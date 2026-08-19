@@ -32,7 +32,14 @@
 
 ## 1.2 MVP / R&D Success Definition
 
-**[DECISION REQUIRED] Question: What must be working at the end of the one-month R&D period for the project to be considered successful?**
+**[DECISION MADE] Decision: The R&D demo is scoped to a specific, defined set of scenarios (situations) rather than general-purpose handling of any possible event. The system is built/tuned to handle this closed set well. The end-of-month demonstration will present a scenario that the system has been prepared for ("learned"), not an arbitrary or unseen event.**
+- Decision owner: TBD
+- Decision date: TBD
+- Reason / constraint: Not specified.
+- Affected tasks: R&D Scope Definition, Scenario Library, Simulator, end-of-month demonstration planning, evaluation framework.
+- Note: This bounds the R&D success definition — success is defined as correct, safe behavior across the prepared scenario set, not general robustness to arbitrary real-world events. General-event robustness remains a candidate goal for a later phase.
+
+**[DECISION REQUIRED] Question: What must be working at the end of the one-month R&D period for the project to be considered successful, within the scope of the prepared scenario set?**
 
 Possible dimensions that need explicit definition:
 - Working demo only
@@ -110,6 +117,13 @@ The source describes:
 - Each agent has a clear responsibility boundary.
 - No responsibility is assigned to more than one agent without an explicit conflict-resolution rule.
 - Every agent input and output is documented.
+
+**[DECISION MADE] Decision: All agents run server-side. The client does not run any agent logic — it only sends a "request" (containing the relevant information) to the Main Agent. The Main Agent manages the request entirely on the server (querying specialized agents, aggregating results, etc.) and returns a response to the client. The client is a thin request/response layer, not a participant in agent orchestration.**
+- Decision owner: TBD
+- Decision date: TBD
+- Reason / constraint: Not specified.
+- Affected tasks: Agent architecture document, backend deployment architecture, messaging interface design, API layer design.
+- Note: A future channel option under consideration is receiving client requests via Telegram (in addition to or instead of other channels) — see Section 12 (Messaging Interface). This does not change the server-side execution model: Telegram would only be another thin client that forwards requests to the server-side Main Agent.
 
 **[DECISION REQUIRED] Question: Should all specialized agents communicate only through the Main Agent, or may agents communicate directly with one another?**
 
@@ -246,6 +260,13 @@ The source defines an agent that knows the state of every member of the rapid-re
 
 The source defines a visual agent responsible for cameras and for reporting what each camera sees.
 
+**[DECISION MADE] Decision: The reasoning agents (including the Visual Agent) will not process raw visual data (images/video) directly. Agents operate on textual descriptions of a situation and act/reason based on that text. Real visual analysis (actual camera/video input) is deferred: when needed in the future, a separate visual-analysis sub-agent will process the video/images and produce a textual description, which is then passed to the (text-only) Visual Agent — the same agent that already reasons over text-based situation descriptions.**
+- Decision owner: TBD
+- Decision date: TBD
+- Reason / constraint: Not specified.
+- Affected tasks: Camera Source Integration, Camera Analysis, Visual Agent prototype scope, R&D scope definition (visual capability marked as simulated/deferred for real video, text-description-driven for R&D month).
+- Note: For the R&D month, camera/visual "input" will be represented as textual scenario descriptions (fed manually, via the Simulator, or via scenario scripts) rather than real image/video analysis. The future visual-analysis sub-agent is a separate, deferred component and out of scope for this decision.
+
 ## 7.1 Camera Source Integration
 
 ### Tasks
@@ -261,9 +282,13 @@ The source defines a visual agent responsible for cameras and for reporting what
 ### Deliverable
 - Camera source integration layer.
 
-**[DECISION REQUIRED] Question: During the one-month R&D period, will the system connect to real settlement cameras, recorded video, simulated camera feeds, or a combination?**
+**[DECISION MADE] Decision: During the one-month R&D period, camera/visual input will be represented as textual scenario descriptions rather than real camera feeds. Real camera/video integration (and the future visual-analysis sub-agent that would convert video to text) is deferred beyond the R&D month.**
+- Decision owner: TBD
+- Decision date: TBD
+- Reason / constraint: Not specified.
+- Affected tasks: Camera Source Integration, Visual Agent prototype.
 
-**[DECISION REQUIRED] Question: What camera systems / protocols / vendors must be supported?**
+**[DECISION REQUIRED] Question: What camera systems / protocols / vendors must be supported once real camera integration is undertaken (post R&D month)?**
 
 ## 7.2 Camera Analysis
 
@@ -278,26 +303,33 @@ The source defines a visual agent responsible for cameras and for reporting what
 - Forward relevant observations to the Main Agent.
 
 ### Deliverable
-- Visual observation pipeline.
+- Visual observation pipeline (deferred — for the R&D month, this is replaced by textual scenario/situation descriptions fed directly to the Visual Agent; no image/video analysis pipeline is built this month).
 
 ### Acceptance Criteria
 - The system can associate each observation with:
-  - Camera
+  - Camera (or scenario/source identifier, for text-described situations)
   - Timestamp
   - Observation text / structured result
   - Confidence or uncertainty indicator
 
-**[DECISION REQUIRED] Question: What types of visual events must the R&D prototype recognize or describe?**
+**[DECISION REQUIRED] Question: What types of situations/events must the R&D prototype's Visual Agent be able to reason about, given only textual descriptions (since no real visual analysis is performed this month)?**
 
 **[DECISION REQUIRED] Question: Is the required output free-text description, structured detections, alerts, or all of these?**
 
-**[DECISION REQUIRED] Question: What minimum accuracy or validation threshold is required before visual output may be presented as confirmed?**
+**[DECISION REQUIRED] Question: Once real visual analysis is introduced in a future phase, what minimum accuracy or validation threshold is required before visual-derived output may be presented as confirmed?**
 
 ---
 
 # 8. Visual Agent — Drones
 
 The source states that the visual agent should also be able to dispatch drones to the incident area.
+
+**[DECISION MADE] Decision: Drone integration for the R&D month is Simulated (not a real drone/API integration) — consistent with the decision that visual/camera input is represented via textual descriptions rather than real hardware this month.**
+- Decision owner: TBD
+- Decision date: TBD
+- Reason / constraint: Not specified.
+- Affected tasks: Drone Integration (design + prototype), R&D Scope Definition, Human Authorization Matrix.
+- Note: Whether drone dispatch (simulated or, in the future, real) requires explicit commander approval, or may occur automatically, is still open — see Section 5 (Human Authorization) and the question below.
 
 ## 8.1 Drone Integration
 
@@ -314,17 +346,15 @@ The source states that the visual agent should also be able to dispatch drones t
 
 ### Deliverable
 - Drone integration design.
-- Prototype integration or simulator adapter.
+- Prototype integration or simulator adapter (simulated dispatch only, per decision above).
 
 ### Acceptance Criteria
-- The system can demonstrate the approved drone workflow.
+- The system can demonstrate the approved (simulated) drone workflow.
 - No drone action can occur outside the defined authorization policy.
 
-**[DECISION REQUIRED] Question: Is real drone control required in the one-month R&D period, or is a simulated/mock drone integration sufficient?**
+**[DECISION REQUIRED] Question: Does simulated drone dispatch require explicit commander approval, or may the AI "dispatch" (simulate dispatching) the drone automatically? (Not yet decided.)**
 
-**[DECISION REQUIRED] Question: What drone vendor/model/API must be supported?**
-
-**[DECISION REQUIRED] Question: Which drone actions, if any, may the AI initiate?**
+**[DECISION REQUIRED] Question: For a future phase with real drone integration, what drone vendor/model/API must be supported?**
 
 **[DECISION REQUIRED] Question: Must every drone launch / movement command require explicit human confirmation?**
 
@@ -335,6 +365,13 @@ The source states that the visual agent should also be able to dispatch drones t
 # 9. Neighboring Forces / Police / MDA Agent
 
 ## 9.1 External Coordination Data
+
+**[DECISION MADE] Decision: Communication with external organizations (MDA, police, neighboring forces) is Simulated in the R&D month — the agent reports as if it made contact with each relevant organization when needed, without an actual API/message being sent. In a future phase, a dedicated sub-agent will be added to actually perform the outreach/contact.**
+- Decision owner: TBD
+- Decision date: TBD
+- Reason / constraint: Not specified.
+- Affected tasks: External Coordination Data, External Forces Agent prototype, R&D Scope Definition, Human Authorization Matrix.
+- Note: This follows the same pattern already decided for Visual/Camera input (Section 7) and Drones (Section 8): real-world action/perception is deferred behind a future dedicated sub-agent, while the R&D month's agent reasons and reports as if the action occurred.
 
 ### Tasks
 - Define external organizations represented in the system.
@@ -347,21 +384,26 @@ The source states that the visual agent should also be able to dispatch drones t
 - Return coordination state to the Main Agent.
 
 ### Deliverable
-- External Forces Agent prototype.
+- External Forces Agent prototype (simulated coordination only, per decision above).
 
-**[DECISION REQUIRED] Question: Which external organizations must be included in the first-month R&D scope?**
+**[DECISION REQUIRED] Question: Which external organizations must be represented/simulated in the first-month R&D scope?**
 
-**[DECISION REQUIRED] Question: Are there actual APIs or operational interfaces for police, MDA, or neighboring forces?**
+**[DECISION REQUIRED] Question: For the future phase, will a real API/operational interface exist for police, MDA, or neighboring forces, or will a human always be the one to actually make contact (with the sub-agent only preparing the message)?**
 
-**[DECISION REQUIRED] Question: If no API exists, should the agent only prepare a message/contact recommendation for a human to send?**
-
-**[DECISION REQUIRED] Question: Is the system allowed to send messages directly to external organizations?**
+**[DECISION REQUIRED] Question: Does the simulated "contact made" report require commander approval before being simulated/logged, or can it happen automatically? (Related to the still-open Human Authorization decision, Section 5.)**
 
 ---
 
 # 10. Regional History Agent
 
 The source defines a regional-history agent that makes historical data easy to use for model improvement and operational context.
+
+**[DECISION MADE] Decision: Regional historical data used by this agent will be simulated/mock data for the R&D month, not a real historical archive.**
+- Decision owner: TBD
+- Decision date: TBD
+- Reason / constraint: Not specified.
+- Affected tasks: Regional Data Inventory, Ingestion specification, Regional-history retrieval prototype, R&D Scope Definition.
+- Note: The retrieval/integration method (RAG, prompt context, fine-tuning, rules, or a combination) is still undecided — see Section 10.2 below.
 
 ## 10.1 Regional Data Inventory
 
@@ -386,14 +428,12 @@ The source defines a regional-history agent that makes historical data easy to u
 - Define data retention requirements.
 
 ### Deliverable
-- Regional Data Inventory.
+- Regional Data Inventory (simulated/mock data for the R&D month).
 - Ingestion specification.
 
-**[DECISION REQUIRED] Question: What regional historical data already exists?**
+**[DECISION REQUIRED] Question: What should the simulated regional historical dataset contain (which categories, how much data, how realistic) for the R&D demo?**
 
-**[DECISION REQUIRED] Question: Where is each source currently stored?**
-
-**[DECISION REQUIRED] Question: Which sources are approved for use by the R&D system?**
+**[DECISION REQUIRED] Question: In a future phase with real historical data, where would each source be stored, and which sources would be approved for use?**
 
 ## 10.2 Historical Knowledge Retrieval
 
@@ -408,7 +448,7 @@ The source defines a regional-history agent that makes historical data easy to u
 ### Deliverable
 - Regional-history retrieval prototype.
 
-**[DECISION REQUIRED] Question: Should the historical data be used through RAG / retrieval, prompt context, model fine-tuning, or another method?**
+**[DECISION REQUIRED] Question: Should the historical data be used through RAG / retrieval, prompt context, model fine-tuning, or another method? (Not yet decided.)**
 
 **[DECISION REQUIRED] Question: What information must be visible as a source/citation in agent answers?**
 
@@ -463,6 +503,13 @@ The source gives example insights such as:
 
 The source says the agents will be built on Telegram or WhatsApp.
 
+**[DECISION MADE] Decision: Consistent with the server-side execution model (Section 3.1), any messaging platform (including Telegram, if selected) acts only as a thin client — it forwards the user's request/message to the server-side Main Agent and displays the returned response. No agent logic runs on the messaging platform or client side.**
+- Decision owner: TBD
+- Decision date: TBD
+- Reason / constraint: Not specified.
+- Affected tasks: Messaging Platform Integration, API layer design, User Interface.
+- Note: Telegram is being considered as a possible future request channel; it is not yet finalized as the sole or primary channel for the R&D month.
+
 ## 12.1 Messaging Platform Integration
 
 ### Tasks
@@ -479,11 +526,11 @@ The source says the agents will be built on Telegram or WhatsApp.
 ### Deliverable
 - Working messaging interface.
 
-**[DECISION REQUIRED] Question: Which platform is selected for the R&D prototype: WhatsApp, Telegram, or both?**
+**[DECISION REQUIRED] Question: Which platform is selected for the R&D prototype: WhatsApp, Telegram, both, or none (e.g., a simple direct client/API call to the server) for month one?**
 
 **[DECISION REQUIRED] Question: If WhatsApp is selected, which WhatsApp integration/provider should be used?**
 
-**[DECISION REQUIRED] Question: If Telegram is selected, should the system use a bot, private group, individual chats, or another structure?**
+**[DECISION REQUIRED] Question: If Telegram is selected (now or later), should the system use a bot, private group, individual chats, or another structure?**
 
 **[DECISION REQUIRED] Question: Should all users interact in a shared channel or in private conversations with the agents?**
 
@@ -567,6 +614,12 @@ The source requires a simulator that "starts the story" / launches the scenario.
 
 ### Deliverable
 - Scenario simulator prototype.
+
+**[DECISION MADE] Decision: The scenario format and scenario engine must be built as a modular/data-driven structure (e.g., scenarios defined as data/config rather than hard-coded logic), so that scenarios beyond the initial 2–6 demo scenarios can be added later without re-architecting the simulator. See Section 27 for the related scenario-count decision.**
+- Decision owner: TBD
+- Decision date: TBD
+- Reason / constraint: Not specified.
+- Affected tasks: Scenario format definition, Scenario Engine implementation, Initial scenario library.
 
 **[DECISION REQUIRED] Question: What components must the simulator simulate?**
 
@@ -824,11 +877,34 @@ The source explicitly requires strong boundaries to avoid cyber attacks or major
 ### Deliverable
 - Model selection criteria.
 
-**[DECISION REQUIRED] Question: Has an AI/LLM provider already been selected?**
+**[DECISION MADE] Decision: The system will use an external LLM provider via API (cloud-based), not a locally-hosted model (e.g., Ollama).**
+- Decision owner: TBD
+- Decision date: TBD
+- Reason / constraint: Not specified.
+- Affected tasks: Model selection criteria, backend integration, privacy/security requirements review, cost modeling.
 
-**[DECISION REQUIRED] Question: Is use of cloud-hosted AI permitted for all project data?**
+**[DECISION MADE] Decision: The system will use CrewAI (Python multi-agent framework) as the orchestration framework.**
+- Decision owner: TBD
+- Decision date: TBD
+- Reason / constraint: Not specified.
+- Affected tasks: Backend technology, agent architecture implementation, tool/function-calling design.
 
-**[DECISION REQUIRED] Question: Is an on-premise/local model required for any data or capability?**
+**[DECISION MADE] Decision: During the one-month R&D period, the system will be implemented and tested against a single LLM provider only.**
+- Decision owner: TBD
+- Decision date: TBD
+- Reason / constraint: Reduces integration/debugging surface during the R&D month; avoids validating multiple providers' tool-calling behavior before core logic is proven.
+- Affected tasks: Model selection criteria, Main Agent implementation, all specialized-agent implementations that call the LLM.
+
+**[DECISION MADE] Decision: The LLM integration layer must be built as a provider-agnostic abstraction from the start, so that additional providers (including cloud providers and local/self-hosted models such as Ollama) can be added later without redesigning the agents themselves.**
+- Decision owner: TBD
+- Decision date: TBD
+- Reason / constraint: Future requirement to support multiple/any LLM provider, including local models, without reworking agent logic. CrewAI's built-in LiteLLM integration can serve as this abstraction layer (supports 100+ providers, including Ollama, via a model-parameter change); direct provider SDK integration remains an alternative if provider-specific features are needed later.
+- Affected tasks: Backend technology, Model selection criteria, agent architecture, tool/function-calling design, cost modeling.
+- Note: Only the single chosen provider needs to be validated end-to-end (including tool/function calling) during the R&D month. Multi-provider switching itself does not need to be tested this month — only that the abstraction does not block it later.
+
+**[DECISION REQUIRED] Question: Which specific AI/LLM provider will be used for the R&D month (e.g., Anthropic, OpenAI, etc.)?**
+
+**[DECISION REQUIRED] Question: Is use of cloud-hosted AI permitted for all project data, including sensitive squad/operational data?**
 
 ---
 
@@ -851,7 +927,13 @@ The source explicitly requires strong boundaries to avoid cyber attacks or major
 ### Deliverable
 - Running backend foundation.
 
-**[DECISION REQUIRED] Question: Has a backend programming language/framework already been selected?**
+**[DECISION MADE] Decision: Backend language is Python. Agent orchestration will use the CrewAI framework, with LLM calls routed through a provider-agnostic abstraction layer (e.g., CrewAI's built-in LiteLLM integration) to allow additional providers — including local/self-hosted models such as Ollama — to be added later without redesigning agents. The web/API layer will use FastAPI.**
+- Decision owner: TBD
+- Decision date: TBD
+- Reason / constraint: Not specified.
+- Affected tasks: Agent orchestration layer setup, API layer setup, tool/function-calling design, model selection criteria.
+
+**[DECISION REQUIRED] Question: Which specific AI/LLM provider will be used for the R&D month (e.g., Anthropic, OpenAI, etc.)?** *(Still open — no provider selected yet.)*
 
 **[DECISION REQUIRED] Question: Are there existing company infrastructure standards that this project must follow?**
 
@@ -874,7 +956,14 @@ The source explicitly requires strong boundaries to avoid cyber attacks or major
 ### Deliverable
 - Deployment architecture.
 
-**[DECISION REQUIRED] Question: Should the system run in public cloud, private cloud, on-premise, or a hybrid architecture?**
+**[DECISION MADE] Decision: The system runs as a server, with a client to be implemented after the server is built. For the R&D/demo period, the server will most likely run on localhost for demonstration purposes.**
+- Decision owner: TBD
+- Decision date: TBD
+- Reason / constraint: Not specified.
+- Affected tasks: Environment Design, backend foundation setup, client implementation timeline (client work follows server completion).
+- Note: This is a demo-stage decision; production/pilot hosting (cloud/on-prem/hybrid) remains open — see question below.
+
+**[DECISION REQUIRED] Question: Should the system run in public cloud, private cloud, on-premise, or a hybrid architecture once past the localhost R&D demo stage?**
 
 **[DECISION REQUIRED] Question: Are there restrictions on where settlement / squad / camera data may be stored?**
 
@@ -987,6 +1076,8 @@ Required parameters to define:
 
 # 27. Scenario Library
 
+**[DECISION MADE] Decision: (See Section 1.2) The demo is trained/prepared against this specific scenario library, not general-purpose event handling. The end-of-month demonstration will use a scenario from this prepared set.**
+
 ## 27.1 Initial Training Scenarios
 
 ### Tasks
@@ -1001,11 +1092,16 @@ Required parameters to define:
 ### Deliverable
 - Initial scenario library.
 
-**[DECISION REQUIRED] Question: How many scenarios must be prepared during the one-month R&D period?**
+**[DECISION MADE] Decision: The initial scenario library will contain between 2 and 6 scenarios for the R&D demo. However, the scenario/simulator architecture (scenario format, scenario engine, data model) must be designed modularly so that additional scenarios can be added later without structural rework — the 2–6 count is a demo-scope decision, not a hard architectural limit.**
+- Decision owner: TBD
+- Decision date: TBD
+- Reason / constraint: Not specified.
+- Affected tasks: Scenario template/format design, Scenario Engine (Section 15.1), Initial scenario library, evaluation framework.
+- Note: This is an architectural constraint on Section 15 (Simulator) as well — the scenario format and engine must not hard-code assumptions specific to the 2–6 demo scenarios.
 
 **[DECISION REQUIRED] Question: Will subject-matter experts provide the scenarios, or is scenario creation part of the R&D team's responsibility?**
 
-**[DECISION REQUIRED] Question: Which scenario categories are mandatory?**
+**[DECISION REQUIRED] Question: Which scenario categories are mandatory among the 2–6 chosen for the demo?**
 
 ---
 
@@ -1161,7 +1257,14 @@ The source states a one-month R&D plan but does not assign individual capabiliti
 
 **[DECISION REQUIRED] Question: Should the month be explicitly divided into Week 1 / Week 2 / Week 3 / Week 4 milestones?**
 
-**[DECISION REQUIRED] Question: How many people are assigned to the project and what are their roles?**
+**[DECISION MADE] Decision: 4 people are assigned to the project — organized as 2 pairs of programmers.**
+- Decision owner: TBD
+- Decision date: TBD
+- Reason / constraint: Not specified.
+- Affected tasks: Work breakdown/assignment across epics, parallelization planning, critical path definition.
+- Note: Specific role/specialization breakdown within the 2 pairs (e.g., which pair owns which agents/components) is still open.
+
+**[DECISION REQUIRED] Question: Within the 4-person team (2 pairs), how should responsibilities be split across agents/components?**
 
 **[DECISION REQUIRED] Question: Are there fixed dates for demo, pilot, or review meetings?**
 
@@ -1238,9 +1341,10 @@ This section consolidates the unresolved decisions that must be answered before 
 
 ## Product / Scope
 1. What is the expected maturity level at the end of one month?
-2. What exactly defines R&D success?
+2. What exactly defines R&D success, within the prepared scenario set? Resolved (partially): the demo targets a specific, defined set of scenarios rather than general-event handling; the end-of-month demo will present a scenario from that prepared set.
 3. What is in scope, simulated, deferred, or out of scope?
 4. What does "Build targets" mean in GTCA?
+4a. How many scenarios, and which categories, make up the prepared set? (See Scenario Library, Section 27 — still open.)
 
 ## Agent Behavior
 5. Can agents only recommend, or may they execute actions?
@@ -1249,10 +1353,11 @@ This section consolidates the unresolved decisions that must be answered before 
 8. How are conflicting agent outputs resolved?
 
 ## Messaging / UI
-9. WhatsApp, Telegram, or both?
+9. WhatsApp, Telegram, both, or none for month one? (Telegram noted as a possible future channel — see below)
 10. Which messaging integration/provider?
 11. Messaging-only UI or separate dashboard?
 12. Who are the user roles?
+12a. Resolved: All agent logic runs server-side. Any client (including a future Telegram channel) only sends a request with relevant info to the Main Agent and receives a response — it does not run agent logic itself.
 
 ## Squad Status
 13. What squad-member statuses exist?
@@ -1261,27 +1366,27 @@ This section consolidates the unresolved decisions that must be answered before 
 16. What readiness/equipment data is tracked?
 
 ## Cameras / Visual
-17. Real cameras, recorded video, simulated video, or a combination?
-18. Which camera systems must be supported?
-19. What must visual AI detect/describe?
-20. What accuracy/confidence requirements apply?
+17. Real cameras, recorded video, simulated video, or a combination? Resolved: None this month — agents reason over textual situation descriptions only; real camera/video input is deferred to a future phase via a separate visual-analysis sub-agent that will convert video to text.
+18. Which camera systems must be supported once real camera integration is undertaken (post R&D month)?
+19. What types of situations must the Visual Agent (text-only) be able to reason about this month?
+20. What accuracy/confidence requirements apply once real visual analysis is introduced later?
 
 ## Drones
-21. Real drone control or simulation in month one?
-22. Which drone platform/API?
-23. Which actions can the AI initiate?
-24. Which drone actions require human confirmation?
+21. Real drone control or simulation in month one? Resolved: Simulated.
+22. Which drone platform/API? Deferred to future phase (real integration).
+23. Which actions can the AI initiate? Still open — see item 24.
+24. Which drone actions require human confirmation? Not yet decided — including whether simulated dispatch itself requires commander approval.
 
 ## External Forces
-25. Which organizations are included?
-26. Are there real APIs?
-27. Can the system contact them automatically?
+25. Which organizations are included? Still open — which orgs to simulate this month.
+26. Are there real APIs? Resolved: No, this month — communication is simulated (reported as if contact was made). A future sub-agent will perform real outreach.
+27. Can the system contact them automatically? Not yet decided whether even the simulated "contact made" report requires commander approval (linked to Section 5, still open).
 
 ## Regional History
-28. What historical data exists?
-29. Where is it stored?
-30. What data is approved for use?
-31. RAG, fine-tuning, prompts, rules, or another improvement method?
+28. What historical data exists? Resolved: Simulated/mock data for the R&D month — real archive is a future-phase question.
+29. Where is it stored? Deferred to future phase (real data).
+30. What data is approved for use? Deferred to future phase (real data); for the R&D month, need to define what the simulated dataset should contain.
+31. RAG, fine-tuning, prompts, rules, or another improvement method? Not yet decided.
 
 ## Insights
 32. Proactive or on-demand insights?
@@ -1292,7 +1397,7 @@ This section consolidates the unresolved decisions that must be answered before 
 ## Simulator / Training
 36. What does the simulator need to simulate?
 37. How are scenarios controlled?
-38. How many initial scenarios?
+38. How many initial scenarios? Resolved: 2–6 for the R&D demo. The scenario format/engine must still be built modularly (data-driven) so more can be added later without re-architecting.
 39. Who authors and approves them?
 40. What training data is stored?
 41. Who labels outputs as correct/incorrect?
@@ -1306,12 +1411,13 @@ This section consolidates the unresolved decisions that must be answered before 
 47. What data requires multi-source confirmation?
 
 ## Technology
-48. Which LLM/provider is approved?
-49. Is cloud AI allowed?
-50. Is a local model required?
-51. Which backend stack is required?
+48. Which specific LLM provider will be used for the R&D month? Still open — no provider selected yet.
+49. Is cloud AI allowed for all data types? (Confirmed: yes, external API model will be used - sensitivity of specific data types still TBD)
+50. Is a local model required? Resolved: No local model in month one. However, the LLM integration layer must be built provider-agnostic (e.g., via CrewAI + LiteLLM) so providers - including local/self-hosted models like Ollama - can be added later without redesigning agents.
+50a. Which orchestration framework will be used? Resolved: CrewAI (Python).
+51. Which backend stack is required? Resolved: Python + CrewAI + FastAPI (web/API layer).
 52. Which database is required?
-53. Cloud, on-premise, private cloud, or hybrid?
+53. Cloud, on-premise, private cloud, or hybrid? Resolved for R&D demo stage: server runs on localhost; client to be built after server. Production/pilot hosting model still open.
 
 ## Cost
 54. What is included in the 3,000 ILS monthly limit?
@@ -1331,8 +1437,8 @@ This section consolidates the unresolved decisions that must be answered before 
 
 ## Timeline / Team
 64. Should the month be divided into weekly milestones?
-65. How many people are on the project?
-66. What are their roles?
+65. How many people are on the project? Resolved: 4 people (2 pairs of programmers).
+66. What are their roles? Partially open — pair-to-component assignment still TBD.
 67. Are there fixed demo/review dates?
 
 ---
@@ -1346,8 +1452,8 @@ This section consolidates the unresolved decisions that must be answered before 
 - [ ] Human authorization matrix
 - [ ] Main Agent prototype
 - [ ] Squad Status Agent prototype
-- [ ] Visual Agent prototype
-- [ ] Camera integration or simulator
+- [ ] Visual Agent prototype (text-only reasoning; no image/video analysis this month)
+- [ ] Camera integration or simulator (represented as textual scenario descriptions this month; real integration deferred)
 - [ ] Drone integration or simulator
 - [ ] External Forces Agent prototype
 - [ ] Regional History Agent prototype
