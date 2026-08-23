@@ -101,5 +101,24 @@ jobs:
           tests/test_orchestrator_queue.py
           tests/test_persistence_held_events.py
 
+      - name: Mission 8 — Telegram Frontend
+        run: >
+          pytest -q
+          tests/test_bot_api_client.py
+          tests/test_bot_formatting.py
+          tests/test_bot_telegram_client.py
+          tests/test_bot_singleton_lock.py
+          tests/test_bot_users.py
+          tests/test_bot_entrypoint.py
+          tests/test_bot_clarification.py
+          tests/test_bot_approval.py
+          tests/test_bot_precedent_notify.py
+          tests/test_bot_profile_commands.py
+          tests/test_bot_settings_commands.py
+          tests/test_bot_results.py
+          tests/test_bot_failures.py
+          tests/test_bot_notifications.py
+          tests/test_bot_app.py
+
       - name: Full suite (drift check)
         run: pytest -q

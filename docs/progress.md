@@ -17,7 +17,7 @@ a new entry describing what changed instead.
 | 5 | History System (5.1–5.10) | Done |
 | 6 | Main Agent Orchestration (6.1–6.15) | Done |
 | 7 | API Layer | Not started |
-| 8 | Telegram Frontend | Not started |
+| 8 | Telegram Frontend | Done, against a stub for Mission 7 (see §8.x entries) |
 | 9 | Integration and Hardening | Not started |
 
 Entry format:
@@ -1036,3 +1036,253 @@ Entry format:
   Python version pinned in CI stayed at 3.11, unchanged - the repo runs
   fine under 3.11 (no 3.13-only syntax used) and revisiting the pin
   wasn't part of this request.
+
+---
+
+## Mission 8 — built against a Mission 7 that does not exist yet
+
+Every §8 subtask requires either 7.2, 7.4, 7.6, 7.7, 7.8, or 7.9, and the
+`api/` package is still just its Mission-1 skeleton (`api/__init__.py`
+saying "not yet implemented"). The user directed this mission to proceed
+anyway, explicitly: skip implementing any Mission-7 dependency, build
+everything in `bot/` that does not require one, and — for anything that
+does — add a minimal, clearly-marked placeholder rather than wait.
+
+The seam is `bot/api_client.py`: `BotApiClient`, an abstract interface
+covering every operation the rest of `bot/` needs from the API Layer,
+with request/response shapes designed directly from `docs/vocabulary.md`
+and each §8 subtask's exact wording. `UnimplementedApiClient` is its only
+implementation today — every method raises `bot.errors
+.ApiNotImplementedError`, naming the exact §7 subtask it is blocked on
+(checked by `tests/test_bot_api_client.py`, which also asserts every
+abstract method has a corresponding raise-and-name test, so the seam
+cannot silently grow an unmarked gap). Every other `bot/` module is built
+and tested against `BotApiClient`'s interface via dependency injection
+(`tests/bot_fakes.py`'s `FakeBotApiClient`), never against
+`UnimplementedApiClient` directly except `bot.app`, which wires the
+default in. Closing Mission 7 means writing one new class implementing
+`BotApiClient` with real HTTP calls to the profile's `api_port` and
+changing one line in `bot.app.build_deps` — nothing else in `bot/` needs
+to change, per the user's explicit "keep the structure ready" instruction.
+`bot` still never imports the `api` package itself — "bot calls only api"
+(`docs/allowed_calls.md`) is a network boundary (the profile's port),
+not a Python import, so this seam lives entirely inside `bot/` and
+touches nothing in `api/`.
+
+A second, shared piece of infrastructure spans several subtasks:
+`bot/notifications.py`'s `BotNotification` / `dispatch_notification` /
+`run_notification_poll_loop`. Work_plan.md §7.2 leaves "how a finished
+result reaches whoever submitted it" as one of the API's own open design
+questions ("implement one path, not an unspecified mixture"); the same
+question applies to §8.4/§8.5/§8.6's unprompted pushes. Rather than guess
+which mechanism §7 will choose (a webhook into the bot vs. the bot
+polling the API), every proactive push funnels through one shape and one
+retrieval method, `poll_pending_notifications` — itself part of the same
+stub seam. Introduced while building §8.4 (the first subtask needing a
+push), reused by §8.5, §8.6, §8.9, and §8.11 rather than each
+reimplementing routing.
+
+`python-telegram-bot` 22.8 was added to `requirements.txt` as a real,
+uncommented dependency and installed in this environment — unlike
+`crewai` (§3.5), it needs no model API key to install or to exercise its
+non-network code paths, so `bot/telegram_client.py`'s `PTBTelegramClient`
+is written and tested against the real, installed library (its classes'
+signatures introspected directly, not guessed), with only the
+network-performing `Bot` methods (`get_me`, `send_message`,
+`answer_callback_query`) replaced by mocks in tests
+(`tests/test_bot_telegram_client.py`). It remains **unverified against a
+live bot token or a real Telegram chat** — same "unverified against a
+live integration" status this codebase already carries for the CrewAI
+adapter (§3.5) and the Main Agent's prompt conventions (§6.x).
+
+Every handler `bot.app` registers is wrapped (`bot.app._guarded`) so an
+`ApiNotImplementedError` reaching it becomes a clear, honest chat reply
+— "This isn't available yet: ... §7.X" — rather than a crash or a
+silently dropped update. The bot is runnable today against a real
+Telegram token (`python -m bot.app <profile_module>`); every capability
+that depends on Mission 7 will simply say so, in the chat, naming the
+exact subtask it is waiting on.
+
+**A real gap discovered in already-built Mission 6 code, left
+unmodified per this mission's explicit instruction not to touch prior
+missions:** `orchestrator.holds.answer_approval_hold` only accepts
+`Literal["approved", "rejected"]`, and `orchestrator.flows
+.resume_after_approval` resumes with `hold["selected_protocol_name"]`,
+which `orchestrator.selection.select_protocol` never sets for an
+ambiguous-selection hold at low risk (it stays `None`). §8.5 requires
+presenting an ambiguous-selection hold's candidates for a commander to
+choose *among* — there is currently nowhere on the orchestrator side for
+that choice to go. `BotApiClient.answer_approval_hold`'s `decision`
+parameter is declared as a plain `str` (not the narrower
+`Literal["approved", "rejected"]`) specifically so the bot side is ready
+to send a candidate's name once this is fixed; its docstring records the
+gap in full. Whoever builds §7 (or a follow-up fix to §6.7) needs to
+close it — either by widening `answer_approval_hold`'s decision type, or
+by having the API translate a candidate-name decision into a recorded
+selection before resuming.
+
+Full suite green (462/462) including `tests/test_architecture.py`, which
+needed no changes — every new module lives inside `bot/`, and
+`docs/allowed_calls.md` already declared `bot.app` as the package's only
+entry point.
+
+### 8.1 — Register and configure the bot
+- **Status:** done
+- **Deviations:** The bot token is read from `LoadedProfile
+  .resolved_secrets`, already populated by `profiles.loader` at load
+  time per §1.5 — `bot.app._resolve_bot_token` re-imports the profile
+  module (a no-op after the first import; `importlib` caches it) only to
+  read the *name* `BOT_TOKEN_ENV` points at, never the secret value a
+  second time, and never touches `profiles/loader.py` or
+  `profiles/spec.py` (Mission 1, done, left unmodified per this
+  mission's instruction). "Rejected" is checked by actually calling
+  Telegram's `getMe` (`bot.telegram_client.PTBTelegramClient
+  .validate_token`) — a token that is merely *absent* already fails
+  earlier and louder, inside `profiles.loader.load_profile` itself.
+  "One bot per deployment" is `bot/singleton_lock.py`: an
+  exclusive-create lock file beside the deployment's database (mirroring
+  `config.settings_store`'s "beside the db" convention), acquired before
+  the token is even validated. It catches the ordinary case — starting a
+  second process while the first is healthy — by construction, but does
+  not detect a lock left behind by a process that crashed without
+  releasing it; documented as a deliberate limitation, not a Mission-7
+  gap, in that module's own docstring. The profile's `api_port` is
+  threaded into `LoadedProfile` and available on `BotDeps.loaded_profile`
+  for whenever a real HTTP-backed `BotApiClient` needs it — not used by
+  `UnimplementedApiClient`, since it makes no network calls at all.
+
+### 8.2 — Resolve users against the user table
+- **Status:** done for everything not behind the Mission-7 seam
+- **Deviations:** The identity → permission-level *lookup*
+  (`BotApiClient.resolve_user`) is the one piece genuinely blocked on
+  §7.9 — the user table lives behind `persistence`, and `bot` has no
+  path to it except through the API. Everything else is real: the
+  permission *comparison* is `auth.permissions.is_permitted` (§1.9's
+  shared function), imported directly in `bot/users.py` — `auth` is a
+  low-level package callable by anything (`docs/allowed_calls.md`), and
+  §1.9 itself names the bot as one of the function's two callers, so
+  this is not a Mission-7 dependency despite §8.2's own header line
+  listing 7.9. Both required refusal messages are implemented and
+  tested word-for-word: "not a registered user" for an unknown identity,
+  and a message naming the specific refused action for a registered
+  user acting above their level. §8.2's explicit prohibition — no
+  command that adds, changes, removes, or lists users — is enforced two
+  ways: nothing in `bot/users.py` exposes such an operation, and
+  `bot.app.REGISTERED_COMMANDS` (the exhaustive, asserted-against set of
+  slash-commands the bot registers) contains only `profile` and
+  `settings`; both are checked by `tests/test_bot_users.py`.
+
+### 8.3 — Implement the single message entry point
+- **Status:** done
+- **Deviations:** Structurally complete and independently testable
+  (`tests/test_bot_entrypoint.py`) — the one thing it cannot do for real
+  is submit a message, since `BotApiClient.submit_message` is the
+  §7.4 stub. `bot.app` routes only non-command text
+  (`filters.TEXT & ~filters.COMMAND`) to `bot.entrypoint
+  .handle_incoming_message`, reserving `/profile` and `/settings` as
+  the only slash-commands, matching §8.3's "reserve slash-commands ...
+  so they never collide with free text."
+
+### 8.4 — Implement clarification prompts
+- **Status:** done for everything not behind the Mission-7 seam
+- **Deviations:** Buttons carry `hold_id` and the chosen classification
+  directly in their callback data (`clarify:<hold_id>:<classification>`)
+  rather than any server-side session state, so answering needs nothing
+  but the button press itself. The available classifications are
+  expected to arrive as part of `HeldClarificationNotice` (via the
+  poll-notification seam) rather than the bot re-deriving "the loaded
+  event types" from its own copy of the profile — the API process is
+  the authority on what is actually running (relevant once §7.7's
+  running/on-disk distinction exists), so the choices always come from
+  wherever the hold was created. The race between two commanders is
+  handled on the bot side by rendering whatever `HoldAnswerOutcome
+  .resolved_by`/`.message` the API returns for a `not_found` status —
+  `orchestrator.holds.answer_clarification_hold`'s current `not_found`
+  message does not itself name who resolved it first; `resolved_by` is
+  declared on the DTO ready to receive that once Mission 7 (or a
+  refinement of §6.2) supplies it, and is exercised in tests via the
+  fake client, not the real orchestrator function.
+
+### 8.5 — Implement approval prompts
+- **Status:** done for everything not behind the Mission-7 seam,
+  **except** relaying an ambiguous-selection choice all the way through
+  to a resumed run, which cannot work until the orchestrator-side gap
+  described above (Mission-8 preamble) is closed
+- **Deviations:** `bot/approval.py` presents the two hold reasons with
+  genuinely different text and buttons — yes/no for a flagged protocol,
+  one button per candidate for an ambiguous selection — and
+  `notify_uncertain_verdict` is deliberately phrased with no question
+  mark and no buttons, tested directly (`test_uncertain_verdict_is_not
+  _phrased_as_a_question_and_has_no_buttons`). The race-condition
+  handling mirrors §8.4's.
+
+### 8.6 — Implement precedent-closure notifications
+- **Status:** done for everything not behind the Mission-7 seam
+- **Deviations:** None beyond the shared seam. Pushed individually (one
+  `send_text` call per commander, never batched) and phrased with no
+  question mark, per §8.6's "clearly informational" requirement.
+
+### 8.7 — Implement profile commands
+- **Status:** done for everything not behind the Mission-7 seam
+- **Deviations:** Reads (`/profile view`, `/profile diff`) require only
+  that the caller be a registered user — there is no dedicated action
+  key for "view the profile" in `auth.permissions.ACTION_REQUIREMENTS`
+  (§1.9's table lists exactly six actions, none of them a read), so
+  gating a read on a nonexistent action key was not an option; §8.7's
+  own "allow viewers to read" confirms this is the intended behavior,
+  not a gap. Writes require `"edit_profile"`, the existing key. The
+  `approval_flag`-must-be-explicit requirement is enforced only for
+  `add`/`edit` — `remove` identifies a protocol by name alone and has no
+  flag to give. `bot.app._parse_protocol_write_command` accepts a
+  pipe-delimited command (`/profile add name | description | agents,... |
+  tools,... | expected_output | criticality | true|false`), chosen over
+  space-delimited so every free-text field can itself contain spaces or
+  commas without ambiguity; tested directly, independent of the network
+  seam.
+
+### 8.8 — Implement settings commands
+- **Status:** done for everything not behind the Mission-7 seam
+- **Deviations:** Same read-is-open, write-requires-`"change_settings"`
+  reasoning as §8.7. Every value is validated in `bot/settings_commands
+  .py` *before* it would ever reach the API — non-negative integer for
+  retry count, `0.0`–`1.0` for the risk threshold, a positive integer for
+  the lookback window — independent of whatever validation §7.8
+  eventually adds server-side, per §8.8's own "validating the value
+  before sending it." The confirmation wording ("took effect
+  immediately... unlike a profile edit, no restart is needed") is
+  deliberately the mirror image of §8.7's "nothing changed... applies
+  from the next start", per §8.8's own explicit "worth stating so a
+  commander using both will otherwise not know which is which."
+
+### 8.9 — Deliver asynchronous results
+- **Status:** split — the acknowledgment half is done for real; delivery
+  is done for everything not behind the Mission-7 seam
+- **Deviations:** "Acknowledge every submission immediately" is not a
+  separate mechanism — it is `bot.entrypoint.handle_incoming_message`
+  replying in the same turn `submit_message` returns a job ID, before
+  any later poll ever runs, so there genuinely is no silent wait.
+  Delivery (`bot/results.py`) is one branch of the shared
+  `bot.notifications.dispatch_notification`, referencing the original
+  message via `TelegramClient.send_reply`'s `reply_to_message_id`.
+
+### 8.10 — Format output for chat
+- **Status:** done
+- **Deviations:** None — the one §8 subtask with zero Mission-7
+  dependency, fully real. `bot/formatting.py`'s `split_message` breaks
+  at paragraph, then sentence, then plain-newline boundaries before
+  falling back to a hard character cut, and is exercised with text
+  engineered to hit each fallback tier
+  (`tests/test_bot_formatting.py`). Seven distinct headers exist, not
+  the four §8.10 names (clarification, approval, closure, result) —
+  `uncertain_verdict`, `failed`, and `declined` were added too, since
+  §8.5 and §8.11 separately require those to be visually distinct from
+  each other and from a plain result.
+
+### 8.11 — Deliver failure notifications
+- **Status:** done for everything not behind the Mission-7 seam
+- **Deviations:** `bot/failures.py` reuses `bot.telegram_client
+  .send_reply` and the same `BotNotification` delivery path as §8.9's
+  results, distinguished only by `kind` (`"job_failed"` vs.
+  `"job_finished"`) and by `bot.formatting`'s separate `"failed"` header
+  — the same infrastructure, not a parallel one, since both are "an
+  asynchronous outcome reaching whoever is waiting on it."

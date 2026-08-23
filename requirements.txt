@@ -12,3 +12,10 @@
 # whatever is current at the time) once real model API keys are available.
 #
 # crewai>=1.13
+
+# Telegram Frontend (§8): unlike crewai, this needs no model API key to
+# install or to exercise its non-network code paths, so it's a real,
+# uncommented dependency — installed and used directly by
+# bot/telegram_client.py. See docs/progress.md's Mission 8 entry for what
+# is, and isn't, verified against a live Telegram bot token.
+python-telegram-bot==22.8

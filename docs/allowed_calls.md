@@ -29,7 +29,7 @@ imports.
 | `history` | `history.interface`, `history.query` | `history.interface` exposes writes, extraction, and scheduler hooks; `history.query` exposes historical Q&A and precedent lookup. Other `history/` modules stay internal. |
 | `orchestrator` | `orchestrator.flows` | |
 | `api` | `api.app` *(lands in §7)* | |
-| `bot` | `bot.app` *(lands in §8)* | |
+| `bot` | `bot.app` | Built in Mission 8, against a Mission 7 (`api`) that does not exist yet. "`bot` calls only `api`" is a *network* boundary (the profile's `api_port`, §8.1), never a Python import — nothing in `bot/` imports the `api` package. `bot.api_client.BotApiClient` is the seam every other `bot/` module is built against; its only implementation today, `UnimplementedApiClient`, raises naming the exact §7 subtask it is blocked on. |
 
 ## Who may call whom
 
