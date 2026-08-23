@@ -24,6 +24,7 @@ class FakeProtocol:
     description: str = "a description"
     participating_agents: tuple = ()
     approved_tools: tuple = ()
+    expected_success_output: str = "a description of what success looks like"
     criticality: object = "low"
     approval_flag: object = False
 

@@ -108,6 +108,19 @@ def _construct_core_agents(base_config: BaseConfig) -> dict:
     return {}
 
 
+def validate_single_protocol(protocol, agents_by_name: dict) -> list[str]:
+    """Validate one protocol against a set of agents, using exactly the
+    checks startup validation runs (§1.6) — the entry point
+    `protocols.editor` (§4.3) calls before accepting a write, so a
+    written protocol can never fail validation differently than the
+    protocols already loaded did. `profiles.validate` itself stays
+    internal to this package; this is the one sanctioned way another
+    package reaches its logic.
+    """
+
+    return profile_validate._validate_protocol(protocol, agents_by_name)
+
+
 def load_profile(module_path: str) -> LoadedProfile:
     module = _import_profile_module(module_path)
     _check_required_attrs(module, module_path)
