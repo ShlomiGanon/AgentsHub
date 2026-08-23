@@ -45,6 +45,19 @@ def test_append_and_fetch_events_range(persistence):
     assert event_id in [e["event_id"] for e in events]
 
 
+def test_fetch_event_by_id(persistence):
+    event_id = persistence.append_event(_minimal_event(raw_text="specific text"))
+
+    event = persistence.fetch_event(event_id)
+
+    assert event["event_id"] == event_id
+    assert event["raw_text"] == "specific text"
+
+
+def test_fetch_event_returns_none_for_an_unknown_id(persistence):
+    assert persistence.fetch_event("does-not-exist") is None
+
+
 def test_fetch_events_range_with_no_rows_returns_empty_list(persistence):
     assert persistence.fetch_events_range("2020-01-01", "2020-12-31") == []
 

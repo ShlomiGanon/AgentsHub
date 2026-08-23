@@ -68,6 +68,18 @@ def test_state_allowlist_cannot_bypass_outcome_writer(store):
         record_event_state(store, event_id, {"outcome": "succeeded"})
 
 
+def test_state_update_can_set_classification_after_a_clarification_hold(store):
+    # Added in Mission 6 (§6.11): resuming a clarification hold writes the
+    # commander's chosen classification via this same allowlisted path,
+    # without re-running extraction and discarding already-resolved
+    # area/description/severity.
+    event_id = _initial(store)
+
+    record_event_state(store, event_id, {"classification": "fire"})
+
+    assert store.fetch_event(event_id)["classification"] == "fire"
+
+
 def test_scheduler_notification_requires_event_envelope_data(store):
     event_id = _initial(store)
     result = ExtractionResult("fire", "resolved", "north", (), None, None, "2026-08-19T22:00:00", False, ())

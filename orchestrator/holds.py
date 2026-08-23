@@ -1,20 +1,16 @@
 """Holds (work_plan.md §6.2, §6.7).
 
 Both hold mechanisms are owned by this module per the work plan's branch
-grouping. **Clarification holds (§6.2) are not implemented this
-mission — blocked on §5.2 (extraction), which doesn't exist yet.** See
-`docs/progress.md`. Only approval holds (§6.7) are built here. The
-underlying storage (`persistence.sqlite_backend`'s `store_held_event`/
-`list_held_events`/`resolve_held_event`) is already generic across both
-kinds — when §5.2 lands, clarification holds start using the same,
-already-complete persistence.
+grouping, both backed by the same generic `held_events` storage
+(`persistence.sqlite_backend`'s `store_held_event`/`list_held_events`/
+`resolve_held_event`), distinguished only by `kind`.
 
-What this module does *not* do: actually resume execution from task
-formulation on approval, or end a run as declined and write that outcome
-to the event record. Those are the new-event flow's job (§6.11, deferred
-— it needs 6.2/6.5/6.6/6.9, none of which exist). This module produces the
-*decision* (hold or not, approved or rejected) and persists it; wiring
-that decision back into a resumed run is §6.11's.
+What this module does *not* do: actually resume execution — from
+extraction-was-unresolved to risk assessment on a clarification answer,
+or from task formulation on approval. Those are the new-event flow's job
+(§6.11). This module produces the *decision* (hold or not, and what the
+answer was) and persists it; wiring that back into a resumed run is
+§6.11's.
 """
 
 from dataclasses import dataclass
@@ -26,15 +22,22 @@ from persistence.interface import PersistenceInterface
 from protocols.model import Protocol
 
 if TYPE_CHECKING:
+    from history.extraction import ExtractionResult
     from orchestrator.main_agent import RiskAssessment
     from orchestrator.selection import ProtocolSelectionResult
+    from registries.event_types import EventTypeRegistry
 
 HoldReason = Literal["flagged_protocol", "ambiguous_selection"]
+
+# Only "classification" ever triggers a clarification hold — an empty area
+# or description doesn't (§2.1/§2.2: those narrow precedent search, they
+# never hold the event). The field name is fixed, not derived per-hold.
+UNRESOLVED_FIELD = "classification"
 
 
 @dataclass(frozen=True)
 class HoldAnswerResult:
-    status: Literal["approved", "rejected", "unauthorized", "not_found"]
+    status: Literal["approved", "rejected", "resolved", "unauthorized", "not_found", "invalid_classification"]
     hold: dict | None = None
     message: str = ""
 
@@ -119,3 +122,75 @@ def answer_approval_hold(
 
     status: Literal["approved", "rejected"] = "approved" if decision == "approved" else "rejected"
     return HoldAnswerResult(status=status, hold=held)
+
+
+# -- Clarification holds (§6.2) ------------------------------------------
+
+
+def determine_clarification_hold(extraction_result: "ExtractionResult") -> bool:
+    """True when the event must be held — extraction couldn't resolve a
+    classification, whether because the text didn't fit any registered
+    type or because the source stated a type outside the registry
+    (`history.extraction.extract_event` already nullifies the latter case,
+    so a `None` classification is the one unified signal for both).
+    """
+
+    return extraction_result.classification is None
+
+
+def create_clarification_hold(persistence: PersistenceInterface, event_id: str, raw_text: str) -> str:
+    """Write everything needed to resume: the event, the raw text, and
+    which field couldn't be resolved — in the terms the prompt will show
+    a commander.
+    """
+
+    hold = {
+        "event_id": event_id,
+        "unresolved_field": UNRESOLVED_FIELD,
+        "raw_text": raw_text,
+    }
+
+    return persistence.store_held_event("clarification", hold)
+
+
+def answer_clarification_hold(
+    persistence: PersistenceInterface,
+    hold_id: str,
+    answering_identity: str,
+    answering_level: PermissionLevel,
+    chosen_classification: str,
+    event_type_registry: "EventTypeRegistry",
+) -> HoldAnswerResult:
+    """Accept a resolution only from a commander, and only a
+    classification drawn from the loaded registry — free text is rejected
+    outright, since the registry is fixed for the run and accepting
+    anything outside it defeats the constraint everything downstream
+    relies on.
+    """
+
+    if not is_permitted(answering_level, "resolve_hold"):
+        return HoldAnswerResult(status="unauthorized", message=f"level {answering_level.name} may not resolve a hold")
+
+    if not event_type_registry.is_valid(chosen_classification):
+        return HoldAnswerResult(
+            status="invalid_classification",
+            message=f"'{chosen_classification}' is not in the loaded event-type registry",
+        )
+
+    held = next((h for h in persistence.list_held_events("clarification") if h["hold_id"] == hold_id), None)
+    if held is None:
+        return HoldAnswerResult(
+            status="not_found",
+            message=f"no unresolved clarification hold '{hold_id}' — it may not exist or may already be resolved",
+        )
+
+    try:
+        persistence.resolve_held_event(
+            "clarification",
+            hold_id,
+            {"resolved_by": answering_identity, "chosen_classification": chosen_classification},
+        )
+    except NotFoundError as exc:
+        return HoldAnswerResult(status="not_found", message=str(exc))
+
+    return HoldAnswerResult(status="resolved", hold=held)

@@ -9,6 +9,7 @@ VALID_OUTCOMES = frozenset(
 
 STATE_UPDATE_FIELDS = frozenset(
     {
+        "classification",
         "risk_level",
         "risk_reason",
         "selected_protocol",
@@ -25,6 +26,15 @@ STATE_UPDATE_FIELDS = frozenset(
         "precedent_closed_by_event_id",
     }
 )
+# `classification` was added in Mission 6 (§6.11): resuming a clarification
+# hold means writing the commander's chosen classification onto the event
+# itself, not just recording it as `clarification_chosen_classification` —
+# and re-running full extraction would discard the commander's decision
+# and any already-resolved fields (§6.2's own explicit "resume at risk
+# assessment, not at extraction" rule). `record_extracted_fields` isn't a
+# fit either — it unconditionally overwrites every extracted field, which
+# would null out area/description/severity that were already correctly
+# resolved. This is a state transition like any other in this set.
 
 
 @dataclass(frozen=True)
