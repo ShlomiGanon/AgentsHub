@@ -176,6 +176,12 @@ summary for an already-summarized period overwrite rather than duplicate.
 | `period_start` | `datetime` | no |
 | `period_end` | `datetime` | no |
 | `generated_at` | `datetime` | no |
+| `event_index` | `list[dict]` | no after Mission 5 regeneration; legacy rows may temporarily be empty/`None` |
+
+Summary periods are half-open (`[period_start, period_end)`). `event_index`
+retains each covered event's ID, classification, area, occurrence time,
+outcome, and deterministic resolved flag so precedent search can identify
+candidate periods before reading raw events.
 
 ## User
 

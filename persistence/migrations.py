@@ -10,13 +10,30 @@ needed.
 import sqlite3
 
 from persistence.schema import (
-    DAILY_SUMMARIES_TABLE_DDL,
     EVENT_STEPS_TABLE_DDL,
     EVENTS_TABLE_DDL,
     INDEXES_DDL,
-    MONTHLY_SUMMARIES_TABLE_DDL,
     USERS_TABLE_DDL,
-    YEARLY_SUMMARIES_TABLE_DDL,
+)
+
+
+def _summary_v4_ddl(table_name: str) -> str:
+    return f"""
+CREATE TABLE IF NOT EXISTS {table_name} (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    summary_text TEXT NOT NULL,
+    period_start TEXT NOT NULL,
+    period_end TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    UNIQUE (period_start, period_end)
+);
+"""
+
+
+SUMMARY_TABLES_V4_DDL = (
+    _summary_v4_ddl("daily_summaries")
+    + _summary_v4_ddl("monthly_summaries")
+    + _summary_v4_ddl("yearly_summaries")
 )
 
 # Numbered, ordered, one entry per migration. Never edit a past entry's
@@ -26,8 +43,15 @@ MIGRATIONS: list[tuple[int, str, str]] = [
     (1, "create users table", USERS_TABLE_DDL),
     (2, "create events table", EVENTS_TABLE_DDL),
     (3, "create event_steps table", EVENT_STEPS_TABLE_DDL),
-    (4, "create summary tables", DAILY_SUMMARIES_TABLE_DDL + MONTHLY_SUMMARIES_TABLE_DDL + YEARLY_SUMMARIES_TABLE_DDL),
+    (4, "create summary tables", SUMMARY_TABLES_V4_DDL),
     (5, "create indexes", INDEXES_DDL),
+    (
+        6,
+        "add event indexes to summaries",
+        "ALTER TABLE daily_summaries ADD COLUMN event_index TEXT;"
+        "ALTER TABLE monthly_summaries ADD COLUMN event_index TEXT;"
+        "ALTER TABLE yearly_summaries ADD COLUMN event_index TEXT;",
+    ),
 ]
 
 
@@ -41,7 +65,17 @@ def run_migrations(db_path: str) -> None:
             if version <= current_version:
                 continue
 
-            connection.executescript(sql)
+            if version == 6:
+                for table_name in ("daily_summaries", "monthly_summaries", "yearly_summaries"):
+                    columns = {
+                        row[1]
+                        for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+                    }
+                    if "event_index" not in columns:
+                        connection.execute(f"ALTER TABLE {table_name} ADD COLUMN event_index TEXT")
+            else:
+                connection.executescript(sql)
+
             connection.execute(f"PRAGMA user_version = {version}")
             connection.commit()
     finally:

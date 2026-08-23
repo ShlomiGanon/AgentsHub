@@ -415,3 +415,104 @@ Entry format:
   one fake `BaseTool` that always raises in `__init__`, and one that
   raises only for a specific tool name among several, confirming the
   right tool is named in the error rather than just "something failed."
+
+### 1.3 / 3.5 — follow-up: DEBUG_FLAG-backed raw AI interaction logging
+- **Status:** done (gap closed; append-only follow-up)
+- **Deviations:** `DEBUG_FLAG` remains a fixed base-configuration value,
+  not a fourth live setting. `tools.logging_config.log_ai_interaction`
+  prints the complete model payload and raw response only when enabled;
+  both the CrewAI adapter and Mission 5 extraction path use it. Raw
+  exchanges are never passed to persistence.
+
+### 2.6 / 2.7 / 2.9 / 2.10 — follow-up: summary lookup index and half-open ranges
+- **Status:** done (Mission 5 prerequisite completed)
+- **Deviations:** Added migration 6 and current-schema `event_index` JSON
+  columns for all three summary levels. Migration 6 checks the actual
+  columns before altering so it works both after the frozen version-4 DDL
+  and on a freshly-created schema that already contains the current
+  column. Event queries now use `[start, end)` and summary overlap uses
+  `period_start < end AND period_end > start`; the public interface and
+  backend conformance coverage were updated together.
+
+### 5.1 — Implement the history-write path
+- **Status:** done
+- **Deviations:** Implemented as the public `history.interface` service;
+  the Mission 6 new-event flow remains responsible for calling the initial
+  write before orchestration exists. The extraction write accepts source
+  and received time only when a scheduler is supplied, since those values
+  are required for the late-event hook and are deliberately not cached in
+  memory. Intermediate state writes use a strict allowlist and cannot
+  bypass the dedicated step/outcome writers.
+
+### 5.2 — Build extraction
+- **Status:** done
+- **Deviations:** Model execution is injected through `model_invoker`, so
+  the extraction contract, prompt, strict JSON parsing, registry checks,
+  timestamp behavior, missing-field reporting, and typed execution error
+  are complete without pulling Mission 6's Main Agent forward. Runtime
+  invoker wiring remains at the future §6.11 integration point. An
+  unresolvable Telegram occurrence time stays `None` and is not falsely
+  marked as a fallback.
+
+### 5.3 — Build the History Agent
+- **Status:** done
+- **Deviations:** The agent exposes zero tools; all database-derived
+  context is supplied by history services. This is the strictest reading
+  of "read-only tools only" and prevents the model from widening its own
+  retrieval. It is constructed as `history_agent` on every profile load;
+  Main and Insights remain deferred to their Mission 6 tasks.
+
+### 5.4 — Build the summarization pipeline
+- **Status:** done
+- **Deviations:** Daily summaries are generated only for closed days that
+  contain events; monthly/yearly summaries are generated only where the
+  lower level contains records. Empty calendar periods are not materialized.
+  Monthly and yearly indexes are deduplicated unions of their children,
+  and no upper level re-reads raw events.
+
+### 5.5 — Build the summary scheduler
+- **Status:** done
+- **Deviations:** Implemented as a reconciliation worker with injectable
+  clock and lifecycle hooks. It derives missing/stale work from the
+  database on every pass, processes levels bottom-up, and persists via
+  idempotent summary upserts. Starting/stopping it from the application is
+  intentionally deferred to Mission 7 lifecycle wiring.
+
+### 5.6 — Handle late-arriving events
+- **Status:** done
+- **Deviations:** `notify_event_written` is a transient wake-up only; no
+  correctness state is kept in memory. Daily staleness is derived from
+  event receipt versus generation time and cascades through child/parent
+  generation timestamps. Mission 6/7 ingestion will call the exposed hook
+  when those flows land.
+
+### 5.7 — Build the query interface
+- **Status:** done
+- **Deviations:** None. `HistoryQueryService` retrieves persisted material
+  first, gives only that context to the History Agent, and returns exact
+  source attribution alongside the answer with optional time,
+  classification, and area filters.
+
+### 5.8 — Implement precedent search
+- **Status:** done
+- **Deviations:** Uses the same hierarchical range planner as questions,
+  so yearly/monthly/daily indexes identify candidate periods and raw reads
+  cover only candidates and unsummarized edges. The window is anchored to
+  the target occurrence time and reads the live lookback value on every
+  call. Resolution is a deterministic outcome mapping, never a model
+  judgment.
+
+### 5.9 — Implement range-scoped retrieval
+- **Status:** done
+- **Deviations:** Uses deterministic greedy coverage in half-open UTC
+  intervals, from yearly to monthly to daily to raw boundary spans.
+  Sources never overlap, and matched event totals deduplicate by event ID.
+
+### 5.10 — Verify summary fidelity
+- **Status:** done
+- **Deviations:** The automated three-level seed-dataset test uses a
+  deterministic fake History Agent because CrewAI and live credentials
+  are unavailable in this environment. It verifies both contradictory
+  reports, handling/outcome material, and index identity survive through
+  yearly compression. Live-model quality remains the documented manual
+  smoke test; all 155 automated tests pass without API keys.

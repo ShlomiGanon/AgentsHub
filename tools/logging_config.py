@@ -18,6 +18,7 @@ import logging
 import sys
 from typing import Any
 
+import config.base as base_config
 from tools.tracing import get_trace_id
 
 _RESERVED_LOG_RECORD_ATTRS = frozenset(logging.makeLogRecord({}).__dict__)
@@ -66,3 +67,17 @@ def configure_logging(profile_name: str, level: int = logging.INFO) -> None:
     handler = logging.StreamHandler(stream=sys.stdout)
     handler.setFormatter(_JsonFormatter())
     root.addHandler(handler)
+
+
+def log_ai_interaction(agent_name: str, prompt: str, response: str, trace_id: str | None = None) -> None:
+    """Print an exact model exchange only when ephemeral debugging is enabled."""
+
+    if not base_config.DEBUG_FLAG:
+        return
+
+    active_trace_id = trace_id or get_trace_id()
+
+    print(f"[AI interaction: {agent_name}; trace_id={active_trace_id}; prompt]")
+    print(prompt)
+    print(f"[AI interaction: {agent_name}; trace_id={active_trace_id}; response]")
+    print(response)

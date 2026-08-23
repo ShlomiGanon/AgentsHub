@@ -100,6 +100,13 @@ def _decode_step_row(row: sqlite3.Row) -> dict:
     return decoded
 
 
+def _decode_summary_row(row: sqlite3.Row) -> dict:
+    decoded = dict(row)
+    if decoded.get("event_index") is not None:
+        decoded["event_index"] = json.loads(decoded["event_index"])
+    return decoded
+
+
 def _upsert_steps(connection: sqlite3.Connection, event_id: str, steps: list[dict]) -> None:
     for step in steps:
         payload = {
@@ -242,7 +249,7 @@ class SQLitePersistence(PersistenceInterface):
         connection = self._read_connection()
         try:
             rows = connection.execute(
-                "SELECT * FROM events WHERE occurred_at IS NOT NULL AND occurred_at BETWEEN ? AND ? "
+                "SELECT * FROM events WHERE occurred_at IS NOT NULL AND occurred_at >= ? AND occurred_at < ? "
                 "ORDER BY occurred_at",
                 (start, end),
             ).fetchall()
@@ -255,7 +262,7 @@ class SQLitePersistence(PersistenceInterface):
         try:
             rows = connection.execute(
                 "SELECT * FROM events WHERE classification = ? AND area = ? "
-                "AND occurred_at IS NOT NULL AND occurred_at BETWEEN ? AND ? ORDER BY occurred_at",
+                "AND occurred_at IS NOT NULL AND occurred_at >= ? AND occurred_at < ? ORDER BY occurred_at",
                 (event_type, area, window_start, window_end),
             ).fetchall()
             return [self._attach_steps(connection, _decode_event_row(row)) for row in rows]
@@ -271,17 +278,19 @@ class SQLitePersistence(PersistenceInterface):
             "period_start": summary["period_start"],
             "period_end": summary["period_end"],
             "generated_at": summary["generated_at"],
+            "event_index": json.dumps(summary["event_index"]) if summary.get("event_index") is not None else None,
         }
 
         def _do(connection: sqlite3.Connection) -> None:
             try:
                 connection.execute(
                     f"""
-                    INSERT INTO {table_name} (summary_text, period_start, period_end, generated_at)
-                    VALUES (:summary_text, :period_start, :period_end, :generated_at)
+                    INSERT INTO {table_name} (summary_text, period_start, period_end, generated_at, event_index)
+                    VALUES (:summary_text, :period_start, :period_end, :generated_at, :event_index)
                     ON CONFLICT(period_start, period_end) DO UPDATE SET
                         summary_text = excluded.summary_text,
-                        generated_at = excluded.generated_at
+                        generated_at = excluded.generated_at,
+                        event_index = excluded.event_index
                     """,
                     payload,
                 )
@@ -297,11 +306,11 @@ class SQLitePersistence(PersistenceInterface):
         connection = self._read_connection()
         try:
             rows = connection.execute(
-                f"SELECT summary_text, period_start, period_end, generated_at FROM {table_name} "
-                "WHERE period_start <= ? AND period_end >= ? ORDER BY period_start",
+                f"SELECT summary_text, period_start, period_end, generated_at, event_index FROM {table_name} "
+                "WHERE period_start < ? AND period_end > ? ORDER BY period_start",
                 (end, start),
             ).fetchall()
-            return [dict(row) for row in rows]
+            return [_decode_summary_row(row) for row in rows]
         finally:
             connection.close()
 

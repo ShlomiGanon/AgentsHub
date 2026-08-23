@@ -50,7 +50,7 @@ class PersistenceInterface(ABC):
 
     @abstractmethod
     def fetch_events_range(self, start: Any, end: Any) -> list[dict]:
-        """Return events whose occurrence timestamp falls in [start, end]."""
+        """Return events whose occurrence timestamp falls in [start, end)."""
 
     @abstractmethod
     def fetch_events_by_type_area_window(self, event_type: str, area: str, window_start: Any, window_end: Any) -> list[dict]:
@@ -64,7 +64,7 @@ class PersistenceInterface(ABC):
 
     @abstractmethod
     def fetch_summaries_range(self, level: str, start: Any, end: Any) -> list[dict]:
-        """Return summaries at `level` whose period overlaps [start, end]."""
+        """Return summaries at `level` whose half-open period overlaps [start, end)."""
 
     # -- Held events (work_plan.md §6.2, §6.7) -------------------------
 

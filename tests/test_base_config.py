@@ -8,6 +8,7 @@ def test_load_base_config_names_all_three_models_separately():
     assert config.main_agent_model
     assert config.history_agent_model
     assert config.insights_agent_model
+    assert config.DEBUG_FLAG is False
 
 
 def test_base_config_is_frozen():

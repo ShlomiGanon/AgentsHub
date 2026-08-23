@@ -112,9 +112,10 @@ CREATE TABLE IF NOT EXISTS {table_name} (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     summary_text TEXT NOT NULL,
     period_start TEXT NOT NULL,
-    period_end TEXT NOT NULL,
-    generated_at TEXT NOT NULL,
-    UNIQUE (period_start, period_end)
+        period_end TEXT NOT NULL,
+        generated_at TEXT NOT NULL,
+        event_index TEXT,
+        UNIQUE (period_start, period_end)
 );
 """
 
