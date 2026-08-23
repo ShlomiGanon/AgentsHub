@@ -33,6 +33,16 @@ class AgentOutputParseError(AgentInvocationError):
     """The model responded, but the output could not be parsed into a result."""
 
 
+class AgentToolConstructionError(AgentInvocationError):
+    """A tool could not be translated into a CrewAI tool object.
+
+    Raised by agents.adapter._build_crewai_tools when dynamically
+    subclassing crewai.tools.BaseTool fails (e.g. pydantic rejects the
+    dynamic type() construction) — a real, live-verified risk, not a
+    hypothetical: see docs/progress.md's §3.10 entry.
+    """
+
+
 class AgentFrameworkNotReadyError(AgentInvocationError):
     """crewai is not installed in this environment yet.
 

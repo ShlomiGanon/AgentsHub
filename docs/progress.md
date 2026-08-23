@@ -6,6 +6,20 @@ entry per subtask, added in completion order (per `instructions.md` §6).
 Never edit or remove a prior entry — if a subtask is revisited later, add
 a new entry describing what changed instead.
 
+## Mission status
+
+| Mission | Section | Status |
+|---|---|---|
+| 1 | Foundations (1.1–1.10) | Done |
+| 2 | Data Layer (2.1–2.12) | Done |
+| 3 | Agent Framework (3.1–3.12) | Done |
+| 4 | Protocol Engine | Not started |
+| 5 | History System | Not started |
+| 6 | Main Agent Orchestration | Not started |
+| 7 | API Layer | Not started |
+| 8 | Telegram Frontend | Not started |
+| 9 | Integration and Hardening | Not started |
+
 Entry format:
 
 ```
@@ -379,3 +393,25 @@ Entry format:
   than reproducing its code, states the three failure modes (unmarked
   tool, missing class attribute, agent not constructed in a profile) and
   when each is caught.
+
+### 3.10 — follow-up: tool-construction errors were bypassing translation
+- **Status:** done (gap closed; append-only follow-up, not an edit of the entry above)
+- **Deviations:** `agents/adapter.py::_build_crewai_tools` had no error
+  handling of its own — a failure while dynamically subclassing
+  `crewai.tools.BaseTool` via `type()` (the exact unverified-pending-
+  real-crewai risk already named in the 3.10 entry above and in the
+  Mission 3 re-summary) would have propagated raw out of `invoke()`,
+  bypassing the `try/except` around `kickoff()` entirely — violating
+  §3.10's "surface each as a distinct outcome" and §1.8's "log every
+  retry with the cause that triggered it," since a raw, untyped exception
+  carries no `agent_name`/`trace_id` and can't be matched by anything
+  catching `AgentInvocationError`. Fixed: each tool's dynamic-class
+  construction is now individually wrapped, re-raising as a new
+  `AgentToolConstructionError(AgentInvocationError)` naming the specific
+  tool that failed (not just "tool construction failed somewhere").
+  Scoped to error handling only, as instructed — the `type()`-based
+  construction mechanism itself is unchanged and still unverified against
+  real pydantic. Two new tests in `tests/test_agent_adapter.py` cover it:
+  one fake `BaseTool` that always raises in `__init__`, and one that
+  raises only for a specific tool name among several, confirming the
+  right tool is named in the error rather than just "something failed."

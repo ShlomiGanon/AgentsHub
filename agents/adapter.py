@@ -30,7 +30,13 @@ needed.
 from typing import Callable
 
 from agents.descriptor import AgentDescriptor
-from agents.errors import AgentFrameworkNotReadyError, AgentModelError, AgentOutputParseError, AgentTimeoutError
+from agents.errors import (
+    AgentFrameworkNotReadyError,
+    AgentModelError,
+    AgentOutputParseError,
+    AgentTimeoutError,
+    AgentToolConstructionError,
+)
 from agents.results import UNCLEAR_TASK_PROMPT_INSTRUCTION
 from agents.tooling import ToolInfo
 from tools.tracing import get_trace_id
@@ -51,7 +57,7 @@ def _get_crewai():
     return crewai
 
 
-def _build_crewai_tools(crewai_module, wrapped_tools: dict[str, Callable], tool_infos: tuple[ToolInfo, ...]) -> list:
+def _build_crewai_tools(crewai_module, agent_name: str, wrapped_tools: dict[str, Callable], tool_infos: tuple[ToolInfo, ...]) -> list:
     base_tool_class = crewai_module.tools.BaseTool
     built = []
 
@@ -63,20 +69,30 @@ def _build_crewai_tools(crewai_module, wrapped_tools: dict[str, Callable], tool_
 
         # Built dynamically per tool, never derived from a docstring —
         # description always comes from our own ToolInfo (§3.3), not
-        # CrewAI's docstring-inference convention.
-        tool_class = type(
-            f"_{info.name}_tool",
-            (base_tool_class,),
-            {"name": info.name, "description": info.description, "_run": _run},
-        )
-        built.append(tool_class())
+        # CrewAI's docstring-inference convention. This dynamic type()
+        # construction against a pydantic-based BaseTool is exactly the
+        # unverified-pending-real-crewai risk noted in docs/progress.md's
+        # §3.10 entry — wrapped here so a failure surfaces as a typed,
+        # logged error naming the offending tool rather than a raw
+        # exception bypassing every other error-translation path below.
+        try:
+            tool_class = type(
+                f"_{info.name}_tool",
+                (base_tool_class,),
+                {"name": info.name, "description": info.description, "_run": _run},
+            )
+            built.append(tool_class())
+        except Exception as exc:
+            raise AgentToolConstructionError(
+                agent_name, f"failed to build CrewAI tool '{info.name}'", trace_id=get_trace_id(), cause=exc
+            ) from exc
 
     return built
 
 
 def invoke(descriptor: AgentDescriptor, wrapped_tools: dict[str, Callable], text: str, timeout_seconds: int) -> str:
     crewai_module = _get_crewai()
-    crewai_tools = _build_crewai_tools(crewai_module, wrapped_tools, descriptor.tools)
+    crewai_tools = _build_crewai_tools(crewai_module, descriptor.name, wrapped_tools, descriptor.tools)
 
     backstory = f"{descriptor.system_prompt}\n\n{UNCLEAR_TASK_PROMPT_INSTRUCTION}"
 

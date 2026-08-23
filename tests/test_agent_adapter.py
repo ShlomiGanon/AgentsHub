@@ -4,7 +4,13 @@ import pytest
 
 from agents import adapter
 from agents.descriptor import AgentDescriptor
-from agents.errors import AgentFrameworkNotReadyError, AgentModelError, AgentOutputParseError, AgentTimeoutError
+from agents.errors import (
+    AgentFrameworkNotReadyError,
+    AgentModelError,
+    AgentOutputParseError,
+    AgentTimeoutError,
+    AgentToolConstructionError,
+)
 from agents.tooling import ToolInfo
 
 
@@ -138,7 +144,7 @@ def test_build_crewai_tools_wires_name_description_and_delegates_to_the_wrapper(
         return "status ok"
 
     tool_infos = (ToolInfo(name="check_status", description="Checks status.", side_effecting=False, idempotent=None),)
-    built = adapter._build_crewai_tools(fake_module, {"check_status": wrapped_check_status}, tool_infos)
+    built = adapter._build_crewai_tools(fake_module, "test_agent", {"check_status": wrapped_check_status}, tool_infos)
 
     assert len(built) == 1
     assert built[0].name == "check_status"
@@ -147,3 +153,54 @@ def test_build_crewai_tools_wires_name_description_and_delegates_to_the_wrapper(
     result = built[0]._run(location="gate-3")
     assert result == "status ok"
     assert seen == ["gate-3"]
+
+
+def test_a_tool_that_fails_to_construct_raises_a_typed_error_naming_it(monkeypatch):
+    # Simulates pydantic (or anything else) rejecting the dynamic
+    # type()-created BaseTool subclass — the specific, currently-
+    # unverified-against-real-crewai risk this test closes the gap on.
+    class _RejectingBaseTool:
+        def __init__(self, *args, **kwargs):
+            raise TypeError("simulated: dynamic subclass construction rejected")
+
+    fake_module = types.SimpleNamespace(
+        Agent=lambda **kwargs: None,
+        tools=types.SimpleNamespace(BaseTool=_RejectingBaseTool),
+    )
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+
+    tool_infos = (ToolInfo(name="check_status", description="Checks status.", side_effecting=False, idempotent=None),)
+
+    with pytest.raises(AgentToolConstructionError) as exc_info:
+        adapter.invoke(_descriptor(tools=tool_infos), {"check_status": lambda **kw: "ok"}, "do something", 5)
+
+    assert exc_info.value.agent_name == "a1"
+    assert "check_status" in str(exc_info.value)
+    assert isinstance(exc_info.value.cause, TypeError)
+
+
+def test_tool_construction_failure_names_the_offending_tool_when_others_are_fine(monkeypatch):
+    # Only the tool whose dynamic class name contains "risky_tool" fails
+    # to construct — proves the error names the actual offending tool,
+    # not just "something failed somewhere in the loop."
+    class _SometimesRejectingBaseTool:
+        def __init__(self, *args, **kwargs):
+            if "risky_tool" in type(self).__name__:
+                raise TypeError("simulated: this specific tool's construction failed")
+
+    fake_module = types.SimpleNamespace(
+        Agent=lambda **kwargs: None,
+        tools=types.SimpleNamespace(BaseTool=_SometimesRejectingBaseTool),
+    )
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+
+    tool_infos = (
+        ToolInfo(name="fine_tool", description="d", side_effecting=False, idempotent=None),
+        ToolInfo(name="risky_tool", description="d", side_effecting=False, idempotent=None),
+    )
+    wrapped_tools = {"fine_tool": lambda **kw: "ok", "risky_tool": lambda **kw: "ok"}
+
+    with pytest.raises(AgentToolConstructionError) as exc_info:
+        adapter.invoke(_descriptor(tools=tool_infos), wrapped_tools, "do something", 5)
+
+    assert "risky_tool" in str(exc_info.value)
