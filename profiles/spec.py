@@ -40,6 +40,7 @@ PROTOCOL_REQUIRED_ATTRS = (
     "description",
     "participating_agents",
     "approved_tools",
+    "expected_success_output",
     "criticality",
     "approval_flag",
 )

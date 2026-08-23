@@ -31,6 +31,7 @@ class _FixtureProtocol:
     description: str
     participating_agents: tuple[str, ...]
     approved_tools: tuple[str, ...]
+    expected_success_output: str
     criticality: str
     approval_flag: bool
 
@@ -46,6 +47,7 @@ PROTOCOLS = [
         "does not apply to anything requiring a side-effecting action.",
         participating_agents=("reference_agent",),
         approved_tools=("check_status",),
+        expected_success_output="A status report for the requested location.",
         criticality="low",
         approval_flag=False,
     ),

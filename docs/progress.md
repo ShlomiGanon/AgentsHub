@@ -13,7 +13,7 @@ a new entry describing what changed instead.
 | 1 | Foundations (1.1–1.10) | Done |
 | 2 | Data Layer (2.1–2.12) | Done |
 | 3 | Agent Framework (3.1–3.12) | Done |
-| 4 | Protocol Engine | Not started |
+| 4 | Protocol Engine (4.1–4.8) | Done |
 | 5 | History System | Not started |
 | 6 | Main Agent Orchestration | Not started |
 | 7 | API Layer | Not started |
@@ -516,3 +516,133 @@ Entry format:
   reports, handling/outcome material, and index identity survive through
   yearly compression. Live-model quality remains the documented manual
   smoke test; all 155 automated tests pass without API keys.
+### 4.1 — Define the protocol model
+- **Status:** done
+- **Deviations:** Found and fixed a real bug while building this:
+  `profiles/validate.py::_validate_protocol` compared a tool-name string
+  against a set built from `agent.exposed_tools()` — correct against
+  Mission 1's duck-typed `FakeAgent`/`_FixtureAgent` (which return plain
+  strings) but silently broken against a real `agents.base.Agent`, whose
+  `exposed_tools()` returns `tuple[ToolInfo, ...]` (Mission 3). No
+  existing profile combined a real `Protocol` with a real `Agent` before
+  now, so nothing caught it. Fixed with a shape-tolerant
+  `getattr(t, "name", t)` so both shapes work; regression tests added in
+  `tests/test_profile_validation.py` using a real `ReferenceAgent`. Also
+  added `expected_success_output` to `profiles/spec.py`'s
+  `PROTOCOL_REQUIRED_ATTRS` — §4.1 requires this field but Mission 1's
+  structural contract never listed it; added a matching non-empty check
+  to `_validate_protocol`. `Step` (§1.2/§4.4's contract) is also defined
+  here, alongside `Protocol`, since both are core protocol-engine data
+  shapes. `CriticalityLevel` is an ordered `IntEnum`, matching
+  `auth.permissions.PermissionLevel`'s established pattern for "compare
+  to pick a winner" fields.
+
+### 4.2 — Load protocols from the profile
+- **Status:** done
+- **Deviations:** None beyond what 4.1's entry already covers.
+  `profiles.loader` already instantiated every protocol correctly since
+  Mission 1; this module is a thin, fixed-for-the-run read wrapper over
+  that data (`ProtocolSet.all()`/`.get(name)`), matching the
+  `registries.event_types` pattern from Mission 2. No checking of its own
+  — depends entirely on §1.6's startup validation having already run.
+
+### 4.3 — Implement profile protocol editing
+- **Status:** done
+- **Deviations:** A profile's `PROTOCOLS = [...]` is Python source, not
+  data. Rather than element-level AST surgery (fragile comma/whitespace
+  bookkeeping to preserve surrounding hand-formatting), a write
+  regenerates the *entire* `PROTOCOLS` assignment from the currently-
+  loaded `Protocol` objects plus the one being added/replaced/removed,
+  and splices that in place of the original assignment's exact line span
+  (`ast` locates the span; nothing outside it is touched). Confirmed with
+  the user as the right tradeoff — far more robust at the cost of not
+  preserving custom formatting inside that one block, which becomes
+  machine-managed the moment editing exists. Relies on one invariant,
+  documented in the module: the file being edited already validated
+  successfully (§4.2's precondition), so it already imports `Protocol`/
+  `CriticalityLevel` and the regenerated block can reference them
+  unqualified. Validation reuses the exact startup checks via a new
+  `profiles.loader.validate_single_protocol` wrapper — added so
+  `protocols.editor` never has to import `profiles.validate` directly,
+  which stays internal to `profiles/` per `docs/allowed_calls.md`.
+
+### 4.4 — Build the protocol executor
+- **Status:** done
+- **Deviations:** Found and fixed a real bug while testing: `execute_steps`
+  called `protocols.retry.execute_step_with_retry` without forwarding a
+  `sleep_fn`, so it silently defaulted to the real `time.sleep` — any test
+  exercising a multi-attempt failure *through the executor* (rather than
+  calling `protocols.retry` directly) was sleeping for real seconds
+  (`tests/test_protocol_executor.py` initially took 4.14s for 6 tests;
+  0.16s after the fix). Fixed by adding `sleep_fn` as a parameter on
+  `execute_steps` and threading it through. Separately, `Agent` is only
+  ever used here as a type hint, and `agents.base` isn't an approved entry
+  point (only `agents.registry`/`results`/`errors`/`reference` are) — the
+  import-graph test correctly flagged this. Fixed with a `TYPE_CHECKING`
+  guard, which then required fixing `tests/test_architecture.py` itself:
+  its checker used a blind `ast.walk`, which doesn't distinguish a
+  type-only, never-executed import from a real one. The checker now prunes
+  `if TYPE_CHECKING:` blocks from its walk entirely — a correctness fix to
+  the tool, not a loosening of the rule it enforces, since those imports
+  create no real runtime coupling. `protocols.retry` also picked up the
+  same `TYPE_CHECKING` treatment for the same reason.
+
+### 4.5 — Implement the retry policy
+- **Status:** done
+- **Deviations:** "Never replay a step whose side-effecting, non-idempotent
+  tool already acted" is read conservatively — confirmed with the user:
+  since a failed `agent.process()` call gives no visibility into whether a
+  non-idempotent tool actually fired before the failure (CrewAI's
+  reasoning is opaque, and this can't be verified without a real installed
+  crewai anyway per Mission 3's open items), a step naming *any*
+  side-effecting, non-idempotent tool among its `allowed_tools` is never
+  retried at all once its first attempt fails — treated as "may have
+  acted." Backoff is a fixed interval (`backoff_seconds=1.0` default), not
+  exponential — §4.5 only asks for "a backoff," not a growth curve, so the
+  simplest implementation satisfying the literal requirement was used. The
+  attempt limit is read from the settings store on *every attempt*, not
+  once per step — the most literal reading of "not cached," and strictly
+  more responsive than the spec requires, never less. An unclear-task
+  signal with no `task_rewriter` available fails immediately after one
+  attempt regardless of the attempt limit, rather than burning the whole
+  budget resending text that would provoke the identical "unclear" response
+  every time — resending unclear-task text unchanged is exactly the
+  behavior §3.9/§4.5 distinguish it from (that's what an execution failure
+  does), so falling back to it would blur the distinction the spec takes
+  care to establish.
+
+### 4.6 — Implement retry exhaustion handling
+- **Status:** partially done — executor-level behavior only
+- **Deviations:** Everything this mission can implement is implemented:
+  `execute_steps` stops at the first permanently-failed step, names it and
+  the failure cause, and preserves every already-succeeded `StepOutcome`
+  rather than discarding them. Writing partial results onto the event
+  record, notifying the event's originator, and moving on to the next
+  event in the queue are explicitly out of scope for the Protocol Engine —
+  they're the orchestrator's (§6.11), persistence's, and the bot's
+  (§8.11) jobs respectively, none of which exist yet. This module's
+  responsibility ends at producing the data (`ProtocolRunResult`) those
+  future pieces will need.
+
+### 4.8 — Leave a seam for task-based execution
+- **Status:** done
+- **Deviations:** None — no code was added for this beyond what 4.4
+  already required. `execute_steps` is the one function boundary; nothing
+  else in the codebase executes a step list directly. No field, flag, or
+  branch exists for an alternative (dependency-graph) execution mode.
+
+### 4.7 — Author the demonstration profile
+- **Status:** done
+- **Deviations:** Event types/areas reuse Mission 2's seed-dataset domain
+  ("fire"/"medical", "north_sector"/"south_sector") rather than inventing
+  a new one, for continuity across the fixture data, the reference agent's
+  tool names, and this profile. This is the first profile to combine a
+  real `Agent` with a real `Protocol`, and it validates cleanly end to end
+  through `profiles.loader.load_profile` — the concrete confirmation that
+  4.1's bug fix actually works, not just that its unit tests pass in
+  isolation. All required properties present in one four-protocol set:
+  read-only-only (`status_check`), side-effecting
+  (`dispatch_response`, flagged), and a genuine tie pair
+  (`minor_incident_review`/`routine_check` — identical approved tools and
+  expected success output, overlapping descriptions, distinct criticality
+  `MEDIUM`/`LOW`, one flagged and one not).

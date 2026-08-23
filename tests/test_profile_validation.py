@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
+from agents.reference import ReferenceAgent
 from profiles.validate import validate_profile
+from protocols.model import CriticalityLevel, Protocol
 from tests.helpers import FakeAgent, FakeProtocol, ShapelessProtocol
 
 
@@ -97,3 +99,42 @@ def test_every_failure_is_collected_not_only_the_first():
 
     # description, criticality, approval flag, no event types, no areas
     assert len(failures) == 5
+
+
+# -- Regression: real Agent.exposed_tools() returns ToolInfo objects, not --
+# -- plain strings — a mismatch the duck-typed FakeAgent above never      --
+# -- surfaced, since its exposed_tools() already returned plain strings.  --
+
+
+def test_real_agent_and_real_protocol_validate_cleanly():
+    agent = ReferenceAgent(model="m")
+    protocol = Protocol(
+        name="status_check",
+        description="applies when a location's status needs confirming",
+        participating_agents=("reference_agent",),
+        approved_tools=("check_status",),
+        expected_success_output="a status report",
+        criticality=CriticalityLevel.LOW,
+        approval_flag=False,
+    )
+
+    failures = validate_profile(_loaded(agents=(agent,), protocols=(protocol,)), declared_event_types=["fire"])
+
+    assert failures == []
+
+
+def test_real_agent_still_rejects_a_genuinely_unapproved_tool():
+    agent = ReferenceAgent(model="m")
+    protocol = Protocol(
+        name="bad",
+        description="d",
+        participating_agents=("reference_agent",),
+        approved_tools=("not_a_real_tool",),
+        expected_success_output="x",
+        criticality=CriticalityLevel.LOW,
+        approval_flag=False,
+    )
+
+    failures = validate_profile(_loaded(agents=(agent,), protocols=(protocol,)), declared_event_types=["fire"])
+
+    assert any("not_a_real_tool" in f for f in failures)
