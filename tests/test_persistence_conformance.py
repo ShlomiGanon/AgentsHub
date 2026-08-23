@@ -76,12 +76,14 @@ def test_write_and_fetch_summary(persistence):
     persistence.write_summary("daily", {
         "summary_text": "x",
         "period_start": "2026-08-01",
-        "period_end": "2026-08-01",
+        "period_end": "2026-08-02",
         "generated_at": "2026-08-02",
+        "event_index": [{"event_id": "e1"}],
     })
 
-    summaries = persistence.fetch_summaries_range("daily", "2026-08-01", "2026-08-01")
+    summaries = persistence.fetch_summaries_range("daily", "2026-08-01", "2026-08-02")
     assert len(summaries) == 1
+    assert summaries[0]["event_index"] == [{"event_id": "e1"}]
 
 
 def test_fetch_summaries_range_with_no_rows_returns_empty_list(persistence):
@@ -89,12 +91,12 @@ def test_fetch_summaries_range_with_no_rows_returns_empty_list(persistence):
 
 
 def test_writing_a_summary_for_a_period_that_already_has_one_does_not_duplicate(persistence):
-    period = {"period_start": "2026-08-01", "period_end": "2026-08-01"}
+    period = {"period_start": "2026-08-01", "period_end": "2026-08-02"}
 
     persistence.write_summary("daily", {**period, "summary_text": "first", "generated_at": "2026-08-02"})
     persistence.write_summary("daily", {**period, "summary_text": "second", "generated_at": "2026-08-03"})
 
-    summaries = persistence.fetch_summaries_range("daily", "2026-08-01", "2026-08-01")
+    summaries = persistence.fetch_summaries_range("daily", "2026-08-01", "2026-08-02")
     assert len(summaries) == 1
     assert summaries[0]["summary_text"] == "second"
 

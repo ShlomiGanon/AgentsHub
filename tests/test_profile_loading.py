@@ -58,7 +58,7 @@ def test_valid_minimal_fixture_profile_loads_and_freezes(monkeypatch):
     assert "fire" in loaded.event_types
     assert loaded.areas == ("north_sector", "south_sector")
     assert loaded.resolved_secrets["AGENTSHUB_FIXTURE_BOT_TOKEN"] == "token-value"
-    assert loaded.core_agents == {}
+    assert tuple(loaded.core_agents) == ("history_agent",)
 
 
 def test_loaded_profile_is_frozen(monkeypatch):

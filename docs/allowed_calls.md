@@ -24,6 +24,9 @@ imports.
 | `profiles` | `profiles.loader`, `profiles.spec` | `profiles.validate` is called only by `profiles.loader`, not directly by other packages. |
 | `tools` | `tools.logging_config`, `tools.tracing` | Shared helpers belonging to no subsystem. |
 | `cli` | none (not importable) | `cli.user_admin` is an entry point run from the shell, never imported by another package. |
+| `agents` | `agents.registry`, `agents.results`, `agents.errors`, `agents.reference`, `agents.history` | Concrete agent modules are public because profiles construct them directly. `agents.base`, `agents.descriptor`, `agents.tooling`, and `agents.adapter` stay internal. |
+| `protocols` | `protocols.model`, `protocols.loader` *(lands in §4)* | |
+| `history` | `history.interface`, `history.query` | `history.interface` exposes writes, extraction, and scheduler hooks; `history.query` exposes historical Q&A and precedent lookup. Other history modules are internal. |
 | `agents` | `agents.registry`, `agents.results`, `agents.errors`, `agents.reference` | `agents.reference` is the reference agent (§3.11) — a concrete agent module a profile constructs directly, not a query interface. Every future concrete agent (a real domain specialist) becomes an entry point the same way, one module per agent. `agents.base`, `agents.descriptor`, `agents.tooling`, `agents.adapter` stay internal — only agents/ package files import them. |
 | `protocols` | `protocols.model`, `protocols.loader`, `protocols.editor`, `protocols.executor` | `protocols.retry` stays internal, called only by `protocols.executor` — parallel to `profiles.validate`'s status. |
 | `history` | `history.query` *(lands in §5)* | |

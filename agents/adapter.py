@@ -27,6 +27,7 @@ Timeout (§3.10): CrewAI's own `max_execution_time` constructor parameter
 needed.
 """
 
+import json
 from typing import Callable
 
 from agents.descriptor import AgentDescriptor
@@ -39,6 +40,7 @@ from agents.errors import (
 )
 from agents.results import UNCLEAR_TASK_PROMPT_INSTRUCTION
 from agents.tooling import ToolInfo
+from tools.logging_config import log_ai_interaction
 from tools.tracing import get_trace_id
 
 
@@ -119,5 +121,19 @@ def invoke(descriptor: AgentDescriptor, wrapped_tools: dict[str, Callable], text
         raise AgentOutputParseError(
             descriptor.name, f"could not extract text from CrewAI output: {output!r}", trace_id=get_trace_id()
         )
+
+    interaction_payload = json.dumps(
+        {
+            "role": descriptor.role,
+            "goal": "Complete the task given, or state clearly what is missing if it cannot be completed.",
+            "backstory": backstory,
+            "model": descriptor.model,
+            "tools": [info.name for info in descriptor.tools],
+            "kickoff_text": text,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    log_ai_interaction(descriptor.name, interaction_payload, raw_text, trace_id=get_trace_id())
 
     return raw_text
