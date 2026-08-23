@@ -1,11 +1,10 @@
 """SQLite schema (work_plan.md §2.9 owns this module in full).
 
 Implements the users table (§1.10 slice, Mission 1), the events and
-event_steps tables (§2.3, §2.5, §2.8), and the three summary tables
-(§2.6, §2.8). Held-event storage is still a placeholder — that table is
-owned by §6.2/§6.7 (orchestrator holds), not the Data Layer, per
-work_plan.md's own branch grouping ("held-event storage in
-persistence/interface" is listed under B17, not B4).
+event_steps tables (§2.3, §2.5, §2.8), the three summary tables (§2.6,
+§2.8), and the held_events table (§6.7, Mission 6 — owned by
+orchestrator holds per work_plan.md's branch grouping, not the Data
+Layer, but built here since that's where table DDL lives).
 
 Schema notes:
 - `entities` and `precedent_matched_event_ids` are JSON-encoded TEXT —
@@ -27,8 +26,6 @@ Schema notes:
   index on period boundaries and what lets `write_summary` upsert instead
   of duplicating a row for a period that already has one (§5.5).
 """
-
-from dataclasses import dataclass
 
 USERS_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS users (
@@ -132,27 +129,29 @@ CREATE INDEX IF NOT EXISTS idx_event_steps_event_id ON event_steps(event_id);
 """
 
 
-@dataclass(frozen=True)
-class NotImplementedTable:
-    """Marks a table persistence.interface already declares operations
-    against, with no DDL defined for it yet in this file.
-    """
+# -- Held events (§6.7; both hold kinds share one table) --------------------
 
-    table_name: str
-    owning_task: str
-    note: str
-
-
-# Backs store_held_event / list_held_events / resolve_held_event.
-HELD_EVENTS_TABLE = NotImplementedTable(
-    table_name="held_events",
-    owning_task="6.2 / 6.7",
-    note="Backs both hold kinds (clarification, approval) — see "
-    "docs/vocabulary.md#hold-states. An event is in at most one at a time. "
-    "Owned by orchestrator holds (B17), not the Data Layer — the "
-    "per-event clarification_*/approval_* columns on `events` above are a "
-    "different thing: the resolved outcome recorded on the event itself, "
-    "not the operational queue of currently-open holds this table backs.",
-)
-
-NOT_YET_IMPLEMENTED_TABLES = (HELD_EVENTS_TABLE,)
+# `kind` distinguishes "clarification" from "approval" rows — an event is in
+# at most one at a time (docs/vocabulary.md#hold-states), but the table
+# itself doesn't enforce that; the orchestration layer does. `payload` and
+# `resolution` are JSON-encoded TEXT, kind-specific (an approval hold's
+# payload carries the selected protocol or candidates + assessed risk; a
+# future clarification hold's would carry the unresolved field) — decoded
+# only at the persistence.sqlite_backend boundary, same as the events
+# table's JSON columns. This table is distinct from the events table's own
+# clarification_*/approval_* columns: those record the *resolved outcome*
+# on the event itself; this table is the operational queue of currently-open
+# holds, read by whoever prompts a commander and writes an answer back.
+HELD_EVENTS_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS held_events (
+    hold_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    resolved INTEGER NOT NULL DEFAULT 0,
+    resolved_by TEXT,
+    resolved_at TEXT,
+    resolution TEXT,
+    created_at TEXT NOT NULL
+);
+"""

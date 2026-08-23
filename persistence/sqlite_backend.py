@@ -12,9 +12,11 @@ All schema knowledge — table names, column lists, JSON encoding of list
 columns — stays confined to this module and persistence/schema.py; nothing
 above the interface ever sees a column name or a SQL string.
 
-Held-event operations still raise NotImplementedError — that table is
-owned by §6.2/§6.7 (orchestrator holds), not this module. See
-persistence/schema.py's `HELD_EVENTS_TABLE` note.
+Held-event operations (§6.7, Mission 6) are generic across both hold
+kinds — `kind` is just a column value, and nothing here treats
+"clarification" specially. Only the *orchestration logic* for
+clarification holds (§6.2) is unbuilt; the storage they'll use is already
+complete.
 """
 
 import json
@@ -22,6 +24,7 @@ import sqlite3
 import threading
 import uuid
 from concurrent.futures import Future
+from datetime import datetime, timezone
 from queue import SimpleQueue
 
 from persistence.exceptions import NotFoundError, PersistenceError
@@ -72,7 +75,8 @@ _EVENT_BOOL_COLUMNS = {"occurred_at_is_fallback", "clarification_held", "approva
 _EVENT_IMMUTABLE_COLUMNS = {"event_id", "received_at", "source", "sender_identity", "raw_text"}
 _UPDATABLE_EVENT_COLUMNS = frozenset(_EVENT_COLUMNS) - _EVENT_IMMUTABLE_COLUMNS
 
-_NOT_YET_IMPLEMENTED = "{op} is not implemented yet — lands in task {task} (see persistence/schema.py)"
+_HELD_EVENT_RESERVED_KEYS = {"hold_id", "event_id", "created_at"}
+_HELD_EVENT_RESOLUTION_RESERVED_KEYS = {"resolved_by", "resolved_at"}
 
 
 def _encode_event_value(column: str, value):
@@ -124,6 +128,16 @@ def _upsert_steps(connection: sqlite3.Connection, event_id: str, steps: list[dic
             """,
             payload,
         )
+
+
+def _decode_held_event_row(row: sqlite3.Row) -> dict:
+    decoded = dict(row)
+    payload = json.loads(decoded.pop("payload"))
+    resolution_raw = decoded.pop("resolution")
+    decoded["resolved"] = bool(decoded["resolved"])
+    decoded["resolution"] = json.loads(resolution_raw) if resolution_raw is not None else None
+    decoded.update(payload)
+    return decoded
 
 
 def _summary_table_name(level: str) -> str:
@@ -350,13 +364,78 @@ class SQLitePersistence(PersistenceInterface):
         finally:
             connection.close()
 
-    # -- Held events — not yet implemented (§6.2 / §6.7) ---------------------
+    # -- Held events (§6.7) --------------------------------------------------
 
     def store_held_event(self, kind: str, hold: dict) -> str:
-        raise NotImplementedError(_NOT_YET_IMPLEMENTED.format(op="store_held_event", task="6.2 / 6.7"))
+        hold_id = hold.get("hold_id") or uuid.uuid4().hex
+        event_id = hold["event_id"]
+        payload = {key: value for key, value in hold.items() if key not in _HELD_EVENT_RESERVED_KEYS}
+        created_at = hold.get("created_at") or datetime.now(timezone.utc).isoformat()
+
+        row = {
+            "hold_id": hold_id,
+            "kind": kind,
+            "event_id": event_id,
+            "payload": json.dumps(payload),
+            "created_at": created_at,
+        }
+
+        def _do(connection: sqlite3.Connection) -> str:
+            try:
+                connection.execute(
+                    "INSERT INTO held_events (hold_id, kind, event_id, payload, created_at) "
+                    "VALUES (:hold_id, :kind, :event_id, :payload, :created_at)",
+                    row,
+                )
+                connection.commit()
+                return hold_id
+            except sqlite3.Error as exc:
+                connection.rollback()
+                raise PersistenceError(f"failed to store held event '{hold_id}': {exc}") from exc
+
+        return self._submit_write(_do)
 
     def list_held_events(self, kind: str) -> list[dict]:
-        raise NotImplementedError(_NOT_YET_IMPLEMENTED.format(op="list_held_events", task="6.2 / 6.7"))
+        connection = self._read_connection()
+        try:
+            rows = connection.execute(
+                "SELECT * FROM held_events WHERE kind = ? AND resolved = 0 ORDER BY created_at",
+                (kind,),
+            ).fetchall()
+            return [_decode_held_event_row(row) for row in rows]
+        finally:
+            connection.close()
 
     def resolve_held_event(self, kind: str, hold_id: str, resolution: dict) -> None:
-        raise NotImplementedError(_NOT_YET_IMPLEMENTED.format(op="resolve_held_event", task="6.2 / 6.7"))
+        resolved_by = resolution.get("resolved_by")
+        resolved_at = resolution.get("resolved_at") or datetime.now(timezone.utc).isoformat()
+        resolution_payload = {key: value for key, value in resolution.items() if key not in _HELD_EVENT_RESOLUTION_RESERVED_KEYS}
+
+        def _do(connection: sqlite3.Connection) -> None:
+            existing = connection.execute(
+                "SELECT resolved FROM held_events WHERE hold_id = ? AND kind = ?", (hold_id, kind)
+            ).fetchone()
+            if existing is None:
+                raise NotFoundError(f"no such {kind} hold: '{hold_id}'")
+            if existing["resolved"]:
+                raise NotFoundError(f"{kind} hold '{hold_id}' is already resolved")
+
+            try:
+                connection.execute(
+                    "UPDATE held_events SET resolved = 1, resolved_by = :resolved_by, "
+                    "resolved_at = :resolved_at, resolution = :resolution "
+                    "WHERE hold_id = :hold_id AND kind = :kind",
+                    {
+                        "resolved_by": resolved_by,
+                        "resolved_at": resolved_at,
+                        "resolution": json.dumps(resolution_payload),
+                        "hold_id": hold_id,
+                        "kind": kind,
+                    },
+                )
+                connection.commit()
+            except sqlite3.Error as exc:
+                connection.rollback()
+                raise PersistenceError(f"failed to resolve held event '{hold_id}': {exc}") from exc
+
+        self._submit_write(_do)

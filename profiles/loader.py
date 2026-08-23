@@ -7,13 +7,18 @@ it (profiles.validate), and freezes the result into an immutable
 a missing or bad argument fails immediately and clearly.
 
 Core-agent construction seam: work_plan.md §1.5 says the three core agents
-are constructed "on every run... always". The Agent Framework (§3) exists
-now (agents/base.py etc., Mission 3) — but the Main Agent, History Agent,
-and Insights Agent *classes* themselves are §5.3/§6.1/§6.9's job, not
-§3's, and none of those sections exist yet. `_construct_core_agents` stays
-a documented no-op returning an empty mapping until they do. Once they
-land, this is the one place that changes to wire them in — nothing here
-needs to change shape.
+are constructed "on every run... always". `_construct_core_agents` stays a
+documented no-op returning an empty mapping — permanently, not just until
+the Agent Framework existed. **This module is not where core agents get
+wired in.** Constructing a `MainAgent` means importing
+`orchestrator.main_agent`, and `profiles` is a low-level package that may
+never call upward into `orchestrator` (docs/allowed_calls.md's own
+layering rule — `profiles` is called by anything, calls nothing above
+itself). Mission 1's original docstring here claimed otherwise; that was
+wrong, caught while building §6.1 (Mission 6). The real, correctly-layered
+replacement is `orchestrator.main_agent.construct_core_agents(base_config)`
+— called by whichever future startup code assembles the running system
+(§7/§9, not yet built), never by this function.
 """
 
 import importlib

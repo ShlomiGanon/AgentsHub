@@ -41,17 +41,5 @@ def test_delete_unknown_user_raises_not_found(store):
     with pytest.raises(NotFoundError):
         store.delete_user("does-not-exist")
 
-
-def test_held_event_operations_are_not_yet_implemented(store):
-    # Events and summaries were implemented in Mission 2 (§2.9) — see
-    # tests/test_persistence_events.py and tests/test_persistence_conformance.py.
-    # Held-event storage is still owned by §6.2/§6.7 and stays unimplemented
-    # here.
-    with pytest.raises(NotImplementedError):
-        store.store_held_event("clarification", {})
-
-    with pytest.raises(NotImplementedError):
-        store.list_held_events("clarification")
-
-    with pytest.raises(NotImplementedError):
-        store.resolve_held_event("clarification", "some-id", {})
+# Held-event operations are implemented (§6.7, Mission 6) — see
+# tests/test_persistence_held_events.py and tests/test_persistence_conformance.py.

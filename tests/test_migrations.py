@@ -18,7 +18,7 @@ def test_fresh_file_gets_the_full_schema(tmp_path):
     run_migrations(db_path)
 
     tables = _table_names(db_path)
-    for expected in ("users", "events", "event_steps", "daily_summaries", "monthly_summaries", "yearly_summaries"):
+    for expected in ("users", "events", "event_steps", "daily_summaries", "monthly_summaries", "yearly_summaries", "held_events"):
         assert expected in tables
 
 

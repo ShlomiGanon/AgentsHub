@@ -13,6 +13,7 @@ from persistence.schema import (
     DAILY_SUMMARIES_TABLE_DDL,
     EVENT_STEPS_TABLE_DDL,
     EVENTS_TABLE_DDL,
+    HELD_EVENTS_TABLE_DDL,
     INDEXES_DDL,
     MONTHLY_SUMMARIES_TABLE_DDL,
     USERS_TABLE_DDL,
@@ -28,6 +29,7 @@ MIGRATIONS: list[tuple[int, str, str]] = [
     (3, "create event_steps table", EVENT_STEPS_TABLE_DDL),
     (4, "create summary tables", DAILY_SUMMARIES_TABLE_DDL + MONTHLY_SUMMARIES_TABLE_DDL + YEARLY_SUMMARIES_TABLE_DDL),
     (5, "create indexes", INDEXES_DDL),
+    (6, "create held_events table", HELD_EVENTS_TABLE_DDL),
 ]
 
 
