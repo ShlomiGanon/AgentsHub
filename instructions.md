@@ -73,6 +73,8 @@ When writing control flow blocks, functions, and classes, use the **Allman style
 1. **Allowed Top-Level Packages and Directories**
    - The AI model is strictly limited to creating files and modules *only* within the pre-approved subsystem packages and standard directories defined by the work plan:
      * `persistence/` (Database interface, SQLite backend, schema, migrations)
+     * `auth/` (Permission model — levels, action-requirement table, the shared authorization check)
+     * `registries/` (Event-type and area registries — closed sets read from the active profile at startup)
      * `agents/` (Agent framework, base class, descriptors, registry, tools)
      * `protocols/` (Protocol model, loader, editor, executor, retry)
      * `history/` (History write, extraction, agent, summarizer, scheduler, queries)
@@ -89,3 +91,16 @@ When writing control flow blocks, functions, and classes, use the **Allman style
 
 2. **Prohibition of Unauthorized Directories**
    - Creating any new top-level directory or package outside of the listed permitted directories is **strictly forbidden** without explicit user approval.
+
+---
+
+## 6. Progress Tracking and Reporting
+
+1. **Append-Only Progress Log (`docs/progress.md`)**
+   - At the end of every completed subtask defined in `docs/work_plan.md`, the AI model or agent doing the work must append an entry to `docs/progress.md` recording:
+     1. The subtask ID and name (e.g. "1.10 — User administration command")
+     2. Its completion status — done / partially done / blocked, with the reason if not fully done
+     3. Any deviations from the subtask's description in `work_plan.md` — anything implemented differently than specified, anything deferred, stubbed, or simplified, and why
+   - This applies to every subtask across every mission, regardless of which model or tool executes it, so the log stays consistent even when different sessions or different models pick up different missions.
+   - Create `docs/progress.md` if it does not yet exist. It is **append-only**: one entry per subtask, added in completion order. Never rewrite or delete an existing entry — if a subtask is revisited later, add a new entry describing what changed rather than editing the old one.
+   - This supersedes marking completion inline in `work_plan.md` itself — `docs/progress.md` is the single record of what was actually built versus what was specified.
