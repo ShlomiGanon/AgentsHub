@@ -259,6 +259,13 @@ The human surface, serving commanders and viewers. Everything a user sends arriv
 - Include text that no classification fits, so the clarification path can be driven from fixtures rather than only live.
 - Include human-activation records, so their exclusion from precedent closure is testable.
 
+### 2.13 Add held-event lookup by event ID
+*Requires: 2.7, 2.9*
+
+- Add `fetch_held_event(kind, event_id) -> dict | None` to the persistence interface and the SQLite backend, following the same precedent `fetch_event`/`update_event` already set.
+- Return the hold whether it is resolved or still pending, including `resolved_by` and `resolved_at` when set, so a caller can distinguish "pending", "resolved by X at T", and "no such hold" in one lookup.
+- Extend the backend-swap conformance suite (§2.11) with this method, same as every other persistence method.
+
 ---
 
 ## 3. Agent Framework
@@ -752,7 +759,7 @@ The human surface, serving commanders and viewers. Everything a user sends arriv
 - Reject any other field with a message naming it and stating that it belongs to the profile and takes effect only on a restart. A silent ignore here looks exactly like a successful change.
 
 ### 7.9 Enforce authentication and authorization
-*Requires: 7.3, 7.4, 7.6, 7.7, 7.8, 1.9, 2.4*
+*Requires: 7.3, 7.4, 7.6, 7.7, 7.8, 7.11, 1.9, 2.4*
 
 - Authenticate every caller against the user table before any endpoint logic runs, including the sensor path, which authenticates as a system identity rather than bypassing authentication.
 - Apply the permission model at every endpoint through the single shared check, and never through an inline level comparison.
@@ -767,6 +774,19 @@ The human surface, serving commanders and viewers. Everything a user sends arriv
 - Return one consistent shape across every endpoint — a class, a human-readable message, and where relevant the field or protocol at fault.
 - Never leak an internal exception, a stack trace, or an engine-specific error into a response.
 - Make a failed run distinguishable from a failed request. A run that exhausted its retries is a successful API interaction reporting an unsuccessful outcome.
+
+### 7.11 Implement `POST /Approve/<event_id>` and `POST /Clarify/<event_id>`
+*Requires: 7.1, 7.2, 6.2, 6.7, 2.13, 1.9*
+
+- Accept a commander's answer to a pending hold, addressed by the event ID it was created against, and resume the flow from where it stopped.
+- Look up the hold via `fetch_held_event`, keyed by event ID rather than the orchestrator's internal hold ID, so the API surface matches what the bot and any external caller actually have on hand.
+- `POST /Clarify/<event_id>`: accept a classification drawn from the loaded event-type registry for a pending clarification hold. Reject any value outside the registry. On acceptance, resolve the hold synchronously and resume the flow at risk assessment — this continuation is itself a full run and must follow the same synchronous-prefix / queued-continuation split as §7.2, returning a job ID for `GET /Job/<event_id>` polling rather than blocking the request on it.
+- `POST /Approve/<event_id>`: accept a decision of approve or deny for a pending approval hold.
+  - On approve: resolve the hold synchronously, then resume execution from task formulation through protocol execution as a queued continuation, same as above — this is not free, it costs the same several-model-call run §7.2 exists to avoid blocking on, so return a job ID for `GET /Job/<event_id>` polling.
+  - On deny: resolve the hold and end the run as declined entirely synchronously, in the same request — this path is genuinely final, has no continuation, and needs no queuing. Return the declined outcome directly in the response.
+- Validate the answering identity's level at the moment they answer, through the same shared permission check every other endpoint uses — never inline. The orchestrator's own internal permission check inside `answer_clarification_hold`/`answer_approval_hold` still runs underneath as defense-in-depth for any direct, non-API caller — it is not a second inline check duplicating the API-level one.
+- Reject an answer to a hold that does not exist, is not in a pending state, or was already resolved, naming who resolved it and when, using `fetch_held_event`'s resolved-state result — not a generic "not found."
+- Return the outcome — a job ID for the queued approve/clarify path, or the declined outcome directly for the deny path — so the caller can confirm to the commander what happened next.
 
 ---
 
@@ -797,7 +817,7 @@ The human surface, serving commanders and viewers. Everything a user sends arriv
 - Reserve slash-commands for the operational actions — clarification, approval, profile, settings — so they never collide with free text a user is reporting.
 
 ### 8.4 Implement clarification prompts
-*Requires: 8.2, 6.2*
+*Requires: 8.2, 7.11*
 
 - Push a held event to commanders immediately, showing its raw text and stating exactly what could not be resolved.
 - Offer the loaded event types as the choices, presented as buttons rather than free text, since the registry is fixed for the run and only a type from it can be accepted.
@@ -805,7 +825,7 @@ The human surface, serving commanders and viewers. Everything a user sends arriv
 - Handle two commanders answering the same hold: accept the first and tell the second it is already resolved and by whom.
 
 ### 8.5 Implement approval prompts
-*Requires: 8.2, 6.7*
+*Requires: 8.2, 7.11*
 
 - Push a pending run to commanders immediately, with the event, the assessed risk and its reason, and why it is being held.
 - Present the two hold reasons differently, because they ask different questions. A flagged protocol asks whether to run this protocol; an ambiguous selection asks which of these protocols to run, and must show the candidates.
