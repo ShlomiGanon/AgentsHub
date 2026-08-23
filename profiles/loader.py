@@ -7,11 +7,13 @@ it (profiles.validate), and freezes the result into an immutable
 a missing or bad argument fails immediately and clearly.
 
 Core-agent construction seam: work_plan.md §1.5 says the three core agents
-are constructed "on every run... always". The Agent Framework (§3) and the
-base-config-driven core agents (§3.6, §6.1/§6.9/§5.3) don't exist yet, so
-`_construct_core_agents` is a documented no-op returning an empty mapping.
-Once those sections land, this is the one place that changes to wire them
-in — nothing here needs to change shape.
+are constructed "on every run... always". The Agent Framework (§3) exists
+now (agents/base.py etc., Mission 3) — but the Main Agent, History Agent,
+and Insights Agent *classes* themselves are §5.3/§6.1/§6.9's job, not
+§3's, and none of those sections exist yet. `_construct_core_agents` stays
+a documented no-op returning an empty mapping until they do. Once they
+land, this is the one place that changes to wire them in — nothing here
+needs to change shape.
 """
 
 import importlib

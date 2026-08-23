@@ -22,7 +22,7 @@ ENTRY_POINTS: dict[str, set[str]] = {
     "profiles": {"profiles.loader", "profiles.spec"},
     "tools": {"tools.logging_config", "tools.tracing"},
     "cli": set(),
-    "agents": {"agents.registry"},
+    "agents": {"agents.registry", "agents.results", "agents.errors", "agents.reference"},
     "protocols": {"protocols.model", "protocols.loader"},
     "history": {"history.query"},
     "orchestrator": {"orchestrator.flows"},

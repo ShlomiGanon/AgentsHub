@@ -1,5 +1,14 @@
 # Runtime dependencies for the Field-Report Multi-Agent System.
 #
-# Foundations (work_plan.md §1) needs nothing beyond the Python standard
-# library. The Agent Framework (§3) will add crewai and a model client
-# library here once it lands.
+# Foundations (work_plan.md §1) and the Data Layer (§2) need nothing
+# beyond the Python standard library.
+#
+# Agent Framework (§3): crewai is not installed in this environment yet —
+# confirmed with the user. agents/adapter.py is built and tested against
+# its documented API (docs.crewai.com, checked 2026-08-23, describing
+# roughly the v1.13-1.15 series) via a monkeypatched fake; see
+# docs/progress.md's §3.5 entry for exactly what was verified and what
+# wasn't. Uncomment the line below (and re-verify the version/API against
+# whatever is current at the time) once real model API keys are available.
+#
+# crewai>=1.13

@@ -238,3 +238,144 @@ Entry format:
   human-activation records (one approved, one declined at approval).
   Verified against a real backend in `tests/test_seed_dataset.py`, not
   just eyeballed.
+
+### 3.2 — Define the agent descriptor
+- **Status:** done
+- **Deviations:** The live CrewAI instance is deliberately *not* held on
+  the descriptor itself, unlike 3.2's literal "hold one CrewAI instance"
+  wording — it lives on the `Agent` instance (§3.1), built lazily on first
+  `process()` call rather than at construction. This matters because
+  `crewai` isn't installed in this environment (confirmed with the user);
+  eager construction in `__init__` would make constructing *any* agent —
+  even one never invoked — crash immediately. Lazy construction on the
+  instance achieves the same "built once, reused for the life of the run"
+  outcome without that failure mode. `AgentDescriptor` itself stays a
+  plain, frozen, declarative dataclass.
+
+### 3.3 — Implement the tool-exposure function
+- **Status:** done
+- **Deviations:** None. `exposed_tools_for` introspects the class for
+  `@tool`-decorated methods rather than reading a hand-maintained list, so
+  a tool added to a class is exposed automatically.
+
+### 3.4 — Classify tools by side effect
+- **Status:** done
+- **Deviations:** Beyond requiring `side_effecting` explicitly (§3.4's
+  literal ask), the `@tool` decorator also rejects `idempotent` being
+  *omitted* when `side_effecting=True` and rejects it being *given* when
+  `side_effecting=False` — not just "no default," but "no ambiguous or
+  meaningless value either." Confirmed as the natural reading of "meaningful,
+  and required, only when side-effecting," not a separate question.
+
+### 3.9 — Implement the unclear-task signal
+- **Status:** done
+- **Deviations:** §3.1 literally describes `process()` as returning
+  "result_text" (implying a bare string), but §3.9 explicitly rules out
+  both an exception and "an error string" as the unclear-task signal —
+  logically leaving only a structured, tagged return value, since a bare
+  string can't be distinct from a normal result without becoming exactly
+  the disallowed "error string." `process()` therefore returns a small
+  `AgentResult(status, text)`, read as completing §3.1's intent rather
+  than contradicting it. The model signals unclear-task via a fixed
+  sentinel line in its raw output (`UNCLEAR_TASK: ...`), parsed here —
+  **this exact prompt convention is unverified against a live model**
+  since crewai isn't installed; flagged for a manual smoke test once real
+  API keys are available.
+
+### 3.1 — Define the abstract agent class
+- **Status:** done
+- **Deviations:** `process()` returns `AgentResult`, not a bare string —
+  see 3.9's entry above for why. Otherwise direct: one public entry point,
+  model taken as a constructor argument and stored, `name`/`role`/
+  `system_prompt` required as class-level attributes (checked at
+  construction, failing loudly by naming what's missing), the base class
+  holds everything common (descriptor, wrapped tools, invocation path).
+
+### 3.5 — Implement the CrewAI adapter
+- **Status:** done (as a seam — see Mission-level note below)
+- **Deviations:** `crewai` is not installed in this environment
+  (confirmed with the user before planning). The adapter is written
+  against the real library's documented API — researched at
+  docs.crewai.com on 2026-08-23, describing roughly the v1.13–1.15 series
+  (exact PyPI version was ambiguous across sources) — not against a guess.
+  Verified from that research: `Agent(role, goal, backstory, llm, tools,
+  max_execution_time, ...)`, `Agent.kickoff(text) -> LiteAgentOutput`
+  (`.raw` holds the text) runs one agent directly with no Task/Crew
+  needed, and custom tools subclass `crewai.tools.BaseTool` with explicit
+  `name`/`description`/`_run`. **Not verified against a live install**:
+  whether dynamically subclassing `BaseTool` via `type(...)` (rather than
+  a normal `class` statement) behaves correctly given `BaseTool` is
+  pydantic-based — this is the specific risk flagged for a manual smoke
+  test once crewai is actually installed. `_get_crewai()` is the one lazy
+  import point; every other function is fully real and fully tested via a
+  monkeypatched fake standing in for the module (`tests/test_agent_adapter.py`),
+  and the framework-not-ready path is tested for real, since that's this
+  environment's actual current state.
+
+### 3.6 — Implement model routing
+- **Status:** done (routing mechanics only — no core agents constructed, see below)
+- **Deviations:** Model routing itself needed no new code for credential
+  resolution: litellm reads provider environment variables straight from
+  `os.environ`, and Mission 1's `profiles.loader` already put them there
+  at load time. "Construct the three core agents with the models named in
+  the base configuration" is **not done in this mission** — the Main
+  Agent, History Agent, and Insights Agent classes don't exist yet
+  (§5.3/§6.1/§6.9). `profiles/loader.py::_construct_core_agents` stays the
+  documented `{}` seam from Mission 1; its comment was updated to point at
+  those three future tasks instead of §3, since the Agent Framework now
+  exists but has nothing of theirs to construct yet. What *is* verified:
+  routing is per-call from `descriptor.model`, with no shared client and
+  no global default (`tests/test_agent_adapter.py`'s two-agents-two-models
+  test).
+
+### 3.7 — Enforce tool permissions at call time
+- **Status:** done
+- **Deviations:** None. Enforcement happens per invocation via a
+  contextvar `process()` sets for the current call, never bound at
+  construction; a blocked attempt returns a refusal string and logs the
+  agent, the tool, and the trace ID. "The step" from §3.7's wording isn't
+  logged directly — `process()`'s signature (§3.1) doesn't carry a step
+  identifier, only `text`/`allowed_tools` — the trace ID is what a caller
+  correlates a blocked attempt back to a step with, once the executor
+  (§4, later) exists to make that correlation meaningful.
+
+### 3.10 — Handle timeouts and agent errors
+- **Status:** done (translation logic; timeout mechanism unverified live)
+- **Deviations:** Uses CrewAI's own `max_execution_time` constructor
+  parameter as the timeout — confirmed as a real, documented parameter,
+  not invented — rather than a separate thread-based watchdog. A generic
+  `Exception` from `kickoff()` becomes `AgentModelError`; `TimeoutError`
+  becomes `AgentTimeoutError`; output with no `.raw` attribute becomes
+  `AgentOutputParseError`. **Not verified live**: whether CrewAI actually
+  raises Python's built-in `TimeoutError` on an execution-time breach, or
+  some other exception type that would currently fall through to
+  `AgentModelError` instead — flagged alongside 3.5's other unverified
+  specifics for a manual smoke test once crewai is installed.
+
+### 3.8 — Build the agent registry
+- **Status:** done
+- **Deviations:** Rejects a duplicate agent name at build time
+  (`DuplicateAgentNameError`) — not in §3.8's literal bullets, added as a
+  direct integrity check since a silently-overwritten registration would
+  be a confusing failure mode later. Otherwise direct: built from exactly
+  the core-agents mapping and profile-agents list passed in, no
+  self-registration; lookup by name and enumeration; `descriptor_for`
+  returns role and tools together from the one descriptor rather than two
+  separate calls that could drift.
+
+### 3.11 — Build the reference agent
+- **Status:** done
+- **Deviations:** `check_status`'s tool name matches Mission 2's seed
+  dataset and fixture profile, which already assumed a `"check_status"`
+  tool would exist — not a coincidence, kept consistent deliberately.
+  `record_action` genuinely appends to an instance list rather than
+  returning a canned string, since a canned string can't distinguish one
+  call from two — that distinction is exactly what §4.5's retry policy
+  will later need to be testable against.
+
+### 3.12 — Document the agent-authoring path
+- **Status:** done
+- **Deviations:** None. One page, points at `agents/reference.py` rather
+  than reproducing its code, states the three failure modes (unmarked
+  tool, missing class attribute, agent not constructed in a profile) and
+  when each is caught.

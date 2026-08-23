@@ -24,7 +24,7 @@ imports.
 | `profiles` | `profiles.loader`, `profiles.spec` | `profiles.validate` is called only by `profiles.loader`, not directly by other packages. |
 | `tools` | `tools.logging_config`, `tools.tracing` | Shared helpers belonging to no subsystem. |
 | `cli` | none (not importable) | `cli.user_admin` is an entry point run from the shell, never imported by another package. |
-| `agents` | `agents.registry` *(lands in §3)* | |
+| `agents` | `agents.registry`, `agents.results`, `agents.errors`, `agents.reference` | `agents.reference` is the reference agent (§3.11) — a concrete agent module a profile constructs directly, not a query interface. Every future concrete agent (a real domain specialist) becomes an entry point the same way, one module per agent. `agents.base`, `agents.descriptor`, `agents.tooling`, `agents.adapter` stay internal — only agents/ package files import them. |
 | `protocols` | `protocols.model`, `protocols.loader` *(lands in §4)* | |
 | `history` | `history.query` *(lands in §5)* | |
 | `orchestrator` | `orchestrator.flows` *(lands in §6)* | |
