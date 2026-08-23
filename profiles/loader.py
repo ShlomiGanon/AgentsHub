@@ -6,6 +6,9 @@ it (profiles.validate), and freezes the result into an immutable
 `LoadedProfile` every subsystem reads from. There is no default profile —
 a missing or bad argument fails immediately and clearly.
 
+Core agents land with their owning missions. The History Agent is now
+constructed on every load from the base configuration; Main and Insights
+remain absent until their Mission 6 implementations land.
 Core-agent construction seam: work_plan.md §1.5 says the three core agents
 are constructed "on every run... always". `_construct_core_agents` stays a
 documented no-op returning an empty mapping — permanently, not just until
@@ -26,6 +29,7 @@ import os
 from dataclasses import dataclass, field
 from types import MappingProxyType, ModuleType
 
+from agents.history import HistoryAgent
 from config.base import BaseConfig, load_base_config
 from profiles import validate as profile_validate
 from profiles.spec import HUMAN_ACTIVATION_TYPE, REQUIRED_PROFILE_ATTRS
@@ -103,14 +107,11 @@ def _resolve_secrets(module: ModuleType, module_path: str) -> dict[str, str]:
 
 
 def _construct_core_agents(base_config: BaseConfig) -> dict:
-    """Seam for the three core agents (Main, History, Insights).
+    """Construct core agents whose owning mission has landed."""
 
-    Returns an empty mapping until the Agent Framework (§3) exists. See
-    module docstring.
-    """
+    history_agent = HistoryAgent(base_config.history_agent_model)
 
-    del base_config  # unused until §3 lands
-    return {}
+    return {history_agent.name: history_agent}
 
 
 def validate_single_protocol(protocol, agents_by_name: dict) -> list[str]:

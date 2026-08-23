@@ -63,6 +63,15 @@ def test_fetch_events_range_orders_by_occurred_at(store):
     assert [e["event_id"] for e in events] == ["e1", "e2"]
 
 
+def test_fetch_events_range_excludes_the_half_open_end_boundary(store):
+    store.append_event(_minimal_event(event_id="inside", occurred_at="2026-08-01T23:59:59"))
+    store.append_event(_minimal_event(event_id="at-end", occurred_at="2026-08-02T00:00:00"))
+
+    events = store.fetch_events_range("2026-08-01T00:00:00", "2026-08-02T00:00:00")
+
+    assert [event["event_id"] for event in events] == ["inside"]
+
+
 def test_fetch_events_by_type_area_window_matches_both_fields_exactly(store):
     store.append_event(_minimal_event(event_id="match", classification="fire", area="north", occurred_at="2026-08-01T00:00:00"))
     store.append_event(_minimal_event(event_id="wrong_area", classification="fire", area="south", occurred_at="2026-08-01T00:00:00"))
@@ -164,10 +173,12 @@ def test_write_and_fetch_a_summary(store):
         "period_start": "2026-08-01T00:00:00",
         "period_end": "2026-08-01T23:59:59",
         "generated_at": "2026-08-02T00:05:00",
+        "event_index": [{"event_id": "e1"}],
     })
 
     [summary] = store.fetch_summaries_range("daily", "2026-08-01T00:00:00", "2026-08-01T23:59:59")
     assert summary["summary_text"] == "3 fire reports, all resolved"
+    assert summary["event_index"] == [{"event_id": "e1"}]
 
 
 def test_writing_a_summary_for_an_already_summarized_period_overwrites(store):

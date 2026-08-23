@@ -46,3 +46,25 @@ def test_running_again_on_an_up_to_date_database_applies_nothing(tmp_path):
     tables_after = _table_names(db_path)
 
     assert tables_before == tables_after
+
+
+def test_migration_six_adds_event_index_to_an_existing_version_five_database(tmp_path):
+    db_path = str(tmp_path / "version-five.db")
+    connection = sqlite3.connect(db_path)
+    try:
+        for version, _description, sql in MIGRATIONS[:5]:
+            connection.executescript(sql)
+            connection.execute(f"PRAGMA user_version = {version}")
+        connection.commit()
+    finally:
+        connection.close()
+
+    run_migrations(db_path)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(daily_summaries)")}
+    finally:
+        connection.close()
+
+    assert "event_index" in columns

@@ -10,12 +10,15 @@ regardless of which profile was named.
 
 from dataclasses import dataclass
 
+DEBUG_FLAG = False
+
 
 @dataclass(frozen=True)
 class BaseConfig:
     main_agent_model: str
     history_agent_model: str
     insights_agent_model: str
+    DEBUG_FLAG: bool = False
 
 
 # Placeholder model identifiers. Finalized when model routing (§3.6)
@@ -38,4 +41,5 @@ def load_base_config() -> BaseConfig:
         main_agent_model=_MAIN_AGENT_MODEL,
         history_agent_model=_HISTORY_AGENT_MODEL,
         insights_agent_model=_INSIGHTS_AGENT_MODEL,
+        DEBUG_FLAG=DEBUG_FLAG,
     )
