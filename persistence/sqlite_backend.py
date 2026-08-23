@@ -259,6 +259,16 @@ class SQLitePersistence(PersistenceInterface):
 
         self._submit_write(_do)
 
+    def fetch_event(self, event_id: str) -> dict | None:
+        connection = self._read_connection()
+        try:
+            row = connection.execute("SELECT * FROM events WHERE event_id = ?", (event_id,)).fetchone()
+            if row is None:
+                return None
+            return self._attach_steps(connection, _decode_event_row(row))
+        finally:
+            connection.close()
+
     def fetch_events_range(self, start, end) -> list[dict]:
         connection = self._read_connection()
         try:

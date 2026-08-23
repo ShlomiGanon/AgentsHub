@@ -1,11 +1,20 @@
 import pytest
 
 from auth.permissions import PermissionLevel
-from orchestrator.holds import answer_approval_hold, create_approval_hold, determine_approval_hold
+from history.extraction import ExtractionResult
+from orchestrator.holds import (
+    answer_approval_hold,
+    answer_clarification_hold,
+    create_approval_hold,
+    create_clarification_hold,
+    determine_approval_hold,
+    determine_clarification_hold,
+)
 from orchestrator.main_agent import RiskAssessment
 from orchestrator.selection import ProtocolSelectionResult
 from persistence.sqlite_backend import SQLitePersistence
 from protocols.model import CriticalityLevel, Protocol
+from registries.event_types import EventTypeRegistry
 
 
 def _protocol(name, approval_flag):
@@ -122,3 +131,97 @@ def test_answering_an_already_resolved_hold_is_reported_distinctly(store):
 
     assert first.status == "approved"
     assert second.status == "not_found"  # not silently accepted as a fresh answer
+
+
+# -- Clarification holds (§6.2) ------------------------------------------
+
+
+def _registry():
+    return EventTypeRegistry(types=("fire", "medical", "human_activation"))
+
+
+def _unresolved_extraction():
+    return ExtractionResult(
+        classification=None,
+        classification_status="unresolved",
+        area="north_sector",
+        entities=(),
+        description="something happened, unclear what",
+        severity=None,
+        occurred_at="2026-08-20T10:00:00",
+        occurred_at_is_fallback=False,
+        missing_fields=("classification",),
+    )
+
+
+def _resolved_extraction():
+    return ExtractionResult(
+        classification="fire",
+        classification_status="resolved",
+        area="north_sector",
+        entities=(),
+        description="d",
+        severity="moderate",
+        occurred_at="2026-08-20T10:00:00",
+        occurred_at_is_fallback=False,
+        missing_fields=(),
+    )
+
+
+def test_unresolved_classification_holds():
+    assert determine_clarification_hold(_unresolved_extraction()) is True
+
+
+def test_resolved_classification_does_not_hold():
+    assert determine_clarification_hold(_resolved_extraction()) is False
+
+
+def test_create_and_answer_clarification_hold_round_trip(store):
+    hold_id = create_clarification_hold(store, "evt-1", "something happened, unclear what")
+
+    [held] = store.list_held_events("clarification")
+    assert held["hold_id"] == hold_id
+    assert held["unresolved_field"] == "classification"
+    assert held["raw_text"] == "something happened, unclear what"
+
+    result = answer_clarification_hold(store, hold_id, "commander-1", PermissionLevel.COMMANDER, "fire", _registry())
+
+    assert result.status == "resolved"
+    assert store.list_held_events("clarification") == []
+
+
+def test_free_text_outside_the_registry_is_rejected(store):
+    hold_id = create_clarification_hold(store, "evt-1", "raw text")
+
+    result = answer_clarification_hold(store, hold_id, "commander-1", PermissionLevel.COMMANDER, "not_a_real_type", _registry())
+
+    assert result.status == "invalid_classification"
+    # rejected, not silently resolved — the hold is still open
+    assert len(store.list_held_events("clarification")) == 1
+
+
+def test_viewer_cannot_resolve_a_clarification_hold(store):
+    hold_id = create_clarification_hold(store, "evt-1", "raw text")
+
+    result = answer_clarification_hold(store, hold_id, "viewer-1", PermissionLevel.VIEWER, "fire", _registry())
+
+    assert result.status == "unauthorized"
+    assert len(store.list_held_events("clarification")) == 1
+
+
+def test_answering_an_unknown_clarification_hold_is_not_found(store):
+    result = answer_clarification_hold(store, "never-existed", "commander-1", PermissionLevel.COMMANDER, "fire", _registry())
+
+    assert result.status == "not_found"
+
+
+def test_clarification_and_approval_holds_do_not_interfere(store):
+    # Both kinds share one table — confirm resolving one never touches the other.
+    clar_id = create_clarification_hold(store, "evt-1", "raw text")
+    appr_id = create_approval_hold(store, "evt-2", "flagged_protocol", _selection(), _risk())
+
+    answer_clarification_hold(store, clar_id, "commander-1", PermissionLevel.COMMANDER, "fire", _registry())
+
+    assert store.list_held_events("clarification") == []
+    assert len(store.list_held_events("approval")) == 1
+    assert store.list_held_events("approval")[0]["hold_id"] == appr_id

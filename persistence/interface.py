@@ -20,6 +20,14 @@ every step record back onto the same event record as the run proceeds")
 and §6.11 ("write the outcome back on every branch") both require mutating
 an already-appended event — the interface is unusable for either without
 it. Added now as completing 2.7's intent, confirmed with the user.
+
+`fetch_event` (single-event lookup by ID) is likewise not in §2.7's
+literal list, added while building §6.11: resuming a held event from the
+database alone (§6.11's own restartability requirement) needs to re-read
+that event's already-extracted fields, and neither `fetch_events_range`
+nor `fetch_events_by_type_area_window` can do a direct ID lookup without
+already knowing the occurrence window. Same "completing 2.7's intent"
+reasoning as `update_event`.
 """
 
 from abc import ABC, abstractmethod
@@ -47,6 +55,10 @@ class PersistenceInterface(ABC):
         Every other key maps to a column on the event itself. Never
         accepts `raw_text` — see persistence/schema.py's §2.5 note.
         """
+
+    @abstractmethod
+    def fetch_event(self, event_id: str) -> dict | None:
+        """Return the single event identified by `event_id`, or None."""
 
     @abstractmethod
     def fetch_events_range(self, start: Any, end: Any) -> list[dict]:

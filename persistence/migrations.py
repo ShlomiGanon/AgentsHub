@@ -53,7 +53,14 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "ALTER TABLE monthly_summaries ADD COLUMN event_index TEXT;"
         "ALTER TABLE yearly_summaries ADD COLUMN event_index TEXT;",
     ),
-    (6, "create held_events table", HELD_EVENTS_TABLE_DDL),
+    # Was also numbered 6 — a merge collision between two branches that
+    # each added their own migration 6. run_migrations skips any entry
+    # whose version is <= the current one, so the second "6" was silently
+    # never applied and the held_events table never got created. Fixed by
+    # renumbering to 7; never renumber a migration a real database may
+    # already have applied under its old number — this one never actually
+    # ran, so renumbering it is safe (see docs/progress.md).
+    (7, "create held_events table", HELD_EVENTS_TABLE_DDL),
 ]
 
 

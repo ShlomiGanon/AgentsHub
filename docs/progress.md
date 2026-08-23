@@ -14,8 +14,8 @@ a new entry describing what changed instead.
 | 2 | Data Layer (2.1–2.12) | Done |
 | 3 | Agent Framework (3.1–3.12) | Done |
 | 4 | Protocol Engine (4.1–4.8) | Done |
-| 5 | History System | Not started |
-| 6 | Main Agent Orchestration | Not started |
+| 5 | History System (5.1–5.10) | Done |
+| 6 | Main Agent Orchestration (6.1–6.15) | Done |
 | 7 | API Layer | Not started |
 | 8 | Telegram Frontend | Not started |
 | 9 | Integration and Hardening | Not started |
@@ -825,3 +825,183 @@ Entry format:
   5.7). Not in the user's original named list of six; identified and
   confirmed with them during planning, same as 6.11. Will be completed
   once 6.11 and 6.12 are.
+
+### Merge remediation — repairing damage from the Mission 5 / Mission 6 branch merge
+- **Status:** done
+- **Deviations:** Not a work_plan.md subtask — logged because it was real,
+  necessary work discovered by re-reading the repo, not a hypothetical.
+  This session's Mission 6 work and a separately-developed Mission 5
+  branch (History System, 5.1–5.10, fully real: `history/interface.py`,
+  `query.py`, `precedent.py`, `write.py`, `extraction.py`, `summarize.py`,
+  `scheduler.py`, `retrieval.py`, `time_utils.py`, plus `agents/history.py`)
+  were merged via GitHub PRs outside this conversation. The merge left
+  concrete regressions, confirmed by running the suite (19 failing tests),
+  not assumed:
+  - `persistence/migrations.py` had **two migrations both numbered `6`**
+    (Mission 5's "add event indexes to summaries" and this mission's
+    "create held_events table"). `run_migrations` skips any entry whose
+    version is `<= current_version`, so after applying the first `6` the
+    second was silently never applied — `held_events` didn't exist,
+    breaking every held-event test. Fixed by renumbering the held-events
+    migration to `7` (confirmed it had never actually run against any
+    real database, so renumbering was safe — never renumber a migration
+    that might already be applied somewhere).
+  - `tests/test_architecture.py`'s `ENTRY_POINTS` dict had **duplicate
+    literal keys** (`"agents"` three times, `"history"`/`"protocols"`
+    twice) — Python silently keeps only the last assignment, dropping
+    `agents.history` and `history.interface`, which real code now
+    imports. Fixed by collapsing to one entry per key, unioning what both
+    branches actually needed.
+  - `docs/allowed_calls.md` had the same duplication in table form (three
+    `agents` rows, two each for `history`/`protocols`) — collapsed to one
+    row per package, matching the corrected `ENTRY_POINTS` exactly.
+  - `docs/progress.md`'s Mission-status table (this file) still said
+    Missions 5 and 6 were "Not started" despite the append-only log below
+    it — which merged cleanly, both branches' entries intact — showing
+    otherwise. Corrected.
+  - Core-agent construction was left split across two independently
+    correct functions with nothing combining them:
+    `profiles.loader._construct_core_agents` builds the History Agent
+    (legitimate — `agents/history.py` isn't `orchestrator/`, no layering
+    violation), `orchestrator.main_agent.construct_core_agents` builds the
+    Main Agent (also legitimate — has to live outside `profiles`, per this
+    mission's own earlier fix). Added
+    `orchestrator.flows.assemble_core_agents(loaded_profile, base_config)`
+    to merge both (and, from this point on, the Insights Agent too) — the
+    one thing a future startup sequence (§7/§9) will call.
+  - Full suite confirmed at 274/274 passing after these fixes, before any
+    further work began.
+
+### 6.2 — Implement clarification holds
+- **Status:** done
+- **Deviations:** Built as an extension of `orchestrator/holds.py`
+  (Mission 6 Part 1's approval-hold module), sharing the same generic
+  `held_events` storage with `kind="clarification"` — as originally
+  planned when that storage was built. `determine_clarification_hold`
+  relies on `history.extraction.extract_event` already nullifying an
+  out-of-registry stated classification before this code ever sees it, so
+  "classification is `None`" is the one unified signal covering both
+  §6.2 bullets ("extraction couldn't resolve it" and "stated type outside
+  the registry") — confirmed by reading `history/extraction.py` directly.
+  The unresolved field is always `"classification"` (a constant, not
+  derived) since that's the only field this hold type ever fires on, per
+  §2.1/§2.2 (an empty area/description never holds an event). Resolution
+  is validated against `registries.event_types.EventTypeRegistry.is_valid`,
+  rejecting free text outright. This module still does not resume
+  execution itself (resuming at risk assessment on answer, not
+  extraction) — that wiring is §6.11's, built next.
+
+### 6.5 — Implement precedent lookup
+- **Status:** done
+- **Deviations:** None beyond what's inherent in the API it wraps —
+  `look_up_precedent` is a thin, read-only pass-through to
+  `history.query.HistoryQueryService.search_precedents` (confirmed real
+  by reading `history/query.py` and `history/precedent.py` directly, not
+  assumed). Recording matches onto the event record and passing them to
+  task formulation are both §6.11's job, since this function only reads.
+
+### 6.6 — Implement closure on precedent
+- **Status:** done
+- **Deviations:** None. Three independent, explicit checks (risk level,
+  match resolution, human-activation exclusion) rather than one combined
+  condition, matching §6.6's four separate bullets one-to-one — makes
+  each rule independently testable and each failure independently
+  readable. Among several matches, the first `resolved=True` one is used,
+  relying on `history.precedent.find_precedents` already returning
+  matches most-recent-first (confirmed by reading its sort key directly).
+  Recording the closure and notifying commanders are §6.11's job — this
+  function only decides.
+
+### 6.9 — Build the Insights Agent
+- **Status:** done
+- **Deviations:** `comparable_history` is designed to reuse §6.5's
+  `orchestrator.precedent.look_up_precedent` output directly, not a
+  second, separate history query — work_plan.md §9.20 names exactly this
+  pair ("the two separate history reads per event — one in precedent
+  lookup and one in the Insights Agent's comparison") as overlapping
+  ground worth merging; built merged from the start instead of needing
+  that fix later. Zero tools (no `@tool`-decorated methods at all), the
+  strictest reading of "read-only tools only" — the same choice Mission
+  5 made for the History Agent, kept consistent. `orchestrator.flows`'s
+  core-agent seam (Mission 6 Part A) extended to include this agent too,
+  as already promised in that module's docstring. **The insight prompt's
+  framing is an unverified-against-a-live-model design choice**, though
+  there's no structured response format to get wrong — free text is the
+  whole point, and it's consumed as a plain string by `judge_success`
+  (§6.10), unchanged.
+
+### 6.12 — Implement the question flow
+- **Status:** done
+- **Deviations:** Reuses `orchestrator.formulation._parse_formulation_response`
+  directly (an intra-package import, not a cross-package one — no
+  entry-point concern) rather than reimplementing the identical
+  `AGENT:`/`TASK:` parsing a second time, since the format is exactly the
+  same. The History Agent needs no special-casing to be reachable for
+  "about the past" questions, confirmed by a dedicated test — it's simply
+  one more entry in the registry the routing prompt can choose, like any
+  other agent. Composition is skipped (no second Main Agent call) when
+  only one agent was chosen, both as a minor efficiency and because
+  composing a single answer with itself has nothing to add. A sub-agent
+  that fails or reports its task unclear doesn't crash the whole
+  question — its slot in the composition becomes a visible
+  "no usable answer" note rather than aborting every other agent's
+  answer too. **The routing and composition prompt formats are
+  unverified-against-a-live-model design choices**, same status as
+  every other Main Agent decision this mission.
+
+### 6.13 — Implement message intent classification
+- **Status:** done
+- **Deviations:** Deliberately classification-only — the routing bullets
+  (question → question flow, report/request → the new-event flow at
+  different entry points, the commander approval-flag bypass) are
+  `orchestrator.flows`'s job, built next, not duplicated here. Built
+  before `orchestrator/flows.py` in this mission's order specifically
+  because flows' routing depends on it. **The `INTENT:`/`REASON:`
+  response format is an unverified prompt convention**, same status as
+  every other Main Agent decision this mission.
+
+### 6.11 — Implement the new-event flow
+- **Status:** done
+- **Deviations:** §6.14 (hold the History reference) is folded into this
+  entry rather than given its own module — `FlowDeps.history_query_service`
+  *is* "one persistent handle to the history query interface, created at
+  startup and used by every flow": precedent lookup (6.5), the Insights
+  Agent's comparable history (6.9), and the question flow (6.12) all take
+  it from this one bundle rather than each opening a second path into
+  history, confirmed by reading each call site. Every event-record write
+  goes through `history.interface`'s dedicated functions
+  (`record_initial_event`/`record_extracted_fields`/`record_event_state`/
+  `record_step_execution`/`record_event_outcome`) — never a raw
+  `persistence.update_event` call from this module — matching Mission 5's
+  write path exactly. Protocol selection always runs before the
+  precedent-closure check (not skipped on a likely close) since risk
+  assessment and protocol selection are independent of whether precedent
+  ultimately closes the event — confirmed correct by a manual
+  closed-on-precedent run, not assumed. Restartability (§6.11's own
+  requirement) is structural: both `resume_after_clarification` and
+  `resume_after_approval` take only a hold ID and an answer, re-reading
+  the event's already-extracted fields and the hold's own payload from
+  persistence rather than from anything held in memory — verified with a
+  dedicated test that opens a second, independent `SQLitePersistence`
+  against the same database file mid-hold and resumes through it
+  successfully. `orchestrator.judgment.SuccessVerdict.verdict` speaks
+  `"success"/"failure"/"uncertain"` (its own pre-existing sentinel
+  vocabulary, unchanged) while `history.write.VALID_OUTCOMES` speaks
+  `"succeeded"/"failed"/"uncertain"` — a real mismatch between two
+  already-built modules that would have raised `ValueError` from
+  `record_event_outcome` on every real success/failure verdict; found by
+  writing this module's own integration tests, fixed with one small
+  translation table (`_VERDICT_TO_OUTCOME`) at the single point the two
+  vocabularies meet, rather than coupling either module to the other's
+  wording. A failed task-formulation call and a failed success-judgment
+  call are each retried exactly once before giving up and recording
+  `"failed"` — no agent has acted yet when formulation fails, and only the
+  judgment call itself (never the agents, which already acted on the
+  world) is retried when judgment fails to parse, per §6.10's own retry
+  boundary. Manually verified end to end (crewai seam mocked, per
+  Mission 3's established technique): a report that closes on precedent,
+  a report that holds for approval and resumes approved, and a
+  commander's request that bypasses the approval flag — all three write
+  the correct outcome via `history.interface`, confirmed by reading the
+  stored event back after each run. Full suite green (335/335) and
+  `tests/test_architecture.py` passes with the corrected `ENTRY_POINTS`.
