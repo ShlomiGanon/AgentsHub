@@ -1005,3 +1005,34 @@ Entry format:
   the correct outcome via `history.interface`, confirmed by reading the
   stored event back after each run. Full suite green (335/335) and
   `tests/test_architecture.py` passes with the corrected `ENTRY_POINTS`.
+
+### CI - per-mission test steps (Missions 1 through 6)
+- **Status:** done
+- **Deviations:** Not a work_plan.md subtask - requested directly by the
+  user, logged for the same reason as the merge-remediation entry above:
+  real work worth a record. `.github/workflows/ci.yml`'s single "Run
+  tests" step (`pytest`, run since 1.1) is replaced with one step per
+  mission, 1 through 6, each running that mission's own `test_*.py` files
+  by explicit path, followed by one final "Full suite (drift check)" step
+  that still runs plain `pytest` - a safety net catching a test file a
+  future change forgets to add to any mission step, so coverage can never
+  silently narrow the way `tests/test_architecture.py`'s `ENTRY_POINTS`
+  dict silently narrowed in the Mission 5/6 merge. Every one of the 48
+  `tests/test_*.py` files is assigned to exactly one mission step -
+  verified mechanically (no file missing, none duplicated, none listed
+  that doesn't exist) and by running each mission's exact file group
+  locally; the six groups' pass counts (46, 60, 41, 44, 15, 129) sum to
+  the full suite's 335. Assignment is by the mission that *introduced*
+  each file, per `docs/progress.md`'s own entries, not by its package
+  directory - confirmed individually for every file whose name alone
+  didn't make this obvious: `test_history_logging.py` tests
+  `tools.logging_config.log_ai_interaction`, a general §1.8 logging
+  utility despite its name, so it's filed under Mission 1, not 5;
+  `test_persistence_held_events.py` lives beside the Mission-2
+  persistence tests but its own docstring says "§6.7, Mission 6", so it's
+  filed there; `test_persistence_conformance.py` and
+  `test_agent_results.py` stay under the mission that introduced them
+  (2.11, 3.9) even though later missions added cases to those same files.
+  Python version pinned in CI stayed at 3.11, unchanged - the repo runs
+  fine under 3.11 (no 3.13-only syntax used) and revisiting the pin
+  wasn't part of this request.

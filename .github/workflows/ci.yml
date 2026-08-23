@@ -17,5 +17,89 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: Run tests
-        run: pytest
+      # One step per mission (docs/work_plan.md), in mission order, so a
+      # failure names the mission it broke instead of surfacing as one
+      # opaque "pytest" step. Each file is listed under the mission that
+      # introduced it (per docs/progress.md), even when a later mission
+      # extended that same file — e.g. test_persistence_conformance.py
+      # (Mission 2) gained a Mission-6 test, and test_persistence_held_events.py
+      # is filed under Mission 6 despite living in tests/ next to the
+      # Mission-2 persistence tests, because its own docstring says so.
+      # Every test_*.py file under tests/ must appear in exactly one step
+      # below; a new mission gets a new step, never a silent fold into an
+      # existing one.
+
+      - name: Mission 1 — Foundations
+        run: >
+          pytest -q
+          tests/test_architecture.py
+          tests/test_base_config.py
+          tests/test_profile_loading.py
+          tests/test_profile_validation.py
+          tests/test_settings_store.py
+          tests/test_logging.py
+          tests/test_history_logging.py
+          tests/test_permissions.py
+          tests/test_user_admin.py
+
+      - name: Mission 2 — Data Layer
+        run: >
+          pytest -q
+          tests/test_event_type_registry.py
+          tests/test_area_registry.py
+          tests/test_persistence_events.py
+          tests/test_persistence_users.py
+          tests/test_migrations.py
+          tests/test_persistence_conformance.py
+          tests/test_seed_dataset.py
+
+      - name: Mission 3 — Agent Framework
+        run: >
+          pytest -q
+          tests/test_agent_adapter.py
+          tests/test_agent_permission_enforcement.py
+          tests/test_agent_registry.py
+          tests/test_agent_results.py
+          tests/test_agent_tooling.py
+          tests/test_reference_agent.py
+
+      - name: Mission 4 — Protocol Engine
+        run: >
+          pytest -q
+          tests/test_protocol_model.py
+          tests/test_protocol_loader.py
+          tests/test_protocol_editor.py
+          tests/test_protocol_executor.py
+          tests/test_protocol_retry.py
+          tests/test_demo_profile.py
+
+      - name: Mission 5 — History System
+        run: >
+          pytest -q
+          tests/test_history_write.py
+          tests/test_history_extraction.py
+          tests/test_history_agent.py
+          tests/test_history_summarize.py
+          tests/test_history_scheduler.py
+          tests/test_history_query.py
+          tests/test_history_precedent.py
+          tests/test_history_fidelity.py
+
+      - name: Mission 6 — Main Agent Orchestration
+        run: >
+          pytest -q
+          tests/test_main_agent.py
+          tests/test_orchestrator_holds.py
+          tests/test_orchestrator_selection.py
+          tests/test_orchestrator_precedent.py
+          tests/test_orchestrator_formulation.py
+          tests/test_orchestrator_insights.py
+          tests/test_orchestrator_judgment.py
+          tests/test_orchestrator_flows.py
+          tests/test_orchestrator_question_flow.py
+          tests/test_orchestrator_intent.py
+          tests/test_orchestrator_queue.py
+          tests/test_persistence_held_events.py
+
+      - name: Full suite (drift check)
+        run: pytest -q
