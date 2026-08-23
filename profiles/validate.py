@@ -62,7 +62,12 @@ def _validate_protocol(protocol, agents_by_name: dict) -> list[str]:
             )
             continue
 
-        exposed_by_participants.update(agent.exposed_tools())
+        # exposed_tools() returns tool *names* for the duck-typed test
+        # fixtures (plain strings) but ToolInfo objects for a real
+        # agents.base.Agent (§3.3) — getattr's default falls through to
+        # the value itself when there's no .name, so this handles both
+        # shapes without needing to know which one we were given.
+        exposed_by_participants.update(getattr(t, "name", t) for t in agent.exposed_tools())
 
     for tool_name in protocol.approved_tools:
         if tool_name not in exposed_by_participants:
@@ -73,6 +78,9 @@ def _validate_protocol(protocol, agents_by_name: dict) -> list[str]:
 
     if not protocol.description:
         failures.append(f"protocol '{protocol.name}' has no description")
+
+    if not protocol.expected_success_output:
+        failures.append(f"protocol '{protocol.name}' has no expected success output")
 
     if protocol.criticality is None:
         failures.append(f"protocol '{protocol.name}' has no criticality level")

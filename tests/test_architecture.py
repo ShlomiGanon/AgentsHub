@@ -23,7 +23,7 @@ ENTRY_POINTS: dict[str, set[str]] = {
     "tools": {"tools.logging_config", "tools.tracing"},
     "cli": set(),
     "agents": {"agents.registry", "agents.results", "agents.errors", "agents.reference"},
-    "protocols": {"protocols.model", "protocols.loader"},
+    "protocols": {"protocols.model", "protocols.loader", "protocols.editor", "protocols.executor"},
     "history": {"history.query"},
     "orchestrator": {"orchestrator.flows"},
     "api": {"api.app"},
@@ -44,10 +44,25 @@ def _iter_governed_python_files():
             yield from package_dir.rglob("*.py")
 
 
+def _is_type_checking_guard(node: ast.If) -> bool:
+    test = node.test
+    return (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or (
+        isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+    )
+
+
 def _imported_module_names(tree: ast.Module) -> list[str]:
+    # A plain ast.walk would also collect imports inside `if TYPE_CHECKING:`
+    # blocks — those are never taken at runtime and create no real
+    # cross-package coupling, so they're pruned from the walk entirely
+    # rather than flagged (see profiles/validate.py, protocols/retry.py,
+    # protocols/executor.py for the pattern this exempts).
     names = []
 
-    for node in ast.walk(tree):
+    def _visit(node: ast.AST) -> None:
+        if isinstance(node, ast.If) and _is_type_checking_guard(node):
+            return
+
         if isinstance(node, ast.Import):
             names.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
@@ -55,6 +70,10 @@ def _imported_module_names(tree: ast.Module) -> list[str]:
                 names.append(node.module)
             # level > 0 is a relative import — always same-package, skip.
 
+        for child in ast.iter_child_nodes(node):
+            _visit(child)
+
+    _visit(tree)
     return names
 
 
