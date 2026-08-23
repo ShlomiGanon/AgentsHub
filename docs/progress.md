@@ -646,3 +646,182 @@ Entry format:
   (`minor_incident_review`/`routine_check` — identical approved tools and
   expected success output, overlapping descriptions, distinct criticality
   `MEDIUM`/`LOW`, one flagged and one not).
+
+### 6.1 — Build the Main Agent's AI agent
+- **Status:** done
+- **Deviations:** Found and fixed a real architecture bug while designing
+  this: Mission 1's `profiles.loader._construct_core_agents` docstring
+  claimed it would become "the one place that changes to wire [core
+  agents] in." That's wrong — constructing a `MainAgent` requires
+  importing `orchestrator.main_agent`, and `profiles` is a low-level
+  package that may never call upward into `orchestrator`
+  (`docs/allowed_calls.md`'s own layering rule). Fixed by correcting
+  `profiles/loader.py`'s docstring (no functional change — it still
+  returns `{}`) and adding the real, correctly-layered replacement,
+  `orchestrator.main_agent.construct_core_agents(base_config)`, to be
+  called by whatever future startup code assembles the running system
+  (§7/§9), not by profile loading. Separately: `agents.base` had to become
+  a real `agents/` entry point (not just a `TYPE_CHECKING` import, unlike
+  `protocols.retry`/`executor` in Mission 4) — `MainAgent` genuinely
+  subclasses `agents.base.Agent` at runtime, and the work plan's own
+  branch table places it in `orchestrator/`, not `agents/`, so any package
+  defining a concrete agent needs real access to the base class. Updated
+  `docs/allowed_calls.md` and the import-graph test accordingly. One
+  design choice, confirmed as low-ambiguity and consistent with the
+  project's decision pattern: risk/selection/formulation/judgment each get
+  a pure prompt-builder and a pure response-parser, tested without any
+  agent involved, plus a thin glue function — keeps almost all coverage
+  off the crewai seam.
+
+### 6.3 — Implement risk assessment
+- **Status:** done
+- **Deviations:** The assessed "risk level" is derived from a numeric
+  score (`RISK_SCORE: 0.0`–`1.0`, the Main Agent's prompt response),
+  compared against the live `risk_threshold` — `docs/vocabulary.md`
+  types `risk_level` as `str`, and a bare string can't be meaningfully
+  compared against a `float` threshold, so the numeric score is the
+  actual comparison input and `"high"`/`"low"` is the derived label that
+  gets stored, reconciling the two. `score >= risk_threshold` counts as
+  high (at-or-above, not strictly above) — a documented convention, not
+  stated explicitly either way in §6.3. **The `RISK_SCORE:`/`REASON:`
+  response format is an unverified prompt convention**, same status as
+  Mission 3's `UNCLEAR_TASK:` sentinel — flagged for a live-model smoke
+  test once crewai is installed.
+
+### 6.4 — Implement protocol selection
+- **Status:** done
+- **Deviations:** "Apply the same rule to a commander's own request" (§6.4's
+  last bullet) is explicitly the caller's responsibility, not this
+  function's — `select_protocol` only ever receives `risk_level`, never
+  who originated the request, since that routing lives in message intent
+  classification (§6.13, deferred). Noted in the module docstring rather
+  than silently ignored. High-risk auto-resolution picks
+  `max(candidates, key=criticality)` only among candidate names the model
+  actually named *and* that exist in the loaded protocol set — a name the
+  model hallucinated is silently excluded from the candidate pool rather
+  than crashing, though this hasn't been exercised against a live model
+  (unverified prompt convention, same status as 6.1/6.3).
+
+### 6.7 — Implement approval holds
+- **Status:** done
+- **Deviations:** Closes a real gap Mission 2 deferred by name: the
+  `held_events` table (`persistence/schema.py`) and the
+  `store_held_event`/`list_held_events`/`resolve_held_event` operations
+  (`persistence/sqlite_backend.py`) are now fully implemented — generic
+  across both hold kinds via a `kind` column, not approval-specific, even
+  though only the approval-hold *orchestration* is built this mission.
+  Added migration 6 (`persistence/migrations.py`). This module explicitly
+  does **not** resume execution on approval or write a declined outcome
+  onto the event record — those belong to the new-event flow (§6.11,
+  deferred). `answer_approval_hold` finds the target hold via
+  `list_held_events` before resolving (the interface has no
+  single-hold-lookup operation, and adding one wasn't warranted for this)
+  — a resolve-vs-list race (resolved by someone else between the two
+  calls) is still caught, since `resolve_held_event` itself raises
+  `NotFoundError` on an already-resolved hold and that's caught too.
+
+### 6.8 — Implement task formulation
+- **Status:** done
+- **Deviations:** `precedent_context` defaults to `()` — the §6.5 seam,
+  confirmed with the user. `rewrite_task` matches
+  `protocols.executor.execute_steps`'s `task_rewriter` callable signature
+  exactly once `main_agent` is bound via `functools.partial`, verified
+  with an integration test running it through the real Mission-4 executor
+  (not just checked by inspection). **Both the multi-agent
+  `AGENT:`/`TASK:` formulation format and the plain-text rewrite response
+  are unverified prompt conventions**, same status as 6.1/6.3/6.4.
+
+### 6.10 — Implement success judgment
+- **Status:** done
+- **Deviations:** `insight_text` defaults to `""` — the §6.9 seam,
+  confirmed with the user. §6.10's "when the judgment call itself fails,
+  rerun only the judgment, never the agents" is implemented as a
+  documented *caller contract*, not code here: `judge_success` makes one
+  call and either returns a verdict or raises
+  `OrchestrationParseError` — it never retries itself, since retry policy
+  is an orchestration decision §6.11 (deferred) will own, not something
+  this function should decide unilaterally. **The `VERDICT:`/`REASONING:`
+  response format is an unverified prompt convention**, same status as
+  6.1/6.3/6.4/6.8.
+
+### 6.15 — Enforce serial event processing
+- **Status:** done
+- **Deviations:** Generic over `process_fn` rather than coupled to the
+  (deferred) new-event flow — confirmed with the user as the right way to
+  build this without §6.11. Explicitly does not handle startup recovery
+  (re-scanning persistence for in-flight/held events after a restart) —
+  that's a future startup-sequence concern (§7/§9), not something a
+  generic in-memory queue mechanism should own. Added `wait_until_idle()`
+  and `stop()`, not named in §6.15's bullets, purely so tests have a
+  deterministic point to check results against a background worker
+  thread rather than sleeping and hoping.
+
+### 6.2 — Implement clarification holds
+- **Status:** not implemented this mission
+- **Deviations:** Blocked on **5.2** (extraction) — clarification holds
+  exist to catch events extraction couldn't classify, and extraction
+  doesn't exist. Confirmed with the user before planning; no seam
+  attempted. The storage this will use (`held_events`, generic across
+  both hold kinds) is already complete, built as part of 6.7 — only the
+  orchestration logic here is missing. Will be completed once §5.2 lands.
+
+### 6.5 — Implement precedent lookup
+- **Status:** not implemented this mission
+- **Deviations:** Blocked on **5.8** (precedent search) — this task's own
+  job is to call precedent search; there is nothing to call. Confirmed
+  with the user before planning; no seam attempted. Will be completed
+  once §5.8 lands.
+
+### 6.6 — Implement closure on precedent
+- **Status:** not implemented this mission
+- **Deviations:** Blocked on **5.8**, via its own `Requires: 6.5` — 6.5
+  is itself blocked on 5.8 (above). Confirmed with the user before
+  planning; no seam attempted. Will be completed once §5.8 lands (and 6.5
+  with it).
+
+### 6.9 — Build the Insights Agent
+- **Status:** not implemented this mission
+- **Deviations:** Blocked on **5.7** (history query interface) — this
+  agent's defining requirement is comparing the current run against
+  comparable prior events from history; there is no history query
+  interface to draw them from. Confirmed with the user before planning;
+  no seam attempted. Will be completed once §5.7 lands.
+
+### 6.12 — Implement the question flow
+- **Status:** not implemented this mission
+- **Deviations:** Blocked on **5.7** (history query interface) — questions
+  about the past must be sent to the History Agent, which itself needs
+  §5.7 and doesn't exist (§6.9, also deferred). Confirmed with the user
+  before planning; no seam attempted. Will be completed once §5.7 lands.
+
+### 6.14 — Hold the History reference
+- **Status:** not implemented this mission
+- **Deviations:** Blocked on **5.7** (history query interface) — this
+  task is entirely "give the Main Agent a handle to history.query"; with
+  no history query interface, there is nothing to hold. Confirmed with
+  the user before planning; no seam attempted. Will be completed once
+  §5.7 lands.
+
+### 6.11 — Implement the new-event flow
+- **Status:** not implemented this mission
+- **Deviations:** Blocked transitively on multiple §5 prerequisites via
+  its own `Requires:` line, which directly names 6.2, 6.5, 6.6, and 6.9 —
+  all deferred above: 6.2 blocked on **5.2**, 6.5/6.6 blocked on **5.8**,
+  6.9 blocked on **5.7**. This was not in the user's original named list
+  of six but was identified and confirmed with them during planning as a
+  necessary further deferral — a "new-event flow" stitching together
+  mostly-nonexistent steps would not be a real flow. What §6.11 would
+  stitch together *is* real and built: risk assessment (6.3), protocol
+  selection (6.4), approval holds (6.7), task formulation (6.8), the
+  protocol executor (Mission 4), and success judgment (6.10) all exist and
+  are individually tested — only the orchestration gluing them into one
+  flow, plus the three deferred steps interleaved among them, is missing.
+  Will be completed once 5.2, 5.7, and 5.8 all land.
+
+### 6.13 — Implement message intent classification
+- **Status:** not implemented this mission
+- **Deviations:** Blocked on its own `Requires: 6.11, 6.12` — both
+  deferred above (6.11 transitively on 5.2/5.7/5.8; 6.12 directly on
+  5.7). Not in the user's original named list of six; identified and
+  confirmed with them during planning, same as 6.11. Will be completed
+  once 6.11 and 6.12 are.

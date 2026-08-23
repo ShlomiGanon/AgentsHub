@@ -26,6 +26,7 @@ ENTRY_POINTS: dict[str, set[str]] = {
     "protocols": {"protocols.model", "protocols.loader"},
     "history": {"history.interface", "history.query"},
     "agents": {"agents.registry", "agents.results", "agents.errors", "agents.reference"},
+    "agents": {"agents.registry", "agents.results", "agents.errors", "agents.reference", "agents.base"},
     "protocols": {"protocols.model", "protocols.loader", "protocols.editor", "protocols.executor"},
     "history": {"history.query"},
     "orchestrator": {"orchestrator.flows"},

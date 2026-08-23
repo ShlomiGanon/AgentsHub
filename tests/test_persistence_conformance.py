@@ -119,19 +119,40 @@ def test_deleting_an_unknown_user_raises_not_found(persistence):
         persistence.delete_user("nonexistent")
 
 
-# -- Held events (not yet implemented — owned by §6.2/§6.7) -----------------
+# -- Held events (§6.7) -------------------------------------------------
 
 
-def test_held_event_operations_are_not_yet_implemented(persistence):
-    # Includes 2.11's named failure case ("resolving a hold that is not
-    # held") — held-event storage doesn't exist yet, so every operation
-    # here raises NotImplementedError rather than a domain-specific error.
-    # Update this test to expect that domain error once §6.2/§6.7 land.
-    with pytest.raises(NotImplementedError):
-        persistence.store_held_event("clarification", {})
+def test_store_list_and_resolve_a_held_event(persistence):
+    hold_id = persistence.store_held_event("approval", {"event_id": "evt-1", "reason": "flagged_protocol"})
 
-    with pytest.raises(NotImplementedError):
-        persistence.list_held_events("clarification")
+    [held] = persistence.list_held_events("approval")
+    assert held["hold_id"] == hold_id
+    assert held["event_id"] == "evt-1"
+    assert held["reason"] == "flagged_protocol"
+    assert held["resolved"] is False
 
-    with pytest.raises(NotImplementedError):
-        persistence.resolve_held_event("approval", "never-existed", {})
+    persistence.resolve_held_event("approval", hold_id, {"resolved_by": "commander-1", "decision": "approved"})
+
+    assert persistence.list_held_events("approval") == []
+
+
+def test_resolving_a_hold_that_is_not_held_raises(persistence):
+    # 2.11's named failure case, now against the real implementation.
+    with pytest.raises(NotFoundError):
+        persistence.resolve_held_event("approval", "never-existed", {"resolved_by": "commander-1"})
+
+
+def test_resolving_an_already_resolved_hold_raises(persistence):
+    hold_id = persistence.store_held_event("approval", {"event_id": "evt-1"})
+    persistence.resolve_held_event("approval", hold_id, {"resolved_by": "commander-1"})
+
+    with pytest.raises(NotFoundError):
+        persistence.resolve_held_event("approval", hold_id, {"resolved_by": "commander-2"})
+
+
+def test_list_held_events_is_scoped_to_its_kind(persistence):
+    persistence.store_held_event("approval", {"event_id": "evt-1"})
+    persistence.store_held_event("clarification", {"event_id": "evt-2"})
+
+    assert len(persistence.list_held_events("approval")) == 1
+    assert len(persistence.list_held_events("clarification")) == 1

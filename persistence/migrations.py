@@ -12,6 +12,7 @@ import sqlite3
 from persistence.schema import (
     EVENT_STEPS_TABLE_DDL,
     EVENTS_TABLE_DDL,
+    HELD_EVENTS_TABLE_DDL,
     INDEXES_DDL,
     USERS_TABLE_DDL,
 )
@@ -52,6 +53,7 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "ALTER TABLE monthly_summaries ADD COLUMN event_index TEXT;"
         "ALTER TABLE yearly_summaries ADD COLUMN event_index TEXT;",
     ),
+    (6, "create held_events table", HELD_EVENTS_TABLE_DDL),
 ]
 
 
