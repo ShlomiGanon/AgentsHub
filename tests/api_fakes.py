@@ -16,6 +16,8 @@ invoked — each test file brings its own autouse fixture for that, same as
 tests/test_orchestrator_flows.py already does.
 """
 
+import threading
+
 from agents.history import HistoryAgent
 from agents.reference import ReferenceAgent
 from agents.registry import build_agent_registry
@@ -215,3 +217,38 @@ class _FakeLoadedProfile:
 
 def auth_headers(identity: str) -> dict:
     return {IDENTITY_HEADER: identity}
+
+
+class RunningApiServer:
+    """A real `api.app.build_app` Flask app listening on a real,
+    OS-assigned TCP port on 127.0.0.1 — for `bot.http_api_client
+    .HttpApiClient` tests, which make genuine HTTP requests over a real
+    socket (`app.test_client()` never opens one; it dispatches WSGI calls
+    in-process, which `HttpApiClient`'s own `urllib` calls cannot reach).
+    Runs the werkzeug dev server on a background daemon thread; `base_url`
+    is ready the moment the constructor returns.
+    """
+
+    def __init__(self, ctx: ApiContext):
+        from werkzeug.serving import make_server
+
+        from api.app import build_app
+
+        self.ctx = ctx
+        app = build_app(ctx)
+        self._server = make_server("127.0.0.1", 0, app)
+        self.base_url = f"http://127.0.0.1:{self._server.server_port}"
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._thread.join()
+        self.ctx.queue.stop()
+        self.ctx.deps.persistence.close()
+
+    def __enter__(self) -> "RunningApiServer":
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self.close()

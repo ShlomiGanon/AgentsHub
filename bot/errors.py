@@ -35,3 +35,21 @@ class ApiNotImplementedError(BotError, NotImplementedError):
             f"'{operation}' is not available: it depends on {blocked_on} "
             f"(work_plan.md §7 — API Layer), which has not been built yet."
         )
+
+
+class ApiRequestError(BotError):
+    """A real API call, made by `bot.http_api_client.HttpApiClient`,
+    failed in a way its own DTO has no slot for — an HTTP 401/403/500, or
+    the request never reaching the API at all (connection refused, DNS,
+    timeout). `docs/api_spec.md`'s "Mapping to BotApiClient" section
+    names exactly which of `HttpApiClient`'s methods raise this versus
+    folding the failure into their own DTO — this is the one error type
+    every "must raise" case in that mapping raises.
+    """
+
+    def __init__(self, status_code: int | None, message: str, error_class: str | None = None, field: str | None = None):
+        self.status_code = status_code
+        self.message = message
+        self.error_class = error_class
+        self.field = field
+        super().__init__(f"API request failed ({status_code if status_code is not None else 'no response'}): {message}")

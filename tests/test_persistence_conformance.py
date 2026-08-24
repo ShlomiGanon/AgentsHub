@@ -204,3 +204,78 @@ def test_fetch_held_event_is_scoped_to_its_kind(persistence):
 
     assert persistence.fetch_held_event("approval", "evt-1") is None
     assert persistence.fetch_held_event("clarification", "evt-1") is not None
+
+
+# -- Notification log (§8.12) ------------------------------------------------
+
+
+def test_storing_a_held_event_writes_a_matching_notification_row(persistence):
+    persistence.store_held_event("approval", {"event_id": "evt-1"})
+    persistence.store_held_event("clarification", {"event_id": "evt-2"})
+
+    notifications = persistence.fetch_notifications_since(0)
+
+    kinds_by_event = {n["event_id"]: n["kind"] for n in notifications}
+    assert kinds_by_event["evt-1"] == "approval_hold"
+    assert kinds_by_event["evt-2"] == "clarification_hold"
+
+
+@pytest.mark.parametrize(
+    "outcome,expected_kinds",
+    [
+        ("succeeded", {"job_finished"}),
+        ("declined", {"job_finished"}),
+        ("failed", {"job_failed"}),
+        ("uncertain", {"job_finished", "uncertain_verdict"}),
+        ("closed_on_precedent", {"job_finished", "precedent_closure"}),
+    ],
+)
+def test_setting_an_event_outcome_writes_the_right_notification_kinds(persistence, outcome, expected_kinds):
+    event_id = persistence.append_event(_minimal_event())
+
+    persistence.update_event(event_id, {"outcome": outcome})
+
+    notifications = persistence.fetch_notifications_since(0)
+    kinds = {n["kind"] for n in notifications if n["event_id"] == event_id}
+    assert kinds == expected_kinds
+
+
+def test_updating_an_event_with_no_outcome_change_writes_no_notification(persistence):
+    event_id = persistence.append_event(_minimal_event())
+
+    persistence.update_event(event_id, {"risk_level": "high", "risk_reason": "why"})
+
+    assert persistence.fetch_notifications_since(0) == []
+
+
+def test_notifications_since_a_cursor_returns_only_what_came_after_it(persistence):
+    persistence.store_held_event("approval", {"event_id": "evt-1"})
+    first_batch = persistence.fetch_notifications_since(0)
+    cursor = first_batch[-1]["sequence_id"]
+
+    # Polling again at the same cursor — no redelivery.
+    assert persistence.fetch_notifications_since(cursor) == []
+
+    persistence.store_held_event("clarification", {"event_id": "evt-2"})
+
+    second_batch = persistence.fetch_notifications_since(cursor)
+    assert len(second_batch) == 1
+    assert second_batch[0]["event_id"] == "evt-2"
+    assert second_batch[0]["sequence_id"] > cursor
+
+
+def test_notifications_since_zero_returns_everything_recorded(persistence):
+    persistence.store_held_event("approval", {"event_id": "evt-1"})
+    persistence.store_held_event("approval", {"event_id": "evt-2"})
+
+    assert len(persistence.fetch_notifications_since(0)) == 2
+
+
+def test_notifications_are_returned_in_ascending_sequence_order(persistence):
+    persistence.store_held_event("approval", {"event_id": "evt-1"})
+    persistence.store_held_event("approval", {"event_id": "evt-2"})
+    persistence.store_held_event("approval", {"event_id": "evt-3"})
+
+    notifications = persistence.fetch_notifications_since(0)
+    sequence_ids = [n["sequence_id"] for n in notifications]
+    assert sequence_ids == sorted(sequence_ids)

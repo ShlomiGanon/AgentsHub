@@ -77,8 +77,8 @@ class FakeBotApiClient(BotApiClient):
         self.calls.append(("list_commander_chat_ids",))
         return self.commander_chat_ids
 
-    async def submit_message(self, text: str, sender_identity: str) -> MessageSubmissionResult:
-        self.calls.append(("submit_message", text, sender_identity))
+    async def submit_message(self, text: str, sender_identity: str, source_message_id: str) -> MessageSubmissionResult:
+        self.calls.append(("submit_message", text, sender_identity, source_message_id))
         assert self.message_submission_result is not None, "test must set message_submission_result"
         return self.message_submission_result
 
@@ -92,7 +92,8 @@ class FakeBotApiClient(BotApiClient):
         assert self.approval_answer_outcome is not None
         return self.approval_answer_outcome
 
-    async def get_profile_view(self) -> ProfileView:
+    async def get_profile_view(self, caller_identity: str) -> ProfileView:
+        self.calls.append(("get_profile_view", caller_identity))
         assert self.profile_view is not None
         return self.profile_view
 
@@ -100,22 +101,25 @@ class FakeBotApiClient(BotApiClient):
         assert self.profile_diff_status is not None
         return self.profile_diff_status
 
-    async def write_protocol(self, action, protocol_payload: dict) -> ProtocolWriteResult:
-        self.calls.append(("write_protocol", action, protocol_payload))
+    async def write_protocol(self, action, protocol_payload: dict, caller_identity: str) -> ProtocolWriteResult:
+        self.calls.append(("write_protocol", action, protocol_payload, caller_identity))
         assert self.protocol_write_result is not None
         return self.protocol_write_result
 
-    async def get_settings_view(self) -> SettingsView:
+    async def get_settings_view(self, caller_identity: str) -> SettingsView:
+        self.calls.append(("get_settings_view", caller_identity))
         assert self.settings_view is not None
         return self.settings_view
 
-    async def write_setting(self, field: str, value: object) -> SettingsWriteResult:
-        self.calls.append(("write_setting", field, value))
+    async def write_setting(self, field: str, value: object, caller_identity: str) -> SettingsWriteResult:
+        self.calls.append(("write_setting", field, value, caller_identity))
         assert self.settings_write_result is not None
         return self.settings_write_result
 
-    async def get_job_result(self, job_id: str) -> JobResult | None:
+    async def get_job_result(self, job_id: str, caller_identity: str) -> JobResult | None:
+        self.calls.append(("get_job_result", job_id, caller_identity))
         return self.job_result
 
-    async def poll_pending_notifications(self) -> tuple[BotNotification, ...]:
-        return self.pending_notifications
+    async def poll_pending_notifications(self, since: int) -> tuple[tuple[BotNotification, ...], int]:
+        self.calls.append(("poll_pending_notifications", since))
+        return self.pending_notifications, since + len(self.pending_notifications)

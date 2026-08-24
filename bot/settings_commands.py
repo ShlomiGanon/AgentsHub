@@ -32,8 +32,8 @@ def format_settings_view(view: "SettingsView") -> str:
     )
 
 
-async def view_settings(deps: "BotDeps") -> str:
-    view = await deps.api_client.get_settings_view()
+async def view_settings(deps: "BotDeps", caller_identity: str) -> str:
+    view = await deps.api_client.get_settings_view(caller_identity)
     return format_settings_view(view)
 
 
@@ -79,7 +79,7 @@ async def change_setting(deps: "BotDeps", caller: CallerContext, field: str, raw
     if validation_refusal is not None:
         return validation_refusal
 
-    result = await deps.api_client.write_setting(field, value)
+    result = await deps.api_client.write_setting(field, value, caller.telegram_identity)
 
     if not result.accepted:
         return f"Rejected: {result.message}"

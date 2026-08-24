@@ -17,8 +17,15 @@ if TYPE_CHECKING:
     from bot.deps import BotDeps
 
 
-async def handle_incoming_message(deps: "BotDeps", telegram_identity: str, text: str) -> str:
-    """Return the exact text to reply with in the chat that sent `text`."""
+async def handle_incoming_message(deps: "BotDeps", telegram_identity: str, text: str, message_id: str) -> str:
+    """Return the exact text to reply with in the chat that sent `text`.
+
+    `message_id` — the incoming Telegram message's own ID — is threaded
+    straight through to `submit_message` (see that method's own
+    docstring): this is the one place it's available, and it must reach
+    persistence now or it's lost for good before any later asynchronous
+    reply could reference it.
+    """
 
     resolution = await resolve_caller(deps.api_client, telegram_identity)
     if resolution.status == "unregistered":
@@ -29,7 +36,7 @@ async def handle_incoming_message(deps: "BotDeps", telegram_identity: str, text:
     if refusal is not None:
         return refusal
 
-    result = await deps.api_client.submit_message(text, telegram_identity)
+    result = await deps.api_client.submit_message(text, telegram_identity, message_id)
 
     if result.kind == "question":
         # A question has no job to track — the answer is the whole reply (§8.3, §7.4).

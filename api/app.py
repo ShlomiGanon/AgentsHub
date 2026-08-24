@@ -113,8 +113,10 @@ def build_app(ctx: ApiContext) -> Flask:
     from api.holds import build_holds_blueprint
     from api.jobs import build_jobs_blueprint
     from api.messages import build_messages_blueprint
+    from api.notifications import build_notifications_blueprint
     from api.protocols import build_protocols_blueprint
     from api.system import build_system_blueprint
+    from api.users import build_users_blueprint
 
     register_error_handlers(app)
     app.register_blueprint(build_events_blueprint(ctx))
@@ -123,6 +125,8 @@ def build_app(ctx: ApiContext) -> Flask:
     app.register_blueprint(build_holds_blueprint(ctx))
     app.register_blueprint(build_protocols_blueprint(ctx))
     app.register_blueprint(build_system_blueprint(ctx))
+    app.register_blueprint(build_users_blueprint(ctx))
+    app.register_blueprint(build_notifications_blueprint(ctx))
 
     return app
 

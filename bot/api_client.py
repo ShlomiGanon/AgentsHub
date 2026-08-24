@@ -6,24 +6,28 @@ reachable over the port the profile names (§1.4/§8.1) — this is a network
 boundary, not a Python import, which is why nothing in this package ever
 imports from the `api` package.
 
-**This module is the seam work_plan.md §7 (API Layer) has not been built
-yet.** `BotApiClient` declares every operation the rest of `bot/` needs
-from the API, with request/response shapes derived directly from
+`BotApiClient` declares every operation the rest of `bot/` needs from the
+API, with request/response shapes derived directly from
 `docs/vocabulary.md` and the exact wording of each work_plan.md §8
-subtask. `UnimplementedApiClient` is the only implementation that exists
-today: every method raises `bot.errors.ApiNotImplementedError`, naming
-the work_plan.md §7 subtask it is blocked on. Nothing here pretends to
-succeed, and nothing here talks to a real socket.
+subtask. `bot.http_api_client.HttpApiClient` is the real implementation —
+genuine HTTP calls to the profile's own `api_port`, and `bot.app`'s
+default since §8's own dependency on §7/§8.12-§8.14 closed. Every other
+module in this package is built and tested against `BotApiClient`'s
+interface via dependency injection, never against a concrete
+implementation directly, exactly as this mission's original "keep the
+structure ready so the missing functionality can be connected later
+without major refactoring" instruction intended — `HttpApiClient` was
+that later connection, and nothing in `bot/` that consumes this interface
+needed to change to receive it.
 
-Every other module in this package is built and tested against
-`BotApiClient`'s interface via dependency injection, never against
-`UnimplementedApiClient` directly (except `bot.app`, which wires the
-default in). Once §7 exists, a `HttpApiClient(BotApiClient)` implementing
-these same methods with real HTTP calls to the profile's `api_port` is
-the only new code required — nothing in `bot/` that consumes this
-interface needs to change, per this mission's explicit instruction to
-"keep the structure ready so the missing functionality can be connected
-later without major refactoring."
+`UnimplementedApiClient` remains in this module as a deliberate null
+object, not a leftover: it is still what `tests/test_bot_notifications.py`
+uses to confirm the notification poll loop degrades gracefully — logs and
+keeps looping — against a `BotApiClient` that cannot do anything at all,
+and it is still available to any test or tool that wants every method to
+raise loudly rather than construct a real HTTP client. Every method
+raises `bot.errors.ApiNotImplementedError`; nothing here pretends to
+succeed, and nothing here talks to a real socket.
 """
 
 from abc import ABC, abstractmethod
@@ -33,6 +37,31 @@ from typing import Literal
 from bot.errors import ApiNotImplementedError
 
 PermissionLevelName = Literal["viewer", "commander"]
+
+# The bot process's own registered identity — presented as X-Identity on
+# every outbound call that has no specific Telegram user's identity to
+# forward: resolve_user, list_commander_chat_ids, poll_pending_notifications,
+# and get_profile_diff_status (§7.7's diff check carries no permission
+# implication — it just compares two hashes). Every other call that used to
+# have no per-user identity to forward — get_profile_view, get_settings_view,
+# get_job_result, write_protocol, write_setting — was fixed to take a
+# caller_identity parameter and use *that* instead, the same way
+# answer_clarification_hold/answer_approval_hold/submit_message already did,
+# once this was found to be a real server-side permission-enforcement gap
+# (found and fixed in the same audit-driven pass that closed §8.12-§8.14).
+# The one exception left, get_profile_diff_status, is deliberately not one
+# of these five — it carries no write, no protocol/settings content, and no
+# dedicated action key in auth.permissions.ACTION_REQUIREMENTS, only the
+# same "registered at all" baseline every interaction already requires. See
+# docs/api_spec.md's "Service identity" section for the full reasoning and
+# the provisioning step this identity requires before a real HttpApiClient
+# can make its first call.
+#
+# Not a secret — same reasoning as BOT_TOKEN_ENV naming an *environment
+# variable* rather than embedding a token: this is just a string every
+# deployment's own user table must have a row for, provisioned via
+# cli.user_admin exactly like the first human commander is.
+BOT_SERVICE_IDENTITY = "bot-service"
 
 # Mirrors orchestrator.flows.FlowOutcome by value, not by import — bot may
 # not import orchestrator (docs/allowed_calls.md: bot calls only api).
@@ -246,7 +275,17 @@ class BotApiClient(ABC):
     # -- §8.3 / §7.4 ----------------------------------------------------------
 
     @abstractmethod
-    async def submit_message(self, text: str, sender_identity: str) -> MessageSubmissionResult: ...
+    async def submit_message(self, text: str, sender_identity: str, source_message_id: str) -> MessageSubmissionResult:
+        """`source_message_id` — the incoming Telegram message's own ID —
+        is what an eventual asynchronous job result (§8.9) or failure
+        notification (§8.11) needs to send its reply *as a reply to*, per
+        `bot.telegram_client.TelegramClient.send_reply`. It is persisted
+        alongside the event this message becomes (`source_message_id` on
+        the events table, work_plan.md §2.3) precisely because the reply
+        may arrive much later, after a queued continuation, from a
+        different call entirely (`GET /Notifications`, §8.12) than the one
+        that submitted the message.
+        """
 
     # -- §8.4 / §6.2 / §7.11 ---------------------------------------------------
 
@@ -289,33 +328,60 @@ class BotApiClient(ABC):
     # -- §8.7 / §7.6 / §7.7 -----------------------------------------------------
 
     @abstractmethod
-    async def get_profile_view(self) -> ProfileView: ...
+    async def get_profile_view(self, caller_identity: str) -> ProfileView:
+        """`caller_identity` — the real Telegram identity asking, already
+        resolved and permission-checked by `bot.users.resolve_caller`
+        before this is ever called — is what the API's own §7.9 check
+        needs to enforce server-side, not the bot's own blanket service
+        identity. See `docs/api_spec.md`'s "Service identity" section for
+        why this must be the real caller and not
+        `bot.api_client.BOT_SERVICE_IDENTITY`.
+        """
 
     @abstractmethod
     async def get_profile_diff_status(self) -> ProfileDiffStatus: ...
 
     @abstractmethod
     async def write_protocol(
-        self, action: Literal["add", "edit", "remove"], protocol_payload: dict
-    ) -> ProtocolWriteResult: ...
+        self, action: Literal["add", "edit", "remove"], protocol_payload: dict, caller_identity: str
+    ) -> ProtocolWriteResult:
+        """`caller_identity` — see `get_profile_view`'s docstring; the same
+        reasoning applies to every write in this interface.
+        """
 
     # -- §8.8 / §7.8 ------------------------------------------------------------
 
     @abstractmethod
-    async def get_settings_view(self) -> SettingsView: ...
+    async def get_settings_view(self, caller_identity: str) -> SettingsView:
+        """`caller_identity` — see `get_profile_view`'s docstring."""
 
     @abstractmethod
-    async def write_setting(self, field: str, value: object) -> SettingsWriteResult: ...
+    async def write_setting(self, field: str, value: object, caller_identity: str) -> SettingsWriteResult:
+        """`caller_identity` — see `get_profile_view`'s docstring."""
 
     # -- §8.9 / §7.2 --------------------------------------------------------------
 
     @abstractmethod
-    async def get_job_result(self, job_id: str) -> JobResult | None: ...
+    async def get_job_result(self, job_id: str, caller_identity: str) -> JobResult | None:
+        """`caller_identity` — see `get_profile_view`'s docstring. Not yet
+        called from anywhere else in `bot/*` (every result today is
+        delivered via the notification feed's push path, §8.9, not by
+        polling this) — the parameter is here so the interface is correct
+        the moment something does call it, not added later as a second
+        signature change.
+        """
 
-    # -- §8.4/§8.5/§8.6/§8.9/§8.11 -------------------------------------------------
+    # -- §8.4/§8.5/§8.6/§8.9/§8.11/§8.12 --------------------------------------------
 
     @abstractmethod
-    async def poll_pending_notifications(self) -> tuple[BotNotification, ...]: ...
+    async def poll_pending_notifications(self, since: int) -> tuple[tuple[BotNotification, ...], int]:
+        """Everything newly relevant since the caller's own `since` cursor
+        (0 for "from the beginning"), plus the cursor to pass as `since` on
+        the next call. `GET /Notifications` (§8.12) keeps no per-caller
+        state of its own — the cursor is entirely the caller's to track and
+        persist across a restart, which is `bot.notification_cursor
+        .NotificationCursorStore`'s job, not this method's.
+        """
 
 
 class UnimplementedApiClient(BotApiClient):
@@ -332,7 +398,7 @@ class UnimplementedApiClient(BotApiClient):
     async def list_commander_chat_ids(self) -> tuple[str, ...]:
         raise ApiNotImplementedError("list_commander_chat_ids", "§7.9 (authentication/authorization enforcement)")
 
-    async def submit_message(self, text: str, sender_identity: str) -> MessageSubmissionResult:
+    async def submit_message(self, text: str, sender_identity: str, source_message_id: str) -> MessageSubmissionResult:
         raise ApiNotImplementedError("submit_message", "§7.4 (POST /Msg)")
 
     async def answer_clarification_hold(
@@ -343,23 +409,23 @@ class UnimplementedApiClient(BotApiClient):
     async def answer_approval_hold(self, event_id: str, decision: str, answering_identity: str) -> HoldAnswerOutcome:
         raise ApiNotImplementedError("answer_approval_hold", "§7.9 (authentication/authorization enforcement)")
 
-    async def get_profile_view(self) -> ProfileView:
+    async def get_profile_view(self, caller_identity: str) -> ProfileView:
         raise ApiNotImplementedError("get_profile_view", "§7.7 (GET /SYSTEM)")
 
     async def get_profile_diff_status(self) -> ProfileDiffStatus:
         raise ApiNotImplementedError("get_profile_diff_status", "§7.7 (GET /SYSTEM)")
 
-    async def write_protocol(self, action: Literal["add", "edit", "remove"], protocol_payload: dict) -> ProtocolWriteResult:
+    async def write_protocol(self, action: Literal["add", "edit", "remove"], protocol_payload: dict, caller_identity: str) -> ProtocolWriteResult:
         raise ApiNotImplementedError("write_protocol", "§7.6 (CRUD /Protocol)")
 
-    async def get_settings_view(self) -> SettingsView:
+    async def get_settings_view(self, caller_identity: str) -> SettingsView:
         raise ApiNotImplementedError("get_settings_view", "§7.7 (GET /SYSTEM)")
 
-    async def write_setting(self, field: str, value: object) -> SettingsWriteResult:
+    async def write_setting(self, field: str, value: object, caller_identity: str) -> SettingsWriteResult:
         raise ApiNotImplementedError("write_setting", "§7.8 (PUT /SYSTEM)")
 
-    async def get_job_result(self, job_id: str) -> JobResult | None:
+    async def get_job_result(self, job_id: str, caller_identity: str) -> JobResult | None:
         raise ApiNotImplementedError("get_job_result", "§7.2 (async job mechanism)")
 
-    async def poll_pending_notifications(self) -> tuple[BotNotification, ...]:
+    async def poll_pending_notifications(self, since: int) -> tuple[tuple[BotNotification, ...], int]:
         raise ApiNotImplementedError("poll_pending_notifications", "§7.2 (async job mechanism)")

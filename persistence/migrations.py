@@ -14,6 +14,7 @@ from persistence.schema import (
     EVENTS_TABLE_DDL,
     HELD_EVENTS_TABLE_DDL,
     INDEXES_DDL,
+    NOTIFICATION_LOG_TABLE_DDL,
     USERS_TABLE_DDL,
 )
 
@@ -61,6 +62,8 @@ MIGRATIONS: list[tuple[int, str, str]] = [
     # already have applied under its old number — this one never actually
     # ran, so renumbering it is safe (see docs/progress.md).
     (7, "create held_events table", HELD_EVENTS_TABLE_DDL),
+    (8, "create notification_log table", NOTIFICATION_LOG_TABLE_DDL),
+    (9, "add source_message_id to events", "ALTER TABLE events ADD COLUMN source_message_id TEXT;"),
 ]
 
 
@@ -82,6 +85,17 @@ def run_migrations(db_path: str) -> None:
                     }
                     if "event_index" not in columns:
                         connection.execute(f"ALTER TABLE {table_name} ADD COLUMN event_index TEXT")
+            elif version == 9:
+                # A fresh database's migration 2 already creates `events`
+                # with this column (persistence/schema.py's EVENTS_TABLE_DDL
+                # was updated directly, the same choice migration 4 made for
+                # the summary tables before migration 6 needed the same
+                # idempotency check for a pre-existing database) — only an
+                # already-migrated database, created before this column
+                # existed, actually needs the ALTER.
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(events)").fetchall()}
+                if "source_message_id" not in columns:
+                    connection.execute("ALTER TABLE events ADD COLUMN source_message_id TEXT")
             else:
                 connection.executescript(sql)
 

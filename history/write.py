@@ -43,6 +43,7 @@ class InitialEventEnvelope:
     source: str
     received_at: str
     sender_identity: str
+    source_message_id: str | None = None
     occurred_at: str | None = None
     occurred_at_is_fallback: bool = False
     event_id: str | None = None

@@ -25,6 +25,14 @@ Schema notes:
 - Each summary table's `UNIQUE(period_start, period_end)` is both the §2.8
   index on period boundaries and what lets `write_summary` upsert instead
   of duplicating a row for a period that already has one (§5.5).
+- `source_message_id` (§8.9/§8.11) is the originating Telegram message's
+  own ID — null for a sensor-sourced event, which has no Telegram message
+  to reference. Written once by `append_event`, like the rest of the
+  envelope, and read back much later, possibly after several model calls
+  and a queued continuation, by `api/notifications.py` to populate a
+  `job_finished`/`job_failed` notification's `reply_to_message_id` — this
+  is the one place that value survives between the original incoming
+  message and the eventual asynchronous reply to it.
 """
 
 USERS_TABLE_DDL = """
@@ -42,6 +50,7 @@ CREATE TABLE IF NOT EXISTS events (
     received_at TEXT NOT NULL,
     source TEXT NOT NULL,
     sender_identity TEXT NOT NULL,
+    source_message_id TEXT,
 
     occurred_at TEXT,
     occurred_at_is_fallback INTEGER NOT NULL DEFAULT 0,
@@ -153,6 +162,28 @@ CREATE TABLE IF NOT EXISTS held_events (
     resolved_by TEXT,
     resolved_at TEXT,
     resolution TEXT,
+    created_at TEXT NOT NULL
+);
+"""
+
+# -- Notification log (§8.12) ------------------------------------------------
+
+# One row per notification-worthy state change — a hold created
+# (persistence.sqlite_backend.store_held_event) or an event's outcome set
+# (persistence.sqlite_backend.update_event, on its "outcome" transitioning
+# from null) — written in the same transaction/commit as that state change,
+# never as a separate queued write, so the two can never drift apart on a
+# crash between them. `sequence_id`'s AUTOINCREMENT ordering is the whole
+# cursor mechanism the notification feed (§8.12) polls with — no separate
+# index needed, the primary key already provides it. `kind` is one of
+# bot.api_client.BotNotificationKind's six values. Read-only above the
+# persistence boundary: nothing outside persistence.sqlite_backend ever
+# inserts into this table directly.
+NOTIFICATION_LOG_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS notification_log (
+    sequence_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    event_id TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
 """

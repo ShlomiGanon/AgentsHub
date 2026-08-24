@@ -34,7 +34,7 @@ def _deps(api):
 def test_view_shows_agents_protocols_with_flags_event_types_and_areas():
     api = FakeBotApiClient(profile_view=VIEW)
 
-    text = _run(view_profile(_deps(api)))
+    text = _run(view_profile(_deps(api), "v1"))
 
     assert "reference_agent" in text
     assert "status_check" in text
@@ -42,6 +42,17 @@ def test_view_shows_agents_protocols_with_flags_event_types_and_areas():
     assert "no approval required" in text
     assert "fire" in text and "medical" in text
     assert "north_sector" in text
+
+
+def test_view_forwards_the_real_callers_identity_to_the_api_client():
+    # Problem 1's fix: the API client, not just bot/*'s own client-side
+    # check, needs to see who's really asking, so its own server-side
+    # permission check has something real to enforce against.
+    api = FakeBotApiClient(profile_view=VIEW)
+
+    _run(view_profile(_deps(api), "v1"))
+
+    assert api.calls == [("get_profile_view", "v1")]
 
 
 def test_diff_status_reports_a_pending_restart():
@@ -82,6 +93,14 @@ def test_successful_write_always_states_nothing_changed_until_restart():
     api = FakeBotApiClient(protocol_write_result=ProtocolWriteResult(accepted=True, message="added protocol 'p'"))
     text = _run(write_protocol(_deps(api), COMMANDER, "add", {"approval_flag": True}))
     assert NOTHING_CHANGED_NOTICE in text
+
+
+def test_write_forwards_the_real_callers_identity_to_the_api_client():
+    api = FakeBotApiClient(protocol_write_result=ProtocolWriteResult(accepted=True, message="added"))
+
+    _run(write_protocol(_deps(api), COMMANDER, "add", {"approval_flag": True}))
+
+    assert api.calls == [("write_protocol", "add", {"approval_flag": True}, "c1")]
 
 
 def test_rejected_write_is_reported_as_rejected():

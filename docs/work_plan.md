@@ -883,7 +883,7 @@ unchanged (no regression).
 
 - Send everything a user types to the message endpoint. There is no separate command for reporting and no command for asking — intent classification decides, and a second entry point would let the user's framing override that judgment.
 - Return the answer in the chat when the message was a question.
-- Tell the sender when their message became an event and which of report or request it was taken as, in the same acknowledgment the message endpoint returns before any model call runs (§7.2). Whether it goes on to land on an approval hold is not yet known at that moment — it depends on risk assessment and protocol selection, which happen later, after the acknowledgment is already sent — so that outcome is delivered separately, once it is known: via the notification feed (§9, once built) or by polling the job (§7.2). Silence after a request is indistinguishable from the system having ignored it, which is what the immediate acknowledgment itself already rules out — it does not need to also carry an outcome nothing has decided yet.
+- Tell the sender when their message became an event and which of report or request it was taken as, in the same acknowledgment the message endpoint returns before any model call runs (§7.2). Whether it goes on to land on an approval hold is not yet known at that moment — it depends on risk assessment and protocol selection, which happen later, after the acknowledgment is already sent — so that outcome is delivered separately, once it is known: via the notification feed (§8.12) or by polling the job (§7.2). Silence after a request is indistinguishable from the system having ignored it, which is what the immediate acknowledgment itself already rules out — it does not need to also carry an outcome nothing has decided yet.
 - Reserve slash-commands for the operational actions — clarification, approval, profile, settings — so they never collide with free text a user is reporting.
 
 ### 8.4 Implement clarification prompts
@@ -976,24 +976,21 @@ coincidence.
 - Include what did succeed before the failure, since a run that failed at the last step still produced findings.
 - Distinguish a failed run from a declined one and from an uncertain verdict. All three end without a clean success and each calls for a different response from the person reading it.
 
----
-
-## 9. Notification & Identity API
-
-Found genuinely missing, not deferred, during the Mission 8 deep audit: three
-`BotApiClient` operations Mission 8 was built against —
-`poll_pending_notifications`, `list_commander_chat_ids`, and
-`resolve_user` — have no corresponding endpoint anywhere in the API Layer
-(§7). §7's own subtasks never named them; §8 assumed they would exist by
-the time a real HTTP client replaced `UnimplementedApiClient`. This section
-is that missing work. It sits here, between the Telegram Frontend (§8) and
-Integration and Hardening (now §10), because §8's own commands and prompts
-are the reason it exists and because the demonstration (§10) needs the bot
-actually able to receive commander input before it can be exercised
-end to end.
-
-### 9.1 Implement the notification feed
+### 8.12 Implement the notification feed the bot polls
 *Requires: 7.2, 7.9, 6.2, 6.7, 6.6, 2.13*
+
+Found genuinely missing, not deferred, during the Mission 8 deep audit:
+`bot.api_client.BotApiClient.poll_pending_notifications` — what
+§8.4/§8.5/§8.6/§8.9/§8.11's proactive pushes all funnel through — has no
+corresponding endpoint anywhere in the API Layer (§7); §7's own subtasks
+never named it, and §8 assumed it would exist by the time a real HTTP
+client replaced `UnimplementedApiClient`. Numbered under §8, not §7,
+because §8's own commands and prompts are the reason it exists and
+because Mission 8 cannot be honestly marked done while it is missing —
+the code itself lives in `api/*`, the same way §7.11/§7.12 already live
+in `api/*` while closing gaps the same audit found; this is Mission
+7-shaped work tracked here to close out Mission 8's dependency on it, not
+a relocation of where it runs.
 
 - Serve one feed a caller polls for what has become newly relevant since
   they last checked: events newly held for clarification, events newly
@@ -1014,9 +1011,20 @@ end to end.
   records via §2.13's `fetch_held_event`) — this endpoint observes and
   formats existing state, it does not introduce a new notion of what
   counts as "notification-worthy."
+- Once this exists, `bot/api_client.py`'s `UnimplementedApiClient
+  .poll_pending_notifications` and `bot/notifications.py`'s poll loop both
+  need updating to use it for real — in particular, the loop will need to
+  track and pass forward whatever position/cursor this feed defines, so a
+  restart of the bot process doesn't either miss notifications or replay
+  ones already delivered. Not specified further here — `bot/*`'s own
+  follow-up work once this endpoint exists.
 
-### 9.2 Implement the commander roster
+### 8.13 Implement the commander roster
 *Requires: 7.9, 2.4, 1.9*
+
+Also `api/*` code, numbered under §8 for the same reason as 8.12: closes
+the same audit gap, this time for `bot.api_client.BotApiClient
+.list_commander_chat_ids`.
 
 - Given an authenticated caller, return the routing information §8.4's
   "push to every commander" and §8.5/§8.6's identical requirement need to
@@ -1027,9 +1035,15 @@ end to end.
   somewhere first, is an open implementation question this subtask must
   resolve by reading how `bot/telegram_client.py` actually addresses a
   chat today, not by assuming the user table already has what's needed.
+- Once this exists, `bot/api_client.py`'s `UnimplementedApiClient
+  .list_commander_chat_ids` needs replacing with a real call.
 
-### 9.3 Implement `resolve_user`
+### 8.14 Implement `resolve_user`
 *Requires: 7.9, 2.4*
+
+Also `api/*` code, numbered under §8 for the same reason as 8.12: closes
+the same audit gap, this time for `bot.api_client.BotApiClient
+.resolve_user`.
 
 - Given an identity, report whether it is registered and, if so, its
   permission level — authenticated the same way every other endpoint is
@@ -1041,22 +1055,14 @@ end to end.
   interaction" be implemented honestly against a real API for the first
   time — today nothing exposes this lookup at all, so `bot.users
   .resolve_caller` has no real endpoint to call.
-
-### Forward-looking note (not in scope for this section)
-
-Once §9.1–§9.3 exist, `bot/api_client.py`'s `UnimplementedApiClient` and
-`bot/notifications.py`'s polling/dispatch logic will need updating to use
-them for real — in particular, `run_notification_poll_loop` will need to
-track and pass forward whatever position/cursor §9.1's feed defines, so a
-restart of the bot process doesn't either miss notifications or replay
-ones already delivered. Not specified further here, and not to be started
-under this section — it is `bot/*`'s own future work once this API exists.
+- Once this exists, `bot/api_client.py`'s `UnimplementedApiClient
+  .resolve_user` needs replacing with a real call.
 
 ---
 
-## 10. Integration and Hardening
+## 9. Integration and Hardening
 
-### 10.1 Build the sensor simulator
+### 9.1 Build the sensor simulator
 *Requires: 7.3, 2.1, 2.2*
 
 - Write a standalone program that emits synthetic sensor events as free-form English text to `POST /Event`, so the demonstration has a source of traffic and the tests have something to drive them.
@@ -1066,15 +1072,15 @@ under this section — it is `bot/*`'s own future work once this API exists.
 - Support emitting text that no classification fits, to drive the clarification path live.
 - Generate text that reads like a real sensor report rather than a template, since extraction is being tested along with everything else.
 
-### 10.2 Run the end-to-end flow test
-*Requires: 10.1, 7.3, 6.11, 5.1, 4.7*
+### 9.2 Run the end-to-end flow test
+*Requires: 9.1, 7.3, 6.11, 5.1, 4.7*
 
 - Drive one event from the simulator through every stage: extraction, risk assessment, protocol selection, precedent lookup, task formulation, execution, insights, judgment, and the history write.
 - Confirm each stage wrote what it should to the event record — not merely that the run completed, but that the classification, the risk and its reason, the protocol and its reason, the precedent result, every step with its task text and result, the insight, and the verdict are all present.
 - Confirm the trace ID connects every log record from ingestion to the final write.
 - Run this first among the tests, since almost every later test assumes this path works.
 
-### 10.3 Test profile loading and validation
+### 9.3 Test profile loading and validation
 *Requires: 1.6, 1.5*
 
 - Start with a valid profile and confirm exactly its agents, protocols, event types, and areas loaded — plus the three core agents and the built-in human-activation type, and nothing else.
@@ -1084,15 +1090,15 @@ under this section — it is `bot/*`'s own future work once this API exists.
 - Start with a missing environment variable, and confirm the failure names the variable.
 - Start two profiles that differ only in the model passed to the same agent class, and confirm each routes its calls to its own model.
 
-### 10.4 Test profile isolation
-*Requires: 10.3, 2.9, 8.1*
+### 9.4 Test profile isolation
+*Requires: 9.3, 2.9, 8.1*
 
 - Run two profiles at once on separate ports with separate database files.
 - Write events under each and confirm no event written under one appears in the other's history queries or precedent search.
 - Add a user to one and confirm they are refused by the other.
 - Confirm the two settings stores are independent — changing the risk threshold in one leaves the other unchanged.
 
-### 10.5 Test user administration
+### 9.5 Test user administration
 *Requires: 1.10, 8.2*
 
 - Run the administration command against an empty database, add the first commander, and confirm they can approve a run.
@@ -1100,15 +1106,15 @@ under this section — it is `bot/*`'s own future work once this API exists.
 - Confirm a viewer refused an action receives a message saying so, not silence.
 - Search the API and bot surfaces and confirm neither offers any path that creates, changes, or removes a user.
 
-### 10.6 Test ingestion parity
-*Requires: 10.2, 7.5*
+### 9.6 Test ingestion parity
+*Requires: 9.2, 7.5*
 
 - Submit the same report text through `POST /Event` and through Telegram.
 - Confirm both produce an event handled identically through every stage — same classification, same protocol selection, same steps.
 - Confirm the only differences are the recorded source and the occurrence timestamp, which the sensor path sets to the received time and the Telegram path extracts.
 - Confirm the Telegram submission was routed as a report rather than a question or a request, since parity is only meaningful when intent classification agreed.
 
-### 10.7 Test the clarification path
+### 9.7 Test the clarification path
 *Requires: 8.4, 6.2, 2.12*
 
 - Submit text no classification fits, from both sources, and confirm both are held rather than classified into the nearest type.
@@ -1119,7 +1125,7 @@ under this section — it is `bot/*`'s own future work once this API exists.
 - Confirm a viewer cannot resolve a hold.
 - Confirm events behind a held event continued processing while it waited.
 
-### 10.8 Test protocol selection
+### 9.8 Test protocol selection
 *Requires: 4.7, 6.4*
 
 - Send an event that clearly matches one protocol and confirm it is selected from its description alone, with a recorded reason.
@@ -1127,7 +1133,7 @@ under this section — it is `bot/*`'s own future work once this API exists.
 - Send the same event at low risk and confirm no protocol is selected and a commander is asked which to run.
 - Send an ambiguous request from a commander and confirm it is still held. The bypass covers the approval flag only; there is no protocol yet for their authority to authorize.
 
-### 10.9 Test the approval flag
+### 9.9 Test the approval flag
 *Requires: 8.5, 6.7, 4.7*
 
 - Send an event matching a flagged protocol at high risk with a clear match, and confirm it waits. This is the case most likely to be broken by a well-meaning optimization.
@@ -1138,7 +1144,7 @@ under this section — it is `bot/*`'s own future work once this API exists.
 - Confirm a viewer cannot approve.
 - Confirm a second commander answering an already-answered hold is told it is resolved.
 
-### 10.10 Test message intent and human activation
+### 9.10 Test message intent and human activation
 *Requires: 6.13, 8.3, 4.7*
 
 - Send a question and confirm it is answered with no event created.
@@ -1149,7 +1155,7 @@ under this section — it is `bot/*`'s own future work once this API exists.
 - Confirm the sender was told which of the three their message was taken as, in every case.
 - Confirm a human-activation event is never closed on precedent, even when an identical prior request was resolved inside the window.
 
-### 10.11 Test precedent lookup and closure
+### 9.11 Test precedent lookup and closure
 *Requires: 6.5, 6.6, 2.12*
 
 - Confirm a repeated low-risk event matches its precedent and closes without running.
@@ -1159,7 +1165,7 @@ under this section — it is `bot/*`'s own future work once this API exists.
 - Confirm an event matching a flagged protocol, which then closes on precedent, never reaches a commander for approval — the ordering fix depends on this and it is invisible otherwise.
 - Confirm commanders are notified on every closure, with the precedent included.
 
-### 10.12 Test task formulation and reformulation
+### 9.12 Test task formulation and reformulation
 *Requires: 6.8, 3.9*
 
 - Confirm every agent named by the protocol receives a task written for its own role, not a copy of the same text.
@@ -1168,7 +1174,7 @@ under this section — it is `bot/*`'s own future work once this API exists.
 - Confirm a plain execution failure resends the same task text unchanged rather than rewriting it.
 - Confirm both paths count against the same attempt limit and eventually exhaust rather than looping.
 
-### 10.13 Run the protocol execution regression suite
+### 9.13 Run the protocol execution regression suite
 *Requires: 4.7, 3.7, 6.10*
 
 - Confirm the protocol's named agents run, in order, with the tools it approved.
@@ -1177,7 +1183,7 @@ under this section — it is `bot/*`'s own future work once this API exists.
 - Confirm all three verdicts are reachable, and that uncertain triggers a commander notification and no retry.
 - Confirm a failure of the judgment call reruns only the judgment, leaving the executed steps untouched.
 
-### 10.14 Test retry and idempotency
+### 9.14 Test retry and idempotency
 *Requires: 4.5, 4.6, 3.4, 3.11*
 
 - Force a step to fail after the reference agent's side-effecting stub tool has already acted, and confirm the step is not replayed and the action is recorded once.
@@ -1185,7 +1191,7 @@ under this section — it is `bot/*`'s own future work once this API exists.
 - Confirm the attempt limit is read live, by changing it mid-test and seeing the new value take effect.
 - Confirm exhaustion writes the failure with the offending step, keeps the successful steps' results, notifies the originator, and lets the next event proceed.
 
-### 10.15 Test the question flow
+### 9.15 Test the question flow
 *Requires: 6.12, 3.11, 3.4*
 
 - Ask about the past and confirm the question reaches the History Agent and is answered from stored records.
@@ -1195,7 +1201,7 @@ under this section — it is `bot/*`'s own future work once this API exists.
 - Confirm an answer drawing on more than one agent is composed into a single reply.
 - Confirm nothing was written to the event record.
 
-### 10.16 Test history accuracy over time
+### 9.16 Test history accuracy over time
 *Requires: 5.10, 5.5, 5.6*
 
 - Query across a simulated multi-month span and confirm the answers match what the raw events support.
@@ -1203,7 +1209,7 @@ under this section — it is `bot/*`'s own future work once this API exists.
 - Submit a late Telegram report whose occurrence time falls in a period already summarized, and confirm the day, month, and year summaries were all regenerated.
 - Confirm a period the scheduler missed during downtime is filled on the next run rather than left as a gap.
 
-### 10.17 Test profile editing and settings persistence
+### 9.17 Test profile editing and settings persistence
 *Requires: 8.7, 8.8, 1.7*
 
 - Add a protocol through the bot and confirm the running system's protocol set is unchanged and the response said so.
@@ -1213,7 +1219,7 @@ under this section — it is `bot/*`'s own future work once this API exists.
 - Restart and confirm the changed threshold survived and overrode the profile's starting value.
 - Attempt to change a profile-owned field through `PUT /SYSTEM` and confirm it is rejected with a message rather than ignored.
 
-### 10.18 Test permission enforcement
+### 9.18 Test permission enforcement
 *Requires: 7.9, 8.2*
 
 - Attempt every restricted action from a viewer and confirm each is refused with a message: resolving a hold, approving a run, editing the profile, changing a setting.
@@ -1221,32 +1227,32 @@ under this section — it is `bot/*`'s own future work once this API exists.
 - Attempt each from an unregistered identity and confirm each is refused as unknown rather than as unauthorized.
 - Run the whole matrix through both the API and the bot, since the two are separate surfaces over one check and only a test proves they share it.
 
-### 10.19 Test serial processing under load
-*Requires: 6.15, 2.9, 10.1*
+### 9.19 Test serial processing under load
+*Requires: 6.15, 2.9, 9.1*
 
 - Drive a burst from the simulator and confirm events are processed one at a time in arrival order.
 - Put an event into each hold state during the burst and confirm the events behind it continued.
 - Confirm no SQLite lock errors occurred and no write was lost, with the event count in the database matching the count emitted.
 - Confirm the Insights Agent running on every event did not create write contention with the summary scheduler.
 
-### 10.20 Review cost and latency
-*Requires: 10.2*
+### 9.20 Review cost and latency
+*Requires: 9.2*
 
 - Count model calls per event across every stage: intent, extraction, risk, selection, formulation, execution, insights, and judgment.
 - Measure how much closure on precedent lowers the average, since it is the one path that skips most of the chain.
 - Measure wall-clock latency from submission to result, separating model time from waiting time.
 - Identify calls that could be merged or reused, starting with the two separate history reads per event — one in precedent lookup and one in the Insights Agent's comparison — which cover overlapping ground.
 
-### 10.21 Set up deployment
-*Requires: 10.2, 2.10, 10.4*
+### 9.21 Set up deployment
+*Requires: 9.2, 2.10, 9.4*
 
 - Package the backend, the database, and the bot to run on localhost for the demonstration.
 - Take the profile as a launch argument and every host, port, and path from that profile, so the identical build runs on a real server with no code change.
 - Verify the package starts from nothing: an empty directory, migrations run, the administration command adds the first commander, and the system serves.
 - Verify two deployments start side by side from the same build with two profiles.
 
-### 10.22 Write operator documentation
-*Requires: 10.21*
+### 9.22 Write operator documentation
+*Requires: 9.21*
 
 - Document writing a profile from scratch, including every name the loader expects.
 - Document adding an agent, pointing at the reference agent as the working example.
@@ -1260,7 +1266,7 @@ under this section — it is `bot/*`'s own future work once this API exists.
 
 ## Critical Path
 
-1.2 → 1.4 → 1.5 → 2.7 → 2.9 → 2.3 → 3.1 → 3.5 → 3.8 → 3.11 → 4.1 → 4.4 → 4.7 → 6.1 → 6.3 → 6.4 → 6.5 → 6.7 → 6.8 → 6.9 → 6.10 → 6.11 → 7.3 → 10.1 → 10.2
+1.2 → 1.4 → 1.5 → 2.7 → 2.9 → 2.3 → 3.1 → 3.5 → 3.8 → 3.11 → 4.1 → 4.4 → 4.7 → 6.1 → 6.3 → 6.4 → 6.5 → 6.7 → 6.8 → 6.9 → 6.10 → 6.11 → 7.3 → 9.1 → 9.2
 
 The History System (section 5) runs in parallel with sections 3 and 4 once the persistence interface (2.7) exists, converging at precedent lookup (6.5) and the new-event flow (6.11).
 
@@ -1296,11 +1302,10 @@ The module names below follow the skeleton defined in 1.1.
 | **B18 — Precedent orchestration** | 6.5, 6.6 | `orchestrator/precedent` | Needs B14's precedent search. Parallel with B16 and B17. |
 | **B19 — Flows** | 6.11, 6.12, 6.13, 6.15 | `orchestrator/flows`, `orchestrator/queue` | **The main conflict point.** All four edit the same flow module, and every branch above feeds into it. Merge B16, B17, and B18 before starting it. |
 | **B20 — API** | 7.1 – 7.10 | `api/*` | One branch. The payload spec, the auth layer, and the error contract are edited by every endpoint. |
-| **B21 — Bot** | 8.1 – 8.11 | `bot/*` | One branch, for the same reason. Depends on B20's endpoints. |
-| **B25 — Notification & Identity API** | 9.1 – 9.3 | `api/*` | Real new scope discovered auditing B21 against B20, not deferred work — comparable in size to §7.11's own addition to B20. Touches the same files B20 already owns, so it merges after B20 and coordinates with it the same way B17 coordinates with B4 on `persistence/interface`. Implementing it requires reading the actual, current `persistence/interface`, `auth/permissions`, and `orchestrator/holds` code first — the shapes it needs (a cursor/position for the notification feed, whatever `bot/telegram_client.py` actually uses to address a chat) are not fully knowable from this document alone. |
-| **B22 — Simulator** | 10.1 | `tools/simulator` | Standalone program. Parallel with everything once `POST /Event` exists. |
-| **B23 — Test suites** | 10.2 – 10.20 | `tests/*` | One test file per task, so these parallelize freely among themselves. Each merges once the branch it tests has landed. |
-| **B24 — Deployment and docs** | 10.21, 10.22 | packaging, `docs/operations` | Last. |
+| **B21 — Bot** | 8.1 – 8.14 | `bot/*`, `api/*` | One branch. 8.12–8.14 were found genuinely missing (not deferred) auditing this branch against B20 — comparable in size to §7.11's own addition to B20 — and are Mission 7-shaped `api/*` code even though they're numbered here to close out this branch's own dependency on them. Depends on B20's endpoints for 8.1–8.11; 8.12–8.14 touch the same files B20 already owns, so merge them after B20 and coordinate the same way B17 coordinates with B4 on `persistence/interface`. Implementing 8.12–8.14 requires reading the actual, current `persistence/interface`, `auth/permissions`, and `orchestrator/holds` code first — the shapes they need (a cursor/position for the notification feed, whatever `bot/telegram_client.py` actually uses to address a chat) are not fully knowable from this document alone. |
+| **B22 — Simulator** | 9.1 | `tools/simulator` | Standalone program. Parallel with everything once `POST /Event` exists. |
+| **B23 — Test suites** | 9.2 – 9.20 | `tests/*` | One test file per task, so these parallelize freely among themselves. Each merges once the branch it tests has landed. |
+| **B24 — Deployment and docs** | 9.21, 9.22 | packaging, `docs/operations` | Last. |
 
 ### Cross-cutting work
 
@@ -1324,5 +1329,5 @@ The module names below follow the skeleton defined in 1.1.
 5. **B11, B13, B14, B16** in parallel.
 6. **B15, B17, B18** in parallel.
 7. **B19**, alone.
-8. **B20**, then **B21**, **B22**, and **B25** in parallel.
+8. **B20**, then **B21** and **B22** in parallel.
 9. **B23** throughout, each suite following its branch; **B24** last.

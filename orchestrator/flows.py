@@ -157,17 +157,27 @@ def begin_report(
     source: Literal["sensor", "telegram"],
     received_at: str,
     sender_identity: str,
+    source_message_id: str | None = None,
 ) -> str:
     """The synchronous prefix of a report: write the raw text and return
     the event ID, before any model call runs (§7.2's own requirement —
     "before any processing begins"). Pass the returned event ID to
     `run_report_extraction` next, either inline (as `process_report`
     does) or via a queued continuation (as §7.2/§7.3/§7.4 do).
+
+    `source_message_id` — the originating Telegram message's own ID, when
+    there is one (never for `source="sensor"`) — is what lets a much later
+    asynchronous reply (§8.9/§8.11, via `api/notifications.py`) actually
+    reference the message that started this event, rather than send an
+    unreferenced reply. Written once, alongside the rest of the envelope.
     """
 
     return record_initial_event(
         deps.persistence,
-        InitialEventEnvelope(raw_text=raw_text, source=source, received_at=received_at, sender_identity=sender_identity),
+        InitialEventEnvelope(
+            raw_text=raw_text, source=source, received_at=received_at, sender_identity=sender_identity,
+            source_message_id=source_message_id,
+        ),
     )
 
 
@@ -224,19 +234,22 @@ def process_report(
     return run_report_extraction(deps, event_id, main_agent, insights_agent)
 
 
-def begin_request(deps: FlowDeps, raw_text: str, received_at: str, sender_identity: str) -> str:
+def begin_request(deps: FlowDeps, raw_text: str, received_at: str, sender_identity: str, source_message_id: str | None = None) -> str:
     """The synchronous prefix of a request: write the raw text, already
     classified `human_activation` (§6.13 — there is nothing to extract),
     and return the event ID. Pass it to `continue_from_risk_assessment`
     next, either inline (as `process_request` does) or via a queued
     continuation (as §7.4 does).
+
+    `source_message_id` — see `begin_report`'s docstring; the same
+    reasoning applies here.
     """
 
     event_id = record_initial_event(
         deps.persistence,
         InitialEventEnvelope(
             raw_text=raw_text, source="telegram", received_at=received_at, sender_identity=sender_identity,
-            occurred_at=received_at, occurred_at_is_fallback=False,
+            source_message_id=source_message_id, occurred_at=received_at, occurred_at_is_fallback=False,
         ),
     )
     record_event_state(deps.persistence, event_id, {"classification": HUMAN_ACTIVATION_TYPE})

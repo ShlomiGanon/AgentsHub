@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from bot import app
-from bot.api_client import MessageSubmissionResult, ProfileDiffStatus, ProfileView, SettingsView
+from bot.api_client import MessageSubmissionResult, ProfileDiffStatus, ProfileView, ProtocolWriteResult, SettingsView, SettingsWriteResult
 from bot.deps import BotDeps
 from bot.errors import ApiNotImplementedError, BotStartupError
 from bot.singleton_lock import SingleInstanceLock
@@ -119,12 +119,13 @@ def test_parse_protocol_write_command_builds_the_expected_payload():
 
 
 class _FakeMessage:
-    def __init__(self, text):
+    def __init__(self, text, message_id="777"):
         self.text = text
+        self.message_id = message_id
 
 
-def _fake_update(user_id="42", chat_id="99", text=None, callback_data=None, callback_query_id="cbq-1"):
-    message = _FakeMessage(text) if text is not None else None
+def _fake_update(user_id="42", chat_id="99", text=None, callback_data=None, callback_query_id="cbq-1", message_id="777"):
+    message = _FakeMessage(text, message_id) if text is not None else None
     callback_query = None
     if callback_data is not None:
         callback_query = SimpleNamespace(data=callback_data, id=callback_query_id)
@@ -150,6 +151,20 @@ def test_on_text_message_replies_in_the_same_chat():
 
     assert telegram.sent[-1].chat_id == "99"
     assert telegram.sent[-1].text == "42 events"
+
+
+def test_on_text_message_forwards_the_real_incoming_message_id():
+    # Problem 2's fix: this is the one place the original Telegram
+    # message's ID is available at all — lost here means lost for good,
+    # long before any later async reply could reference it.
+    api = FakeBotApiClient(users={"42": "viewer"}, message_submission_result=MessageSubmissionResult(kind="report", job_id="j1"))
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
+
+    update = _fake_update(text="smoke seen", message_id="12345")
+    _run(app._on_text_message(update, _fake_context(deps)))
+
+    assert ("submit_message", "smoke seen", "42", "12345") in api.calls
 
 
 def test_on_profile_command_view_replies_with_the_profile():
@@ -376,6 +391,57 @@ def test_a_registered_viewer_can_read_settings_through_the_real_handler():
     _run(app._on_settings_command(update, _fake_context(deps, args=["view"])))
 
     assert "3" in telegram.sent[-1].text
+
+
+# -- Problem 1 (post-Mission-8 audit): the real Telegram caller's own -------
+# identity, not the bot's blanket service identity, must reach the API
+# client for these — confirmed through the real command handler, the same
+# way the §8.2 unauthenticated-read fix was confirmed, not through
+# bot.profile_commands/bot.settings_commands in isolation.
+
+
+def test_profile_view_through_the_real_handler_forwards_the_real_callers_identity():
+    api = FakeBotApiClient(users={"42": "viewer"}, profile_view=ProfileView(profile_name="demo", agent_names=(), protocols=(), event_types=(), areas=()))
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
+
+    update = _fake_update()
+    _run(app._on_profile_command(update, _fake_context(deps, args=["view"])))
+
+    assert ("get_profile_view", "42") in api.calls
+
+
+def test_settings_view_through_the_real_handler_forwards_the_real_callers_identity():
+    api = FakeBotApiClient(users={"42": "viewer"}, settings_view=SettingsView(retry_count=3, risk_threshold=0.5, lookback_window_days=30))
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
+
+    update = _fake_update()
+    _run(app._on_settings_command(update, _fake_context(deps, args=["view"])))
+
+    assert ("get_settings_view", "42") in api.calls
+
+
+def test_settings_change_through_the_real_handler_forwards_the_real_callers_identity():
+    api = FakeBotApiClient(users={"42": "commander"}, settings_write_result=SettingsWriteResult(accepted=True, message="ok"))
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
+
+    update = _fake_update()
+    _run(app._on_settings_command(update, _fake_context(deps, args=["set", "retry_count", "5"])))
+
+    assert ("write_setting", "retry_count", 5, "42") in api.calls
+
+
+def test_protocol_write_through_the_real_handler_forwards_the_real_callers_identity():
+    api = FakeBotApiClient(users={"42": "commander"}, protocol_write_result=ProtocolWriteResult(accepted=True, message="ok"))
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
+
+    update = _fake_update()
+    _run(app._on_profile_command(update, _fake_context(deps, args=["remove", "status_check"])))
+
+    assert ("write_protocol", "remove", {"name": "status_check"}, "42") in api.calls
 
 
 def test_write_branches_still_refuse_an_unregistered_identity_no_regression():

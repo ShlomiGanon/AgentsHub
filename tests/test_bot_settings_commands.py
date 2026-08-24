@@ -27,8 +27,16 @@ def _deps(api):
 
 def test_view_shows_all_three_current_values():
     api = FakeBotApiClient(settings_view=SettingsView(retry_count=3, risk_threshold=0.6, lookback_window_days=30))
-    text = _run(view_settings(_deps(api)))
+    text = _run(view_settings(_deps(api), "v1"))
     assert "3" in text and "0.6" in text and "30" in text
+
+
+def test_view_forwards_the_real_callers_identity_to_the_api_client():
+    api = FakeBotApiClient(settings_view=SettingsView(retry_count=3, risk_threshold=0.6, lookback_window_days=30))
+
+    _run(view_settings(_deps(api), "v1"))
+
+    assert api.calls == [("get_settings_view", "v1")]
 
 
 def test_viewer_cannot_change_a_setting():
@@ -61,13 +69,13 @@ def test_valid_change_confirms_immediate_effect_not_next_start():
     api = FakeBotApiClient(settings_write_result=SettingsWriteResult(accepted=True, message="retry_count set to 5"))
     text = _run(change_setting(_deps(api), COMMANDER, "retry_count", "5"))
     assert "immediately" in text.lower()
-    assert api.calls[-1] == ("write_setting", "retry_count", 5)
+    assert api.calls[-1] == ("write_setting", "retry_count", 5, "c1")
 
 
 def test_valid_risk_threshold_is_parsed_as_float():
     api = FakeBotApiClient(settings_write_result=SettingsWriteResult(accepted=True, message="ok"))
     _run(change_setting(_deps(api), COMMANDER, "risk_threshold", "0.75"))
-    assert api.calls[-1] == ("write_setting", "risk_threshold", 0.75)
+    assert api.calls[-1] == ("write_setting", "risk_threshold", 0.75, "c1")
 
 
 def test_rejected_write_is_reported():

@@ -49,6 +49,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
         body = request.get_json(silent=True) or {}
         text = body.get("text")
         sender_identity = body.get("sender_identity")
+        source_message_id = body.get("source_message_id")
 
         if not text:
             raise InvalidInputError("'text' is required", field="text")
@@ -70,12 +71,12 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
             return jsonify({"taken_as": "question", "answer": answer})
 
         if intent.intent == "report":
-            event_id = begin_report(ctx.deps, text, "telegram", received_at, sender_identity)
+            event_id = begin_report(ctx.deps, text, "telegram", received_at, sender_identity, source_message_id)
             ctx.queue.submit((event_id, lambda: run_report_extraction(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent)))
             return jsonify({"taken_as": "report", "event_id": event_id, "status": "queued"}), 202
 
         is_commander = level >= PermissionLevel.COMMANDER
-        event_id = begin_request(ctx.deps, text, received_at, sender_identity)
+        event_id = begin_request(ctx.deps, text, received_at, sender_identity, source_message_id)
         ctx.queue.submit((event_id, lambda: continue_from_risk_assessment(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent, is_commander)))
         return jsonify({"taken_as": "request", "event_id": event_id, "status": "queued"}), 202
 

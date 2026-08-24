@@ -11,13 +11,13 @@ a new entry describing what changed instead.
 | Mission | Section | Status |
 |---|---|---|
 | 1 | Foundations (1.1–1.10) | Done |
-| 2 | Data Layer (2.1–2.12) | Done |
+| 2 | Data Layer (2.1–2.13) | Done |
 | 3 | Agent Framework (3.1–3.12) | Done |
 | 4 | Protocol Engine (4.1–4.8) | Done |
 | 5 | History System (5.1–5.10) | Done |
 | 6 | Main Agent Orchestration (6.1–6.15) | Done |
-| 7 | API Layer (7.1–7.11) | Done |
-| 8 | Telegram Frontend | Done, against a stub for Mission 7 — §7 has since landed; wiring Mission 8's `bot/` package to the real API is not yet done (see §8.x entries) |
+| 7 | API Layer (7.1–7.12) | Done |
+| 8 | Telegram Frontend (8.1–8.14, +8.15) | Done, end to end — `bot/` talks to a real running `api/*` process over real HTTP (`bot.http_api_client.HttpApiClient`), not a stub |
 | 9 | Integration and Hardening | Not started |
 
 Entry format:
@@ -1597,3 +1597,241 @@ wrong-layer pattern. Four fixes, against Missions 2, 5, and 8:
   "no exception escaped the test."
 
 Full suite: 634 passed, 0 failed. `tests/test_architecture.py` passes.
+
+### 8.14 — Implement `resolve_user`
+- **Status:** done
+- **Deviations:** Lives in `api/users.py`, alongside 8.13 — both are
+  `api/*` code, numbered under §8 per the user's own decision to fold
+  Mission 8's dependency on these three endpoints back into Mission 8
+  itself rather than a separate Mission 9. `GET /User/<identity>`,
+  VIEWER-level (`view_history`) — the lowest-privilege read in the
+  system, matching this subtask's own low-sensitivity reasoning. Response
+  is `200 OK` even for an unregistered identity (`{"registered": false,
+  "permission_level": null}`) — asking "is this registered" is the whole
+  point, not an error case. `bot.api_client.UnimplementedApiClient
+  .resolve_user` remains as the null-object fallback (see 8.15's entry
+  below); `bot.http_api_client.HttpApiClient.resolve_user` is the real
+  implementation, using `bot.api_client.BOT_SERVICE_IDENTITY` as
+  `X-Identity` — this call has no specific Telegram user's identity to
+  forward, unlike the hold-answer/message-submission calls.
+
+### 8.13 — Implement the commander roster
+- **Status:** done
+- **Deviations:** `GET /Commanders` in `api/users.py`. Diverges from the
+  original draft's open question ("whether a commander's Telegram
+  identity alone is sufficient chat-routing information") — resolved: yes,
+  by reading `bot/telegram_client.py`, whose `send_text`/`send_with_buttons`
+  address a chat purely by `chat_id`, and this system's private-chat-only
+  design means a commander's own Telegram identity already equals the
+  chat_id to reach them at (no group chats anywhere in `bot/*`). No new
+  storage needed beyond `list_users()` filtered to `permission_level ==
+  "commander"`. New action name added to `auth.permissions
+  .ACTION_REQUIREMENTS`: `view_commander_roster`, COMMANDER level — unlike
+  most reads in this system, this one is commander-level, since it returns
+  the full roster (comparable sensitivity to the "no user-list command"
+  rule §8.2 already enforces on the bot side, here enforced server-side
+  for the one real caller, the bot's own service identity).
+
+### 8.12 — Implement the notification feed the bot polls
+- **Status:** done
+- **Deviations:** `GET /Notifications` in new `api/notifications.py`.
+  Required a new persistence primitive, confirmed with the user before
+  building: a `notification_log` table (migration 8 —
+  `sequence_id INTEGER PRIMARY KEY AUTOINCREMENT, kind, event_id,
+  created_at`) and one new read method on `PersistenceInterface`,
+  `fetch_notifications_since(since: int) -> list[dict]`. No new abstract
+  *write* method was added — `store_held_event` and `update_event`
+  (`persistence/sqlite_backend.py`) both insert a `notification_log` row
+  inside their own existing `_do`/commit, satisfying "same transaction as
+  the state change" literally without widening the interface's write
+  surface. Outcome-to-notification-kind mapping (a real design decision,
+  not specified in advance): `succeeded`/`declined` → `job_finished`;
+  `failed` → `job_failed`; `uncertain` → **both** `job_finished` and
+  `uncertain_verdict` (two rows, two audiences — the original submitter
+  and every commander); `closed_on_precedent` → **both** `job_finished`
+  and `precedent_closure`, same reasoning. Endpoint is COMMANDER-level
+  (`poll_notifications`) — narrower than the original draft text's
+  per-notification-kind viewer/commander split, corrected after
+  confirming there is exactly one real caller (the bot's own service
+  identity, `docs/allowed_calls.md`: "bot calls only api"), which needs
+  every kind to do its own fan-out. Cursor is caller-supplied and
+  stateless server-side (`since` query param, `next_cursor` in the
+  response) — no per-identity server state. `target_chat_ids` is
+  populated per response entry (from the event's own `sender_identity`
+  for `job_finished`/`job_failed`; empty for the four commander-facing
+  kinds, which a caller resolves via `GET /Commanders` instead) — caught
+  as a real gap while documenting the mapping (`JobResult` itself carries
+  no identity field) and fixed before it reached a test. `reply_to_message_id`
+  is always `None` — no column anywhere stores a Telegram message ID; a
+  pre-existing gap, not introduced or closed here, documented in
+  `docs/api_spec.md` rather than left as a hidden assumption.
+
+### 8.15 — Build a real `HttpApiClient` and resolve the service-identity gap
+*Not a `docs/work_plan.md`-numbered subtask — real work needed to close
+Mission 8's own dependency on Mission 7 for good, done in the same round
+as 8.12–8.14 per the user's explicit decision to build it now rather than
+defer it.*
+- **Status:** done
+- **Deviations:** Service identity: `bot.api_client.BOT_SERVICE_IDENTITY
+  = "bot-service"`, provisioned per deployment via `cli/user_admin` at
+  COMMANDER level — the same bootstrap path as the first human commander,
+  no code change to `cli/user_admin` needed. Calls with no specific
+  Telegram user's identity in their own signature use this constant as
+  `X-Identity`; calls that already carry one (`answer_clarification_hold`,
+  `answer_approval_hold`, `submit_message`) use that real identity instead
+  — required, not stylistic, so the API's own §7.9 check keeps checking
+  the real acting person rather than always passing on the bot's
+  commander-level access. One pre-existing structural gap this surfaced
+  and documented rather than silently redesigned:
+  `get_profile_view`/`get_profile_diff_status`/`get_settings_view`
+  /`get_job_result`/`write_protocol`/`write_setting` carry no per-call
+  identity parameter at all in `BotApiClient`'s Mission-8-era abstract
+  signatures, so for these the bot's own client-side permission check
+  (already in place, already tested) is the only genuine gate — the API's
+  own check necessarily passes on the service identity's blanket access.
+  Documented in `docs/api_spec.md`'s new "Service identity" section.
+
+  `bot/http_api_client.py::HttpApiClient` implements all thirteen
+  `BotApiClient` methods with real HTTP calls, built on `urllib.request`
+  (wrapped in `asyncio.to_thread`) rather than adding `requests`/`httpx`
+  as a new runtime dependency — neither is on this session's approved
+  package list, and nothing about a JSON-over-HTTP client this size needs
+  them. Built and tested one method at a time against a real running
+  `api/*` server on a genuine OS-assigned TCP port
+  (`tests/api_fakes.py::RunningApiServer`, a `werkzeug` dev server on a
+  background thread — `app.test_client()` never opens a real socket, so a
+  new helper was needed to actually prove `HttpApiClient`'s own `urllib`
+  calls work end to end). Two real bugs this incremental testing caught
+  and fixed before they reached a committed test: `submit_message` had
+  initially forwarded the API's own `status` field into
+  `MessageSubmissionResult.awaiting_approval`, which is never knowable at
+  acknowledgment time by §8.3's own design (fixed to always `False`); and
+  `answer_approval_hold`'s success path had initially forwarded the raw
+  HTTP body's `"queued"`/`"declined"` text directly into
+  `HoldAnswerOutcome.status`, which expects `"approved"`/`"rejected"`/
+  `"resolved"` (fixed to translate explicitly by status code + body).
+
+  `bot.api_client.UnimplementedApiClient` was **not** retired — kept
+  deliberately: `tests/test_bot_notifications.py`'s own
+  `test_poll_loop_survives_an_unimplemented_api_and_stops_after_max_iterations`
+  genuinely needs a null-object double whose every method raises, to
+  confirm the poll loop's `ApiNotImplementedError` branch degrades
+  gracefully — a real, current, legitimate use, not leftover scaffolding.
+  `bot/app.py::build_deps` now constructs `HttpApiClient` as the real
+  default instead.
+
+  New tests: `tests/test_api_notifications.py` (10),
+  `tests/test_api_users.py` (7), `tests/test_bot_http_api_client.py` (15,
+  every `HttpApiClient` method against `RunningApiServer`). Also fixed,
+  while auditing `.github/workflows/ci.yml`'s explicit per-mission file
+  list (not glob-based, contrary to an earlier assumption — checked
+  rather than assumed, per instruction): three files from *earlier* in
+  this session (`test_persistence_sqlite_backend.py`,
+  `test_history_time_utils.py`, `test_api_app.py`) were also missing from
+  their mission steps, silently covered only by the trailing "Full suite
+  (drift check)" step. Added all six missing files to their correct
+  mission steps, restoring the file's own stated invariant.
+
+**Mission 8 — now genuinely complete, end to end.** Every bot-side
+behavior was already correct and fully tested against the `BotApiClient`
+interface before this round; what closed today is the interface's real
+implementation. A bot built from this codebase today, pointed at a real
+Telegram token and a deployment whose `bot-service` identity has been
+provisioned via `cli/user_admin`, makes genuine HTTP calls to a genuine
+running `api/*` process for every one of its thirteen operations — not a
+mock, not a fake, not `UnimplementedApiClient`. Full suite: 676 passed, 0
+failed. `tests/test_architecture.py` passes.
+
+### Follow-up — closing the two known limitations flagged at the end of §8.15
+
+*Not `docs/work_plan.md`-numbered subtasks — both were explicitly flagged
+as known, real gaps at the end of the §8.15 round and approved for a real
+fix (not documentation) in this follow-up pass.*
+
+**Problem 1 — server-side permission enforcement for five `BotApiClient`
+methods.**
+- **Status:** done
+- **Deviations:** `get_profile_view`, `get_settings_view`, `get_job_result`,
+  `write_protocol`, and `write_setting` were defined in Mission 8's
+  original `BotApiClient` interface with no parameter carrying the
+  specific Telegram identity asking — `HttpApiClient` therefore had
+  nothing to put in `X-Identity` for these five except
+  `BOT_SERVICE_IDENTITY`, so the API's own already-correct §7.9
+  `authenticate`/`require` checks in `api/protocols.py`/`api/system.py`
+  /`api/jobs.py` (confirmed by re-reading all three in full — no `api/*`
+  code changes were needed) were checking the bot's blanket
+  commander-level access rather than the real caller's, for these five
+  calls only. Confirmed the real identity was already available at every
+  call site — `bot.users.resolve_caller` already resolves it — it just
+  wasn't threaded through; two call sites (`bot/app.py`'s profile/settings
+  `view` branches) were discarding the resolved `CallerContext` entirely
+  after checking only whether it was `None`. Fixed by adding a
+  `caller_identity` parameter to all five abstract methods (`bot/api_client.py`,
+  `UnimplementedApiClient`), threading it through `bot/http_api_client.py`
+  (into `X-Identity`, replacing `BOT_SERVICE_IDENTITY`),
+  `bot/profile_commands.py`/`bot/settings_commands.py` (which already took
+  a `caller` for their own client-side check on the two write functions,
+  but never forwarded it), and `bot/app.py`'s two `view` branches (now
+  capturing the `CallerContext` instead of discarding it).
+  `get_profile_diff_status` was deliberately left unchanged — not one of
+  the five named, carries no permission-sensitive content, no dedicated
+  action key. Twelve new tests: per-method identity-forwarding assertions
+  in `tests/test_bot_profile_commands.py`/`tests/test_bot_settings_commands.py`,
+  four handler-level forwarding tests in `tests/test_bot_app.py` (mirroring
+  how the original §8.2 audit fix was itself verified — through the real
+  command handler, not an isolated function), and five new
+  server-side-refusal tests in `tests/test_bot_http_api_client.py`
+  confirming the real running API now genuinely returns `403` for a
+  viewer identity on `write_protocol`/`write_setting` — not just that the
+  bot's own client-side check would have caught it — plus confirmation the
+  three reads still correctly succeed for a viewer.
+
+**Problem 2 — `reply_to_message_id` had no defined source.**
+- **Status:** done
+- **Deviations:** The originating Telegram message's own ID was never
+  captured anywhere — `bot/app.py::_on_text_message` read `update.message
+  .text` but never `update.message.message_id`, so it was lost before
+  `bot/entrypoint.py::handle_incoming_message` or `BotApiClient
+  .submit_message` ever saw it, long before any later asynchronous
+  job-result/failure reply (§8.9/§8.11, delivered via `TelegramClient
+  .send_reply`) could reference it. Required a new persistence field to
+  survive the gap between submission and a possibly much-later queued
+  reply: `events.source_message_id` (nullable TEXT — null for a
+  sensor-sourced event, which has no Telegram message to reference),
+  added via migration 9 (idempotent, matching migration 6's own pattern,
+  since `persistence/schema.py`'s `EVENTS_TABLE_DDL` was also updated
+  directly for a fresh database, the same choice already made once for
+  the summary tables' `event_index` column before migration 6 needed the
+  same idempotency check). Threaded end to end: `bot/app.py` →
+  `bot/entrypoint.py::handle_incoming_message` (new `message_id` parameter)
+  → `BotApiClient.submit_message` (new `source_message_id` parameter) →
+  `bot/http_api_client.py` (into the `POST /Msg` body) → `api/messages.py`
+  (reads `body.get("source_message_id")`, optional) →
+  `orchestrator.flows.begin_report`/`begin_request` (new optional
+  parameter, default `None` — `api/events.py`'s sensor path is unchanged)
+  → `history.write.InitialEventEnvelope` (new field) →
+  `persistence.sqlite_backend` (`_EVENT_COLUMNS`/`_EVENT_IMMUTABLE_COLUMNS`).
+  Read back in `api/notifications.py`: each `GET /Notifications` response
+  entry now carries its own `reply_to_message_id` (alongside the existing
+  `target_chat_ids`), populated from the originating event's
+  `source_message_id` only for `job_finished`/`job_failed` — the two kinds
+  ever delivered via `send_reply` — `null` for the other four kinds and
+  for a sensor-sourced event. `bot/http_api_client.py::poll_pending_notifications`
+  reads it off the response entry instead of hardcoding `None`.
+  `orchestrator.flows.process_report`/`process_request`/`process_message`
+  were deliberately left unchanged — they're the fully-synchronous
+  all-in-one path `api/messages.py` explicitly avoids using (its own
+  docstring: "exactly what §7.2 exists to avoid blocking a request on"),
+  never reachable from the real bot-driven HTTP path this fix closes, and
+  changing them would have rippled through 15+ existing
+  `tests/test_orchestrator_flows.py` call sites for no functional benefit.
+  Five new tests, including two built specifically to prove the fix
+  (`tests/test_api_notifications.py::test_job_finished_and_job_failed_carry_the_real_originating_message_id`,
+  `tests/test_bot_http_api_client.py::test_reply_to_message_id_survives_the_full_real_path_from_submit_message_to_the_notification`)
+  using two deliberately distinct, distinctive fixture message IDs and
+  asserting the exact value each notification carries, not just that some
+  reply was sent — confirmed by a deliberate mutation (forcing the source
+  to always return `None`) that both tests correctly caught before being
+  reverted.
+
+Full suite: 693 passed, 0 failed. `tests/test_architecture.py` passes.

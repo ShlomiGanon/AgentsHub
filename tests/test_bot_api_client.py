@@ -24,16 +24,16 @@ def _run(coro):
 _DUMMY_ARGS = {
     "resolve_user": ("u1",),
     "list_commander_chat_ids": (),
-    "submit_message": ("text", "u1"),
+    "submit_message": ("text", "u1", "m1"),
     "answer_clarification_hold": ("h1", "fire", "u1"),
     "answer_approval_hold": ("h1", "approved", "u1"),
-    "get_profile_view": (),
+    "get_profile_view": ("u1",),
     "get_profile_diff_status": (),
-    "write_protocol": ("add", {}),
-    "get_settings_view": (),
-    "write_setting": ("retry_count", 3),
-    "get_job_result": ("job1",),
-    "poll_pending_notifications": (),
+    "write_protocol": ("add", {}, "u1"),
+    "get_settings_view": ("u1",),
+    "write_setting": ("retry_count", 3, "u1"),
+    "get_job_result": ("job1", "u1"),
+    "poll_pending_notifications": (0,),
 }
 
 

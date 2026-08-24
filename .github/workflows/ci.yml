@@ -51,6 +51,7 @@ jobs:
           tests/test_persistence_users.py
           tests/test_migrations.py
           tests/test_persistence_conformance.py
+          tests/test_persistence_sqlite_backend.py
           tests/test_seed_dataset.py
 
       - name: Mission 3 — Agent Framework
@@ -84,6 +85,7 @@ jobs:
           tests/test_history_query.py
           tests/test_history_precedent.py
           tests/test_history_fidelity.py
+          tests/test_history_time_utils.py
 
       - name: Mission 6 — Main Agent Orchestration
         run: >
@@ -113,6 +115,7 @@ jobs:
           tests/test_api_protocols.py
           tests/test_api_system.py
           tests/test_api_unified_ingestion.py
+          tests/test_api_app.py
 
       - name: Mission 8 — Telegram Frontend
         run: >
@@ -132,6 +135,9 @@ jobs:
           tests/test_bot_failures.py
           tests/test_bot_notifications.py
           tests/test_bot_app.py
+          tests/test_api_notifications.py
+          tests/test_api_users.py
+          tests/test_bot_http_api_client.py
 
       - name: Full suite (drift check)
         run: pytest -q

@@ -43,8 +43,8 @@ def format_profile_view(view: "ProfileView") -> str:
     return "\n".join(lines)
 
 
-async def view_profile(deps: "BotDeps") -> str:
-    view = await deps.api_client.get_profile_view()
+async def view_profile(deps: "BotDeps", caller_identity: str) -> str:
+    view = await deps.api_client.get_profile_view(caller_identity)
     return format_profile_view(view)
 
 
@@ -85,7 +85,7 @@ async def write_protocol(
     if validation_refusal is not None:
         return validation_refusal
 
-    result = await deps.api_client.write_protocol(action, protocol_payload)
+    result = await deps.api_client.write_protocol(action, protocol_payload, caller.telegram_identity)
 
     if not result.accepted:
         return f"Rejected: {result.message}"

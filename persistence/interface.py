@@ -111,6 +111,23 @@ class PersistenceInterface(ABC):
     def resolve_held_event(self, kind: str, hold_id: str, resolution: dict) -> None:
         """Mark a hold resolved and record who resolved it and how."""
 
+    # -- Notification log (work_plan.md §8.12) --------------------------
+
+    @abstractmethod
+    def fetch_notifications_since(self, since: int) -> list[dict]:
+        """Return every notification-log row with `sequence_id > since`, in
+        ascending order — `since=0` returns everything ever recorded.
+
+        Each dict carries `sequence_id`, `kind` (one of
+        `bot.api_client.BotNotificationKind`'s six values), `event_id`, and
+        `created_at`. Rows are written internally by `store_held_event` and
+        `update_event` (on an outcome transition), in the same transaction
+        as the state change each one records — there is no separate write
+        method on this interface for them, deliberately: a notification-log
+        row is never a state change in its own right, only a side effect of
+        one that already has its own write method.
+        """
+
     # -- Users (work_plan.md §2.4, §1.10) ------------------------------
 
     @abstractmethod

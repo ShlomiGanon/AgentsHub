@@ -77,9 +77,10 @@ def test_poll_once_dispatches_every_pending_notification():
     )
     deps = BotDeps(loaded_profile=None, telegram_client=FakeTelegramClient(), api_client=api)
 
-    count = _run(run_notification_poll_once(deps))
+    count, next_cursor = _run(run_notification_poll_once(deps))
 
     assert count == 2
+    assert next_cursor == 2  # FakeBotApiClient bumps since by however many it returned
     assert len(deps.telegram_client.sent) == 2
 
 
@@ -108,7 +109,7 @@ class _RaisingApiClient(FakeBotApiClient):
         self._exc = exc
         self.poll_call_count = 0
 
-    async def poll_pending_notifications(self):
+    async def poll_pending_notifications(self, since: int):
         self.poll_call_count += 1
         raise self._exc
 

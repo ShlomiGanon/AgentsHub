@@ -6,13 +6,15 @@ resolves and validates the bot token, guards against a second instance
 for the same deployment, registers every handler, and runs the polling
 loop.
 
-`bot.api_client.UnimplementedApiClient` is the default `BotApiClient`
-built here — see that module's docstring for why, and for what a future
-Mission 7 needs to replace it with. Every handler below is wrapped so
-that an `ApiNotImplementedError` reaching it becomes a clear, honest chat
-reply instead of a crash or a silently dropped update — this bot is
-runnable against a real Telegram token today; it will simply say, for
-each capability, exactly which work_plan.md §7 subtask it is waiting on.
+`bot.http_api_client.HttpApiClient` is the default `BotApiClient` built
+here — real HTTP, against the profile's own `api_port` (§8.1). Every
+handler below stays wrapped so that any unexpected failure reaching it
+becomes a clear chat reply instead of a crash or a silently dropped
+update — including `bot.errors.ApiRequestError` (a real API call that
+failed) and, for any `BotApiClient` implementation that still legitimately
+has no real counterpart for an operation, `ApiNotImplementedError` (see
+`bot.api_client.UnimplementedApiClient`'s own docstring for when that
+still applies).
 """
 
 import argparse
@@ -26,9 +28,10 @@ from profiles.loader import LoadedProfile, ProfileLoadError, ProfileValidationEr
 from tools.logging_config import configure_logging
 
 from bot import approval, clarification, entrypoint, profile_commands, settings_commands
-from bot.api_client import UnimplementedApiClient
+from bot.http_api_client import HttpApiClient
 from bot.deps import BotDeps
 from bot.errors import ApiNotImplementedError, BotStartupError
+from bot.notification_cursor import NotificationCursorStore
 from bot.notifications import run_notification_poll_loop
 from bot.singleton_lock import SingleInstanceLock
 from bot.telegram_client import PTBTelegramClient
@@ -65,10 +68,12 @@ def build_deps(module_path: str) -> BotDeps:
     bot_token = _resolve_bot_token(module_path, loaded_profile)
     telegram_client = PTBTelegramClient(bot_token)
 
-    # TODO(Mission 7): swap for a real HTTP client (talking to
-    # `loaded_profile.api_port`, per §8.1's "use the profile's port when
-    # talking to the API") once §7 exists. See bot/api_client.py.
-    api_client = UnimplementedApiClient()
+    # Real HTTP, at last — §8.1's "use the profile's port when talking to
+    # the API". Needs bot.api_client.BOT_SERVICE_IDENTITY provisioned in
+    # this deployment's user table first (docs/api_spec.md's "Service
+    # identity" section) — every call fails authentication otherwise, the
+    # same as any other unregistered identity.
+    api_client = HttpApiClient(f"http://localhost:{loaded_profile.api_port}")
 
     return BotDeps(loaded_profile=loaded_profile, telegram_client=telegram_client, api_client=api_client)
 
@@ -118,7 +123,7 @@ async def _on_text_message(update, context) -> None:
     deps: BotDeps = context.bot_data["deps"]
     telegram_identity, chat_id = _identity_and_chat_id(update)
 
-    reply = await entrypoint.handle_incoming_message(deps, telegram_identity, update.message.text)
+    reply = await entrypoint.handle_incoming_message(deps, telegram_identity, update.message.text, str(update.message.message_id))
     await deps.telegram_client.send_text(chat_id, reply)
 
 
@@ -206,9 +211,10 @@ async def _on_profile_command(update, context) -> None:
     args = context.args or []
 
     if not args or args[0] == "view":
-        if await _resolve_caller_or_refuse(deps, chat_id, telegram_identity) is None:
+        caller = await _resolve_caller_or_refuse(deps, chat_id, telegram_identity)
+        if caller is None:
             return
-        await deps.telegram_client.send_text(chat_id, await profile_commands.view_profile(deps))
+        await deps.telegram_client.send_text(chat_id, await profile_commands.view_profile(deps, caller.telegram_identity))
         return
 
     if args[0] == "diff":
@@ -247,9 +253,10 @@ async def _on_settings_command(update, context) -> None:
     args = context.args or []
 
     if not args or args[0] == "view":
-        if await _resolve_caller_or_refuse(deps, chat_id, telegram_identity) is None:
+        caller = await _resolve_caller_or_refuse(deps, chat_id, telegram_identity)
+        if caller is None:
             return
-        await deps.telegram_client.send_text(chat_id, await settings_commands.view_settings(deps))
+        await deps.telegram_client.send_text(chat_id, await settings_commands.view_settings(deps, caller.telegram_identity))
         return
 
     if args[0] == "set" and len(args) == 3:
@@ -279,9 +286,13 @@ def register_handlers(application, deps: BotDeps) -> None:
     # `Application.post_init` runs once the polling loop actually starts —
     # the earliest point at which `application.create_task` (which needs a
     # running event loop) is safe to call. This is what starts the §8.4-
-    # §8.6/§8.9/§8.11 notification poll loop alongside message handling.
+    # §8.6/§8.9/§8.11/§8.12 notification poll loop alongside message
+    # handling. The cursor store is built here, not earlier, since it
+    # needs `deps.loaded_profile.db_path` — real only once a real profile
+    # started this bot, never assumed at import time.
     async def _post_init(started_application) -> None:
-        started_application.create_task(run_notification_poll_loop(deps, NOTIFICATION_POLL_INTERVAL_SECONDS))
+        cursor_store = NotificationCursorStore(Path(f"{deps.loaded_profile.db_path}.notification_cursor"))
+        started_application.create_task(run_notification_poll_loop(deps, NOTIFICATION_POLL_INTERVAL_SECONDS, cursor_store=cursor_store))
 
     application.post_init = _post_init
 

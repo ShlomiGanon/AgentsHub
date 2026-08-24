@@ -39,6 +39,7 @@ _EVENT_COLUMNS = (
     "received_at",
     "source",
     "sender_identity",
+    "source_message_id",
     "occurred_at",
     "occurred_at_is_fallback",
     "raw_text",
@@ -72,11 +73,29 @@ _EVENT_BOOL_COLUMNS = {"occurred_at_is_fallback", "clarification_held", "approva
 # Envelope fields written once by append_event — never touched by
 # update_event (§2.5 for raw_text; the rest of the envelope for the same
 # reason: it describes where the event came from, not what happened to it).
-_EVENT_IMMUTABLE_COLUMNS = {"event_id", "received_at", "source", "sender_identity", "raw_text"}
+_EVENT_IMMUTABLE_COLUMNS = {"event_id", "received_at", "source", "sender_identity", "source_message_id", "raw_text"}
 _UPDATABLE_EVENT_COLUMNS = frozenset(_EVENT_COLUMNS) - _EVENT_IMMUTABLE_COLUMNS
 
 _HELD_EVENT_RESERVED_KEYS = {"hold_id", "event_id", "created_at"}
 _HELD_EVENT_RESOLUTION_RESERVED_KEYS = {"resolved_by", "resolved_at"}
+
+# An event's outcome, once set, fans out to one or two notification_log
+# rows — one per audience a real delivery path (bot/notifications.py's
+# dispatch_notification) treats separately. "uncertain" and
+# "closed_on_precedent" both still owe the original submitter a
+# "job_finished"-shaped result (bot.api_client.BotOutcome includes both
+# values as valid JobResult.outcome values) *in addition to* the
+# commander-facing push §8.5/§8.6 already document. "declined" reaches the
+# submitter through the same job_finished path — nothing else ever notifies
+# them a declined run happened, since the reject itself already answers the
+# commander who declined it synchronously, in the API response.
+_OUTCOME_TO_NOTIFICATION_KINDS: dict[str, tuple[str, ...]] = {
+    "succeeded": ("job_finished",),
+    "declined": ("job_finished",),
+    "failed": ("job_failed",),
+    "uncertain": ("job_finished", "uncertain_verdict"),
+    "closed_on_precedent": ("job_finished", "precedent_closure"),
+}
 
 
 def _encode_event_value(column: str, value):
@@ -135,6 +154,13 @@ def _upsert_steps(connection: sqlite3.Connection, event_id: str, steps: list[dic
             """,
             payload,
         )
+
+
+def _insert_notification(connection: sqlite3.Connection, kind: str, event_id: str) -> None:
+    connection.execute(
+        "INSERT INTO notification_log (kind, event_id, created_at) VALUES (?, ?, ?)",
+        (kind, event_id, datetime.now(timezone.utc).isoformat()),
+    )
 
 
 def _decode_held_event_row(row: sqlite3.Row) -> dict:
@@ -251,6 +277,11 @@ class SQLitePersistence(PersistenceInterface):
 
                 if steps:
                     _upsert_steps(connection, event_id, steps)
+
+                outcome = column_updates.get("outcome")
+                if outcome is not None:
+                    for notification_kind in _OUTCOME_TO_NOTIFICATION_KINDS.get(outcome, ()):
+                        _insert_notification(connection, notification_kind, event_id)
 
                 connection.commit()
             except sqlite3.Error as exc:
@@ -406,6 +437,7 @@ class SQLitePersistence(PersistenceInterface):
                     "VALUES (:hold_id, :kind, :event_id, :payload, :created_at)",
                     row,
                 )
+                _insert_notification(connection, f"{kind}_hold", event_id)
                 connection.commit()
                 return hold_id
             except sqlite3.Error as exc:
@@ -476,3 +508,17 @@ class SQLitePersistence(PersistenceInterface):
                 raise PersistenceError(f"failed to resolve held event '{hold_id}': {exc}") from exc
 
         self._submit_write(_do)
+
+    # -- Notification log (§8.12) --------------------------------------------
+
+    def fetch_notifications_since(self, since: int) -> list[dict]:
+        connection = self._read_connection()
+        try:
+            rows = connection.execute(
+                "SELECT sequence_id, kind, event_id, created_at FROM notification_log "
+                "WHERE sequence_id > ? ORDER BY sequence_id",
+                (since,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            connection.close()

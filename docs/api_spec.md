@@ -20,6 +20,68 @@ table (§2.4, provisioned only by `cli/user_admin`, §1.10) is the entire
 authentication mechanism. A missing or unregistered identity is rejected
 outright — never treated as a viewer (§7.9's own rule).
 
+### Service identity (`bot.api_client.BOT_SERVICE_IDENTITY`)
+
+A third kind of pre-registered, non-human identity, alongside the human
+commander/viewer case and the sensor case above: the bot process itself.
+`docs/allowed_calls.md`'s "bot calls only api" means a real `HttpApiClient`
+is the only thing that ever makes these calls, and every one of them needs
+*some* `X-Identity` — for two genuinely different reasons, so it uses two
+genuinely different identities depending on which:
+
+- **Calls with no specific Telegram user's identity to forward** —
+  `resolve_user`, `list_commander_chat_ids`/`GET /Commanders`,
+  `poll_pending_notifications`/`GET /Notifications`, and
+  `get_profile_diff_status` — present the bot's own fixed identity,
+  `bot.api_client.BOT_SERVICE_IDENTITY` (currently the literal string
+  `"bot-service"`). Provisioned once per deployment via `cli/user_admin`,
+  at **commander** level (it needs to see commander-only information —
+  the full roster, every notification kind — to do its own fan-out
+  correctly), exactly like the first human commander:
+  ```
+  python -m cli.user_admin --profile <profile> add --telegram-id bot-service --level commander
+  ```
+  Without this row, every one of these calls fails authentication — the
+  same "unregistered identity rejected outright" rule above applies to the
+  bot itself, no exception. `get_profile_diff_status` stays here
+  deliberately: it carries no write, no protocol/settings content, and no
+  dedicated action key in `auth.permissions.ACTION_REQUIREMENTS`, only the
+  same "registered at all" baseline every interaction already requires —
+  it was never one of the methods the gap below applied to.
+- **Calls that already carry a specific person's identity as a parameter**
+  — `answer_clarification_hold`, `answer_approval_hold`, `submit_message`,
+  and (since the server-side-enforcement gap noted below was closed)
+  `get_profile_view`, `get_settings_view`, `get_job_result`,
+  `write_protocol`, `write_setting` — use *that* identity as `X-Identity`,
+  never the service identity. This is required, not a style choice: §7.9's
+  permission check is what decides whether a hold-answer, a message
+  submission, or one of these five is allowed at all, and it checks
+  whoever `X-Identity` names. If the bot always presented its own
+  commander-level service identity here, the API's own check would always
+  pass regardless of the real Telegram user's actual level — silently
+  turning the API's authorization into a rubber stamp for the bot's client-
+  side check alone, rather than genuine defense-in-depth. The bot's own
+  pre-check (`bot.users.check_permission`, already in place and tested)
+  stays the first gate a request meets; the API's check, driven by the
+  real identity, stays the second, independent one.
+
+**A structural gap that used to exist here, closed:** `get_profile_view`,
+`get_settings_view`, `get_job_result`, `write_protocol`, and
+`write_setting` originally carried no per-call identity parameter at all
+in `BotApiClient`'s Mission-8-era abstract signatures, even though the
+last two are commander-only writes — meaning the API-side check could
+only ever validate the bot's own blanket service-level access for these
+five, never the real caller's. `bot/api_client.py`, `bot/http_api_client.py`,
+`bot/profile_commands.py`, `bot/settings_commands.py`, and `bot/app.py`
+were all updated to thread the real caller's identity through to every
+one of these five — the same shape of fix as the Mission 8 deep audit's
+own §8.2 profile/settings unauthenticated-read fix, this time closing a
+server-side-enforcement gap rather than a missing check entirely. Verified
+with a dedicated test per affected method confirming the real API now
+genuinely refuses an unauthorized identity for that specific call — not
+just that the bot's own client-side check would have caught it
+(`tests/test_bot_http_api_client.py`, `tests/test_bot_app.py`).
+
 ## The acknowledgment shape
 
 Every endpoint that submits work returns this shape immediately, before
@@ -56,8 +118,14 @@ here; intent classification (§6.13) decides which.
 
 Request:
 ```json
-{ "text": "any status update on gate 3?", "sender_identity": "1002003" }
+{ "text": "any status update on gate 3?", "sender_identity": "1002003", "source_message_id": "4821" }
 ```
+`source_message_id` — the originating Telegram message's own ID — is
+optional in the request body (a caller with no message to reference, or
+testing directly against this endpoint, may omit it) but is what a much
+later `job_finished`/`job_failed` entry in `GET /Notifications` (§8.12)
+needs to carry a real `reply_to_message_id`, per work_plan.md §2.3's
+`events.source_message_id` column: written once here, read back there.
 
 Response, when the message was a **question** — answered inline, no job:
 ```json
@@ -274,6 +342,79 @@ before this response is sent:
 { "retry_count": 5, "risk_threshold": 0.6, "lookback_window_days": 45 }
 ```
 
+## `GET /User/<identity>` (§8.14)
+
+`200 OK`, always — an unregistered identity is not an error here, since
+asking "is this registered" is the whole point:
+```json
+{ "registered": true, "permission_level": "commander" }
+```
+or
+```json
+{ "registered": false, "permission_level": null }
+```
+`view_history` level (VIEWER minimum) — the same low-privilege reasoning
+`GET /Protocol` already uses.
+
+## `GET /Commanders` (§8.13)
+
+`200 OK`:
+```json
+{ "commanders": [{ "telegram_identity": "commander-1" }] }
+```
+COMMANDER-level (`view_commander_roster`) — see **Service identity**
+above for who the real caller is and why this isn't VIEWER-level like
+most reads in this system.
+
+## `GET /Notifications` (§8.12)
+
+`GET /Notifications?since=<cursor>` — `since` is an opaque, caller-tracked
+integer cursor (omit or `0` for "everything ever recorded"). `200 OK`:
+```json
+{
+  "notifications": [
+    {
+      "sequence_id": 7,
+      "kind": "approval_hold",
+      "payload": {
+        "hold_id": "...", "event_id": "e3f1...", "reason": "flagged_protocol",
+        "risk_level": "high", "risk_reason": "...",
+        "selected_protocol_name": "dispatch_response", "candidate_protocol_names": []
+      },
+      "target_chat_ids": [],
+      "reply_to_message_id": null
+    }
+  ],
+  "next_cursor": 7
+}
+```
+`kind` is one of `bot.api_client.BotNotificationKind`'s six values;
+`payload`'s shape matches that kind's own DTO
+(`HeldClarificationNotice`/`HeldApprovalNotice`/`UncertainVerdictNotice`
+/`PrecedentClosureNotice`/`JobResult`-shaped for `job_finished`/
+`job_failed`) exactly, field for field. `target_chat_ids` is populated
+(one entry, the original sender's own identity — a private chat's
+`chat_id` equals its user's identity) only for `job_finished`/
+`job_failed`, since those two are addressed to a specific person; the
+other four kinds are addressed to every commander, which a caller
+resolves via `GET /Commanders` rather than this endpoint repeating that
+list on every row. `reply_to_message_id` (§8.9's "reference the original
+message") is likewise populated only for those same two kinds, read from
+the originating event's own `source_message_id` column (work_plan.md
+§2.3) — `null` for a sensor-sourced event (no Telegram message to
+reference) and for every other notification kind (none of them are
+replies to anything). Polling again with `since` equal to the previous
+response's `next_cursor` returns `{"notifications": [], "next_cursor":
+<same value>}` — never the same row twice. COMMANDER-level
+(`poll_notifications`) — see **Service identity** above.
+
+An outcome that has two distinct audiences produces two separate entries
+with two different `kind`s and two different `sequence_id`s, not one
+entry serving both: `"uncertain"` produces a `job_finished` entry (for
+whoever submitted the event) and a separate `uncertain_verdict` entry
+(for commanders); `"closed_on_precedent"` produces `job_finished` plus a
+separate `precedent_closure` entry, the same way.
+
 ## Errors (§7.10)
 
 One shape, every endpoint, every failure:
@@ -347,3 +488,19 @@ as `write_protocol` — `accepted=False` for a `400` from `PUT /SYSTEM`;
 responses are `401`/`403` (raise) and `404` for `get_job_result` (no such
 event — return `None`, matching this method's own declared `JobResult |
 None` return type, no raise needed).
+
+**`resolve_user` → `UserLookupResult`.** `GET /User/<identity>`'s `200`
+body maps directly — `registered`/`permission_level` are already exactly
+this DTO's own fields, no translation needed. `401`/`403` raise, same as
+every other read.
+
+**`list_commander_chat_ids` → `tuple[str, ...]`.** `GET /Commanders`'s
+`commanders` array, each entry's `telegram_identity` — a plain tuple of
+strings, no DTO wrapper. `401`/`403` raise.
+
+**`poll_pending_notifications` → `tuple[tuple[BotNotification, ...],
+int]`.** `GET /Notifications`'s `notifications` array, each entry built
+into a `BotNotification` directly — `kind`, `target_chat_ids`, and
+`reply_to_message_id` all come straight off the response entry, `payload`
+parsed into the DTO that `kind` names (see **`GET /Notifications`**
+above) — paired with `next_cursor`. `401`/`403` raise.
