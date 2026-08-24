@@ -425,6 +425,24 @@ class SQLitePersistence(PersistenceInterface):
         finally:
             connection.close()
 
+    def fetch_held_event(self, kind: str, event_id: str) -> dict | None:
+        connection = self._read_connection()
+        try:
+            # Most-recent-first: an event carries at most one hold of a
+            # given kind at a time by design (docs/vocabulary.md), but the
+            # table has no constraint enforcing that — this order picks
+            # the latest if that invariant is ever violated, rather than
+            # an arbitrary row.
+            row = connection.execute(
+                "SELECT * FROM held_events WHERE kind = ? AND event_id = ? ORDER BY created_at DESC LIMIT 1",
+                (kind, event_id),
+            ).fetchone()
+            if row is None:
+                return None
+            return _decode_held_event_row(row)
+        finally:
+            connection.close()
+
     def resolve_held_event(self, kind: str, hold_id: str, resolution: dict) -> None:
         resolved_by = resolution.get("resolved_by")
         resolved_at = resolution.get("resolved_at") or datetime.now(timezone.utc).isoformat()

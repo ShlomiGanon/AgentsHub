@@ -19,3 +19,7 @@
 # bot/telegram_client.py. See docs/progress.md's Mission 8 entry for what
 # is, and isn't, verified against a live Telegram bot token.
 python-telegram-bot==22.8
+# API Layer (§7): Flask, confirmed with the user (synchronous/threaded —
+# matches orchestrator.queue.SerialEventQueue and the blocking crewai
+# calls already built, no asyncio impedance mismatch).
+flask>=3.1

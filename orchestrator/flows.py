@@ -17,6 +17,21 @@ functions take only a hold ID and an answer, and re-read everything else
 persistence. Neither depends on anything held in memory from the original
 call, so a resume works identically whether it happens in the same
 process or after a full restart.
+
+Every entry and resumption point below is actually two pieces composed
+together: a fast, synchronous "begin"/"resolve" prefix that only writes a
+record and returns, and a "run"/"continue" piece that does the real work
+(model calls, tool calls) and can take a while. `process_report`,
+`process_request`, `resume_after_clarification`, and the approved branch
+of `resume_after_approval` compose their own two pieces back into one
+synchronous call, so every one of Mission 6's own tests keeps working
+unchanged. §7.2 (the async job mechanism) is what actually needs them
+kept apart: it calls a "begin"/"resolve" piece inline in the request
+handler to get an event ID back immediately, then submits the matching
+"run"/"continue" piece to `orchestrator.queue.SerialEventQueue` instead of
+running it in the request. §7.11's deny path is the one exception that
+stays fully synchronous even for the API — declining is genuinely final,
+with no continuation to queue.
 """
 
 import functools
@@ -52,6 +67,7 @@ from orchestrator.judgment import judge_success
 from orchestrator.main_agent import assess_risk, construct_core_agents as construct_main_agent
 from orchestrator.precedent import determine_closure, look_up_precedent
 from orchestrator.question_flow import answer_question
+from orchestrator.queue import SerialEventQueue
 from orchestrator.selection import select_protocol
 from profiles.spec import HUMAN_ACTIVATION_TYPE
 from protocols.executor import execute_steps
@@ -63,7 +79,7 @@ if TYPE_CHECKING:
     from config.base import BaseConfig
     from config.settings_store import SettingsStore
     from history.query import HistoryQueryService
-    from orchestrator.holds import HoldReason
+    from orchestrator.holds import HoldAnswerResult, HoldReason
     from orchestrator.insights import InsightsAgent
     from orchestrator.main_agent import MainAgent
     from persistence.interface import PersistenceInterface
@@ -135,25 +151,35 @@ def _now() -> str:
 # -- Entry points: brand new messages ----------------------------------
 
 
-def process_report(
+def begin_report(
     deps: FlowDeps,
-    main_agent: "MainAgent",
-    insights_agent: "InsightsAgent",
     raw_text: str,
     source: Literal["sensor", "telegram"],
     received_at: str,
     sender_identity: str,
-) -> FlowResult:
-    """A report of something that happened — runs extraction. A report
-    never originates from "a commander's own request" (§6.4/§6.7's
-    bypass is for requests only), so closure/approval logic here always
-    treats it as not commander-originated.
+) -> str:
+    """The synchronous prefix of a report: write the raw text and return
+    the event ID, before any model call runs (§7.2's own requirement —
+    "before any processing begins"). Pass the returned event ID to
+    `run_report_extraction` next, either inline (as `process_report`
+    does) or via a queued continuation (as §7.2/§7.3/§7.4 do).
     """
 
-    event_id = record_initial_event(
+    return record_initial_event(
         deps.persistence,
         InitialEventEnvelope(raw_text=raw_text, source=source, received_at=received_at, sender_identity=sender_identity),
     )
+
+
+def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent") -> FlowResult:
+    """The rest of a report: extraction through outcome. Re-reads the
+    event `begin_report` already wrote rather than taking `raw_text`/
+    `source`/`received_at` as arguments — this is the piece §7.2 queues,
+    so it must work from the event ID alone.
+    """
+
+    event = deps.persistence.fetch_event(event_id)
+    raw_text, source, received_at = event["raw_text"], event["source"], event["received_at"]
 
     try:
         extraction_result = extract_event(
@@ -175,21 +201,35 @@ def process_report(
         record_event_state(deps.persistence, event_id, {"clarification_held": True, "clarification_unresolved_field": UNRESOLVED_FIELD})
         return FlowResult(event_id, "held_for_clarification")
 
-    return _continue_from_risk_assessment(deps, event_id, main_agent, insights_agent, originated_from_commander=False)
+    return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent, originated_from_commander=False)
 
 
-def process_request(
+def process_report(
     deps: FlowDeps,
     main_agent: "MainAgent",
     insights_agent: "InsightsAgent",
     raw_text: str,
+    source: Literal["sensor", "telegram"],
     received_at: str,
     sender_identity: str,
-    originated_from_commander: bool,
 ) -> FlowResult:
-    """A person's request for an action — classified `human_activation`
-    directly; extraction has nothing to classify, because the
-    classification is already known (§6.13).
+    """A report of something that happened, run synchronously start to
+    finish — `begin_report` + `run_report_extraction` composed back into
+    one call. A report never originates from "a commander's own request"
+    (§6.4/§6.7's bypass is for requests only), so closure/approval logic
+    downstream always treats it as not commander-originated.
+    """
+
+    event_id = begin_report(deps, raw_text, source, received_at, sender_identity)
+    return run_report_extraction(deps, event_id, main_agent, insights_agent)
+
+
+def begin_request(deps: FlowDeps, raw_text: str, received_at: str, sender_identity: str) -> str:
+    """The synchronous prefix of a request: write the raw text, already
+    classified `human_activation` (§6.13 — there is nothing to extract),
+    and return the event ID. Pass it to `continue_from_risk_assessment`
+    next, either inline (as `process_request` does) or via a queued
+    continuation (as §7.4 does).
     """
 
     event_id = record_initial_event(
@@ -201,7 +241,25 @@ def process_request(
     )
     record_event_state(deps.persistence, event_id, {"classification": HUMAN_ACTIVATION_TYPE})
 
-    return _continue_from_risk_assessment(deps, event_id, main_agent, insights_agent, originated_from_commander)
+    return event_id
+
+
+def process_request(
+    deps: FlowDeps,
+    main_agent: "MainAgent",
+    insights_agent: "InsightsAgent",
+    raw_text: str,
+    received_at: str,
+    sender_identity: str,
+    originated_from_commander: bool,
+) -> FlowResult:
+    """A person's request for an action, run synchronously start to
+    finish — `begin_request` + `continue_from_risk_assessment` composed
+    back into one call.
+    """
+
+    event_id = begin_request(deps, raw_text, received_at, sender_identity)
+    return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent, originated_from_commander)
 
 
 def process_message(
@@ -234,18 +292,18 @@ def process_message(
 # -- Resumption points ----------------------------------------------------
 
 
-def resume_after_clarification(
+def resolve_clarification(
     deps: FlowDeps,
-    main_agent: "MainAgent",
-    insights_agent: "InsightsAgent",
     hold_id: str,
     answering_identity: str,
     answering_level: "PermissionLevel",
     chosen_classification: str,
-):
-    """Resume at risk assessment, not extraction — the other extracted
-    fields are still valid and re-running extraction would discard the
-    commander's decision (§6.2's own rule).
+) -> "HoldAnswerResult":
+    """The synchronous prefix of answering a clarification hold: validate
+    and record the answer, nothing more. A resolved answer always needs a
+    continuation (`continue_after_clarification`) — unlike an approval
+    answer, there is no "final, no continuation" branch here, since
+    resolving a classification never itself ends a run.
     """
 
     answer = answer_clarification_hold(deps.persistence, hold_id, answering_identity, answering_level, chosen_classification, deps.event_type_registry)
@@ -258,7 +316,86 @@ def resume_after_clarification(
         {"classification": chosen_classification, "clarification_resolved_by": answering_identity, "clarification_chosen_classification": chosen_classification},
     )
 
-    return _continue_from_risk_assessment(deps, event_id, main_agent, insights_agent, originated_from_commander=False)
+    return answer
+
+
+def continue_after_clarification(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent") -> FlowResult:
+    """Resume at risk assessment, not extraction — the other extracted
+    fields are still valid and re-running extraction would discard the
+    commander's decision (§6.2's own rule). This is a full run (§7.11's
+    own note) — the piece §7.2/§7.11 queue rather than run inline.
+    """
+
+    return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent, originated_from_commander=False)
+
+
+def resume_after_clarification(
+    deps: FlowDeps,
+    main_agent: "MainAgent",
+    insights_agent: "InsightsAgent",
+    hold_id: str,
+    answering_identity: str,
+    answering_level: "PermissionLevel",
+    chosen_classification: str,
+):
+    """Answer a clarification hold and resume, synchronously start to
+    finish — `resolve_clarification` + `continue_after_clarification`
+    composed back into one call.
+    """
+
+    answer = resolve_clarification(deps, hold_id, answering_identity, answering_level, chosen_classification)
+    if answer.status != "resolved":
+        return answer  # unauthorized / not_found / invalid_classification — nothing to resume
+
+    return continue_after_clarification(deps, answer.hold["event_id"], main_agent, insights_agent)
+
+
+def resolve_approval(
+    deps: FlowDeps,
+    hold_id: str,
+    answering_identity: str,
+    answering_level: "PermissionLevel",
+    decision: Literal["approved", "rejected"],
+) -> "HoldAnswerResult":
+    """The synchronous prefix of answering an approval hold: validate and
+    record the answer, nothing more. Unlike a clarification answer, what
+    follows genuinely forks: `rejected` is already final (see
+    `resume_after_approval`'s own handling) and needs no continuation;
+    only `approved` needs `continue_after_approval`.
+    """
+
+    answer = answer_approval_hold(deps.persistence, hold_id, answering_identity, answering_level, decision)
+    if answer.status not in ("approved", "rejected"):
+        return answer  # unauthorized / not_found — nothing to resume
+
+    event_id = answer.hold["event_id"]
+    record_event_state(deps.persistence, event_id, {"approval_answered_by": answering_identity, "approval_answered_at": _now()})
+
+    return answer
+
+
+def decline(deps: FlowDeps, event_id: str) -> FlowResult:
+    """Record a rejected approval hold's outcome as declined — the
+    synchronous, no-continuation-needed branch `resume_after_approval`
+    and `api.holds`'s deny path (§7.11) both share.
+    """
+
+    record_event_outcome(deps.persistence, event_id, "declined")
+    return FlowResult(event_id, "declined")
+
+
+def continue_after_approval(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent", selected_protocol_name: str) -> FlowResult:
+    """Resume execution from task formulation through protocol execution
+    — the approved branch only. This is not free: it costs the same
+    several-model-call run §7.2 exists to avoid blocking a request on, so
+    it is the piece §7.2/§7.11 queue rather than run inline.
+    """
+
+    protocol = deps.protocol_set.get(selected_protocol_name)
+    event = deps.persistence.fetch_event(event_id)
+    precedent_matches = _look_up_precedent_if_possible(deps, event_id, event)
+
+    return _run_protocol(deps, event_id, main_agent, insights_agent, protocol, precedent_matches, event["raw_text"], event["classification"], event["area"], event["description"])
 
 
 def resume_after_approval(
@@ -270,26 +407,23 @@ def resume_after_approval(
     answering_level: "PermissionLevel",
     decision: Literal["approved", "rejected"],
 ):
-    """Resume execution from task formulation on approval. End the run
-    as declined on rejection, writing that outcome to the event record.
+    """Answer an approval hold and resume, synchronously start to finish
+    — `resolve_approval` + (on approval only) `continue_after_approval`
+    composed back into one call. End the run as declined on rejection,
+    writing that outcome to the event record; declining is already final
+    here, with nothing left to continue.
     """
 
-    answer = answer_approval_hold(deps.persistence, hold_id, answering_identity, answering_level, decision)
+    answer = resolve_approval(deps, hold_id, answering_identity, answering_level, decision)
     if answer.status not in ("approved", "rejected"):
         return answer  # unauthorized / not_found — nothing to resume
 
     event_id = answer.hold["event_id"]
-    record_event_state(deps.persistence, event_id, {"approval_answered_by": answering_identity, "approval_answered_at": _now()})
 
     if answer.status == "rejected":
-        record_event_outcome(deps.persistence, event_id, "declined")
-        return FlowResult(event_id, "declined")
+        return decline(deps, event_id)
 
-    protocol = deps.protocol_set.get(answer.hold["selected_protocol_name"])
-    event = deps.persistence.fetch_event(event_id)
-    precedent_matches = _look_up_precedent_if_possible(deps, event_id, event)
-
-    return _run_protocol(deps, event_id, main_agent, insights_agent, protocol, precedent_matches, event["raw_text"], event["classification"], event["area"], event["description"])
+    return continue_after_approval(deps, event_id, main_agent, insights_agent, answer.hold["selected_protocol_name"])
 
 
 # -- Internal continuation --------------------------------------------------
@@ -301,7 +435,7 @@ def _look_up_precedent_if_possible(deps: FlowDeps, event_id: str, event: dict) -
     return look_up_precedent(deps.history_query_service, event_id, event["classification"], event["area"], event["occurred_at"])
 
 
-def _continue_from_risk_assessment(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent", originated_from_commander: bool) -> FlowResult:
+def continue_from_risk_assessment(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent", originated_from_commander: bool) -> FlowResult:
     event = deps.persistence.fetch_event(event_id)
     raw_text, classification, area = event["raw_text"], event["classification"], event["area"]
     description, severity = event["description"], event["severity"]

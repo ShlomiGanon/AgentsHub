@@ -1,0 +1,82 @@
+"""POST /Msg (work_plan.md §7.4).
+
+Human ingestion — reports, requests, and questions all arrive here;
+intent classification (§6.13) decides which. Composes the split
+primitives (`begin_report`/`run_report_extraction`,
+`begin_request`/`continue_from_risk_assessment`) itself rather than
+calling `orchestrator.flows.process_message`, which runs a report or
+request synchronously start to finish — exactly what §7.2 exists to
+avoid blocking a request on. A question is answered synchronously here,
+per §7.4's own rule: "a question has no job to track." This is half of
+§7.5's unified ingestion — see `api/events.py` for the other half and
+`tests/test_api_unified_ingestion.py` for the convergence proof.
+"""
+
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING
+
+from flask import Blueprint, jsonify, request
+
+from api.auth import authenticate, require
+from api.errors import InvalidInputError, RunFailureError
+from auth.permissions import PermissionLevel
+from orchestrator.flows import (
+    OrchestrationParseError,
+    answer_question,
+    begin_report,
+    begin_request,
+    classify_intent,
+    continue_from_risk_assessment,
+    run_report_extraction,
+)
+
+if TYPE_CHECKING:
+    from api.app import ApiContext
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
+    blueprint = Blueprint("messages", __name__)
+
+    @blueprint.route("/Msg", methods=["POST"])
+    def post_msg():
+        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
+        require(level, "send_message")
+
+        body = request.get_json(silent=True) or {}
+        text = body.get("text")
+        sender_identity = body.get("sender_identity")
+
+        if not text:
+            raise InvalidInputError("'text' is required", field="text")
+        if not sender_identity:
+            raise InvalidInputError("'sender_identity' is required", field="sender_identity")
+
+        try:
+            intent = classify_intent(ctx.main_agent, ctx.deps.protocol_set.all(), text)
+        except OrchestrationParseError as exc:
+            raise RunFailureError(str(exc)) from exc
+
+        received_at = _now()
+
+        if intent.intent == "question":
+            try:
+                answer = answer_question(ctx.main_agent, text, ctx.deps.registry, ctx.deps.history_query_service)
+            except OrchestrationParseError as exc:
+                raise RunFailureError(str(exc)) from exc
+            return jsonify({"taken_as": "question", "answer": answer})
+
+        if intent.intent == "report":
+            event_id = begin_report(ctx.deps, text, "telegram", received_at, sender_identity)
+            ctx.queue.submit((event_id, lambda: run_report_extraction(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent)))
+            return jsonify({"taken_as": "report", "event_id": event_id, "status": "queued"}), 202
+
+        is_commander = level >= PermissionLevel.COMMANDER
+        event_id = begin_request(ctx.deps, text, received_at, sender_identity)
+        ctx.queue.submit((event_id, lambda: continue_from_risk_assessment(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent, is_commander)))
+        return jsonify({"taken_as": "request", "event_id": event_id, "status": "queued"}), 202
+
+    return blueprint

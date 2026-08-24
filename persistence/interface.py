@@ -28,6 +28,11 @@ that event's already-extracted fields, and neither `fetch_events_range`
 nor `fetch_events_by_type_area_window` can do a direct ID lookup without
 already knowing the occurrence window. Same "completing 2.7's intent"
 reasoning as `update_event`.
+
+`fetch_held_event` (§2.13) is the same idea applied to holds: added while
+designing §7.11, which addresses a hold by event ID rather than the
+orchestrator's internal hold ID, and needs to report an already-resolved
+hold's resolver and timestamp rather than a generic not-found.
 """
 
 from abc import ABC, abstractmethod
@@ -87,6 +92,20 @@ class PersistenceInterface(ABC):
     @abstractmethod
     def list_held_events(self, kind: str) -> list[dict]:
         """Return every currently-unresolved hold of `kind`."""
+
+    @abstractmethod
+    def fetch_held_event(self, kind: str, event_id: str) -> dict | None:
+        """Return the hold of `kind` created against `event_id`, or None.
+
+        Unlike `list_held_events`, returns a hold whether it is still
+        pending or already resolved — carrying `resolved`, `resolved_by`,
+        and `resolved_at` either way. Added for §7.11: the API addresses a
+        hold by the event ID the caller actually has, not the
+        orchestrator's internal hold ID, and needs to report "already
+        resolved by X at T" rather than a generic not-found for a second
+        commander answering a hold that's already been handled. Same
+        "completing §2.7's intent" reasoning as `fetch_event`.
+        """
 
     @abstractmethod
     def resolve_held_event(self, kind: str, hold_id: str, resolution: dict) -> None:

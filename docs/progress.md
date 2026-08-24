@@ -1286,3 +1286,23 @@ entry point.
   `"job_finished"`) and by `bot.formatting`'s separate `"failed"` header
   — the same infrastructure, not a parallel one, since both are "an
   asynchronous outcome reaching whoever is waiting on it."
+### 2.13 - Add held-event lookup by event ID
+- **Status:** done
+- **Deviations:** Not in work_plan.md's original text - added as a new
+  subtask via a user-approved addendum while planning Mission 7 (`docs/
+  work_plan.md` itself was edited first to add this subtask, in an earlier
+  pass; this entry logs the implementation). `fetch_held_event(kind,
+  event_id) -> dict | None` added to `persistence/interface.py` and
+  `persistence/sqlite_backend.py`, same "completing §2.7's intent"
+  reasoning as `fetch_event`/`update_event` before it. Looks up by
+  `(kind, event_id)` rather than the orchestrator's internal `hold_id`,
+  ordered most-recent-first as a defensive tie-break (an event carries at
+  most one hold of a given kind at a time by design - docs/vocabulary.md -
+  but the table itself has no constraint enforcing that). Reuses the
+  existing `_decode_held_event_row` helper unchanged, so a resolved hold's
+  `resolved_by`/`resolved_at`/`resolution` decode identically to how
+  `list_held_events` already decodes a pending one - the only difference
+  is this method doesn't filter `WHERE resolved = 0`. Extended the
+  backend-swap conformance suite (§2.11) with four new cases: pending,
+  resolved (reporting resolver and timestamp), unknown event ID, and
+  kind-scoping. This exists to serve §7.11, not built yet.
