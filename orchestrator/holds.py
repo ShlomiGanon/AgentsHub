@@ -37,7 +37,7 @@ UNRESOLVED_FIELD = "classification"
 
 @dataclass(frozen=True)
 class HoldAnswerResult:
-    status: Literal["approved", "rejected", "resolved", "unauthorized", "not_found", "invalid_classification"]
+    status: Literal["approved", "rejected", "resolved", "unauthorized", "not_found", "invalid_classification", "invalid_candidate"]
     hold: dict | None = None
     message: str = ""
 
@@ -96,12 +96,20 @@ def answer_approval_hold(
     hold_id: str,
     answering_identity: str,
     answering_level: PermissionLevel,
-    decision: Literal["approved", "rejected"],
+    decision: Literal["approved", "rejected"] | str,
 ) -> HoldAnswerResult:
     """Accept an answer only from a commander, validated *now* — at the
     moment they answer, not whatever level they held when the hold was
     created. A second answer to an already-resolved hold is reported
     distinctly, never silently accepted as if it were the first.
+
+    `decision` accepts a third shape beyond `"approved"`/`"rejected"`: a
+    candidate protocol name, for a hold whose reason is
+    `"ambiguous_selection"` (§6.4's no-clear-fit-at-low-risk case) — a
+    commander is choosing *which* protocol runs, not answering yes/no.
+    This is additive: a `"flagged_protocol"` hold's approve/reject
+    handling below is completely unchanged, reached exactly as it always
+    was, for every value of `decision`.
     """
 
     if not is_permitted(answering_level, "approve_run"):
@@ -114,6 +122,9 @@ def answer_approval_hold(
             message=f"no unresolved approval hold '{hold_id}' — it may not exist or may already be resolved",
         )
 
+    if held["reason"] == "ambiguous_selection":
+        return _answer_ambiguous_selection_hold(persistence, hold_id, answering_identity, held, decision)
+
     try:
         persistence.resolve_held_event("approval", hold_id, {"resolved_by": answering_identity, "decision": decision})
     except NotFoundError as exc:
@@ -122,6 +133,39 @@ def answer_approval_hold(
 
     status: Literal["approved", "rejected"] = "approved" if decision == "approved" else "rejected"
     return HoldAnswerResult(status=status, hold=held)
+
+
+def _answer_ambiguous_selection_hold(
+    persistence: PersistenceInterface,
+    hold_id: str,
+    answering_identity: str,
+    held: dict,
+    decision: str,
+) -> HoldAnswerResult:
+    """`"approved"`/`"rejected"` answer nothing here — an ambiguous hold
+    asks which protocol to run, never a yes/no question (§6.7's own
+    second bullet). Validated against exactly the candidates recorded on
+    this hold at creation time (§6.4/§6.7), never a wider set.
+    """
+
+    candidates = held["candidate_protocol_names"]
+    if decision not in candidates:
+        return HoldAnswerResult(
+            status="invalid_candidate",
+            message=f"'{decision}' is not one of this hold's candidates: {candidates}",
+        )
+
+    try:
+        persistence.resolve_held_event("approval", hold_id, {"resolved_by": answering_identity, "decision": decision})
+    except NotFoundError as exc:
+        return HoldAnswerResult(status="not_found", message=str(exc))
+
+    # The pre-resolution snapshot's `selected_protocol_name` is still the
+    # `None` it was created with (§6.4 never sets one for this reason) —
+    # override it with the chosen candidate so a caller resuming from
+    # `hold["selected_protocol_name"]` gets a real protocol, not nothing.
+    resolved_hold = {**held, "selected_protocol_name": decision}
+    return HoldAnswerResult(status="approved", hold=resolved_hold)
 
 
 # -- Clarification holds (§6.2) ------------------------------------------

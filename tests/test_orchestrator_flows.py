@@ -475,3 +475,37 @@ def test_resolve_approval_then_continue_after_approval_composes_to_success(deps)
     result = continue_after_approval(deps, answer.hold["event_id"], agent, insights_agent, answer.hold["selected_protocol_name"])
 
     assert result.outcome == "succeeded"
+
+
+def test_an_ambiguous_selection_hold_resolves_to_a_real_protocol_and_resumes(deps):
+    # §6.4/§6.7's gap, closed additively in orchestrator.holds: before this
+    # fix, `selected_protocol_name` stayed None for an ambiguous hold and
+    # continue_after_approval had nothing real to run — this asserts a
+    # chosen candidate reaches it, not just that the None case is absent.
+    agent = _ScriptedAgent(
+        {
+            "Extract this operational event": _extraction_response(),
+            "RISK_SCORE": "RISK_SCORE: 0.1\nREASON: low, but two protocols fit",
+            "Choose the protocol": "AMBIGUOUS: status_check,dispatch_response\nREASON: both fit equally well",
+            "participating in the": "AGENT: reference_agent\nTASK: check gate 3",
+            "VERDICT:": "VERDICT: success\nREASONING: matches expected output",
+        }
+    )
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    held = process_report(deps, agent, insights_agent, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    assert held.outcome == "held_for_approval"
+    [hold] = deps.persistence.list_held_events("approval")
+    assert hold["reason"] == "ambiguous_selection"
+    assert hold["selected_protocol_name"] is None
+
+    answer = resolve_approval(deps, hold["hold_id"], "commander-1", PermissionLevel.COMMANDER, "status_check")
+    assert answer.status == "approved"
+    assert answer.hold["selected_protocol_name"] == "status_check"
+
+    event = deps.persistence.fetch_event(held.event_id)
+    assert event["selected_protocol"] == "status_check"  # resolve_approval's own write
+
+    result = continue_after_approval(deps, answer.hold["event_id"], agent, insights_agent, answer.hold["selected_protocol_name"])
+
+    assert result.outcome == "succeeded"

@@ -28,8 +28,8 @@ NOTICE = HeldClarificationNotice(
 
 
 def test_callback_data_round_trips():
-    data = build_callback_data("hold-1", "fire")
-    assert parse_callback_data(data) == ("hold-1", "fire")
+    data = build_callback_data("event-1", "fire")
+    assert parse_callback_data(data) == ("event-1", "fire")
 
 
 def test_prompt_shows_raw_text_and_unresolved_field():
@@ -48,7 +48,23 @@ def test_pushed_to_every_commander_with_buttons_not_free_text():
 
     assert {m.chat_id for m in telegram.sent} == {"c1", "c2"}
     for message in telegram.sent:
-        assert message.buttons == (("fire", "clarify:hold-1:fire"), ("medical", "clarify:hold-1:medical"))
+        assert message.buttons == (("fire", "clarify:event-1:fire"), ("medical", "clarify:event-1:medical"))
+
+
+def test_pushed_buttons_encode_event_id_not_hold_id():
+    # NOTICE.hold_id ("hold-1") and NOTICE.event_id ("event-1") deliberately
+    # differ, so this fails loudly if the callback data ever regresses to
+    # encoding the orchestrator's internal hold ID again — api/holds.py's
+    # POST /Clarify/<event_id> (§7.11) only ever accepts an event ID.
+    api = FakeBotApiClient(commander_chat_ids=("c1",))
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
+
+    _run(push_clarification_prompt(deps, NOTICE))
+
+    for _label, callback_data in telegram.sent[0].buttons:
+        assert NOTICE.event_id in callback_data
+        assert NOTICE.hold_id not in callback_data
 
 
 def test_unregistered_answerer_is_refused():
@@ -56,7 +72,7 @@ def test_unregistered_answerer_is_refused():
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
 
-    _run(handle_clarification_answer(deps, "chat-1", "stranger", "hold-1", "fire"))
+    _run(handle_clarification_answer(deps, "chat-1", "stranger", "event-1", "fire"))
 
     assert "not a registered user" in telegram.sent[-1].text
 
@@ -66,7 +82,7 @@ def test_viewer_cannot_resolve_a_hold():
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
 
-    _run(handle_clarification_answer(deps, "chat-1", "v1", "hold-1", "fire"))
+    _run(handle_clarification_answer(deps, "chat-1", "v1", "event-1", "fire"))
 
     assert "resolve_hold" in telegram.sent[-1].text
     assert not api.calls or api.calls[-1][0] != "answer_clarification_hold"
@@ -80,9 +96,9 @@ def test_commander_answer_resumes_and_confirms():
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
 
-    _run(handle_clarification_answer(deps, "chat-1", "c1", "hold-1", "fire"))
+    _run(handle_clarification_answer(deps, "chat-1", "c1", "event-1", "fire"))
 
-    assert api.calls[-1] == ("answer_clarification_hold", "hold-1", "fire", "c1")
+    assert api.calls[-1] == ("answer_clarification_hold", "event-1", "fire", "c1")
     assert "resumed" in telegram.sent[-1].text.lower()
 
 
@@ -94,6 +110,6 @@ def test_second_answer_to_an_already_resolved_hold_names_who_resolved_it():
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
 
-    _run(handle_clarification_answer(deps, "chat-2", "c2", "hold-1", "medical"))
+    _run(handle_clarification_answer(deps, "chat-2", "c2", "event-1", "medical"))
 
     assert "already resolved by c1" in telegram.sent[-1].text.lower()

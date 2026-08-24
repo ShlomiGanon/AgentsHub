@@ -28,7 +28,7 @@ imports.
 | `protocols` | `protocols.model`, `protocols.loader`, `protocols.editor`, `protocols.executor` | `protocols.retry` stays internal, called only by `protocols.executor` — parallel to `profiles.validate`'s status. |
 | `history` | `history.interface`, `history.query` | `history.interface` exposes writes, extraction, and scheduler hooks; `history.query` exposes historical Q&A and precedent lookup. Other `history/` modules stay internal. |
 | `orchestrator` | `orchestrator.flows` | |
-| `api` | `api.app` *(lands in §7)* | |
+| `api` | `api.app` | `api.app.create_app(module_path)` assembles everything a running API needs from a `LoadedProfile` (the agent registry, the protocol/area/event-type registries, the history query service, the settings store, the serial queue, the summary scheduler) and builds the Flask app — the first place all of that gets wired together at once. Every other `api/` module (`auth`, `errors`, `events`, `messages`, `jobs`, `holds`, `protocols`, `system`) is internal, reached only from within the package. |
 | `bot` | `bot.app` | Built in Mission 8, against a Mission 7 (`api`) that does not exist yet. "`bot` calls only `api`" is a *network* boundary (the profile's `api_port`, §8.1), never a Python import — nothing in `bot/` imports the `api` package. `bot.api_client.BotApiClient` is the seam every other `bot/` module is built against; its only implementation today, `UnimplementedApiClient`, raises naming the exact §7 subtask it is blocked on. |
 
 ## Who may call whom

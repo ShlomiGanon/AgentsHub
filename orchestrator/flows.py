@@ -355,21 +355,30 @@ def resolve_approval(
     hold_id: str,
     answering_identity: str,
     answering_level: "PermissionLevel",
-    decision: Literal["approved", "rejected"],
+    decision: Literal["approved", "rejected"] | str,
 ) -> "HoldAnswerResult":
     """The synchronous prefix of answering an approval hold: validate and
     record the answer, nothing more. Unlike a clarification answer, what
     follows genuinely forks: `rejected` is already final (see
     `resume_after_approval`'s own handling) and needs no continuation;
-    only `approved` needs `continue_after_approval`.
+    `approved` — including a resolved candidate-protocol selection for an
+    ambiguous-selection hold (§6.4/§6.7), which `answer_approval_hold`
+    also reports as `"approved"` — needs `continue_after_approval`.
     """
 
     answer = answer_approval_hold(deps.persistence, hold_id, answering_identity, answering_level, decision)
     if answer.status not in ("approved", "rejected"):
-        return answer  # unauthorized / not_found — nothing to resume
+        return answer  # unauthorized / not_found / invalid_candidate — nothing to resume
 
     event_id = answer.hold["event_id"]
-    record_event_state(deps.persistence, event_id, {"approval_answered_by": answering_identity, "approval_answered_at": _now()})
+    record_event_state(
+        deps.persistence, event_id,
+        {
+            "approval_answered_by": answering_identity,
+            "approval_answered_at": _now(),
+            "selected_protocol": answer.hold["selected_protocol_name"],
+        },
+    )
 
     return answer
 
@@ -405,7 +414,7 @@ def resume_after_approval(
     hold_id: str,
     answering_identity: str,
     answering_level: "PermissionLevel",
-    decision: Literal["approved", "rejected"],
+    decision: Literal["approved", "rejected"] | str,
 ):
     """Answer an approval hold and resume, synchronously start to finish
     — `resolve_approval` + (on approval only) `continue_after_approval`

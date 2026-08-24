@@ -90,6 +90,22 @@ def test_high_risk_ambiguous_resolves_to_most_critical_candidate():
     assert result.protocol_name == "b"  # HIGH beats MEDIUM
 
 
+def test_high_risk_tie_break_uses_numeric_severity_not_alphabetical_order():
+    # The Mission 8 coverage audit's silent-miscomparison risk, made
+    # explicit: alphabetically "high" < "low" (h < l), so a criticality
+    # that was ever a plain string would have this tie-break pick LOW —
+    # the *least* critical candidate — with no error at all.
+    # CriticalityLevel is a real IntEnum (LOW=1 < HIGH=3), so max() compares
+    # by severity instead, and HIGH correctly wins.
+    agent = _ScriptedMainAgent("AMBIGUOUS: low_one, high_one\nREASON: tied")
+    protocols = (_protocol("low_one", CriticalityLevel.LOW), _protocol("high_one", CriticalityLevel.HIGH))
+
+    result = select_protocol(agent, "raw", "fire", "north", "d", protocols, risk_level="high")
+
+    assert result.status == "selected"
+    assert result.protocol_name == "high_one"
+
+
 def test_select_protocol_passes_no_tools():
     agent = _ScriptedMainAgent("SELECTED: a\nREASON: r")
 

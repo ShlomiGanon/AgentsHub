@@ -133,6 +133,58 @@ def test_answering_an_already_resolved_hold_is_reported_distinctly(store):
     assert second.status == "not_found"  # not silently accepted as a fresh answer
 
 
+# -- Ambiguous-selection holds: a candidate-protocol decision (§6.4/§6.7) -
+
+
+def _ambiguous_selection():
+    return ProtocolSelectionResult(status="ambiguous", candidate_names=("status_check", "dispatch_response"), reason="both fit")
+
+
+def test_a_valid_candidate_name_resolves_and_records_the_selection(store):
+    hold_id = create_approval_hold(store, "evt-1", "ambiguous_selection", _ambiguous_selection(), _risk())
+    [held] = store.list_held_events("approval")
+    assert held["selected_protocol_name"] is None  # nothing chosen yet
+
+    result = answer_approval_hold(store, hold_id, "commander-1", PermissionLevel.COMMANDER, "dispatch_response")
+
+    assert result.status == "approved"
+    assert result.hold["selected_protocol_name"] == "dispatch_response"
+    assert store.list_held_events("approval") == []
+
+
+def test_a_name_outside_the_holds_own_candidates_is_rejected(store):
+    hold_id = create_approval_hold(store, "evt-1", "ambiguous_selection", _ambiguous_selection(), _risk())
+
+    result = answer_approval_hold(store, hold_id, "commander-1", PermissionLevel.COMMANDER, "not_a_real_candidate")
+
+    assert result.status == "invalid_candidate"
+    assert "status_check" in result.message and "dispatch_response" in result.message
+    # the hold is untouched — still unresolved
+    assert len(store.list_held_events("approval")) == 1
+
+
+def test_approved_and_rejected_are_not_meaningful_answers_to_an_ambiguous_hold(store):
+    hold_id = create_approval_hold(store, "evt-1", "ambiguous_selection", _ambiguous_selection(), _risk())
+
+    approved = answer_approval_hold(store, hold_id, "commander-1", PermissionLevel.COMMANDER, "approved")
+    assert approved.status == "invalid_candidate"
+
+    rejected = answer_approval_hold(store, hold_id, "commander-1", PermissionLevel.COMMANDER, "rejected")
+    assert rejected.status == "invalid_candidate"
+
+
+def test_flagged_protocol_holds_are_unaffected_by_the_ambiguous_selection_path(store):
+    # A flagged_protocol hold's own approve/reject handling is reached
+    # exactly as before, whatever `decision` is passed — confirming the
+    # widening in answer_approval_hold is additive, not a behavior change.
+    hold_id = create_approval_hold(store, "evt-1", "flagged_protocol", _selection(), _risk())
+
+    result = answer_approval_hold(store, hold_id, "commander-1", PermissionLevel.COMMANDER, "approved")
+
+    assert result.status == "approved"
+    assert result.hold["selected_protocol_name"] == "dispatch_response"
+
+
 # -- Clarification holds (§6.2) ------------------------------------------
 
 

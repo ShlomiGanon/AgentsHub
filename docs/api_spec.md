@@ -122,7 +122,17 @@ Response `200 OK` once finished — ran to a verdict:
   "event_id": "e3f1...",
   "status": "succeeded",
   "insight_text": "...",
-  "detail": "matches expected output"
+  "steps_completed": ["reference_agent: gate 3 is nominal"]
+}
+```
+or, on a run that exhausted its retries:
+```json
+{
+  "event_id": "e3f1...",
+  "status": "failed",
+  "detail": "attempt limit exhausted",
+  "steps_completed": ["reference_agent: gate 3 is nominal"],
+  "failed_step_agent_name": "dispatch_agent"
 }
 ```
 `status` here is one of `"succeeded" | "failed" | "uncertain"`. This is
@@ -130,7 +140,12 @@ how "still running" is told from "waiting on a commander" is told from
 "closed without running" (§7.1's own required distinction) — three
 different `status` values, never inferred from HTTP status code alone
 (every one of these responses is `200 OK`; the run's own outcome is data,
-not a transport-level failure — §7.10's explicit rule).
+not a transport-level failure — §7.10's explicit rule). `steps_completed`
+(§7.12) lists every step that actually produced a result, in execution
+order — omitted when no step ran (e.g. `closed_on_precedent`, `declined`).
+`failed_step_agent_name` (§7.12) is present only when `status: "failed"`
+and a step actually ran and failed (as opposed to, say, task formulation
+itself failing before any step started).
 
 Response `404 Not Found` (the errors shape, §7.10) when `event_id` names
 no event at all.
@@ -150,15 +165,25 @@ queues a continuation (§7.11's own rule).
 ```
 or
 ```json
-{ "decision": "denied" }
+{ "decision": "rejected" }
 ```
-Response on `"approved"`: `202 Accepted`, the acknowledgment shape — the
-continuation is queued, same as clarify.
+or, for the ambiguous-selection case (§6.4/§6.7) — a candidate protocol
+name in place of `"approved"`/`"rejected"`:
+```json
+{ "decision": "status_check" }
+```
 
-Response on `"denied"`: `200 OK`, synchronously, no job left running:
+Response on `"approved"` or a candidate protocol name: `202 Accepted`,
+the acknowledgment shape — the continuation is queued, same as clarify.
+
+Response on `"rejected"`: `200 OK`, synchronously, no job left running:
 ```json
 { "event_id": "e3f1...", "status": "declined" }
 ```
+
+Response `400 Bad Request` (the errors shape, `invalid_input`) when
+`decision` is neither `"approved"`, `"rejected"`, nor one of the hold's
+own candidate protocol names — naming the real candidates.
 
 Response `409 Conflict` (the errors shape) when the hold named by
 `event_id` was already resolved — `message` names who resolved it and
@@ -207,7 +232,17 @@ Never a body resembling a successful state change (§7.6's explicit rule)
 {
   "profile": "fixtures.profiles.demo_profile",
   "agents": ["reference_agent", "main_agent", "history_agent", "insights_agent"],
-  "protocols": [{ "name": "status_check", "approval_flag": false }],
+  "protocols": [
+    {
+      "name": "status_check",
+      "description": "applies to a routine status check",
+      "participating_agents": ["reference_agent"],
+      "approved_tools": ["check_status"],
+      "expected_success_output": "a status report",
+      "criticality": "low",
+      "approval_flag": false
+    }
+  ],
   "event_types": ["fire", "medical", "human_activation"],
   "areas": ["north_sector", "south_sector"],
   "queued_events": 2,
@@ -219,6 +254,9 @@ Never a body resembling a successful state change (§7.6's explicit rule)
 ```
 `profile_file_changed` is `true` when the profile file's hash on disk no
 longer matches the hash taken at load — a pending edit awaiting restart.
+Each entry in `protocols` uses the exact same shape `GET /Protocol` (§7.6)
+returns — one rendering, reused, so a caller never needs both endpoints
+just to get one protocol's full description and criticality (§7.12).
 
 ## `PUT /SYSTEM` (§7.8)
 
@@ -264,3 +302,48 @@ omitted otherwise. `error_class` is one of:
 
 No response body of any kind, on any endpoint, ever contains a Python
 traceback, an exception's `repr`, or a SQLite error string.
+
+## Mapping to `BotApiClient` (bot/api_client.py) — §7.12
+
+Every `BotApiClient` method is typed to return a success DTO, several with
+their own in-body status field for a condition this API instead reports as
+an HTTP error response. This is the mapping a real `HttpApiClient` needs —
+written down now, per §7.12, since the DTOs themselves aren't changing
+until an `HttpApiClient` is actually built.
+
+**`answer_clarification_hold` / `answer_approval_hold` → `HoldAnswerOutcome`.**
+This is the one place almost every error response has a natural home,
+since `HoldAnswerStatus` already exists to carry exactly this:
+
+| Response | `HoldAnswerOutcome.status` | Notes |
+|---|---|---|
+| `401`/`403` `invalid_input` (authentication/authorization) | `"unauthorized"` | `message` carries the API's own message text. |
+| `404` `invalid_input` (no such hold) | `"not_found"` | `resolved_by` stays `None` — nothing to name. |
+| `409` `invalid_input` (already resolved) | `"not_found"` | `resolved_by`/`resolved_at` must be parsed out of the API's `message` string (`"already resolved by 'X' at T"`) — there is no separate structured field for it in the error body (§7.10's fixed three-field shape has no room for one). A future refinement could add a dedicated field; until then, parsing the message is the only path. |
+| `400` `invalid_input`, `field: "classification"` (`POST /Clarify`) | `"invalid_classification"` | |
+| `400` `invalid_input`, `field: "decision"` (`POST /Approve`, bad candidate) | `"invalid_candidate"` | |
+| `400` `invalid_input`, `field: "decision"` (`POST /Approve`, missing/malformed) | *(no exact match)* | Nearest is `"invalid_candidate"`, though the API's message may not be about a candidate at all (e.g. a missing `decision` field entirely) — a client should render the API's `message` regardless of which status it picks. |
+| `202`/`200` success | `"approved"` / `"rejected"` / `"resolved"` | Direct — the response's `status` field (`"queued"` or `"declined"`) plus which endpoint was called determines which. |
+
+**`submit_message` → `MessageSubmissionResult`.** This DTO has no error
+slot at all — no `accepted`, no `status` covering failure. A `401`/`403`
+(auth) or `422` `run_failure` (intent routing/question-answering failed
+synchronously) from `POST /Msg` has nowhere to go inside a
+`MessageSubmissionResult`; a real client must raise an exception (a new
+`bot.errors` type, not yet defined) rather than force one of these into
+the DTO. `500` `internal_error` is the same.
+
+**`write_protocol` → `ProtocolWriteResult`.** `accepted: bool` already
+covers a validation failure at `POST`/`PUT`/`DELETE /Protocol` (`400`
+`invalid_input` → `accepted=False`, `message` from the API). `401`/`403`
+have no slot here either — same as `submit_message`, these must raise.
+
+**`write_setting` → `SettingsWriteResult`.** Same shape and same mapping
+as `write_protocol` — `accepted=False` for a `400` from `PUT /SYSTEM`;
+`401`/`403` raise.
+
+**`get_profile_view` / `get_profile_diff_status` / `get_settings_view` /
+`get_job_result`.** These are read-only GETs; the only realistic error
+responses are `401`/`403` (raise) and `404` for `get_job_result` (no such
+event — return `None`, matching this method's own declared `JobResult |
+None` return type, no raise needed).

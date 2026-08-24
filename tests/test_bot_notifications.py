@@ -92,3 +92,38 @@ def test_poll_loop_survives_an_unimplemented_api_and_stops_after_max_iterations(
     # every single poll fails with ApiNotImplementedError — §7.2 doesn't
     # exist yet, and that must degrade gracefully, not crash the bot.
     _run(run_notification_poll_loop(deps, poll_interval_seconds=0, max_iterations=3))
+
+
+class _RaisingApiClient(FakeBotApiClient):
+    """Raises a caller-supplied, non-ApiNotImplementedError exception from
+    poll_pending_notifications on every call, to exercise the poll loop's
+    generic `except Exception` branch (as opposed to its dedicated
+    ApiNotImplementedError branch, already covered above) — a real bug in
+    the client (a bad response shape, a connection error) rather than the
+    known "§7.2 doesn't exist yet" case.
+    """
+
+    def __init__(self, exc: Exception, **kwargs):
+        super().__init__(**kwargs)
+        self._exc = exc
+        self.poll_call_count = 0
+
+    async def poll_pending_notifications(self):
+        self.poll_call_count += 1
+        raise self._exc
+
+
+def test_poll_loop_logs_and_continues_past_a_non_api_not_implemented_error():
+    # run_notification_poll_loop's `except Exception` branch (as opposed to
+    # its dedicated ApiNotImplementedError branch) must log and keep
+    # looping — not re-raise, not stop early — for any other exception a
+    # real client implementation could raise.
+    api = _RaisingApiClient(RuntimeError("connection reset"))
+    deps = BotDeps(loaded_profile=None, telegram_client=FakeTelegramClient(), api_client=api)
+
+    _run(run_notification_poll_loop(deps, poll_interval_seconds=0, max_iterations=3))
+
+    # The loop actually ran all 3 iterations rather than stopping after the
+    # first failure — the real, observable behavior, not just "no exception
+    # escaped the test."
+    assert api.poll_call_count == 3

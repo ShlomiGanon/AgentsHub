@@ -41,7 +41,18 @@ by type:
   explicitly — an absent/`None` flag is a validation failure).
 
 Any object satisfying this shape works, including the fake stand-ins used
-in tests before the real classes exist.
+in tests before the real classes exist — **with one exception**:
+`.criticality` must be a real `protocols.model.CriticalityLevel` member
+(`LOW`, `MEDIUM`, or `HIGH`), not merely present. A plain string like
+`"low"` satisfies every structural check above but is not accepted —
+`api/protocols.py` and `protocols/editor.py` both call `.name` on it
+(crashing on anything else), and `orchestrator/selection.py`'s high-risk
+tie-break compares it by severity, which only a real, ordered
+`CriticalityLevel` guarantees; a string would compare alphabetically
+instead and could silently select the wrong protocol. This is the same
+kind of exception `.approval_flag` already is — most fields here stay
+duck-typed, but not the ones a wrong value could get dangerously wrong
+without raising anything.
 
 ## Failure behavior
 

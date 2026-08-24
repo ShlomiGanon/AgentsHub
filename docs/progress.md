@@ -16,8 +16,8 @@ a new entry describing what changed instead.
 | 4 | Protocol Engine (4.1–4.8) | Done |
 | 5 | History System (5.1–5.10) | Done |
 | 6 | Main Agent Orchestration (6.1–6.15) | Done |
-| 7 | API Layer | Not started |
-| 8 | Telegram Frontend | Done, against a stub for Mission 7 (see §8.x entries) |
+| 7 | API Layer (7.1–7.11) | Done |
+| 8 | Telegram Frontend | Done, against a stub for Mission 7 — §7 has since landed; wiring Mission 8's `bot/` package to the real API is not yet done (see §8.x entries) |
 | 9 | Integration and Hardening | Not started |
 
 Entry format:
@@ -1306,3 +1306,294 @@ entry point.
   backend-swap conformance suite (§2.11) with four new cases: pending,
   resolved (reporting resolver and timestamp), unknown event ID, and
   kind-scoping. This exists to serve §7.11, not built yet.
+
+
+### 6.7 — Implement approval holds (amended: candidate-protocol selection for the ambiguous-selection case)
+- **Status:** done
+- **Deviations:** A real gap found while designing §7.11 (POST /Approve),
+  fixed here per explicit user decision rather than translated at the API
+  boundary: "a teammate reading `answer_approval_hold`'s signature alone,
+  without reading its body, should see that a candidate-protocol
+  selection is a real, first-class outcome of answering an approval
+  hold." `answer_approval_hold` now accepts a third `decision` shape
+  alongside `"approved"`/`"rejected"` — a candidate protocol name, for a
+  hold whose `reason` is `"ambiguous_selection"` (§6.4's no-clear-fit-at-
+  low-risk case), which previously had no working answer path at all
+  (`selected_protocol_name` stayed `None`, and nothing downstream could
+  do anything with that). Purely additive: branches strictly on
+  `held["reason"]`, never on `decision`'s shape, so a `"flagged_protocol"`
+  hold's existing approve/reject handling is reached exactly as before —
+  confirmed by a dedicated regression test, not just by the original
+  approve/reject tests still passing unchanged. A candidate is validated
+  against exactly `held["candidate_protocol_names"]` (already captured at
+  hold-creation time — no new dependency); an invalid one returns a new
+  `HoldAnswerResult` status, `"invalid_candidate"`, naming the real
+  candidates. A valid selection overrides the returned hold's
+  `selected_protocol_name` with the chosen candidate and reports
+  `"approved"` — the same status a flagged-protocol approval already
+  used — so every existing caller of that status needs no new branch.
+  `orchestrator/flows.py`'s `resolve_approval` additionally writes
+  `selected_protocol` onto the event record (harmless re-write for the
+  flagged-protocol case, real for a chosen candidate), and a new
+  integration test (`tests/test_orchestrator_flows.py`) confirms an
+  ambiguous-selection hold resolves and resumes to a genuine, completed
+  protocol run — the previous tests covered only the `None` case by
+  omission, never by assertion.
+
+### 7.1 — Specify payloads
+- **Status:** done
+- **Deviations:** `docs/api_spec.md` — a document, no code, same pattern
+  as §1.2's vocabulary file. Defines the acknowledgment shape once (the
+  job ID *is* the event ID — no second identifier), how a held/closed
+  event appears in a `GET /Job/<event_id>` response (a `status` field
+  distinguishing "still running" from "waiting on a commander" from
+  "closed without running," always `200 OK` — a run's own outcome is
+  data, never a transport-level failure), and the one error shape every
+  endpoint shares. Every subsequent §7.x subtask below was built against
+  this document and it was kept in sync as each landed — the candidate-
+  protocol decision shape (§7.11) and the `"rejected"` correction (below)
+  are both reflected in it, not left stale.
+
+### 7.2 — Build the async job mechanism
+- **Status:** done
+- **Deviations:** No separate "jobs" table — the job ID *is* the event
+  ID (`history.interface.record_initial_event` already returns one
+  synchronously), and every state §7.2 lists is derived from
+  already-persisted event/hold state, except one genuinely transient bit:
+  "queued" vs. "running," which has no meaningful persisted distinction
+  and doesn't need one. `orchestrator/queue.py`'s `SerialEventQueue`
+  gained two small accessors for this: `currently_processing()` (the raw
+  item mid-flight, or `None` — this class stays fully generic over what
+  an "item" is, per its own §6.15 design; `api/app.py`'s convention of
+  submitting `(event_id, work_fn)` pairs is api/-only, not baked into the
+  queue) and `qsize()` (items not yet picked up). "Result retrieval by
+  job ID" is `api/jobs.py`'s `GET /Job/<event_id>`. "How a finished
+  result reaches whoever submitted it" is deliberately **not** decided
+  here — §7.2's own wording defers that to "the bot pushes it... an
+  external system polls," and Mission 8's `bot/` already committed to
+  polling via its `BotApiClient.get_job_result`/`poll_pending_notifications`
+  seam; this mission implements the polling side those depend on and
+  takes no position on a push/webhook alternative.
+
+### 7.3 — Implement `POST /Event`
+- **Status:** done
+- **Deviations:** None beyond the split every §7.2-queued entry point
+  shares: `begin_report` (synchronous — write the raw text, return the
+  event ID, no model call) and `run_report_extraction` (the queued
+  continuation). Sets nothing sensor-specific beyond `source="sensor"`
+  and the receipt timestamp — `history.extraction.extract_event`'s own
+  `source == "sensor"` branch (Mission 5) already sets `occurred_at`
+  equal to `received_at` and never asks the model to extract one; §7.3
+  triggers that, it doesn't reimplement it.
+
+### 7.4 — Implement `POST /Msg`
+- **Status:** done
+- **Deviations:** Composes `classify_intent` + the split primitives
+  itself rather than calling `orchestrator.flows.process_message`, which
+  runs a report/request synchronously start to finish — exactly what
+  §7.2 exists to avoid blocking a request on. A question is answered
+  synchronously and directly, per §7.4's own rule ("a question has no
+  job to track"). `classify_intent`/`answer_question` raising
+  `OrchestrationParseError` here — with no job yet created to report a
+  status against — is exactly `run_failure`'s (§7.10) reason to exist;
+  tested directly, not left theoretical.
+
+### 7.5 — Unify ingestion
+- **Status:** done
+- **Deviations:** None — verified with `tests/test_api_unified_ingestion.py`
+  rather than by inspection, per §7.5's own explicit requirement. One
+  test asserts every extracted/decided field converges given identical
+  text submitted through both endpoints, differing only in `source` and
+  `occurred_at`-derivation; a second asserts the *same* `orchestrator
+  .flows.begin_report` call happens from both route handlers (monkeypatch-
+  observed), not merely a same-shaped parallel implementation.
+
+### 7.6 — Implement `CRUD /Protocol`
+- **Status:** done
+- **Deviations:** A thin wrapper over the already-complete
+  `protocols.editor` (§4.3) — reads serve `ctx.deps.protocol_set.all()`
+  directly (nothing to fetch), writes go through
+  `add_protocol`/`replace_protocol`/`remove_protocol` unchanged. Every
+  write response is the one fixed message §7.6 specifies, unconditionally
+  — never a body resembling a successful state change. Tested against a
+  disposable temp profile module on disk (the same technique
+  `tests/test_protocol_editor.py` already established), never the shared
+  fixture profile, since a write genuinely edits the file.
+
+### 7.7 — Implement `GET /SYSTEM`
+- **Status:** done
+- **Deviations:** Two small additive changes to already-"done" modules,
+  both confirmed with a dedicated regression test rather than assumed
+  safe: `history/scheduler.py`'s `SummaryScheduler` gained
+  `last_run_status()` (`last_run_at`/`last_run_ok`/`last_run_error`, all
+  `None` until the *background* thread completes a pass — a manual
+  `reconcile()` call, as most existing tests make, does not update it);
+  `profiles/loader.py` gained `profile_file_hash` (captured once at load
+  time) and the `hash_profile_file(module_path)` function both
+  `LoadedProfile` construction and `GET /SYSTEM`'s live recompute call —
+  the one function both moments use, so the two hashes can never be
+  computed two different ways. "How many events are queued" is
+  `SerialEventQueue.qsize()` (§7.2); "how many are held in each state" is
+  `len(persistence.list_held_events(kind))` per kind.
+
+### 7.8 — Implement `PUT /SYSTEM`
+- **Status:** done
+- **Deviations:** Accepts a partial body — only the keys present are
+  changed, matching §1.7's own settings-store semantics. Rejects an
+  unknown field by name (`invalid_input`, naming the field) rather than
+  ignoring it. Validation ranges: `risk_threshold` in `[0.0, 1.0]`
+  (matching `orchestrator.main_agent`'s own risk-score range, confirmed
+  by reading it, not guessed); `retry_count` rejects only negative values
+  — zero ("try once, never retry") is a legitimate operator choice, per
+  §7.8's own wording ("a negative retry count... is a configuration
+  error"); `lookback_window_days` rejects zero or negative, per the same
+  bullet's "zero-length lookback window" wording. Each accepted value is
+  written to the settings store before the response is sent.
+
+### 7.9 — Enforce authentication and authorization
+- **Status:** done
+- **Deviations:** One `authenticate` function (`api/auth.py`) every route
+  calls first, reading the caller's identity from an `X-Identity` header
+  and rejecting an unregistered one outright — never defaulted to viewer.
+  One `require(level, action)` wrapping `auth.permissions.is_permitted`
+  — never an inline level comparison anywhere in `api/`. The sensor path
+  authenticates through this same function, as a pre-registered identity
+  (provisioned via `cli/user_admin`, same as any other), never a bypass.
+  Profile edits, hold resolution, approval, and settings changes map
+  one-to-one onto `auth.permissions.ACTION_REQUIREMENTS`'s existing
+  `edit_profile`/`resolve_hold`/`approve_run`/`change_settings` actions —
+  no new action names were needed. No endpoint creates, changes, or
+  removes a user — `api/` has no such route, confirmed by its own
+  contents rather than a negative test (there is nothing to test the
+  absence of beyond "the route does not exist").
+
+### 7.10 — Define the error contract
+- **Status:** done
+- **Deviations:** `api/errors.py`'s `ApiError` and its subclasses
+  (`InvalidInputError` 400, `NotFoundError` 404, `ConflictError` 409,
+  `AuthenticationError` 401, `AuthorizationError` 403, `RunFailureError`
+  422, `InternalError` 500) are the only sanctioned way a route raises an
+  HTTP-visible failure — nothing in `api/` builds an error response by
+  hand. `NotFoundError`/`ConflictError`/`AuthenticationError`/
+  `AuthorizationError` all report `error_class: "invalid_input"` per
+  §7.10's three-class list — only their HTTP status differs; §7.10 names
+  three classes, not five, and this keeps the JSON body's vocabulary
+  matching that literally. A Flask/Werkzeug `HTTPException` (an unmapped
+  route, a wrong method) is also translated into the same shape, so a
+  caller never sees Werkzeug's own HTML error page. The bare-`Exception`
+  handler's message is a fixed, generic string, confirmed by a dedicated
+  test to never leak the real exception's text. A protocol run that
+  exhausts its retries is `200 OK` via `GET /Job/<event_id>` reporting
+  `status: "failed"` — not this error contract at all, per §7.10's own
+  explicit rule, restated in `docs/api_spec.md`.
+
+### 7.11 — Implement `POST /Approve/<event_id>` and `POST /Clarify/<event_id>`
+- **Status:** done
+- **Deviations:** Added a new persistence subtask, §2.13
+  (`fetch_held_event(kind, event_id) -> dict | None`), via a user-approved
+  addendum to `docs/work_plan.md`, since neither endpoint can address a
+  hold by the event ID a caller actually has, or report an already-
+  resolved hold's resolver and timestamp, without it — `list_held_events`
+  only ever returns unresolved holds. `api/holds.py` is a thin wrapper:
+  `decision` (`"approved"` / `"rejected"` / a candidate protocol name,
+  per §6.7's amendment above) is passed straight through to
+  `orchestrator.flows.resolve_approval` with no branching beyond routing
+  to the right parameter — §6.7 is the one place that knows what a
+  candidate name means. `POST /Clarify` and the approved (or candidate-
+  selected) branch of `POST /Approve` both queue a continuation, since
+  resuming is itself a full run (§7.2); the rejected branch stays fully
+  synchronous — declining is genuinely final, nothing to queue. Found and
+  fixed one accidental terminology inconsistency while building this:
+  early drafts of `api/holds.py` and `docs/api_spec.md` spelled the deny
+  outcome `"denied"`, while every other file in the system — Mission 6's
+  `orchestrator/holds.py`/`orchestrator/flows.py` and, importantly,
+  Mission 8's `bot/api_client.py`/`bot/approval.py` (the API's actual
+  future caller) — uses `"rejected"` throughout. Confirmed via a full-
+  codebase search that this was never a documented boundary translation,
+  just an independent word choice made before Mission 8's vocabulary
+  existed to check against; corrected to `"rejected"` end-to-end in both
+  files rather than adding a translation layer.
+
+## Mission 7 — Merge verification (Mission 8 landed mid-mission)
+
+Between building the five small additive changes/`docs/api_spec.md` and
+writing the `api/` test suite, Mission 8 (Telegram Frontend) was merged
+into this branch by a separate collaborator. Verified before continuing:
+full suite (481 tests at that point) showed one failure,
+`tests/test_bot_telegram_client.py::test_run_polling_registers_handlers_then_polls`
+— a pre-existing Mission-8 bug (`python-telegram-bot` 22.8's
+`Application.run_polling` is a read-only attribute, so the test's own
+`monkeypatch.setattr` fails), unrelated to Mission 7 or the merge, and
+still present at the end of this mission — not fixed here, out of scope
+(Mission 8's own test). `tests/test_architecture.py` and every shared
+registration point (`ENTRY_POINTS`, `docs/allowed_calls.md`, CI) checked
+clean — no duplicated or dropped entries, matching the same pattern the
+Mission 5/6 merge review used. `git show --stat` on every relevant commit
+confirmed no Mission 7 file was reverted, overwritten, or altered by the
+merge. `.github/workflows/ci.yml` was missing a "Mission 7" step entirely
+at merge time (not merge damage — simply not yet reached in this
+mission's own build order); added as this mission's own step 6, above.
+
+## Test-suite coverage audit — remediation (persistence concurrency, history/time_utils, bot wrong-layer tests, notification poll-loop exception path)
+
+Not a new `work_plan.md` subtask — a full test-suite coverage audit
+(Missions 1 through 8) identified several already-"done" subtasks whose
+production code was real but whose own test coverage had gaps or a
+wrong-layer pattern. Four fixes, against Missions 2, 5, and 8:
+
+- **§2.9 concurrency (`persistence/sqlite_backend.py`)** — added
+  `tests/test_persistence_sqlite_backend.py`, exercising the serialized-
+  writer-thread design under real multi-threaded contention for the first
+  time (every other persistence test drives it single-threaded): 25
+  concurrent appends, 20 concurrent updates to distinct events, and a
+  combined 15-writer/10-reader run against a real temp SQLite file (not
+  `:memory:`). No bug found — confirmed clean across 5 repeated runs; the
+  architecture's own safety claim (one writer, WAL-mode concurrent
+  readers) held under contention.
+- **`history/time_utils.py`** — previously only exercised indirectly
+  through `history/scheduler.py`'s/`history/summarize.py`'s own tests.
+  Added `tests/test_history_time_utils.py` (25 tests) covering
+  `parse_timestamp`, `storage_timestamp`, `day_bounds`, `month_bounds`,
+  `year_bounds`, `add_month`, `iter_days`, `iter_months`, `iter_years`
+  directly: month/year rollover both directions, malformed-timestamp
+  input (confirmed to raise plain `ValueError`, matching
+  `history/extraction.py`'s existing `except (TypeError, ValueError)`
+  catch — no new contract invented), a non-UTC-offset timestamp crossing
+  a day boundary on conversion, `day_bounds`' documented behavior of
+  using its input's own calendar date rather than re-normalizing to UTC
+  itself, and leap-year correctness via `iter_days` across a leap and a
+  non-leap February.
+- **Bot wrong-layer tests (§8.4/§8.5)** — `bot/app.py::_on_callback_query`
+  previously had exactly one handler-level test (the clarification
+  happy path); every other case (approval dispatch, permission denial,
+  the second-commander-conflict race, unrecognized/malformed
+  `callback_data`) was only exercised at the
+  `handle_clarification_answer`/`handle_approval_answer` level directly
+  — the same bug class the §8.2 profile/settings fix already caught once.
+  Added 8 tests to `tests/test_bot_app.py` going through the real handler
+  (and, for malformed `callback_data`, through the real
+  `_guarded(_on_callback_query)` composition `register_handlers` actually
+  wires up) for all of these. Re-scanned the rest of `tests/test_bot_*.py`
+  for the same pattern: `bot/entrypoint.py` is called through
+  `_on_text_message`, a pure pass-through with no branching logic of its
+  own, so it isn't at risk the same way; `bot/failures.py`/
+  `bot/results.py`/`bot/precedent_notify.py` are only ever reached
+  through `bot/notifications.py::dispatch_notification`, which already
+  has its own full-coverage dispatch tests. Left
+  `tests/test_bot_profile_commands.py`/`tests/test_bot_settings_commands.py`'s
+  isolated-function tests in place rather than consolidating — they still
+  cover input parsing/validation logic worth testing standalone, and
+  handler-level coverage for the permission-check concern already exists
+  in `tests/test_bot_app.py` from the §8.2 fix.
+- **§8.4/§8.5/§8.6/§8.9/§8.11 notification poll loop** — read
+  `bot/notifications.py::run_notification_poll_loop` in full: a non-
+  `ApiNotImplementedError` exception from a poll iteration is logged and
+  the loop continues to the next iteration, never re-raised. Only the
+  `ApiNotImplementedError` branch had a test. Added
+  `test_poll_loop_logs_and_continues_past_a_non_api_not_implemented_error`
+  to `tests/test_bot_notifications.py`, using a fake client that raises
+  `RuntimeError` on every poll, asserting the loop actually completed all
+  3 configured iterations (the real resulting behavior) rather than just
+  "no exception escaped the test."
+
+Full suite: 634 passed, 0 failed. `tests/test_architecture.py` passes.

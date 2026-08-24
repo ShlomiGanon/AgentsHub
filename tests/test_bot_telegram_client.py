@@ -91,7 +91,7 @@ def test_answer_callback_query_acknowledges_the_button_press(client, monkeypatch
 
 def test_run_polling_registers_handlers_then_polls(client, monkeypatch):
     calls = []
-    monkeypatch.setattr(client._application, "run_polling", lambda: calls.append("polled"))
+    monkeypatch.setattr(type(client._application), "run_polling", lambda self: calls.append("polled"))
 
     client.run_polling(lambda application: calls.append(("registered", application is client._application)))
 

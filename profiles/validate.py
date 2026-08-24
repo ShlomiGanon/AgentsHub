@@ -7,11 +7,26 @@ sees the whole list in one run.
 Checks agents and protocols structurally (attribute presence via
 profiles.spec), not by type, since the real Agent/Protocol classes land in
 §3/§4. See docs/profile_spec.md.
+
+Two fields are the deliberate exception to "not by type": `approval_flag`
+(always was — §1.6's own text: "an absent flag is not defaulted") and, as
+of the Mission 8 coverage audit, `criticality` too. A plain string passed
+every structural check but broke two consumers outright
+(`api/protocols.py`, `protocols/editor.py`, both call `.name` on it) and,
+worse, silently miscompared in `orchestrator/selection.py`'s high-risk
+tie-break — Python compares strings alphabetically ("high" < "low" <
+"medium"), not by severity, so a string-typed criticality could pick the
+*wrong* protocol with no error at all. `CriticalityLevel` is a small,
+stable, already-real enum (unlike `Agent`/`Protocol` themselves, still
+duck-typed) — requiring it costs nothing structural-checking was meant to
+save, and closes both the crash and the silent-corruption risk at the one
+place both need it: before a bad value ever reaches either consumer.
 """
 
 from typing import TYPE_CHECKING
 
 from profiles.spec import HUMAN_ACTIVATION_TYPE, protocol_missing_attrs
+from protocols.model import CriticalityLevel
 
 if TYPE_CHECKING:
     from profiles.loader import LoadedProfile
@@ -82,8 +97,12 @@ def _validate_protocol(protocol, agents_by_name: dict) -> list[str]:
     if not protocol.expected_success_output:
         failures.append(f"protocol '{protocol.name}' has no expected success output")
 
-    if protocol.criticality is None:
-        failures.append(f"protocol '{protocol.name}' has no criticality level")
+    if not isinstance(protocol.criticality, CriticalityLevel):
+        failures.append(
+            f"protocol '{protocol.name}' has an invalid criticality level: "
+            f"expected a real CriticalityLevel enum member (LOW, MEDIUM, or HIGH), "
+            f"got {protocol.criticality!r} instead"
+        )
 
     if protocol.approval_flag is not True and protocol.approval_flag is not False:
         failures.append(

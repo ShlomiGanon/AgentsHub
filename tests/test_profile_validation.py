@@ -123,6 +123,25 @@ def test_real_agent_and_real_protocol_validate_cleanly():
     assert failures == []
 
 
+def test_a_plain_string_criticality_is_rejected():
+    # §1.6, tightened after the Mission 8 coverage audit: criticality must
+    # be a real CriticalityLevel enum member — a string that merely looks
+    # like one ("low") is not accepted, since api/protocols.py,
+    # protocols/editor.py, and orchestrator/selection.py all either crash
+    # or silently miscompare on anything else.
+    protocol = FakeProtocol(criticality="low")
+    failures = validate_profile(_loaded(protocols=(protocol,)), declared_event_types=["fire"])
+
+    assert any("criticality" in f and "low" in f for f in failures)
+
+
+def test_a_real_criticalitylevel_member_passes():
+    protocol = FakeProtocol(criticality=CriticalityLevel.HIGH)
+    failures = validate_profile(_loaded(protocols=(protocol,)), declared_event_types=["fire"])
+
+    assert not any("criticality" in f for f in failures)
+
+
 def test_real_agent_still_rejects_a_genuinely_unapproved_tool():
     agent = ReferenceAgent(model="m")
     protocol = Protocol(

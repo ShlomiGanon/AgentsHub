@@ -132,13 +132,13 @@ async def _on_callback_query(update, context) -> None:
     namespace = query.data.split(":", 1)[0]
 
     if namespace == clarification.CALLBACK_PREFIX:
-        hold_id, choice = clarification.parse_callback_data(query.data)
-        await clarification.handle_clarification_answer(deps, chat_id, telegram_identity, hold_id, choice)
+        event_id, choice = clarification.parse_callback_data(query.data)
+        await clarification.handle_clarification_answer(deps, chat_id, telegram_identity, event_id, choice)
         return
 
     if namespace == approval.CALLBACK_PREFIX:
-        hold_id, choice = approval.parse_callback_data(query.data)
-        await approval.handle_approval_answer(deps, chat_id, telegram_identity, hold_id, choice)
+        event_id, choice = approval.parse_callback_data(query.data)
+        await approval.handle_approval_answer(deps, chat_id, telegram_identity, event_id, choice)
         return
 
     logger.warning("unrecognized callback namespace: %s", namespace, extra={"event": "bot_unknown_callback"})
@@ -176,37 +176,64 @@ def _parse_protocol_write_command(rest: str) -> tuple[str, dict] | str:
     return name, payload
 
 
+async def _resolve_caller_or_refuse(deps: BotDeps, chat_id: str, telegram_identity: str):
+    """Resolve `telegram_identity` and, if unregistered, send the refusal
+    reply and return `None` — the caller must then return immediately.
+    Returns the resolved `CallerContext` on success.
+
+    Required for every interaction, reads included (§8.2's "look up every
+    Telegram identity... on every interaction" — reading is still an
+    interaction, and "allow viewers to read" (§8.7/§8.8) names a real,
+    registered permission level, not "anyone"). `/profile view`/`diff` and
+    `/settings view` need no level check beyond registration itself —
+    viewer is the lowest registered level and §8.7/§8.8 both grant it read
+    access explicitly — so this helper only refuses the unregistered case;
+    a write branch layers its own `check_permission` call on top of what
+    this returns, same as before.
+    """
+
+    resolution = await resolve_caller(deps.api_client, telegram_identity)
+    if resolution.status == "unregistered":
+        await deps.telegram_client.send_text(chat_id, resolution.refusal_message)
+        return None
+
+    return resolution.caller
+
+
 async def _on_profile_command(update, context) -> None:
     deps: BotDeps = context.bot_data["deps"]
     telegram_identity, chat_id = _identity_and_chat_id(update)
     args = context.args or []
 
     if not args or args[0] == "view":
+        if await _resolve_caller_or_refuse(deps, chat_id, telegram_identity) is None:
+            return
         await deps.telegram_client.send_text(chat_id, await profile_commands.view_profile(deps))
         return
 
     if args[0] == "diff":
+        if await _resolve_caller_or_refuse(deps, chat_id, telegram_identity) is None:
+            return
         await deps.telegram_client.send_text(chat_id, await profile_commands.profile_diff_status(deps))
         return
 
     if args[0] in ("add", "edit", "remove"):
-        resolution = await resolve_caller(deps.api_client, telegram_identity)
-        if resolution.status == "unregistered":
-            await deps.telegram_client.send_text(chat_id, resolution.refusal_message)
+        caller = await _resolve_caller_or_refuse(deps, chat_id, telegram_identity)
+        if caller is None:
             return
 
         action = args[0]
         rest = " ".join(args[1:])
 
         if action == "remove":
-            reply = await profile_commands.write_protocol(deps, resolution.caller, "remove", {"name": rest.strip()})
+            reply = await profile_commands.write_protocol(deps, caller, "remove", {"name": rest.strip()})
         else:
             parsed = _parse_protocol_write_command(rest)
             if isinstance(parsed, str):
                 await deps.telegram_client.send_text(chat_id, parsed)
                 return
             _, payload = parsed
-            reply = await profile_commands.write_protocol(deps, resolution.caller, action, payload)
+            reply = await profile_commands.write_protocol(deps, caller, action, payload)
 
         await deps.telegram_client.send_text(chat_id, reply)
         return
@@ -220,17 +247,18 @@ async def _on_settings_command(update, context) -> None:
     args = context.args or []
 
     if not args or args[0] == "view":
+        if await _resolve_caller_or_refuse(deps, chat_id, telegram_identity) is None:
+            return
         await deps.telegram_client.send_text(chat_id, await settings_commands.view_settings(deps))
         return
 
     if args[0] == "set" and len(args) == 3:
-        resolution = await resolve_caller(deps.api_client, telegram_identity)
-        if resolution.status == "unregistered":
-            await deps.telegram_client.send_text(chat_id, resolution.refusal_message)
+        caller = await _resolve_caller_or_refuse(deps, chat_id, telegram_identity)
+        if caller is None:
             return
 
         _, field, raw_value = args
-        reply = await settings_commands.change_setting(deps, resolution.caller, field, raw_value)
+        reply = await settings_commands.change_setting(deps, caller, field, raw_value)
         await deps.telegram_client.send_text(chat_id, reply)
         return
 

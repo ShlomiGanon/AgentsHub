@@ -101,6 +101,19 @@ jobs:
           tests/test_orchestrator_queue.py
           tests/test_persistence_held_events.py
 
+      - name: Mission 7 — API Layer
+        run: >
+          pytest -q
+          tests/test_api_auth.py
+          tests/test_api_errors.py
+          tests/test_api_jobs.py
+          tests/test_api_events.py
+          tests/test_api_messages.py
+          tests/test_api_holds.py
+          tests/test_api_protocols.py
+          tests/test_api_system.py
+          tests/test_api_unified_ingestion.py
+
       - name: Mission 8 — Telegram Frontend
         run: >
           pytest -q

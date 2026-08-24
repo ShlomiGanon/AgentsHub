@@ -48,7 +48,7 @@ BotOutcome = Literal[
 ]
 
 HoldAnswerStatus = Literal[
-    "resolved", "approved", "rejected", "unauthorized", "not_found", "invalid_classification"
+    "resolved", "approved", "rejected", "unauthorized", "not_found", "invalid_classification", "invalid_candidate"
 ]
 
 
@@ -248,36 +248,42 @@ class BotApiClient(ABC):
     @abstractmethod
     async def submit_message(self, text: str, sender_identity: str) -> MessageSubmissionResult: ...
 
-    # -- §8.4 / §6.2 ----------------------------------------------------------
+    # -- §8.4 / §6.2 / §7.11 ---------------------------------------------------
 
     @abstractmethod
     async def answer_clarification_hold(
-        self, hold_id: str, chosen_classification: str, answering_identity: str
-    ) -> HoldAnswerOutcome: ...
+        self, event_id: str, chosen_classification: str, answering_identity: str
+    ) -> HoldAnswerOutcome:
+        """`event_id` — not the orchestrator's internal hold ID — since
+        `api/holds.py`'s `POST /Clarify/<event_id>` (§7.11) is deliberately
+        keyed by event ID: the one stable external identifier the whole API
+        is already built around (`GET /Job/<event_id>` uses it too, and
+        §7.2 defines the job ID as the event ID). `hold_id` is a Mission-6
+        implementation detail that was never meant to cross the API
+        boundary. `HeldClarificationNotice.event_id` is what a caller
+        should pass here — found and fixed in the Mission 8 deep audit;
+        this parameter used to be named `hold_id` and was forwarded from
+        the wrong field.
+        """
 
-    # -- §8.5 / §6.7 ----------------------------------------------------------
+    # -- §8.5 / §6.7 / §7.11 ---------------------------------------------------
 
     @abstractmethod
-    async def answer_approval_hold(self, hold_id: str, decision: str, answering_identity: str) -> HoldAnswerOutcome:
-        """`decision` is `"approved"` or `"rejected"` for a flagged-protocol
+    async def answer_approval_hold(self, event_id: str, decision: str, answering_identity: str) -> HoldAnswerOutcome:
+        """`event_id` — not the orchestrator's internal hold ID — for the
+        same reason `answer_clarification_hold` takes it: `api/holds.py`'s
+        `POST /Approve/<event_id>` (§7.11) is keyed by event ID.
+        `HeldApprovalNotice.event_id` is what a caller should pass here.
+
+        `decision` is `"approved"` or `"rejected"` for a flagged-protocol
         hold; for an ambiguous-selection hold it is the name of the chosen
         candidate protocol (rejection there is expressed by choosing
         none — see `bot.approval`'s formatting, which offers no separate
-        "reject" button for that case).
-
-        Note: `orchestrator.holds.answer_approval_hold` (work_plan.md §6.7,
-        already built) only accepts `Literal["approved", "rejected"]` and
-        `orchestrator.flows.resume_after_approval` resumes with
-        `hold["selected_protocol_name"]`, which is `None` for an
-        ambiguous-selection hold (`orchestrator.selection.select_protocol`
-        never sets it at low risk). Passing a candidate name through this
-        method therefore has nowhere to go yet on the orchestrator side —
-        a real gap, discovered while designing this interface, in a
-        previous mission this mission was told not to modify. Whoever
-        builds §7 (or a follow-up fix to §6.7) must close it — either by
-        widening `answer_approval_hold`'s decision type or by having the
-        API translate a candidate-name decision into a recorded selection
-        before resuming. Documented in `docs/progress.md`.
+        "reject" button for that case). `orchestrator.holds
+        .answer_approval_hold` (§6.7) now accepts all three shapes
+        additively — the gap this docstring used to describe (no path for
+        a candidate name to reach a resumed run) was closed in Mission 7;
+        see `docs/progress.md`'s amended §6.7 entry.
         """
 
     # -- §8.7 / §7.6 / §7.7 -----------------------------------------------------
@@ -330,11 +336,11 @@ class UnimplementedApiClient(BotApiClient):
         raise ApiNotImplementedError("submit_message", "§7.4 (POST /Msg)")
 
     async def answer_clarification_hold(
-        self, hold_id: str, chosen_classification: str, answering_identity: str
+        self, event_id: str, chosen_classification: str, answering_identity: str
     ) -> HoldAnswerOutcome:
         raise ApiNotImplementedError("answer_clarification_hold", "§7.9 (authentication/authorization enforcement)")
 
-    async def answer_approval_hold(self, hold_id: str, decision: str, answering_identity: str) -> HoldAnswerOutcome:
+    async def answer_approval_hold(self, event_id: str, decision: str, answering_identity: str) -> HoldAnswerOutcome:
         raise ApiNotImplementedError("answer_approval_hold", "§7.9 (authentication/authorization enforcement)")
 
     async def get_profile_view(self) -> ProfileView:

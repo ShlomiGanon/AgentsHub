@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from api.app import ApiContext
 
 
-def _protocol_to_dict(protocol: Protocol) -> dict:
+def protocol_to_dict(protocol: Protocol) -> dict:
     return {
         "name": protocol.name,
         "description": protocol.description,
@@ -63,7 +63,7 @@ def build_protocols_blueprint(ctx: "ApiContext") -> Blueprint:
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, "view_history")
 
-        return jsonify({"protocols": [_protocol_to_dict(p) for p in ctx.deps.protocol_set.all()]})
+        return jsonify({"protocols": [protocol_to_dict(p) for p in ctx.deps.protocol_set.all()]})
 
     @blueprint.route("/Protocol", methods=["POST"])
     def create_protocol():

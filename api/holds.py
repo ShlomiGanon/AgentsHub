@@ -9,11 +9,20 @@ via §2.13's `fetch_held_event`. That same lookup is what reports "already
 resolved by X at T" for a second commander answering an already-handled
 hold, rather than a generic not-found (§7.11's own requirement).
 
-`POST /Clarify` and the approved branch of `POST /Approve` both queue a
-continuation — resuming is itself a full run, exactly what §7.2 exists to
-avoid blocking a request on. The denied branch of `POST /Approve` stays
-fully synchronous: declining is genuinely final, with nothing left to
-continue, so there is nothing to queue.
+`POST /Clarify` and the approved (or candidate-selected) branch of
+`POST /Approve` both queue a continuation — resuming is itself a full
+run, exactly what §7.2 exists to avoid blocking a request on. The
+rejected branch of `POST /Approve` stays fully synchronous: declining is
+genuinely final, with nothing left to continue, so there is nothing to
+queue.
+
+`decision` accepts three shapes: `"approved"`, `"rejected"`, or — for the
+ambiguous-selection case (§6.4/§6.7) — a candidate protocol name. This
+layer does no branching on which shape it is beyond routing to the right
+parameter; `decision` is passed straight through to the widened
+`orchestrator.holds.answer_approval_hold`, which is the one place that
+knows what a candidate name means. Keeping the API a thin wrapper here is
+deliberate — see that function's own docstring.
 
 `require` gates every write here before `orchestrator.holds
 .answer_clarification_hold`/`answer_approval_hold` even run — those
@@ -79,18 +88,19 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
 
         body = request.get_json(silent=True) or {}
         decision = body.get("decision")
-        if decision not in ("approved", "denied"):
-            raise InvalidInputError("'decision' must be 'approved' or 'denied'", field="decision")
+        if not decision:
+            raise InvalidInputError("'decision' is required — 'approved', 'rejected', or a candidate protocol name", field="decision")
 
         hold = _pending_hold_or_raise(ctx, "approval", event_id)
 
-        internal_decision = "approved" if decision == "approved" else "rejected"
-        answer = resolve_approval(ctx.deps, hold["hold_id"], identity, level, internal_decision)
-        if answer.status != internal_decision:
-            # Same narrow race as above.
+        answer = resolve_approval(ctx.deps, hold["hold_id"], identity, level, decision)
+        if answer.status == "invalid_candidate":
+            raise InvalidInputError(answer.message, field="decision")
+        if answer.status not in ("approved", "rejected"):
+            # Same narrow race as the clarify path above.
             raise InvalidInputError(answer.message)
 
-        if internal_decision == "rejected":
+        if answer.status == "rejected":
             decline(ctx.deps, event_id)
             return jsonify({"event_id": event_id, "status": "declined"})
 

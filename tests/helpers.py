@@ -3,10 +3,15 @@
 Sections 3/4 haven't landed the real classes yet — profiles.validate
 checks structural shape (see profiles/spec.py), so these fakes are enough
 to exercise every branch of that validation without depending on fixtures
-meant to represent a *valid* profile.
+meant to represent a *valid* profile. `criticality` is the one field
+`profiles.validate` requires to be a real `CriticalityLevel` enum member
+specifically (§1.6, tightened after the Mission 8 coverage audit) — every
+other field here stays a plain, minimal stand-in.
 """
 
 from dataclasses import dataclass, field
+
+from protocols.model import CriticalityLevel
 
 
 @dataclass(frozen=True)
@@ -25,7 +30,7 @@ class FakeProtocol:
     participating_agents: tuple = ()
     approved_tools: tuple = ()
     expected_success_output: str = "a description of what success looks like"
-    criticality: object = "low"
+    criticality: object = CriticalityLevel.LOW
     approval_flag: object = False
 
 

@@ -11,6 +11,13 @@ every other field by name rather than silently ignoring it — a silent
 ignore here would look exactly like a successful change. Each accepted
 value is written to the settings store before this response is sent, so
 a confirmation can never outlive the change it confirms.
+
+§7.12: `GET /SYSTEM`'s protocol summary reuses `api.protocols
+.protocol_to_dict` (the same rendering `GET /Protocol` uses) rather than
+a separate, narrower `{name, approval_flag}` shape — found in the Mission
+8 deep audit that `bot.api_client.ProfileView`/`ProtocolView` need
+`description`/`criticality` too, which the old narrower shape omitted.
+One coherent surface for both callers, not two shapes to keep in sync.
 """
 
 from typing import TYPE_CHECKING
@@ -19,6 +26,7 @@ from flask import Blueprint, jsonify, request
 
 from api.auth import authenticate, require
 from api.errors import InvalidInputError
+from api.protocols import protocol_to_dict
 from profiles.loader import hash_profile_file
 
 if TYPE_CHECKING:
@@ -41,7 +49,7 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
         return jsonify({
             "profile": loaded.module_path,
             "agents": [agent.name for agent in ctx.deps.registry.all()],
-            "protocols": [{"name": p.name, "approval_flag": p.approval_flag} for p in ctx.deps.protocol_set.all()],
+            "protocols": [protocol_to_dict(p) for p in ctx.deps.protocol_set.all()],
             "event_types": list(ctx.deps.event_type_registry.types),
             "areas": list(ctx.deps.area_registry.areas),
             "queued_events": ctx.queue.qsize(),

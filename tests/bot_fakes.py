@@ -82,13 +82,13 @@ class FakeBotApiClient(BotApiClient):
         assert self.message_submission_result is not None, "test must set message_submission_result"
         return self.message_submission_result
 
-    async def answer_clarification_hold(self, hold_id: str, chosen_classification: str, answering_identity: str) -> HoldAnswerOutcome:
-        self.calls.append(("answer_clarification_hold", hold_id, chosen_classification, answering_identity))
+    async def answer_clarification_hold(self, event_id: str, chosen_classification: str, answering_identity: str) -> HoldAnswerOutcome:
+        self.calls.append(("answer_clarification_hold", event_id, chosen_classification, answering_identity))
         assert self.clarification_answer_outcome is not None
         return self.clarification_answer_outcome
 
-    async def answer_approval_hold(self, hold_id: str, decision: str, answering_identity: str) -> HoldAnswerOutcome:
-        self.calls.append(("answer_approval_hold", hold_id, decision, answering_identity))
+    async def answer_approval_hold(self, event_id: str, decision: str, answering_identity: str) -> HoldAnswerOutcome:
+        self.calls.append(("answer_approval_hold", event_id, decision, answering_identity))
         assert self.approval_answer_outcome is not None
         return self.approval_answer_outcome
 

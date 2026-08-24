@@ -7,6 +7,13 @@ needs to show candidates. An uncertain-verdict notice is pushed the same
 way but is deliberately never phrased as a question — nothing is
 waiting on an answer to it, and presenting it as an approval invites one
 that has nowhere to go.
+
+Callback data carries the event ID, not the orchestrator's internal hold
+ID — `api/holds.py`'s `POST /Approve/<event_id>` (§7.11) is keyed by event
+ID, the one stable external identifier the whole API is already built
+around. Found and fixed in the Mission 8 deep audit: this module used to
+encode `notice.hold_id` here instead, which no real `HttpApiClient` could
+have forwarded to a working endpoint.
 """
 
 from typing import TYPE_CHECKING
@@ -21,13 +28,13 @@ if TYPE_CHECKING:
 CALLBACK_PREFIX = "approve"
 
 
-def build_callback_data(hold_id: str, choice: str) -> str:
-    return f"{CALLBACK_PREFIX}:{hold_id}:{choice}"
+def build_callback_data(event_id: str, choice: str) -> str:
+    return f"{CALLBACK_PREFIX}:{event_id}:{choice}"
 
 
 def parse_callback_data(data: str) -> tuple[str, str]:
-    _, hold_id, choice = data.split(":", 2)
-    return hold_id, choice
+    _, event_id, choice = data.split(":", 2)
+    return event_id, choice
 
 
 def format_approval_prompt(notice: "HeldApprovalNotice") -> tuple[str, list[tuple[str, str]]]:
@@ -43,13 +50,13 @@ def format_approval_prompt(notice: "HeldApprovalNotice") -> tuple[str, list[tupl
             f"{common}\n\n"
             f"Should this run?"
         )
-        buttons = [("Approve", build_callback_data(notice.hold_id, "approved")), ("Reject", build_callback_data(notice.hold_id, "rejected"))]
+        buttons = [("Approve", build_callback_data(notice.event_id, "approved")), ("Reject", build_callback_data(notice.event_id, "rejected"))]
         return text, buttons
 
     # ambiguous_selection
     candidates = ", ".join(notice.candidate_protocol_names) or "(none)"
     text = f"{header}\n\nMultiple protocols fit equally well:\n{candidates}\n{common}\n\nWhich should run?"
-    buttons = [(name, build_callback_data(notice.hold_id, name)) for name in notice.candidate_protocol_names]
+    buttons = [(name, build_callback_data(notice.event_id, name)) for name in notice.candidate_protocol_names]
     return text, buttons
 
 
@@ -78,21 +85,21 @@ def _describe_outcome(outcome) -> str:
     if outcome.status == "rejected":
         return "Recorded — declined; the event will not run."
 
-    if outcome.status in ("unauthorized", "invalid_classification"):
+    if outcome.status in ("unauthorized", "invalid_classification", "invalid_candidate"):
         return outcome.message
 
     who = f" by {outcome.resolved_by}" if outcome.resolved_by else ""
     return f"This approval was already answered{who}. {outcome.message}".strip()
 
 
-async def handle_approval_answer(deps: "BotDeps", chat_id: str, answering_identity: str, hold_id: str, choice: str) -> None:
+async def handle_approval_answer(deps: "BotDeps", chat_id: str, answering_identity: str, event_id: str, choice: str) -> None:
     """`choice` is already "approved"/"rejected" for a flagged-protocol
     hold (the button's callback data), or the chosen candidate's protocol
     name for an ambiguous-selection hold — see `BotApiClient
-    .answer_approval_hold`'s docstring for the orchestrator-side gap this
-    currently has nowhere to resolve to. This function needs no separate
-    `reason` parameter: it forwards whichever `choice` the button carried
-    and describes whatever status comes back.
+    .answer_approval_hold`'s docstring for how the orchestrator side
+    handles all three. This function needs no separate `reason` parameter:
+    it forwards whichever `choice` the button carried and describes
+    whatever status comes back.
     """
 
     resolution = await resolve_caller(deps.api_client, answering_identity)
@@ -105,5 +112,5 @@ async def handle_approval_answer(deps: "BotDeps", chat_id: str, answering_identi
         await deps.telegram_client.send_text(chat_id, refusal)
         return
 
-    outcome = await deps.api_client.answer_approval_hold(hold_id, choice, answering_identity)
+    outcome = await deps.api_client.answer_approval_hold(event_id, choice, answering_identity)
     await deps.telegram_client.send_text(chat_id, _describe_outcome(outcome))

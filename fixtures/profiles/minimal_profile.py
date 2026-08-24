@@ -2,8 +2,13 @@
 
 Satisfies docs/profile_spec.md in full, including the structural
 (duck-typed) agent/protocol contract — the real Agent/Protocol classes
-from §3/§4 don't exist yet, so this fixture defines the smallest objects
-that pass profiles.spec's shape checks.
+from §3/§4 don't need to exist for this fixture, so it defines the
+smallest objects that pass profiles.spec's shape checks. `criticality` is
+the one field this contract requires to be a real `CriticalityLevel` enum
+member specifically (§1.6, tightened after the Mission 8 coverage audit
+found two consumers crash and one silently miscompares on a plain
+string) — every other field on `_FixtureProtocol` stays a plain, minimal
+stand-in.
 
 The two named environment variables (BOT_TOKEN_ENV, MODEL_CREDENTIAL_ENVS)
 must be set before this module is loaded through profiles.loader — tests
@@ -14,6 +19,8 @@ secret values itself.
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+from protocols.model import CriticalityLevel
 
 
 @dataclass(frozen=True)
@@ -32,7 +39,7 @@ class _FixtureProtocol:
     participating_agents: tuple[str, ...]
     approved_tools: tuple[str, ...]
     expected_success_output: str
-    criticality: str
+    criticality: CriticalityLevel
     approval_flag: bool
 
 
@@ -48,7 +55,7 @@ PROTOCOLS = [
         participating_agents=("reference_agent",),
         approved_tools=("check_status",),
         expected_success_output="A status report for the requested location.",
-        criticality="low",
+        criticality=CriticalityLevel.LOW,
         approval_flag=False,
     ),
 ]
