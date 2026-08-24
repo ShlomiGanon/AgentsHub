@@ -1104,7 +1104,7 @@ the same audit gap, this time for `bot.api_client.BotApiClient
 - Run the administration command against an empty database, add the first commander, and confirm they can approve a run.
 - Confirm an unknown Telegram identity is refused rather than treated as a viewer.
 - Confirm a viewer refused an action receives a message saying so, not silence.
-- Search the API and bot surfaces and confirm neither offers any path that creates, changes, or removes a user.
+- Search the API and bot surfaces and confirm neither offers any path that creates, changes, or removes a user. `GET /Commanders` and `GET /User/<identity>` (§8.13/§8.14, added after this subtask was first drafted) are reads, not exceptions to this rule — confirm explicitly that neither accepts a write of any kind, the same "search and confirm absence" standard the rest of this bullet already applies.
 
 ### 9.6 Test ingestion parity
 *Requires: 9.2, 7.5*
@@ -1113,6 +1113,7 @@ the same audit gap, this time for `bot.api_client.BotApiClient
 - Confirm both produce an event handled identically through every stage — same classification, same protocol selection, same steps.
 - Confirm the only differences are the recorded source and the occurrence timestamp, which the sensor path sets to the received time and the Telegram path extracts.
 - Confirm the Telegram submission was routed as a report rather than a question or a request, since parity is only meaningful when intent classification agreed.
+- "Through Telegram" here means through the real bot code path — `bot.entrypoint.handle_incoming_message` calling a real `bot.http_api_client.HttpApiClient` against a real running API (the same `RunningApiServer`-backed pattern `tests/test_bot_http_api_client.py` already established), not a second direct `POST /Msg` call. `tests/test_api_unified_ingestion.py` (§7.5's own convergence proof) already confirms `POST /Event` and `POST /Msg` converge at the API layer; this subtask's remaining, non-redundant scope is proving the bot's own path converges too, which is only provable for real now that a genuine `HttpApiClient` exists.
 
 ### 9.7 Test the clarification path
 *Requires: 8.4, 6.2, 2.12*
@@ -1163,7 +1164,7 @@ the same audit gap, this time for `bot.api_client.BotApiClient
 - Confirm a match to a precedent that was never resolved does not close the event.
 - Confirm a match falling outside the lookback window is ignored, and that widening the window through settings brings it back into scope.
 - Confirm an event matching a flagged protocol, which then closes on precedent, never reaches a commander for approval — the ordering fix depends on this and it is invisible otherwise.
-- Confirm commanders are notified on every closure, with the precedent included.
+- Confirm commanders are notified on every closure, with the precedent included — via a real `GET /Notifications` poll (§8.12) returning a `precedent_closure` entry naming the matched event and its ending, not merely by inspecting `precedent_closed_by_event_id` on the event record. The two are different claims: the column proves the decision was made, the notification proves a commander would actually learn about it.
 
 ### 9.12 Test task formulation and reformulation
 *Requires: 6.8, 3.9*
@@ -1225,7 +1226,7 @@ the same audit gap, this time for `bot.api_client.BotApiClient
 - Attempt every restricted action from a viewer and confirm each is refused with a message: resolving a hold, approving a run, editing the profile, changing a setting.
 - Attempt each from a commander and confirm each succeeds.
 - Attempt each from an unregistered identity and confirm each is refused as unknown rather than as unauthorized.
-- Run the whole matrix through both the API and the bot, since the two are separate surfaces over one check and only a test proves they share it.
+- Run the whole matrix through both the API and the bot, since the two are separate surfaces over one check and only a test proves they share it. Through the bot means through a real `HttpApiClient` against a real running API (`tests/test_bot_http_api_client.py`'s pattern), not the bot's own client-side check alone — this is exactly where a real, once-found gap lived: `get_profile_view`, `get_settings_view`, `get_job_result`, `write_protocol`, and `write_setting` originally reached the API under the bot's own blanket service identity with no way for the server to check the real caller's level at all. That gap is closed (see `docs/progress.md`'s follow-up entry), but this subtask is the integration-level suite that should keep it closed — include these five explicitly, not just the hold/profile/settings actions already named above.
 
 ### 9.19 Test serial processing under load
 *Requires: 6.15, 2.9, 9.1*
@@ -1234,6 +1235,7 @@ the same audit gap, this time for `bot.api_client.BotApiClient
 - Put an event into each hold state during the burst and confirm the events behind it continued.
 - Confirm no SQLite lock errors occurred and no write was lost, with the event count in the database matching the count emitted.
 - Confirm the Insights Agent running on every event did not create write contention with the summary scheduler.
+- Distinct from, not redundant with, `tests/test_persistence_sqlite_backend.py`'s own concurrency suite: that file proves the serialized-writer design holds under raw concurrent `persistence` calls in isolation; this subtask proves it holds under a real simulator-driven burst through the *entire* flow (extraction, risk assessment, protocol selection, holds, the summary scheduler) at once — reuse that file's real-threads-plus-timeout technique for detecting a hang, rather than a new one.
 
 ### 9.20 Review cost and latency
 *Requires: 9.2*
@@ -1250,6 +1252,7 @@ the same audit gap, this time for `bot.api_client.BotApiClient
 - Take the profile as a launch argument and every host, port, and path from that profile, so the identical build runs on a real server with no code change.
 - Verify the package starts from nothing: an empty directory, migrations run, the administration command adds the first commander, and the system serves.
 - Verify two deployments start side by side from the same build with two profiles.
+- Scope stays localhost-demo packaging only — dependency pinning, secrets management, process supervision, TLS, backups, and every other production-hardening concern are `docs/PRODUCTION_READY.md`'s explicit, separate scope, not this subtask's. That document already assumes this one is done (or at minimum §9.2/§9.4 are) before its own tasks start; this note makes the boundary visible from this side too.
 
 ### 9.22 Write operator documentation
 *Requires: 9.21*
@@ -1258,6 +1261,7 @@ the same audit gap, this time for `bot.api_client.BotApiClient
 - Document adding an agent, pointing at the reference agent as the working example.
 - Document adding a protocol and setting its approval flag, stating plainly what the flag does.
 - Document adding a user with the administration command.
+- Document provisioning the bot's own service identity (`docs/api_spec.md`'s "Service identity" section — `python -m cli.user_admin --profile <profile> add --telegram-id bot-service --level commander`, or whatever value `bot.api_client.BOT_SERVICE_IDENTITY` names) as a required deployment step, stated as plainly and prominently as adding the first commander: without this row, every bot-to-API call fails authentication, with a plausible-looking startup that then fails on first real use — this was found and closed after this subtask was first drafted and has no coverage in the bullets above it.
 - Document the three things that arrive unprompted — clarification requests, approval requests, closure notices — and what each expects from the reader.
 - Document changing the three live settings, and which changes need a restart instead.
 - Document reading the run logs: finding an event by trace ID and following it through every stage.
@@ -1305,7 +1309,7 @@ The module names below follow the skeleton defined in 1.1.
 | **B21 — Bot** | 8.1 – 8.14 | `bot/*`, `api/*` | One branch. 8.12–8.14 were found genuinely missing (not deferred) auditing this branch against B20 — comparable in size to §7.11's own addition to B20 — and are Mission 7-shaped `api/*` code even though they're numbered here to close out this branch's own dependency on them. Depends on B20's endpoints for 8.1–8.11; 8.12–8.14 touch the same files B20 already owns, so merge them after B20 and coordinate the same way B17 coordinates with B4 on `persistence/interface`. Implementing 8.12–8.14 requires reading the actual, current `persistence/interface`, `auth/permissions`, and `orchestrator/holds` code first — the shapes they need (a cursor/position for the notification feed, whatever `bot/telegram_client.py` actually uses to address a chat) are not fully knowable from this document alone. |
 | **B22 — Simulator** | 9.1 | `tools/simulator` | Standalone program. Parallel with everything once `POST /Event` exists. |
 | **B23 — Test suites** | 9.2 – 9.20 | `tests/*` | One test file per task, so these parallelize freely among themselves. Each merges once the branch it tests has landed. |
-| **B24 — Deployment and docs** | 9.21, 9.22 | packaging, `docs/operations` | Last. |
+| **B24 — Deployment and docs** | 9.21, 9.22 | `api/app.py` (launch entry point), `docs/operator_guide.md` | Last. |
 
 ### Cross-cutting work
 

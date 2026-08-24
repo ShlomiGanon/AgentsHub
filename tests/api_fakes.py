@@ -237,7 +237,8 @@ class RunningApiServer:
         self.ctx = ctx
         app = build_app(ctx)
         self._server = make_server("127.0.0.1", 0, app)
-        self.base_url = f"http://127.0.0.1:{self._server.server_port}"
+        self.port = self._server.server_port
+        self.base_url = f"http://127.0.0.1:{self.port}"
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
 

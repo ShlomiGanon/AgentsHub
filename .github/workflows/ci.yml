@@ -85,6 +85,7 @@ jobs:
           tests/test_history_query.py
           tests/test_history_precedent.py
           tests/test_history_fidelity.py
+          tests/test_history_retrieval.py
           tests/test_history_time_utils.py
 
       - name: Mission 6 — Main Agent Orchestration
@@ -138,6 +139,23 @@ jobs:
           tests/test_api_notifications.py
           tests/test_api_users.py
           tests/test_bot_http_api_client.py
+
+      - name: Mission 9 — Integration and Hardening
+        run: >
+          pytest -q
+          tests/test_tools_simulator.py
+          tests/test_integration_end_to_end_flow.py
+          tests/test_integration_profile_loading.py
+          tests/test_integration_profile_isolation.py
+          tests/test_integration_user_administration.py
+          tests/test_integration_ingestion_parity.py
+          tests/test_integration_hold_restart_and_flow.py
+          tests/test_integration_retry_exhaustion.py
+          tests/test_integration_history_accuracy.py
+          tests/test_integration_profile_editing_and_settings.py
+          tests/test_integration_serial_processing_under_load.py
+          tests/test_integration_cost_and_latency_review.py
+          tests/test_integration_deployment.py
 
       - name: Full suite (drift check)
         run: pytest -q

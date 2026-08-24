@@ -203,6 +203,45 @@ def test_answer_clarification_hold_unauthorized(server):
     assert outcome.status == "unauthorized"
 
 
+def test_answer_approval_hold_unauthorized(server):
+    # §9.18's own permission matrix — the one action-cell no existing
+    # HttpApiClient test covered: a viewer, over real HTTP, may not
+    # approve_run.
+    client = HttpApiClient(server.base_url)
+    selection = ProtocolSelectionResult(status="selected", protocol_name="dispatch_response", reason="matched")
+    risk = RiskAssessment(level="high", score=0.9, reason="r")
+    event_id = _minimal_event(server.ctx.deps.persistence)
+    create_approval_hold(server.ctx.deps.persistence, event_id, "flagged_protocol", selection, risk)
+
+    outcome = _run(client.answer_approval_hold(event_id, "approved", VIEWER_IDENTITY))
+
+    assert outcome.status == "unauthorized"
+
+
+def test_an_unregistered_identity_is_refused_across_the_matrix(server):
+    # §9.18's third row: an unregistered identity is refused the same way
+    # regardless of which real HTTP status this method's own mapping
+    # translates it into — HoldAnswerOutcome.status="unauthorized" for
+    # answer_approval_hold (HoldAnswerStatus already has a slot for it,
+    # per docs/api_spec.md's own mapping table — no raise here,
+    # deliberately), a raised ApiRequestError for get_profile_view (no
+    # DTO slot exists for an auth failure there). Both real HTTP calls
+    # return 401 underneath either way — confirmed distinctly from a
+    # registered-but-insufficient (viewer) identity in the tests above.
+    client = HttpApiClient(server.base_url)
+    selection = ProtocolSelectionResult(status="selected", protocol_name="dispatch_response", reason="matched")
+    risk = RiskAssessment(level="high", score=0.9, reason="r")
+    event_id = _minimal_event(server.ctx.deps.persistence)
+    create_approval_hold(server.ctx.deps.persistence, event_id, "flagged_protocol", selection, risk)
+
+    outcome = _run(client.answer_approval_hold(event_id, "approved", "nobody-registered"))
+    assert outcome.status == "unauthorized"
+
+    with pytest.raises(ApiRequestError) as excinfo:
+        _run(client.get_profile_view("nobody-registered"))
+    assert excinfo.value.status_code == 401
+
+
 def test_answer_approval_hold_approved_and_rejected(server):
     client = HttpApiClient(server.base_url)
     selection = ProtocolSelectionResult(status="selected", protocol_name="dispatch_response", reason="matched")

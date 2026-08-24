@@ -27,7 +27,18 @@ def find_precedents(
     area: str,
     target_event_occurred_at: str,
 ) -> list[PrecedentMatch]:
-    window_end = parse_timestamp(target_event_occurred_at)
+    # +1 second, not the target's own instant, as the window's upper
+    # bound: `occurred_at` is only ever stored at whole-second precision
+    # (history.time_utils.storage_timestamp), so two events genuinely
+    # milliseconds apart — exactly what a real burst produces — can share
+    # an identical truncated timestamp. retrieve_range's underlying query
+    # excludes anything not strictly less than the bound, so without this
+    # widening, an event recorded in the *same second* as the target
+    # would never be found as its precedent. This can never pull in a
+    # genuinely later event: anything a full second past the target's own
+    # timestamp still falls outside the widened bound. The target itself
+    # is excluded separately, by event ID, not by this boundary.
+    window_end = parse_timestamp(target_event_occurred_at) + timedelta(seconds=1)
     window_start = window_end - timedelta(days=settings_store.get_lookback_window_days())
 
     events_by_id = {}

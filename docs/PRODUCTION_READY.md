@@ -2,11 +2,12 @@
 
 ## Purpose and relationship to `docs/work_plan.md`
 
-`docs/work_plan.md` defines Missions 1–9. Missions 1–8 are complete and
-verified. Mission 9 ("Integration and Hardening", §9.1–§9.22) is not yet
-started and defines the *functional* proof that the system behaves correctly
-end-to-end, plus a first packaging pass (§9.21) and operator documentation
-(§9.22).
+`docs/work_plan.md` defines Missions 1–9. All nine are complete and
+verified — Mission 9 ("Integration and Hardening", §9.1–§9.22, see
+`docs/progress.md`'s own entries for what each subtask actually found and
+built) provided the *functional* proof that the system behaves correctly
+end-to-end, a first packaging pass (§9.21, `api.app.main`/`bot.app.main`),
+and operator documentation (§9.22, `docs/operator_guide.md`).
 
 This document covers what's needed **beyond** Mission 9 to run the system in
 production. It does not restate Mission 9's tasks. Where a task here
@@ -18,9 +19,8 @@ conflicting work.
 that must be made before the work starts. Those decisions are the point —
 don't let them be made implicitly by whoever implements first.
 
-**Assumed prerequisite:** Mission 9 is complete, or at minimum §9.2
-(end-to-end flow test), §9.4 (profile isolation), and §9.21 (deployment
-packaging) are done. Several tasks below build directly on §9.21's packaging
+**Assumed prerequisite:** Mission 9 is complete — confirmed, see above.
+Several tasks below build directly on §9.21's packaging (`api.app.main`)
 and would conflict with it if built first.
 
 ---
