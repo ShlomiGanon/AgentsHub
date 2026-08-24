@@ -2,7 +2,7 @@ import textwrap
 
 import pytest
 
-from profiles.loader import ProfileLoadError, ProfileValidationError, load_profile
+from profiles.loader import ProfileLoadError, ProfileValidationError, hash_profile_file, load_profile
 from tests.helpers import write_profile_module
 
 BOT_TOKEN_ENV = "TEST_LOADER_BOT_TOKEN"
@@ -68,6 +68,32 @@ def test_loaded_profile_is_frozen(monkeypatch):
 
     with pytest.raises(Exception):
         loaded.db_path = "/somewhere/else.db"
+
+
+def test_profile_file_hash_matches_a_direct_hash_of_the_same_file(monkeypatch):
+    monkeypatch.setenv("AGENTSHUB_FIXTURE_BOT_TOKEN", "token-value")
+    monkeypatch.setenv("AGENTSHUB_FIXTURE_MODEL_KEY", "key-value")
+
+    loaded = load_profile("fixtures.profiles.minimal_profile")
+
+    assert loaded.profile_file_hash == hash_profile_file("fixtures.profiles.minimal_profile")
+
+
+def test_profile_file_hash_changes_when_the_file_on_disk_changes(tmp_path, monkeypatch):
+    _write(tmp_path, monkeypatch, "hash_check_profile")
+
+    before = hash_profile_file("hash_check_profile")
+
+    import importlib
+
+    spec = importlib.util.find_spec("hash_check_profile")
+    path = spec.origin
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("\n# a pending, not-yet-restarted edit\n")
+
+    after = hash_profile_file("hash_check_profile")
+
+    assert before != after
 
 
 def test_profile_with_unresolvable_protocol_agent_fails_validation(tmp_path, monkeypatch):

@@ -33,6 +33,24 @@ class SummaryScheduler:
         self._wake_event = threading.Event()
         self._stop_event = threading.Event()
         self._thread = None
+        self._last_run_at: str | None = None
+        self._last_run_ok: bool | None = None
+        self._last_run_error: str | None = None
+
+    def last_run_status(self) -> dict:
+        """Whether the background thread's most recent reconciliation
+        succeeded (§7.7's "whether the summary scheduler last ran
+        successfully"). `last_run_ok` is None until the thread has
+        completed a first pass — never started is not the same as failed.
+        A manual `reconcile()` call (as most tests make) does not update
+        this; only the scheduled background run does.
+        """
+
+        return {
+            "last_run_at": self._last_run_at,
+            "last_run_ok": self._last_run_ok,
+            "last_run_error": self._last_run_error,
+        }
 
     def _all_events(self, now: datetime) -> list[dict]:
         return self._persistence.fetch_events_range("0001-01-01T00:00:00", storage_timestamp(now))
@@ -136,8 +154,14 @@ class SummaryScheduler:
                 return
             try:
                 self.reconcile()
-            except Exception:
+                self._last_run_ok = True
+                self._last_run_error = None
+            except Exception as exc:
+                self._last_run_ok = False
+                self._last_run_error = str(exc)
                 logger.exception("history summary reconciliation failed")
+            finally:
+                self._last_run_at = self._clock().astimezone(timezone.utc).isoformat()
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():

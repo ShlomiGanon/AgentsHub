@@ -90,3 +90,62 @@ def test_start_is_idempotent():
     q.stop()
 
     assert processed == ["only-once"]
+
+
+def test_qsize_reflects_items_not_yet_picked_up():
+    release = threading.Event()
+
+    def _process(item):
+        del item
+        release.wait()
+
+    q = SerialEventQueue(_process)
+    q.start()
+
+    q.submit("first")  # picked up immediately, not counted
+    time.sleep(0.02)
+    q.submit("second")
+    q.submit("third")
+
+    assert q.qsize() == 2  # "first" is being processed, not queued
+
+    release.set()
+    q.wait_until_idle()
+    q.stop()
+
+
+def test_currently_processing_reports_the_in_flight_item_then_clears():
+    seen_while_processing = []
+    release = threading.Event()
+
+    def _process(item):
+        seen_while_processing.append(q.currently_processing())
+        if item == "first":
+            release.wait()
+
+    q = SerialEventQueue(_process)
+    q.start()
+
+    assert q.currently_processing() is None  # nothing submitted yet
+
+    q.submit("first")
+    time.sleep(0.02)
+    assert q.currently_processing() == "first"
+
+    release.set()
+    q.wait_until_idle()
+
+    assert q.currently_processing() is None  # cleared once idle
+    assert seen_while_processing == ["first"]
+    q.stop()
+
+
+def test_currently_processing_clears_even_when_the_item_raises():
+    q = SerialEventQueue(lambda item: (_ for _ in ()).throw(ValueError("boom")))
+    q.start()
+
+    q.submit("bad")
+    q.wait_until_idle()
+
+    assert q.currently_processing() is None
+    q.stop()

@@ -12,3 +12,8 @@
 # whatever is current at the time) once real model API keys are available.
 #
 # crewai>=1.13
+
+# API Layer (§7): Flask, confirmed with the user (synchronous/threaded —
+# matches orchestrator.queue.SerialEventQueue and the blocking crewai
+# calls already built, no asyncio impedance mismatch).
+flask>=3.1

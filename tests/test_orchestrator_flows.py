@@ -13,11 +13,18 @@ from history.query import HistoryQueryService
 from orchestrator.flows import (
     FlowDeps,
     assemble_core_agents,
+    begin_report,
+    begin_request,
+    continue_after_approval,
+    continue_after_clarification,
     process_message,
     process_report,
     process_request,
+    resolve_approval,
+    resolve_clarification,
     resume_after_approval,
     resume_after_clarification,
+    run_report_extraction,
 )
 from orchestrator.insights import InsightsAgent
 from orchestrator.main_agent import MainAgent
@@ -368,3 +375,103 @@ def test_a_held_event_resumes_correctly_after_a_simulated_restart(deps, tmp_path
 
     assert resumed.outcome == "succeeded"
     restarted_persistence.close()
+
+
+# -- The synchronous-prefix / queued-continuation split (§7.2, §7.11) -----
+# process_report/process_request/resume_after_clarification/resume_after_
+# approval are exercised above as one call each; these tests exercise the
+# split pieces §7.2/§7.11 will call separately — one inline, one queued.
+
+
+def test_begin_report_returns_immediately_with_no_model_call(deps):
+    agent = _ScriptedAgent({})  # would raise on any .process() call
+
+    event_id = begin_report(deps, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    assert agent.calls == []
+    event = deps.persistence.fetch_event(event_id)
+    assert event["raw_text"] == "smoke at gate 3"
+    assert event["classification"] is None  # extraction hasn't run yet
+
+
+def test_run_report_extraction_continues_from_a_begin_report_event_id(deps):
+    agent = _happy_path_agent(risk_score="0.1", selected="status_check")
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    event_id = begin_report(deps, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    result = run_report_extraction(deps, event_id, agent, insights_agent)
+
+    assert result.event_id == event_id
+    assert result.outcome == "succeeded"
+
+
+def test_begin_request_returns_immediately_with_no_model_call(deps):
+    agent = _ScriptedAgent({})  # would raise on any .process() call
+
+    event_id = begin_request(deps, "please dispatch someone", "2026-08-20T10:00:00", "commander-1")
+
+    assert agent.calls == []
+    event = deps.persistence.fetch_event(event_id)
+    assert event["classification"] == "human_activation"
+    assert event["risk_level"] is None  # risk assessment hasn't run yet
+
+
+def test_resolve_clarification_writes_the_answer_without_resuming(deps):
+    agent = _ScriptedAgent({"Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}'})
+    insights_agent = _ScriptedAgent({})
+
+    held = process_report(deps, agent, insights_agent, "unclear text", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    [hold] = deps.persistence.list_held_events("clarification")
+
+    answer = resolve_clarification(deps, hold["hold_id"], "commander-1", PermissionLevel.COMMANDER, "fire")
+
+    assert answer.status == "resolved"
+    event = deps.persistence.fetch_event(held.event_id)
+    assert event["classification"] == "fire"
+    assert event["risk_level"] is None  # continuation hasn't run yet
+
+
+def test_continue_after_clarification_finishes_the_run(deps):
+    agent = _happy_path_agent(risk_score="0.1", selected="status_check")
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+    agent._dispatch["Extract this operational event"] = '{"classification": null, "area": "north_sector", "entities": [], "description": "d", "severity": "s", "occurred_at": "2026-08-20T09:00:00"}'
+
+    held = process_report(deps, agent, insights_agent, "something unclear at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    [hold] = deps.persistence.list_held_events("clarification")
+    answer = resolve_clarification(deps, hold["hold_id"], "commander-1", PermissionLevel.COMMANDER, "fire")
+
+    result = continue_after_clarification(deps, answer.hold["event_id"], agent, insights_agent)
+
+    assert result.outcome == "succeeded"
+
+
+def test_resolve_approval_denial_is_synchronous_with_no_continuation_needed(deps):
+    agent = _happy_path_agent(risk_score="0.9", selected="dispatch_response")
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    held = process_report(deps, agent, insights_agent, "fire at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    [hold] = deps.persistence.list_held_events("approval")
+
+    answer = resolve_approval(deps, hold["hold_id"], "commander-1", PermissionLevel.COMMANDER, "rejected")
+
+    assert answer.status == "rejected"
+    # resolve_approval only resolves — it never records the declined
+    # outcome itself; resume_after_approval (or the API's own deny path)
+    # does that next, synchronously, with no continuation to queue.
+    event = deps.persistence.fetch_event(held.event_id)
+    assert event["outcome"] is None
+
+
+def test_resolve_approval_then_continue_after_approval_composes_to_success(deps):
+    agent = _happy_path_agent(risk_score="0.9", selected="dispatch_response", agent_task="dispatch to gate 3")
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    held = process_report(deps, agent, insights_agent, "fire at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    [hold] = deps.persistence.list_held_events("approval")
+
+    answer = resolve_approval(deps, hold["hold_id"], "commander-1", PermissionLevel.COMMANDER, "approved")
+    assert answer.status == "approved"
+
+    result = continue_after_approval(deps, answer.hold["event_id"], agent, insights_agent, answer.hold["selected_protocol_name"])
+
+    assert result.outcome == "succeeded"

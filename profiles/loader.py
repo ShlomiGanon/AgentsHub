@@ -24,9 +24,12 @@ replacement is `orchestrator.main_agent.construct_core_agents(base_config)`
 (§7/§9, not yet built), never by this function.
 """
 
+import hashlib
 import importlib
+import importlib.util
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import MappingProxyType, ModuleType
 
 from agents.history import HistoryAgent
@@ -62,8 +65,28 @@ class LoadedProfile:
     retry_count: int
     risk_threshold: float
     lookback_window_days: int
+    profile_file_hash: str
     core_agents: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
     resolved_secrets: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
+
+
+def hash_profile_file(module_path: str) -> str:
+    """SHA-256 of the profile module's source file, hex-encoded.
+
+    Added for §7.7: computed once at load time and stored on
+    `LoadedProfile`, then recomputed against the file on disk at request
+    time so an operator can see a pending edit is awaiting a restart. The
+    one function both call, so the two hashes can never be computed two
+    different ways. Uses `importlib.util.find_spec` to locate the file —
+    the same technique `protocols.editor._resolve_profile_file` already
+    uses to find the exact file a profile write must edit.
+    """
+
+    spec = importlib.util.find_spec(module_path)
+    if spec is None or spec.origin is None:
+        raise ProfileLoadError(f"cannot locate source file for profile module '{module_path}'")
+
+    return hashlib.sha256(Path(spec.origin).read_bytes()).hexdigest()
 
 
 def _import_profile_module(module_path: str) -> ModuleType:
@@ -147,6 +170,7 @@ def load_profile(module_path: str) -> LoadedProfile:
         retry_count=module.RETRY_COUNT,
         risk_threshold=module.RISK_THRESHOLD,
         lookback_window_days=module.LOOKBACK_WINDOW_DAYS,
+        profile_file_hash=hash_profile_file(module_path),
         core_agents=MappingProxyType(core_agents),
         resolved_secrets=MappingProxyType(resolved_secrets),
     )

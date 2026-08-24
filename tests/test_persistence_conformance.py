@@ -169,3 +169,38 @@ def test_list_held_events_is_scoped_to_its_kind(persistence):
 
     assert len(persistence.list_held_events("approval")) == 1
     assert len(persistence.list_held_events("clarification")) == 1
+
+
+def test_fetch_held_event_by_event_id_while_pending(persistence):
+    hold_id = persistence.store_held_event("approval", {"event_id": "evt-1", "reason": "flagged_protocol"})
+
+    held = persistence.fetch_held_event("approval", "evt-1")
+
+    assert held["hold_id"] == hold_id
+    assert held["reason"] == "flagged_protocol"
+    assert held["resolved"] is False
+    assert held["resolved_by"] is None
+    assert held["resolved_at"] is None
+
+
+def test_fetch_held_event_after_resolution_reports_resolver_and_time(persistence):
+    hold_id = persistence.store_held_event("approval", {"event_id": "evt-1"})
+    persistence.resolve_held_event("approval", hold_id, {"resolved_by": "commander-1", "resolved_at": "2026-08-24T09:00:00", "decision": "approved"})
+
+    held = persistence.fetch_held_event("approval", "evt-1")
+
+    assert held["resolved"] is True
+    assert held["resolved_by"] == "commander-1"
+    assert held["resolved_at"] == "2026-08-24T09:00:00"
+    assert held["resolution"]["decision"] == "approved"
+
+
+def test_fetch_held_event_returns_none_for_an_unknown_event_id(persistence):
+    assert persistence.fetch_held_event("approval", "does-not-exist") is None
+
+
+def test_fetch_held_event_is_scoped_to_its_kind(persistence):
+    persistence.store_held_event("clarification", {"event_id": "evt-1"})
+
+    assert persistence.fetch_held_event("approval", "evt-1") is None
+    assert persistence.fetch_held_event("clarification", "evt-1") is not None

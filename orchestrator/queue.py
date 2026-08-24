@@ -37,6 +37,7 @@ class SerialEventQueue:
         self._queue: queue.Queue = queue.Queue()
         self._worker = threading.Thread(target=self._run, daemon=True)
         self._started = False
+        self._currently_processing = None
 
     def start(self) -> None:
         if not self._started:
@@ -45,6 +46,30 @@ class SerialEventQueue:
 
     def submit(self, item) -> None:
         self._queue.put(item)
+
+    def qsize(self) -> int:
+        """How many submitted items are still waiting — not yet picked up
+        by the worker (§7.7's "how many events are queued"). Deliberately
+        excludes whatever is currently being processed; see
+        `currently_processing`.
+        """
+
+        return self._queue.qsize()
+
+    def currently_processing(self) -> object | None:
+        """The raw item the worker is processing right now, or None.
+
+        Returned exactly as submitted — this class stays fully generic
+        over what an "item" is (work_plan.md §6.15's own design), so it
+        never interprets one. A caller that submits `(event_id, work_fn)`
+        pairs (as api/ does, for job-status derivation — §7.2) reads
+        `.currently_processing()[0]` itself; nothing here assumes that
+        shape. A single-attribute read/write is safe across threads
+        without a lock — CPython's GIL makes both atomic, and only the
+        worker thread ever writes it.
+        """
+
+        return self._currently_processing
 
     def wait_until_idle(self) -> None:
         """Block until every item submitted so far has been processed.
@@ -67,9 +92,11 @@ class SerialEventQueue:
                 self._queue.task_done()
                 return
 
+            self._currently_processing = item
             try:
                 self._process_fn(item)
             except Exception:
                 logger.exception("event processing failed; continuing with the next queued event", extra={"event": "queue_processing_failed"})
             finally:
+                self._currently_processing = None
                 self._queue.task_done()
