@@ -17,11 +17,11 @@ from profiles.spec import HUMAN_ACTIVATION_TYPE
 from tests.helpers import write_profile_module
 
 
-def test_a_valid_profile_loads_exactly_its_agents_protocols_event_types_and_areas(monkeypatch):
+def test_a_valid_profile_loads_exactly_its_agents_protocols_event_types_and_areas(monkeypatch, test_core_model, test_sub_model):
     monkeypatch.setenv("AGENTSHUB_FIXTURE_BOT_TOKEN", "token-value")
     monkeypatch.setenv("AGENTSHUB_FIXTURE_MODEL_KEY", "key-value")
 
-    loaded = load_profile("fixtures.profiles.minimal_profile")
+    loaded = load_profile("fixtures.profiles.minimal_profile", core_model=test_core_model, sub_model=test_sub_model)
 
     assert [a.name for a in loaded.agents] == ["reference_agent"]
     assert [p.name for p in loaded.protocols] == ["basic_response"]
@@ -34,8 +34,9 @@ def test_a_valid_profile_loads_exactly_its_agents_protocols_event_types_and_area
     assert "history_agent" in loaded.core_agents
 
 
-def test_two_profiles_differing_only_in_model_route_each_to_its_own(tmp_path, monkeypatch):
+def test_two_profiles_differing_only_in_model_route_each_to_its_own(tmp_path, monkeypatch, test_core_model):
     from agents import adapter
+    from config.base import build_tier_model
 
     captured_models = []
 
@@ -43,17 +44,26 @@ def test_two_profiles_differing_only_in_model_route_each_to_its_own(tmp_path, mo
         def __init__(self, raw):
             self.raw = raw
 
+    class _FakeLLM:
+        def __init__(self, **kwargs):
+            self.model = kwargs.get("model")
+
     class _FakeCrewAgent:
         def __init__(self, **kwargs):
-            captured_models.append(kwargs.get("llm"))
+            captured_models.append(kwargs.get("llm").model)
 
         def kickoff(self, text):
             return _FakeOutput("status nominal")
 
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, tools=types.SimpleNamespace(BaseTool=object))
+    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=_FakeLLM, tools=types.SimpleNamespace(BaseTool=object))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
-    prelude = "from agents.reference import ReferenceAgent\n"
+    # Both profiles declare the identical spec (AgentSpec(cls=ReferenceAgent,
+    # tier="sub")) — the whole point is that routing now happens through
+    # which TierModel each *load* is given, not anything hardcoded in the
+    # profile's own source, so the two profile files are identical on this
+    # axis; only the two load_profile calls below differ.
+    prelude = "from agents.reference import ReferenceAgent\nfrom profiles.spec import AgentSpec\n"
 
     monkeypatch.setenv("SIM_MODEL_TOKEN", "t")
     monkeypatch.setenv("SIM_MODEL_KEY", "k")
@@ -61,18 +71,21 @@ def test_two_profiles_differing_only_in_model_route_each_to_its_own(tmp_path, mo
     write_profile_module(
         tmp_path, monkeypatch, "profile_model_a", bot_token_env="SIM_MODEL_TOKEN", model_cred_env="SIM_MODEL_KEY",
         extra_prelude=prelude,
-        overrides={"AGENTS": 'AGENTS = [ReferenceAgent(model="model-a")]', "DB_PATH": 'DB_PATH = "profile_a.db"', "API_PORT": "API_PORT = 9101"},
+        overrides={"AGENTS": 'AGENTS = [AgentSpec(cls=ReferenceAgent, tier="sub")]', "DB_PATH": 'DB_PATH = "profile_a.db"', "API_PORT": "API_PORT = 9101"},
     )
     write_profile_module(
         tmp_path, monkeypatch, "profile_model_b", bot_token_env="SIM_MODEL_TOKEN", model_cred_env="SIM_MODEL_KEY",
         extra_prelude=prelude,
-        overrides={"AGENTS": 'AGENTS = [ReferenceAgent(model="model-b")]', "DB_PATH": 'DB_PATH = "profile_b.db"', "API_PORT": "API_PORT = 9102"},
+        overrides={"AGENTS": 'AGENTS = [AgentSpec(cls=ReferenceAgent, tier="sub")]', "DB_PATH": 'DB_PATH = "profile_b.db"', "API_PORT": "API_PORT = 9102"},
     )
 
-    loaded_a = load_profile("profile_model_a")
-    loaded_b = load_profile("profile_model_b")
+    sub_model_a = build_tier_model("openrouter", "model-a", "key-a")
+    sub_model_b = build_tier_model("openrouter", "model-b", "key-b")
+
+    loaded_a = load_profile("profile_model_a", core_model=test_core_model, sub_model=sub_model_a)
+    loaded_b = load_profile("profile_model_b", core_model=test_core_model, sub_model=sub_model_b)
 
     loaded_a.agents[0].process("check status", [])
     loaded_b.agents[0].process("check status", [])
 
-    assert captured_models == ["model-a", "model-b"]
+    assert captured_models == ["openrouter/model-a", "openrouter/model-b"]

@@ -17,8 +17,14 @@ alongside this rather than expecting this document to reproduce it.
 4. **Accept `model` in `__init__`** and pass it to `super().__init__(model)`
    — this is what lets the same agent class run on different models in
    different profiles.
-5. **Construct the agent in a profile's `AGENTS` list**, passing whichever
-   model that deployment uses.
+5. **Declare the agent in a profile's `AGENTS` list**, via
+   `profiles.spec.AgentSpec(cls=YourAgent, tier="core"|"sub")` — never
+   construct it there yourself. `profiles.loader.load_profile` is the only
+   place any `AgentSpec` actually gets built, using whichever already-
+   resolved `TierModel` matches the tier named (see
+   `docs/profile_spec.md`'s "Model tiers" section); this is what lets the
+   same agent class run on different models in different profiles without
+   the profile module itself ever touching `os.environ`.
 
 ## What happens if a step is skipped
 
@@ -27,6 +33,9 @@ alongside this rather than expecting this document to reproduce it.
   agent fails to import at all, not later during a run.
 - Omit `name`/`role`/`system_prompt`: the agent fails to *construct*,
   naming which attribute is missing (`agents/base.py`'s `Agent.__init__`).
-- Write the agent but never construct it in a profile: it's simply never
+- Write the agent but never declare it in a profile: it's simply never
   loaded — `agents.registry` only knows about what's explicitly passed to
   it, nothing self-registers.
+- Declare it as anything other than an `AgentSpec` (e.g. an already-
+  constructed instance, the pre-`AgentSpec` shape): `load_profile` fails
+  loudly at load time, naming the bad `AGENTS` index.

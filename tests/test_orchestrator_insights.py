@@ -114,14 +114,15 @@ def test_unclear_task_status_raises():
 
 
 def test_construct_core_agents_returns_the_insights_agent_with_the_configured_model():
-    from config.base import BaseConfig
+    from config.base import BaseConfig, TierModel
 
-    base_config = BaseConfig(main_agent_model="m", history_agent_model="h", insights_agent_model="the-insights-model")
+    base_config = BaseConfig(core_model=TierModel(model="the-insights-model", api_key="the-core-key"))
 
     core_agents = construct_core_agents(base_config)
 
     assert set(core_agents) == {"insights_agent"}
     assert core_agents["insights_agent"].model == "the-insights-model"
+    assert core_agents["insights_agent"].descriptor.api_key == "the-core-key"
 
 
 def test_end_to_end_through_the_mocked_adapter(monkeypatch):

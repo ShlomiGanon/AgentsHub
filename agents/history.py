@@ -17,5 +17,5 @@ class HistoryAgent(Agent):
         "each event was handled, agent actions, and how it ended."
     )
 
-    def __init__(self, model: str):
-        super().__init__(model)
+    def __init__(self, model: str, api_key: str | None = None):
+        super().__init__(model, api_key)

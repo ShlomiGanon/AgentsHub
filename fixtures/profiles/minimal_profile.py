@@ -1,14 +1,19 @@
 """A minimal valid profile module, used by tests for §1.5/§1.6.
 
-Satisfies docs/profile_spec.md in full, including the structural
-(duck-typed) agent/protocol contract — the real Agent/Protocol classes
-from §3/§4 don't need to exist for this fixture, so it defines the
-smallest objects that pass profiles.spec's shape checks. `criticality` is
-the one field this contract requires to be a real `CriticalityLevel` enum
-member specifically (§1.6, tightened after the Mission 8 coverage audit
-found two consumers crash and one silently miscompares on a plain
-string) — every other field on `_FixtureProtocol` stays a plain, minimal
-stand-in.
+Satisfies docs/profile_spec.md in full. `AGENTS` declares one real agent
+(`agents.reference.ReferenceAgent`, on the "sub" tier) via
+`profiles.spec.AgentSpec` — every `AGENTS` entry must be a real,
+constructible agent class now (profiles.loader.load_profile builds it at
+load time), not a duck-typed stand-in; `ReferenceAgent` already exposes
+the `check_status` tool this fixture's one protocol needs, so it doubles
+as the simplest real agent to use here. `_FixtureProtocol` stays a
+minimal, duck-typed stand-in for `PROTOCOLS` — protocols/spec's
+structural contract hasn't changed and doesn't need a real
+`protocols.model.Protocol`. `criticality` is the one field this contract
+requires to be a real `CriticalityLevel` enum member specifically (§1.6,
+tightened after the Mission 8 coverage audit found two consumers crash
+and one silently miscompares on a plain string) — every other field on
+`_FixtureProtocol` stays a plain, minimal stand-in.
 
 The two named environment variables (BOT_TOKEN_ENV, MODEL_CREDENTIAL_ENVS)
 must be set before this module is loaded through profiles.loader — tests
@@ -20,16 +25,9 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from agents.reference import ReferenceAgent
+from profiles.spec import AgentSpec
 from protocols.model import CriticalityLevel
-
-
-@dataclass(frozen=True)
-class _FixtureAgent:
-    name: str
-    tools: tuple[str, ...] = ()
-
-    def exposed_tools(self) -> tuple[str, ...]:
-        return self.tools
 
 
 @dataclass(frozen=True)
@@ -44,7 +42,7 @@ class _FixtureProtocol:
 
 
 AGENTS = [
-    _FixtureAgent(name="reference_agent", tools=("check_status",)),
+    AgentSpec(cls=ReferenceAgent, tier="sub"),
 ]
 
 PROTOCOLS = [

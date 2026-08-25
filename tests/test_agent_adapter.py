@@ -1,3 +1,4 @@
+import sys
 import types
 
 import pytest
@@ -45,15 +46,28 @@ def _descriptor(**overrides):
     return AgentDescriptor(**fields)
 
 
-# -- crewai not installed (the real state of this environment) --------------
+# -- crewai not installed --------------------------------------------------
+# crewai is genuinely installed in this environment (1.15.17) — its absence
+# is simulated here via sys.modules, the standard technique (an import
+# raises ImportError when sys.modules[name] is exactly None), the same way
+# every other test in this file mocks `_get_crewai` itself instead of
+# relying on the real environment. This is the one function that can't be
+# mocked that way, since it's the function under test.
 
 
-def test_crewai_not_installed_raises_clearly():
+def test_crewai_not_installed_raises_clearly(monkeypatch):
+    monkeypatch.setitem(sys.modules, "crewai", None)
+
     with pytest.raises(AgentFrameworkNotReadyError):
         adapter._get_crewai()
 
 
-def test_invoke_without_crewai_installed_raises_the_same_error():
+def test_invoke_without_crewai_installed_raises_the_same_error(monkeypatch):
+    # invoke() calls _get_crewai() before anything else — this proves that
+    # absence propagates through invoke() as the same AgentFrameworkNotReadyError,
+    # not translated into AgentModelError or some other outcome along the way.
+    monkeypatch.setitem(sys.modules, "crewai", None)
+
     with pytest.raises(AgentFrameworkNotReadyError):
         adapter.invoke(_descriptor(), {}, "do something", 30)
 
@@ -84,6 +98,76 @@ def test_invoke_routes_to_the_descriptors_own_model(monkeypatch):
 
     assert first_model == "agent-one-model"
     assert second_model == "agent-two-model"
+
+
+# -- Explicit api_key -> crewai.LLM(model=..., api_key=...) -----------------
+# (config.base.build_tier_model's normal output; docs/profile_spec.md
+# "Model tiers" — this is the mechanism that gives two agents on the same
+# provider two genuinely independent API keys.)
+
+
+def test_invoke_builds_an_explicit_crewai_llm_when_api_key_is_set(monkeypatch):
+    captured = {}
+
+    class _FakeLLM:
+        def __init__(self, **kwargs):
+            captured["llm_kwargs"] = kwargs
+
+    class _FakeAgent:
+        def __init__(self, **kwargs):
+            captured["agent_kwargs"] = kwargs
+
+        def kickoff(self, text):
+            return _FakeOutput("ok")
+
+    fake_module = types.SimpleNamespace(Agent=_FakeAgent, LLM=_FakeLLM, tools=types.SimpleNamespace(BaseTool=_FakeBaseTool))
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+
+    adapter.invoke(_descriptor(model="openrouter/anthropic/claude-3.5-sonnet", api_key="sk-or-secret"), {}, "x", 10)
+
+    assert captured["llm_kwargs"] == {"model": "openrouter/anthropic/claude-3.5-sonnet", "api_key": "sk-or-secret"}
+    assert isinstance(captured["agent_kwargs"]["llm"], _FakeLLM)
+
+
+def test_invoke_falls_back_to_a_bare_model_string_when_there_is_no_api_key(monkeypatch):
+    # Legacy construction path (no api_key at all) — unchanged behavior,
+    # relies on litellm's own implicit env-var lookup, same as before
+    # api_key existed.
+    fake_module, captured = _make_fake_crewai(lambda text: _FakeOutput("ok"))
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+
+    adapter.invoke(_descriptor(model="plain-model", api_key=None), {}, "x", 10)
+
+    assert captured["agent_kwargs"]["llm"] == "plain-model"
+
+
+def test_invoke_gives_two_agents_on_the_same_provider_genuinely_independent_keys(monkeypatch):
+    # The exact scenario *_MODEL_API_KEY_ENV's two-level indirection
+    # exists for: same provider, two distinct keys — litellm's implicit
+    # provider-named env lookup (e.g. OPENROUTER_API_KEY) cannot express
+    # this. Nothing here branches on provider name to make it work.
+    captured_llms = []
+
+    class _FakeLLM:
+        def __init__(self, **kwargs):
+            captured_llms.append(kwargs)
+
+    class _FakeAgent:
+        def __init__(self, **kwargs):
+            pass
+
+        def kickoff(self, text):
+            return _FakeOutput("ok")
+
+    fake_module = types.SimpleNamespace(Agent=_FakeAgent, LLM=_FakeLLM, tools=types.SimpleNamespace(BaseTool=_FakeBaseTool))
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+
+    adapter.invoke(_descriptor(model="openrouter/model-a", api_key="key-one"), {}, "x", 10)
+    adapter.invoke(_descriptor(model="openrouter/model-b", api_key="key-two"), {}, "x", 10)
+
+    assert captured_llms[0] == {"model": "openrouter/model-a", "api_key": "key-one"}
+    assert captured_llms[1] == {"model": "openrouter/model-b", "api_key": "key-two"}
+    assert captured_llms[0]["api_key"] != captured_llms[1]["api_key"]
 
 
 def test_invoke_translates_timeout(monkeypatch):

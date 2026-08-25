@@ -5,10 +5,15 @@ from protocols.model import CriticalityLevel
 
 
 @pytest.fixture
-def loaded(monkeypatch):
-    monkeypatch.setenv("AGENTSHUB_DEMO_BOT_TOKEN", "token")
-    monkeypatch.setenv("AGENTSHUB_DEMO_MODEL_KEY", "key")
-    return load_profile("profiles.demo")
+def loaded(monkeypatch, test_core_model, test_sub_model):
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    # MODEL_CREDENTIAL_ENVS is empty in profiles/demo.py — nothing to set
+    # there any more (docs/profile_spec.md "Model tiers"). profiles/demo.py
+    # only *declares* its one agent (AgentSpec(cls=ReferenceAgent,
+    # tier="sub")) — load_profile is what resolves the tier and
+    # constructs it, so both tiers just come from the fixtures directly;
+    # the profile module itself never touches os.environ at all any more.
+    return load_profile("profiles.demo", core_model=test_core_model, sub_model=test_sub_model)
 
 
 def test_loads_and_validates_successfully(loaded):

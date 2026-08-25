@@ -27,9 +27,9 @@ class ReferenceAgent(Agent):
         "found or did."
     )
 
-    def __init__(self, model: str):
+    def __init__(self, model: str, api_key: str | None = None):
         self.actions_taken: list[str] = []
-        super().__init__(model)
+        super().__init__(model, api_key)
 
     @tool("check_status", "Returns the current status of a named location. Read-only — never changes anything.", side_effecting=False)
     def check_status(self, location: str) -> str:

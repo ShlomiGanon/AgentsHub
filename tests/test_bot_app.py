@@ -31,10 +31,10 @@ def _write_and_load_test_profile(tmp_path, monkeypatch, module_name="test_app_pr
 # -- §8.1: startup, token resolution, token validation, single instance ----
 
 
-def test_build_deps_resolves_the_already_loaded_token_and_port(tmp_path, monkeypatch):
+def test_build_deps_resolves_the_already_loaded_token_and_port(tmp_path, monkeypatch, test_core_model, test_sub_model):
     module_name = _write_and_load_test_profile(tmp_path, monkeypatch)
 
-    deps = app.build_deps(module_name)
+    deps = app.build_deps(module_name, core_model=test_core_model, sub_model=test_sub_model)
 
     assert deps.loaded_profile.api_port == 9999  # from tests/helpers.py's PROFILE_ATTR_LINES
     # The token was already resolved at profile-load time (§1.5) and never
@@ -42,7 +42,7 @@ def test_build_deps_resolves_the_already_loaded_token_and_port(tmp_path, monkeyp
     assert deps.telegram_client._application.bot.token == "the-real-token"
 
 
-def test_build_deps_fails_loudly_naming_the_missing_env_var(tmp_path, monkeypatch):
+def test_build_deps_fails_loudly_naming_the_missing_env_var(tmp_path, monkeypatch, test_core_model, test_sub_model):
     from profiles.loader import ProfileLoadError
 
     monkeypatch.delenv(BOT_TOKEN_ENV, raising=False)
@@ -50,7 +50,77 @@ def test_build_deps_fails_loudly_naming_the_missing_env_var(tmp_path, monkeypatc
     write_profile_module(tmp_path, monkeypatch, "test_app_profile_missing_token", bot_token_env=BOT_TOKEN_ENV, model_cred_env=MODEL_CRED_ENV)
 
     with pytest.raises(ProfileLoadError, match=BOT_TOKEN_ENV):
-        app.build_deps("test_app_profile_missing_token")
+        app.build_deps("test_app_profile_missing_token", core_model=test_core_model, sub_model=test_sub_model)
+
+
+@pytest.mark.parametrize("blank_token", ["", "   ", "\t\n"])
+def test_resolve_bot_token_warns_and_returns_none_for_a_blank_token(tmp_path, monkeypatch, caplog, blank_token, test_core_model, test_sub_model):
+    # Deliberately calls _resolve_bot_token directly with a LoadedProfile
+    # from a plain load_profile() — not through build_deps, which calls
+    # configure_logging() and clears the root logger's handlers, which
+    # would take pytest's own caplog handler down with it.
+    from profiles.loader import load_profile
+
+    monkeypatch.setenv(BOT_TOKEN_ENV, blank_token)
+    monkeypatch.setenv(MODEL_CRED_ENV, "cred")
+    write_profile_module(tmp_path, monkeypatch, "test_app_profile_blank_token", bot_token_env=BOT_TOKEN_ENV, model_cred_env=MODEL_CRED_ENV)
+    loaded_profile = load_profile("test_app_profile_blank_token", core_model=test_core_model, sub_model=test_sub_model)
+
+    with caplog.at_level("WARNING"):
+        token = app._resolve_bot_token("test_app_profile_blank_token", loaded_profile)
+
+    assert token is None
+
+    warnings = [r for r in caplog.records if getattr(r, "event", None) == "bot_token_missing"]
+    assert len(warnings) == 1
+    assert warnings[0].levelname == "WARNING"
+    assert warnings[0].env_var == BOT_TOKEN_ENV
+    # The exact message format requested: names the variable and points at
+    # BOT_TOKEN_ENV specifically, and says the connection was skipped —
+    # not a generic "something is missing" message.
+    assert warnings[0].message == (
+        f"Bot token not found: environment variable {BOT_TOKEN_ENV}, as configured in "
+        "BOT_TOKEN_ENV, is not set — Telegram connection skipped"
+    )
+
+
+def test_build_deps_returns_none_for_a_blank_token_without_raising(tmp_path, monkeypatch, test_core_model, test_sub_model):
+    monkeypatch.setenv(BOT_TOKEN_ENV, "   ")
+    monkeypatch.setenv(MODEL_CRED_ENV, "cred")
+    write_profile_module(tmp_path, monkeypatch, "test_app_profile_blank_token_deps", bot_token_env=BOT_TOKEN_ENV, model_cred_env=MODEL_CRED_ENV)
+
+    # Must not raise — a blank token is a handled, non-fatal condition.
+    assert app.build_deps("test_app_profile_blank_token_deps", core_model=test_core_model, sub_model=test_sub_model) is None
+
+
+def test_main_does_not_crash_or_exit_when_the_token_is_blank(tmp_path, monkeypatch):
+    monkeypatch.setenv(BOT_TOKEN_ENV, "  ")
+    monkeypatch.setenv(MODEL_CRED_ENV, "cred")
+    write_profile_module(tmp_path, monkeypatch, "test_app_profile_blank_token_main", bot_token_env=BOT_TOKEN_ENV, model_cred_env=MODEL_CRED_ENV)
+
+    # main() is now a hard root — it always reads the real environment
+    # (no env= override any more), so its own model-tier vars must be set
+    # for real here, same as any other real invocation.
+    monkeypatch.setenv("CORE_MODEL_PROVIDER", "openrouter")
+    monkeypatch.setenv("CORE_MODEL_NAME", "m")
+    monkeypatch.setenv("CORE_MODEL_API_KEY_ENV", "MAIN_TEST_CORE_KEY")
+    monkeypatch.setenv("MAIN_TEST_CORE_KEY", "k")
+    monkeypatch.setenv("SUB_MODEL_PROVIDER", "openrouter")
+    monkeypatch.setenv("SUB_MODEL_NAME", "m")
+    monkeypatch.setenv("SUB_MODEL_API_KEY_ENV", "MAIN_TEST_SUB_KEY")
+    monkeypatch.setenv("MAIN_TEST_SUB_KEY", "k")
+
+    # No SystemExit, no other exception — reaching this line at all, with a
+    # normal (None) return, is the proof main() treated this as non-fatal.
+    assert app.main(["test_app_profile_blank_token_main"]) is None
+
+
+def test_main_fails_loudly_naming_the_missing_tier_env_var(monkeypatch):
+    for name in ("CORE_MODEL_PROVIDER", "CORE_MODEL_NAME", "CORE_MODEL_API_KEY_ENV"):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(SystemExit, match="CORE_MODEL_PROVIDER"):
+        app.main(["fixtures.profiles.minimal_profile"])
 
 
 def test_validate_bot_token_raises_when_telegram_rejects_it():

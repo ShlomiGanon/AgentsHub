@@ -8,19 +8,32 @@ with no Task/Crew object needed at all — confirmed against docs.crewai.com
 (checked 2026-08-23, roughly the v1.13–1.15 series; see docs/progress.md's
 §3.5 entry for what was verified and what wasn't).
 
-`crewai` is not installed in this environment yet (confirmed with the
-user). `_get_crewai()` is the *only* function that imports it, and the
-only function tests monkeypatch — everything else here is real,
-structurally-accurate glue against the library's documented API, built and
-tested through a fake standing in for the real module.
+`crewai` is now installed (1.15.17). `_get_crewai()` is the *only*
+function that imports it, and the only function the automated test suite
+monkeypatches (still fully mocked, unchanged) — everything else here is
+real, structurally-accurate glue against the library's documented API. A
+real, manual, non-mocked sanity check lives at
+`tests/sanity_check_real_model_call.py` (not part of the automated suite).
 
 Model routing (§3.6): every invocation routes to `descriptor.model`, read
 fresh from the descriptor on this call — there is no shared client
 configured once with a single model, so changing one agent's model can
-never affect another. Credentials aren't read here at all: litellm reads
-provider environment variables directly from the process environment,
-which `profiles.loader` already populated at load time (Mission 1) —
-nothing further is needed for §3.6's credential-resolution requirement.
+never affect another.
+
+Credentials: when `descriptor.api_key` is set (the normal case for any
+agent constructed through `config.base.build_tier_model` — see
+`docs/profile_spec.md`'s "Model tiers" section), it is passed explicitly
+as `crewai.LLM(model=..., api_key=...)` — a real, documented crewai/
+LiteLLM constructor, confirmed against docs.crewai.com/en/learn/llm-
+connections and docs.litellm.ai. This is what lets two agents on the same
+provider use two genuinely independent API keys: litellm's implicit,
+provider-named env lookup (e.g. `OPENROUTER_API_KEY`) can only hold one
+value process-wide and can't express that, for any provider — nothing
+here ever branches on provider name to work around it. When
+`descriptor.api_key` is `None` (an agent constructed the old way, with a
+bare model string and no key), `llm=descriptor.model` is passed as a
+plain string, unchanged from before `api_key` existed — litellm's
+implicit env lookup still applies for that agent.
 
 Timeout (§3.10): CrewAI's own `max_execution_time` constructor parameter
 *is* the per-invocation timeout — no separate thread-based watchdog is
@@ -98,11 +111,19 @@ def invoke(descriptor: AgentDescriptor, wrapped_tools: dict[str, Callable], text
 
     backstory = f"{descriptor.system_prompt}\n\n{UNCLEAR_TASK_PROMPT_INSTRUCTION}"
 
+    # An explicit api_key (config.base.build_tier_model's normal output)
+    # is passed via a real crewai.LLM object, not folded into the model
+    # string — the only documented way to give two agents on the same
+    # provider two genuinely independent keys (see module docstring). No
+    # api_key at all (legacy construction) keeps the old bare-string
+    # behavior, relying on litellm's implicit env lookup as before.
+    llm = crewai_module.LLM(model=descriptor.model, api_key=descriptor.api_key) if descriptor.api_key else descriptor.model
+
     crewai_agent = crewai_module.Agent(
         role=descriptor.role,
         goal="Complete the task given, or state clearly what is missing if it cannot be completed.",
         backstory=backstory,
-        llm=descriptor.model,
+        llm=llm,
         tools=crewai_tools,
         max_execution_time=timeout_seconds,
     )

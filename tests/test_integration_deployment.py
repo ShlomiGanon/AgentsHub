@@ -20,9 +20,10 @@ from tests.api_fakes import auth_headers
 
 _PROFILE_TEMPLATE = """
 from agents.reference import ReferenceAgent
+from profiles.spec import AgentSpec
 from protocols.model import Protocol, CriticalityLevel
 
-AGENTS = [ReferenceAgent(model="m")]
+AGENTS = [AgentSpec(cls=ReferenceAgent, tier="sub")]
 PROTOCOLS = [
     Protocol(
         name="status_check", description="applies to a routine status check",
@@ -53,7 +54,7 @@ def _write_deployment(tmp_path, monkeypatch, api_port: int):
     return module_name, db_path
 
 
-def test_the_package_starts_from_nothing_and_serves(tmp_path, monkeypatch):
+def test_the_package_starts_from_nothing_and_serves(tmp_path, monkeypatch, real_tier_env, test_core_model, test_sub_model):
     # A genuinely empty directory — pytest's own tmp_path guarantees this.
     assert list(tmp_path.iterdir()) == []
 
@@ -62,14 +63,16 @@ def test_the_package_starts_from_nothing_and_serves(tmp_path, monkeypatch):
 
     # The administration command is the real first step of a fresh
     # deployment — running it triggers load_profile -> open_persistence,
-    # which runs migrations and creates the database from nothing.
+    # which runs migrations and creates the database from nothing. It is a
+    # real root (reads CORE_MODEL_*/SUB_MODEL_* from the real environment
+    # itself, via real_tier_env, above), unlike build_context below.
     exit_code = user_admin_main(["--profile", module_name, "add", "--telegram-id", "first-commander", "--level", "commander"])
     assert exit_code == 0
     assert db_path.exists()
 
     # The system serves — the real build_context/build_app, not the test
     # fixture, wired up exactly as `python -m api.app <profile>` would.
-    ctx = real_build_context(module_name)
+    ctx = real_build_context(module_name, core_model=test_core_model, sub_model=test_sub_model)
     try:
         client = real_build_app(ctx).test_client()
         resp = client.get("/SYSTEM", headers=auth_headers("first-commander"))
@@ -81,7 +84,7 @@ def test_the_package_starts_from_nothing_and_serves(tmp_path, monkeypatch):
         ctx.deps.persistence.close()
 
 
-def test_two_deployments_start_side_by_side_from_the_same_build(tmp_path, monkeypatch):
+def test_two_deployments_start_side_by_side_from_the_same_build(tmp_path, monkeypatch, real_tier_env, test_core_model, test_sub_model):
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
 
@@ -91,8 +94,8 @@ def test_two_deployments_start_side_by_side_from_the_same_build(tmp_path, monkey
     user_admin_main(["--profile", module_a, "add", "--telegram-id", "commander-a", "--level", "commander"])
     user_admin_main(["--profile", module_b, "add", "--telegram-id", "commander-b", "--level", "commander"])
 
-    ctx_a = real_build_context(module_a)
-    ctx_b = real_build_context(module_b)
+    ctx_a = real_build_context(module_a, core_model=test_core_model, sub_model=test_sub_model)
+    ctx_b = real_build_context(module_b, core_model=test_core_model, sub_model=test_sub_model)
     try:
         assert ctx_a.loaded_profile.api_port != ctx_b.loaded_profile.api_port
         assert ctx_a.deps.persistence.db_path != ctx_b.deps.persistence.db_path

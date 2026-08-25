@@ -1,24 +1,4 @@
-from config.base import BaseConfig, _parse_debug_flag, load_base_config
-
-
-def test_load_base_config_names_all_three_models_separately():
-    config = load_base_config()
-
-    assert isinstance(config, BaseConfig)
-    assert config.main_agent_model
-    assert config.history_agent_model
-    assert config.insights_agent_model
-    assert config.DEBUG_FLAG is False
-
-
-def test_base_config_is_frozen():
-    config = load_base_config()
-
-    try:
-        config.main_agent_model = "something-else"
-        assert False, "BaseConfig should be immutable"
-    except AttributeError:
-        pass
+from config.base import _parse_debug_flag
 
 
 def test_debug_flag_parsing_is_strict_not_any_non_empty_string():
@@ -54,7 +34,8 @@ def test_debug_flag_is_read_from_the_environment_variable_once_at_import(monkeyp
     importlib.reload(base_config)
     try:
         assert base_config.DEBUG_FLAG is True
-        assert load_base_config().DEBUG_FLAG is True
+        core_model = base_config.build_tier_model("openrouter", "m", "k")
+        assert base_config.load_base_config(core_model=core_model).DEBUG_FLAG is True
     finally:
         monkeypatch.delenv("DEBUG_VERBOSE_LOGGING", raising=False)
         importlib.reload(base_config)  # restore normal (unset -> False) state for every other test

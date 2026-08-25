@@ -72,12 +72,13 @@ class Agent:
     # one agent genuinely needs longer.
     timeout_seconds: int = 60
 
-    def __init__(self, model: str):
+    def __init__(self, model: str, api_key: str | None = None):
         missing = [attr for attr in _REQUIRED_CLASS_ATTRS if not getattr(type(self), attr, "")]
         if missing:
             raise TypeError(f"{type(self).__name__} must set class-level {', '.join(missing)}")
 
         self.model = model
+        self.api_key = api_key
         self._wrapped_tools: dict[str, Callable] = {}
 
         tool_infos = exposed_tools_for(self)
@@ -93,6 +94,7 @@ class Agent:
             system_prompt=self.system_prompt,
             tools=tool_infos,
             model=model,
+            api_key=api_key,
         )
 
     def exposed_tools(self) -> tuple[ToolInfo, ...]:

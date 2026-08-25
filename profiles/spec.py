@@ -7,9 +7,36 @@ See docs/profile_spec.md for the human-readable version of this contract.
 Kept separate from `profiles.loader` so both the loader and
 `profiles.validate` depend on one shared definition rather than two that
 can drift.
+
+`AgentSpec` (below) is what a profile's `AGENTS` list actually holds: a
+declaration, not a built agent. A profile module's own top-level code runs
+the moment it's imported, with no way for `profiles.loader.load_profile`
+to pass anything into it — so an `AGENTS` entry can never construct
+itself against a specific model/API key without reaching into `os.environ`
+directly (exactly the exception this design avoids). Declaring `cls`/
+`tier` instead defers construction to `load_profile`, which already has
+the resolved `core`/`sub` `TierModel` values as explicit parameters — the
+only place any agent from a profile's `AGENTS` list actually gets built.
 """
 
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from agents.base import Agent
+
+
+@dataclass(frozen=True)
+class AgentSpec:
+    """One `AGENTS` entry: `cls`, a class taking `(model: str, api_key:
+    str | None = None)` — normally a concrete `agents.base.Agent`
+    subclass (docs/agent_authoring.md) — and `tier`, which of the two
+    resolved `TierModel`s (`config.base.TierModel`) `load_profile` builds
+    it with.
+    """
+
+    cls: "type[Agent]"
+    tier: Literal["core", "sub"]
 
 # Every name a profile module must define at module level. No defaults —
 # a profile missing one of these fails to load, naming the missing name.

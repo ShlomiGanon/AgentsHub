@@ -47,9 +47,10 @@ def _mock_crewai(monkeypatch):
 
 _PROFILE_TEMPLATE = """
 from agents.reference import ReferenceAgent
+from profiles.spec import AgentSpec
 from protocols.model import Protocol, CriticalityLevel
 
-AGENTS = [ReferenceAgent(model="m")]
+AGENTS = [AgentSpec(cls=ReferenceAgent, tier="sub")]
 PROTOCOLS = [
     Protocol(
         name="status_check", description="applies to a routine status check",
@@ -79,7 +80,7 @@ def writable_profile_module(tmp_path, monkeypatch):
     return module_name
 
 
-def test_a_protocol_added_through_the_api_is_loaded_and_selectable_after_a_real_restart(tmp_path, writable_profile_module):
+def test_a_protocol_added_through_the_api_is_loaded_and_selectable_after_a_real_restart(tmp_path, writable_profile_module, test_core_model, test_sub_model):
     ctx = build_context(tmp_path, module_path=writable_profile_module)
     client = build_app(ctx).test_client()
 
@@ -96,7 +97,7 @@ def test_a_protocol_added_through_the_api_is_loaded_and_selectable_after_a_real_
     assert "night_watch" not in [p.name for p in ctx.deps.protocol_set.all()]
 
     # "Restart": reload the profile module fresh from disk.
-    reloaded = load_profile(writable_profile_module)
+    reloaded = load_profile(writable_profile_module, core_model=test_core_model, sub_model=test_sub_model)
 
     reloaded_names = [p.name for p in reloaded.protocols]
     assert "night_watch" in reloaded_names

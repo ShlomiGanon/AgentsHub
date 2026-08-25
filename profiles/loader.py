@@ -33,9 +33,9 @@ from pathlib import Path
 from types import MappingProxyType, ModuleType
 
 from agents.history import HistoryAgent
-from config.base import BaseConfig, load_base_config
+from config.base import BaseConfig, TierModel, load_base_config
 from profiles import validate as profile_validate
-from profiles.spec import HUMAN_ACTIVATION_TYPE, REQUIRED_PROFILE_ATTRS
+from profiles.spec import HUMAN_ACTIVATION_TYPE, REQUIRED_PROFILE_ATTRS, AgentSpec
 
 
 class ProfileLoadError(Exception):
@@ -130,11 +130,45 @@ def _resolve_secrets(module: ModuleType, module_path: str) -> dict[str, str]:
 
 
 def _construct_core_agents(base_config: BaseConfig) -> dict:
-    """Construct core agents whose owning mission has landed."""
+    """Construct core agents whose owning mission has landed.
 
-    history_agent = HistoryAgent(base_config.history_agent_model)
+    Always the "core" model tier (`base_config.core_model`) — same as
+    every other core agent, see orchestrator.main_agent.construct_core_agents.
+    """
+
+    history_agent = HistoryAgent(model=base_config.core_model.model, api_key=base_config.core_model.api_key)
 
     return {history_agent.name: history_agent}
+
+
+def _construct_agents_from_specs(module: ModuleType, module_path: str, core_model: TierModel, sub_model: TierModel) -> tuple:
+    """Build the real agents a profile's `AGENTS` list only *declares*
+    (`profiles.spec.AgentSpec` — `cls` + `tier`) — the one place any of
+    them actually gets constructed. Each spec's `tier` picks which
+    already-resolved `TierModel` it's built with; neither this function
+    nor the profile module that declared the spec ever touches
+    `os.environ` or any environment-reading function directly.
+    """
+
+    tier_models = {"core": core_model, "sub": sub_model}
+    agents = []
+
+    for index, spec in enumerate(module.AGENTS):
+        if not isinstance(spec, AgentSpec):
+            raise ProfileLoadError(
+                f"profile '{module_path}' AGENTS[{index}] is {spec!r}, not a profiles.spec.AgentSpec "
+                "— AGENTS must declare agents (cls, tier), never construct them directly"
+            )
+
+        if spec.tier not in tier_models:
+            raise ProfileLoadError(
+                f"profile '{module_path}' AGENTS[{index}] names tier {spec.tier!r} — must be 'core' or 'sub'"
+            )
+
+        tier_model = tier_models[spec.tier]
+        agents.append(spec.cls(model=tier_model.model, api_key=tier_model.api_key))
+
+    return tuple(agents)
 
 
 def validate_single_protocol(protocol, agents_by_name: dict) -> list[str]:
@@ -150,18 +184,37 @@ def validate_single_protocol(protocol, agents_by_name: dict) -> list[str]:
     return profile_validate._validate_protocol(protocol, agents_by_name)
 
 
-def load_profile(module_path: str) -> LoadedProfile:
+def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) -> LoadedProfile:
+    """`core_model`/`sub_model` are the two already-resolved `TierModel`s
+    — required, no default, no environment access for model-tier config
+    anywhere in this function (the pre-existing, unrelated
+    `_resolve_secrets` step below still reads `os.environ` for
+    `BOT_TOKEN_ENV`/`MODEL_CREDENTIAL_ENVS`, exactly as before — a
+    different, profile-declared-name mechanism, not model tiers).
+    `core_model` builds the History Agent (below) and, via
+    `assemble_core_agents` elsewhere, the Main and Insights Agents too;
+    both feed `_construct_agents_from_specs`, which builds whatever a
+    profile's own `AGENTS` list declares. Callers — the three real entry
+    points (`api.app.main`, `bot.app.main`, `cli.user_admin.main`) and,
+    for tests, `conftest.py`'s `test_core_model`/`test_sub_model`
+    fixtures — are the only places that decide where these values come
+    from; this function never reaches into `os.environ` for model-tier
+    config itself, and neither does a profile module's own top-level code
+    any more (see `profiles.spec.AgentSpec`).
+    """
+
     module = _import_profile_module(module_path)
     _check_required_attrs(module, module_path)
 
     resolved_secrets = _resolve_secrets(module, module_path)
-    core_agents = _construct_core_agents(load_base_config())
+    core_agents = _construct_core_agents(load_base_config(core_model=core_model))
+    agents = _construct_agents_from_specs(module, module_path, core_model=core_model, sub_model=sub_model)
 
     event_types = tuple(module.EVENT_TYPES) + (HUMAN_ACTIVATION_TYPE,)
 
     loaded = LoadedProfile(
         module_path=module_path,
-        agents=tuple(module.AGENTS),
+        agents=agents,
         protocols=tuple(module.PROTOCOLS),
         event_types=event_types,
         areas=tuple(module.AREAS),

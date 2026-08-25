@@ -32,7 +32,7 @@ def profile_module(tmp_path, monkeypatch):
     return module_name, db_path
 
 
-def test_add_first_commander_against_an_empty_database(profile_module, capsys):
+def test_add_first_commander_against_an_empty_database(profile_module, capsys, real_tier_env):
     module_name, db_path = profile_module
 
     exit_code = main(["--profile", module_name, "add", "--telegram-id", "1001", "--level", "commander"])
@@ -47,7 +47,7 @@ def test_add_first_commander_against_an_empty_database(profile_module, capsys):
         store.close()
 
 
-def test_update_changes_an_existing_users_level(profile_module):
+def test_update_changes_an_existing_users_level(profile_module, real_tier_env):
     module_name, db_path = profile_module
 
     main(["--profile", module_name, "add", "--telegram-id", "2002", "--level", "viewer"])
@@ -60,7 +60,7 @@ def test_update_changes_an_existing_users_level(profile_module):
         store.close()
 
 
-def test_remove_deletes_a_user(profile_module):
+def test_remove_deletes_a_user(profile_module, real_tier_env):
     module_name, db_path = profile_module
 
     main(["--profile", module_name, "add", "--telegram-id", "3003", "--level", "viewer"])
@@ -74,7 +74,7 @@ def test_remove_deletes_a_user(profile_module):
         store.close()
 
 
-def test_remove_unknown_user_fails_with_nonzero_exit(profile_module, capsys):
+def test_remove_unknown_user_fails_with_nonzero_exit(profile_module, capsys, real_tier_env):
     module_name, _ = profile_module
 
     exit_code = main(["--profile", module_name, "remove", "--telegram-id", "does-not-exist"])
@@ -83,7 +83,7 @@ def test_remove_unknown_user_fails_with_nonzero_exit(profile_module, capsys):
     assert "error" in capsys.readouterr().err
 
 
-def test_list_reports_every_registered_user(profile_module, capsys):
+def test_list_reports_every_registered_user(profile_module, capsys, real_tier_env):
     module_name, _ = profile_module
 
     main(["--profile", module_name, "add", "--telegram-id", "4004", "--level", "viewer"])
@@ -97,15 +97,25 @@ def test_list_reports_every_registered_user(profile_module, capsys):
     assert "5005" in out and "commander" in out
 
 
-def test_level_outside_the_enum_is_rejected(profile_module):
+def test_level_outside_the_enum_is_rejected(profile_module, real_tier_env):
     module_name, _ = profile_module
 
     with pytest.raises(SystemExit):
         main(["--profile", module_name, "add", "--telegram-id", "6006", "--level", "supreme_leader"])
 
 
-def test_unknown_profile_fails_before_touching_any_database(capsys):
+def test_unknown_profile_fails_before_touching_any_database(capsys, real_tier_env):
     exit_code = main(["--profile", "no_such_profile_module", "add", "--telegram-id", "1", "--level", "viewer"])
 
     assert exit_code == 1
     assert "error" in capsys.readouterr().err
+
+
+def test_main_fails_loudly_naming_the_missing_tier_env_var(monkeypatch, capsys):
+    for name in ("CORE_MODEL_PROVIDER", "CORE_MODEL_NAME", "CORE_MODEL_API_KEY_ENV"):
+        monkeypatch.delenv(name, raising=False)
+
+    exit_code = main(["--profile", "fixtures.profiles.minimal_profile", "list"])
+
+    assert exit_code == 1
+    assert "CORE_MODEL_PROVIDER" in capsys.readouterr().err

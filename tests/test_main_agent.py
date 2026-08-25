@@ -3,7 +3,7 @@ import types
 import pytest
 
 from agents import adapter
-from config.base import BaseConfig
+from config.base import BaseConfig, TierModel
 from orchestrator.errors import OrchestrationParseError
 from orchestrator.main_agent import (
     MainAgent,
@@ -150,10 +150,11 @@ def test_assess_risk_end_to_end_through_the_mocked_adapter(monkeypatch):
 
 
 def test_construct_core_agents_returns_the_main_agent_with_the_configured_model():
-    base_config = BaseConfig(main_agent_model="the-main-model", history_agent_model="h", insights_agent_model="i")
+    base_config = BaseConfig(core_model=TierModel(model="the-main-model", api_key="the-core-key"))
 
     core_agents = construct_core_agents(base_config)
 
     assert set(core_agents) == {"main_agent"}
     assert core_agents["main_agent"].model == "the-main-model"
+    assert core_agents["main_agent"].descriptor.api_key == "the-core-key"
     assert isinstance(core_agents["main_agent"], MainAgent)

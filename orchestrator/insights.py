@@ -91,4 +91,9 @@ def build_insight(insights_agent: InsightsAgent, protocol: Protocol, step_outcom
 
 
 def construct_core_agents(base_config: BaseConfig) -> dict[str, Agent]:
-    return {"insights_agent": InsightsAgent(model=base_config.insights_agent_model)}
+    """Always the "core" model tier — see orchestrator.main_agent's own
+    construct_core_agents docstring; the same tier, the same reasoning,
+    for this core agent too.
+    """
+
+    return {"insights_agent": InsightsAgent(model=base_config.core_model.model, api_key=base_config.core_model.api_key)}

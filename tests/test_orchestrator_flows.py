@@ -8,7 +8,7 @@ from agents.history import HistoryAgent
 from agents.reference import ReferenceAgent
 from agents.registry import build_agent_registry
 from auth.permissions import PermissionLevel
-from config.base import BaseConfig
+from config.base import BaseConfig, TierModel
 from history.query import HistoryQueryService
 from orchestrator.flows import (
     FlowDeps,
@@ -65,7 +65,7 @@ def _mock_crewai(monkeypatch):
 def test_assemble_core_agents_merges_profile_main_and_insights_agents():
     history_agent = SimpleNamespace(name="history_agent")
     loaded_profile = SimpleNamespace(core_agents={"history_agent": history_agent})
-    base_config = BaseConfig(main_agent_model="main-model", history_agent_model="h", insights_agent_model="insights-model")
+    base_config = BaseConfig(core_model=TierModel(model="main-model", api_key="core-key"))
 
     core_agents = assemble_core_agents(loaded_profile, base_config)
 
@@ -73,13 +73,15 @@ def test_assemble_core_agents_merges_profile_main_and_insights_agents():
     assert core_agents["history_agent"] is history_agent
     assert isinstance(core_agents["main_agent"], MainAgent)
     assert core_agents["main_agent"].model == "main-model"
+    assert core_agents["main_agent"].descriptor.api_key == "core-key"
     assert isinstance(core_agents["insights_agent"], InsightsAgent)
-    assert core_agents["insights_agent"].model == "insights-model"
+    assert core_agents["insights_agent"].model == "main-model"
+    assert core_agents["insights_agent"].descriptor.api_key == "core-key"
 
 
 def test_assemble_core_agents_does_not_mutate_the_profiles_dict():
     loaded_profile = SimpleNamespace(core_agents={"history_agent": SimpleNamespace(name="history_agent")})
-    base_config = BaseConfig(main_agent_model="m", history_agent_model="h", insights_agent_model="i")
+    base_config = BaseConfig(core_model=TierModel(model="m", api_key="k"))
 
     assemble_core_agents(loaded_profile, base_config)
 

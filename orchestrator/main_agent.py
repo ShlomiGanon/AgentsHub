@@ -97,6 +97,11 @@ def construct_core_agents(base_config: BaseConfig) -> dict[str, Agent]:
     Called by whichever future startup code assembles the running system
     (§7/§9, not yet built) — never by profiles.loader, which may not
     import anything from orchestrator/.
+
+    Always the "core" model tier (`base_config.core_model`, built via
+    `config.base.build_tier_model`) — no hardcoded model, no per-agent
+    distinction among the three core agents (see docs/profile_spec.md's
+    "Model tiers" section).
     """
 
-    return {"main_agent": MainAgent(model=base_config.main_agent_model)}
+    return {"main_agent": MainAgent(model=base_config.core_model.model, api_key=base_config.core_model.api_key)}

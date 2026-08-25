@@ -21,9 +21,11 @@ import argparse
 import asyncio
 import importlib
 import logging
+import os
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from config.base import ModelTierError, TierModel, build_tier_model
 from profiles.loader import LoadedProfile, ProfileLoadError, ProfileValidationError, load_profile
 from tools.logging_config import configure_logging
 
@@ -50,22 +52,58 @@ NOTIFICATION_POLL_INTERVAL_SECONDS = 5.0
 REGISTERED_COMMANDS = ("profile", "settings")
 
 
-def _resolve_bot_token(module_path: str, loaded_profile: LoadedProfile) -> str:
+def _resolve_bot_token(module_path: str, loaded_profile: LoadedProfile) -> str | None:
     """The token named by the profile's `BOT_TOKEN_ENV`, already read into
     `loaded_profile.resolved_secrets` at load time (§1.5) — this re-imports
     the (already-cached, per `importlib`) profile module only to read the
     *name* of the variable holding it, never the value itself again.
+
+    `profiles.loader` already fails loudly, before this is ever reached, if
+    the named variable is entirely unset (`os.environ.get(...) is None`).
+    It does not, however, reject an empty or whitespace-only value — that
+    gap is closed here, before any Telegram connection is attempted. Unlike
+    the entirely-unset case, this is deliberately *not* a startup failure:
+    a missing bot token must not block this process (or the separate `api`
+    process — a different OS process entirely, per docs/allowed_calls.md's
+    "bot calls only api... a network boundary, never a Python import") from
+    coming up. Returns `None` (after logging a WARNING naming the specific
+    variable) instead of raising, so the caller can skip the Telegram
+    connection step without treating this as an error.
     """
 
     profile_module = importlib.import_module(module_path)
-    return loaded_profile.resolved_secrets[profile_module.BOT_TOKEN_ENV]
+    token_env_name = profile_module.BOT_TOKEN_ENV
+    token = loaded_profile.resolved_secrets[token_env_name]
+
+    if not token.strip():
+        logger.warning(
+            f"Bot token not found: environment variable {token_env_name}, as configured in "
+            "BOT_TOKEN_ENV, is not set — Telegram connection skipped",
+            extra={"event": "bot_token_missing", "env_var": token_env_name},
+        )
+        return None
+
+    return token
 
 
-def build_deps(module_path: str) -> BotDeps:
-    loaded_profile = load_profile(module_path)
+def build_deps(module_path: str, core_model: TierModel, sub_model: TierModel) -> BotDeps | None:
+    """Returns `None` (never raises for this specific reason) when the
+    configured bot token is missing/blank — see `_resolve_bot_token`. Every
+    other failure this function can hit still raises normally.
+
+    `core_model`/`sub_model` are required, already-resolved `TierModel`s,
+    threaded straight through to `load_profile` — no environment access
+    anywhere in this function; `main`, below, is the one place in this
+    module that decides where these values come from.
+    """
+
+    loaded_profile = load_profile(module_path, core_model=core_model, sub_model=sub_model)
     configure_logging(loaded_profile.module_path)
 
     bot_token = _resolve_bot_token(module_path, loaded_profile)
+    if bot_token is None:
+        return None
+
     telegram_client = PTBTelegramClient(bot_token)
 
     # Real HTTP, at last — §8.1's "use the profile's port when talking to
@@ -301,15 +339,55 @@ def run_bot(deps: BotDeps) -> None:
     deps.telegram_client.run_polling(lambda application: register_handlers(application, deps))
 
 
+def _require_env(name: str) -> str:
+    value = os.environ.get(name)
+    if value is None:
+        raise ModelTierError(f"required environment variable '{name}' is not set")
+    return value
+
+
+def _tier_model_from_environ(prefix: str) -> TierModel:
+    """Read one tier's provider/model name/API key straight from the real
+    process environment — `main`'s own job, the one place in this module
+    `os.environ` is read for model-tier config (see config/base.py's
+    module docstring). `prefix` is `"CORE"` or `"SUB"`.
+    """
+
+    provider = _require_env(f"{prefix}_MODEL_PROVIDER")
+    model_name = _require_env(f"{prefix}_MODEL_NAME")
+    api_key_env_name = _require_env(f"{prefix}_MODEL_API_KEY_ENV")
+    api_key = _require_env(api_key_env_name)
+    return build_tier_model(provider, model_name, api_key)
+
+
 def main(argv: list[str] | None = None) -> None:
+    """One of the three real entry points (with `api.app.main`,
+    `cli.user_admin.main`) that reads `os.environ` for model-tier config —
+    everything below it takes already-resolved `TierModel` values instead.
+    """
+
     parser = argparse.ArgumentParser(description="Run the Telegram bot frontend for one deployment (work_plan.md §8).")
     parser.add_argument("profile_module", help="dotted module path of the profile to run, e.g. profiles.demo")
     args = parser.parse_args(argv)
 
     try:
-        deps = build_deps(args.profile_module)
+        core_model = _tier_model_from_environ("CORE")
+        sub_model = _tier_model_from_environ("SUB")
+    except ModelTierError as exc:
+        raise SystemExit(f"failed to start bot: {exc}") from exc
+
+    try:
+        deps = build_deps(args.profile_module, core_model=core_model, sub_model=sub_model)
     except (ProfileLoadError, ProfileValidationError) as exc:
         raise SystemExit(f"failed to start bot: {exc}") from exc
+
+    if deps is None:
+        # The bot token is missing/blank (already logged, with the specific
+        # env var name, inside _resolve_bot_token). Deliberately not a
+        # startup failure — no Telegram connection to make without a token,
+        # so there is nothing further for this process to do, but that is
+        # not an error: exit cleanly (status 0), not via SystemExit(message).
+        return
 
     lock = SingleInstanceLock(Path(f"{deps.loaded_profile.db_path}.bot.lock"))
 

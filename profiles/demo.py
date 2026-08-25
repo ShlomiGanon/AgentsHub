@@ -22,10 +22,20 @@ import tempfile
 from pathlib import Path
 
 from agents.reference import ReferenceAgent
+from profiles.spec import AgentSpec
 from protocols.model import CriticalityLevel, Protocol
 
+# Each agent picks a tier, not a model — see docs/profile_spec.md's "Model
+# tiers" section. AgentSpec only *declares* which class and which tier;
+# profiles.loader.load_profile is the one place that actually resolves a
+# tier and constructs the agent, at load time — never here, at import
+# time, and never against os.environ directly (a profile module has no
+# way to receive parameters from whoever imports it, so it must never be
+# the one making that decision). This profile's one specialist agent uses
+# the cheaper "sub" tier; the three core agents (Main, History, Insights)
+# always use "core", entirely separately from this list.
 AGENTS = [
-    ReferenceAgent(model="gpt-4o-mini"),  # provider-agnostic placeholder — see config/base.py
+    AgentSpec(cls=ReferenceAgent, tier="sub"),
 ]
 
 PROTOCOLS = [
@@ -86,5 +96,14 @@ RETRY_COUNT = 3
 RISK_THRESHOLD = 0.6
 LOOKBACK_WINDOW_DAYS = 30
 
-BOT_TOKEN_ENV = "AGENTSHUB_DEMO_BOT_TOKEN"
-MODEL_CREDENTIAL_ENVS = ["AGENTSHUB_DEMO_MODEL_KEY"]
+BOT_TOKEN_ENV = "BOT_TOKEN"
+# Still a required profile attribute (docs/profile_spec.md), and the
+# mechanism itself is unchanged — but empty here, deliberately: every
+# agent this profile constructs (the one ReferenceAgent above, plus the
+# three core agents every deployment gets) now resolves its API key
+# through the "core"/"sub" tier system's own *_MODEL_API_KEY_ENV
+# indirection instead, so there is no separate model credential left for
+# this list to name. Kept for a profile that adds an agent constructed
+# the old way (a bare model string, no tier, no explicit key) — that
+# agent would need its provider's credential var listed here instead.
+MODEL_CREDENTIAL_ENVS = []

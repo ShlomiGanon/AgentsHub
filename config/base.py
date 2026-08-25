@@ -1,8 +1,8 @@
 """Base configuration (work_plan.md §1.3).
 
-Holds only values true of every deployment. Today that is the model each
-of the three core agents runs on. Deployment-specific values — ports,
-database paths, agent rosters, protocols — belong to a profile, never here.
+Holds only values true of every deployment. Today that is the model the
+three core agents run on. Deployment-specific values — ports, database
+paths, agent rosters, protocols — belong to a profile, never here.
 
 Loaded before any profile, since the three core agents are constructed
 regardless of which profile was named.
@@ -17,21 +17,32 @@ parse failure or an unexpected response shape is the likeliest problem.
 It is read from the `DEBUG_VERBOSE_LOGGING` environment variable — not a
 profile-declared value, since it's a diagnostic switch for the process,
 not a deployment identity value — parsed once, here, at module import
-time (not on every log call), the same "read once at startup" pattern
-`profiles.loader` already uses for the environment variables a profile
-names (`os.environ.get`, no `.env`-file loader anywhere in this codebase
-to match — this follows that exact mechanism rather than introducing a
-second one). Absent or unset means off; only `"1"`/`"true"` (any case)
-turn it on — a bare non-empty string like `"false"` or `"0"` must not be
-mistaken for "set". This is unrelated to §1.6's profile validation, which
-only inspects a `LoadedProfile`'s own declared environment variables
-(`BOT_TOKEN_ENV`, `MODEL_CREDENTIAL_ENVS`) — `DEBUG_VERBOSE_LOGGING` is
-never profile-declared and is never a *required* variable, so a missing
-value is never a validation failure, only the normal, expected default.
+time (not on every log call). Absent or unset means off; only `"1"`/
+`"true"` (any case) turn it on — a bare non-empty string like `"false"`
+or `"0"` must not be mistaken for "set". This is a separate, unrelated
+concern from everything below — never touched by the model-tier
+machinery, and the one remaining `os.environ` read in this module.
 
-Its output can include the full original event/message text verbatim —
-treat it as sensitive, and never leave it on in normal operation. See
-`docs/operator_guide.md`'s "Reading the run logs" section.
+`build_tier_model`/`load_base_config` (below) are the model-tier concern:
+every agent in the system uses either the "core" tier (the three core
+agents — Main, History, Insights — every deployment constructs
+unconditionally) or "sub" (a profile's own specialist agents; see
+`profiles.spec.AgentSpec`). Neither function has any knowledge of
+environment variables, `os.environ`, or any other config source — each
+takes the clean, already-resolved values it needs as plain parameters.
+Deciding *where* those values come from (reading `CORE_MODEL_PROVIDER`/
+`CORE_MODEL_NAME`/`CORE_MODEL_API_KEY_ENV` — and the two-step
+`*_MODEL_API_KEY_ENV` indirection, the same convention `BOT_TOKEN_ENV`
+uses — from the real process environment) is entirely the job of the
+three real entry points (`api.app.main`, `bot.app.main`,
+`cli.user_admin.main`) and, for tests, `conftest.py`'s `test_core_model`/
+`test_sub_model` fixtures — the only four places in the production
+system and automated test suite that reference `os.environ` for
+model-tier config. See `docs/profile_spec.md`'s "Model tiers" section for
+the full picture, including the handful of standalone, hand-run
+diagnostic scripts under `tests/` (never collected by pytest, never
+imported by anything) that read model-tier-shaped variables of their own
+accord, outside this count.
 """
 
 import os
@@ -50,33 +61,54 @@ def _parse_debug_flag(raw: str | None) -> bool:
 DEBUG_FLAG = _parse_debug_flag(os.environ.get("DEBUG_VERBOSE_LOGGING"))
 
 
+class ModelTierError(Exception):
+    """A model tier's provider/model/API key could not be resolved from
+    the environment. Raised by whichever of the four roots
+    (`api.app.main`, `bot.app.main`, `cli.user_admin.main`,
+    `conftest.py`'s test fixtures) is doing that resolution — never by
+    `build_tier_model` or `load_base_config` themselves, which take
+    already-resolved values and can't fail this way.
+    """
+
+
+@dataclass(frozen=True)
+class TierModel:
+    """One resolved model tier: `.model`, the `provider/model` string
+    (`agents/adapter.py` passes this straight through as
+    `crewai.LLM(model=...)` / CrewAI's `llm=` argument — the LiteLLM
+    `provider/model` prefix convention); `.api_key`, the tier's actual API
+    key value. Built by `build_tier_model` from clean, already-resolved
+    values — carries no memory of where those values came from.
+    """
+
+    model: str
+    api_key: str
+
+
+def build_tier_model(provider: str, model_name: str, api_key: str) -> TierModel:
+    """Join a tier's already-resolved provider/model name/API key into a
+    `TierModel`. Pure — no environment access, no knowledge that these
+    values might have come from environment variables at all. Every
+    non-empty combination of clean strings and validating that they're
+    fully resolved is the caller's job (one of the four roots — see
+    module docstring); this function never fails, it only constructs.
+    """
+
+    return TierModel(model=f"{provider}/{model_name}", api_key=api_key)
+
+
 @dataclass(frozen=True)
 class BaseConfig:
-    main_agent_model: str
-    history_agent_model: str
-    insights_agent_model: str
+    core_model: TierModel
     DEBUG_FLAG: bool = False
 
 
-# Placeholder model identifiers. Finalized when model routing (§3.6)
-# selects a real model client library; named separately per agent because
-# the Main Agent justifies a strong model while the History Agent
-# summarizes large volumes of text and can use a cheaper one.
-_MAIN_AGENT_MODEL = "gpt-4o"
-_HISTORY_AGENT_MODEL = "gpt-4o-mini"
-_INSIGHTS_AGENT_MODEL = "gpt-4o-mini"
-
-
-def load_base_config() -> BaseConfig:
-    """Return the base configuration.
-
-    A function rather than a bare module-level constant so later work
-    (e.g. reading overrides from the environment) has one place to change.
+def load_base_config(core_model: TierModel) -> BaseConfig:
+    """Return the base configuration. `core_model` is required, already
+    resolved by the caller (typically `build_tier_model` fed by one of
+    the four roots) — the three core agents (Main, History, Insights) all
+    share it; there is no per-agent hardcoded placeholder model for any
+    of them, and this function itself never reaches into `os.environ`.
     """
 
-    return BaseConfig(
-        main_agent_model=_MAIN_AGENT_MODEL,
-        history_agent_model=_HISTORY_AGENT_MODEL,
-        insights_agent_model=_INSIGHTS_AGENT_MODEL,
-        DEBUG_FLAG=DEBUG_FLAG,
-    )
+    return BaseConfig(core_model=core_model, DEBUG_FLAG=DEBUG_FLAG)

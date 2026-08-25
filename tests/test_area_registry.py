@@ -14,13 +14,13 @@ def test_is_not_valid_for_undeclared_area():
     assert not registry.is_valid("")
 
 
-def test_build_from_loaded_profile_carries_its_areas(monkeypatch):
+def test_build_from_loaded_profile_carries_its_areas(monkeypatch, test_core_model, test_sub_model):
     monkeypatch.setenv("AGENTSHUB_FIXTURE_BOT_TOKEN", "token")
     monkeypatch.setenv("AGENTSHUB_FIXTURE_MODEL_KEY", "key")
 
     from profiles.loader import load_profile
 
-    loaded = load_profile("fixtures.profiles.minimal_profile")
+    loaded = load_profile("fixtures.profiles.minimal_profile", core_model=test_core_model, sub_model=test_sub_model)
     registry = build_area_registry(loaded)
 
     assert registry.areas == loaded.areas

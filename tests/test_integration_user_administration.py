@@ -46,7 +46,7 @@ def _mock_crewai(monkeypatch):
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
 
-def test_a_commander_added_via_the_admin_command_can_approve_a_real_held_run(tmp_path, monkeypatch):
+def test_a_commander_added_via_the_admin_command_can_approve_a_real_held_run(tmp_path, monkeypatch, real_tier_env):
     # cli.user_admin.main() reloads the profile independently and opens its
     # own persistence connection against *that module's own* DB_PATH — for
     # this to be a genuine end-to-end proof (not two different databases

@@ -21,6 +21,7 @@ import types
 import pytest
 
 from agents import adapter
+from api import app as api_app
 from api.app import build_app, build_context
 
 BOT_TOKEN_ENV = "AGENTSHUB_FIXTURE_BOT_TOKEN"
@@ -55,10 +56,10 @@ def _fixture_profile_env(monkeypatch):
     monkeypatch.setenv(MODEL_CRED_ENV, "key")
 
 
-def test_build_context_succeeds_against_a_real_profile():
+def test_build_context_succeeds_against_a_real_profile(test_core_model, test_sub_model):
     # This is the exact call that crashed during the Mission 8 coverage
     # audit, before the criticality fix — confirming it no longer does.
-    ctx = build_context("fixtures.profiles.minimal_profile")
+    ctx = build_context("fixtures.profiles.minimal_profile", core_model=test_core_model, sub_model=test_sub_model)
     try:
         assert ctx.loaded_profile.module_path == "fixtures.profiles.minimal_profile"
         assert ctx.main_agent is not None
@@ -69,8 +70,8 @@ def test_build_context_succeeds_against_a_real_profile():
         ctx.deps.persistence.close()
 
 
-def test_get_system_succeeds_against_the_real_wiring():
-    ctx = build_context("fixtures.profiles.minimal_profile")
+def test_get_system_succeeds_against_the_real_wiring(test_core_model, test_sub_model):
+    ctx = build_context("fixtures.profiles.minimal_profile", core_model=test_core_model, sub_model=test_sub_model)
     try:
         ctx.deps.persistence.write_user("u1", "viewer")
         client = build_app(ctx).test_client()
@@ -88,8 +89,8 @@ def test_get_system_succeeds_against_the_real_wiring():
         ctx.deps.persistence.close()
 
 
-def test_get_protocol_succeeds_against_the_real_wiring():
-    ctx = build_context("fixtures.profiles.minimal_profile")
+def test_get_protocol_succeeds_against_the_real_wiring(test_core_model, test_sub_model):
+    ctx = build_context("fixtures.profiles.minimal_profile", core_model=test_core_model, sub_model=test_sub_model)
     try:
         ctx.deps.persistence.write_user("u1", "viewer")
         client = build_app(ctx).test_client()
@@ -106,8 +107,8 @@ def test_get_protocol_succeeds_against_the_real_wiring():
         ctx.deps.persistence.close()
 
 
-def test_get_system_requires_authentication_against_the_real_wiring():
-    ctx = build_context("fixtures.profiles.minimal_profile")
+def test_get_system_requires_authentication_against_the_real_wiring(test_core_model, test_sub_model):
+    ctx = build_context("fixtures.profiles.minimal_profile", core_model=test_core_model, sub_model=test_sub_model)
     try:
         client = build_app(ctx).test_client()
 
@@ -117,3 +118,14 @@ def test_get_system_requires_authentication_against_the_real_wiring():
     finally:
         ctx.queue.stop()
         ctx.deps.persistence.close()
+
+
+# -- api.app.main() — the real root that reads os.environ for model-tier config --
+
+
+def test_main_fails_loudly_naming_the_missing_tier_env_var(monkeypatch):
+    for name in ("CORE_MODEL_PROVIDER", "CORE_MODEL_NAME", "CORE_MODEL_API_KEY_ENV"):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(SystemExit, match="CORE_MODEL_PROVIDER"):
+        api_app.main(["fixtures.profiles.minimal_profile"])
