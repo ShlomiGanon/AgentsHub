@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Callable
 
 from agents.errors import AgentInvocationError
 from protocols.model import Step
-from tools.tracing import get_trace_id
+from tools.tracing import get_trace_id, stage_context
 
 if TYPE_CHECKING:
     # agents.base is not an entry point (docs/allowed_calls.md) — Agent is
@@ -80,7 +80,8 @@ def execute_step_with_retry(
         attempts += 1
 
         try:
-            result = agent.process(current_task_text, list(step.allowed_tools))
+            with stage_context("step_execution"):
+                result = agent.process(current_task_text, list(step.allowed_tools))
         except AgentInvocationError as exc:
             last_failure_reason = str(exc)
             logger.info(

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Literal
 
 from orchestrator.errors import OrchestrationParseError
 from protocols.model import Protocol
+from tools.tracing import stage_context
 
 if TYPE_CHECKING:
     from orchestrator.main_agent import MainAgent
@@ -62,7 +63,8 @@ def _parse_intent_response(raw_text: str) -> IntentResult:
 
 def classify_intent(main_agent: "MainAgent", protocols: tuple[Protocol, ...], message_text: str) -> IntentResult:
     prompt = _build_intent_prompt(message_text, protocols)
-    result = main_agent.process(prompt, [])
+    with stage_context("intent_classification"):
+        result = main_agent.process(prompt, [])
 
     if result.status != "success":
         raise OrchestrationParseError(f"message intent classification did not produce a usable response: {result.text}")

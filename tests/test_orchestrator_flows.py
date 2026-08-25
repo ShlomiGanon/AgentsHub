@@ -205,11 +205,30 @@ def test_process_report_holds_for_clarification_when_classification_is_unresolve
     assert held["event_id"] == result.event_id
 
 
-def test_process_report_low_risk_unflagged_protocol_runs_to_success(deps):
+def test_process_report_holds_for_clarification_logs_the_hold_kind(deps, caplog):
+    agent = _ScriptedAgent({"Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}'})
+    insights_agent = _ScriptedAgent({})
+
+    with caplog.at_level("INFO"):
+        result = process_report(deps, agent, insights_agent, "something happened, unclear what", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    holds = [r for r in caplog.records if getattr(r, "event", None) == "hold_created"]
+    assert len(holds) == 1
+    assert holds[0].hold_kind == "clarification"
+    assert holds[0].event_id == result.event_id
+
+    extraction = [r for r in caplog.records if getattr(r, "event", None) == "extraction_result"]
+    assert len(extraction) == 1
+    assert extraction[0].classification is None
+    assert extraction[0].missing_fields  # unresolved classification is named as missing
+
+
+def test_process_report_low_risk_unflagged_protocol_runs_to_success(deps, caplog):
     agent = _happy_path_agent(risk_score="0.1", selected="status_check", verdict="success")
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "no notable precedent")})()
 
-    result = process_report(deps, agent, insights_agent, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    with caplog.at_level("INFO"):
+        result = process_report(deps, agent, insights_agent, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
 
     assert result.outcome == "succeeded"
     event = deps.persistence.fetch_event(result.event_id)
@@ -217,13 +236,32 @@ def test_process_report_low_risk_unflagged_protocol_runs_to_success(deps):
     assert event["selected_protocol"] == "status_check"
     assert event["steps"][0]["agent_name"] == "reference_agent"
 
+    risk_records = [r for r in caplog.records if getattr(r, "event", None) == "risk_assessed"]
+    assert risk_records and risk_records[0].risk_level == "low"
 
-def test_process_report_flagged_protocol_holds_for_approval_then_resumes_approved(deps):
+    selection_records = [r for r in caplog.records if getattr(r, "event", None) == "protocol_selection"]
+    assert selection_records and selection_records[0].protocol_name == "status_check"
+
+    verdict_records = [r for r in caplog.records if getattr(r, "event", None) == "final_verdict"]
+    assert verdict_records and verdict_records[0].verdict == "success"
+
+    outcome_records = [r for r in caplog.records if getattr(r, "event", None) == "event_outcome" and r.event_id == result.event_id]
+    assert outcome_records[-1].outcome == "succeeded"
+
+
+def test_process_report_flagged_protocol_holds_for_approval_then_resumes_approved(deps, caplog):
     agent = _happy_path_agent(risk_score="0.9", selected="dispatch_response", verdict="success", agent_task="dispatch to gate 3")
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
 
-    held = process_report(deps, agent, insights_agent, "fire at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    with caplog.at_level("INFO"):
+        held = process_report(deps, agent, insights_agent, "fire at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
     assert held.outcome == "held_for_approval"
+
+    holds = [r for r in caplog.records if getattr(r, "event", None) == "hold_created"]
+    assert len(holds) == 1
+    assert holds[0].hold_kind == "approval"
+    assert holds[0].reason == "flagged_protocol"
+    assert holds[0].event_id == held.event_id
 
     [hold] = deps.persistence.list_held_events("approval")
     resumed = resume_after_approval(deps, agent, insights_agent, hold["hold_id"], "commander-1", PermissionLevel.COMMANDER, "approved")

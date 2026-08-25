@@ -18,7 +18,7 @@ a new entry describing what changed instead.
 | 6 | Main Agent Orchestration (6.1–6.15) | Done |
 | 7 | API Layer (7.1–7.12) | Done |
 | 8 | Telegram Frontend (8.1–8.14, +8.15) | Done, end to end — `bot/` talks to a real running `api/*` process over real HTTP (`bot.http_api_client.HttpApiClient`), not a stub |
-| 9 | Integration and Hardening | Not started |
+| 9 | Integration and Hardening (9.1–9.22) | Done |
 
 Entry format:
 
@@ -1835,3 +1835,726 @@ methods.**
   reverted.
 
 Full suite: 693 passed, 0 failed. `tests/test_architecture.py` passes.
+
+## Mission 9 — Integration and Hardening
+
+### 9.1 — Build the sensor simulator
+- **Status:** done
+- **Deviations:** `tools/simulator.py`, a standalone `urllib`-only CLI
+  (`python -m tools.simulator --port ... --identity ...`) — no new
+  runtime dependency, matching `bot/http_api_client.py`'s own choice.
+  Not declared in `docs/allowed_calls.md`: nothing inside the system
+  imports it, and it imports nothing from the system beyond the standard
+  library — it's a plain HTTP client of `POST /Event`, authenticating as
+  any other caller would with a pre-registered sensor identity. Real
+  variety in generated text (5 templates each for fire/medical/
+  unclassifiable, randomized location/severity) rather than one fixed
+  string, so extraction is genuinely exercised — not natural-language
+  generation, but enough to satisfy this subtask's own "reads like a real
+  sensor report rather than a template" bullet short of a real model
+  writing the reports. `--repeat-rate` reuses a small pool of
+  recently-emitted classification/area pairs for precedent lookup
+  matches; `--unclassifiable-rate` drives the clarification path;
+  `--burst-size` sends N events with no inter-event delay before
+  switching to `--rate`, for §9.19's later use. 11 tests in
+  `tests/test_tools_simulator.py`, including three against a real running
+  API (`tests/api_fakes.py::RunningApiServer`, extended with a public
+  `.port` attribute for this) confirming a real run actually creates the
+  right events, a burst sends with no delay, and an unregistered identity
+  fails cleanly. Added a new CI step, "Mission 9 — Integration and
+  Hardening".
+
+### 9.2 — Run the end-to-end flow test
+- **Status:** done
+- **Deviations:** Found and fixed a real, previously-unwired gap before
+  this subtask's own "confirm the trace ID connects every log record"
+  bullet could honestly pass: `tools/tracing.py`'s `trace_context()`/
+  `new_trace_id()` were fully built (§1.8) but never called anywhere in
+  the real production code — `api/events.py`, `api/messages.py`,
+  `api/holds.py`, `orchestrator/*` all only ever *read* `get_trace_id()`.
+  Every real log record's `trace_id` was genuinely `""` before this. Fixed
+  by generating one trace ID at each real ingestion/resumption point
+  (`api/events.py::post_event`, `api/messages.py::post_msg`,
+  `api/holds.py::post_clarify`/`post_approve`) and entering
+  `trace_context(trace_id)` around both the synchronous prefix and the
+  queued continuation's own closure — threaded through explicitly as
+  data, not relying on contextvar propagation across the queue's
+  background worker thread, which cannot inherit it automatically and
+  which drains many different items over its lifetime (a copied context
+  would be wrong for every item after the first). Confirmed with the user
+  before fixing, since it touches real production code beyond what the
+  subtask itself implied. A hold resumption gets its own fresh trace ID
+  rather than continuing the original event's — that ID isn't persisted
+  anywhere a much-later resumption could read it back from; extending
+  trace continuity across a hold's pause would need a new persistence
+  field and is out of scope here.
+
+  `tests/test_integration_end_to_end_flow.py` drives one event through
+  `POST /Event` against a real running API, confirms every stage's field
+  is present on the event record (classification, risk level/reason,
+  selected protocol/reason, precedent columns, every step's task/result,
+  insight text, verdict), and captures real stdout JSON log output
+  (`tools.logging_config.configure_logging`) to confirm every record
+  produced during that one event's handling carries the same single,
+  non-empty trace ID — including a real `step_start` record from
+  `protocols/executor.py`. Verified the test actually catches the bug: a
+  deliberate revert of the `api/events.py` fix made it fail exactly on
+  the trace-ID assertion, confirmed, then restored.
+
+### 9.3 — Test profile loading and validation
+- **Status:** done
+- **Deviations:** Most of this subtask's bullets were already thoroughly
+  covered at the unit level (`tests/test_profile_loading.py`,
+  `tests/test_profile_validation.py`, both pre-existing) — confirmed by
+  reading both files in full rather than assuming, to avoid writing
+  redundant coverage. `tests/test_integration_profile_loading.py` adds
+  exactly the two bullets that weren't covered anywhere: an exhaustive
+  "loads exactly its agents/protocols/event types/areas and nothing else"
+  check (by name/set, not just a subset of fields), and the
+  two-profiles-differing-only-in-model routing check — a genuinely
+  different, profile-level concern from `tests/test_agent_adapter.py`'s
+  existing adapter-level model-routing test (two real profile modules on
+  disk via `tests.helpers.write_profile_module`, each constructing a real
+  `ReferenceAgent` with its own model string, confirming each one's
+  captured `llm` kwarg at the (mocked) crewai boundary matches its own
+  profile, not the other's).
+
+### 9.4 — Test profile isolation
+- **Status:** done
+- **Deviations:** `tests/test_integration_profile_isolation.py` (5 tests):
+  two real `RunningApiServer` instances at once confirm genuinely separate
+  ports and database file paths; events written under one never appear in
+  the other's `fetch_events_range` or `search_precedents` (a real,
+  no-model-call `HistoryQueryService.search_precedents`, not mocked);
+  adding a user to one leaves the other's `read_user` returning `None`;
+  two real `config.settings_store.SettingsStore` instances (not
+  `tests/api_fakes.py`'s `FakeSettings` — the real production class, for
+  a genuine settings-persistence isolation check) confirm changing one's
+  risk threshold leaves the other's unchanged; and a full round trip
+  through both real APIs at once (`POST /Event` via
+  `tools.simulator._post_event`, reused rather than reimplemented)
+  confirms each server's own event lands only in its own database.
+
+### 9.5 — Test user administration
+- **Status:** done
+- **Deviations:** `tests/test_integration_user_administration.py` (2
+  tests). The end-to-end "add the first commander, confirm they can
+  approve a run" test required matching `cli.user_admin.main()`'s own
+  independently-reloaded profile (it calls `load_profile(args.profile)`
+  and opens its own persistence against *that module's* `DB_PATH`) to the
+  exact same file `tests.api_fakes.build_context`'s `ApiContext` reads
+  from — otherwise the two would silently write to two different
+  database files that happen not to conflict, not a real end-to-end
+  proof. Fixed by writing a disposable profile module (`tests.helpers
+  .write_profile_module`) whose `DB_PATH` is set to exactly
+  `build_context`'s own hardcoded path, matching
+  `tests/test_api_protocols.py`'s `writable_profile_module` pattern. The
+  "search the API and bot surfaces" bullet is now a real structural test
+  over `app.url_map.iter_rules()` (not by inspection): every route whose
+  path contains "user" or "commander" — including the two read-only
+  lookups added after this subtask was first drafted — must expose only
+  `GET`. The bot-surface half was already covered by
+  `tests/test_bot_users.py::test_no_user_management_command_is_registered_by_the_bot`.
+
+### 9.6 — Test ingestion parity
+- **Status:** done
+- **Deviations:** `tests/test_integration_ingestion_parity.py` — as
+  refined, drives the sensor side through a real `POST /Event` and the
+  "through Telegram" side through the real bot code path
+  (`bot.entrypoint.handle_incoming_message` calling a real
+  `bot.http_api_client.HttpApiClient` against a second real running API),
+  not a second direct `POST /Msg`, since `tests/test_api_unified_ingestion.py`
+  already proves that half. Confirms the same convergence fields §7.5
+  requires, plus one the API-only test can't reach: the bot path's real
+  `source_message_id` (Problem 2's fix) actually lands on the event
+  record, while the sensor path's stays `None`.
+
+### 9.7 — Test the clarification path
+### 9.8 — Test protocol selection
+### 9.9 — Test the approval flag
+### 9.10 — Test message intent and human activation
+### 9.11 — Test precedent lookup and closure
+### 9.12 — Test task formulation and reformulation
+### 9.13 — Run the protocol execution regression suite
+- **Status:** done
+- **Deviations:** Checked each subtask's bullets individually against the
+  real, pre-existing test suite before writing anything new, to avoid
+  redundant coverage. Every single bullet across these seven subtasks is
+  already satisfied, bullet for bullet, by pre-existing tests:
+  `tests/test_orchestrator_holds.py` (flagged/unflagged/ambiguous
+  selection, commander bypass, viewer refusal, second-answer conflict,
+  clarification/approval independence — §9.7/§9.9), `tests/test_orchestrator_precedent.py`
+  (risk threshold, resolved/unresolved match, human-activation exemption,
+  most-recent-match selection — §9.11), `tests/test_orchestrator_formulation.py`
+  (per-agent tasks, tool filtering, precedent context, unclear-task
+  rewrite, attempt-limit sharing — §9.12), `tests/test_orchestrator_judgment.py`
+  and `tests/test_protocol_executor.py`/`tests/test_protocol_retry.py`
+  (all three verdicts, tool-approval enforcement, judgment failure
+  isolation — §9.13), `tests/test_orchestrator_intent.py`/`test_api_messages.py`
+  (question/report/request routing, commander bypass scope, sender told
+  which — §9.10), `tests/test_orchestrator_selection.py`/`test_api_holds.py`
+  (clear match, high-risk tie-break, low-risk hold, commander-still-held
+  ambiguity — §9.8). `tests/test_api_notifications.py`'s own
+  `test_closed_on_precedent_produces_both_a_job_finished_and_a_precedent_closure_entry`
+  (from the earlier §8.12-closure round) already satisfies §9.11's
+  refined "confirm via a real `GET /Notifications` poll" bullet too.
+
+  The one genuinely uncovered gap across all seven: restart-survival
+  proven through the real `api/*` HTTP routes specifically — the
+  pre-existing `tests/test_orchestrator_flows.py::test_a_held_event_resumes_correctly_after_a_simulated_restart`
+  proves it at the orchestrator level (calling `resume_after_approval`
+  directly) for an approval hold only. `tests/test_integration_hold_restart_and_flow.py`
+  adds the missing piece: a real restart (a fresh `ApiContext`/
+  `SQLitePersistence` against the same file, the old one's queue stopped
+  and persistence closed first) resolved through the real
+  `POST /Clarify`/`POST /Approve` routes, for both hold kinds — plus
+  §9.7's own "events behind a held event continued processing while it
+  waited" bullet, confirmed by submitting a holding event and a
+  clean-match event back to back through the real API and showing the
+  second completes while the first is still pending, not blocked and not
+  abandoned.
+
+### 9.14 — Test retry and idempotency
+- **Status:** done
+- **Deviations:** The first three bullets (idempotency blocking retry
+  after a side-effecting tool acted, read-only retry to the limit, the
+  limit read live) were already directly covered against
+  `protocols.retry.execute_step_with_retry` in
+  `tests/test_protocol_retry.py`; "keeps the successful steps' results"
+  already covered at the rendering level in `tests/test_api_jobs.py`.
+  `tests/test_integration_retry_exhaustion.py` adds the real,
+  wired-together path: a crewai mock that always raises forces a genuine
+  retry-exhaustion through the real executor (not simulated by writing an
+  outcome directly), confirmed to produce a real `job_failed`
+  `GET /Notifications` entry naming the right agent and reaching the
+  right recipient, and confirmed the queue is not stuck — a second event
+  submitted right after still reaches a real terminal outcome rather than
+  staying queued forever.
+
+### 9.15 — Test the question flow
+- **Status:** done
+- **Deviations:** Already fully covered — `tests/test_orchestrator_question_flow.py`
+  covers every bullet at the orchestrator level (side-effecting tool
+  never passed regardless of wording, multi-agent composition, a failing
+  sub-agent not crashing the whole answer, the real History Agent routed
+  through the query service). "Restriction holds for a commander too" is
+  structurally guaranteed, not merely tested: `answer_question`'s real
+  signature carries no caller-identity parameter at all, so there is no
+  branch that could special-case a commander even if something tried.
+  "Nothing was written to the event record" is already confirmed through
+  the real API in `tests/test_api_messages.py::test_a_question_is_answered_directly_with_no_job`
+  (`fetch_events_range(...) == []`). No new test needed.
+
+### 9.16 — Test history accuracy over time
+- **Status:** done
+- **Deviations:** Multi-month fidelity and cross-level query assembly
+  already covered by `tests/test_history_fidelity.py`/`tests/test_history_query.py`;
+  downtime-gap backfill already covered by `tests/test_history_scheduler.py
+  ::test_reconciliation_builds_bottom_up_and_is_idempotent`. Found one real
+  gap: the existing `test_late_telegram_notification_wakes_only_for_existing_stale_day`
+  only asserts the scheduler's wake event gets set — it never actually
+  runs a reconciliation pass afterward to confirm real regeneration.
+  `tests/test_integration_history_accuracy.py` adds that: seeds all three
+  summary levels, appends a late-arriving Telegram event into the
+  already-summarized day (with an advancing injected clock — a fixed one
+  would make the regenerated daily summary's `generated_at` look no newer
+  than the still-current monthly/yearly ones, so the upward staleness
+  propagation this bullet exists to prove would never actually fire), and
+  confirms `reconcile()` regenerates all three levels, with the daily
+  summary's own `event_index` genuinely including the new event
+  afterward — not just a re-stamped timestamp.
+
+### 9.17 — Test profile editing and settings persistence
+- **Status:** done
+- **Deviations:** Four of six bullets already covered: "running system
+  unchanged" (`tests/test_api_protocols.py`), "`GET /SYSTEM` reports a
+  pending change" and "reject a profile-owned field"
+  (`tests/test_api_system.py`), "changed threshold survives a restart"
+  (`tests/test_settings_store.py::test_later_run_prefers_the_settings_file_over_profile_starting_values`).
+  `tests/test_integration_profile_editing_and_settings.py` adds the
+  remaining two: a protocol added through the real `POST /Protocol` is
+  confirmed present, correctly shaped, and referencing a real constructed
+  agent after a genuine profile reload (`profiles.loader.load_profile`
+  called fresh, not simulated); and a risk-threshold change through the
+  real `PUT /SYSTEM` is confirmed to change the very next event's own
+  outcome (a risk score placed deliberately between the old and new
+  threshold, so only the new value being in effect explains the result).
+  Building the first test surfaced a real fixture mismatch worth noting:
+  `tests.api_fakes.build_context`'s `ApiContext.deps.protocol_set` is
+  always its own hardcoded fixture protocols, independent of whatever
+  profile module `module_path` names — a disposable profile module used
+  for a real protocol-write-then-reload test must still construct a real
+  agent matching what that hardcoded protocol set's own participating
+  agents expect, or reloading it fails validation for unrelated reasons.
+  Not a product bug — `build_context` is a test fixture, working as
+  designed — but a sharp edge worth documenting for whoever writes the
+  next test combining a disposable profile module with `build_context`.
+
+### 9.18 — Test permission enforcement
+- **Status:** done
+- **Deviations:** Every cell of the viewer/commander/unregistered ×
+  resolve-hold/approve-run/edit-profile/change-settings matrix was
+  already individually proven correct, scattered across
+  `tests/test_api_holds.py`, `tests/test_api_protocols.py`,
+  `tests/test_api_system.py`, `tests/test_bot_clarification.py`,
+  `tests/test_bot_approval.py`, `tests/test_bot_profile_commands.py`,
+  `tests/test_bot_settings_commands.py`, plus — per this subtask's own
+  refined text — `tests/test_bot_http_api_client.py`'s real-`HttpApiClient`
+  tests added this round for the five methods Problem 1 fixed. Checked
+  each cell rather than assuming; found exactly one missing:
+  `answer_approval_hold`'s viewer-refusal, never exercised through a real
+  `HttpApiClient` (only through the fake in `tests/test_bot_approval.py`).
+  Added it, plus one test confirming an *unregistered* identity is
+  refused distinctly from a *registered-but-insufficient* one across two
+  representative methods — surfacing a real, deliberate asymmetry worth
+  making explicit: `answer_approval_hold`'s 401 becomes
+  `HoldAnswerOutcome(status="unauthorized")` (no raise —
+  `HoldAnswerStatus` already has a slot for it, per `docs/api_spec.md`'s
+  own mapping table), while `get_profile_view`'s 401 raises
+  `ApiRequestError` (no DTO slot exists there). My first draft of this
+  test assumed both raised — the run caught it immediately.
+
+### 9.19 — Test serial processing under load
+- **Status:** done
+- **Deviations:** `tests/test_integration_serial_processing_under_load.py`
+  drives a real 25-event burst through the real simulator (§9.1) against
+  a real running API, with a real (started) `SummaryScheduler` alongside,
+  and a wrapper around the scripted main agent that detects any two
+  overlapping `.process()` calls directly (a non-blocking lock
+  acquire/release around each call) — the actual proof of one-at-a-time
+  processing, not an inference from timing. Caught and fixed a wrong
+  assumption while building it: `happy_path_agent()`'s extraction
+  response is a single fixed canned value, so every event in the burst
+  shares one classification/area — after the first genuinely runs, the
+  rest correctly close on precedent instead of re-running the protocol,
+  which is real, correct system behavior, not a lock error or lost
+  write. The original assertion ("every event succeeds") was wrong for
+  that reason and was fixed to accept either terminal outcome, while
+  still asserting none is `"failed"`, the event count matches what was
+  emitted exactly, and no overlap was ever detected.
+
+### Two real bugs found and fixed during §9.19/§9.20's integration testing
+
+*Not `docs/work_plan.md`-numbered subtasks — genuine, previously-unknown
+correctness bugs, found while building §9.19's burst test and §9.20's
+cost/latency review, confirmed with the user before fixing per this
+session's standing rule (a real bug found while testing is reported, not
+silently worked around).*
+
+**Bug 1 — inconsistent timestamp formatting silently broke same-second
+range comparisons.** `api/events.py`'s and `api/messages.py`'s own
+`_now()` wrote `received_at`/`occurred_at` via a raw
+`datetime.now(timezone.utc).isoformat()` — microsecond precision, a
+`+00:00` suffix. Every range-query bound built through
+`history.time_utils.storage_timestamp` (used throughout
+`history/retrieval.py`) is whole-second precision with no suffix.
+`occurred_at` is a plain SQLite TEXT column, compared lexicographically —
+two different formats in the same column meant an event genuinely
+earlier in the same second as a query's upper bound could sort *after*
+the truncated bound string and be silently excluded from a match.
+Reproduced directly: two sensor events landing in the same wall-clock
+second (a real, likely outcome of exactly the burst load §9.19 tests)
+failed to find each other as precedents in roughly 80–90% of repeated
+runs. Fixed by making both `_now()` functions go through
+`storage_timestamp` too, so every timestamp in the table shares one
+comparable format. Initially imported it from `history.time_utils`
+directly, which `tests/test_architecture.py` correctly caught as a
+layering violation (`history.time_utils` is internal — only
+`history.interface`/`history.query` are declared `history` entry
+points); fixed by re-exporting `storage_timestamp` from
+`history.interface` instead and importing it from there, matching that
+module's own existing role as the package's write-path facade. Full
+suite re-run confirmed clean after this correction —
+`tests/test_architecture.py` passes.
+
+**Bug 2 — same-second events still couldn't match after Bug 1's fix.**
+Once every timestamp shared one whole-second format, two events
+genuinely milliseconds apart could round to an *identical* truncated
+string — and `history.precedent.find_precedents`'s window used a strict,
+exclusive upper bound at the target event's own timestamp, so equal
+still meant excluded. Confirmed with the user before fixing (a second,
+distinct architectural question from Bug 1, not assumed to be covered by
+the same fix). Fixed by widening `find_precedents`'s own window by
+exactly one second — scoped to precedent search alone, not
+`retrieve_range`'s general contract, which `history/query.py`'s plain
+history queries also depend on and which was never shown to share this
+problem (`history/retrieval.py`'s own day/month/year boundary chunking
+uses `retrieve_range` directly and was not touched). Confirmed the
+widening can never pull in a genuinely later event: anything a full
+second past the target's own timestamp still falls outside the widened
+bound, verified by a dedicated test.
+
+Both fixes verified empirically, not just by re-reading the code: the
+same 15-repetition real-time diagnostic that reproduced Bug 1 (12–13
+failures per 15 runs) showed 0 failures in 15 runs after Bug 2's fix.
+`tests/test_history_retrieval.py` (4 tests) is the deterministic version
+of that same check — a same-second precedent is found, a genuinely later
+event is not pulled in, `retrieve_range`'s own general contract is
+unaffected, and both `_now()` helpers produce `storage_timestamp`-
+compatible output.
+
+### 9.20 — Review cost and latency
+- **Status:** done
+- **Deviations:** This subtask is a review, not a pass/fail correctness
+  test, per its own bullets. `tests/test_integration_cost_and_latency_review.py`
+  is the real instrumentation (a wrapper counting main-agent calls by
+  matching each prompt's own distinguishing text, plus a separate
+  insights-agent call counter) behind the actual measured findings
+  written up in `docs/cost_latency_review.md`: 6 main-agent-shaped calls
+  for a full run (extraction, risk, selection, formulation, execution,
+  judgment) plus 1 insights-agent call, versus 3 for a precedent closure
+  (a 40%+ reduction, skipping formulation/execution/insights/judgment
+  entirely); wall-clock latency is structural only, given every model
+  call is mocked; the clearest remaining merge opportunity is precedent
+  lookup and the Insights Agent's own comparison both reading comparable
+  history independently for the same event, confirmed by reading both
+  call sites directly. Building this review's own instrumentation is
+  what surfaced Bugs 1 and 2 above — a genuinely different, valuable
+  outcome from what this subtask's own bullets asked for, not something
+  this pass went looking for.
+
+### 9.21 — Set up deployment
+- **Status:** done
+- **Deviations:** `api/app.py` had no runnable launch entry point at
+  all — confirmed by checking for one before assuming it existed. Added
+  `api.app.main(argv)` (`python -m api.app <profile_module>`), matching
+  `bot/app.py`'s own `main()`/`if __name__ == "__main__"` pattern
+  exactly: every host, port, and path comes from the named profile,
+  never a flag, except `--host` itself (a deployment concern the profile
+  has no opinion on, defaulting to `127.0.0.1`). Runs Flask's own
+  `app.run()` — deliberately not a production WSGI server, matching
+  "package... to run on localhost for the demonstration" precisely and
+  leaving everything `docs/PRODUCTION_READY.md` covers out of scope.
+  `tests/test_integration_deployment.py` (2 tests) uses the *real*
+  `api.app.build_context`/`build_app` — not `tests/api_fakes.py`'s test
+  double — to prove the actual startup wiring: a genuinely empty
+  directory, `cli.user_admin` triggering migrations and creating the
+  database from nothing, the system then serving a real request; and two
+  full deployments (separate ports, separate database files, separate
+  profile modules) running side by side from the same build, each
+  correctly refusing the other's commander identity.
+
+### 9.22 — Write operator documentation
+- **Status:** done
+- **Deviations:** `docs/operator_guide.md` — written to cross-reference,
+  not duplicate, the existing docs that already cover part of this
+  ground in full (`docs/profile_spec.md` for every name the loader
+  expects, `docs/agent_authoring.md` for adding an agent,
+  `docs/api_spec.md`'s "Service identity" section for the bot-service
+  provisioning step). Covers what wasn't consolidated anywhere yet: the
+  approval flag's exact meaning and the commander-bypass rule, `cli
+  .user_admin`'s exact CLI syntax, the three unprompted message types by
+  their real header text (read directly from `bot/formatting.py`'s
+  `_HEADERS`, not guessed), the three live settings' immediate-effect
+  behavior versus a profile edit's restart-required one, and reading logs
+  by trace ID — including the accurate detail that a hold's resumption
+  gets its own fresh trace ID, not a continuation of the original event's
+  (Bug 1/2's own fix work, §9.19/§9.20, made this fully honest to state).
+  The bot-service identity section is deliberately the most prominent —
+  it's the one step a deployment can silently skip and appear to have
+  started correctly regardless. `docs/work_plan.md`'s own Branch Grouping
+  table pointed at a `docs/operations` target that was never the actual
+  filename chosen; corrected to `docs/operator_guide.md`.
+
+## Mission 9 — complete
+
+All 22 subtasks (§9.1–§9.22) done. Two real, previously-unknown
+correctness bugs found and fixed along the way (see the dedicated entry
+above), one real architectural layering violation caught by
+`tests/test_architecture.py` and corrected immediately, and one real,
+concrete production-readiness gap closed that had no prior test coverage
+at all (`api/app.py` had no runnable launch entry point before §9.21).
+Every new integration test drives real components — a real running API
+server (`tests/api_fakes.py::RunningApiServer`), the real simulator, the
+real bot code path, or the real `cli.user_admin`/`api.app` entry
+points — not fakes standing in for them, matching this mission's own
+purpose.
+
+---
+
+## docs/server_report.md audit — remediation (2026-08-25)
+
+A full verification audit (`docs/server_report.md`) was run against the
+whole codebase and this log. It confirmed the large majority of this
+log's own claims hold, and surfaced three findings acted on below —
+append-only entries, per this file's own rule; none of the entries they
+touch were edited or removed.
+
+### 1.5 — superseded: core-agent construction is no longer a stub
+- **Status:** superseded, see below
+- **Deviations:** The original 1.5 entry (above) correctly described the
+  state at the time it was written — `profiles/loader.py
+  ::_construct_core_agents` was a documented no-op seam returning `{}`,
+  since the Agent Framework didn't exist yet. That stopped being true
+  during Mission 6: `orchestrator.flows.assemble_core_agents`
+  (`orchestrator/flows.py`, added in the "Merge remediation" entry above)
+  genuinely merges the Main, History, and Insights agents, and
+  `api/app.py::build_context` calls it as part of real startup wiring —
+  confirmed by direct reading during the audit, not assumed. The original
+  1.5 entry is left unedited per this log's append-only rule; this entry
+  is the pointer for a reader who lands on it and wonders whether the
+  limitation is still current. It is not.
+
+### 4.6 — superseded: retry exhaustion handling is now fully wired
+- **Status:** superseded, see below
+- **Deviations:** The original 4.6 entry (above) says "partially done —
+  executor-level behavior only," explicitly deferring three things to
+  missions that didn't exist yet: writing partial results onto the event
+  record, notifying the event's originator, and moving on to the next
+  event. All three are real today, confirmed during the audit: 
+  `orchestrator/flows.py`'s `_run_protocol` calls `record_step_execution`
+  inside the step loop (partial results land incrementally, not only at
+  the end) and `record_event_outcome(..., "failed", ...)` on exhaustion
+  (§6.11); `bot/failures.py` plus the `job_failed` notification kind
+  (`api/notifications.py`, §8.11/§8.12) deliver the originator
+  notification; the serial queue (§6.15) already guarantees the next
+  event proceeds. `tests/test_integration_retry_exhaustion.py` (§9.14)
+  exercises this exact path end to end. The original 4.6 entry is left
+  unedited per this log's append-only rule; this entry is the pointer.
+
+### 1.8 — completed: the specific named events are now logged
+- **Status:** done
+- **Deviations:** The original 1.8 entry (above) — "partially done...
+  those call sites land with §5/§6" — was never actually followed up:
+  the audit found, by direct grep, zero `logger.*` calls in `orchestrator/`
+  and zero in `history/` as of 2026-08-25, six missions after that
+  promise was made. This entry closes that gap for real. Added, all
+  through the existing `tools/logging_config.py`/`tools/tracing.py`
+  machinery (no second logging mechanism, no new dependency):
+  - `intent_classified` — `api/messages.py::post_msg`, the real
+    production call site (not `orchestrator.flows.process_message`,
+    which is never called in production — see the 8.15-adjacent
+    dead-code entry below).
+  - `extraction_result` (naming which fields came back empty),
+    `risk_assessed`, `protocol_selection`, `hold_created` (clarification
+    or approval, with which), `precedent_closure`, `insight_generated`,
+    `final_verdict`, and a new umbrella `event_outcome` fired on every
+    terminal branch (closed on precedent, declined, failed, succeeded,
+    uncertain) — all in `orchestrator/flows.py`, at the point each
+    decision is made, since that module has both the event ID and the
+    full decision context together.
+  - `precedent_lookup` (the window searched, the target/classification/
+    area, and which prior events matched) — `history/precedent.py
+    ::find_precedents`, the function that actually computes the window.
+  - `tool_call` for a *successful* tool invocation — `agents/base.py`.
+    `tool_blocked` already existed and needed no change; the gap was
+    specifically that only the blocked branch was ever logged.
+  - `step_start`/`step_result` (task text and result respectively) and
+    `step_failed`/`step_retry`/`step_unclear` — confirmed already present
+    and correct in `protocols/executor.py`/`protocols/retry.py`; nothing
+    added, no duplication.
+  - Level convention: every new call site is INFO, matching every
+    pre-existing one in this codebase (`step_start`, `tool_blocked`,
+    `step_retry`, etc. are all already INFO) — kept consistent with the
+    established convention rather than introduce a new DEBUG/WARNING
+    split that would leave old and new call sites inconsistent with each
+    other, a deliberate choice confirmed rather than assumed.
+  - Six new tests (`tests/test_agent_permission_enforcement.py`,
+    `tests/test_history_precedent.py`, `tests/test_orchestrator_flows.py`,
+    `tests/test_integration_end_to_end_flow.py`) drive a real event or
+    message through the real flow, capture actual JSON log output, and
+    assert the specific values a run produced (which risk level, which
+    protocol, which fields were empty) appear under that run's own trace
+    ID — not just that the formatter works, which `tests/test_logging.py`
+    already covered and continues to cover unchanged.
+  - `docs/operator_guide.md`'s "Reading the run logs" section corrected:
+    it previously implied every relevant record (including step/tool
+    records) carries `event_id`; that's true for the decision-level
+    events above but not for `step_start`/`step_result`/`tool_call`,
+    which carry the agent/step/tool and the shared `trace_id` instead —
+    the guide now lists every event name that actually fires and states
+    the real correlation path (find any `event_id`-bearing record, read
+    its `trace_id`, filter the whole stream to that value) accurately.
+
+  **The Mission-status table at the top of this file and this entry now
+  agree**: Mission 1 is genuinely "Done," including 1.8 — confirmed by
+  re-running the full suite and `tests/test_architecture.py` after this
+  fix, not merely asserted.
+
+### Dead code — `orchestrator.flows.process_report`/`process_request`/`process_message` reviewed, kept intentionally
+- **Status:** done (documentation only, no functional change)
+- **Deviations:** The audit found these three functions fully built and
+  exercised by ~20 test call sites in `tests/test_orchestrator_flows.py`,
+  but never called from any production entry point — `api/events.py` and
+  `api/messages.py` use the split primitives (`begin_report`/
+  `run_report_extraction`, `begin_request`/`continue_from_risk_assessment`)
+  instead, required by §7.2's async-job design. Reviewed and a decision
+  made explicitly (not assumed): **keep them**, since they are the
+  orchestrator package's own deliberate synchronous test-facing
+  composition — letting `tests/test_orchestrator_flows.py` exercise
+  full-flow logic in one call, independent of `api/`'s queueing concerns
+  — not leftover scaffolding, and deleting them would mean rewriting
+  ~20 passing tests onto the split-primitive pattern for no functional
+  benefit. Each of the three functions' own docstrings now states this
+  plainly (not used in production, names exactly what `api/*` uses
+  instead and why), so a reader who finds one by searching the codebase,
+  not just one who reads the module's opening docstring, sees the same
+  answer. No test was changed; `tests/test_orchestrator_flows.py`'s 22
+  tests pass unchanged.
+
+Full suite after all three remediations: 736 passed, 0 failed (was 732;
++4 new test functions, 2 existing tests extended in place with additional
+assertions). `tests/test_architecture.py` passes.
+`.github/workflows/ci.yml`'s per-mission file-coverage invariant checked
+mechanically and still holds — no new test files were created this pass,
+only existing ones extended, so no CI change was needed.
+
+---
+
+## Follow-up to the §1.8 remediation above — debug-gated model I/O logging, noisy internals moved off INFO
+
+*Not a `docs/work_plan.md`-numbered subtask — real work, requested directly,
+building on the §1.8 remediation logged above: that pass added the eleven
+always-on decision events; this pass adds the layer beneath them (the exact
+prompt sent and raw response received) and moves genuinely noisy internal
+detail off INFO, gated behind the same mechanism.*
+- **Status:** done
+- **Deviations:**
+  - **One flag, not two** (an explicit choice, not a default): a single
+    `DEBUG_VERBOSE_LOGGING` environment variable gates both the model I/O
+    logging and the internal-detail demotion below, rather than one flag
+    per concern. Chosen because an operator diagnosing a live-model
+    problem — the scenario this exists for — almost always wants both at
+    once (the internal detail is frequently what explains *why* a given
+    prompt/response pair produced the outcome it did); two flags would add
+    configuration surface for a case where splitting them apart has no
+    real use found.
+  - Read from the environment directly (`os.environ.get("DEBUG_VERBOSE_LOGGING")`,
+    `config/base.py`, module-level, once at import time) — matching
+    `profiles/loader.py`'s own existing mechanism for the environment
+    variables a profile names, since no `.env`-file loader exists anywhere
+    in this codebase to instead plug into. Parsed strictly
+    (`config.base._parse_debug_flag`): only `"1"`/`"true"` (any case,
+    optionally padded) mean on; unset, empty, `"false"`, `"0"`, or any
+    other text mean off — never a bare "any non-empty string is truthy"
+    check. Confirmed no conflict with §1.6's profile validation: that
+    validation only ever inspects a `LoadedProfile`'s own declared
+    environment variables (`BOT_TOKEN_ENV`, `MODEL_CREDENTIAL_ENVS`);
+    `DEBUG_VERBOSE_LOGGING` is never profile-declared and never a
+    *required* variable, so its absence is never a validation failure —
+    confirmed by reading `profiles/validate.py` in full, which contains no
+    environment-variable handling of any kind. No `.env.example` or
+    equivalent exists anywhere in this repository to document it in
+    (checked, not assumed) — noted here rather than created, since that's
+    `docs/PRODUCTION_READY.md`'s own separate scope, not this task's.
+  - `agents/adapter.py::invoke` confirmed as the one real choke point
+    every agent call passes through (`agents.base.Agent.process` →
+    here) — reused, not duplicated: `history/extraction.py` used to make
+    its own separate `log_ai_interaction` call for the extraction model
+    call, which (in production, via `orchestrator.flows._model_invoker_for`)
+    always already routed through this same choke point a second time
+    under a different tag — a real, pre-existing duplication, not
+    introduced by this pass. Removed the separate call; `extract_event`
+    now wraps its `model_invoker(prompt)` call in
+    `tools.tracing.stage_context("extraction")` instead, so the one real
+    logged interaction carries the right stage tag without a second log
+    call.
+  - **Stage tagging**: `agents.base.Agent.process(text, allowed_tools)`
+    (§3.1) is deliberately the only public entry point every caller
+    reaches an agent through — adding a "stage" parameter to it would mean
+    touching that contract and every one of its ~15 call sites for a
+    logging concern alone. Used a contextvar instead
+    (`tools.tracing.stage_context`/`get_current_stage`, the same shape as
+    `trace_context`, and the same reasoning `agents/base.py`'s existing
+    `_current_allowed_tools` contextvar already applies to `allowed_tools`).
+    Each orchestrator-level call site wraps its own `agent.process(...)`
+    call: `intent_classification`, `risk_assessment`, `protocol_selection`,
+    `task_formulation`, `task_rewrite`, `success_judgment`,
+    `insight_generation`, `extraction`, `step_execution`
+    (`protocols/retry.py`), and the question flow's three internal calls
+    (`question_routing`, `question_subagent`, `question_history_query`,
+    `question_composition`). `agents/adapter.py::invoke` reads it back via
+    `get_current_stage()` when building a debug-gated log record — no
+    signature threaded through the agent framework itself.
+  - **Payload construction, not just emission, is gated**: `interaction_payload`
+    (the full CrewAI invocation envelope — role, goal, backstory, model,
+    tools, and the full task text) is only ever built inside
+    `if verbose_logging_enabled():` in `agents/adapter.py::invoke` — never
+    built and then discarded. `tools.logging_config.log_ai_interaction`
+    itself keeps its own internal `DEBUG_FLAG` check too, as
+    defense-in-depth for any other caller, but the expensive part (the
+    `json.dumps` call) never runs when the flag is off regardless.
+  - `log_ai_interaction` itself was rewritten from `print()` to a
+    structured `logger.debug(...)` call through the same JSON formatter
+    and trace-ID mechanism as every other log record (§1.8's own "not a
+    second logging mechanism" rule) — a real behavior change from the
+    Mission 1 `DEBUG_FLAG`-backed version (`docs/progress.md`'s "1.3 / 3.5
+    — follow-up" entry, above), required by this task's own explicit
+    instruction to use the existing structured logging setup rather than
+    leave the print-based one in place. `tests/test_history_logging.py`
+    rewritten to match (was asserting on `capsys` stdout text; now asserts
+    on `caplog` structured records) — the old assertions no longer apply
+    to the new, intentionally different implementation.
+  - `configure_logging`'s `level` parameter now defaults to `None`,
+    meaning "compute from `config.base.DEBUG_FLAG`" (`DEBUG` when on,
+    `INFO` otherwise) rather than always `INFO` — read once, at the single
+    point logging is configured, not per log call; an explicit `level`
+    still overrides. This is what actually makes the flag take effect: the
+    DEBUG-level records this pass adds are otherwise silently dropped by
+    Python's own logger-level check before ever reaching the JSON
+    formatter, regardless of any per-call guard.
+  - **A real, pre-existing gap found and fixed while wiring this in**:
+    `api/app.py::build_context` — the function every real `python -m
+    api.app` process runs — never called `configure_logging` at all,
+    confirmed by a repo-wide search before assuming otherwise; only
+    `bot/app.py` did. Without this fix, `DEBUG_VERBOSE_LOGGING` (and,
+    more importantly, every one of §1.8's own INFO-level events) would
+    have had no real effect on the API process specifically, which is
+    where nearly every one of those events is actually produced
+    (extraction, risk assessment, selection, holds, precedent, insight,
+    judgment all run inside API-triggered flows, not inside the bot
+    process). Fixed by adding the same `configure_logging(loaded_profile.module_path)`
+    call `bot/app.py` already makes, right after profile loading in
+    `build_context` — `bot/app.py`'s own existing call needed no change,
+    since it already omits an explicit `level` and picks up the new
+    default automatically.
+  - **Noisy internals moved to DEBUG** (only these two; nothing was moved
+    off the always-on INFO list, per this task's own explicit
+    instruction): (1) `agents/base.py`'s successful, allowed tool-call log
+    (`tool_call`) — `tool_blocked` is unchanged, still INFO. (2)
+    `history/precedent.py::find_precedents`'s own `precedent_lookup`
+    record (the exact window boundaries and raw candidate list) — the
+    outcome an operator actually needs ("did anything match, did it close
+    the event") is `orchestrator.flows.continue_from_risk_assessment`'s
+    `precedent_closure` record, at INFO, unchanged, added in the §1.8
+    remediation above. No other candidate from this task's own list
+    (extraction per-field detail, queue/scheduler state transitions)
+    turned out to have any existing logging to move — confirmed by reading
+    `orchestrator/queue.py` and `history/scheduler.py` directly: their
+    only `logger` calls are `logger.exception(...)` on an actual failure,
+    which stay as they are (errors, not routine internal detail), and
+    extraction's own per-field detail was never logged separately from the
+    already-INFO `extraction_result` summary the §1.8 remediation added,
+    so there was nothing further to demote there.
+  - Ten new/rewritten tests across `tests/test_base_config.py` (strict
+    flag parsing, including the exact `"false"`/`"0"` case requested, and
+    a real read-from-environment round trip via `importlib.reload`),
+    `tests/test_history_logging.py` (rewritten for the structured-logging
+    behavior, plus a new stage-context-default test),
+    `tests/test_agent_permission_enforcement.py` and
+    `tests/test_history_precedent.py` (updated to assert DEBUG, not INFO,
+    for the two demoted events), and two new integration tests in
+    `tests/test_integration_end_to_end_flow.py` driving a real event
+    through a real running API with the flag explicitly off and explicitly
+    on: off confirms no `model_io` record appears and every §1.8 decision
+    event is still present and unaffected; on confirms `model_io` appears
+    for every real model call (using real `MainAgent`/`InsightsAgent`
+    instances with a keyword-dispatching fake CrewAI kickoff, since the
+    fixture used by every other test in that file,
+    `tests.api_fakes.happy_path_agent`, is itself a fake that never
+    reaches `agents/adapter.py::invoke` and so can't exercise this),
+    tagged with the right stage per call, carrying the exact same
+    non-empty `trace_id` as every INFO record from the same run.
+  - `docs/operator_guide.md`'s "Reading the run logs" section rewritten:
+    split into the always-on INFO tier and the `DEBUG_VERBOSE_LOGGING`
+    tier (naming `model_io` and its stage vocabulary explicitly, and the
+    two records moved off INFO), with the exact environment variable name,
+    how to set it, and an explicit sensitivity warning that its output can
+    contain the full original event/message text and should not be left
+    on in normal operation.
+
+Full suite: 741 passed, 0 failed (was 736; +5 net new test functions).
+`tests/test_architecture.py` passes. `.github/workflows/ci.yml`'s
+per-mission file-coverage invariant checked mechanically and still holds —
+no new test files were created this pass, only existing ones extended, so
+no CI change was needed.

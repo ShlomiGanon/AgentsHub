@@ -2,6 +2,7 @@
 
 from history.extraction import ExtractionExecutionError, ExtractionResult, extract_event
 from history.scheduler import SummaryScheduler
+from history.time_utils import storage_timestamp
 from history.write import (
     InitialEventEnvelope,
     StepExecutionEnvelope,
@@ -24,4 +25,5 @@ __all__ = [
     "record_extracted_fields",
     "record_initial_event",
     "record_step_execution",
+    "storage_timestamp",
 ]

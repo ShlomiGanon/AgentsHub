@@ -29,6 +29,13 @@ deliberate — see that function's own docstring.
 functions' own internal `is_permitted` check still runs underneath, as
 defense-in-depth for any direct, non-API caller, not as a second inline
 check duplicating this one.
+
+Each of these gets its own fresh trace ID (§1.8) for the resumption's own
+handling — it does not inherit or continue the original event's ingestion
+trace ID, which is not persisted anywhere a resumption, possibly arriving
+much later, could read it back from. See `api/events.py`'s own docstring
+for why a queued continuation threads the ID explicitly rather than
+relying on contextvar propagation across the queue's worker thread.
 """
 
 from typing import TYPE_CHECKING
@@ -38,6 +45,7 @@ from flask import Blueprint, jsonify, request
 from api.auth import authenticate, require
 from api.errors import ConflictError, InvalidInputError, NotFoundError
 from orchestrator.flows import continue_after_approval, continue_after_clarification, decline, resolve_approval, resolve_clarification
+from tools.tracing import new_trace_id, trace_context
 
 if TYPE_CHECKING:
     from api.app import ApiContext
@@ -66,19 +74,26 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
         if not classification:
             raise InvalidInputError("'classification' is required", field="classification")
 
-        hold = _pending_hold_or_raise(ctx, "clarification", event_id)
+        trace_id = new_trace_id()
+        with trace_context(trace_id):
+            hold = _pending_hold_or_raise(ctx, "clarification", event_id)
 
-        answer = resolve_clarification(ctx.deps, hold["hold_id"], identity, level, classification)
-        if answer.status == "invalid_classification":
-            raise InvalidInputError(answer.message, field="classification")
-        if answer.status != "resolved":
-            # A hold resolved by someone else between the check above and
-            # this call — a narrow race; not_found is the accurate status,
-            # reported generically rather than re-querying for who/when.
-            raise InvalidInputError(answer.message)
+            answer = resolve_clarification(ctx.deps, hold["hold_id"], identity, level, classification)
+            if answer.status == "invalid_classification":
+                raise InvalidInputError(answer.message, field="classification")
+            if answer.status != "resolved":
+                # A hold resolved by someone else between the check above
+                # and this call — a narrow race; not_found is the accurate
+                # status, reported generically rather than re-querying for
+                # who/when.
+                raise InvalidInputError(answer.message)
 
-        ctx.queue.submit((event_id, lambda: continue_after_clarification(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent)))
-        return jsonify({"event_id": event_id, "status": "queued"}), 202
+            def _work() -> None:
+                with trace_context(trace_id):
+                    continue_after_clarification(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent)
+
+            ctx.queue.submit((event_id, _work))
+            return jsonify({"event_id": event_id, "status": "queued"}), 202
 
     @blueprint.route("/Approve/<event_id>", methods=["POST"])
     def post_approve(event_id):
@@ -91,21 +106,28 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
         if not decision:
             raise InvalidInputError("'decision' is required — 'approved', 'rejected', or a candidate protocol name", field="decision")
 
-        hold = _pending_hold_or_raise(ctx, "approval", event_id)
+        trace_id = new_trace_id()
+        with trace_context(trace_id):
+            hold = _pending_hold_or_raise(ctx, "approval", event_id)
 
-        answer = resolve_approval(ctx.deps, hold["hold_id"], identity, level, decision)
-        if answer.status == "invalid_candidate":
-            raise InvalidInputError(answer.message, field="decision")
-        if answer.status not in ("approved", "rejected"):
-            # Same narrow race as the clarify path above.
-            raise InvalidInputError(answer.message)
+            answer = resolve_approval(ctx.deps, hold["hold_id"], identity, level, decision)
+            if answer.status == "invalid_candidate":
+                raise InvalidInputError(answer.message, field="decision")
+            if answer.status not in ("approved", "rejected"):
+                # Same narrow race as the clarify path above.
+                raise InvalidInputError(answer.message)
 
-        if answer.status == "rejected":
-            decline(ctx.deps, event_id)
-            return jsonify({"event_id": event_id, "status": "declined"})
+            if answer.status == "rejected":
+                decline(ctx.deps, event_id)
+                return jsonify({"event_id": event_id, "status": "declined"})
 
-        selected_protocol_name = answer.hold["selected_protocol_name"]
-        ctx.queue.submit((event_id, lambda: continue_after_approval(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent, selected_protocol_name)))
-        return jsonify({"event_id": event_id, "status": "queued"}), 202
+            selected_protocol_name = answer.hold["selected_protocol_name"]
+
+            def _work() -> None:
+                with trace_context(trace_id):
+                    continue_after_approval(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent, selected_protocol_name)
+
+            ctx.queue.submit((event_id, _work))
+            return jsonify({"event_id": event_id, "status": "queued"}), 202
 
     return blueprint

@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from orchestrator.errors import OrchestrationParseError
+from tools.tracing import stage_context
 
 if TYPE_CHECKING:
     from orchestrator.main_agent import MainAgent
@@ -86,7 +87,8 @@ def select_protocol(
     risk_level: Literal["high", "low"],
 ) -> ProtocolSelectionResult:
     prompt = _build_selection_prompt(raw_text, classification, area, description, protocols)
-    result = main_agent.process(prompt, [])
+    with stage_context("protocol_selection"):
+        result = main_agent.process(prompt, [])
 
     if result.status != "success":
         raise OrchestrationParseError(f"protocol selection did not produce a usable response: {result.text}")

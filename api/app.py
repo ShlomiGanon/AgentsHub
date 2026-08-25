@@ -31,6 +31,7 @@ from profiles.loader import load_profile
 from protocols.loader import load_protocols
 from registries.areas import build_area_registry
 from registries.event_types import build_event_type_registry
+from tools.logging_config import configure_logging
 
 if TYPE_CHECKING:
     from agents.base import Agent
@@ -63,6 +64,7 @@ def _dispatch_queue_item(item: object) -> None:
 
 def build_context(module_path: str) -> ApiContext:
     loaded_profile = load_profile(module_path)
+    configure_logging(loaded_profile.module_path)
     base_config = load_base_config()
 
     persistence = open_persistence(loaded_profile.db_path)
@@ -133,3 +135,34 @@ def build_app(ctx: ApiContext) -> Flask:
 
 def create_app(module_path: str) -> Flask:
     return build_app(build_context(module_path))
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Run the API layer for one deployment (work_plan.md §9.21).
+
+    The localhost-demo launch path this subtask asks for — every host,
+    port, and path the running server uses comes from the named profile
+    (§1.4/§7.1), never a flag, so the identical build runs unmodified for
+    any profile. `--host` is the one exception, deliberately: which
+    network interface to bind is a deployment concern the profile itself
+    has no opinion on, not a per-deployment identity value like the port
+    is. Production process supervision, TLS, and everything else
+    `docs/NEXT_STAGE.md` covers stays out of scope here — this is
+    `app.run()`, Flask's own development server, exactly matching what
+    "package... to run on localhost for the demonstration" asks for.
+    """
+
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run the API layer for one deployment (work_plan.md §7, §9.21).")
+    parser.add_argument("profile_module", help="dotted module path of the profile to run, e.g. profiles.demo")
+    parser.add_argument("--host", default="127.0.0.1", help="network interface to bind (default: 127.0.0.1, localhost only)")
+    args = parser.parse_args(argv)
+
+    ctx = build_context(args.profile_module)
+    app = build_app(ctx)
+    app.run(host=args.host, port=ctx.loaded_profile.api_port)
+
+
+if __name__ == "__main__":
+    main()

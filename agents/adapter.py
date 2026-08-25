@@ -40,8 +40,8 @@ from agents.errors import (
 )
 from agents.results import UNCLEAR_TASK_PROMPT_INSTRUCTION
 from agents.tooling import ToolInfo
-from tools.logging_config import log_ai_interaction
-from tools.tracing import get_trace_id
+from tools.logging_config import log_ai_interaction, verbose_logging_enabled
+from tools.tracing import get_current_stage, get_trace_id
 
 
 def _get_crewai():
@@ -122,18 +122,26 @@ def invoke(descriptor: AgentDescriptor, wrapped_tools: dict[str, Callable], text
             descriptor.name, f"could not extract text from CrewAI output: {output!r}", trace_id=get_trace_id()
         )
 
-    interaction_payload = json.dumps(
-        {
-            "role": descriptor.role,
-            "goal": "Complete the task given, or state clearly what is missing if it cannot be completed.",
-            "backstory": backstory,
-            "model": descriptor.model,
-            "tools": [info.name for info in descriptor.tools],
-            "kickoff_text": text,
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-    log_ai_interaction(descriptor.name, interaction_payload, raw_text, trace_id=get_trace_id())
+    # This is the one real choke point every agent call passes through
+    # (agents.base.Agent.process -> here), and the one place model I/O is
+    # logged (work_plan.md §1.8 follow-up, debug-gated). Building
+    # `interaction_payload` is real work over data that can be large (the
+    # full original event/message text ends up in `kickoff_text`) — guard
+    # it with an explicit check first, rather than build it unconditionally
+    # and let `log_ai_interaction`'s own internal check discard it.
+    if verbose_logging_enabled():
+        interaction_payload = json.dumps(
+            {
+                "role": descriptor.role,
+                "goal": "Complete the task given, or state clearly what is missing if it cannot be completed.",
+                "backstory": backstory,
+                "model": descriptor.model,
+                "tools": [info.name for info in descriptor.tools],
+                "kickoff_text": text,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        log_ai_interaction(descriptor.name, interaction_payload, raw_text, stage=get_current_stage(), trace_id=get_trace_id())
 
     return raw_text
