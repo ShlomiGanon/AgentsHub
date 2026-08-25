@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from orchestrator.errors import OrchestrationParseError
 from protocols.model import Protocol, Step
+from tools.tracing import stage_context
 
 if TYPE_CHECKING:
     from agents.descriptor import AgentDescriptor
@@ -90,7 +91,8 @@ def formulate_tasks(
 ) -> FormulationResult:
     descriptors = [registry.descriptor_for(name) for name in protocol.participating_agents]
     prompt = _build_formulation_prompt(protocol, descriptors, raw_text, classification, area, description, precedent_context)
-    result = main_agent.process(prompt, [])
+    with stage_context("task_formulation"):
+        result = main_agent.process(prompt, [])
 
     if result.status != "success":
         return FormulationResult(failure_reason=f"formulation did not produce a usable response: {result.text}")
@@ -121,7 +123,8 @@ def _build_rewrite_prompt(step: Step, missing: str) -> str:
 
 def rewrite_task(main_agent: "MainAgent", step: Step, missing: str) -> str:
     prompt = _build_rewrite_prompt(step, missing)
-    result = main_agent.process(prompt, [])
+    with stage_context("task_rewrite"):
+        result = main_agent.process(prompt, [])
 
     if result.status != "success":
         raise OrchestrationParseError(f"task rewrite did not produce a usable response: {result.text}")

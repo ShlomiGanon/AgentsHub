@@ -1,10 +1,14 @@
 """Summary-first, exact type/area precedent lookup."""
 
+import logging
 from dataclasses import dataclass
 from datetime import timedelta
 
 from history.retrieval import retrieve_range
 from history.time_utils import parse_timestamp
+from tools.tracing import get_trace_id
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -60,7 +64,7 @@ def find_precedents(
             if event["event_id"] != target_event_id:
                 events_by_id[event["event_id"]] = event
 
-    return [
+    matches = [
         PrecedentMatch(
             event_id=event["event_id"],
             classification=event["classification"],
@@ -73,3 +77,25 @@ def find_precedents(
         )
         for event in sorted(events_by_id.values(), key=lambda item: (item["occurred_at"], item["event_id"]), reverse=True)
     ]
+
+    # DEBUG, not INFO: this is the search's internal detail — the exact
+    # window boundaries and the raw candidate list before closure is
+    # decided. The outcome an operator needs ("did anything match, did it
+    # close the event") is logged separately, at INFO, by
+    # orchestrator.flows.continue_from_risk_assessment's "precedent_closure"
+    # event once closure is actually evaluated — never move that one.
+    logger.debug(
+        "precedent lookup",
+        extra={
+            "event": "precedent_lookup",
+            "target_event_id": target_event_id,
+            "classification": classification,
+            "area": area,
+            "window_start": window_start.isoformat(),
+            "window_end": window_end.isoformat(),
+            "matched_event_ids": [m.event_id for m in matches],
+            "trace_id": get_trace_id(),
+        },
+    )
+
+    return matches

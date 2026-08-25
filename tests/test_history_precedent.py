@@ -39,3 +39,35 @@ def test_precedent_search_uses_summary_candidates_and_raw_gaps(tmp_path):
         assert next(match for match in matches if match.event_id == "unresolved").resolved is False
     finally:
         store.close()
+
+
+def test_precedent_search_logs_the_window_and_the_matches(tmp_path, caplog):
+    db_path = str(tmp_path / "precedent_log.db")
+    store = open_persistence(db_path)
+    try:
+        store.append_event({
+            "event_id": "resolved", "received_at": "2026-08-18T09:00:00", "source": "sensor",
+            "sender_identity": "s", "occurred_at": "2026-08-18T09:00:00", "raw_text": "resolved",
+            "classification": "fire", "area": "north", "outcome": "succeeded",
+            "selected_protocol": "basic", "steps": [],
+        })
+        settings = SettingsStore(db_path, 1, 0.5, 30)
+        service = HistoryQueryService(store, UnusedAgent(), settings)
+
+        # DEBUG, not INFO — this is the search's own internal detail (the
+        # window it computed, the raw candidate list); the outcome an
+        # operator needs is logged separately, at INFO, once closure is
+        # evaluated (orchestrator.flows's "precedent_closure" event).
+        with caplog.at_level("DEBUG"):
+            matches = service.search_precedents("target", "fire", "north", "2026-08-20T12:00:00")
+
+        lookups = [r for r in caplog.records if getattr(r, "event", None) == "precedent_lookup"]
+        assert len(lookups) == 1
+        assert lookups[0].levelname == "DEBUG"
+        assert lookups[0].target_event_id == "target"
+        assert lookups[0].classification == "fire"
+        assert lookups[0].window_start
+        assert lookups[0].window_end
+        assert lookups[0].matched_event_ids == [m.event_id for m in matches]
+    finally:
+        store.close()

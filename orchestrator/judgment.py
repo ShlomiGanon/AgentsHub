@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Literal
 
 from orchestrator.errors import OrchestrationParseError
 from protocols.model import Protocol
+from tools.tracing import stage_context
 
 if TYPE_CHECKING:
     from orchestrator.main_agent import MainAgent
@@ -72,7 +73,8 @@ def _parse_judgment_response(raw_text: str) -> SuccessVerdict:
 
 def judge_success(main_agent: "MainAgent", protocol: Protocol, step_outcomes: tuple["StepOutcome", ...], insight_text: str = "") -> SuccessVerdict:
     prompt = _build_judgment_prompt(protocol, step_outcomes, insight_text)
-    result = main_agent.process(prompt, [])
+    with stage_context("success_judgment"):
+        result = main_agent.process(prompt, [])
 
     if result.status != "success":
         raise OrchestrationParseError(f"success judgment did not produce a usable response: {result.text}")

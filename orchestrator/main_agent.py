@@ -21,6 +21,7 @@ from typing import Literal
 from agents.base import Agent
 from config.base import BaseConfig
 from orchestrator.errors import OrchestrationParseError
+from tools.tracing import stage_context
 
 
 class MainAgent(Agent):
@@ -78,7 +79,8 @@ def _parse_risk_assessment_response(raw_text: str) -> tuple[float, str]:
 
 def assess_risk(main_agent: MainAgent, classification: str | None, area: str | None, description: str | None, severity: str | None, risk_threshold: float) -> RiskAssessment:
     prompt = _build_risk_assessment_prompt(classification, area, description, severity)
-    result = main_agent.process(prompt, [])
+    with stage_context("risk_assessment"):
+        result = main_agent.process(prompt, [])
 
     if result.status != "success":
         raise OrchestrationParseError(f"risk assessment did not produce a usable response: {result.text}")

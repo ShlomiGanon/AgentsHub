@@ -147,9 +147,55 @@ enters the system (`POST /Event`, `POST /Msg`, or a hold's resumption via
 `POST /Approve`/`POST /Clarify` — each of these gets its own fresh ID,
 not a continuation of the original event's) and is attached to every
 record produced while handling it, all the way through extraction, every
-agent call, every tool call, and the final write. To follow one event
-from start to finish: find any log line mentioning the event (by its
-`event_id`, present on extraction/step/outcome records), read its
-`trace_id`, then filter the whole log stream to that one value — every
-record with it belongs to that one run, in order, regardless of which
-stage or agent produced it.
+agent call, every tool call, and the final write.
+
+**Always on, at INFO** — what the system decided about an event and why.
+This is on in normal operation, with no configuration needed: `intent_classified`
+(message ingestion only), `extraction_result` (naming which fields came
+back empty), `hold_created` (clarification or approval, with which),
+`risk_assessed`, `protocol_selection`, `precedent_closure` (whether a
+match closed the event), `step_start`/`step_result` (one pair per step,
+with the task text and the result), `tool_blocked`, `step_retry` (and its
+cause), `insight_generated`, `final_verdict`, and `event_outcome` on
+every branch a run can end on (closed on precedent, declined, failed,
+succeeded, uncertain) — so a run can be reassembled by querying rather
+than reading. To follow one event from start to finish: find any log
+line mentioning the event (most of the events above carry `event_id`
+directly; a `step_start`/`step_result` record carries the agent and step
+instead, but shares the same run's `trace_id`), read its `trace_id`, then
+filter the whole log stream to that one value — every record with it
+belongs to that one run, in order, regardless of which stage or agent
+produced it.
+
+**Off by default, behind `DEBUG_VERBOSE_LOGGING`** — internal detail
+that's noise in normal operation but useful when diagnosing a live run,
+most valuably the first time this runs against a real model rather than
+a mock (a parse failure or an unexpected response shape is the likeliest
+problem, and the INFO log alone can't show what produced it):
+
+- `model_io` — the **full prompt sent to the model and the full raw
+  response received, before any parsing**, for every single model call,
+  tagged with which agent and which stage (`intent_classification`,
+  `extraction`, `risk_assessment`, `protocol_selection`,
+  `task_formulation`, `task_rewrite`, `step_execution`,
+  `insight_generation`, `success_judgment`, `question_routing`,
+  `question_subagent`, `question_history_query`,
+  `question_composition`) it belongs to, alongside the same `trace_id` as
+  everything else in that run.
+- Successful (non-blocked) individual tool calls (`tool_call`) —
+  `tool_blocked` stays at INFO above; this is only the ordinary,
+  permitted case.
+- The precedent search's own internal detail (`precedent_lookup`: the
+  exact window boundaries searched, the raw candidate list) — the
+  outcome an operator actually needs ("did anything match, did it close
+  the event") is `precedent_closure`, at INFO, above.
+
+**Set `DEBUG_VERBOSE_LOGGING=true` in the process environment before
+starting the API or the bot** to turn this on (`false`, `0`, unset, or
+any other value is off — an explicit falsy value is never mistaken for
+"set"; read once at startup, not reconfigurable while running). **Its
+output is sensitive** — `model_io` records can contain the full original
+event or message text verbatim, prompt structure, and model output. This
+is a diagnostic mode for investigating a specific problem, not something
+to leave on in normal operation or route to a shared log collector
+without the same care given to the raw event text itself.

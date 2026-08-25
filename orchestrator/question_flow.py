@@ -27,6 +27,7 @@ from agents.history import HistoryAgent
 from history.query import HistoryQueryError
 from orchestrator.errors import OrchestrationParseError
 from orchestrator.formulation import _parse_formulation_response
+from tools.tracing import stage_context
 
 if TYPE_CHECKING:
     from agents.descriptor import AgentDescriptor
@@ -60,7 +61,8 @@ def _build_compose_prompt(question: str, sub_answers: dict[str, str]) -> str:
 
 def answer_question(main_agent: "MainAgent", question: str, registry: "AgentRegistry", history_query_service: "HistoryQueryService") -> str:
     descriptors = [agent.descriptor for agent in registry.all()]
-    selection_result = main_agent.process(_build_agent_selection_prompt(question, descriptors), [])
+    with stage_context("question_routing"):
+        selection_result = main_agent.process(_build_agent_selection_prompt(question, descriptors), [])
 
     if selection_result.status != "success":
         raise OrchestrationParseError(f"question routing did not produce a usable response: {selection_result.text}")
@@ -75,19 +77,22 @@ def answer_question(main_agent: "MainAgent", question: str, registry: "AgentRegi
 
         if isinstance(agent, HistoryAgent):
             try:
-                sub_answers[agent_name] = history_query_service.query(task_text).answer
+                with stage_context("question_history_query"):
+                    sub_answers[agent_name] = history_query_service.query(task_text).answer
             except HistoryQueryError as exc:
                 sub_answers[agent_name] = f"(no usable answer: {exc})"
             continue
 
         read_only_tools = [tool.name for tool in agent.exposed_tools() if not tool.side_effecting]
-        result = agent.process(task_text, read_only_tools)
+        with stage_context("question_subagent"):
+            result = agent.process(task_text, read_only_tools)
         sub_answers[agent_name] = result.text if result.status == "success" else f"(no usable answer: {result.text})"
 
     if len(sub_answers) == 1:
         return next(iter(sub_answers.values()))
 
-    compose_result = main_agent.process(_build_compose_prompt(question, sub_answers), [])
+    with stage_context("question_composition"):
+        compose_result = main_agent.process(_build_compose_prompt(question, sub_answers), [])
     if compose_result.status != "success":
         raise OrchestrationParseError(f"answer composition did not produce a usable response: {compose_result.text}")
 

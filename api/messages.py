@@ -22,6 +22,7 @@ full diagnosis (a format mismatch that silently broke same-second
 range-query comparisons, found during §9.19/§9.20's integration testing).
 """
 
+import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -40,10 +41,12 @@ from orchestrator.flows import (
     continue_from_risk_assessment,
     run_report_extraction,
 )
-from tools.tracing import new_trace_id, trace_context
+from tools.tracing import get_trace_id, new_trace_id, trace_context
 
 if TYPE_CHECKING:
     from api.app import ApiContext
+
+logger = logging.getLogger(__name__)
 
 
 def _now() -> str:
@@ -74,6 +77,11 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
                 intent = classify_intent(ctx.main_agent, ctx.deps.protocol_set.all(), text)
             except OrchestrationParseError as exc:
                 raise RunFailureError(str(exc)) from exc
+
+            logger.info(
+                "intent classified",
+                extra={"event": "intent_classified", "intent": intent.intent, "reason": intent.reason, "trace_id": get_trace_id()},
+            )
 
             received_at = _now()
 

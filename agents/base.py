@@ -46,7 +46,16 @@ def _wrap_tool(agent_name: str, bound_method: Callable, info: ToolInfo) -> Calla
             )
             return f"Tool '{info.name}' is not permitted for this task."
 
-        return bound_method(*args, **kwargs)
+        result = bound_method(*args, **kwargs)
+        # DEBUG, not INFO: an allowed, successful tool call is routine
+        # internal detail, not a decision an operator needs to see in
+        # normal operation — unlike a *blocked* call above, which stays
+        # at INFO (§1.8's own list; never move it).
+        logger.debug(
+            "tool call",
+            extra={"event": "tool_call", "agent": agent_name, "tool": info.name, "trace_id": get_trace_id()},
+        )
+        return result
 
     return _wrapped
 

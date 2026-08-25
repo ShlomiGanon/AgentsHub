@@ -35,6 +35,7 @@ with no continuation to queue.
 """
 
 import functools
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal
@@ -71,6 +72,7 @@ from orchestrator.queue import SerialEventQueue
 from orchestrator.selection import select_protocol
 from profiles.spec import HUMAN_ACTIVATION_TYPE
 from protocols.executor import execute_steps
+from tools.tracing import get_trace_id
 
 if TYPE_CHECKING:
     from agents.base import Agent
@@ -88,6 +90,8 @@ if TYPE_CHECKING:
     from protocols.model import Protocol
     from registries.areas import AreaRegistry
     from registries.event_types import EventTypeRegistry
+
+logger = logging.getLogger(__name__)
 
 FlowOutcome = Literal[
     "closed_on_precedent", "declined", "succeeded", "failed", "uncertain",
@@ -148,6 +152,20 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _log_event_outcome(event_id: str, outcome: str, **detail) -> None:
+    """One place every terminal outcome (§1.8's "final verdict") is
+    logged — closed on precedent, declined, failed, succeeded, or
+    uncertain — so a run can be reassembled by querying its trace ID and
+    seeing exactly how it ended, without hunting across every branch that
+    can produce an outcome.
+    """
+
+    logger.info(
+        "event outcome",
+        extra={"event": "event_outcome", "event_id": event_id, "outcome": outcome, "trace_id": get_trace_id(), **detail},
+    )
+
+
 # -- Entry points: brand new messages ----------------------------------
 
 
@@ -198,7 +216,21 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
         )
     except ExtractionExecutionError as exc:
         record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
+        _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="extraction")
         return FlowResult(event_id, "failed", str(exc))
+
+    logger.info(
+        "extraction result",
+        extra={
+            "event": "extraction_result",
+            "event_id": event_id,
+            "classification": extraction_result.classification,
+            "area": extraction_result.area,
+            "missing_fields": list(extraction_result.missing_fields),
+            "occurred_at_is_fallback": extraction_result.occurred_at_is_fallback,
+            "trace_id": get_trace_id(),
+        },
+    )
 
     # No scheduler wired up here — FlowDeps has none; §5.6's late-arriving-
     # event hook is an available extension point once a real startup
@@ -209,6 +241,10 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
     if determine_clarification_hold(extraction_result):
         create_clarification_hold(deps.persistence, event_id, raw_text)
         record_event_state(deps.persistence, event_id, {"clarification_held": True, "clarification_unresolved_field": UNRESOLVED_FIELD})
+        logger.info(
+            "hold created",
+            extra={"event": "hold_created", "hold_kind": "clarification", "event_id": event_id, "unresolved_field": UNRESOLVED_FIELD, "trace_id": get_trace_id()},
+        )
         return FlowResult(event_id, "held_for_clarification")
 
     return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent, originated_from_commander=False)
@@ -228,6 +264,16 @@ def process_report(
     one call. A report never originates from "a commander's own request"
     (§6.4/§6.7's bypass is for requests only), so closure/approval logic
     downstream always treats it as not commander-originated.
+
+    Not called from any production entry point — `api/events.py` and
+    `api/messages.py` use `begin_report`/`run_report_extraction` directly,
+    split apart across the request/queued-continuation boundary §7.2
+    requires. This function is the orchestrator package's own deliberate
+    synchronous test-facing composition (see the module docstring above):
+    it lets `tests/test_orchestrator_flows.py` exercise the full flow's
+    logic in one call, independent of `api/`'s queueing concerns. Kept
+    intentionally, not leftover scaffolding — found and reviewed during
+    the server_report.md audit (2026-08).
     """
 
     event_id = begin_report(deps, raw_text, source, received_at, sender_identity)
@@ -269,6 +315,12 @@ def process_request(
     """A person's request for an action, run synchronously start to
     finish — `begin_request` + `continue_from_risk_assessment` composed
     back into one call.
+
+    Not called from any production entry point — same status as
+    `process_report` above: `api/messages.py` uses `begin_request` +
+    `continue_from_risk_assessment` directly, split apart for §7.2's
+    async job mechanism. Kept as the orchestrator's own deliberate
+    synchronous test-facing composition, not leftover scaffolding.
     """
 
     event_id = begin_request(deps, raw_text, received_at, sender_identity)
@@ -286,9 +338,19 @@ def process_message(
 ) -> tuple[Literal["question", "report", "request"], object]:
     """Route a person's message by intent (§6.13). Returns which of the
     three the message was taken as, alongside the result — a question's
-    answer (`str`), or a `FlowResult` for a report or request. Delivering
-    that "taken as" information back to the sender is the bot/API's job
-    (§8/§7, not yet built); this is what it will read.
+    answer (`str`), or a `FlowResult` for a report or request.
+
+    Not called from any production entry point. `api/messages.py::post_msg`
+    is the real implementation of this same routing — it composes
+    `classify_intent` with the split primitives itself (`begin_report`/
+    `run_report_extraction`, `begin_request`/`continue_from_risk_assessment`)
+    rather than calling this function, exactly so a report/request can be
+    acknowledged immediately and finished as a queued continuation (§7.2).
+    This function (and `process_report`/`process_request`, which it calls)
+    is the orchestrator package's own deliberate synchronous test-facing
+    composition, kept intentionally so `tests/test_orchestrator_flows.py`
+    can exercise full-flow routing in one call — not leftover scaffolding
+    from before `api/` existed.
     """
 
     intent = classify_intent(main_agent, deps.protocol_set.all(), message_text)
@@ -403,6 +465,7 @@ def decline(deps: FlowDeps, event_id: str) -> FlowResult:
     """
 
     record_event_outcome(deps.persistence, event_id, "declined")
+    _log_event_outcome(event_id, "declined")
     return FlowResult(event_id, "declined")
 
 
@@ -464,19 +527,43 @@ def continue_from_risk_assessment(deps: FlowDeps, event_id: str, main_agent: "Ma
 
     risk_assessment = assess_risk(main_agent, classification, area, description, severity, deps.settings_store.get_risk_threshold())
     record_event_state(deps.persistence, event_id, {"risk_level": risk_assessment.level, "risk_reason": risk_assessment.reason})
+    logger.info(
+        "risk assessed",
+        extra={
+            "event": "risk_assessed", "event_id": event_id, "risk_level": risk_assessment.level,
+            "risk_score": risk_assessment.score, "risk_reason": risk_assessment.reason, "trace_id": get_trace_id(),
+        },
+    )
 
     selection = select_protocol(main_agent, raw_text, classification, area, description, deps.protocol_set.all(), risk_assessment.level)
     if selection.status == "selected":
         record_event_state(deps.persistence, event_id, {"selected_protocol": selection.protocol_name, "protocol_reason": selection.reason})
+    logger.info(
+        "protocol selection",
+        extra={
+            "event": "protocol_selection", "event_id": event_id, "status": selection.status,
+            "protocol_name": selection.protocol_name, "candidate_names": list(selection.candidate_names),
+            "reason": selection.reason, "trace_id": get_trace_id(),
+        },
+    )
 
     precedent_matches = _look_up_precedent_if_possible(deps, event_id, event)
     if precedent_matches:
         record_event_state(deps.persistence, event_id, {"precedent_matched_event_ids": [p.event_id for p in precedent_matches]})
 
     closing_event_id = determine_closure(risk_assessment.level, classification, precedent_matches)
+    logger.info(
+        "precedent closure decision",
+        extra={
+            "event": "precedent_closure", "event_id": event_id,
+            "matched_event_ids": [p.event_id for p in precedent_matches],
+            "closed": closing_event_id is not None, "closing_event_id": closing_event_id, "trace_id": get_trace_id(),
+        },
+    )
     if closing_event_id is not None:
         record_event_state(deps.persistence, event_id, {"precedent_closed_by_event_id": closing_event_id})
         record_event_outcome(deps.persistence, event_id, "closed_on_precedent")
+        _log_event_outcome(event_id, "closed_on_precedent", precedent_event_id=closing_event_id)
         return FlowResult(event_id, "closed_on_precedent", f"closed against resolved precedent '{closing_event_id}'")
 
     protocols_by_name = {p.name: p for p in deps.protocol_set.all()}
@@ -485,6 +572,10 @@ def continue_from_risk_assessment(deps: FlowDeps, event_id: str, main_agent: "Ma
     if hold_reason is not None:
         create_approval_hold(deps.persistence, event_id, hold_reason, selection, risk_assessment)
         record_event_state(deps.persistence, event_id, {"approval_held": True, "approval_reason": hold_reason})
+        logger.info(
+            "hold created",
+            extra={"event": "hold_created", "hold_kind": "approval", "event_id": event_id, "reason": hold_reason, "trace_id": get_trace_id()},
+        )
         return FlowResult(event_id, "held_for_approval", hold_reason)
 
     protocol = protocols_by_name[selection.protocol_name]
@@ -510,6 +601,7 @@ def _run_protocol(
 
     if not formulation.success:
         record_event_outcome(deps.persistence, event_id, "failed", failure_reason=formulation.failure_reason)
+        _log_event_outcome(event_id, "failed", failure_reason=formulation.failure_reason, stage="formulation")
         return FlowResult(event_id, "failed", formulation.failure_reason or "")
 
     agents_by_name = {name: deps.registry.get(name) for name in protocol.participating_agents}
@@ -528,9 +620,14 @@ def _run_protocol(
 
     if not run_result.completed:
         record_event_outcome(deps.persistence, event_id, "failed", failure_reason=run_result.failure_cause)
+        _log_event_outcome(event_id, "failed", failure_reason=run_result.failure_cause, stage="execution", failed_step_agent=run_result.failed_step_agent)
         return FlowResult(event_id, "failed", run_result.failure_cause or "")
 
     insight_text = build_insight(insights_agent, protocol, run_result.step_outcomes, comparable_history=precedent_matches)
+    logger.info(
+        "insight generated",
+        extra={"event": "insight_generated", "event_id": event_id, "protocol": protocol.name, "insight_text": insight_text, "trace_id": get_trace_id()},
+    )
 
     try:
         verdict = judge_success(main_agent, protocol, run_result.step_outcomes, insight_text=insight_text)
@@ -540,8 +637,17 @@ def _run_protocol(
         except OrchestrationParseError as exc:
             # Rerun only the judgment, never the agents, which already acted (§6.10). Both attempts failed.
             record_event_outcome(deps.persistence, event_id, "failed", failure_reason=f"success judgment failed: {exc}", insight_text=insight_text)
+            _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="judgment")
             return FlowResult(event_id, "failed", str(exc))
 
     outcome = _VERDICT_TO_OUTCOME[verdict.verdict]
     record_event_outcome(deps.persistence, event_id, outcome, insight_text=insight_text)
+    logger.info(
+        "final verdict",
+        extra={
+            "event": "final_verdict", "event_id": event_id, "verdict": verdict.verdict,
+            "reasoning": verdict.reasoning, "trace_id": get_trace_id(),
+        },
+    )
+    _log_event_outcome(event_id, outcome, reasoning=verdict.reasoning)
     return FlowResult(event_id, outcome, verdict.reasoning)

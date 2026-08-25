@@ -33,6 +33,7 @@ from agents.base import Agent
 from config.base import BaseConfig
 from orchestrator.errors import OrchestrationParseError
 from protocols.model import Protocol
+from tools.tracing import stage_context
 
 if TYPE_CHECKING:
     from history.precedent import PrecedentMatch
@@ -80,7 +81,8 @@ def _build_insight_prompt(protocol: Protocol, step_outcomes: tuple["StepOutcome"
 
 def build_insight(insights_agent: InsightsAgent, protocol: Protocol, step_outcomes: tuple["StepOutcome", ...], comparable_history: tuple["PrecedentMatch", ...] = ()) -> str:
     prompt = _build_insight_prompt(protocol, step_outcomes, comparable_history)
-    result = insights_agent.process(prompt, [])
+    with stage_context("insight_generation"):
+        result = insights_agent.process(prompt, [])
 
     if result.status != "success":
         raise OrchestrationParseError(f"insight generation did not produce a usable response: {result.text}")

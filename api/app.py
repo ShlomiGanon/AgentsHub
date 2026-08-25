@@ -31,6 +31,7 @@ from profiles.loader import load_profile
 from protocols.loader import load_protocols
 from registries.areas import build_area_registry
 from registries.event_types import build_event_type_registry
+from tools.logging_config import configure_logging
 
 if TYPE_CHECKING:
     from agents.base import Agent
@@ -63,6 +64,7 @@ def _dispatch_queue_item(item: object) -> None:
 
 def build_context(module_path: str) -> ApiContext:
     loaded_profile = load_profile(module_path)
+    configure_logging(loaded_profile.module_path)
     base_config = load_base_config()
 
     persistence = open_persistence(loaded_profile.db_path)

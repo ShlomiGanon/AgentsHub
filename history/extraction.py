@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from history.time_utils import parse_timestamp
-from tools.logging_config import log_ai_interaction
+from tools.tracing import stage_context
 
 
 class ExtractionExecutionError(Exception):
@@ -86,14 +86,19 @@ def extract_event(
     )
 
     try:
-        raw_response = model_invoker(prompt)
+        # `stage_context` tags whatever real model call `model_invoker`
+        # makes underneath (in production, `main_agent.process(...)` ->
+        # `agents/adapter.py::invoke`, the one place model I/O is actually
+        # logged) as "extraction" — no separate log call needed here,
+        # which would otherwise duplicate the same interaction under a
+        # second, differently-shaped record.
+        with stage_context("extraction"):
+            raw_response = model_invoker(prompt)
     except Exception as exc:
         raise ExtractionExecutionError(f"model invocation failed: {exc}") from exc
 
     if not isinstance(raw_response, str):
         raise ExtractionExecutionError("model response must be text")
-
-    log_ai_interaction("extraction", prompt, raw_response)
 
     try:
         payload = json.loads(_strip_code_fence(raw_response))
