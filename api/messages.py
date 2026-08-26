@@ -14,7 +14,10 @@ per §7.4's own rule: "a question has no job to track." This is half of
 One trace ID (§1.8) covers the whole handler, including intent
 classification — see `api/events.py`'s own docstring for why it's
 explicitly threaded into a queued continuation's closure rather than
-relying on contextvar propagation across the queue's worker thread.
+relying on contextvar propagation across the queue's worker thread, and
+for why the synchronous portion sets it via `tools.tracing.set_trace_id`
+rather than a `with trace_context(...)` block that would reset it before
+werkzeug's own request-log line gets written.
 
 `_now()` goes through `storage_timestamp` for the same reason as
 `api/events.py`'s own `_now()` — see that module's docstring for the
@@ -41,7 +44,7 @@ from orchestrator.flows import (
     continue_from_risk_assessment,
     run_report_extraction,
 )
-from tools.tracing import get_trace_id, new_trace_id, trace_context
+from tools.tracing import get_trace_id, new_trace_id, set_trace_id, trace_context
 
 if TYPE_CHECKING:
     from api.app import ApiContext
@@ -72,44 +75,45 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
             raise InvalidInputError("'sender_identity' is required", field="sender_identity")
 
         trace_id = new_trace_id()
-        with trace_context(trace_id):
+        set_trace_id(trace_id)
+
+        try:
+            intent = classify_intent(ctx.main_agent, ctx.deps.protocol_set.all(), text)
+        except OrchestrationParseError as exc:
+            raise RunFailureError(str(exc)) from exc
+
+        logger.info(
+            "intent classified",
+            extra={"event": "intent_classified", "intent": intent.intent, "reason": intent.reason, "trace_id": get_trace_id()},
+        )
+
+        received_at = _now()
+
+        if intent.intent == "question":
             try:
-                intent = classify_intent(ctx.main_agent, ctx.deps.protocol_set.all(), text)
+                answer = answer_question(ctx.main_agent, text, ctx.deps.registry, ctx.deps.history_query_service)
             except OrchestrationParseError as exc:
                 raise RunFailureError(str(exc)) from exc
+            return jsonify({"taken_as": "question", "answer": answer})
 
-            logger.info(
-                "intent classified",
-                extra={"event": "intent_classified", "intent": intent.intent, "reason": intent.reason, "trace_id": get_trace_id()},
-            )
-
-            received_at = _now()
-
-            if intent.intent == "question":
-                try:
-                    answer = answer_question(ctx.main_agent, text, ctx.deps.registry, ctx.deps.history_query_service)
-                except OrchestrationParseError as exc:
-                    raise RunFailureError(str(exc)) from exc
-                return jsonify({"taken_as": "question", "answer": answer})
-
-            if intent.intent == "report":
-                event_id = begin_report(ctx.deps, text, "telegram", received_at, sender_identity, source_message_id)
-
-                def _work() -> None:
-                    with trace_context(trace_id):
-                        run_report_extraction(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent)
-
-                ctx.queue.submit((event_id, _work))
-                return jsonify({"taken_as": "report", "event_id": event_id, "status": "queued"}), 202
-
-            is_commander = level >= PermissionLevel.COMMANDER
-            event_id = begin_request(ctx.deps, text, received_at, sender_identity, source_message_id)
+        if intent.intent == "report":
+            event_id = begin_report(ctx.deps, text, "telegram", received_at, sender_identity, source_message_id)
 
             def _work() -> None:
                 with trace_context(trace_id):
-                    continue_from_risk_assessment(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent, is_commander)
+                    run_report_extraction(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent)
 
             ctx.queue.submit((event_id, _work))
-            return jsonify({"taken_as": "request", "event_id": event_id, "status": "queued"}), 202
+            return jsonify({"taken_as": "report", "event_id": event_id, "status": "queued"}), 202
+
+        is_commander = level >= PermissionLevel.COMMANDER
+        event_id = begin_request(ctx.deps, text, received_at, sender_identity, source_message_id)
+
+        def _work() -> None:
+            with trace_context(trace_id):
+                continue_from_risk_assessment(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent, is_commander)
+
+        ctx.queue.submit((event_id, _work))
+        return jsonify({"taken_as": "request", "event_id": event_id, "status": "queued"}), 202
 
     return blueprint

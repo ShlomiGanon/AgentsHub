@@ -14,6 +14,8 @@ from persistence.schema import (
     EVENTS_TABLE_DDL,
     HELD_EVENTS_TABLE_DDL,
     INDEXES_DDL,
+    LOG_ENTRIES_INDEXES_DDL,
+    LOG_ENTRIES_TABLE_DDL,
     NOTIFICATION_LOG_TABLE_DDL,
     USERS_TABLE_DDL,
 )
@@ -64,6 +66,7 @@ MIGRATIONS: list[tuple[int, str, str]] = [
     (7, "create held_events table", HELD_EVENTS_TABLE_DDL),
     (8, "create notification_log table", NOTIFICATION_LOG_TABLE_DDL),
     (9, "add source_message_id to events", "ALTER TABLE events ADD COLUMN source_message_id TEXT;"),
+    (10, "create log_entries table", LOG_ENTRIES_TABLE_DDL + LOG_ENTRIES_INDEXES_DDL),
 ]
 
 

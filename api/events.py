@@ -16,6 +16,16 @@ through the final history write carries the same one (§9.2's own
 "confirm the trace ID connects every log record" requirement, found
 unwired anywhere in the real code before this).
 
+The synchronous portion below sets it via `tools.tracing.set_trace_id`,
+not `with trace_context(...)` — this response still needs to reach
+werkzeug's own request-log line, written only *after* this function
+returns (see that function's own docstring); scoping it to a `with`
+block that exits before `return` would reset it back to `""` first, the
+exact gap this fixes (found live: querying by trace_id reconstructed
+everything except the one line recording the request itself). The
+queued continuation, on a different thread, still uses `trace_context`
+as before — a bounded block is exactly right there.
+
 `_now()` goes through `storage_timestamp` (re-exported from `history
 .interface`, the declared entry point — `history.time_utils` itself is
 internal to that package, per `docs/allowed_calls.md`) rather than
@@ -41,7 +51,7 @@ from api.auth import authenticate, require
 from api.errors import InvalidInputError
 from history.interface import storage_timestamp
 from orchestrator.flows import begin_report, run_report_extraction
-from tools.tracing import new_trace_id, trace_context
+from tools.tracing import new_trace_id, set_trace_id, trace_context
 
 if TYPE_CHECKING:
     from api.app import ApiContext
@@ -69,8 +79,8 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
             raise InvalidInputError("'sender_identity' is required", field="sender_identity")
 
         trace_id = new_trace_id()
-        with trace_context(trace_id):
-            event_id = begin_report(ctx.deps, text, "sensor", _now(), sender_identity)
+        set_trace_id(trace_id)
+        event_id = begin_report(ctx.deps, text, "sensor", _now(), sender_identity)
 
         def _work() -> None:
             with trace_context(trace_id):

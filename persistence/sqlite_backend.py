@@ -216,6 +216,33 @@ class SQLitePersistence(PersistenceInterface):
             connection.close()
 
     def _submit_write(self, fn):
+        # A write submitted from inside the writer thread itself (i.e. from
+        # inside another `_do` closure already running here) would queue
+        # behind its own completion and never be serviced — a silent
+        # deadlock, not a slow write. Raised loudly instead: nothing in
+        # this module's own write closures logs today, so this can only
+        # fire if a future call site (most plausibly `write_log_entry`,
+        # via `tools.logging_config`'s handler) adds one — see
+        # `write_log_entry`'s own docstring, which is what actually
+        # protects against it in practice by never reaching this branch.
+        if threading.current_thread() is self._writer_thread:
+            raise PersistenceError("cannot submit a write from within the persistence writer thread itself — this would deadlock")
+
+        # A write submitted after `close()` has the identical symptom: the
+        # writer thread already drained `_STOP` and returned, so nothing
+        # will ever dequeue this job and `future.result()` blocks forever.
+        # Found for real, not hypothetically: `tools.logging_config`'s
+        # DB-backed handler stays attached to the *root* logger — process-
+        # wide, outliving any one test — until something reconfigures it;
+        # a later test that logs anything at all, without itself calling
+        # `configure_logging` again, was hanging the entire suite the
+        # instant it hit a persistence instance an earlier test had
+        # already closed. Same fix as the reentrancy case above: fail
+        # loudly and immediately rather than hang, for every caller, not
+        # only logging.
+        if not self._writer_thread.is_alive():
+            raise PersistenceError("cannot submit a write after this persistence connection has been closed")
+
         future: Future = Future()
         self._write_queue.put((fn, future))
         return future.result()
@@ -411,6 +438,44 @@ class SQLitePersistence(PersistenceInterface):
         try:
             rows = connection.execute("SELECT telegram_identity, permission_level FROM users").fetchall()
             return [dict(row) for row in rows]
+        finally:
+            connection.close()
+
+    # -- Structured log entries (§1.8 follow-up) -----------------------------
+
+    def write_log_entry(self, trace_id: str | None, details: dict) -> None:
+        timestamp = datetime.now(timezone.utc).isoformat()
+        payload = json.dumps(details, default=str, ensure_ascii=False)
+
+        def _do(connection: sqlite3.Connection) -> None:
+            try:
+                connection.execute(
+                    "INSERT INTO log_entries (trace_id, timestamp, details) VALUES (?, ?, ?)",
+                    (trace_id, timestamp, payload),
+                )
+                connection.commit()
+            except sqlite3.Error as exc:
+                connection.rollback()
+                raise PersistenceError(f"failed to write log entry: {exc}") from exc
+
+        self._submit_write(_do)
+
+    def fetch_log_entries(self, trace_id: str) -> list[dict]:
+        connection = self._read_connection()
+        try:
+            rows = connection.execute(
+                "SELECT id, trace_id, timestamp, details FROM log_entries WHERE trace_id = ? ORDER BY id",
+                (trace_id,),
+            ).fetchall()
+
+            entries = []
+            for row in rows:
+                entry = json.loads(row["details"])
+                entry["id"] = row["id"]
+                entry["trace_id"] = row["trace_id"]
+                entry["timestamp"] = row["timestamp"]
+                entries.append(entry)
+            return entries
         finally:
             connection.close()
 

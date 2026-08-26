@@ -23,6 +23,18 @@ resolved value from `os.environ` itself. It only *writes* the real
 `test_sub_model`'s already-configured `TEST_` values) for the rare test
 that must exercise one of the three real `main()` entry points end to
 end, so that root's own environment read has something real to find.
+
+`_reset_trace_id_between_tests` (below) exists because of one specific
+gap `api.app.build_app`'s own `before_request` hook cannot close on its
+own: that hook resets `tools.tracing`'s trace-ID contextvar at the start
+of every real HTTP request, on whichever thread serves it — but a test
+using Flask's `test_client()` (unlike `tests.api_fakes.RunningApiServer`,
+which serves on its own background thread) runs the whole request
+in-process, on the *same* thread pytest itself runs on. Without this
+fixture, `tools.tracing.set_trace_id` (needed so a route's trace ID
+survives long enough for werkzeug's own request-log line to carry it —
+see that function's own docstring) would leave its value sitting on that
+shared thread's context, visible to whatever unrelated test runs next.
 """
 
 import os
@@ -32,8 +44,14 @@ from pathlib import Path
 import pytest
 
 from config.base import TierModel, build_tier_model
+from tools.tracing import set_trace_id
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+
+@pytest.fixture(autouse=True)
+def _reset_trace_id_between_tests():
+    set_trace_id("")
 
 
 def _require_test_env(name: str) -> str:

@@ -10,8 +10,14 @@ by hand for an error case. `register_error_handlers` is the one place
 that turns any of them (or anything unexpected) into that one shape.
 """
 
+import logging
+
 from flask import Flask, jsonify
 from werkzeug.exceptions import HTTPException
+
+from tools.tracing import get_trace_id
+
+logger = logging.getLogger(__name__)
 
 
 class ApiError(Exception):
@@ -101,6 +107,30 @@ _GENERIC_INTERNAL_MESSAGE = "an internal error occurred"
 def register_error_handlers(app: Flask) -> None:
     @app.errorhandler(ApiError)
     def _handle_api_error(error: ApiError):
+        # Every refused/failed request used to produce zero log records at
+        # all (§1.8 follow-up coverage audit gap) — nothing to debug a
+        # 400/401/403/404/409/422 from except the response Flask already
+        # sent the caller. `trace_id` is best-effort here: a request that
+        # fails authentication or input validation typically hasn't
+        # entered `trace_context` yet (both checks run before a route body
+        # generates one) and legitimately has none — `get_trace_id()`
+        # returns "" in that case, same as any other untraced record, not
+        # a bug in this handler. `RunFailureError` is the one class raised
+        # from *inside* an active trace_context; note in the module
+        # docstring's own known-limits section that the trace context has
+        # already unwound (and the ID with it) by the time Flask's error
+        # handling machinery reaches here, so even that case logs without
+        # one today — a correlation gap, not a crash risk, and out of
+        # scope for this pass.
+        logger.warning(
+            "API request refused",
+            extra={
+                "event": "api_error", "error_class": error.error_class, "status_code": error.status_code,
+                # "error_message", not "message" — logging.LogRecord reserves
+                # "message" for its own use and raises on any extra= collision.
+                "error_message": error.message, "field": error.field, "trace_id": get_trace_id(),
+            },
+        )
         body = {"error_class": error.error_class, "message": error.message}
         if error.field is not None:
             body["field"] = error.field
@@ -117,5 +147,8 @@ def register_error_handlers(app: Flask) -> None:
 
     @app.errorhandler(Exception)
     def _handle_unexpected(error: Exception):
-        app.logger.exception("unhandled exception in an API request")
+        logger.exception(
+            "unhandled exception in an API request",
+            extra={"event": "api_unexpected_error", "trace_id": get_trace_id()},
+        )
         return jsonify({"error_class": "internal_error", "message": _GENERIC_INTERNAL_MESSAGE}), 500

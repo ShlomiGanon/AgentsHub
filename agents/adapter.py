@@ -61,6 +61,7 @@ def _get_crewai():
     try:
         import crewai
         import crewai.tools
+        from crewai.events.utils.console_formatter import set_suppress_console_output
     except ImportError as exc:
         raise AgentFrameworkNotReadyError(
             "framework",
@@ -68,6 +69,28 @@ def _get_crewai():
             trace_id=get_trace_id(),
             cause=exc,
         ) from exc
+
+    # Display only — nothing about invocation changes below. crewai's own
+    # "🤖 LiteAgent Started/Completed" panels are printed by a process-wide
+    # `EventListener` singleton whose `ConsoleFormatter` is constructed with
+    # `verbose=True` unconditionally (crewai/events/event_listener.py) —
+    # independent of, and not affected by, the `verbose` flag on any
+    # individual `Agent` instance (see `invoke()` below, which sets its own
+    # to False for the same reason but can't reach this). This is crewai's
+    # own supported switch for that output (crewai_core.printer, re-exported
+    # here), not a log level — the panels are Rich console prints, never
+    # routed through Python's `logging` module, so there is no logger to
+    # raise the level on instead.
+    #
+    # It's a contextvars.ContextVar, which does not propagate across a
+    # plain `threading.Thread` boundary (confirmed empirically) — setting it
+    # once at process startup would not reach `orchestrator.queue
+    # .SerialEventQueue`'s dedicated worker thread, where every real
+    # `kickoff()` call actually runs. Setting it here instead, inside the one
+    # function every `invoke()` call goes through immediately before that
+    # `kickoff()` call, guarantees it's set on whichever thread is about to
+    # need it, every time.
+    set_suppress_console_output(True)
 
     return crewai
 
@@ -126,6 +149,7 @@ def invoke(descriptor: AgentDescriptor, wrapped_tools: dict[str, Callable], text
         llm=llm,
         tools=crewai_tools,
         max_execution_time=timeout_seconds,
+        verbose=False,
     )
 
     try:

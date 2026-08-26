@@ -146,6 +146,37 @@ class PersistenceInterface(ABC):
     def list_users(self) -> list[dict]:
         """Return every registered user."""
 
+    # -- Structured log entries (work_plan.md §1.8 follow-up) -----------
+
+    @abstractmethod
+    def write_log_entry(self, trace_id: str | None, details: dict) -> None:
+        """Persist one structured log record — the single write path
+        `tools.logging_config`'s DB-backed handler funnels every
+        `logger.*` call site through, so no call site ever talks to
+        storage directly. `trace_id` is its own parameter, not a
+        `details` key, since it's what a caller filters/debugs by (see
+        `fetch_log_entries`). `details` carries everything else a JSON log
+        record already carries — level, logger name, message, and every
+        event-specific structured field a call site passed via `extra=` —
+        as one open-ended map, the same "don't fix the shape in advance"
+        reasoning `held_events.payload`/`events.entities` already use.
+
+        The timestamp is captured here, at write time, not accepted as a
+        parameter — a caller has no business backdating a log entry, and
+        this keeps every implementation honest about when the row was
+        actually written.
+        """
+
+    @abstractmethod
+    def fetch_log_entries(self, trace_id: str) -> list[dict]:
+        """Return every log entry recorded for `trace_id`, oldest first —
+        each dict merging `details` back out with `id`/`trace_id`/
+        `timestamp`, reconstructing the full original record. Ordering is
+        by insertion order (see `write_log_entry`'s docstring), which is
+        what makes "the complete, correctly-ordered log for one request"
+        answerable by this one call.
+        """
+
 
 def open_persistence(db_path: str) -> PersistenceInterface:
     """Construct the concrete backend for `db_path`.

@@ -96,7 +96,15 @@ class SerialEventQueue:
             try:
                 self._process_fn(item)
             except Exception:
-                logger.exception("event processing failed; continuing with the next queued event", extra={"event": "queue_processing_failed"})
+                # `item` is generic to this class (module docstring) — logging
+                # its repr, rather than nothing, is the only way this log
+                # record can name which event failed without assuming a
+                # shape this class deliberately doesn't know (§1.8 follow-up
+                # coverage audit gap: this previously named no event at all).
+                logger.exception(
+                    "event processing failed; continuing with the next queued event",
+                    extra={"event": "queue_processing_failed", "item": repr(item)},
+                )
             finally:
                 self._currently_processing = None
                 self._queue.task_done()

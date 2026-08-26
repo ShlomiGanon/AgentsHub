@@ -138,6 +138,13 @@ CREATE INDEX IF NOT EXISTS idx_events_classification_area ON events(classificati
 CREATE INDEX IF NOT EXISTS idx_event_steps_event_id ON event_steps(event_id);
 """
 
+# Its own index DDL, not folded into INDEXES_DDL above — that constant is
+# migration 5's frozen historical SQL (see persistence/migrations.py), and
+# log_entries didn't exist yet when migration 5 shipped.
+LOG_ENTRIES_INDEXES_DDL = """
+CREATE INDEX IF NOT EXISTS idx_log_entries_trace_id ON log_entries(trace_id);
+"""
+
 
 # -- Held events (§6.7; both hold kinds share one table) --------------------
 
@@ -185,5 +192,44 @@ CREATE TABLE IF NOT EXISTS notification_log (
     kind TEXT NOT NULL,
     event_id TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+"""
+
+# -- Structured log entries (work_plan.md §1.8 follow-up — DB-backed sink) ---
+#
+# One row per `logger.*` call site captured by `tools.logging_config`'s
+# handler — the DB-backed counterpart to the JSON object every log record
+# already prints to stdout (`tools.logging_config._JsonFormatter`). `id`'s
+# AUTOINCREMENT ordering, not `timestamp`, is what `fetch_log_entries`
+# relies on to return a trace's rows in the order they actually happened:
+# every write here goes through the same single serialized writer thread
+# every other persistence write does (§2.9), so insertion order exactly
+# matches logger-call order regardless of clock resolution — two records
+# logged in the same microsecond still land in the right order. `timestamp`
+# is captured by the write path itself, not by the caller, and is for
+# human-readable display only; it deliberately uses its own precision
+# independent of `history.interface.storage_timestamp`'s whole-second
+# convention (§9.19/§9.20) — that convention exists for lexicographic
+# range-query comparison against other `occurred_at`/`received_at` values,
+# which nothing here does; this table is only ever queried by `trace_id`.
+# `details` is one JSON-encoded TEXT blob — level, logger name, message,
+# and every event-specific structured field a call site passed via
+# `extra=` — rather than fixed named columns, mirroring `events.entities`/
+# `held_events.payload`'s own reasoning: call sites pass an open-ended,
+# per-event set of fields (§1.8's eleven event kinds each carry different
+# structured detail), not one fixed shape. `trace_id` is its own column,
+# not a `details` key, since it's the primary thing this table is filtered
+# by; nullable because not every log record is produced inside a trace
+# (e.g. startup-time warnings, or a request's own access-log line, which
+# fires outside any trace_context) — `tools.tracing.get_trace_id()` itself
+# returns `""` outside any trace, by that module's own design, and the
+# write path stores that case as SQL NULL rather than an empty string, so
+# "no trace" reads unambiguously rather than as an empty trace ID.
+LOG_ENTRIES_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS log_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trace_id TEXT,
+    timestamp TEXT NOT NULL,
+    details TEXT NOT NULL
 );
 """

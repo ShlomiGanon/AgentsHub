@@ -147,7 +147,23 @@ enters the system (`POST /Event`, `POST /Msg`, or a hold's resumption via
 `POST /Approve`/`POST /Clarify` — each of these gets its own fresh ID,
 not a continuation of the original event's) and is attached to every
 record produced while handling it, all the way through extraction, every
-agent call, every tool call, and the final write.
+agent call, every tool call, and the final write. The same full-detail
+record also lands in the deployment's own database (`log_entries`), and
+a short, human-readable one-line summary of it prints to the console
+separately — see below for how to see only that last one.
+
+**Console output — two streams, on by default.** The full JSON stream
+above prints to stdout; a condensed, human-readable line per record
+(`[HH:MM:SS] LEVEL  <trace_id[:8]>  <summary>`) prints separately to
+stderr. In a normal terminal both are visible and interleaved. Set
+**`LOG_CONSOLE_JSON=false`** (or `0`) in the process environment before
+starting the API or the bot to stop the JSON stream from printing to the
+console, leaving only the human-readable lines — useful for interactive,
+manual testing. This affects the console only: the JSON formatter and
+the database log sink are both completely unaffected either way, so
+nothing about what's recorded or queryable ever changes, only what
+prints to the terminal. Unset, empty, or any value other than an
+explicit `false`/`0` means the JSON stream stays on (today's default).
 
 **Always on, at INFO** — what the system decided about an event and why.
 This is on in normal operation, with no configuration needed: `intent_classified`

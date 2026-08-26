@@ -60,6 +60,29 @@ def trace_context(trace_id: str | None = None):
         _current_trace_id.reset(token)
 
 
+def set_trace_id(trace_id: str) -> None:
+    """Make `trace_id` current from this call onward, on this thread,
+    with no corresponding reset — unlike `trace_context`, which is for a
+    bounded block that should stop being "current" the moment it exits.
+
+    Exists for exactly one caller shape: an API route (`api/events.py`,
+    `api/messages.py`, `api/holds.py`) that mints a trace ID and does real
+    work before returning a response — and needs that same trace ID still
+    current *after* the route function returns, because werkzeug's own
+    request-log line (`WSGIRequestHandler.log_request`, via the stdlib's
+    `send_response`) is written only once the WSGI app's response is fully
+    built, which is strictly after the view function — and any
+    `trace_context` block inside it — has already returned and reset the
+    contextvar back to `""`. `api/app.py`'s `before_request` hook clears
+    the trace ID to `""` at the start of every request specifically so an
+    unrelated route that never calls this (a plain read like `GET
+    /SYSTEM`) doesn't inherit a stale value left over from whichever
+    request previously ran on the same thread.
+    """
+
+    _current_trace_id.set(trace_id)
+
+
 def get_current_stage() -> str:
     """Return the stage name for the model call currently in progress.
 

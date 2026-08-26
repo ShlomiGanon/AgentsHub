@@ -279,3 +279,44 @@ def test_notifications_are_returned_in_ascending_sequence_order(persistence):
     notifications = persistence.fetch_notifications_since(0)
     sequence_ids = [n["sequence_id"] for n in notifications]
     assert sequence_ids == sorted(sequence_ids)
+
+
+# -- Structured log entries (§1.8 follow-up) ---------------------------------
+
+
+def test_write_and_fetch_log_entries_round_trip(persistence):
+    persistence.write_log_entry("trace-1", {"level": "INFO", "logger": "x", "message": "hello", "custom_field": 42})
+
+    [entry] = persistence.fetch_log_entries("trace-1")
+    assert entry["trace_id"] == "trace-1"
+    assert entry["level"] == "INFO"
+    assert entry["logger"] == "x"
+    assert entry["message"] == "hello"
+    assert entry["custom_field"] == 42
+    assert entry["timestamp"]  # captured automatically by the write path
+
+
+def test_fetch_log_entries_is_scoped_to_its_trace_id(persistence):
+    persistence.write_log_entry("trace-1", {"message": "a"})
+    persistence.write_log_entry("trace-2", {"message": "b"})
+
+    assert [e["message"] for e in persistence.fetch_log_entries("trace-1")] == ["a"]
+    assert [e["message"] for e in persistence.fetch_log_entries("trace-2")] == ["b"]
+
+
+def test_fetch_log_entries_for_an_unknown_trace_id_returns_empty_list(persistence):
+    assert persistence.fetch_log_entries("never-logged") == []
+
+
+def test_log_entries_for_one_trace_id_are_returned_in_the_order_they_were_written(persistence):
+    for i in range(5):
+        persistence.write_log_entry("trace-1", {"message": f"step {i}", "i": i})
+
+    entries = persistence.fetch_log_entries("trace-1")
+    assert [e["i"] for e in entries] == [0, 1, 2, 3, 4]
+
+
+def test_write_log_entry_accepts_no_trace_id(persistence):
+    persistence.write_log_entry(None, {"message": "startup warning"})
+
+    assert persistence.fetch_log_entries("") == []  # never conflated with "no trace"

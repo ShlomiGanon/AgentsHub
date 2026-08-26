@@ -33,6 +33,7 @@ from protocols.loader import load_protocols
 from registries.areas import build_area_registry
 from registries.event_types import build_event_type_registry
 from tools.logging_config import configure_logging
+from tools.tracing import set_trace_id
 
 if TYPE_CHECKING:
     from agents.base import Agent
@@ -75,10 +76,18 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
     """
 
     loaded_profile = load_profile(module_path, core_model=core_model, sub_model=sub_model)
-    configure_logging(loaded_profile.module_path)
+
+    # Persistence opens before logging configures — deliberately reordered
+    # from this function's original sequence — specifically so the
+    # DB-backed log sink (work_plan.md §1.8 follow-up) has a handle to
+    # attach to. Nothing between the old and new position depended on the
+    # old order: `open_persistence` reads nothing `configure_logging`/
+    # `load_base_config` produce, and neither of those logs anything
+    # during its own setup that would be lost by running after this.
+    persistence = open_persistence(loaded_profile.db_path)
+    configure_logging(loaded_profile.module_path, persistence=persistence)
     base_config = load_base_config(core_model=core_model)
 
-    persistence = open_persistence(loaded_profile.db_path)
     settings_store = SettingsStore(
         loaded_profile.db_path,
         loaded_profile.retry_count,
@@ -120,6 +129,17 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
 
 def build_app(ctx: ApiContext) -> Flask:
     app = Flask(__name__)
+
+    # Isolates each request's trace ID on the thread that serves it, before
+    # anything else runs — see tools.tracing.set_trace_id's own docstring
+    # for why a route sets one this way instead of scoping it with
+    # trace_context. Without this reset, a route that never mints a trace
+    # ID at all (a plain read like GET /SYSTEM) would inherit whatever
+    # value a *previous*, unrelated request left set on this same
+    # request-serving thread — a false correlation, worse than none.
+    @app.before_request
+    def _reset_trace_id_for_this_request() -> None:
+        set_trace_id("")
 
     from api.errors import register_error_handlers
     from api.events import build_events_blueprint

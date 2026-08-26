@@ -21,7 +21,23 @@ time (not on every log call). Absent or unset means off; only `"1"`/
 `"true"` (any case) turn it on — a bare non-empty string like `"false"`
 or `"0"` must not be mistaken for "set". This is a separate, unrelated
 concern from everything below — never touched by the model-tier
-machinery, and the one remaining `os.environ` read in this module.
+machinery.
+
+`LOG_CONSOLE_JSON_ENABLED` is the same shape of switch, for a different
+concern: `tools.logging_config.configure_logging` normally attaches
+*two* console handlers — the original JSON stream (stdout) and the
+newer human-readable one (stderr, work_plan.md §1.8 follow-up) — which
+interleave in a normal terminal. Read from `LOG_CONSOLE_JSON`, inverted
+from `DEBUG_VERBOSE_LOGGING`'s convention on purpose: this one is *on*
+by default (today's existing behavior, unchanged, for anything that
+doesn't set it — including every existing test), and only an explicit
+`"0"`/`"false"` (case-insensitive) turns it off, giving a terminal with
+only the human-readable lines. Unset, empty, `"1"`, `"true"`, or any
+other text all mean "on" — the default is never one typo away from
+silently changing. This flag never reaches the DB-backed log sink
+(`_PersistenceLogHandler`) at all, which `configure_logging` attaches
+independently of either console handler — full detail keeps landing
+there regardless of this flag's value.
 
 `build_tier_model`/`load_base_config` (below) are the model-tier concern:
 every agent in the system uses either the "core" tier (the three core
@@ -59,6 +75,19 @@ def _parse_debug_flag(raw: str | None) -> bool:
 
 
 DEBUG_FLAG = _parse_debug_flag(os.environ.get("DEBUG_VERBOSE_LOGGING"))
+
+
+def _parse_console_json_flag(raw: str | None) -> bool:
+    """On by default — strict in the opposite direction from
+    `_parse_debug_flag`: only these exact (case-insensitive) values turn
+    it off. Unset, empty, "true", "1", or any other text all leave it on,
+    matching the stream's behavior before this switch existed.
+    """
+
+    return (raw or "").strip().lower() not in ("0", "false")
+
+
+LOG_CONSOLE_JSON_ENABLED = _parse_console_json_flag(os.environ.get("LOG_CONSOLE_JSON"))
 
 
 class ModelTierError(Exception):

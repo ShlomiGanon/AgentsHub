@@ -190,13 +190,28 @@ def begin_report(
     unreferenced reply. Written once, alongside the rest of the envelope.
     """
 
-    return record_initial_event(
+    event_id = record_initial_event(
         deps.persistence,
         InitialEventEnvelope(
             raw_text=raw_text, source=source, received_at=received_at, sender_identity=sender_identity,
             source_message_id=source_message_id,
         ),
     )
+
+    # The first log record of a report's own trace (§1.8 follow-up
+    # coverage audit gap): without this, reconstructing a run from the log
+    # sink alone starts at "extraction result" with no record of what was
+    # actually submitted or by whom — the raw text and sender only ever
+    # lived in the `events` table, never in the log stream itself.
+    logger.info(
+        "report received",
+        extra={
+            "event": "report_received", "event_id": event_id, "source": source,
+            "sender_identity": sender_identity, "raw_text": raw_text, "trace_id": get_trace_id(),
+        },
+    )
+
+    return event_id
 
 
 def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent") -> FlowResult:
@@ -300,6 +315,16 @@ def begin_request(deps: FlowDeps, raw_text: str, received_at: str, sender_identi
     )
     record_event_state(deps.persistence, event_id, {"classification": HUMAN_ACTIVATION_TYPE})
 
+    # Same reasoning as begin_report's own "report received" log, above —
+    # the first record of a request's own trace.
+    logger.info(
+        "request received",
+        extra={
+            "event": "request_received", "event_id": event_id,
+            "sender_identity": sender_identity, "raw_text": raw_text, "trace_id": get_trace_id(),
+        },
+    )
+
     return event_id
 
 
@@ -391,6 +416,20 @@ def resolve_clarification(
         {"classification": chosen_classification, "clarification_resolved_by": answering_identity, "clarification_chosen_classification": chosen_classification},
     )
 
+    # Who answered and what they chose (§1.8 follow-up coverage audit gap)
+    # — §1.8 itself only requires logging that a hold was *created*
+    # (already done, in run_report_extraction); without this, "why did
+    # this event proceed the way it did" can only be answered by reading
+    # the events/held_events tables, never the log stream a trace ID
+    # otherwise reconstructs everything else from.
+    logger.info(
+        "clarification hold resolved",
+        extra={
+            "event": "hold_resolved", "hold_kind": "clarification", "event_id": event_id,
+            "resolved_by": answering_identity, "chosen_classification": chosen_classification, "trace_id": get_trace_id(),
+        },
+    )
+
     return answer
 
 
@@ -452,6 +491,17 @@ def resolve_approval(
             "approval_answered_by": answering_identity,
             "approval_answered_at": _now(),
             "selected_protocol": answer.hold["selected_protocol_name"],
+        },
+    )
+
+    # Same reasoning as resolve_clarification's own "hold resolved" log,
+    # above — who answered and what they decided.
+    logger.info(
+        "approval hold resolved",
+        extra={
+            "event": "hold_resolved", "hold_kind": "approval", "event_id": event_id, "resolved_by": answering_identity,
+            "decision": decision, "status": answer.status, "selected_protocol": answer.hold["selected_protocol_name"],
+            "trace_id": get_trace_id(),
         },
     )
 
