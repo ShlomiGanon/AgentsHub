@@ -11,6 +11,10 @@ prompt:
 
 Full walkthrough: `docs/operator_guide.md`. Quick start below.
 
+load env variables:
+```
+./load_env.sh1
+```
 commander run:
 ```
 python -m tools.terminal_client_commander --profile profiles.demo
