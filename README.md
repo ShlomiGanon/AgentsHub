@@ -13,7 +13,7 @@ Full walkthrough: `docs/operator_guide.md`. Quick start below.
 
 load env variables:
 ```
-./load_env.sh1
+./load_env.ps1
 ```
 commander run:
 ```
