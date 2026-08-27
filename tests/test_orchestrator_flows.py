@@ -368,6 +368,7 @@ def test_process_message_routes_question_without_writing_an_event(deps):
     agent = _ScriptedAgent(
         {
             "kind of message": "INTENT: question\nREASON: asks about status",
+            "Decide whether this question can be answered by directly looking up": "ROUTE: normal",
             "Decide which of the following agents": "AGENT: reference_agent\nTASK: what's the status?",
         }
     )
@@ -515,6 +516,38 @@ def test_resolve_approval_then_continue_after_approval_composes_to_success(deps)
     result = continue_after_approval(deps, answer.hold["event_id"], agent, insights_agent, answer.hold["selected_protocol_name"])
 
     assert result.outcome == "succeeded"
+
+
+def test_process_report_no_match_selection_writes_a_terminal_outcome_not_a_hold(deps, caplog):
+    # NO_MATCH has no candidate to approve/reject/select, so there is
+    # nothing a hold could ever resolve — it must behave like
+    # uncertain/closed_on_precedent: a real terminal outcome plus a
+    # one-way notification, never a held_events row.
+    agent = _ScriptedAgent(
+        {
+            "Extract this operational event": _extraction_response(),
+            "RISK_SCORE": "RISK_SCORE: 0.2\nREASON: assessed",
+            "Choose the protocol": "NO_MATCH: no loaded protocol handles this kind of request",
+        }
+    )
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    with caplog.at_level("INFO"):
+        result = process_report(deps, agent, insights_agent, "an unroutable report", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    assert result.outcome == "no_match_protocol"
+    assert result.detail == "no loaded protocol handles this kind of request"
+
+    # No approval hold was created for it.
+    assert deps.persistence.list_held_events("approval") == []
+
+    event = deps.persistence.fetch_event(result.event_id)
+    assert event["outcome"] == "no_match_protocol"
+    assert event["outcome_failure_reason"] == "no loaded protocol handles this kind of request"
+    assert event["approval_held"] is False  # never went through the hold path at all
+
+    outcome_logs = [r for r in caplog.records if getattr(r, "event", None) == "event_outcome"]
+    assert any(r.outcome == "no_match_protocol" for r in outcome_logs)
 
 
 def test_an_ambiguous_selection_hold_resolves_to_a_real_protocol_and_resumes(deps):

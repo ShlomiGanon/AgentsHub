@@ -183,7 +183,7 @@ CREATE TABLE IF NOT EXISTS held_events (
 # crash between them. `sequence_id`'s AUTOINCREMENT ordering is the whole
 # cursor mechanism the notification feed (§8.12) polls with — no separate
 # index needed, the primary key already provides it. `kind` is one of
-# bot.api_client.BotNotificationKind's six values. Read-only above the
+# bot.api_client.BotNotificationKind's seven values. Read-only above the
 # persistence boundary: nothing outside persistence.sqlite_backend ever
 # inserts into this table directly.
 NOTIFICATION_LOG_TABLE_DDL = """

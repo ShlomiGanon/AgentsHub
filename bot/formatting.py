@@ -21,6 +21,7 @@ MessageKind = Literal[
     "approval_needed",
     "precedent_closure",
     "uncertain_verdict",
+    "no_match",
     "result",
     "failed",
     "declined",
@@ -34,6 +35,7 @@ _HEADERS: dict[MessageKind, str] = {
     "approval_needed": "[APPROVAL NEEDED — please reply]",
     "precedent_closure": "[NOTICE — closed on precedent — no reply needed]",
     "uncertain_verdict": "[NOTICE — uncertain verdict — no reply needed]",
+    "no_match": "[NOTICE — no protocol available — no reply needed]",
     "result": "[RESULT]",
     "failed": "[RUN FAILED]",
     "declined": "[DECLINED]",
@@ -101,6 +103,13 @@ def split_message(text: str, limit: int = TELEGRAM_MESSAGE_LIMIT) -> list[str]:
 def format_job_result(result: "JobResult") -> str:
     kind: MessageKind = "result" if result.outcome != "declined" else "declined"
     lines = [format_header(kind), "", f"Verdict: {result.outcome}"]
+
+    # Only ever populated today for "no_match_protocol" (the "why no
+    # protocol applies" text, written into the same outcome_failure_reason
+    # column "failed" uses) — every other outcome this function ever
+    # renders leaves it unset, so this is a no-op for all of them.
+    if result.failure_reason:
+        lines += ["", result.failure_reason]
 
     if result.steps_completed:
         lines += ["", "What was done:"]

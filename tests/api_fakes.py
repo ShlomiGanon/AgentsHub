@@ -127,6 +127,12 @@ def happy_path_agent(risk_score="0.2", selected="status_check", verdict="success
         "Choose the protocol": f"SELECTED: {selected}\nREASON: fits",
         "participating in the": f"AGENT: reference_agent\nTASK: {agent_task}",
         "VERDICT:": f"VERDICT: {verdict}\nREASONING: matches expected output",
+        # orchestrator.question_flow's direct-lookup classification, ahead
+        # of agent-selection for every question — "ROUTE: normal" here
+        # keeps every existing question-answering test's own
+        # "Decide which of the following agents" dispatch entry reachable
+        # unchanged, exactly as before this classification step existed.
+        "Decide whether this question can be answered by directly looking up": "ROUTE: normal",
     }
     if intent is not None:
         dispatch["kind of message"] = f"INTENT: {intent}\nREASON: classified"

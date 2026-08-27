@@ -42,7 +42,9 @@ PROTOCOLS = [
     Protocol(
         name="status_check",
         description="Applies when a commander or sensor needs to confirm current conditions at a "
-        "location, with no action beyond checking; does not apply when an action must be taken.",
+        "location, with no action beyond checking; does not apply when an action must be taken, and "
+        "does not apply to relaying a message from one person to another — there is no messenger "
+        "capability here, only a status check.",
         participating_agents=("reference_agent",),
         approved_tools=("check_status",),
         expected_success_output="A status report describing current conditions at the requested location.",
@@ -51,8 +53,10 @@ PROTOCOLS = [
     ),
     Protocol(
         name="dispatch_response",
-        description="Applies when a report requires dispatching a response and recording that action "
-        "was taken at the location; does not apply to a routine status check with no action required.",
+        description="Applies when a report requires dispatching a physical response to a location and "
+        "recording that action was taken there; does not apply to a routine status check with no action "
+        "required, and does not apply to relaying a message from one person to another — 'dispatching a "
+        "response' means sending a response to a location, never passing along words between people.",
         participating_agents=("reference_agent",),
         approved_tools=("check_status", "record_action"),
         expected_success_output="Confirmation that a response was dispatched and recorded at the location.",
@@ -62,7 +66,8 @@ PROTOCOLS = [
     Protocol(
         name="minor_incident_review",
         description="Applies to a minor incident report needing a quick status confirmation at the "
-        "scene; does not apply when the report describes an ongoing or escalating situation.",
+        "scene; does not apply when the report describes an ongoing or escalating situation, and does "
+        "not apply to relaying a message between people — there is no messenger capability here.",
         participating_agents=("reference_agent",),
         approved_tools=("check_status",),
         expected_success_output="A status confirmation for the minor incident location.",
@@ -72,7 +77,8 @@ PROTOCOLS = [
     Protocol(
         name="routine_check",
         description="Applies to a minor incident report needing a quick status check at the scene; "
-        "does not apply when the report describes an ongoing or escalating situation.",
+        "does not apply when the report describes an ongoing or escalating situation, and does not "
+        "apply to relaying a message between people — there is no messenger capability here.",
         participating_agents=("reference_agent",),
         approved_tools=("check_status",),
         expected_success_output="A status confirmation for the minor incident location.",

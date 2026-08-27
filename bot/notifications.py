@@ -45,6 +45,10 @@ async def dispatch_notification(deps: "BotDeps", notification: "BotNotification"
         await precedent_notify.notify_precedent_closure(deps, notification.payload)
         return
 
+    if notification.kind == "no_match_notice":
+        await approval.notify_no_match(deps, notification.payload)
+        return
+
     if notification.kind == "job_finished":
         await deliver_job_result(deps, notification)
         return

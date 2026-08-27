@@ -103,6 +103,57 @@ class HistoryQueryService:
             total_events_matched=len(matched_ids),
         )
 
+    def answer_most_recent_event(self, question: str) -> HistoryAnswer:
+        """A narrow, direct-lookup path for "what is the last event"-shaped
+        questions (orchestrator.question_flow's own direct-lookup
+        classification decides when to call this instead of the general
+        agent-selection/routing path).
+
+        Bypasses `query()`'s range-based `retrieve_range` context-building
+        entirely: fetches every event via the same primitive
+        `_resolve_bounds` already uses to find the *earliest* one
+        (`persistence.fetch_events_range`), and picks the *most recent* one
+        directly, in code — the same production pattern
+        `orchestrator/precedent.py::look_up_precedent` already uses (a
+        direct, deterministic persistence query, no model call for
+        retrieval). The History Agent still does the interpreting: it is
+        handed only the one retrieved event's raw fields, framed as the
+        answer to compose from, never a bare question with nothing to
+        ground it — the same "never answer from memory" guarantee `query()`
+        upholds, just with the record already narrowed to one event instead
+        of asking a model to find the latest one inside a pile of context.
+        """
+
+        now = self._clock()
+        all_events = self._persistence.fetch_events_range("0001-01-01T00:00:00", storage_timestamp(now))
+        if not all_events:
+            raise HistoryQueryError("no events have been recorded yet")
+
+        most_recent = max(all_events, key=lambda event: parse_timestamp(event["occurred_at"]))
+
+        prompt = (
+            "Answer the question using only the one most recent event supplied below — the record has "
+            "already been searched for you; do not ask for more context or claim none was given.\n"
+            f"Question: {question}\nMost recent event: {json.dumps(most_recent, ensure_ascii=False, sort_keys=True, default=str)}"
+        )
+        result = self._history_agent.process(prompt, allowed_tools=[])
+        if result.status != "success":
+            raise HistoryQueryError(f"history agent could not answer: {result.text}")
+
+        source = HistorySource(
+            level="raw_event",
+            period_start=most_recent["occurred_at"],
+            period_end=most_recent["occurred_at"],
+            source_id=most_recent["event_id"],
+        )
+        return HistoryAnswer(
+            answer=result.text,
+            sources_used=(source,),
+            time_start=most_recent["occurred_at"],
+            time_end=most_recent["occurred_at"],
+            total_events_matched=1,
+        )
+
     def search_precedents(
         self,
         target_event_id: str,

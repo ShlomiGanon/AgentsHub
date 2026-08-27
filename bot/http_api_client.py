@@ -35,6 +35,7 @@ from bot.api_client import (
     HoldAnswerOutcome,
     JobResult,
     MessageSubmissionResult,
+    NoMatchNotice,
     PrecedentClosureNotice,
     ProfileDiffStatus,
     ProfileView,
@@ -304,6 +305,14 @@ class HttpApiClient(BotApiClient):
                 raw_text=payload["raw_text"],
                 matched_precedent_event_id=payload["matched_precedent_event_id"],
                 precedent_ending=payload["precedent_ending"],
+            )
+        if kind == "no_match_notice":
+            return NoMatchNotice(
+                event_id=payload["event_id"],
+                raw_text=payload["raw_text"],
+                reason=payload["reason"],
+                risk_level=payload["risk_level"],
+                risk_reason=payload["risk_reason"],
             )
         if kind == "job_finished":
             return JobResult(

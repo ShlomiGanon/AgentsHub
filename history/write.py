@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 
 
 VALID_OUTCOMES = frozenset(
-    {"succeeded", "failed", "uncertain", "closed_on_precedent", "declined"}
+    {"succeeded", "failed", "uncertain", "closed_on_precedent", "declined", "no_match_protocol"}
 )
 
 STATE_UPDATE_FIELDS = frozenset(

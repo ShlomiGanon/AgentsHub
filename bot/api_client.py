@@ -74,6 +74,7 @@ BotOutcome = Literal[
     "succeeded",
     "failed",
     "uncertain",
+    "no_match_protocol",
 ]
 
 HoldAnswerStatus = Literal[
@@ -144,6 +145,28 @@ class HeldApprovalNotice:
 class UncertainVerdictNotice:
     event_id: str
     insight_text: str
+
+
+# -- §8.5-adjacent: no-match notice — a one-way FYI, never a hold ----------
+#
+# orchestrator.selection's NO_MATCH outcome ("no loaded protocol genuinely
+# fits this request") used to be delivered as a third approval-hold reason
+# — found, during a later audit, to leave the underlying event with no
+# terminal outcome ever recorded (nothing could ever resolve it, so nothing
+# ever called record_event_outcome) and no real action for a commander to
+# take (no buttons, no candidate, nothing to approve/reject/select).
+# Restructured to match orchestrator.flows.FlowOutcome's own
+# "no_match_protocol" — a real terminal outcome, exactly like "uncertain"/
+# "closed_on_precedent" — with this as the informational push that rides
+# along with it (persistence.sqlite_backend._OUTCOME_TO_NOTIFICATION_KINDS),
+# never a held_events row.
+@dataclass(frozen=True)
+class NoMatchNotice:
+    event_id: str
+    raw_text: str
+    reason: str
+    risk_level: str
+    risk_reason: str
 
 
 @dataclass(frozen=True)
@@ -229,6 +252,7 @@ BotNotificationKind = Literal[
     "approval_hold",
     "uncertain_verdict",
     "precedent_closure",
+    "no_match_notice",
     "job_finished",
     "job_failed",
 ]
@@ -251,6 +275,7 @@ class BotNotification:
         | HeldApprovalNotice
         | UncertainVerdictNotice
         | PrecedentClosureNotice
+        | NoMatchNotice
         | JobResult
         | FailureNotice
     )

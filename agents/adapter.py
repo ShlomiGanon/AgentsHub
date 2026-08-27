@@ -40,6 +40,7 @@ Timeout (§3.10): CrewAI's own `max_execution_time` constructor parameter
 needed.
 """
 
+import inspect
 import json
 from typing import Callable
 
@@ -105,19 +106,71 @@ def _build_crewai_tools(crewai_module, agent_name: str, wrapped_tools: dict[str,
         def _run(self, *args, _wrapped=wrapped, **kwargs):
             return _wrapped(*args, **kwargs)
 
+        # CrewAI's BaseTool auto-generates args_schema — the function-
+        # calling schema the model actually sees and is validated against
+        # (crewai.tools.base_tool.BaseTool._default_args_schema) — by
+        # introspecting *this* _run's own signature via `inspect.signature`,
+        # never the wrapped tool method's. Left alone, that signature is
+        # `(self, *args, _wrapped=..., **kwargs)`: `*args`/`**kwargs` are
+        # explicitly skipped by that introspection, and the one named
+        # parameter it would otherwise see, `_wrapped`, is silently dropped
+        # by Pydantic's `create_model` for its leading underscore — the net
+        # result, confirmed live, is a tool schema with zero parameters, so
+        # a tool like check_status(location) is invisible to the model as
+        # taking any argument at all, and a real call fails with "missing
+        # required positional argument: 'location'".
+        #
+        # Fixed by overriding what `inspect.signature()` reports for this
+        # exact function object — a standard, supported mechanism (the same
+        # one `functools.partial` and `inspect.Signature.from_callable`
+        # itself rely on: an explicit `__signature__` attribute takes
+        # priority over introspecting `__code__`) — to the real tool
+        # method's own signature. That's already recoverable accurately:
+        # `agents.base._wrap_tool` builds `wrapped` with
+        # `@functools.wraps(bound_method)`, and `inspect.signature(wrapped)`
+        # follows the resulting `__wrapped__` chain to `bound_method` (the
+        # real, bound tool method — `self` already applied), giving back
+        # its exact parameters, annotations, and defaults. This changes
+        # nothing about how `_run` actually executes — the call below still
+        # forwards through the generic `*args, **kwargs` unchanged, and
+        # CrewAI's own `BaseTool.run()` calls `_run(*args, **kwargs)` with
+        # whatever was validated against `args_schema`, which now lands on
+        # the right keyword names — it only changes what CrewAI's
+        # schema-builder sees when deciding what parameters to expose.
+        _run.__signature__ = inspect.Signature(
+            [inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD), *inspect.signature(wrapped).parameters.values()]
+        )
+
         # Built dynamically per tool, never derived from a docstring —
         # description always comes from our own ToolInfo (§3.3), not
         # CrewAI's docstring-inference convention. This dynamic type()
-        # construction against a pydantic-based BaseTool is exactly the
+        # construction against a pydantic-based BaseTool was the
         # unverified-pending-real-crewai risk noted in docs/progress.md's
-        # §3.10 entry — wrapped here so a failure surfaces as a typed,
-        # logged error naming the offending tool rather than a raw
-        # exception bypassing every other error-translation path below.
+        # §3.10 entry — confirmed against the real, installed crewai
+        # (1.15.17) to fail unconditionally without the explicit
+        # `__annotations__` below: crewai.tools.BaseTool is a Pydantic v2
+        # model with `name`/`description` declared as annotated fields, and
+        # Pydantic v2 requires a subclass overriding an inherited field's
+        # value to redeclare that field's type annotation too — a bare,
+        # unannotated class attribute (what a plain `{"name": ...}` class
+        # dict produces) is rejected at class-creation time with
+        # `PydanticUserError`, before this tool (or any tool — this is
+        # universal, not tool-specific) is ever instantiated. Supplying
+        # `__annotations__` explicitly is what makes the override valid.
+        # Still wrapped in a try/except so any other future construction
+        # failure surfaces as a typed, logged error naming the offending
+        # tool rather than a raw exception bypassing every other
+        # error-translation path below.
         try:
             tool_class = type(
                 f"_{info.name}_tool",
                 (base_tool_class,),
-                {"name": info.name, "description": info.description, "_run": _run},
+                {
+                    "__annotations__": {"name": str, "description": str},
+                    "name": info.name,
+                    "description": info.description,
+                    "_run": _run,
+                },
             )
             built.append(tool_class())
         except Exception as exc:

@@ -77,6 +77,8 @@ def job_status(ctx: "ApiContext", event_id: str) -> dict | None:
                 body["failed_step_agent_name"] = failed_step_agent_name
         elif event["outcome"] == "closed_on_precedent" and event.get("precedent_closed_by_event_id"):
             body["detail"] = f"closed against resolved precedent '{event['precedent_closed_by_event_id']}'"
+        elif event["outcome"] == "no_match_protocol" and event.get("outcome_failure_reason"):
+            body["detail"] = event["outcome_failure_reason"]
 
         return body
 

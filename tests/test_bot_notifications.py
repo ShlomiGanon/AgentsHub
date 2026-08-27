@@ -12,6 +12,7 @@ from bot.api_client import (
     HeldApprovalNotice,
     HeldClarificationNotice,
     JobResult,
+    NoMatchNotice,
     PrecedentClosureNotice,
     UncertainVerdictNotice,
 )
@@ -44,6 +45,7 @@ def _deps(api, commander_chat_ids=("c1",)):
         ),
         ("uncertain_verdict", UncertainVerdictNotice(event_id="e1", insight_text="mixed"), ()),
         ("precedent_closure", PrecedentClosureNotice(event_id="e1", raw_text="x", matched_precedent_event_id="e0", precedent_ending="succeeded"), ()),
+        ("no_match_notice", NoMatchNotice(event_id="e1", raw_text="x", reason="no match", risk_level="low", risk_reason="r"), ()),
         ("job_finished", JobResult(job_id="j1", outcome="succeeded"), ("chat-9",)),
         ("job_failed", FailureNotice(event_id="e1", failed_step_agent_name="a1", failure_reason="boom"), ("chat-9",)),
     ],

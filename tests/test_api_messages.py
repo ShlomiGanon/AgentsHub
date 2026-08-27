@@ -136,11 +136,63 @@ def test_post_msg_requires_authentication(tmp_path, teardown_ctx):
     assert resp.status_code == 401
 
 
+def test_a_question_matching_no_agent_gets_a_clean_reply_not_a_forced_dispatch(tmp_path, teardown_ctx):
+    # The repro-1 shape: "do I have any tasks?" matches nothing any loaded
+    # agent's role covers. The NONE: line lets the Main Agent say so
+    # cleanly instead of being forced onto reference_agent.
+    agent = happy_path_agent(intent="question")
+    agent._dispatch["Decide which of the following agents"] = "NONE: no loaded agent tracks individual user tasks"
+    ctx = _ctx_with(tmp_path, agent)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    resp = client.post("/Msg", headers=auth_headers(VIEWER_IDENTITY), json={"text": "do I have any tasks?", "sender_identity": VIEWER_IDENTITY})
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["taken_as"] == "question"
+    assert body["answer"] == "I don't have a way to answer that. no loaded agent tracks individual user tasks"
+
+
+def test_a_direct_lookup_question_bypasses_agent_selection_and_answers_from_history(tmp_path, teardown_ctx):
+    # The repro-2 shape: "what is the last event?" — recognized by the new
+    # classification step and answered via
+    # HistoryQueryService.answer_most_recent_event directly, never through
+    # the AGENT:/TASK: agent-selection call that used to crash on this
+    # question shape with a 422.
+    agent = happy_path_agent(risk_score="0.1", selected="status_check", intent="report")
+    ctx = _ctx_with(tmp_path, agent)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    # Seed one real event so there is something for "the last event" to
+    # resolve to.
+    report_resp = client.post(
+        "/Msg", headers=auth_headers(VIEWER_IDENTITY),
+        json={"text": "smoke seen at gate 3", "sender_identity": VIEWER_IDENTITY},
+    )
+    assert report_resp.status_code == 202
+    ctx.queue.wait_until_idle()
+    assert job_status(ctx, report_resp.get_json()["event_id"])["status"] == "succeeded"
+
+    agent._dispatch["kind of message"] = "INTENT: question\nREASON: asks about the last event"
+    agent._dispatch["Decide whether this question can be answered by directly looking up"] = "DIRECT_LOOKUP: most_recent"
+
+    resp = client.post("/Msg", headers=auth_headers(VIEWER_IDENTITY), json={"text": "what is the last event?", "sender_identity": VIEWER_IDENTITY})
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["taken_as"] == "question"
+    assert "answer" in body and body["answer"]
+
+
 def test_a_question_the_main_agent_cannot_route_becomes_a_run_failure_error(tmp_path, teardown_ctx):
     agent = ScriptedAgent(
         {
             "kind of message": "INTENT: question\nREASON: asks about status",
-            # No AGENT:/TASK: lines — answer_question raises OrchestrationParseError.
+            "Decide whether this question can be answered by directly looking up": "ROUTE: normal",
+            # Neither AGENT:/TASK: lines nor a NONE: line — a genuine parse
+            # failure, distinct from a clean NONE decline.
             "Decide which of the following agents": "I cannot determine which agent to ask.",
         }
     )

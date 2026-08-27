@@ -10,6 +10,7 @@ whether an interactive answer is even offered) stays in each role's own
 file, not here — see those files' own module docstrings for why.
 """
 
+import asyncio
 import sys
 import uuid
 from typing import Sequence
@@ -22,6 +23,24 @@ from cli.user_admin import main as user_admin_main
 from persistence.interface import open_persistence
 
 CONSOLE_CHAT_ID = "terminal"
+
+
+async def ainput(prompt: str = "") -> str:
+    """`input()`, off the event loop.
+
+    Every prompt in either tool goes through this instead of a bare
+    `input()` call — including `choose_mode`/`choose_event_payload` below
+    — so a coroutine running alongside the REPL (`terminal_client_commander
+    .py`'s background poll task) can keep making real HTTP calls and
+    updating its own state while the operator is mid-type, instead of the
+    whole process freezing at the C-level `input()` call underneath. The
+    background task still never prints anything while a prompt is
+    outstanding (work_plan.md's own "surfaced only between foreground
+    turns" design — see that module's docstring) — this is what makes that
+    possible in the first place, not a UI polish on its own.
+    """
+
+    return await asyncio.to_thread(input, prompt)
 
 # Reuses the demo profile's own event types/areas (profiles/demo.py) so
 # these actually exercise real classification instead of tripping a
@@ -45,16 +64,41 @@ class ConsoleTelegramClient(TelegramClient):
     bot.results, bot.failures, bot.precedent_notify, bot.notifications)
     is unmodified real bot code — none of it knows or cares that this
     isn't Telegram.
+
+    Identity-aware since the commander tool's move to unconditional,
+    job-unfiltered dispatch (mirroring `bot.notifications
+    .dispatch_notification`'s own real behavior): a real deployment's
+    per-chat addressing is what naturally stops one commander's phone from
+    showing another commander's job result, or a hold broadcast landing
+    twice for two different registered commanders' chat_ids
+    (`bot.approval.push_approval_prompt` sends once per
+    `list_commander_chat_ids()` entry) — a single shared terminal has no
+    such separation unless this class enforces it itself. `owning_identity`
+    is the one chat_id this terminal represents; every send whose `chat_id`
+    doesn't match it (or the `CONSOLE_CHAT_ID` sentinel, reserved for
+    direct foreground replies — e.g. "you're not authorized" — that must
+    always show regardless of broadcast addressing) is silently dropped,
+    the same way a real deployment's *other* chats never see it either.
     """
+
+    def __init__(self, owning_identity: str):
+        self._owning_identity = owning_identity
+
+    def _addressed_to_this_console(self, chat_id: str) -> bool:
+        return chat_id in (self._owning_identity, CONSOLE_CHAT_ID)
 
     async def validate_token(self) -> bool:
         return True
 
     async def send_text(self, chat_id: str, text: str) -> None:
+        if not self._addressed_to_this_console(chat_id):
+            return
         for chunk in split_message(text):
             print(f"\n{chunk}")
 
     async def send_with_buttons(self, chat_id: str, text: str, buttons: Sequence[tuple[str, str]]) -> None:
+        if not self._addressed_to_this_console(chat_id):
+            return
         chunks = split_message(text)
         for chunk in chunks[:-1]:
             print(f"\n{chunk}")
@@ -112,9 +156,9 @@ def submit_event(base_url: str, text: str, sender_identity: str) -> tuple[int, d
     return _do_request(f"{base_url}/Event", "POST", sender_identity, {"text": text, "sender_identity": sender_identity})
 
 
-def choose_mode() -> str | None:
+async def choose_mode() -> str | None:
     while True:
-        raw = input("\nMode — [m]essage, [e]vent, or [q]uit? ").strip().lower()
+        raw = (await ainput("\nMode — [m]essage, [e]vent, or [q]uit? ")).strip().lower()
         if raw in ("m", "message"):
             return "message"
         if raw in ("e", "event"):
@@ -124,27 +168,27 @@ def choose_mode() -> str | None:
         print("Please type 'm', 'e', or 'q'.")
 
 
-def choose_event_payload(default_sender: str) -> tuple[str, str] | None:
+async def choose_event_payload(default_sender: str) -> tuple[str, str] | None:
     print("\nSample sensor events:")
     for i, (label, _) in enumerate(SAMPLE_EVENT_TEXTS, start=1):
         print(f"  [{i}] {label}")
     print("  [q] back to mode selection")
 
-    raw = input("choose> ").strip().lower()
+    raw = (await ainput("choose> ")).strip().lower()
     if raw in ("q", "quit", "exit"):
         return None
     if not raw.isdigit() or not (1 <= int(raw) <= len(SAMPLE_EVENT_TEXTS)):
         print("Invalid choice.")
-        return choose_event_payload(default_sender)
+        return await choose_event_payload(default_sender)
 
     _label, preset_text = SAMPLE_EVENT_TEXTS[int(raw) - 1]
     if preset_text is None:
-        text = input("event text> ").strip()
+        text = (await ainput("event text> ")).strip()
     else:
-        typed = input(f"event text [{preset_text}]> ").strip()
+        typed = (await ainput(f"event text [{preset_text}]> ")).strip()
         text = typed or preset_text
 
-    typed_sender = input(f"sender identity [{default_sender}]> ").strip()
+    typed_sender = (await ainput(f"sender identity [{default_sender}]> ")).strip()
     sender = typed_sender or default_sender
     return text, sender
 

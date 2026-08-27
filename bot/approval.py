@@ -2,11 +2,16 @@
 
 The two hold reasons ask different questions, so they get different
 presentations: a flagged protocol asks a yes/no "should this run at
-all", an ambiguous selection asks "which of these", and only the second
-needs to show candidates. An uncertain-verdict notice is pushed the same
-way but is deliberately never phrased as a question — nothing is
-waiting on an answer to it, and presenting it as an approval invites one
-that has nowhere to go.
+all", and an ambiguous selection asks "which of these" and needs to show
+candidates. A no-match selection (orchestrator.selection's NO_MATCH
+outcome — no protocol genuinely fits) is *not* one of these anymore: it
+used to be a third, report-only hold reason here, but that left the
+underlying event with no terminal outcome ever recorded (nothing could
+resolve it — no candidate, no yes/no). It's now a real terminal outcome
+(`orchestrator.flows.FlowOutcome`'s `"no_match_protocol"`) plus the
+one-way `notify_no_match` notice below, the same "nothing is waiting on
+an answer" treatment `notify_uncertain_verdict` already gets — never
+offering "run the closest one anyway," same as before.
 
 Callback data carries the event ID, not the orchestrator's internal hold
 ID — `api/holds.py`'s `POST /Approve/<event_id>` (§7.11) is keyed by event
@@ -22,7 +27,7 @@ from bot.formatting import format_header
 from bot.users import check_permission, resolve_caller
 
 if TYPE_CHECKING:
-    from bot.api_client import HeldApprovalNotice, UncertainVerdictNotice
+    from bot.api_client import HeldApprovalNotice, NoMatchNotice, UncertainVerdictNotice
     from bot.deps import BotDeps
 
 CALLBACK_PREFIX = "approve"
@@ -73,6 +78,28 @@ def format_uncertain_verdict_notice(notice: "UncertainVerdictNotice") -> str:
 
 async def notify_uncertain_verdict(deps: "BotDeps", notice: "UncertainVerdictNotice") -> None:
     text = format_uncertain_verdict_notice(notice)
+
+    for chat_id in await deps.api_client.list_commander_chat_ids():
+        await deps.telegram_client.send_text(chat_id, text)
+
+
+def format_no_match_notice(notice: "NoMatchNotice") -> str:
+    # Deliberately not phrased as a question, same as an uncertain-verdict
+    # notice above — nothing is waiting on an answer to it, and never
+    # offers "run the closest one anyway" (that would silently reintroduce
+    # the forced, low-confidence match this outcome exists to avoid).
+    why = notice.reason or "(no reason given)"
+    return (
+        f"{format_header('no_match')}\n\n"
+        f"No existing protocol can fulfill this request.\n"
+        f"Raw text: {notice.raw_text}\n"
+        f"{why}\n"
+        f"Risk: {notice.risk_level} ({notice.risk_reason})"
+    )
+
+
+async def notify_no_match(deps: "BotDeps", notice: "NoMatchNotice") -> None:
+    text = format_no_match_notice(notice)
 
     for chat_id in await deps.api_client.list_commander_chat_ids():
         await deps.telegram_client.send_text(chat_id, text)

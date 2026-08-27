@@ -95,6 +95,7 @@ _OUTCOME_TO_NOTIFICATION_KINDS: dict[str, tuple[str, ...]] = {
     "failed": ("job_failed",),
     "uncertain": ("job_finished", "uncertain_verdict"),
     "closed_on_precedent": ("job_finished", "precedent_closure"),
+    "no_match_protocol": ("job_finished", "no_match_notice"),
 }
 
 

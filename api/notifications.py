@@ -84,6 +84,21 @@ def _precedent_closure_payload(ctx: "ApiContext", event_id: str) -> dict:
     }
 
 
+def _no_match_payload(ctx: "ApiContext", event_id: str) -> dict:
+    # A real terminal outcome ("no_match_protocol"), not a hold — the
+    # "why" text lives in outcome_failure_reason, the same column "failed"
+    # uses, written by orchestrator.flows.continue_from_risk_assessment's
+    # own record_event_outcome(..., failure_reason=selection.reason) call.
+    event = ctx.deps.persistence.fetch_event(event_id)
+    return {
+        "event_id": event_id,
+        "raw_text": event["raw_text"],
+        "reason": event.get("outcome_failure_reason") or "",
+        "risk_level": event.get("risk_level") or "",
+        "risk_reason": event.get("risk_reason") or "",
+    }
+
+
 def _job_payload(ctx: "ApiContext", event_id: str) -> dict:
     event = ctx.deps.persistence.fetch_event(event_id)
     return {
@@ -101,6 +116,7 @@ _PAYLOAD_BUILDERS = {
     "approval_hold": _approval_hold_payload,
     "uncertain_verdict": _uncertain_verdict_payload,
     "precedent_closure": _precedent_closure_payload,
+    "no_match_notice": _no_match_payload,
     "job_finished": _job_payload,
     "job_failed": _job_payload,
 }

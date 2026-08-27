@@ -85,3 +85,10 @@ means either widening `FlowResult`/the flow's own internal state to carry
 it, or restructuring insights to accept an already-fetched history
 argument), which is real implementation work belonging to its own,
 separately-approved pass — out of scope for a review subtask.
+
+**Correction (2026-08-27):** the paragraph above is stale — this merge has
+since been implemented. `orchestrator/flows.py::_run_protocol` now passes
+the same `precedent_matches` tuple `continue_from_risk_assessment` already
+computed straight into `build_insight(..., comparable_history=precedent_matches)`
+— confirmed by direct reading, not assumed. There is only one history read
+per event today, not two; the reduction this section proposed is real.

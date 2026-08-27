@@ -110,13 +110,20 @@ def test_job_status_reports_a_resolved_hold_as_no_longer_held(ctx):
 
 @pytest.mark.parametrize(
     "outcome,expected_detail_key",
-    [("succeeded", None), ("failed", "outcome_failure_reason"), ("uncertain", None), ("declined", None), ("closed_on_precedent", "precedent_closed_by_event_id")],
+    [
+        ("succeeded", None),
+        ("failed", "outcome_failure_reason"),
+        ("uncertain", None),
+        ("declined", None),
+        ("closed_on_precedent", "precedent_closed_by_event_id"),
+        ("no_match_protocol", "outcome_failure_reason"),
+    ],
 )
 def test_job_status_reports_every_terminal_outcome(ctx, outcome, expected_detail_key):
     event_id = _new_event(ctx)
     kwargs = {}
-    if outcome == "failed":
-        kwargs["failure_reason"] = "the model timed out"
+    if outcome in ("failed", "no_match_protocol"):
+        kwargs["failure_reason"] = "no loaded protocol handles this kind of request" if outcome == "no_match_protocol" else "the model timed out"
     if outcome == "closed_on_precedent":
         record_event_state(ctx.deps.persistence, event_id, {"precedent_closed_by_event_id": "evt-old"})
     record_event_outcome(ctx.deps.persistence, event_id, outcome, **kwargs)

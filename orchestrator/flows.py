@@ -94,7 +94,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 FlowOutcome = Literal[
-    "closed_on_precedent", "declined", "succeeded", "failed", "uncertain",
+    "closed_on_precedent", "declined", "succeeded", "failed", "uncertain", "no_match_protocol",
     "held_for_clarification", "held_for_approval",
 ]
 
@@ -585,7 +585,21 @@ def continue_from_risk_assessment(deps: FlowDeps, event_id: str, main_agent: "Ma
         },
     )
 
-    selection = select_protocol(main_agent, raw_text, classification, area, description, deps.protocol_set.all(), risk_assessment.level)
+    try:
+        selection = select_protocol(main_agent, raw_text, classification, area, description, deps.protocol_set.all(), risk_assessment.level)
+    except OrchestrationParseError as exc:
+        # Previously uncaught here: a parse failure at this call site would
+        # propagate out of continue_from_risk_assessment entirely and be
+        # silently swallowed by orchestrator.queue.SerialEventQueue's
+        # generic handler (logged, but the event left with no recorded
+        # outcome at all) — worse than the ordinary [RUN FAILED] path every
+        # other stage already gets. Same reporting pattern as
+        # run_report_extraction's own extraction failure, just for this
+        # stage.
+        record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
+        _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="protocol_selection")
+        return FlowResult(event_id, "failed", str(exc))
+
     if selection.status == "selected":
         record_event_state(deps.persistence, event_id, {"selected_protocol": selection.protocol_name, "protocol_reason": selection.reason})
     logger.info(
@@ -615,6 +629,19 @@ def continue_from_risk_assessment(deps: FlowDeps, event_id: str, main_agent: "Ma
         record_event_outcome(deps.persistence, event_id, "closed_on_precedent")
         _log_event_outcome(event_id, "closed_on_precedent", precedent_event_id=closing_event_id)
         return FlowResult(event_id, "closed_on_precedent", f"closed against resolved precedent '{closing_event_id}'")
+
+    if selection.status == "no_match":
+        # A real terminal outcome plus a one-way notification, not a hold —
+        # there is no candidate to approve/reject/select, so nothing could
+        # ever resolve a held_events row for this; leaving it as a hold
+        # meant the event never reached a terminal outcome at all. Matches
+        # "uncertain"/"closed_on_precedent"'s own pattern exactly: write the
+        # outcome, and persistence.sqlite_backend._OUTCOME_TO_NOTIFICATION_KINDS
+        # fires the informational push (to commanders) and the submitter's
+        # own job_finished result as a side effect of that one write.
+        record_event_outcome(deps.persistence, event_id, "no_match_protocol", failure_reason=selection.reason)
+        _log_event_outcome(event_id, "no_match_protocol", reason=selection.reason)
+        return FlowResult(event_id, "no_match_protocol", selection.reason)
 
     protocols_by_name = {p.name: p for p in deps.protocol_set.all()}
     hold_reason: "HoldReason | None" = determine_approval_hold(selection, protocols_by_name, originated_from_commander)

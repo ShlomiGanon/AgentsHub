@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ProtocolSelectionResult:
-    status: Literal["selected", "ambiguous"]
+    status: Literal["selected", "ambiguous", "no_match"]
     protocol_name: str | None = None
     candidate_names: tuple[str, ...] = ()
     reason: str = ""
@@ -37,6 +37,7 @@ class ProtocolSelectionResult:
 
 _SELECTED_PATTERN = re.compile(r"SELECTED:\s*(\S+)", re.IGNORECASE)
 _AMBIGUOUS_PATTERN = re.compile(r"AMBIGUOUS:\s*(.+)", re.IGNORECASE)
+_NO_MATCH_PATTERN = re.compile(r"NO_MATCH:\s*(.+)", re.IGNORECASE | re.DOTALL)
 _REASON_PATTERN = re.compile(r"REASON:\s*(.+)", re.IGNORECASE | re.DOTALL)
 
 
@@ -57,7 +58,10 @@ def _build_selection_prompt(raw_text: str, classification: str | None, area: str
         "If more than one protocol fits equally well and you cannot discriminate between them, "
         "respond in exactly this format instead:\n"
         "AMBIGUOUS: <comma-separated protocol names>\n"
-        "REASON: <why you could not discriminate>"
+        "REASON: <why you could not discriminate>\n\n"
+        "If none of the protocols genuinely apply to this event, do not force a match onto the "
+        "closest-sounding one — respond in exactly this format instead, one line:\n"
+        "NO_MATCH: <why no protocol applies>"
     )
 
 
@@ -73,6 +77,14 @@ def _parse_selection_response(raw_text: str) -> ProtocolSelectionResult:
     if ambiguous_match:
         names = tuple(name.strip() for name in ambiguous_match.group(1).split(",") if name.strip())
         return ProtocolSelectionResult(status="ambiguous", candidate_names=names, reason=reason)
+
+    # NO_MATCH carries its own reason inline on one line (unlike SELECTED/
+    # AMBIGUOUS, which pair with a separate REASON: line) — captured from
+    # this pattern directly rather than from `reason` above, which would be
+    # empty when no separate REASON: line is present.
+    no_match_match = _NO_MATCH_PATTERN.search(raw_text)
+    if no_match_match:
+        return ProtocolSelectionResult(status="no_match", reason=no_match_match.group(1).strip())
 
     raise OrchestrationParseError(f"could not parse protocol selection response: {raw_text!r}")
 

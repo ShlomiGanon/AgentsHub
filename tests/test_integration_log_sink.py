@@ -16,7 +16,7 @@ import json
 import types
 
 from agents import adapter
-from tests.api_fakes import SENSOR_IDENTITY, RunningApiServer, build_context, happy_path_agent
+from tests.api_fakes import SENSOR_IDENTITY, RunningApiServer, build_context, extraction_response, happy_path_agent
 from tools.logging_config import configure_logging
 from tools.simulator import _post_event
 
@@ -34,6 +34,79 @@ def _fake_crewai(response_text="status nominal, no anomalies"):
             return _FakeOutput(response_text)
 
     return types.SimpleNamespace(Agent=_FakeCrewAgent, tools=types.SimpleNamespace(BaseTool=object))
+
+
+def _fake_crewai_that_calls_a_tool(tool_name_to_call, response_text="status nominal, no anomalies"):
+    """Like `_fake_crewai`, but its `kickoff()` also simulates the model
+    deciding to call one specific tool — by invoking the built tool's own
+    `_run` directly (this fake's `BaseTool` is a bare `object`, not the
+    real Pydantic one; that coverage is `tests/test_agent_adapter_real_crewai
+    .py`'s job) — which is enough to reach `agents.base`'s real,
+    unmocked permission-context check for whichever tool name is named.
+    """
+
+    class _FakeOutput:
+        def __init__(self, raw):
+            self.raw = raw
+
+    class _FakeCrewAgent:
+        def __init__(self, **kwargs):
+            self._tools = kwargs.get("tools") or []
+
+        def kickoff(self, text):
+            tool = next((t for t in self._tools if t.name == tool_name_to_call), None)
+            if tool is not None:
+                tool._run(location="gate-3")
+            return _FakeOutput(response_text)
+
+    return types.SimpleNamespace(Agent=_FakeCrewAgent, tools=types.SimpleNamespace(BaseTool=object))
+
+
+def _fake_crewai_failing_once_then_succeeding(response_text="status nominal, no anomalies"):
+    """Like `_fake_crewai`, but its first `kickoff()` call raises (a
+    transient failure `agents/adapter.py::invoke` translates into
+    `AgentModelError`) and every call after that succeeds — for exercising
+    the retry path. Returns `(fake_module, calls)`; `calls["count"]` is the
+    running number of `kickoff()` invocations, for asserting exactly one
+    retry happened, not more.
+    """
+
+    calls = {"count": 0}
+
+    class _FakeOutput:
+        def __init__(self, raw):
+            self.raw = raw
+
+    class _FakeCrewAgent:
+        def __init__(self, **kwargs):
+            pass
+
+        def kickoff(self, text):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise RuntimeError("transient failure")
+            return _FakeOutput(response_text)
+
+    return types.SimpleNamespace(Agent=_FakeCrewAgent, tools=types.SimpleNamespace(BaseTool=object)), calls
+
+
+def _extraction_trace_id(ctx, event_id: str) -> str:
+    """The trace ID for `event_id`'s own run, recovered the same way an
+    operator with only the DB (no known trace ID yet) would — via this
+    event's own `extraction_result` row, which always fires exactly once
+    per event, before any hold/closure/step logic runs.
+    """
+
+    import sqlite3
+
+    conn = sqlite3.connect(ctx.deps.persistence.db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("SELECT details FROM log_entries ORDER BY id").fetchall()
+    conn.close()
+
+    records = [json.loads(r["details"]) for r in rows]
+    [extraction_record] = [r for r in records if r.get("event") == "extraction_result" and r.get("event_id") == event_id]
+    return extraction_record["trace_id"]
 
 
 def test_querying_by_trace_id_returns_every_log_row_for_one_request_in_order(tmp_path, monkeypatch):
@@ -218,6 +291,17 @@ def test_a_hold_resolution_is_logged_with_who_answered_and_what_they_chose(tmp_p
         job = ctx.deps.persistence.fetch_event(event_id)
         assert job["approval_held"] is True  # dispatch_response is flagged — sanity check on the fixture itself
 
+        # §1.8's own list: "log every hold with which kind it was" — the
+        # creation itself, on the original ingestion trace, distinct from
+        # the resolution asserted below (a different trace ID — see the
+        # comment further down).
+        ingestion_trace_id = _extraction_trace_id(ctx, event_id)
+        ingestion_entries = ctx.deps.persistence.fetch_log_entries(ingestion_trace_id)
+        [hold_created] = [e for e in ingestion_entries if e.get("event") == "hold_created"]
+        assert hold_created["hold_kind"] == "approval"
+        assert hold_created["reason"] == "flagged_protocol"
+        assert hold_created["event_id"] == event_id
+
         import urllib.request
 
         body = json.dumps({"decision": "approved"}).encode("utf-8")
@@ -251,3 +335,164 @@ def test_a_hold_resolution_is_logged_with_who_answered_and_what_they_chose(tmp_p
     assert approval_resolution["resolved_by"] == "commander-1"
     assert approval_resolution["decision"] == "approved"
     assert approval_resolution["status"] == "approved"
+
+
+# -- Narrow remaining §1.8 coverage gap: the events below were already
+# logged correctly (proven at the unit level elsewhere — e.g.
+# tests/test_agent_permission_enforcement.py::test_blocked_attempt_is_logged
+# for tool_blocked), but none of them had a test driving them through a
+# real, queued protocol run the way every event above already is. These
+# four close that gap; no production code changed to add them.
+
+
+def test_a_clarification_hold_is_logged_with_which_field_was_unresolved(tmp_path, monkeypatch):
+    """§1.8's own list: "log every hold with which kind it was." The
+    approval kind is covered above (via the existing hold-resolution
+    test's own hold_created check); this is the first test in this file to
+    drive the clarification kind — an extraction result naming a
+    classification outside the loaded registry, which
+    history.extraction.extract_event nulls out, which
+    determine_clarification_hold holds on.
+    """
+
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: _fake_crewai())
+
+    agent = happy_path_agent(extraction=extraction_response(classification="flood"))
+    ctx = build_context(tmp_path, main_agent=agent)
+    configure_logging("test-clarification-hold-profile", persistence=ctx.deps.persistence)
+
+    with RunningApiServer(ctx) as server:
+        result = _post_event(server.base_url, SENSOR_IDENTITY, "water rising near gate 3")
+        event_id = result["event_id"]
+        ctx.queue.wait_until_idle()
+
+        event = ctx.deps.persistence.fetch_event(event_id)
+        assert event["clarification_held"] is True  # sanity check on the fixture itself
+
+        trace_id = _extraction_trace_id(ctx, event_id)
+        entries = ctx.deps.persistence.fetch_log_entries(trace_id)
+
+    [hold_created] = [e for e in entries if e.get("event") == "hold_created"]
+    assert hold_created["hold_kind"] == "clarification"
+    assert hold_created["unresolved_field"] == "classification"
+    assert hold_created["event_id"] == event_id
+
+
+def test_precedent_lookup_and_closure_are_logged_with_the_window_and_the_match(tmp_path, monkeypatch):
+    """§1.8's own list: "the window searched, which prior events matched,
+    and whether the match closed the event." Split deliberately across two
+    call sites and two levels — history.precedent.find_precedents's own
+    precedent_lookup (DEBUG: the window and every candidate) and
+    orchestrator.flows's precedent_closure (INFO: the operator-relevant
+    outcome) — so this test explicitly raises the level to DEBUG rather
+    than relying on config.base.DEBUG_FLAG. Drives a real close-on-
+    precedent run via two sequential events, the same proven pattern
+    tests/test_integration_cost_and_latency_review.py already uses.
+    """
+
+    import logging
+
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: _fake_crewai())
+
+    agent = happy_path_agent(risk_score="0.1", selected="status_check", verdict="success")
+    ctx = build_context(tmp_path, main_agent=agent)
+    configure_logging("test-precedent-profile", level=logging.DEBUG, persistence=ctx.deps.persistence)
+
+    with RunningApiServer(ctx) as server:
+        first = _post_event(server.base_url, SENSOR_IDENTITY, "fire at gate 3, north_sector")
+        ctx.queue.wait_until_idle()
+        first_event_id = first["event_id"]
+        assert ctx.deps.persistence.fetch_event(first_event_id)["outcome"] == "succeeded"
+
+        second = _post_event(server.base_url, SENSOR_IDENTITY, "fire at gate 4, north_sector")
+        ctx.queue.wait_until_idle()
+        second_event_id = second["event_id"]
+        assert ctx.deps.persistence.fetch_event(second_event_id)["outcome"] == "closed_on_precedent"
+
+        trace_id = _extraction_trace_id(ctx, second_event_id)
+        entries = ctx.deps.persistence.fetch_log_entries(trace_id)
+
+    by_event = {e["event"]: e for e in entries if "event" in e}
+
+    assert "precedent_lookup" in by_event, "precedent_lookup (DEBUG) was never logged for the closing event"
+    lookup = by_event["precedent_lookup"]
+    assert lookup["window_start"]
+    assert lookup["window_end"]
+    assert first_event_id in lookup["matched_event_ids"]
+
+    assert "precedent_closure" in by_event
+    closure = by_event["precedent_closure"]
+    assert closure["closed"] is True
+    assert closure["closing_event_id"] == first_event_id
+    assert first_event_id in closure["matched_event_ids"]
+
+
+def test_a_blocked_tool_attempt_is_logged_through_a_real_protocol_run(tmp_path, monkeypatch):
+    """§1.8's own list: "every tool call blocked by the permission check."
+    Already correct at the unit level; this is the first test to drive it
+    through a real queued protocol run — the real executor, the real
+    agents.base permission-context check, a real reference_agent — rather
+    than a direct process() call.
+    """
+
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: _fake_crewai_that_calls_a_tool("record_action"))
+
+    # status_check only approves check_status (tests/api_fakes.py
+    # ::protocols) — reference_agent's own record_action implementation
+    # still exists and is genuinely callable, so the block below is real.
+    agent = happy_path_agent(risk_score="0.2", selected="status_check", verdict="success")
+    ctx = build_context(tmp_path, main_agent=agent)
+    configure_logging("test-tool-blocked-profile", persistence=ctx.deps.persistence)
+
+    with RunningApiServer(ctx) as server:
+        result = _post_event(server.base_url, SENSOR_IDENTITY, "smoke observed near gate 3, north_sector")
+        event_id = result["event_id"]
+        ctx.queue.wait_until_idle()
+
+        # The fake's kickoff() always returns a fixed success text
+        # regardless of the blocked call underneath it — the run itself
+        # isn't derailed by the block, only the tool call is.
+        assert ctx.deps.persistence.fetch_event(event_id)["outcome"] == "succeeded"
+
+        trace_id = _extraction_trace_id(ctx, event_id)
+        entries = ctx.deps.persistence.fetch_log_entries(trace_id)
+
+    [blocked] = [e for e in entries if e.get("event") == "tool_blocked"]
+    assert blocked["agent"] == "reference_agent"
+    assert blocked["tool"] == "record_action"
+
+
+def test_a_transient_step_failure_is_retried_and_both_are_logged_with_cause(tmp_path, monkeypatch):
+    """§1.8's own list: "every retry with the cause that triggered it."
+    Already correct at the unit level (tests/test_protocol_retry.py); this
+    is the first test to drive both step_failed (the failing first
+    attempt) and step_retry (the decision to try again) through a real
+    queued protocol run, with a real transient failure and a real recovery.
+    """
+
+    fake_module, calls = _fake_crewai_failing_once_then_succeeding()
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+
+    agent = happy_path_agent(risk_score="0.2", selected="status_check", verdict="success")
+    ctx = build_context(tmp_path, main_agent=agent)
+    configure_logging("test-step-retry-profile", persistence=ctx.deps.persistence)
+
+    with RunningApiServer(ctx) as server:
+        result = _post_event(server.base_url, SENSOR_IDENTITY, "smoke observed near gate 3, north_sector")
+        event_id = result["event_id"]
+        ctx.queue.wait_until_idle()
+
+        # Retried exactly once, then succeeded — not exhausted, not
+        # retried more than the one transient failure warranted.
+        assert ctx.deps.persistence.fetch_event(event_id)["outcome"] == "succeeded"
+        assert calls["count"] == 2
+
+        trace_id = _extraction_trace_id(ctx, event_id)
+        entries = ctx.deps.persistence.fetch_log_entries(trace_id)
+
+    [step_failed] = [e for e in entries if e.get("event") == "step_failed"]
+    [step_retry] = [e for e in entries if e.get("event") == "step_retry"]
+    assert "the model call failed" in step_failed["cause"]
+    assert step_retry["cause"] == step_failed["cause"]
+    assert step_failed["agent"] == "reference_agent"
+    assert step_retry["attempt"] == 2

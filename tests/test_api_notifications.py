@@ -177,6 +177,30 @@ def test_closed_on_precedent_produces_both_a_job_finished_and_a_precedent_closur
     assert closure["payload"]["precedent_ending"] == "succeeded"
 
 
+def test_no_match_produces_both_a_job_finished_and_a_no_match_notice_entry(tmp_path, teardown_ctx):
+    # NO_MATCH is a real terminal outcome plus a one-way notification now
+    # (never a held_events row) — same shape as uncertain/closed_on_precedent.
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    event_id = _minimal_event(ctx.deps.persistence, raw_text="tell the viewer they need to come to me")
+    ctx.deps.persistence.update_event(event_id, {"risk_level": "low", "risk_reason": "informational request"})
+    record_event_outcome(ctx.deps.persistence, event_id, "no_match_protocol", failure_reason="no loaded protocol handles this kind of request")
+
+    resp = client.get("/Notifications", headers=auth_headers(COMMANDER_IDENTITY))
+    notifications = resp.get_json()["notifications"]
+
+    kinds = {n["kind"] for n in notifications}
+    assert kinds == {"job_finished", "no_match_notice"}
+
+    notice = next(n for n in notifications if n["kind"] == "no_match_notice")
+    assert notice["payload"]["event_id"] == event_id
+    assert notice["payload"]["raw_text"] == "tell the viewer they need to come to me"
+    assert notice["payload"]["reason"] == "no loaded protocol handles this kind of request"
+    assert notice["payload"]["risk_level"] == "low"
+
+
 def test_polling_twice_at_the_same_cursor_returns_nothing_new(tmp_path, teardown_ctx):
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)

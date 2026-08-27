@@ -228,6 +228,7 @@ def test_storing_a_held_event_writes_a_matching_notification_row(persistence):
         ("failed", {"job_failed"}),
         ("uncertain", {"job_finished", "uncertain_verdict"}),
         ("closed_on_precedent", {"job_finished", "precedent_closure"}),
+        ("no_match_protocol", {"job_finished", "no_match_notice"}),
     ],
 )
 def test_setting_an_event_outcome_writes_the_right_notification_kinds(persistence, outcome, expected_kinds):

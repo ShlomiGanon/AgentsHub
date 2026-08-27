@@ -37,7 +37,10 @@ UNRESOLVED_FIELD = "classification"
 
 @dataclass(frozen=True)
 class HoldAnswerResult:
-    status: Literal["approved", "rejected", "resolved", "unauthorized", "not_found", "invalid_classification", "invalid_candidate"]
+    status: Literal[
+        "approved", "rejected", "resolved", "unauthorized", "not_found",
+        "invalid_classification", "invalid_candidate",
+    ]
     hold: dict | None = None
     message: str = ""
 
@@ -49,9 +52,21 @@ def determine_approval_hold(
 ) -> HoldReason | None:
     """Return the reason a run must be held, or None to proceed.
 
+    Callers only reach this with a `selected`/`ambiguous` selection — a
+    `no_match` selection (orchestrator.selection's NO_MATCH outcome, "no
+    loaded protocol genuinely fits") is intercepted earlier, in
+    `orchestrator.flows.continue_from_risk_assessment`, and never becomes a
+    hold at all: it used to (a third `HoldReason` here), but that left the
+    event with no terminal outcome ever recorded, since nothing could ever
+    resolve it (no candidate, no yes/no, nothing a commander's authority or
+    a high-risk auto-resolution could act on). It's now a real terminal
+    outcome (`"no_match_protocol"`) plus a one-way notification, the same
+    pattern `"uncertain"`/`"closed_on_precedent"` already use — see
+    `bot.api_client.NoMatchNotice`'s own docstring for the full account.
+
     An ambiguous selection always holds, whoever asked — that hold asks
-    which protocol to run, which a commander's authority doesn't answer.
-    A flagged protocol holds only when the request didn't come from a
+    which protocol to run, which a commander's authority doesn't answer. A
+    flagged protocol holds only when the request didn't come from a
     commander in the first place; their authority bypasses the flag, not
     the ambiguity.
     """

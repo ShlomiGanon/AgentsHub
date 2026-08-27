@@ -2,11 +2,12 @@
 
 import asyncio
 
-from bot.api_client import HeldApprovalNotice, HoldAnswerOutcome, UncertainVerdictNotice
+from bot.api_client import HeldApprovalNotice, HoldAnswerOutcome, NoMatchNotice, UncertainVerdictNotice
 from bot.approval import (
     build_callback_data,
     format_approval_prompt,
     handle_approval_answer,
+    notify_no_match,
     notify_uncertain_verdict,
     parse_callback_data,
     push_approval_prompt,
@@ -88,6 +89,37 @@ def test_uncertain_verdict_is_not_phrased_as_a_question_and_has_no_buttons():
     assert telegram.sent[-1].buttons is None
     assert "?" not in telegram.sent[-1].text
     assert "no reply needed" in telegram.sent[-1].text.lower()
+
+
+def test_no_match_notice_is_not_phrased_as_a_question_and_has_no_buttons():
+    # NO_MATCH is a real terminal outcome plus a one-way notification, not
+    # a hold — same shape as notify_uncertain_verdict, never routed through
+    # format_approval_prompt/push_approval_prompt at all.
+    api = FakeBotApiClient(commander_chat_ids=("c1",))
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
+
+    notice = NoMatchNotice(
+        event_id="e1", raw_text="tell the viewer they need to come to me",
+        reason="no loaded protocol handles this kind of request", risk_level="low", risk_reason="informational",
+    )
+    _run(notify_no_match(deps, notice))
+
+    assert telegram.sent[-1].buttons is None
+    assert "?" not in telegram.sent[-1].text
+    assert "no reply needed" in telegram.sent[-1].text.lower()
+    assert notice.reason in telegram.sent[-1].text
+
+
+def test_no_match_notice_reaches_every_commander():
+    api = FakeBotApiClient(commander_chat_ids=("c1", "c2"))
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
+
+    notice = NoMatchNotice(event_id="e1", raw_text="raw", reason="no match", risk_level="low", risk_reason="informational")
+    _run(notify_no_match(deps, notice))
+
+    assert {m.chat_id for m in telegram.sent} == {"c1", "c2"}
 
 
 def test_callback_data_round_trips():

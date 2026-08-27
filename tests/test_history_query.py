@@ -61,3 +61,56 @@ def test_partial_day_falls_back_to_raw_events(tmp_path):
         assert answer.sources_used[0].level == "raw_event"
     finally:
         store.close()
+
+
+# -- answer_most_recent_event (orchestrator.question_flow's direct-lookup
+# path, question-flow-repros follow-up) ------------------------------------
+
+
+def test_answer_most_recent_event_picks_the_latest_by_occurred_at_not_insertion_order(tmp_path):
+    store = open_persistence(str(tmp_path / "query-recent.db"))
+    try:
+        # Inserted out of chronological order on purpose — the pick must
+        # be by occurred_at, never by row/insertion order.
+        store.append_event({
+            "event_id": "e-later", "received_at": "2026-08-02T09:00:00", "source": "sensor",
+            "sender_identity": "s", "occurred_at": "2026-08-02T09:00:00", "raw_text": "medical incident",
+            "classification": "medical", "area": "south",
+        })
+        store.append_event({
+            "event_id": "e-earlier", "received_at": "2026-08-01T10:00:00", "source": "sensor",
+            "sender_identity": "s", "occurred_at": "2026-08-01T10:00:00", "raw_text": "fire",
+            "classification": "fire", "area": "north",
+        })
+
+        agent = FakeHistoryAgent()
+        service = HistoryQueryService(store, agent)
+
+        answer = service.answer_most_recent_event("what is the last event?")
+
+        assert answer.answer == "answer from stored context"
+        assert answer.total_events_matched == 1
+        assert answer.sources_used[0].source_id == "e-later"
+        assert answer.time_start == "2026-08-02T09:00:00"
+        # The History Agent is still the one interpreting — it's handed
+        # the retrieved event's real content, not a bare question (§5.7).
+        assert "e-later" in agent.last_prompt
+        assert "medical incident" in agent.last_prompt  # the real event content, not a stub or a bare question
+    finally:
+        store.close()
+
+
+def test_answer_most_recent_event_raises_a_clean_error_when_nothing_has_been_recorded(tmp_path):
+    from history.query import HistoryQueryError
+
+    store = open_persistence(str(tmp_path / "query-empty.db"))
+    try:
+        service = HistoryQueryService(store, FakeHistoryAgent())
+
+        try:
+            service.answer_most_recent_event("what is the last event?")
+            assert False, "expected HistoryQueryError"
+        except HistoryQueryError as exc:
+            assert "no events" in str(exc)
+    finally:
+        store.close()

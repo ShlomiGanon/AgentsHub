@@ -83,7 +83,7 @@ def test_headers_needing_a_reply_say_so(kind):
     assert "reply" in format_header(kind).lower()
 
 
-@pytest.mark.parametrize("kind", ["precedent_closure", "uncertain_verdict"])
+@pytest.mark.parametrize("kind", ["precedent_closure", "uncertain_verdict", "no_match"])
 def test_headers_needing_no_reply_say_so(kind):
     assert "no reply needed" in format_header(kind).lower()
 
@@ -107,6 +107,18 @@ def test_declined_job_result_uses_the_declined_header():
     result = JobResult(job_id="j1", outcome="declined")
     text = format_job_result(result)
     assert format_header("declined") in text
+
+
+def test_no_match_job_result_includes_the_failure_reason_text():
+    result = JobResult(job_id="j1", outcome="no_match_protocol", failure_reason="no loaded protocol handles this kind of request")
+    text = format_job_result(result)
+    assert "no loaded protocol handles this kind of request" in text
+
+
+def test_job_result_with_no_failure_reason_adds_no_extra_line():
+    result = JobResult(job_id="j1", outcome="succeeded")
+    text = format_job_result(result)
+    assert text == "\n".join([format_header("result"), "", "Verdict: succeeded"])
 
 
 def test_failure_notice_names_step_and_reason_and_prior_successes():
