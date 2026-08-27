@@ -6,7 +6,7 @@ validating a type on an incoming event. Fixed for the life of the run — no
 add or remove operation.
 
 The human-activation append and the "a profile may not declare it itself"
-rejection already happen in `profiles.loader` / `profiles.validate`
+rejection already happen in `profiles.loader` / `profiles.loader`
 (work_plan.md §1.5/§1.6), before this registry ever sees the list — a
 `LoadedProfile.event_types` is already the correct closed set. This module
 only wraps it in the query interface §2.1 describes; it does not

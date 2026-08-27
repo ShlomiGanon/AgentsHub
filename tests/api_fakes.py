@@ -199,12 +199,12 @@ def build_context(tmp_path, main_agent=None, insights_agent=None, module_path=No
 
 
 class _FakeLoadedProfile:
-    """Stands in for `profiles.loader.LoadedProfile` — api/system.py and
-    api/protocols.py only ever read `.module_path`/`.profile_file_hash`
+    """Stands in for `profiles.loader.LoadedProfile` — api/management.py and
+    api/management.py only ever read `.module_path`/`.profile_file_hash`
     off it; a real one needs a real profile module on disk, which most of
     these tests have no reason to require. Defaults to the real demo
     fixture profile so `profiles.loader.hash_profile_file` (used by
-    api/system.py) has an actual file to hash; a protocol-write test
+    api/management.py) has an actual file to hash; a protocol-write test
     passes its own disposable temp module instead, since writing a
     protocol genuinely edits the file at `module_path` on disk and must
     never touch a shared fixture file.
@@ -216,7 +216,7 @@ class _FakeLoadedProfile:
         self.module_path = module_path
         # Captured once, here, at "load" time — like the real LoadedProfile
         # does — not recomputed live. A property recomputing it on every
-        # access would always equal api/system.py's own fresh recompute,
+        # access would always equal api/management.py's own fresh recompute,
         # making a genuinely pending profile-file edit undetectable.
         self.profile_file_hash = hash_profile_file(module_path)
 

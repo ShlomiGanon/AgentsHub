@@ -9,7 +9,7 @@ alongside this rather than expecting this document to reproduce it.
    good at, written for the Main Agent to read when deciding who to task
    and what to ask them — not for a human), `system_prompt` (its
    instructions).
-3. **Implement each tool as a method**, decorated with `@agents.tooling.tool(name, description, side_effecting=..., idempotent=...)`.
+3. **Implement each tool as a method**, decorated with `@agents.runtime.tool(name, description, side_effecting=..., idempotent=...)`.
    `description` is written for a model to act on ("queries sensor
    status", not "sensor tool"). `idempotent` is required when
    `side_effecting=True` and forbidden when it's `False` — there's no

@@ -1,10 +1,10 @@
-"""bot/results.py (work_plan.md §8.9)."""
+"""bot/notifications.py (work_plan.md §8.9)."""
 
 import asyncio
 
 from bot.api_client import BotNotification, JobResult
 from bot.deps import BotDeps
-from bot.results import deliver_job_result
+from bot.notifications import deliver_job_result
 from tests.bot_fakes import FakeBotApiClient, FakeTelegramClient
 
 

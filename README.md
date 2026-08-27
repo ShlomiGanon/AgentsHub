@@ -25,7 +25,7 @@ python -m tools.terminal_client_viewer --profile profiles.demo
 ```
 server run:
 ```
-python -m api.app --profile profiles.demo
+python -m api.app profiles.demo
 ```
 
 

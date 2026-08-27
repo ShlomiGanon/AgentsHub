@@ -1,7 +1,7 @@
 """history/time_utils.py — direct, targeted tests.
 
 Every existing test exercises this module only indirectly, through
-history/scheduler.py's/history/summarize.py's own tests calling
+history/scheduler.py's/history/scheduler.py's own tests calling
 reconcile() — none of them target this module's own boundary conditions.
 This file does.
 """

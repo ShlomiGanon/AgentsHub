@@ -1,10 +1,10 @@
 """Small duck-typed stand-ins for Agent/Protocol, used only by tests.
 
-Sections 3/4 haven't landed the real classes yet — profiles.validate
+Sections 3/4 haven't landed the real classes yet — profiles.loader
 checks structural shape (see profiles/spec.py), so these fakes are enough
 to exercise every branch of that validation without depending on fixtures
 meant to represent a *valid* profile. `criticality` is the one field
-`profiles.validate` requires to be a real `CriticalityLevel` enum member
+`profiles.loader` requires to be a real `CriticalityLevel` enum member
 specifically (§1.6, tightened after the Mission 8 coverage audit) — every
 other field here stays a plain, minimal stand-in.
 """

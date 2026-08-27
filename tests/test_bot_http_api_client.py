@@ -21,12 +21,12 @@ import pytest
 
 from agents import adapter
 from bot.api_client import BOT_SERVICE_IDENTITY
-from bot.errors import ApiRequestError
+from bot.startup import ApiRequestError
 from bot.http_api_client import HttpApiClient
 from history.write import record_event_outcome
 from orchestrator.holds import create_approval_hold, create_clarification_hold
 from orchestrator.main_agent import RiskAssessment
-from orchestrator.selection import ProtocolSelectionResult
+from orchestrator.main_agent import ProtocolSelectionResult
 from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, RunningApiServer, build_context, happy_path_agent
 
 _PROFILE_TEMPLATE = """
@@ -276,7 +276,7 @@ def test_get_profile_diff_status_reports_false_when_unchanged(server):
 
     status = _run(client.get_profile_diff_status())
 
-    assert status.differs_from_running is False
+    assert status is False
 
 
 def test_get_and_write_settings_round_trip(server):

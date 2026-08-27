@@ -44,7 +44,6 @@ import inspect
 import json
 from typing import Callable
 
-from agents.descriptor import AgentDescriptor
 from agents.errors import (
     AgentFrameworkNotReadyError,
     AgentModelError,
@@ -53,7 +52,7 @@ from agents.errors import (
     AgentToolConstructionError,
 )
 from agents.results import UNCLEAR_TASK_PROMPT_INSTRUCTION
-from agents.tooling import ToolInfo
+from agents.runtime import AgentDescriptor, ToolInfo
 from tools.logging_config import log_ai_interaction, verbose_logging_enabled
 from tools.tracing import get_current_stage, get_trace_id
 

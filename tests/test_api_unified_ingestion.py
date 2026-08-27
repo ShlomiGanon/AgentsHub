@@ -11,7 +11,7 @@ import pytest
 
 from agents import adapter
 from api.app import build_app
-from api.jobs import job_status
+from api.operations import job_status
 from tests.api_fakes import VIEWER_IDENTITY, auth_headers, build_context, happy_path_agent
 
 
@@ -88,8 +88,8 @@ def test_event_and_msg_report_call_the_same_orchestrator_functions(tmp_path, tea
     # neither may implement a second, parallel sequence.
     calls = []
 
-    import api.events as events_module
-    import api.messages as messages_module
+    import api.ingestion as events_module
+    import api.ingestion as messages_module
 
     original_begin_report = events_module.begin_report
 

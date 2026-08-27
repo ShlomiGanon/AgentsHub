@@ -10,7 +10,7 @@ just returning a canned string, so a test can tell one call from two.
 """
 
 from agents.base import Agent
-from agents.tooling import tool
+from agents.runtime import tool
 
 
 class ReferenceAgent(Agent):

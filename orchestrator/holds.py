@@ -24,7 +24,7 @@ from protocols.model import Protocol
 if TYPE_CHECKING:
     from history.extraction import ExtractionResult
     from orchestrator.main_agent import RiskAssessment
-    from orchestrator.selection import ProtocolSelectionResult
+    from orchestrator.main_agent import ProtocolSelectionResult
     from registries.event_types import EventTypeRegistry
 
 HoldReason = Literal["flagged_protocol", "ambiguous_selection"]
@@ -53,7 +53,7 @@ def determine_approval_hold(
     """Return the reason a run must be held, or None to proceed.
 
     Callers only reach this with a `selected`/`ambiguous` selection — a
-    `no_match` selection (orchestrator.selection's NO_MATCH outcome, "no
+    `no_match` selection (orchestrator.main_agent's NO_MATCH outcome, "no
     loaded protocol genuinely fits") is intercepted earlier, in
     `orchestrator.flows.continue_from_risk_assessment`, and never becomes a
     hold at all: it used to (a third `HoldReason` here), but that left the

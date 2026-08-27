@@ -22,7 +22,6 @@ file the running system loaded), so it already imports `Protocol` and
 import ast
 import importlib.util
 import os
-from dataclasses import dataclass
 from pathlib import Path
 
 from profiles.loader import validate_single_protocol
@@ -33,9 +32,7 @@ class ProtocolEditError(Exception):
     """A protocol write was rejected, or the profile file could not be edited."""
 
 
-@dataclass(frozen=True)
-class ProtocolEditResult:
-    message: str = "The running system is unchanged. This edit applies from the next start."
+EDIT_SUCCESS_MESSAGE = "The running system is unchanged. This edit applies from the next start."
 
 
 def read_protocols(protocol_set) -> tuple[Protocol, ...]:
@@ -45,32 +42,32 @@ def read_protocols(protocol_set) -> tuple[Protocol, ...]:
     return protocol_set.all()
 
 
-def add_protocol(module_path: str, current_protocols: tuple[Protocol, ...], agents_by_name: dict, new_protocol: Protocol) -> ProtocolEditResult:
+def add_protocol(module_path: str, current_protocols: tuple[Protocol, ...], agents_by_name: dict, new_protocol: Protocol) -> str:
     if any(p.name == new_protocol.name for p in current_protocols):
         raise ProtocolEditError(f"a protocol named '{new_protocol.name}' already exists — use replace, not add")
 
     _validate_or_raise(new_protocol, agents_by_name)
     _write_protocols(module_path, (*current_protocols, new_protocol))
-    return ProtocolEditResult()
+    return EDIT_SUCCESS_MESSAGE
 
 
-def replace_protocol(module_path: str, current_protocols: tuple[Protocol, ...], agents_by_name: dict, updated_protocol: Protocol) -> ProtocolEditResult:
+def replace_protocol(module_path: str, current_protocols: tuple[Protocol, ...], agents_by_name: dict, updated_protocol: Protocol) -> str:
     if not any(p.name == updated_protocol.name for p in current_protocols):
         raise ProtocolEditError(f"no protocol named '{updated_protocol.name}' exists — use add, not replace")
 
     _validate_or_raise(updated_protocol, agents_by_name)
     updated = tuple(updated_protocol if p.name == updated_protocol.name else p for p in current_protocols)
     _write_protocols(module_path, updated)
-    return ProtocolEditResult()
+    return EDIT_SUCCESS_MESSAGE
 
 
-def remove_protocol(module_path: str, current_protocols: tuple[Protocol, ...], name: str) -> ProtocolEditResult:
+def remove_protocol(module_path: str, current_protocols: tuple[Protocol, ...], name: str) -> str:
     if not any(p.name == name for p in current_protocols):
         raise ProtocolEditError(f"no protocol named '{name}' exists")
 
     updated = tuple(p for p in current_protocols if p.name != name)
     _write_protocols(module_path, updated)
-    return ProtocolEditResult()
+    return EDIT_SUCCESS_MESSAGE
 
 
 def _validate_or_raise(protocol: Protocol, agents_by_name: dict) -> None:

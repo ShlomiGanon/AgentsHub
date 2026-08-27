@@ -17,19 +17,19 @@ imports.
 
 | Package | Entry-point module(s) | Notes |
 |---|---|---|
-| `persistence` | `persistence.interface`, `persistence.exceptions` | Never `persistence.sqlite_backend`, `persistence.schema`, or `persistence.migrations` directly — those are engine-specific and stay behind the interface. Construct a concrete backend via `persistence.interface.open_persistence(db_path)`, the one place that decides which engine is built. The interface's operations include `update_event` (added in Mission 2, alongside `append_event`, beyond §2.7's original literal list — see `docs/progress.md`). |
+| `persistence` | `persistence.interface`, `persistence.exceptions` | Never import `persistence.sqlite_backend` or `persistence.schema` directly outside the package; schema and migrations remain engine-specific behind `open_persistence`. |
 | `config` | `config.base`, `config.settings_store` | |
 | `auth` | `auth.permissions` | |
 | `registries` | `registries.event_types`, `registries.areas` | Read-only closed sets built from a `LoadedProfile` at startup. |
-| `profiles` | `profiles.loader`, `profiles.spec` | `profiles.validate` is called only by `profiles.loader`, not directly by other packages. |
+| `profiles` | `profiles.loader`, `profiles.spec` | Validation is owned by `profiles.loader`; `LoadedProfile`, `AgentSpec`, and the public loading contract remain unchanged. |
 | `tools` | `tools.logging_config`, `tools.tracing` | Shared helpers belonging to no subsystem. |
-| `cli` | none (not importable) | `cli.user_admin` is an entry point run from the shell, never imported by another package. |
-| `agents` | `agents.registry`, `agents.results`, `agents.errors`, `agents.reference`, `agents.base`, `agents.history` | `agents.reference` and `agents.history` are concrete agent modules — public because a profile (or `profiles.loader`'s core-agent seam) constructs them directly, not query interfaces. Every future concrete agent becomes an entry point the same way, one module per agent. `agents.base` is a real entry point because a concrete agent must genuinely subclass `agents.base.Agent` at runtime — including ones living outside `agents/`, like `orchestrator.main_agent.MainAgent` (the work plan's own branch table places core Main-Agent-decision agents in `orchestrator/`, not `agents/`). `agents.descriptor`, `agents.tooling`, `agents.adapter` stay internal — only `agents/` package files import them. |
-| `protocols` | `protocols.model`, `protocols.loader`, `protocols.editor`, `protocols.executor` | `protocols.retry` stays internal, called only by `protocols.executor` — parallel to `profiles.validate`'s status. |
-| `history` | `history.interface`, `history.query` | `history.interface` exposes writes, extraction, scheduler hooks, and the `storage_timestamp` formatting helper (re-exported so `api/events.py`/`api/messages.py` can format `received_at`/`occurred_at` consistently with every range-query bound `history/retrieval.py` builds — found necessary during §9.19/§9.20's integration testing); `history.query` exposes historical Q&A and precedent lookup. Other `history/` modules stay internal. |
+| `cli` | none (not generally importable) | `cli.user_admin` is a shell entry point. The terminal frontends in `tools` are the sole caller-specific exception: they invoke the same command function so user writes still have one path. |
+| `agents` | `agents.registry`, `agents.results`, `agents.errors`, `agents.reference`, `agents.base`, `agents.history` | Concrete agents remain one class per module. `agents.base` preserves the Agent contract; `agents.runtime` and `agents.adapter` remain internal framework support. |
+| `protocols` | `protocols.model`, `protocols.loader`, `protocols.editor`, `protocols.executor` | Execution and its retry policy share the executor entry point. |
+| `history` | `history.interface`, `history.query` | `history.interface` exposes writes, extraction, scheduler hooks, and `storage_timestamp`; `history.query` owns historical Q&A, range retrieval, and precedent lookup. Other `history/` modules stay internal. |
 | `orchestrator` | `orchestrator.flows` | |
-| `api` | `api.app` | `api.app.create_app(module_path)` assembles everything a running API needs from a `LoadedProfile` (the agent registry, the protocol/area/event-type registries, the history query service, the settings store, the serial queue, the summary scheduler) and builds the Flask app — the first place all of that gets wired together at once. Every other `api/` module (`auth`, `errors`, `events`, `messages`, `jobs`, `holds`, `protocols`, `system`) is internal, reached only from within the package. |
-| `bot` | `bot.app` | Built in Mission 8, against a Mission 7 (`api`) that does not exist yet. "`bot` calls only `api`" is a *network* boundary (the profile's `api_port`, §8.1), never a Python import — nothing in `bot/` imports the `api` package. `bot.api_client.BotApiClient` is the seam every other `bot/` module is built against; its only implementation today, `UnimplementedApiClient`, raises naming the exact §7 subtask it is blocked on. |
+| `api` | `api.app` | `api.app.create_app(module_path)` assembles the running API. Internal routes are grouped in `ingestion`, `operations`, and `management`; authentication and error mapping remain separate. |
+| `bot` | `bot.app`, `bot.interface` | `bot.app` is the runtime entry point. `bot.interface` is the narrow supported integration surface used by the two terminal frontends; bot-to-API communication remains a network boundary. |
 
 ## Who may call whom
 

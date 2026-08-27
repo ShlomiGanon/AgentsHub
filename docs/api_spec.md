@@ -72,7 +72,7 @@ in `BotApiClient`'s Mission-8-era abstract signatures, even though the
 last two are commander-only writes — meaning the API-side check could
 only ever validate the bot's own blanket service-level access for these
 five, never the real caller's. `bot/api_client.py`, `bot/http_api_client.py`,
-`bot/profile_commands.py`, `bot/settings_commands.py`, and `bot/app.py`
+`bot/commands.py` and `bot/app.py`
 were all updated to thread the real caller's identity through to every
 one of these five — the same shape of fix as the Mission 8 deep audit's
 own §8.2 profile/settings unauthenticated-read fix, this time closing a
@@ -471,15 +471,15 @@ slot at all — no `accepted`, no `status` covering failure. A `401`/`403`
 (auth) or `422` `run_failure` (intent routing/question-answering failed
 synchronously) from `POST /Msg` has nowhere to go inside a
 `MessageSubmissionResult`; a real client must raise an exception (a new
-`bot.errors` type, not yet defined) rather than force one of these into
+`bot.startup.ApiRequestError`) rather than force one of these into
 the DTO. `500` `internal_error` is the same.
 
-**`write_protocol` → `ProtocolWriteResult`.** `accepted: bool` already
+**`write_protocol` → `WriteResult`.** `accepted: bool` already
 covers a validation failure at `POST`/`PUT`/`DELETE /Protocol` (`400`
 `invalid_input` → `accepted=False`, `message` from the API). `401`/`403`
 have no slot here either — same as `submit_message`, these must raise.
 
-**`write_setting` → `SettingsWriteResult`.** Same shape and same mapping
+**`write_setting` → `WriteResult`.** Same shape and same mapping
 as `write_protocol` — `accepted=False` for a `400` from `PUT /SYSTEM`;
 `401`/`403` raise.
 

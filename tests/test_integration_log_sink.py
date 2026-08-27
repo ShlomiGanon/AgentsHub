@@ -242,7 +242,7 @@ def test_a_failed_request_still_shares_its_trace_id_with_the_werkzeug_500_line(t
     line were written. `set_trace_id` has no such reset, on success or on
     failure.
     """
-    import api.events as events_module
+    import api.ingestion as events_module
 
     monkeypatch.setattr(adapter, "_get_crewai", lambda: _fake_crewai())
     monkeypatch.setattr(events_module, "begin_report", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
@@ -315,7 +315,7 @@ def test_a_hold_resolution_is_logged_with_who_answered_and_what_they_chose(tmp_p
         ctx.queue.wait_until_idle()
 
     # The resolution's own trace ID is a *different* trace than the
-    # original ingestion (api/holds.py mints a fresh one per resumption, by
+    # original ingestion (api/operations.py mints a fresh one per resumption, by
     # design — see that module's docstring) — `fetch_log_entries` needs a
     # trace ID up front, and this interface deliberately has no "list every
     # trace" operation, so the most direct check is a raw scan of the one
@@ -381,7 +381,7 @@ def test_a_clarification_hold_is_logged_with_which_field_was_unresolved(tmp_path
 def test_precedent_lookup_and_closure_are_logged_with_the_window_and_the_match(tmp_path, monkeypatch):
     """§1.8's own list: "the window searched, which prior events matched,
     and whether the match closed the event." Split deliberately across two
-    call sites and two levels — history.precedent.find_precedents's own
+    call sites and two levels — history.query.find_precedents's own
     precedent_lookup (DEBUG: the window and every candidate) and
     orchestrator.flows's precedent_closure (INFO: the operator-relevant
     outcome) — so this test explicitly raises the level to DEBUG rather

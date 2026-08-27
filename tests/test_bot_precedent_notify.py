@@ -1,10 +1,10 @@
-"""bot/precedent_notify.py (work_plan.md §8.6)."""
+"""bot/notifications.py (work_plan.md §8.6)."""
 
 import asyncio
 
 from bot.api_client import PrecedentClosureNotice
 from bot.deps import BotDeps
-from bot.precedent_notify import format_precedent_closure_notice, notify_precedent_closure
+from bot.notifications import format_precedent_closure_notice, notify_precedent_closure
 from tests.bot_fakes import FakeBotApiClient, FakeTelegramClient
 
 

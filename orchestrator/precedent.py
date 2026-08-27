@@ -4,7 +4,7 @@ Read-only: `look_up_precedent` changes nothing and may remove the need for
 both a hold and a run. Closure is a plain, deterministic check over what
 `history.query.HistoryQueryService.search_precedents` already returns —
 `PrecedentMatch.resolved` is a deterministic outcome mapping computed by
-`history/precedent.py` itself (never a model judgment), so there's nothing
+`history/query.py` itself (never a model judgment), so there's nothing
 for this module to interpret beyond the three explicit rules below.
 """
 

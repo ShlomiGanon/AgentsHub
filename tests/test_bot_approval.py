@@ -1,11 +1,11 @@
-"""bot/approval.py (work_plan.md §8.5)."""
+"""bot/holds.py (work_plan.md §8.5)."""
 
 import asyncio
 
 import pytest
 
 from bot.api_client import HeldApprovalNotice, HoldAnswerOutcome, NoMatchNotice, UncertainVerdictNotice
-from bot.approval import (
+from bot.holds import (
     build_callback_data,
     format_approval_prompt,
     handle_approval_answer,
@@ -73,7 +73,7 @@ def test_the_two_reasons_produce_different_prompt_text():
 def test_prompt_buttons_encode_event_id_not_hold_id():
     # FLAGGED_NOTICE.hold_id ("hold-1") and .event_id ("e1") deliberately
     # differ, so this fails loudly if the callback data ever regresses to
-    # encoding the orchestrator's internal hold ID again — api/holds.py's
+    # encoding the orchestrator's internal hold ID again — api/operations.py's
     # POST /Approve/<event_id> (§7.11) only ever accepts an event ID.
     _text, flagged_buttons = format_approval_prompt(FLAGGED_NOTICE)
     for _label, callback_data in flagged_buttons:

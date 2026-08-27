@@ -23,9 +23,8 @@ from functools import wraps
 from typing import Callable
 
 from agents import adapter
-from agents.descriptor import AgentDescriptor
 from agents.results import AgentResult, parse_agent_output
-from agents.tooling import ToolInfo, exposed_tools_for, tool_info_of
+from agents.runtime import AgentDescriptor, ToolInfo, exposed_tools_for, tool_info_of
 from tools.tracing import get_trace_id
 
 logger = logging.getLogger(__name__)

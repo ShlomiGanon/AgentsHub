@@ -20,7 +20,7 @@ Two gaps found via live manual testing, both fixed here:
 
 - The agent-selection prompt used to offer exactly one response shape
   (`AGENT:`/`TASK:` blocks), reused directly from
-  `orchestrator.formulation._parse_formulation_response` — with no
+  `orchestrator.main_agent._parse_formulation_response` — with no
   legitimate way to say "none of these agents can answer this," worse off
   than protocol selection's own pre-NO_MATCH state (which at least had two
   shapes). A question with no genuine match (e.g. "do I have any tasks?",
@@ -30,7 +30,7 @@ Two gaps found via live manual testing, both fixed here:
   location") was surfaced verbatim as the final answer to someone who
   never mentioned a location. Fixed with this module's own dedicated
   `NONE:` response shape and parser (deliberately *not* reusing
-  `orchestrator.formulation`'s — its "every named agent must get a task"
+  `orchestrator.main_agent`'s — its "every named agent must get a task"
   rule is an unrelated failure mode that has no business being entangled
   with this one), plus routing a single-agent `unclear_task` result
   through the same clean "I don't have a way to answer that" presentation
@@ -64,11 +64,11 @@ from typing import TYPE_CHECKING, Literal
 
 from agents.history import HistoryAgent
 from history.query import HistoryQueryError
-from orchestrator.errors import OrchestrationParseError
+from orchestrator.main_agent import OrchestrationParseError
 from tools.tracing import stage_context
 
 if TYPE_CHECKING:
-    from agents.descriptor import AgentDescriptor
+    from agents.runtime import AgentDescriptor
     from agents.registry import AgentRegistry
     from history.query import HistoryQueryService
     from orchestrator.main_agent import MainAgent

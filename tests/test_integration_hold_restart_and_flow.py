@@ -26,7 +26,7 @@ import pytest
 from agents import adapter
 from orchestrator.holds import create_approval_hold, create_clarification_hold
 from orchestrator.main_agent import RiskAssessment
-from orchestrator.selection import ProtocolSelectionResult
+from orchestrator.main_agent import ProtocolSelectionResult
 from tests.api_fakes import COMMANDER_IDENTITY, RunningApiServer, build_context, happy_path_agent
 
 

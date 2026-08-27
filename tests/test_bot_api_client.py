@@ -12,7 +12,7 @@ import asyncio
 import pytest
 
 from bot.api_client import BotApiClient, UnimplementedApiClient
-from bot.errors import ApiNotImplementedError
+from bot.startup import ApiNotImplementedError
 
 client = UnimplementedApiClient()
 

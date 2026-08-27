@@ -65,8 +65,8 @@ def set_trace_id(trace_id: str) -> None:
     with no corresponding reset — unlike `trace_context`, which is for a
     bounded block that should stop being "current" the moment it exits.
 
-    Exists for exactly one caller shape: an API route (`api/events.py`,
-    `api/messages.py`, `api/holds.py`) that mints a trace ID and does real
+    Exists for exactly one caller shape: an API route (`api/ingestion.py`,
+    `api/ingestion.py`, `api/operations.py`) that mints a trace ID and does real
     work before returning a response — and needs that same trace ID still
     current *after* the route function returns, because werkzeug's own
     request-log line (`WSGIRequestHandler.log_request`, via the stdlib's

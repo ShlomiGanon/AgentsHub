@@ -10,7 +10,7 @@ loop.
 here — real HTTP, against the profile's own `api_port` (§8.1). Every
 handler below stays wrapped so that any unexpected failure reaching it
 becomes a clear chat reply instead of a crash or a silently dropped
-update — including `bot.errors.ApiRequestError` (a real API call that
+update — including `bot.startup.ApiRequestError` (a real API call that
 failed) and, for any `BotApiClient` implementation that still legitimately
 has no real counterpart for an operation, `ApiNotImplementedError` (see
 `bot.api_client.UnimplementedApiClient`'s own docstring for when that
@@ -29,15 +29,13 @@ from config.base import ModelTierError, TierModel, build_tier_model
 from profiles.loader import LoadedProfile, ProfileLoadError, ProfileValidationError, load_profile
 from tools.logging_config import configure_logging
 
-from bot import approval, clarification, entrypoint, profile_commands, settings_commands
+from bot import commands, holds
 from bot.http_api_client import HttpApiClient
 from bot.deps import BotDeps
-from bot.errors import ApiNotImplementedError, BotStartupError
-from bot.notification_cursor import NotificationCursorStore
-from bot.notifications import run_notification_poll_loop
-from bot.singleton_lock import SingleInstanceLock
+from bot.notifications import NotificationCursorStore, run_notification_poll_loop
+from bot.startup import ApiNotImplementedError, BotStartupError, SingleInstanceLock
 from bot.telegram_client import PTBTelegramClient
-from bot.users import resolve_caller
+from bot.users import check_permission, resolve_caller
 
 logger = logging.getLogger(__name__)
 
@@ -157,11 +155,35 @@ def _guarded(handler: Callable[..., Awaitable[None]]):
     return _wrapped
 
 
+async def handle_incoming_message(deps: BotDeps, telegram_identity: str, text: str, message_id: str) -> str:
+    """Route free-form Telegram text through the single message endpoint."""
+
+    resolution = await resolve_caller(deps.api_client, telegram_identity)
+    if resolution.status == "unregistered":
+        return resolution.refusal_message
+
+    caller = resolution.caller
+    refusal = check_permission(caller, "send_message")
+    if refusal is not None:
+        return refusal
+
+    result = await deps.api_client.submit_message(text, telegram_identity, message_id)
+    if result.kind == "question":
+        return result.answer_text or "(no answer was returned)"
+
+    lines = [f"Got it — taken as a {result.kind}."]
+    if result.awaiting_approval:
+        lines.append("It is now waiting for a commander's approval.")
+    elif result.job_id:
+        lines.append(f"Job ID: {result.job_id}. You'll hear back here once it's done.")
+    return "\n".join(lines)
+
+
 async def _on_text_message(update, context) -> None:
     deps: BotDeps = context.bot_data["deps"]
     telegram_identity, chat_id = _identity_and_chat_id(update)
 
-    reply = await entrypoint.handle_incoming_message(deps, telegram_identity, update.message.text, str(update.message.message_id))
+    reply = await handle_incoming_message(deps, telegram_identity, update.message.text, str(update.message.message_id))
     await deps.telegram_client.send_text(chat_id, reply)
 
 
@@ -174,14 +196,14 @@ async def _on_callback_query(update, context) -> None:
 
     namespace = query.data.split(":", 1)[0]
 
-    if namespace == clarification.CALLBACK_PREFIX:
-        event_id, choice = clarification.parse_callback_data(query.data)
-        await clarification.handle_clarification_answer(deps, chat_id, telegram_identity, event_id, choice)
+    if namespace == holds.CLARIFICATION_CALLBACK_PREFIX:
+        event_id, choice = holds.parse_clarification_callback_data(query.data)
+        await holds.handle_clarification_answer(deps, chat_id, telegram_identity, event_id, choice)
         return
 
-    if namespace == approval.CALLBACK_PREFIX:
-        event_id, choice = approval.parse_callback_data(query.data)
-        await approval.handle_approval_answer(deps, chat_id, telegram_identity, event_id, choice)
+    if namespace == holds.CALLBACK_PREFIX:
+        event_id, choice = holds.parse_callback_data(query.data)
+        await holds.handle_approval_answer(deps, chat_id, telegram_identity, event_id, choice)
         return
 
     logger.warning("unrecognized callback namespace: %s", namespace, extra={"event": "bot_unknown_callback"})
@@ -252,13 +274,13 @@ async def _on_profile_command(update, context) -> None:
         caller = await _resolve_caller_or_refuse(deps, chat_id, telegram_identity)
         if caller is None:
             return
-        await deps.telegram_client.send_text(chat_id, await profile_commands.view_profile(deps, caller.telegram_identity))
+        await deps.telegram_client.send_text(chat_id, await commands.view_profile(deps, caller.telegram_identity))
         return
 
     if args[0] == "diff":
         if await _resolve_caller_or_refuse(deps, chat_id, telegram_identity) is None:
             return
-        await deps.telegram_client.send_text(chat_id, await profile_commands.profile_diff_status(deps))
+        await deps.telegram_client.send_text(chat_id, await commands.profile_diff_status(deps))
         return
 
     if args[0] in ("add", "edit", "remove"):
@@ -270,14 +292,14 @@ async def _on_profile_command(update, context) -> None:
         rest = " ".join(args[1:])
 
         if action == "remove":
-            reply = await profile_commands.write_protocol(deps, caller, "remove", {"name": rest.strip()})
+            reply = await commands.write_protocol(deps, caller, "remove", {"name": rest.strip()})
         else:
             parsed = _parse_protocol_write_command(rest)
             if isinstance(parsed, str):
                 await deps.telegram_client.send_text(chat_id, parsed)
                 return
             _, payload = parsed
-            reply = await profile_commands.write_protocol(deps, caller, action, payload)
+            reply = await commands.write_protocol(deps, caller, action, payload)
 
         await deps.telegram_client.send_text(chat_id, reply)
         return
@@ -294,7 +316,7 @@ async def _on_settings_command(update, context) -> None:
         caller = await _resolve_caller_or_refuse(deps, chat_id, telegram_identity)
         if caller is None:
             return
-        await deps.telegram_client.send_text(chat_id, await settings_commands.view_settings(deps, caller.telegram_identity))
+        await deps.telegram_client.send_text(chat_id, await commands.view_settings(deps, caller.telegram_identity))
         return
 
     if args[0] == "set" and len(args) == 3:
@@ -303,7 +325,7 @@ async def _on_settings_command(update, context) -> None:
             return
 
         _, field, raw_value = args
-        reply = await settings_commands.change_setting(deps, caller, field, raw_value)
+        reply = await commands.change_setting(deps, caller, field, raw_value)
         await deps.telegram_client.send_text(chat_id, reply)
         return
 

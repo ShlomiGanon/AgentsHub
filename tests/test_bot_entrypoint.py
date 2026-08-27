@@ -1,9 +1,9 @@
-"""bot/entrypoint.py (work_plan.md §8.3)."""
+"""bot/app.py (work_plan.md §8.3)."""
 
 import asyncio
 
 from bot.api_client import MessageSubmissionResult
-from bot.entrypoint import handle_incoming_message
+from bot.app import handle_incoming_message
 from tests.bot_fakes import FakeBotApiClient
 
 

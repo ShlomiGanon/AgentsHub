@@ -47,7 +47,7 @@ worth a second look get their own detailed subsection.
 | 1.3 | Base configuration | Fully implemented & tested | `config/base.py`; deployment-specific values correctly absent. |
 | 1.4 | Profile structure | Fully implemented & tested | `profiles/spec.py`, `docs/profile_spec.md`. |
 | 1.5 | Profile loading and selection | **See §A.1.5 below** | |
-| 1.6 | Startup validation | Fully implemented & tested | `profiles/validate.py:100`, `isinstance(protocol.criticality, CriticalityLevel)` confirmed present by direct read (this is the fix work_plan.md §1.6 itself documents finding necessary — verified it is actually in the file, not just described). |
+| 1.6 | Startup validation | Fully implemented & tested | `profiles/loader.py:100`, `isinstance(protocol.criticality, CriticalityLevel)` confirmed present by direct read (this is the fix work_plan.md §1.6 itself documents finding necessary — verified it is actually in the file, not just described). |
 | 1.7 | Runtime settings store | Fully implemented & tested | `config/settings_store.py`; independence confirmed via `tests/test_integration_profile_isolation.py` (two real `SettingsStore` instances). |
 | 1.8 | Structured logging and run tracing | **Not fully implemented — see §A.1.8 below** | |
 | 1.9 | Permission model | Fully implemented & tested | `auth/permissions.py` — one `is_permitted(level, action)` shared function, ordered `PermissionLevel` enum. |
@@ -90,7 +90,7 @@ returns **zero matches** in `orchestrator/` and **zero matches** in
 `history/` — the two packages that own essentially every event this
 bullet list names (intent, extraction, risk, selection, holds, precedent,
 step task/result, insight, verdict). The only packages with any
-`logger.*` calls at all are `protocols/retry.py` and
+`logger.*` calls at all are `protocols/executor.py` and
 `protocols/executor.py` (covers "every retry with the cause" and
 plausibly tool-call logging via `agents/base.py`, the only other file
 with logger calls) — a small fraction of the list. `api/` has none
@@ -106,7 +106,7 @@ asterisk against it. See Part C.
 
 All 13 subtasks: **fully implemented and tested**, confirmed by direct
 reading of `persistence/schema.py`, `persistence/sqlite_backend.py`,
-`persistence/interface.py`, `persistence/migrations.py`,
+`persistence/interface.py`, `persistence/schema.py`,
 `registries/event_types.py`, `registries/areas.py`,
 `fixtures/seed_events.py`, and `tests/test_persistence_conformance.py`
 (the backend-swap suite, confirmed engine-agnostic — no SQLite import in
@@ -116,7 +116,7 @@ the test file). Specific checks: `fetch_held_event(kind, event_id)`
 `tests/test_persistence_conformance.py`; the composite
 `(classification, area)` index (§2.8) present in `persistence/schema.py`;
 the `[start, end)` half-open range convention (a Mission-5-prerequisite
-follow-up, §2.6/2.7/2.9/2.10) is the same convention `history/retrieval.py`
+follow-up, §2.6/2.7/2.9/2.10) is the same convention `history/query.py`
 depends on and later Bug 1/Bug 2 fixes (§9.19/§9.20, below) had to work
 within — consistent end to end.
 
@@ -150,7 +150,7 @@ exactly.
 
 7 of 8 fully implemented and tested as described (`protocols/model.py`,
 `protocols/loader.py`, `protocols/editor.py`, `protocols/executor.py`,
-`protocols/retry.py`, `profiles/demo.py`). One item needs an update:
+`protocols/executor.py`, `profiles/demo.py`). One item needs an update:
 
 #### A.4.6 — 4.6 Retry exhaustion handling: stale "partially done" status
 
@@ -163,8 +163,8 @@ the wiring is real: `orchestrator/flows.py`'s `continue_from_risk_assessment`
 calls `record_step_execution` inside the step loop (so partial results
 are written incrementally, not only at the end) and
 `record_event_outcome(..., "failed", failure_reason=...)` on exhaustion;
-`bot/failures.py` + the `job_failed` notification kind
-(`api/notifications.py`) cover the originator notification; the serial
+`bot/notifications.py` + the `job_failed` notification kind
+(`api/operations.py`) cover the originator notification; the serial
 queue (§6.15) already guarantees the next event proceeds regardless. §9.14's
 integration test (`tests/test_integration_retry_exhaustion.py`) exercises
 this exact path for real and confirms a second event still completes
@@ -178,9 +178,9 @@ All 10 subtasks: **fully implemented and tested**, subject to the same
 crewai-unverified caveat as Mission 3 for `agents/history.py`'s prompt
 behavior and `history/extraction.py`'s model-driven field extraction
 (both real code, tested via injected fakes/`model_invoker` stand-ins,
-never a live model). Verified directly: `history/precedent.py::find_precedents`
+never a live model). Verified directly: `history/query.py::find_precedents`
 uses the hierarchical summary-first lookup §5.8 requires (read directly,
-not assumed); `history/retrieval.py`'s range-scoped assembly (§5.9) uses
+not assumed); `history/query.py`'s range-scoped assembly (§5.9) uses
 half-open UTC intervals; `tests/test_history_fidelity.py` runs the real
 three-level pipeline over the seed dataset and checks contradiction
 preservation, not just "it ran."
@@ -212,12 +212,12 @@ They are fully built, and `tests/test_orchestrator_flows.py` exercises
 them directly (17 call sites). But **no production entry point calls
 them**: `grep`-ing the whole repository for calls to any of the three
 (excluding their own mutual calls and the test file) returns nothing.
-`api/messages.py`'s own module docstring says so explicitly: it "Composes
+`api/ingestion.py`'s own module docstring says so explicitly: it "Composes
 the split primitives (`begin_report`/`run_report_extraction`,
 `begin_request`/`continue_from_risk_assessment`) itself rather than
 calling `orchestrator.flows.process_message`, which runs a report or
 request synchronously start to finish — exactly what §7.2 exists to avoid
-blocking a request on." `api/events.py` and `api/holds.py` independently
+blocking a request on." `api/ingestion.py` and `api/operations.py` independently
 confirmed to use the same split-primitive pattern, never these three.
 
 This is not a bug — the split primitives are the real, correct,
@@ -240,7 +240,7 @@ All 12 subtasks: **fully implemented and tested**, verified directly:
 an HTTP-visible failure (confirmed by reading `api/errors.py` — 7
 subclasses, three `error_class` values matching §7.10's three-class
 requirement); §7.12's `steps_completed`/`failed_step_agent_name` fields
-confirmed present in `api/jobs.py` (`_steps_completed`,
+confirmed present in `api/operations.py` (`_steps_completed`,
 `_failed_step_agent_name` helper functions, lines 33/45, wired into the
 response body at lines 68-77).
 
@@ -259,9 +259,9 @@ only as a deliberately-retained test double (`tests/test_bot_notifications.py`'s
 poll-loop-degrades-gracefully test needs a null object whose every method
 raises) — not a leftover stub masquerading as a real path; confirmed it
 is never constructed inside `bot/app.py`'s own production code, only in
-tests. `bot/notification_cursor.py::NotificationCursorStore` confirmed
+tests. `bot/notifications.py::NotificationCursorStore` confirmed
 wired into `bot/app.py:294` (`register_handlers`'s `_post_init`), not
-just defined and tested in isolation. `api/notifications.py`'s
+just defined and tested in isolation. `api/operations.py`'s
 `fetch_notifications_since` and the `notification_log` table (migration
 8) confirmed present in `persistence/sqlite_backend.py`,
 `persistence/interface.py`, and exercised by
@@ -275,11 +275,11 @@ directly checkable; three specific, high-value spot-checks:
 
 #### A.9.2 — Trace ID: genuinely wired, not just built
 
-Confirmed directly (not merely trusted from progress.md): `api/events.py`,
-`api/messages.py`, and `api/holds.py` all import and call
+Confirmed directly (not merely trusted from progress.md): `api/ingestion.py`,
+`api/ingestion.py`, and `api/operations.py` all import and call
 `tools.tracing.trace_context`/`new_trace_id`, and it is not merely
-imported-but-unused — `api/events.py`'s `post_event` and
-`api/messages.py`'s `post_msg` wrap both their synchronous prefix and
+imported-but-unused — `api/ingestion.py`'s `post_event` and
+`api/ingestion.py`'s `post_msg` wrap both their synchronous prefix and
 their queued continuation's closure in `with trace_context(trace_id):`.
 This is the fix work_plan.md itself documents as closing a real,
 previously-existing gap (the mechanism existed since Mission 1 but had no
@@ -296,8 +296,8 @@ resumption gets a fresh trace ID, not a continuation).
 `history.time_utils` (confirmed present — satisfies the layering fix,
 also independently confirmed against `tests/test_architecture.py`'s
 passing `ENTRY_POINTS`, which lists only `history.interface`/`history.query`
-as `history`'s entry points). `history/precedent.py::find_precedents`'s
-window-widening fix and `api/events.py`/`api/messages.py`'s `_now()`
+as `history`'s entry points). `history/query.py::find_precedents`'s
+window-widening fix and `api/ingestion.py`/`api/ingestion.py`'s `_now()`
 both read directly and confirmed to match the described fix, not just
 asserted by the log.
 
@@ -332,14 +332,14 @@ merely claimed restored.
 | `python -m bot.app <profile>` | `bot.app.main` → `build_deps` → real `HttpApiClient` (confirmed, §A.8) → `register_handlers` (message handler, `/profile`, `/settings`, callback-query handler, notification poll loop with a real `NotificationCursorStore`) | Real. |
 | `python -m cli.user_admin --profile <profile> add/update/remove/list` | `cli.user_admin.main` → `profiles.loader.load_profile` (same loader the system uses, per §1.10's own requirement) → `persistence.interface.open_persistence` → direct user-table writes | Real; confirmed no code in `api/` or `bot/` duplicates this write path (§A.1's grep). |
 | `python -m tools.simulator --port ...` | `tools.simulator.main` → `_post_event` → real `POST /Event` over `urllib` against a running API process | Real; not a fake traffic generator. |
-| `POST /Event` | `api/events.py::post_event` → `orchestrator.flows.begin_report` (sync) → queued `run_report_extraction` → `history.interface.extract_event`/`record_*` → risk/selection/precedent/holds/executor/insights/judgment via `continue_from_risk_assessment` | Real, full chain confirmed (§A.6, §A.9.2). |
-| `POST /Msg` | `api/messages.py::post_msg` → `orchestrator.intent.classify_intent` → question path (`orchestrator.question_flow.answer_question`, synchronous) or report/request path via the **same** split primitives `POST /Event` uses (not `process_message` — see §A.6.11) | Real; converges correctly, per §7.5's own dedicated convergence test. |
-| `POST /Approve/<id>` / `POST /Clarify/<id>` | `api/holds.py` → `orchestrator.flows.resolve_approval`/`resolve_clarification` → `fetch_held_event` by event ID → resume via `continue_after_approval`/`continue_after_clarification` | Real. |
+| `POST /Event` | `api/ingestion.py::post_event` → `orchestrator.flows.begin_report` (sync) → queued `run_report_extraction` → `history.interface.extract_event`/`record_*` → risk/selection/precedent/holds/executor/insights/judgment via `continue_from_risk_assessment` | Real, full chain confirmed (§A.6, §A.9.2). |
+| `POST /Msg` | `api/ingestion.py::post_msg` → `orchestrator.main_agent.classify_intent` → question path (`orchestrator.question_flow.answer_question`, synchronous) or report/request path via the **same** split primitives `POST /Event` uses (not `process_message` — see §A.6.11) | Real; converges correctly, per §7.5's own dedicated convergence test. |
+| `POST /Approve/<id>` / `POST /Clarify/<id>` | `api/operations.py` → `orchestrator.flows.resolve_approval`/`resolve_clarification` → `fetch_held_event` by event ID → resume via `continue_after_approval`/`continue_after_clarification` | Real. |
 
 ### B.2 — Code with no production caller
 
 - **`orchestrator.flows.process_report`, `process_request`, `process_message`** — fully built, fully tested (17 test call sites in `tests/test_orchestrator_flows.py`), never called from `api/`, `bot/`, `cli/`, or `tools/`. Detailed at §A.6.11. This is the one significant instance of the exact failure mode the audit brief names by example (trace-ID mechanism, `api.app.build_context()`); everything else checked (`assemble_core_agents`, `fetch_notifications_since`, `NotificationCursorStore`, `HttpApiClient`, the four `main()` entry points, the trace-ID context managers) was confirmed to have a real production caller, not just a test caller.
-- No other orphaned public entry-point-module code was found in this pass. `agents.tooling`, `agents.descriptor`, `protocols.retry`, `profiles.validate`, `history.time_utils`, `history.retrieval`, and other declared-internal modules are correctly *not* entry points and are reached only from within their own package — consistent with `docs/allowed_calls.md` and confirmed by `tests/test_architecture.py` passing.
+- No other orphaned public entry-point-module code was found in this pass. `agents.runtime`, `agents.runtime`, `protocols.executor`, `profiles.loader`, `history.time_utils`, `history.query`, and other declared-internal modules are correctly *not* entry points and are reached only from within their own package — consistent with `docs/allowed_calls.md` and confirmed by `tests/test_architecture.py` passing.
 
 ### B.3 — Composition-point verification
 

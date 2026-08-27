@@ -56,7 +56,7 @@ def _dispatch_queue_item(item: object) -> None:
     `orchestrator.queue.SerialEventQueue` stays fully generic over what
     an "item" is (work_plan.md §6.15's own design) — this function is the
     api/-only convention that gives items meaning: every one api/ submits
-    is an `(event_id, work_fn)` pair. `job_status` (api/jobs.py) reads
+    is an `(event_id, work_fn)` pair. `job_status` (api/operations.py) reads
     that same convention back through `queue.currently_processing()`.
     """
 
@@ -142,14 +142,9 @@ def build_app(ctx: ApiContext) -> Flask:
         set_trace_id("")
 
     from api.errors import register_error_handlers
-    from api.events import build_events_blueprint
-    from api.holds import build_holds_blueprint
-    from api.jobs import build_jobs_blueprint
-    from api.messages import build_messages_blueprint
-    from api.notifications import build_notifications_blueprint
-    from api.protocols import build_protocols_blueprint
-    from api.system import build_system_blueprint
-    from api.users import build_users_blueprint
+    from api.ingestion import build_events_blueprint, build_messages_blueprint
+    from api.management import build_protocols_blueprint, build_system_blueprint, build_users_blueprint
+    from api.operations import build_holds_blueprint, build_jobs_blueprint, build_notifications_blueprint
 
     register_error_handlers(app)
     app.register_blueprint(build_events_blueprint(ctx))

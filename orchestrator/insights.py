@@ -31,13 +31,13 @@ from typing import TYPE_CHECKING
 
 from agents.base import Agent
 from config.base import BaseConfig
-from orchestrator.errors import OrchestrationParseError
+from orchestrator.main_agent import OrchestrationParseError
 from protocols.model import Protocol
 from tools.tracing import stage_context
 
 if TYPE_CHECKING:
-    from history.precedent import PrecedentMatch
-    from protocols.retry import StepOutcome
+    from history.query import PrecedentMatch
+    from protocols.executor import StepOutcome
 
 
 class InsightsAgent(Agent):

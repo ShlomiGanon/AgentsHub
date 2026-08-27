@@ -26,7 +26,7 @@ uses to confirm the notification poll loop degrades gracefully — logs and
 keeps looping — against a `BotApiClient` that cannot do anything at all,
 and it is still available to any test or tool that wants every method to
 raise loudly rather than construct a real HTTP client. Every method
-raises `bot.errors.ApiNotImplementedError`; nothing here pretends to
+raises `bot.startup.ApiNotImplementedError`; nothing here pretends to
 succeed, and nothing here talks to a real socket.
 """
 
@@ -34,7 +34,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Literal
 
-from bot.errors import ApiNotImplementedError
+from bot.startup import ApiNotImplementedError
 
 PermissionLevelName = Literal["viewer", "commander"]
 
@@ -149,7 +149,7 @@ class UncertainVerdictNotice:
 
 # -- §8.5-adjacent: no-match notice — a one-way FYI, never a hold ----------
 #
-# orchestrator.selection's NO_MATCH outcome ("no loaded protocol genuinely
+# orchestrator.main_agent's NO_MATCH outcome ("no loaded protocol genuinely
 # fits this request") used to be delivered as a third approval-hold reason
 # — found, during a later audit, to leave the underlying event with no
 # terminal outcome ever recorded (nothing could ever resolve it, so nothing
@@ -208,12 +208,7 @@ class ProfileView:
 
 
 @dataclass(frozen=True)
-class ProfileDiffStatus:
-    differs_from_running: bool
-
-
-@dataclass(frozen=True)
-class ProtocolWriteResult:
+class WriteResult:
     accepted: bool
     message: str
 
@@ -226,12 +221,6 @@ class SettingsView:
     retry_count: int
     risk_threshold: float
     lookback_window_days: int
-
-
-@dataclass(frozen=True)
-class SettingsWriteResult:
-    accepted: bool
-    message: str
 
 
 # -- §8.4/§8.5/§8.6/§8.9/§8.11: the unified proactive-push feed --------------
@@ -319,7 +308,7 @@ class BotApiClient(ABC):
         self, event_id: str, chosen_classification: str, answering_identity: str
     ) -> HoldAnswerOutcome:
         """`event_id` — not the orchestrator's internal hold ID — since
-        `api/holds.py`'s `POST /Clarify/<event_id>` (§7.11) is deliberately
+        `api/operations.py`'s `POST /Clarify/<event_id>` (§7.11) is deliberately
         keyed by event ID: the one stable external identifier the whole API
         is already built around (`GET /Job/<event_id>` uses it too, and
         §7.2 defines the job ID as the event ID). `hold_id` is a Mission-6
@@ -335,14 +324,14 @@ class BotApiClient(ABC):
     @abstractmethod
     async def answer_approval_hold(self, event_id: str, decision: str, answering_identity: str) -> HoldAnswerOutcome:
         """`event_id` — not the orchestrator's internal hold ID — for the
-        same reason `answer_clarification_hold` takes it: `api/holds.py`'s
+        same reason `answer_clarification_hold` takes it: `api/operations.py`'s
         `POST /Approve/<event_id>` (§7.11) is keyed by event ID.
         `HeldApprovalNotice.event_id` is what a caller should pass here.
 
         `decision` is `"approved"` or `"rejected"` for a flagged-protocol
         hold; for an ambiguous-selection hold it is the name of the chosen
         candidate protocol (rejection there is expressed by choosing
-        none — see `bot.approval`'s formatting, which offers no separate
+        none — see `bot.holds`'s formatting, which offers no separate
         "reject" button for that case). `orchestrator.holds
         .answer_approval_hold` (§6.7) now accepts all three shapes
         additively — the gap this docstring used to describe (no path for
@@ -364,12 +353,12 @@ class BotApiClient(ABC):
         """
 
     @abstractmethod
-    async def get_profile_diff_status(self) -> ProfileDiffStatus: ...
+    async def get_profile_diff_status(self) -> bool: ...
 
     @abstractmethod
     async def write_protocol(
         self, action: Literal["add", "edit", "remove"], protocol_payload: dict, caller_identity: str
-    ) -> ProtocolWriteResult:
+    ) -> WriteResult:
         """`caller_identity` — see `get_profile_view`'s docstring; the same
         reasoning applies to every write in this interface.
         """
@@ -381,7 +370,7 @@ class BotApiClient(ABC):
         """`caller_identity` — see `get_profile_view`'s docstring."""
 
     @abstractmethod
-    async def write_setting(self, field: str, value: object, caller_identity: str) -> SettingsWriteResult:
+    async def write_setting(self, field: str, value: object, caller_identity: str) -> WriteResult:
         """`caller_identity` — see `get_profile_view`'s docstring."""
 
     # -- §8.9 / §7.2 --------------------------------------------------------------
@@ -404,7 +393,7 @@ class BotApiClient(ABC):
         (0 for "from the beginning"), plus the cursor to pass as `since` on
         the next call. `GET /Notifications` (§8.12) keeps no per-caller
         state of its own — the cursor is entirely the caller's to track and
-        persist across a restart, which is `bot.notification_cursor
+        persist across a restart, which is `bot.notifications
         .NotificationCursorStore`'s job, not this method's.
         """
 
@@ -437,16 +426,16 @@ class UnimplementedApiClient(BotApiClient):
     async def get_profile_view(self, caller_identity: str) -> ProfileView:
         raise ApiNotImplementedError("get_profile_view", "§7.7 (GET /SYSTEM)")
 
-    async def get_profile_diff_status(self) -> ProfileDiffStatus:
+    async def get_profile_diff_status(self) -> bool:
         raise ApiNotImplementedError("get_profile_diff_status", "§7.7 (GET /SYSTEM)")
 
-    async def write_protocol(self, action: Literal["add", "edit", "remove"], protocol_payload: dict, caller_identity: str) -> ProtocolWriteResult:
+    async def write_protocol(self, action: Literal["add", "edit", "remove"], protocol_payload: dict, caller_identity: str) -> WriteResult:
         raise ApiNotImplementedError("write_protocol", "§7.6 (CRUD /Protocol)")
 
     async def get_settings_view(self, caller_identity: str) -> SettingsView:
         raise ApiNotImplementedError("get_settings_view", "§7.7 (GET /SYSTEM)")
 
-    async def write_setting(self, field: str, value: object, caller_identity: str) -> SettingsWriteResult:
+    async def write_setting(self, field: str, value: object, caller_identity: str) -> WriteResult:
         raise ApiNotImplementedError("write_setting", "§7.8 (PUT /SYSTEM)")
 
     async def get_job_result(self, job_id: str, caller_identity: str) -> JobResult | None:

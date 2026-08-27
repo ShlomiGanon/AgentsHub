@@ -4,7 +4,7 @@ import pytest
 
 from agents import adapter
 from config.base import BaseConfig, TierModel
-from orchestrator.errors import OrchestrationParseError
+from orchestrator.main_agent import OrchestrationParseError
 from orchestrator.main_agent import (
     MainAgent,
     RiskAssessment,

@@ -1,12 +1,184 @@
 """Public, persistence-backed historical query and precedent interface."""
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from history.precedent import PrecedentMatch, find_precedents
-from history.retrieval import retrieve_range
-from history.time_utils import parse_timestamp, storage_timestamp
+from history.time_utils import day_bounds, month_bounds, parse_timestamp, storage_timestamp, year_bounds
+from tools.tracing import get_trace_id
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RetrievedSource:
+    level: str
+    period_start: str
+    period_end: str
+    source_id: str
+    content: object
+    matched_event_ids: tuple[str, ...]
+
+
+def _exact_summary(persistence, level: str, start: datetime, end: datetime) -> dict | None:
+    start_text = storage_timestamp(start)
+    end_text = storage_timestamp(end)
+    for summary in persistence.fetch_summaries_range(level, start_text, end_text):
+        if summary["period_start"] == start_text and summary["period_end"] == end_text:
+            if summary.get("event_index") is not None:
+                return summary
+    return None
+
+
+def _matching_ids(index: list[dict], classification: str | None, area: str | None) -> tuple[str, ...]:
+    return tuple(
+        item["event_id"]
+        for item in index
+        if (classification is None or item.get("classification") == classification)
+        and (area is None or item.get("area") == area)
+    )
+
+
+def _summary_source(level: str, summary: dict, classification: str | None, area: str | None) -> RetrievedSource | None:
+    matched_ids = _matching_ids(summary.get("event_index") or [], classification, area)
+    if (classification is not None or area is not None) and not matched_ids:
+        return None
+
+    start = summary["period_start"]
+    end = summary["period_end"]
+    return RetrievedSource(
+        level=level,
+        period_start=start,
+        period_end=end,
+        source_id=f"{level}:{start}:{end}",
+        content=summary["summary_text"],
+        matched_event_ids=matched_ids,
+    )
+
+
+def retrieve_range(persistence, start: datetime, end: datetime, classification: str | None, area: str | None) -> list[RetrievedSource]:
+    if end <= start:
+        raise ValueError("time_end must be later than time_start")
+
+    sources = []
+    cursor = start
+    while cursor < end:
+        candidates = []
+        year_start, year_end = year_bounds(cursor)
+        month_start, month_end = month_bounds(cursor)
+        day_start, day_end = day_bounds(cursor)
+
+        if cursor == year_start and year_end <= end:
+            candidates.append(("yearly", year_end))
+        if cursor == month_start and month_end <= end:
+            candidates.append(("monthly", month_end))
+        if cursor == day_start and day_end <= end:
+            candidates.append(("daily", day_end))
+
+        used_summary = False
+        for level, candidate_end in candidates:
+            summary = _exact_summary(persistence, level, cursor, candidate_end)
+            if summary is None:
+                continue
+
+            source = _summary_source(level, summary, classification, area)
+            if source is not None:
+                sources.append(source)
+            cursor = candidate_end
+            used_summary = True
+            break
+
+        if used_summary:
+            continue
+
+        raw_end = min(day_end, end)
+        events = persistence.fetch_events_range(storage_timestamp(cursor), storage_timestamp(raw_end))
+        for event in events:
+            if classification is not None and event.get("classification") != classification:
+                continue
+            if area is not None and event.get("area") != area:
+                continue
+            sources.append(
+                RetrievedSource(
+                    level="raw_event",
+                    period_start=event["occurred_at"],
+                    period_end=event["occurred_at"],
+                    source_id=event["event_id"],
+                    content=event,
+                    matched_event_ids=(event["event_id"],),
+                )
+            )
+        cursor = raw_end
+
+    return sources
+
+
+@dataclass(frozen=True)
+class PrecedentMatch:
+    event_id: str
+    classification: str
+    area: str
+    occurred_at: str
+    protocol_name: str | None
+    steps_summary: list[dict]
+    outcome: str | None
+    resolved: bool
+
+
+def find_precedents(
+    persistence,
+    settings_store,
+    target_event_id: str,
+    classification: str,
+    area: str,
+    target_event_occurred_at: str,
+) -> list[PrecedentMatch]:
+    window_end = parse_timestamp(target_event_occurred_at) + timedelta(seconds=1)
+    window_start = window_end - timedelta(days=settings_store.get_lookback_window_days())
+
+    events_by_id = {}
+    sources = retrieve_range(persistence, window_start, window_end, classification, area)
+    for source in sources:
+        if source.level == "raw_event":
+            event = source.content
+            if event["event_id"] != target_event_id:
+                events_by_id[event["event_id"]] = event
+            continue
+
+        events = persistence.fetch_events_by_type_area_window(classification, area, source.period_start, source.period_end)
+        for event in events:
+            if event["event_id"] != target_event_id:
+                events_by_id[event["event_id"]] = event
+
+    matches = [
+        PrecedentMatch(
+            event_id=event["event_id"],
+            classification=event["classification"],
+            area=event["area"],
+            occurred_at=event["occurred_at"],
+            protocol_name=event.get("selected_protocol"),
+            steps_summary=list(event.get("steps") or []),
+            outcome=event.get("outcome"),
+            resolved=event.get("outcome") in {"succeeded", "closed_on_precedent"},
+        )
+        for event in sorted(events_by_id.values(), key=lambda item: (item["occurred_at"], item["event_id"]), reverse=True)
+    ]
+
+    logger.debug(
+        "precedent lookup",
+        extra={
+            "event": "precedent_lookup",
+            "target_event_id": target_event_id,
+            "classification": classification,
+            "area": area,
+            "window_start": window_start.isoformat(),
+            "window_end": window_end.isoformat(),
+            "matched_event_ids": [match.event_id for match in matches],
+            "trace_id": get_trace_id(),
+        },
+    )
+    return matches
 
 
 class HistoryQueryError(Exception):
@@ -180,4 +352,7 @@ __all__ = [
     "HistoryQueryService",
     "HistorySource",
     "PrecedentMatch",
+    "RetrievedSource",
+    "find_precedents",
+    "retrieve_range",
 ]

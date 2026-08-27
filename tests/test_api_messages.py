@@ -4,7 +4,7 @@ import pytest
 
 from agents import adapter
 from api.app import build_app
-from api.jobs import job_status
+from api.operations import job_status
 from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, ScriptedAgent, auth_headers, build_context, happy_path_agent
 
 

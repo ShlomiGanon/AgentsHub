@@ -51,8 +51,6 @@ from history.interface import (
     record_initial_event,
     record_step_execution,
 )
-from orchestrator.errors import OrchestrationParseError
-from orchestrator.formulation import formulate_tasks, rewrite_task
 from orchestrator.holds import (
     UNRESOLVED_FIELD,
     answer_approval_hold,
@@ -63,13 +61,20 @@ from orchestrator.holds import (
     determine_clarification_hold,
 )
 from orchestrator.insights import build_insight, construct_core_agents as construct_insights_agent
-from orchestrator.intent import answer_conversationally, classify_intent
-from orchestrator.judgment import judge_success
-from orchestrator.main_agent import assess_risk, construct_core_agents as construct_main_agent
+from orchestrator.main_agent import (
+    OrchestrationParseError,
+    answer_conversationally,
+    assess_risk,
+    classify_intent,
+    construct_core_agents as construct_main_agent,
+    formulate_tasks,
+    judge_success,
+    rewrite_task,
+    select_protocol,
+)
 from orchestrator.precedent import determine_closure, look_up_precedent
 from orchestrator.question_flow import answer_question
 from orchestrator.queue import SerialEventQueue
-from orchestrator.selection import select_protocol
 from profiles.spec import HUMAN_ACTIVATION_TYPE
 from protocols.executor import execute_steps
 from tools.tracing import get_trace_id
@@ -98,7 +103,7 @@ FlowOutcome = Literal[
     "held_for_clarification", "held_for_approval",
 ]
 
-# orchestrator.judgment.SuccessVerdict.verdict speaks "success"/"failure"/
+# orchestrator.main_agent.SuccessVerdict.verdict speaks "success"/"failure"/
 # "uncertain" (its own, separately-evolved sentinel vocabulary); history.write
 # .VALID_OUTCOMES speaks "succeeded"/"failed"/"uncertain". Translate here,
 # at the one point they meet, rather than coupling either module's
@@ -185,7 +190,7 @@ def begin_report(
 
     `source_message_id` — the originating Telegram message's own ID, when
     there is one (never for `source="sensor"`) — is what lets a much later
-    asynchronous reply (§8.9/§8.11, via `api/notifications.py`) actually
+    asynchronous reply (§8.9/§8.11, via `api/operations.py`) actually
     reference the message that started this event, rather than send an
     unreferenced reply. Written once, alongside the rest of the envelope.
     """
@@ -280,8 +285,8 @@ def process_report(
     (§6.4/§6.7's bypass is for requests only), so closure/approval logic
     downstream always treats it as not commander-originated.
 
-    Not called from any production entry point — `api/events.py` and
-    `api/messages.py` use `begin_report`/`run_report_extraction` directly,
+    Not called from any production entry point — `api/ingestion.py` and
+    `api/ingestion.py` use `begin_report`/`run_report_extraction` directly,
     split apart across the request/queued-continuation boundary §7.2
     requires. This function is the orchestrator package's own deliberate
     synchronous test-facing composition (see the module docstring above):
@@ -342,7 +347,7 @@ def process_request(
     back into one call.
 
     Not called from any production entry point — same status as
-    `process_report` above: `api/messages.py` uses `begin_request` +
+    `process_report` above: `api/ingestion.py` uses `begin_request` +
     `continue_from_risk_assessment` directly, split apart for §7.2's
     async job mechanism. Kept as the orchestrator's own deliberate
     synchronous test-facing composition, not leftover scaffolding.
@@ -366,7 +371,7 @@ def process_message(
     conversational reply's answer (`str`), or a `FlowResult` for a report
     or request.
 
-    Not called from any production entry point. `api/messages.py::post_msg`
+    Not called from any production entry point. `api/ingestion.py::post_msg`
     is the real implementation of this same routing — it composes
     `classify_intent` with the split primitives itself (`begin_report`/
     `run_report_extraction`, `begin_request`/`continue_from_risk_assessment`)
@@ -515,7 +520,7 @@ def resolve_approval(
 def decline(deps: FlowDeps, event_id: str) -> FlowResult:
     """Record a rejected approval hold's outcome as declined — the
     synchronous, no-continuation-needed branch `resume_after_approval`
-    and `api.holds`'s deny path (§7.11) both share.
+    and `api.operations`'s deny path (§7.11) both share.
     """
 
     record_event_outcome(deps.persistence, event_id, "declined")

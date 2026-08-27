@@ -11,7 +11,7 @@ Condensed action items from the full report. Full report retained separately for
 **Verdict: Moderate change, not a rework.** The architecture already isolates the question path from the protocol/risk/approval machinery (no event write, no holds, no `FlowDeps` access) — a new conversation path can inherit that same safety property by construction rather than needing new guards.
 
 ### To build a real conversation path
-- [ ] Add a 4th intent category (`conversation`/`clarifying_followup`) distinct from `question` — reuse `classify_intent`'s existing single fork point (`orchestrator/intent.py`).
+- [ ] Add a 4th intent category (`conversation`/`clarifying_followup`) distinct from `question` — reuse `classify_intent`'s existing single fork point (`orchestrator/main_agent.py`).
 - [ ] Add a new persistence record: conversation/thread keyed by sender identity, storing prior turns (text+answer), open/closed state. Nothing like this exists today — new surface, not a repurposing of `held_events`.
 - [ ] New flow module `orchestrator/conversation_flow.py`, mirroring `question_flow.py`'s shape (read-only tools, no access to event-writing functions or `orchestrator.holds`).
 - [ ] Structural guard (not just a prompt instruction): conversation flow must never receive `FlowDeps`/event-writing functions in its call signature — same pattern `answer_question` already uses.
@@ -32,7 +32,7 @@ Condensed action items from the full report. Full report retained separately for
 ### To build this
 - [ ] New, **non-blocking** mechanism — "open enrichment questions for event X" — separate from `held_events`, never removes the event from the serial queue.
 - [ ] Populate candidate questions from `ExtractionResult.missing_fields` (already computed in `history/extraction.py:139-151`), filtered by Main Agent judgment of relevance.
-- [ ] Reuse the existing bot-side answer-delivery pattern (`bot/clarification.py`) for asking/receiving answers.
+- [ ] Reuse the existing bot-side answer-delivery pattern (`bot/holds.py`) for asking/receiving answers.
 - [ ] Late answers should land on the event record and reach the **Insights Agent's synthesis** (`orchestrator/insights.py`) — cheapest, safest option; does not change what already-dispatched agents did with the original (thinner) picture.
 
 ### The one caveat — do NOT attempt this (structural rework, not moderate)
@@ -46,14 +46,14 @@ Condensed action items from the full report. Full report retained separately for
 ## Part 2 — Speed & Quality
 
 ### Safe speed wins (no quality cost)
-1. **Parallelize per-agent step execution** in `protocols/executor.py` for multi-agent protocols — steps' tasks are already all written in one call before any run (`orchestrator/formulation.py`), so there's no data dependency blocking this. 
-   ⚠️ Requires deliberately reworking the retry policy's "already acted" / stop-on-first-failure semantics (`protocols/retry.py`) — not a one-line change, but self-contained.
+1. **Parallelize per-agent step execution** in `protocols/executor.py` for multi-agent protocols — steps' tasks are already all written in one call before any run (`orchestrator/main_agent.py`), so there's no data dependency blocking this.
+   ⚠️ Requires deliberately reworking the executor's retry policy and its "already acted" / stop-on-first-failure semantics — not a one-line change, but self-contained.
 2. **Split the single "core" model tier into per-role tiers.** Main Agent, History Agent, and Insights Agent all currently run on the *same* model tier — a direct departure from `work_plan.md §1.3`'s original intent (three separately-tuned models). 
    - Keep Main Agent on the strongest model (its judgment calls are the one place quality actually depends on model strength).
    - Move History Agent (bounded, mechanical summarization) to a faster/cheaper tier.
    - Move Insights Agent (bounded synthesis) to a mid tier.
    - This is additive to `config/base.py`'s existing `TierModel` machinery — not a rework.
-3. **Investigate CrewAI/provider-side structured output** to remove today's fragile regex-parsing of Main Agent responses (`orchestrator/intent.py`, `selection.py`, `formulation.py` all rely on an "unverified prompt convention" parsed by regex, with retries on parse failure). Plausibly reduces latency (fewer retries) *and* improves reliability at the same time.
+3. **Investigate CrewAI/provider-side structured output** to remove today's fragile regex-parsing of Main Agent responses (`orchestrator/main_agent.py` owns these prompt conventions and parsers). Plausibly reduces latency (fewer retries) *and* improves reliability at the same time.
 4. **Doc-only fix:** `docs/cost_latency_review.md` incorrectly claims precedent-lookup and Insights-Agent history reads aren't merged — they already are (`orchestrator/flows.py:647,676`). Update the doc, no code change needed.
 
 ### Not a bottleneck today, but note for later

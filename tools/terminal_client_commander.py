@@ -4,11 +4,11 @@ Lets you exercise a running `api.app` server as a commander-level user by
 typing in a terminal instead of using Telegram, while going through exactly
 the same code the real bot goes through:
 
-  * `bot.entrypoint.handle_incoming_message` for free-form text (message
+  * `bot.app.handle_incoming_message` for free-form text (message
     mode) — the same function `bot.app._on_text_message` calls.
   * `bot.http_api_client.HttpApiClient` for every HTTP call to the API —
     the bot's own real client, not a stub.
-  * `bot.notification_cursor.NotificationCursorStore` and
+  * `bot.notifications.NotificationCursorStore` and
     `bot.notifications.run_notification_poll_loop`'s own shape (a
     continuous background task, started at process startup, dispatching
     every notification unconditionally) for everything that arrives
@@ -17,7 +17,7 @@ the same code the real bot goes through:
 
 Nothing here reimplements message wording, permission checks, or dispatch
 semantics — `bot.notifications.dispatch_notification` plus
-`bot.clarification`/`bot.approval`'s own formatting and answer-handling are
+`bot.holds`/`bot.holds`'s own formatting and answer-handling are
 unmodified real bot code throughout.
 
 Every capability here — resolving a clarification hold, answering an
@@ -48,8 +48,8 @@ per-identity file — see `main`'s own comment on the path — so two
 concurrent commander sessions, or a real bot, never fight over one cursor).
 
 One companion problem this creates and solves, not present in the real
-bot: `bot.results.deliver_job_result` (and the hold-broadcast functions in
-`bot.approval`/`bot.clarification`) send to whichever `chat_id`s they're
+bot: `bot.notifications.deliver_job_result` (and the hold-broadcast functions in
+`bot.holds`/`bot.holds`) send to whichever `chat_id`s they're
 given — safe in a real deployment, where different chat_ids are different
 people's separate phones, but this tool's `ConsoleTelegramClient` used to
 print regardless of `chat_id`. Fully unconditional dispatch onto one shared
@@ -108,13 +108,19 @@ import importlib
 import sys
 from pathlib import Path
 
-from bot import approval, clarification
-from bot.deps import BotDeps
-from bot.entrypoint import handle_incoming_message
-from bot.errors import ApiRequestError, BotError
-from bot.http_api_client import HttpApiClient
-from bot.notification_cursor import NotificationCursorStore
-from bot.notifications import dispatch_notification
+from bot.interface import (
+    ApiRequestError,
+    BotDeps,
+    BotError,
+    HttpApiClient,
+    NotificationCursorStore,
+    dispatch_notification,
+    format_approval_prompt,
+    handle_approval_answer,
+    handle_clarification_answer,
+    handle_incoming_message,
+    parse_approval_callback_data,
+)
 from tools._terminal_client_shared import (
     CONSOLE_CHAT_ID,
     ConsoleTelegramClient,
@@ -270,7 +276,7 @@ async def _prompt_clarification(deps: BotDeps, answering_identity: str, notice) 
             break
         print("Invalid choice — pick one of the numbers above, or 's' to skip.")
 
-    await clarification.handle_clarification_answer(deps, CONSOLE_CHAT_ID, answering_identity, notice.event_id, chosen)
+    await handle_clarification_answer(deps, CONSOLE_CHAT_ID, answering_identity, notice.event_id, chosen)
     return True
 
 
@@ -286,13 +292,13 @@ async def _prompt_approval(deps: BotDeps, answering_identity: str, notice) -> bo
     or more by construction (an "ambiguous" selection with fewer than two
     genuine candidates couldn't have been reported as ambiguous in the
     first place). The former third case, a report-only no-buttons hold for
-    `orchestrator.selection`'s NO_MATCH outcome, no longer reaches this
+    `orchestrator.main_agent`'s NO_MATCH outcome, no longer reaches this
     function at all — that's a real terminal outcome plus a one-way
-    notification now (`bot.approval.notify_no_match`), never a
+    notification now (`bot.holds.notify_no_match`), never a
     `held_events` row, so there is nothing here left to display or skip.
     """
 
-    text, buttons = approval.format_approval_prompt(notice)
+    text, buttons = format_approval_prompt(notice)
     print(f"\n{text}")
     print("\nChoose:")
     for i, (label, _data) in enumerate(buttons, start=1):
@@ -309,8 +315,8 @@ async def _prompt_approval(deps: BotDeps, answering_identity: str, notice) -> bo
             break
         print("Invalid choice — pick one of the numbers above, or 's' to skip.")
 
-    event_id, choice = approval.parse_callback_data(data)
-    await approval.handle_approval_answer(deps, CONSOLE_CHAT_ID, answering_identity, event_id, choice)
+    event_id, choice = parse_approval_callback_data(data)
+    await handle_approval_answer(deps, CONSOLE_CHAT_ID, answering_identity, event_id, choice)
     return True
 
 

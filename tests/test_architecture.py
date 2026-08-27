@@ -27,12 +27,17 @@ ENTRY_POINTS: dict[str, set[str]] = {
     "history": {"history.interface", "history.query"},
     "orchestrator": {"orchestrator.flows"},
     "api": {"api.app"},
-    "bot": {"bot.app"},
+    "bot": {"bot.app", "bot.interface"},
 }
 
 # tools.logging_config / tools.tracing are the one deliberate exception:
 # reachable from internal (non-entry-point) modules of every package too.
 CROSS_CUTTING_ALWAYS_ALLOWED = {"tools.logging_config", "tools.tracing"}
+
+# The terminal frontends deliberately invoke the real user-admin command
+# rather than creating a second user-write path. No other package may import
+# cli, and tools may import only this exact module.
+CALLER_SPECIFIC_ALLOWED = {("tools", "cli.user_admin")}
 
 GOVERNED_PACKAGES = set(ENTRY_POINTS)
 
@@ -55,7 +60,7 @@ def _imported_module_names(tree: ast.Module) -> list[str]:
     # A plain ast.walk would also collect imports inside `if TYPE_CHECKING:`
     # blocks — those are never taken at runtime and create no real
     # cross-package coupling, so they're pruned from the walk entirely
-    # rather than flagged (see profiles/validate.py, protocols/retry.py,
+    # rather than flagged (see profiles/loader.py, protocols/executor.py,
     # protocols/executor.py for the pattern this exempts).
     names = []
 
@@ -90,6 +95,9 @@ def _violations_for_file(file_path: Path) -> list[str]:
             continue
 
         if imported in CROSS_CUTTING_ALWAYS_ALLOWED:
+            continue
+
+        if (owning_package, imported) in CALLER_SPECIFIC_ALLOWED:
             continue
 
         if imported not in ENTRY_POINTS[imported_package]:

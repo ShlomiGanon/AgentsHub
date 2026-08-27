@@ -9,7 +9,7 @@ registers itself at import time.
 """
 
 from agents.base import Agent
-from agents.descriptor import AgentDescriptor
+from agents.runtime import AgentDescriptor
 
 
 class DuplicateAgentNameError(Exception):

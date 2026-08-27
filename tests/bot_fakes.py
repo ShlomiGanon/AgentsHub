@@ -12,7 +12,7 @@ which exists to fail loudly, not to be a test double.
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from bot.api_client import BotApiClient, BotNotification, HoldAnswerOutcome, JobResult, MessageSubmissionResult, ProfileDiffStatus, ProfileView, ProtocolWriteResult, SettingsView, SettingsWriteResult, UserLookupResult
+from bot.api_client import BotApiClient, BotNotification, HoldAnswerOutcome, JobResult, MessageSubmissionResult, ProfileView, SettingsView, UserLookupResult, WriteResult
 from bot.telegram_client import TelegramClient
 
 
@@ -57,10 +57,10 @@ class FakeBotApiClient(BotApiClient):
     clarification_answer_outcome: HoldAnswerOutcome | None = None
     approval_answer_outcome: HoldAnswerOutcome | None = None
     profile_view: ProfileView | None = None
-    profile_diff_status: ProfileDiffStatus | None = None
-    protocol_write_result: ProtocolWriteResult | None = None
+    profile_diff_status: bool | None = None
+    protocol_write_result: WriteResult | None = None
     settings_view: SettingsView | None = None
-    settings_write_result: SettingsWriteResult | None = None
+    settings_write_result: WriteResult | None = None
     job_result: JobResult | None = None
     pending_notifications: tuple[BotNotification, ...] = ()
 
@@ -97,11 +97,11 @@ class FakeBotApiClient(BotApiClient):
         assert self.profile_view is not None
         return self.profile_view
 
-    async def get_profile_diff_status(self) -> ProfileDiffStatus:
+    async def get_profile_diff_status(self) -> bool:
         assert self.profile_diff_status is not None
         return self.profile_diff_status
 
-    async def write_protocol(self, action, protocol_payload: dict, caller_identity: str) -> ProtocolWriteResult:
+    async def write_protocol(self, action, protocol_payload: dict, caller_identity: str) -> WriteResult:
         self.calls.append(("write_protocol", action, protocol_payload, caller_identity))
         assert self.protocol_write_result is not None
         return self.protocol_write_result
@@ -111,7 +111,7 @@ class FakeBotApiClient(BotApiClient):
         assert self.settings_view is not None
         return self.settings_view
 
-    async def write_setting(self, field: str, value: object, caller_identity: str) -> SettingsWriteResult:
+    async def write_setting(self, field: str, value: object, caller_identity: str) -> WriteResult:
         self.calls.append(("write_setting", field, value, caller_identity))
         assert self.settings_write_result is not None
         return self.settings_write_result

@@ -4,7 +4,7 @@ Lets you exercise a running `api.app` server as a viewer-level user by
 typing in a terminal instead of using Telegram, while going through exactly
 the same code the real bot goes through:
 
-  * `bot.entrypoint.handle_incoming_message` for free-form text (message
+  * `bot.app.handle_incoming_message` for free-form text (message
     mode) — the same function `bot.app._on_text_message` calls.
   * `bot.http_api_client.HttpApiClient` for every HTTP call to the API —
     the bot's own real client, not a stub.
@@ -28,7 +28,7 @@ commander tool:
 
   A real viewer's Telegram chat is never addressed by a
   `clarification_hold`/`approval_hold`/`uncertain_verdict`/
-  `precedent_closure` notification at all. `api/notifications.py` never
+  `precedent_closure` notification at all. `api/operations.py` never
   computes a recipient list for these kinds (`target_chat_ids` is always
   `[]`) — the bot resolves who gets them itself, via
   `list_commander_chat_ids()`, which a viewer identity is never a member
@@ -84,11 +84,7 @@ import asyncio
 import importlib
 import sys
 
-from bot.deps import BotDeps
-from bot.entrypoint import handle_incoming_message
-from bot.errors import ApiRequestError, BotError
-from bot.http_api_client import HttpApiClient
-from bot.notifications import dispatch_notification
+from bot.interface import ApiRequestError, BotDeps, BotError, HttpApiClient, dispatch_notification, handle_incoming_message
 from tools._terminal_client_shared import (
     ConsoleTelegramClient,
     ObservingApiClient,

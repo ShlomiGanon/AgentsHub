@@ -39,8 +39,12 @@ real key — it will not run, and must never be made to run, in CI or the
 normal test suite.
 """
 
+import argparse
+import json
 import os
 import sys
+import urllib.error
+import urllib.request
 
 from agents.errors import AgentInvocationError
 from config.base import ModelTierError, build_tier_model, load_base_config
@@ -55,7 +59,7 @@ def _require_env(name: str) -> str:
     return value
 
 
-def main() -> int:
+def production_check() -> int:
     print("=== AgentsHub real-model sanity check (live, billed API call) ===\n")
 
     print("[1/5] reading CORE_MODEL_* from the real environment and building the core TierModel...")
@@ -118,6 +122,81 @@ def main() -> int:
 
     print("PASS — real config, real tier resolution, real crewai.LLM, a real live API call, and a real response, all confirmed working.")
     return 0
+
+
+def key_check() -> int:
+    api_key = os.environ.get("CORE_MODEL_KEY", "").strip()
+    if not api_key:
+        print("FAIL: CORE_MODEL_KEY is not set.")
+        return 1
+    request = urllib.request.Request(
+        "https://openrouter.ai/api/v1/auth/key",
+        headers={"Authorization": f"Bearer {api_key}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            print(f"SUCCESS: HTTP {response.status}")
+            print(json.dumps(json.loads(response.read().decode("utf-8")), indent=2))
+            return 0
+    except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+        print(f"FAIL: {exc}")
+        return 1
+
+
+def openrouter_check() -> int:
+    api_key = os.environ.get("CORE_MODEL_KEY", "").strip()
+    if not api_key:
+        print("FAIL: CORE_MODEL_KEY is not set.")
+        return 1
+    payload = {
+        "model": os.environ.get("CORE_MODEL_NAME", "meta-llama/llama-3.1-8b-instruct:free"),
+        "messages": [{"role": "user", "content": "What are you? Answer in one short sentence."}],
+    }
+    request = urllib.request.Request(
+        "https://openrouter.ai/api/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = json.loads(response.read().decode("utf-8"))
+            print(f"SUCCESS: HTTP {response.status}")
+            print(body["choices"][0]["message"]["content"])
+            return 0
+    except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+        print(f"FAIL: {exc}")
+        return 1
+
+
+def crewai_check() -> int:
+    api_key = os.environ.get("CORE_MODEL_KEY", "").strip()
+    model_name = os.environ.get("CORE_MODEL_NAME", "poolside/laguna-s-2.1:free").strip()
+    if not api_key:
+        print("FAIL: CORE_MODEL_KEY is not set.")
+        return 1
+    try:
+        from crewai import LLM
+
+        llm = LLM(model=f"openrouter/{model_name}", api_key=api_key, base_url="https://openrouter.ai/api/v1")
+        print(llm.call("What are you? Answer in one short sentence."))
+        return 0
+    except Exception as exc:
+        print(f"FAIL: {type(exc).__name__}: {exc}")
+        return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Manual live-model checks; never run from CI.")
+    parser.add_argument("check", nargs="?", choices=("production", "key", "openrouter", "crewai"), default="production")
+    selected = parser.parse_args(argv).check
+    return {
+        "production": production_check,
+        "key": key_check,
+        "openrouter": openrouter_check,
+        "crewai": crewai_check,
+    }[selected]()
 
 
 if __name__ == "__main__":

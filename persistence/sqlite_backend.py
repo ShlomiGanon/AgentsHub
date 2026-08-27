@@ -29,8 +29,7 @@ from queue import SimpleQueue
 
 from persistence.exceptions import NotFoundError, PersistenceError
 from persistence.interface import PersistenceInterface
-from persistence.migrations import run_migrations
-from persistence.schema import SUMMARY_TABLE_NAMES
+from persistence.schema import SUMMARY_TABLE_NAMES, run_migrations
 
 _STOP = object()
 

@@ -92,15 +92,6 @@ class RunFailureError(ApiError):
     status_code = 422
 
 
-class InternalError(ApiError):
-    """Anything unexpected. `message` is always the fixed string below —
-    never the real exception's text, never a stack trace.
-    """
-
-    error_class = "internal_error"
-    status_code = 500
-
-
 _GENERIC_INTERNAL_MESSAGE = "an internal error occurred"
 
 

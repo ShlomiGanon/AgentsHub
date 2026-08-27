@@ -16,10 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Sequence
 
-from bot.api_client import BOT_SERVICE_IDENTITY
-from bot.formatting import split_message
-from bot.http_api_client import HttpApiClient, _do_request
-from bot.telegram_client import TelegramClient
+from bot.interface import BOT_SERVICE_IDENTITY, HttpApiClient, TelegramClient, do_request, split_message
 from cli.user_admin import main as user_admin_main
 from persistence.interface import open_persistence
 
@@ -61,8 +58,8 @@ SAMPLE_EVENT_TEXTS = [
 class ConsoleTelegramClient(TelegramClient):
     """The one substitution either tool makes: prints exactly what the
     real `PTBTelegramClient` would have sent to Telegram, instead of
-    sending it. Every caller (bot.clarification, bot.approval,
-    bot.results, bot.failures, bot.precedent_notify, bot.notifications)
+    sending it. Every caller (bot.holds, bot.holds,
+    bot.notifications, bot.notifications, bot.notifications, bot.notifications)
     is unmodified real bot code — none of it knows or cares that this
     isn't Telegram.
 
@@ -72,7 +69,7 @@ class ConsoleTelegramClient(TelegramClient):
     per-chat addressing is what naturally stops one commander's phone from
     showing another commander's job result, or a hold broadcast landing
     twice for two different registered commanders' chat_ids
-    (`bot.approval.push_approval_prompt` sends once per
+    (`bot.holds.push_approval_prompt` sends once per
     `list_commander_chat_ids()` entry) — a single shared terminal has no
     such separation unless this class enforces it itself. `owning_identity`
     is the one chat_id this terminal represents; every send whose `chat_id`
@@ -154,7 +151,7 @@ def notification_subject_id(note) -> str | None:
 
 
 def submit_event(base_url: str, text: str, sender_identity: str) -> tuple[int, dict]:
-    return _do_request(f"{base_url}/Event", "POST", sender_identity, {"text": text, "sender_identity": sender_identity})
+    return do_request(f"{base_url}/Event", "POST", sender_identity, {"text": text, "sender_identity": sender_identity})
 
 
 async def choose_mode() -> str | None:
@@ -274,7 +271,7 @@ def cleanup_test_identity(profile_module_path: str, test_identity: str, created_
 
     `cursor_path` — only the commander tool passes one (the viewer has no
     persisted cursor at all, by design). Found live: deleting only the
-    `users` row left `bot.notification_cursor.NotificationCursorStore`'s
+    `users` row left `bot.notifications.NotificationCursorStore`'s
     file behind, keyed purely on identity *name* — a later session
     provisioning the same default name (`cli_tester`) then read back the
     dead identity's old cursor instead of bootstrapping fresh, replaying

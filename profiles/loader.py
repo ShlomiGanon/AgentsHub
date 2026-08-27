@@ -2,7 +2,7 @@
 
 Reads the profile module named by a launch argument, reads every
 environment variable it names (at load time, not at first use), validates
-it (profiles.validate), and freezes the result into an immutable
+it (profiles.loader), and freezes the result into an immutable
 `LoadedProfile` every subsystem reads from. There is no default profile —
 a missing or bad argument fails immediately and clearly.
 
@@ -34,8 +34,8 @@ from types import MappingProxyType, ModuleType
 
 from agents.history import HistoryAgent
 from config.base import BaseConfig, TierModel, load_base_config
-from profiles import validate as profile_validate
-from profiles.spec import HUMAN_ACTIVATION_TYPE, REQUIRED_PROFILE_ATTRS, AgentSpec
+from profiles.spec import HUMAN_ACTIVATION_TYPE, REQUIRED_PROFILE_ATTRS, AgentSpec, protocol_missing_attrs
+from protocols.model import CriticalityLevel
 
 
 class ProfileLoadError(Exception):
@@ -68,6 +68,79 @@ class LoadedProfile:
     profile_file_hash: str
     core_agents: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
     resolved_secrets: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
+
+
+def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> list[str]:
+    failures: list[str] = []
+    agents_by_name = {agent.name: agent for agent in loaded.agents}
+
+    for protocol in loaded.protocols:
+        failures.extend(_validate_protocol(protocol, agents_by_name))
+
+    if not declared_event_types:
+        failures.append("profile declares no event types — extraction has nothing to classify into")
+
+    if HUMAN_ACTIVATION_TYPE in declared_event_types:
+        failures.append(
+            f"profile declares '{HUMAN_ACTIVATION_TYPE}' as an event type — "
+            "it is built in and added automatically, declaring it is a duplicate"
+        )
+
+    if not loaded.areas:
+        failures.append("profile declares no areas — extraction has nothing to resolve a location to")
+
+    return failures
+
+
+def _validate_protocol(protocol, agents_by_name: dict) -> list[str]:
+    failures: list[str] = []
+    missing_attrs = protocol_missing_attrs(protocol)
+    if missing_attrs:
+        failures.append(
+            f"protocol object {protocol!r} is missing required attribute(s): "
+            f"{', '.join(missing_attrs)}"
+        )
+        return failures
+
+    exposed_by_participants: set[str] = set()
+    for agent_name in protocol.participating_agents:
+        agent = agents_by_name.get(agent_name)
+        if agent is None:
+            failures.append(
+                f"protocol '{protocol.name}' names agent '{agent_name}' "
+                "which was not constructed by the profile"
+            )
+            continue
+
+        exposed_by_participants.update(getattr(tool, "name", tool) for tool in agent.exposed_tools())
+
+    for tool_name in protocol.approved_tools:
+        if tool_name not in exposed_by_participants:
+            failures.append(
+                f"protocol '{protocol.name}' approves tool '{tool_name}' "
+                "which none of its participating agents expose"
+            )
+
+    if not protocol.description:
+        failures.append(f"protocol '{protocol.name}' has no description")
+
+    if not protocol.expected_success_output:
+        failures.append(f"protocol '{protocol.name}' has no expected success output")
+
+    if not isinstance(protocol.criticality, CriticalityLevel):
+        failures.append(
+            f"protocol '{protocol.name}' has an invalid criticality level: "
+            "expected a real CriticalityLevel enum member (LOW, MEDIUM, or HIGH), "
+            f"got {protocol.criticality!r} instead"
+        )
+
+    if protocol.approval_flag is not True and protocol.approval_flag is not False:
+        failures.append(
+            f"protocol '{protocol.name}' has no explicitly-set approval flag "
+            "(True/False required — an absent flag is not defaulted)"
+        )
+
+    return failures
 
 
 def hash_profile_file(module_path: str) -> str:
@@ -176,12 +249,12 @@ def validate_single_protocol(protocol, agents_by_name: dict) -> list[str]:
     checks startup validation runs (§1.6) — the entry point
     `protocols.editor` (§4.3) calls before accepting a write, so a
     written protocol can never fail validation differently than the
-    protocols already loaded did. `profiles.validate` itself stays
+    protocols already loaded did. `profiles.loader` itself stays
     internal to this package; this is the one sanctioned way another
     package reaches its logic.
     """
 
-    return profile_validate._validate_protocol(protocol, agents_by_name)
+    return _validate_protocol(protocol, agents_by_name)
 
 
 def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) -> LoadedProfile:
@@ -228,7 +301,7 @@ def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) 
         resolved_secrets=MappingProxyType(resolved_secrets),
     )
 
-    failures = profile_validate.validate_profile(loaded, declared_event_types=module.EVENT_TYPES)
+    failures = validate_profile(loaded, declared_event_types=module.EVENT_TYPES)
     if failures:
         raise ProfileValidationError(failures)
 

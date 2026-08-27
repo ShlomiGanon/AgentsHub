@@ -2,7 +2,7 @@
 
 The first three bullets (idempotency blocking retry after a side-effecting
 tool acted, read-only retry to the limit, the limit read live) are already
-covered directly against `protocols.retry.execute_step_with_retry` in
+covered directly against `protocols.executor.execute_step_with_retry` in
 `tests/test_protocol_retry.py`. `tests/test_api_jobs.py` already covers
 "keeps the successful steps' results" at the rendering level. What's
 missing, and what this file adds: the real retry-exhaustion path, through

@@ -37,16 +37,14 @@ from bot.api_client import (
     MessageSubmissionResult,
     NoMatchNotice,
     PrecedentClosureNotice,
-    ProfileDiffStatus,
     ProfileView,
     ProtocolView,
-    ProtocolWriteResult,
+    WriteResult,
     SettingsView,
-    SettingsWriteResult,
     UncertainVerdictNotice,
     UserLookupResult,
 )
-from bot.errors import ApiRequestError
+from bot.startup import ApiRequestError
 
 
 def _do_request(url: str, method: str, identity: str, body: dict | None) -> tuple[int, dict]:
@@ -192,14 +190,14 @@ class HttpApiClient(BotApiClient):
             areas=tuple(body["areas"]),
         )
 
-    async def get_profile_diff_status(self) -> ProfileDiffStatus:
+    async def get_profile_diff_status(self) -> bool:
         # Deliberately still BOT_SERVICE_IDENTITY — this carries no
         # permission-sensitive content (a hash comparison) and no
         # dedicated action key exists for it; not one of Problem 1's five.
         body = await self._get_system(BOT_SERVICE_IDENTITY)
-        return ProfileDiffStatus(differs_from_running=body["profile_file_changed"])
+        return body["profile_file_changed"]
 
-    async def write_protocol(self, action: Literal["add", "edit", "remove"], protocol_payload: dict, caller_identity: str) -> ProtocolWriteResult:
+    async def write_protocol(self, action: Literal["add", "edit", "remove"], protocol_payload: dict, caller_identity: str) -> WriteResult:
         name = protocol_payload.get("name", "")
         if action == "add":
             status, body = await self._call("POST", "/Protocol", caller_identity, protocol_payload)
@@ -211,8 +209,8 @@ class HttpApiClient(BotApiClient):
         if status in (401, 403):
             self._raise_for_error(status, body)
         if status >= 400:
-            return ProtocolWriteResult(accepted=False, message=body.get("message", ""))
-        return ProtocolWriteResult(accepted=True, message=body.get("message", ""))
+            return WriteResult(accepted=False, message=body.get("message", ""))
+        return WriteResult(accepted=True, message=body.get("message", ""))
 
     async def get_settings_view(self, caller_identity: str) -> SettingsView:
         body = await self._get_system(caller_identity)
@@ -223,14 +221,14 @@ class HttpApiClient(BotApiClient):
             lookback_window_days=settings["lookback_window_days"],
         )
 
-    async def write_setting(self, field: str, value: object, caller_identity: str) -> SettingsWriteResult:
+    async def write_setting(self, field: str, value: object, caller_identity: str) -> WriteResult:
         status, body = await self._call("PUT", "/SYSTEM", caller_identity, {field: value})
 
         if status in (401, 403):
             self._raise_for_error(status, body)
         if status >= 400:
-            return SettingsWriteResult(accepted=False, message=body.get("message", ""))
-        return SettingsWriteResult(accepted=True, message=f"'{field}' is now {body[field]}.")
+            return WriteResult(accepted=False, message=body.get("message", ""))
+        return WriteResult(accepted=True, message=f"'{field}' is now {body[field]}.")
 
     async def get_job_result(self, job_id: str, caller_identity: str) -> JobResult | None:
         status, body = await self._call("GET", f"/Job/{job_id}", caller_identity)

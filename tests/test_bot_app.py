@@ -6,10 +6,9 @@ from types import SimpleNamespace
 import pytest
 
 from bot import app
-from bot.api_client import MessageSubmissionResult, ProfileDiffStatus, ProfileView, ProtocolWriteResult, SettingsView, SettingsWriteResult
+from bot.api_client import MessageSubmissionResult, ProfileView, SettingsView, WriteResult
 from bot.deps import BotDeps
-from bot.errors import ApiNotImplementedError, BotStartupError
-from bot.singleton_lock import SingleInstanceLock
+from bot.startup import ApiNotImplementedError, BotStartupError, SingleInstanceLock
 from tests.bot_fakes import FakeBotApiClient, FakeTelegramClient
 from tests.helpers import write_profile_module
 
@@ -249,7 +248,7 @@ def test_on_profile_command_view_replies_with_the_profile():
 
 
 def test_on_profile_command_diff_replies_with_diff_status():
-    api = FakeBotApiClient(users={"42": "viewer"}, profile_diff_status=ProfileDiffStatus(differs_from_running=False))
+    api = FakeBotApiClient(users={"42": "viewer"}, profile_diff_status=False)
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
 
@@ -439,8 +438,6 @@ def test_an_unregistered_identity_cannot_read_settings_through_the_real_handler(
 
     assert "not a registered user" in telegram.sent[-1].text
     assert api.calls == [("resolve_user", "42")]
-
-
 def test_a_registered_viewer_can_read_the_profile_through_the_real_handler():
     api = FakeBotApiClient(users={"42": "viewer"}, profile_view=ProfileView(profile_name="demo", agent_names=(), protocols=(), event_types=(), areas=()))
     telegram = FakeTelegramClient()
@@ -467,7 +464,7 @@ def test_a_registered_viewer_can_read_settings_through_the_real_handler():
 # identity, not the bot's blanket service identity, must reach the API
 # client for these — confirmed through the real command handler, the same
 # way the §8.2 unauthenticated-read fix was confirmed, not through
-# bot.profile_commands/bot.settings_commands in isolation.
+# bot.commands/bot.commands in isolation.
 
 
 def test_profile_view_through_the_real_handler_forwards_the_real_callers_identity():
@@ -493,7 +490,7 @@ def test_settings_view_through_the_real_handler_forwards_the_real_callers_identi
 
 
 def test_settings_change_through_the_real_handler_forwards_the_real_callers_identity():
-    api = FakeBotApiClient(users={"42": "commander"}, settings_write_result=SettingsWriteResult(accepted=True, message="ok"))
+    api = FakeBotApiClient(users={"42": "commander"}, settings_write_result=WriteResult(accepted=True, message="ok"))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
 
@@ -504,7 +501,7 @@ def test_settings_change_through_the_real_handler_forwards_the_real_callers_iden
 
 
 def test_protocol_write_through_the_real_handler_forwards_the_real_callers_identity():
-    api = FakeBotApiClient(users={"42": "commander"}, protocol_write_result=ProtocolWriteResult(accepted=True, message="ok"))
+    api = FakeBotApiClient(users={"42": "commander"}, protocol_write_result=WriteResult(accepted=True, message="ok"))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
 

@@ -170,7 +170,7 @@ def _render_protocol_selection(f: dict[str, Any], record: logging.LogRecord) -> 
         return f"protocol selection → ambiguous among [{', '.join(candidates)}]"
     if status == "no_match":
         # Found live: before this branch existed, a real NO_MATCH selection
-        # (orchestrator.selection's own status, distinct from "ambiguous")
+        # (orchestrator.main_agent's own status, distinct from "ambiguous")
         # fell through to the line above with an empty candidate list —
         # printing "ambiguous among []" for an event that was never
         # actually ambiguous, only ever mismatched here in the console

@@ -5,7 +5,7 @@ Declares the exact names a profile module must expose and the structural
 See docs/profile_spec.md for the human-readable version of this contract.
 
 Kept separate from `profiles.loader` so both the loader and
-`profiles.validate` depend on one shared definition rather than two that
+`profiles.loader` depend on one shared definition rather than two that
 can drift.
 
 `AgentSpec` (below) is what a profile's `AGENTS` list actually holds: a
@@ -85,7 +85,7 @@ def protocol_missing_attrs(protocol: Any) -> list[str]:
 
     Empty list means the protocol has the right shape — it says nothing
     about whether the *values* (e.g. a non-empty description) are valid;
-    that judgment belongs to profiles.validate.
+    that judgment belongs to profiles.loader.
     """
 
     missing = []

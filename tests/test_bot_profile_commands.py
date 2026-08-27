@@ -1,12 +1,12 @@
-"""bot/profile_commands.py (work_plan.md §8.7)."""
+"""bot/commands.py (work_plan.md §8.7)."""
 
 import asyncio
 
 from auth.permissions import PermissionLevel
 
-from bot.api_client import ProfileDiffStatus, ProfileView, ProtocolView, ProtocolWriteResult
+from bot.api_client import ProfileView, ProtocolView, WriteResult
 from bot.deps import BotDeps
-from bot.profile_commands import NOTHING_CHANGED_NOTICE, profile_diff_status, view_profile, write_protocol
+from bot.commands import NOTHING_CHANGED_NOTICE, profile_diff_status, view_profile, write_protocol
 from bot.users import CallerContext
 from tests.bot_fakes import FakeBotApiClient
 
@@ -56,13 +56,13 @@ def test_view_forwards_the_real_callers_identity_to_the_api_client():
 
 
 def test_diff_status_reports_a_pending_restart():
-    api = FakeBotApiClient(profile_diff_status=ProfileDiffStatus(differs_from_running=True))
+    api = FakeBotApiClient(profile_diff_status=True)
     text = _run(profile_diff_status(_deps(api)))
     assert "pending" in text.lower()
 
 
 def test_diff_status_reports_no_pending_restart():
-    api = FakeBotApiClient(profile_diff_status=ProfileDiffStatus(differs_from_running=False))
+    api = FakeBotApiClient(profile_diff_status=False)
     text = _run(profile_diff_status(_deps(api)))
     assert "no restart is pending" in text.lower()
 
@@ -83,20 +83,20 @@ def test_add_without_explicit_approval_flag_is_refused():
 
 
 def test_remove_needs_no_approval_flag():
-    api = FakeBotApiClient(protocol_write_result=ProtocolWriteResult(accepted=True, message="removed"))
+    api = FakeBotApiClient(protocol_write_result=WriteResult(accepted=True, message="removed"))
     text = _run(write_protocol(_deps(api), COMMANDER, "remove", {"name": "p"}))
     assert "removed" in text
     assert NOTHING_CHANGED_NOTICE in text
 
 
 def test_successful_write_always_states_nothing_changed_until_restart():
-    api = FakeBotApiClient(protocol_write_result=ProtocolWriteResult(accepted=True, message="added protocol 'p'"))
+    api = FakeBotApiClient(protocol_write_result=WriteResult(accepted=True, message="added protocol 'p'"))
     text = _run(write_protocol(_deps(api), COMMANDER, "add", {"approval_flag": True}))
     assert NOTHING_CHANGED_NOTICE in text
 
 
 def test_write_forwards_the_real_callers_identity_to_the_api_client():
-    api = FakeBotApiClient(protocol_write_result=ProtocolWriteResult(accepted=True, message="added"))
+    api = FakeBotApiClient(protocol_write_result=WriteResult(accepted=True, message="added"))
 
     _run(write_protocol(_deps(api), COMMANDER, "add", {"approval_flag": True}))
 
@@ -104,7 +104,7 @@ def test_write_forwards_the_real_callers_identity_to_the_api_client():
 
 
 def test_rejected_write_is_reported_as_rejected():
-    api = FakeBotApiClient(protocol_write_result=ProtocolWriteResult(accepted=False, message="unknown agent 'x'"))
+    api = FakeBotApiClient(protocol_write_result=WriteResult(accepted=False, message="unknown agent 'x'"))
     text = _run(write_protocol(_deps(api), COMMANDER, "add", {"approval_flag": True}))
     assert "Rejected" in text
     assert "unknown agent" in text

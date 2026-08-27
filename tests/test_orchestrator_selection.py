@@ -3,8 +3,7 @@ import types
 import pytest
 
 from agents import adapter
-from orchestrator.errors import OrchestrationParseError
-from orchestrator.selection import ProtocolSelectionResult, _parse_selection_response, select_protocol
+from orchestrator.main_agent import OrchestrationParseError, ProtocolSelectionResult, _parse_selection_response, select_protocol
 from protocols.model import CriticalityLevel, Protocol
 
 

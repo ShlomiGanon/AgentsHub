@@ -165,17 +165,11 @@ own initiative — the decision is always made explicitly, once, at one of
 these four places, and threaded down as plain `TierModel` values from
 there.
 
-Outside that count: a handful of standalone, hand-run diagnostic scripts
-under `tests/` deliberately don't match `pytest.ini`'s `python_files =
-test_*.py` glob, so they're never collected by pytest and never imported
-by anything — `tests/sanity_check_real_model_call.py` reads
-`CORE_MODEL_*` and calls `build_tier_model`/`load_base_config` for real,
-by hand, against a live billed API; `tests/crewai_direct_check.py`,
-`tests/key_check.py`, and `tests/direct_openrouter_check.py` read
-`CORE_MODEL_KEY`/`CORE_MODEL_NAME` directly and bypass `config.base`
-entirely, by design (see their own docstrings). None of these run in CI
-or the normal suite, and none of them are reachable from anywhere the
-four places above are.
+Outside that count: `tests/sanity_check_real_model_call.py` is a
+standalone, hand-run diagnostic that deliberately does not match
+`pytest.ini`'s `python_files = test_*.py` glob. Its `production`,
+`key`, `openrouter`, and `crewai` modes cover the previous live-model
+checks. It never runs in CI or the normal suite.
 
 A profile module's own top-level code (e.g. `profiles/demo.py`'s
 `AGENTS` list) never reads `os.environ`, and never resolves a `TierModel`
@@ -224,7 +218,7 @@ for the duration of that one test.
 ## The agent/protocol structural contract
 
 Sections 3 (Agent Framework) and 4 (Protocol Engine) define the real
-`Agent` and `Protocol` classes. Until they land, `profiles.validate` checks
+`Agent` and `Protocol` classes. `profiles.loader.validate_profile` checks
 `AGENTS` and `PROTOCOLS` entries **structurally** (attribute presence), not
 by type:
 
@@ -241,8 +235,8 @@ in tests before the real classes exist — **with one exception**:
 `.criticality` must be a real `protocols.model.CriticalityLevel` member
 (`LOW`, `MEDIUM`, or `HIGH`), not merely present. A plain string like
 `"low"` satisfies every structural check above but is not accepted —
-`api/protocols.py` and `protocols/editor.py` both call `.name` on it
-(crashing on anything else), and `orchestrator/selection.py`'s high-risk
+`api/management.py` and `protocols/editor.py` both call `.name` on it
+(crashing on anything else), and `orchestrator/main_agent.py`'s high-risk
 tie-break compares it by severity, which only a real, ordered
 `CriticalityLevel` guarantees; a string would compare alphabetically
 instead and could silently select the wrong protocol. This is the same
@@ -269,5 +263,5 @@ without raising anything.
   bad entry's index (and, for a bad tier name, the tier it named).
 - Structural/content problems (bad protocol references, duplicate
   `human_activation`, missing event types/areas, etc.): reported by
-  `profiles.validate`, which collects every failure before stopping rather
+  `profiles.loader.validate_profile`, which collects every failure before stopping rather
   than failing on the first.

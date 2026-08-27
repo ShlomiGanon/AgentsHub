@@ -30,9 +30,9 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
+from agents.errors import AgentInvocationError
 from protocols.model import Step
-from protocols.retry import StepOutcome, execute_step_with_retry
-from tools.tracing import get_trace_id
+from tools.tracing import get_trace_id, stage_context
 
 if TYPE_CHECKING:
     # agents.base is not an entry point (docs/allowed_calls.md) — Agent is
@@ -40,6 +40,80 @@ if TYPE_CHECKING:
     from agents.base import Agent
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class StepOutcome:
+    step: Step
+    result_text: str | None
+    attempt_count: int
+    succeeded: bool
+    failure_reason: str | None = None
+
+
+def _can_retry(step: Step, agent: Agent) -> bool:
+    exposed = {tool.name: tool for tool in agent.exposed_tools()}
+    for tool_name in step.allowed_tools:
+        info = exposed.get(tool_name)
+        if info is not None and info.side_effecting and not info.idempotent:
+            return False
+
+    return True
+
+
+def execute_step_with_retry(
+    agent: Agent,
+    step: Step,
+    settings_store,
+    *,
+    task_rewriter: Callable[[Step, str], str] | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    backoff_seconds: float = 1.0,
+) -> StepOutcome:
+    current_task_text = step.task_text
+    attempts = 0
+    last_failure_reason = "attempt limit exhausted"
+
+    while True:
+        attempt_limit = settings_store.get_retry_count()
+        attempts += 1
+
+        try:
+            with stage_context("step_execution"):
+                result = agent.process(current_task_text, list(step.allowed_tools))
+        except AgentInvocationError as exc:
+            last_failure_reason = str(exc)
+            logger.info(
+                "step execution failed",
+                extra={"event": "step_failed", "agent": step.agent_name, "attempt": attempts, "cause": last_failure_reason, "trace_id": get_trace_id()},
+            )
+
+            if attempts >= attempt_limit or not _can_retry(step, agent):
+                return StepOutcome(step=step, result_text=None, attempt_count=attempts, succeeded=False, failure_reason=last_failure_reason)
+
+            logger.info("retrying step", extra={"event": "step_retry", "agent": step.agent_name, "attempt": attempts + 1, "cause": last_failure_reason, "trace_id": get_trace_id()})
+            sleep_fn(backoff_seconds)
+            continue
+
+        if result.status == "unclear_task":
+            last_failure_reason = f"task unclear: {result.text}"
+            logger.info(
+                "step reported task unclear",
+                extra={"event": "step_unclear", "agent": step.agent_name, "attempt": attempts, "missing": result.text, "trace_id": get_trace_id()},
+            )
+
+            if task_rewriter is None:
+                return StepOutcome(step=step, result_text=None, attempt_count=attempts, succeeded=False, failure_reason=f"{last_failure_reason} (no task rewriter available)")
+
+            if attempts >= attempt_limit or not _can_retry(step, agent):
+                return StepOutcome(step=step, result_text=None, attempt_count=attempts, succeeded=False, failure_reason=last_failure_reason)
+
+            current_task_text = task_rewriter(step, result.text)
+            logger.info("retrying step with rewritten task", extra={"event": "step_retry", "agent": step.agent_name, "attempt": attempts + 1, "cause": last_failure_reason, "trace_id": get_trace_id()})
+            sleep_fn(backoff_seconds)
+            continue
+
+        return StepOutcome(step=step, result_text=result.text, attempt_count=attempts, succeeded=True)
 
 
 @dataclass(frozen=True)

@@ -21,7 +21,7 @@ from api.app import build_app
 from cli.user_admin import main as user_admin_main
 from orchestrator.holds import create_approval_hold
 from orchestrator.main_agent import RiskAssessment
-from orchestrator.selection import ProtocolSelectionResult
+from orchestrator.main_agent import ProtocolSelectionResult
 from tests.api_fakes import auth_headers, build_context
 from tests.helpers import write_profile_module
 

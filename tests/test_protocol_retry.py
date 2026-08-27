@@ -2,9 +2,9 @@ import pytest
 
 from agents.errors import AgentModelError
 from agents.results import AgentResult
-from agents.tooling import ToolInfo
+from agents.runtime import ToolInfo
 from protocols.model import Step
-from protocols.retry import execute_step_with_retry
+from protocols.executor import execute_step_with_retry
 
 
 class _ScriptedAgent:

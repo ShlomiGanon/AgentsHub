@@ -4,7 +4,7 @@
 already confirms `POST /Event` and `POST /Msg` converge at the API layer.
 This file's own, non-redundant scope per this subtask's refined text:
 proving the bot's own real code path converges too — through
-`bot.entrypoint.handle_incoming_message` calling a real
+`bot.app.handle_incoming_message` calling a real
 `bot.http_api_client.HttpApiClient` against a real running API, not a
 second direct `POST /Msg` call.
 """
@@ -17,7 +17,7 @@ import pytest
 from agents import adapter
 from bot.api_client import BOT_SERVICE_IDENTITY
 from bot.deps import BotDeps
-from bot.entrypoint import handle_incoming_message
+from bot.app import handle_incoming_message
 from bot.http_api_client import HttpApiClient
 from tests.api_fakes import VIEWER_IDENTITY, RunningApiServer, build_context, happy_path_agent
 from tools.simulator import _post_event

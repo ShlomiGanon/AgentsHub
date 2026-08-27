@@ -1,13 +1,13 @@
-"""bot/clarification.py (work_plan.md §8.4)."""
+"""bot/holds.py (work_plan.md §8.4)."""
 
 import asyncio
 
 from bot.api_client import HeldClarificationNotice, HoldAnswerOutcome
-from bot.clarification import (
-    build_callback_data,
+from bot.holds import (
+    build_clarification_callback_data as build_callback_data,
     format_clarification_prompt,
     handle_clarification_answer,
-    parse_callback_data,
+    parse_clarification_callback_data as parse_callback_data,
     push_clarification_prompt,
 )
 from bot.deps import BotDeps
@@ -54,7 +54,7 @@ def test_pushed_to_every_commander_with_buttons_not_free_text():
 def test_pushed_buttons_encode_event_id_not_hold_id():
     # NOTICE.hold_id ("hold-1") and NOTICE.event_id ("event-1") deliberately
     # differ, so this fails loudly if the callback data ever regresses to
-    # encoding the orchestrator's internal hold ID again — api/holds.py's
+    # encoding the orchestrator's internal hold ID again — api/operations.py's
     # POST /Clarify/<event_id> (§7.11) only ever accepts an event ID.
     api = FakeBotApiClient(commander_chat_ids=("c1",))
     telegram = FakeTelegramClient()

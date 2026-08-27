@@ -3,11 +3,11 @@ import types
 import pytest
 
 from agents import adapter
-from history.precedent import PrecedentMatch
-from orchestrator.errors import OrchestrationParseError
+from history.query import PrecedentMatch
+from orchestrator.main_agent import OrchestrationParseError
 from orchestrator.insights import InsightsAgent, build_insight, construct_core_agents
 from protocols.model import CriticalityLevel, Protocol, Step
-from protocols.retry import StepOutcome
+from protocols.executor import StepOutcome
 
 
 class _ScriptedInsightsAgent:

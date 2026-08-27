@@ -29,11 +29,13 @@ Schema notes:
   own ID — null for a sensor-sourced event, which has no Telegram message
   to reference. Written once by `append_event`, like the rest of the
   envelope, and read back much later, possibly after several model calls
-  and a queued continuation, by `api/notifications.py` to populate a
+  and a queued continuation, by `api/operations.py` to populate a
   `job_finished`/`job_failed` notification's `reply_to_message_id` — this
   is the one place that value survives between the original incoming
   message and the eventual asynchronous reply to it.
 """
+
+import sqlite3
 
 USERS_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS users (
@@ -139,7 +141,7 @@ CREATE INDEX IF NOT EXISTS idx_event_steps_event_id ON event_steps(event_id);
 """
 
 # Its own index DDL, not folded into INDEXES_DDL above — that constant is
-# migration 5's frozen historical SQL (see persistence/migrations.py), and
+# migration 5's frozen historical SQL (see persistence/schema.py), and
 # log_entries didn't exist yet when migration 5 shipped.
 LOG_ENTRIES_INDEXES_DDL = """
 CREATE INDEX IF NOT EXISTS idx_log_entries_trace_id ON log_entries(trace_id);
@@ -233,3 +235,68 @@ CREATE TABLE IF NOT EXISTS log_entries (
     details TEXT NOT NULL
 );
 """
+
+
+def _summary_v4_ddl(table_name: str) -> str:
+    return f"""
+CREATE TABLE IF NOT EXISTS {table_name} (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    summary_text TEXT NOT NULL,
+    period_start TEXT NOT NULL,
+    period_end TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    UNIQUE (period_start, period_end)
+);
+"""
+
+
+SUMMARY_TABLES_V4_DDL = (
+    _summary_v4_ddl("daily_summaries")
+    + _summary_v4_ddl("monthly_summaries")
+    + _summary_v4_ddl("yearly_summaries")
+)
+
+MIGRATIONS: list[tuple[int, str, str]] = [
+    (1, "create users table", USERS_TABLE_DDL),
+    (2, "create events table", EVENTS_TABLE_DDL),
+    (3, "create event_steps table", EVENT_STEPS_TABLE_DDL),
+    (4, "create summary tables", SUMMARY_TABLES_V4_DDL),
+    (5, "create indexes", INDEXES_DDL),
+    (
+        6,
+        "add event indexes to summaries",
+        "ALTER TABLE daily_summaries ADD COLUMN event_index TEXT;"
+        "ALTER TABLE monthly_summaries ADD COLUMN event_index TEXT;"
+        "ALTER TABLE yearly_summaries ADD COLUMN event_index TEXT;",
+    ),
+    (7, "create held_events table", HELD_EVENTS_TABLE_DDL),
+    (8, "create notification_log table", NOTIFICATION_LOG_TABLE_DDL),
+    (9, "add source_message_id to events", "ALTER TABLE events ADD COLUMN source_message_id TEXT;"),
+    (10, "create log_entries table", LOG_ENTRIES_TABLE_DDL + LOG_ENTRIES_INDEXES_DDL),
+]
+
+
+def run_migrations(db_path: str) -> None:
+    connection = sqlite3.connect(db_path)
+    try:
+        current_version = connection.execute("PRAGMA user_version").fetchone()[0]
+        for version, _description, sql in MIGRATIONS:
+            if version <= current_version:
+                continue
+
+            if version == 6:
+                for table_name in ("daily_summaries", "monthly_summaries", "yearly_summaries"):
+                    columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()}
+                    if "event_index" not in columns:
+                        connection.execute(f"ALTER TABLE {table_name} ADD COLUMN event_index TEXT")
+            elif version == 9:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(events)").fetchall()}
+                if "source_message_id" not in columns:
+                    connection.execute("ALTER TABLE events ADD COLUMN source_message_id TEXT")
+            else:
+                connection.executescript(sql)
+
+            connection.execute(f"PRAGMA user_version = {version}")
+            connection.commit()
+    finally:
+        connection.close()
