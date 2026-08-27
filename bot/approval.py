@@ -58,11 +58,24 @@ def format_approval_prompt(notice: "HeldApprovalNotice") -> tuple[str, list[tupl
         buttons = [("Approve", build_callback_data(notice.event_id, "approved")), ("Reject", build_callback_data(notice.event_id, "rejected"))]
         return text, buttons
 
-    # ambiguous_selection
-    candidates = ", ".join(notice.candidate_protocol_names) or "(none)"
-    text = f"{header}\n\nMultiple protocols fit equally well:\n{candidates}\n{common}\n\nWhich should run?"
-    buttons = [(name, build_callback_data(notice.event_id, name)) for name in notice.candidate_protocol_names]
-    return text, buttons
+    if notice.reason == "ambiguous_selection":
+        candidates = ", ".join(notice.candidate_protocol_names) or "(none)"
+        text = f"{header}\n\nMultiple protocols fit equally well:\n{candidates}\n{common}\n\nWhich should run?"
+        buttons = [(name, build_callback_data(notice.event_id, name)) for name in notice.candidate_protocol_names]
+        return text, buttons
+
+    # Every current reason is handled above (HeldApprovalNotice.reason is
+    # typed as exactly these two — see bot/api_client.py). Found live: an
+    # earlier version of this function fell through to the
+    # ambiguous_selection rendering for *any* reason it didn't recognize,
+    # which silently mis-rendered stale "no_match"-reason data (a relic of
+    # NO_MATCH's old hold-based design, before it became a real terminal
+    # outcome — see orchestrator.holds.determine_approval_hold's own
+    # docstring) as "Multiple protocols fit equally well: (none)". Raising
+    # here instead means a future third reason value — or any other stale
+    # data — fails loudly at render time instead of silently lying about
+    # what kind of hold this is.
+    raise ValueError(f"unrecognized approval hold reason: {notice.reason!r}")
 
 
 async def push_approval_prompt(deps: "BotDeps", notice: "HeldApprovalNotice") -> None:

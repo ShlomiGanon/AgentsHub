@@ -13,6 +13,7 @@ file, not here — see those files' own module docstrings for why.
 import asyncio
 import sys
 import uuid
+from pathlib import Path
 from typing import Sequence
 
 from bot.api_client import BOT_SERVICE_IDENTITY
@@ -258,7 +259,7 @@ def ensure_test_identity(profile_module_path: str, test_identity: str, level: st
     return True
 
 
-def cleanup_test_identity(profile_module_path: str, test_identity: str, created_this_session: bool) -> None:
+def cleanup_test_identity(profile_module_path: str, test_identity: str, created_this_session: bool, cursor_path: Path | None = None) -> None:
     """Remove `test_identity` via the same real `cli.user_admin` command
     used to create it (`remove`, not a new deletion path) — but only when
     `created_this_session` is `True` (an identity this session found
@@ -270,6 +271,17 @@ def cleanup_test_identity(profile_module_path: str, test_identity: str, created_
 
     A failed removal is never silent: it prints exactly which identity is
     left behind and the command to remove it by hand.
+
+    `cursor_path` — only the commander tool passes one (the viewer has no
+    persisted cursor at all, by design). Found live: deleting only the
+    `users` row left `bot.notification_cursor.NotificationCursorStore`'s
+    file behind, keyed purely on identity *name* — a later session
+    provisioning the same default name (`cli_tester`) then read back the
+    dead identity's old cursor instead of bootstrapping fresh, replaying
+    that deployment's entire notification backlog with no "(first run...)"
+    message. Deleted here, in the same cleanup step as the identity itself,
+    so a name can never outlive both or neither. A missing file (nothing
+    was ever polled this session) is not an error.
     """
 
     if not created_this_session:
@@ -283,3 +295,9 @@ def cleanup_test_identity(profile_module_path: str, test_identity: str, created_
             f"remove --telegram-id {test_identity}",
             file=sys.stderr,
         )
+
+    if cursor_path is not None:
+        try:
+            cursor_path.unlink()
+        except FileNotFoundError:
+            pass

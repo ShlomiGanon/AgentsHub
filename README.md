@@ -11,6 +11,20 @@ prompt:
 
 Full walkthrough: `docs/operator_guide.md`. Quick start below.
 
+commander run:
+```
+python -m tools.terminal_client_commander --profile profiles.demo
+```
+viewer run:
+```
+python -m tools.terminal_client_viewer --profile profiles.demo
+```
+server run:
+```
+python -m api.app --profile profiles.demo
+```
+
+
 1. Install dependencies:
 
 ```

@@ -63,7 +63,7 @@ from orchestrator.holds import (
     determine_clarification_hold,
 )
 from orchestrator.insights import build_insight, construct_core_agents as construct_insights_agent
-from orchestrator.intent import classify_intent
+from orchestrator.intent import answer_conversationally, classify_intent
 from orchestrator.judgment import judge_success
 from orchestrator.main_agent import assess_risk, construct_core_agents as construct_main_agent
 from orchestrator.precedent import determine_closure, look_up_precedent
@@ -360,10 +360,11 @@ def process_message(
     sender_identity: str,
     received_at: str,
     is_commander: bool,
-) -> tuple[Literal["question", "report", "request"], object]:
+) -> tuple[Literal["question", "report", "request", "conversational"], object]:
     """Route a person's message by intent (§6.13). Returns which of the
-    three the message was taken as, alongside the result — a question's
-    answer (`str`), or a `FlowResult` for a report or request.
+    four the message was taken as, alongside the result — a question's or
+    conversational reply's answer (`str`), or a `FlowResult` for a report
+    or request.
 
     Not called from any production entry point. `api/messages.py::post_msg`
     is the real implementation of this same routing — it composes
@@ -379,6 +380,9 @@ def process_message(
     """
 
     intent = classify_intent(main_agent, deps.protocol_set.all(), message_text)
+
+    if intent.intent == "conversational":
+        return "conversational", answer_conversationally(main_agent, message_text)
 
     if intent.intent == "question":
         return "question", answer_question(main_agent, message_text, deps.registry, deps.history_query_service)

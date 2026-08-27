@@ -1,14 +1,16 @@
 """POST /Msg (work_plan.md §7.4).
 
-Human ingestion — reports, requests, and questions all arrive here;
-intent classification (§6.13) decides which. Composes the split
-primitives (`begin_report`/`run_report_extraction`,
+Human ingestion — reports, requests, questions, and purely conversational
+messages all arrive here; intent classification (§6.13) decides which.
+Composes the split primitives (`begin_report`/`run_report_extraction`,
 `begin_request`/`continue_from_risk_assessment`) itself rather than
 calling `orchestrator.flows.process_message`, which runs a report or
 request synchronously start to finish — exactly what §7.2 exists to
-avoid blocking a request on. A question is answered synchronously here,
-per §7.4's own rule: "a question has no job to track." This is half of
-§7.5's unified ingestion — see `api/events.py` for the other half and
+avoid blocking a request on. A question or a conversational message is
+answered synchronously here, per §7.4's own rule: "a question has no job
+to track" — a conversational reply has even less to track, since nothing
+is retrieved or routed at all. This is half of §7.5's unified ingestion —
+see `api/events.py` for the other half and
 `tests/test_api_unified_ingestion.py` for the convergence proof.
 
 One trace ID (§1.8) covers the whole handler, including intent
@@ -37,6 +39,7 @@ from auth.permissions import PermissionLevel
 from history.interface import storage_timestamp
 from orchestrator.flows import (
     OrchestrationParseError,
+    answer_conversationally,
     answer_question,
     begin_report,
     begin_request,
@@ -88,6 +91,13 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
         )
 
         received_at = _now()
+
+        if intent.intent == "conversational":
+            try:
+                reply = answer_conversationally(ctx.main_agent, text)
+            except OrchestrationParseError as exc:
+                raise RunFailureError(str(exc)) from exc
+            return jsonify({"taken_as": "conversational", "answer": reply})
 
         if intent.intent == "question":
             try:

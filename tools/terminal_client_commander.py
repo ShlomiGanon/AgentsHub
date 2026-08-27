@@ -468,7 +468,12 @@ def main(argv: list[str] | None = None) -> None:
         # Runs on every exit path, including an unexpected exception — a
         # deliberately wider net than just the three named cases, so a
         # genuine crash never leaves a stale test identity behind either.
-        cleanup_test_identity(args.profile, args.identity, created_this_session)
+        # cursor_path travels with it (see cleanup_test_identity's own
+        # docstring): deleting the identity without also deleting its
+        # cursor file is exactly what let a later session provisioning the
+        # same default name replay a dead identity's old notification
+        # backlog instead of bootstrapping fresh (found live, 2026-08).
+        cleanup_test_identity(args.profile, args.identity, created_this_session, cursor_path=cursor_path)
 
     print("\nGoodbye.")
 

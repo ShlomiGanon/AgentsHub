@@ -4,7 +4,7 @@ import pytest
 
 from agents import adapter
 from orchestrator.errors import OrchestrationParseError
-from orchestrator.intent import IntentResult, _parse_intent_response, classify_intent
+from orchestrator.intent import IntentResult, _parse_intent_response, answer_conversationally, classify_intent
 from protocols.model import CriticalityLevel, Protocol
 
 
@@ -41,7 +41,7 @@ def _protocols():
 # -- Parser -------------------------------------------------------------
 
 
-@pytest.mark.parametrize("intent", ["question", "report", "request"])
+@pytest.mark.parametrize("intent", ["question", "report", "request", "conversational"])
 def test_parse_each_intent(intent):
     result = _parse_intent_response(f"INTENT: {intent}\nREASON: because")
 
@@ -97,6 +97,71 @@ def test_unclear_task_status_raises():
 
     with pytest.raises(OrchestrationParseError):
         classify_intent(agent, _protocols(), "some message")
+
+
+def test_a_greeting_classifies_as_conversational():
+    agent = _ScriptedMainAgent("INTENT: conversational\nREASON: purely social, nothing to look up or act on")
+
+    result = classify_intent(agent, _protocols(), "hey, how are you?")
+
+    assert result.intent == "conversational"
+
+
+def test_a_question_asking_for_real_capability_stays_a_question_not_conversational():
+    # The line this session's fix must draw correctly: "do I have any
+    # tasks?" asks the system to check something real — it's a QUESTION
+    # even though no agent here can actually answer it — never
+    # CONVERSATIONAL, whatever the eventual answer turns out to be.
+    agent = _ScriptedMainAgent("INTENT: question\nREASON: asks the system to check something real")
+
+    result = classify_intent(agent, _protocols(), "do I have any tasks?")
+
+    assert result.intent == "question"
+
+
+def test_conversational_prompt_explicitly_distinguishes_from_a_real_question():
+    agent = _ScriptedMainAgent("INTENT: conversational\nREASON: r")
+
+    classify_intent(agent, _protocols(), "hey, how are you?")
+
+    prompt = agent.calls[0][0]
+    assert "do i have any tasks?" in prompt.lower()  # the drawn-line example is actually in the prompt
+    assert "CONVERSATIONAL" in prompt
+
+
+# -- answer_conversationally ----------------------------------------------
+
+
+def test_answer_conversationally_returns_the_agents_direct_reply():
+    agent = _ScriptedMainAgent("Doing well, thanks for asking! How can I help?")
+
+    reply = answer_conversationally(agent, "hey, how are you?")
+
+    assert reply == "Doing well, thanks for asking! How can I help?"
+
+
+def test_answer_conversationally_passes_no_tools():
+    agent = _ScriptedMainAgent("hi there")
+
+    answer_conversationally(agent, "hey")
+
+    assert agent.calls[0][1] == []
+
+
+def test_answer_conversationally_prompt_carries_an_honesty_constraint():
+    agent = _ScriptedMainAgent("hi there")
+
+    answer_conversationally(agent, "hey")
+
+    prompt = agent.calls[0][0]
+    assert "invent" in prompt.lower() or "fabricate" in prompt.lower()
+
+
+def test_answer_conversationally_raises_on_an_unusable_response():
+    agent = _ScriptedMainAgent("missing info", status="unclear_task")
+
+    with pytest.raises(OrchestrationParseError):
+        answer_conversationally(agent, "hey")
 
 
 def test_end_to_end_through_the_mocked_adapter(monkeypatch):

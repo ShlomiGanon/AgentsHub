@@ -381,6 +381,50 @@ def test_process_message_routes_question_without_writing_an_event(deps):
     assert deps.persistence.fetch_events_range("2000-01-01", "2100-01-01") == []
 
 
+def test_process_message_routes_conversational_directly_with_no_agent_routing(deps):
+    # No "Decide whether this question can be answered by directly looking
+    # up" or "Decide which of the following agents" dispatch entries are
+    # given here at all — if the conversational branch ever fell through
+    # into question_flow.py's machinery, _ScriptedAgent.process would
+    # raise on the unmatched prompt, failing this test loudly.
+    agent = _ScriptedAgent(
+        {
+            "kind of message": "INTENT: conversational\nREASON: purely social, nothing to look up or act on",
+            "Reply naturally and directly": "Doing well, thanks for asking!",
+        }
+    )
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    kind, result = process_message(deps, agent, insights_agent, "hey, how are you?", "viewer-1", "2026-08-20T10:00:00", is_commander=False)
+
+    assert kind == "conversational"
+    assert result == "Doing well, thanks for asking!"
+    assert deps.persistence.fetch_events_range("2000-01-01", "2100-01-01") == []
+    # Exactly two model calls: intent classification, then the direct reply.
+    assert len(agent.calls) == 2
+
+
+def test_process_message_still_declines_a_genuine_no_agent_fit_question(deps):
+    # Regression check for this session's earlier NONE fix: a real
+    # question with no agent whose role fits it must still classify as
+    # "question" (not "conversational") and go through question_flow.py's
+    # own NONE decline — completely unaffected by the new conversational
+    # branch.
+    agent = _ScriptedAgent(
+        {
+            "kind of message": "INTENT: question\nREASON: asks the system to check something real",
+            "Decide whether this question can be answered by directly looking up": "ROUTE: normal",
+            "Decide which of the following agents": "NONE: no loaded agent tracks personal tasks",
+        }
+    )
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    kind, result = process_message(deps, agent, insights_agent, "do I have any tasks?", "viewer-1", "2026-08-20T10:00:00", is_commander=False)
+
+    assert kind == "question"
+    assert result == "I don't have a way to answer that. no loaded agent tracks personal tasks"
+
+
 def test_process_message_routes_report_into_the_new_event_flow(deps):
     agent = _happy_path_agent(risk_score="0.1", selected="status_check")
     agent._dispatch["kind of message"] = "INTENT: report\nREASON: describes something that happened"
@@ -389,6 +433,20 @@ def test_process_message_routes_report_into_the_new_event_flow(deps):
     kind, result = process_message(deps, agent, insights_agent, "smoke seen at gate 3", "viewer-1", "2026-08-20T10:00:00", is_commander=False)
 
     assert kind == "report"
+    assert result.outcome == "succeeded"
+
+
+def test_process_message_routes_request_into_the_new_event_flow(deps):
+    # Unaffected by the new conversational branch — "request" is checked
+    # after both "conversational" and "question" and reaches process_request
+    # exactly as before.
+    agent = _happy_path_agent(risk_score="0.9", selected="dispatch_response", agent_task="dispatch to gate 3")
+    agent._dispatch["kind of message"] = "INTENT: request\nREASON: asks for a response to be dispatched"
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    kind, result = process_message(deps, agent, insights_agent, "please dispatch someone to gate 3", "commander-1", "2026-08-20T10:00:00", is_commander=True)
+
+    assert kind == "request"
     assert result.outcome == "succeeded"
 
 

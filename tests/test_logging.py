@@ -209,6 +209,36 @@ def test_console_line_truncates_a_long_value_instead_of_wrapping(capsys):
     assert "…" in line
 
 
+def test_console_line_distinguishes_no_match_from_ambiguous_protocol_selection(capsys):
+    # Found live: before this fix, any non-"selected" status rendered as
+    # "ambiguous among [...]" here — so a real NO_MATCH selection (a
+    # distinct orchestrator.selection status from "ambiguous") printed as
+    # "protocol selection → ambiguous among []", misleading during manual
+    # testing even though the actually-stored outcome was correctly
+    # "no_match_protocol" the whole time.
+    configure_logging("test_profile")
+    logging.getLogger("orchestrator.flows").info(
+        "protocol selection",
+        extra={"event": "protocol_selection", "status": "no_match", "candidate_names": [], "reason": "nothing loaded fits"},
+    )
+
+    line = capsys.readouterr().err.strip()
+    assert "no match" in line
+    assert "ambiguous" not in line
+    assert "nothing loaded fits" in line
+
+
+def test_console_line_still_renders_a_genuine_ambiguous_selection_correctly(capsys):
+    configure_logging("test_profile")
+    logging.getLogger("orchestrator.flows").info(
+        "protocol selection",
+        extra={"event": "protocol_selection", "status": "ambiguous", "candidate_names": ["status_check", "routine_check"], "reason": "tie"},
+    )
+
+    line = capsys.readouterr().err.strip()
+    assert "ambiguous among [status_check, routine_check]" in line
+
+
 def test_console_formatter_does_not_prevent_the_db_sink_from_receiving_full_detail(capsys):
     """All three handlers read from the same call — the console line being
     short must never mean the DB sink (or stdout JSON) got the same short

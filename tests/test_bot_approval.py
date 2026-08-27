@@ -2,6 +2,8 @@
 
 import asyncio
 
+import pytest
+
 from bot.api_client import HeldApprovalNotice, HoldAnswerOutcome, NoMatchNotice, UncertainVerdictNotice
 from bot.approval import (
     build_callback_data,
@@ -45,6 +47,21 @@ def test_ambiguous_selection_prompt_shows_candidates_as_buttons():
     assert "minor_incident_review" in text
     assert "routine_check" in text
     assert [label for label, _ in buttons] == ["minor_incident_review", "routine_check"]
+
+
+def test_an_unrecognized_reason_raises_instead_of_rendering_as_ambiguous():
+    # Found live: a stale "no_match"-reason relic (no_match's old,
+    # since-removed hold-based design — see orchestrator.holds
+    # .determine_approval_hold's own docstring) silently fell through to
+    # the ambiguous_selection rendering, showing "Multiple protocols fit
+    # equally well: (none)" for a hold that was never actually ambiguous.
+    # format_approval_prompt must now fail loudly on any reason value
+    # that isn't one of the two it actually knows how to render, rather
+    # than quietly mis-rendering it as the other one.
+    stale_notice = HeldApprovalNotice(hold_id="hold-3", event_id="e3", reason="no_match", risk_level="low", risk_reason="r")
+
+    with pytest.raises(ValueError):
+        format_approval_prompt(stale_notice)
 
 
 def test_the_two_reasons_produce_different_prompt_text():

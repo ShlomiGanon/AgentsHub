@@ -54,6 +54,22 @@ def test_a_question_is_answered_directly_with_no_job(tmp_path, teardown_ctx):
     assert ctx.deps.persistence.fetch_events_range("2000-01-01", "2100-01-01") == []  # no event written
 
 
+def test_a_conversational_message_is_answered_directly_with_no_job(tmp_path, teardown_ctx):
+    agent = happy_path_agent(intent="conversational")
+    agent._dispatch["Reply naturally and directly"] = "Doing well, thanks for asking!"
+    ctx = _ctx_with(tmp_path, agent)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    resp = client.post("/Msg", headers=auth_headers(VIEWER_IDENTITY), json={"text": "hey, how are you?", "sender_identity": VIEWER_IDENTITY})
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["taken_as"] == "conversational"
+    assert body["answer"] == "Doing well, thanks for asking!"
+    assert ctx.deps.persistence.fetch_events_range("2000-01-01", "2100-01-01") == []  # no event written
+
+
 def test_a_report_returns_202_with_a_job_id(tmp_path, teardown_ctx):
     agent = happy_path_agent(risk_score="0.1", selected="status_check", intent="report")
     ctx = _ctx_with(tmp_path, agent)

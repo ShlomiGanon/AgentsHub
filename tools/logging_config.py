@@ -162,10 +162,22 @@ def _render_risk_assessed(f: dict[str, Any], record: logging.LogRecord) -> str:
 
 
 def _render_protocol_selection(f: dict[str, Any], record: logging.LogRecord) -> str:
-    if f.get("status") == "selected":
+    status = f.get("status")
+    if status == "selected":
         return f"protocol selected → {f.get('protocol_name', '?')} ({_truncate(f.get('reason', ''))})"
-    candidates = f.get("candidate_names") or []
-    return f"protocol selection → ambiguous among [{', '.join(candidates)}]"
+    if status == "ambiguous":
+        candidates = f.get("candidate_names") or []
+        return f"protocol selection → ambiguous among [{', '.join(candidates)}]"
+    if status == "no_match":
+        # Found live: before this branch existed, a real NO_MATCH selection
+        # (orchestrator.selection's own status, distinct from "ambiguous")
+        # fell through to the line above with an empty candidate list —
+        # printing "ambiguous among []" for an event that was never
+        # actually ambiguous, only ever mismatched here in the console
+        # summary (the stored data and every other rendering — job status,
+        # notifications — always had it right).
+        return f"protocol selection → no match ({_truncate(f.get('reason', ''))})"
+    return f"protocol selection → {status} ({_truncate(f.get('reason', ''))})"
 
 
 def _render_precedent_closure(f: dict[str, Any], record: logging.LogRecord) -> str:
