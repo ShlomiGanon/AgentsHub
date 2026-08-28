@@ -78,6 +78,7 @@ from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, RunningApiServe
 _PROFILE_TEMPLATE = """
 from protocols.model import Protocol, CriticalityLevel
 
+PROFILE_NAME = "For Tests"
 AGENTS = []
 PROTOCOLS = [
     Protocol(

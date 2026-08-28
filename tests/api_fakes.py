@@ -214,6 +214,7 @@ class _FakeLoadedProfile:
         from profiles.loader import hash_profile_file
 
         self.module_path = module_path
+        self.profile_name = "For Tests"
         # Captured once, here, at "load" time — like the real LoadedProfile
         # does — not recomputed live. A property recomputing it on every
         # access would always equal api/management.py's own fresh recompute,

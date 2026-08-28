@@ -7,6 +7,8 @@ from agents import ReferenceAgent
 from profiles.contracts import AgentSpec, OptimizationPolicy
 from protocols import CriticalityLevel, Protocol
 
+PROFILE_NAME = "For Tests"
+
 AGENTS = [
     AgentSpec(cls=ReferenceAgent, tier="sub"),
 ]

@@ -37,6 +37,11 @@ def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> lis
     failures: list[str] = []
     agents_by_name = {agent.name: agent for agent in loaded.agents}
 
+    if not isinstance(loaded.profile_name, str) or not loaded.profile_name.strip():
+        failures.append("PROFILE_NAME must be a non-empty string")
+    elif any(character in loaded.profile_name for character in ("\r", "\n", "\x00")):
+        failures.append("PROFILE_NAME must not contain control characters")
+
     protocol_names = [getattr(protocol, "name", None) for protocol in loaded.protocols]
     duplicate_protocol_names = sorted({name for name in protocol_names if name and protocol_names.count(name) > 1})
     if duplicate_protocol_names:
@@ -267,6 +272,11 @@ def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) 
 
     loaded = LoadedProfile(
         module_path=module_path,
+        profile_name=(
+            profile_module.PROFILE_NAME.strip()
+            if isinstance(profile_module.PROFILE_NAME, str)
+            else profile_module.PROFILE_NAME
+        ),
         agents=agents,
         protocols=tuple(profile_module.PROTOCOLS),
         event_types=event_types,

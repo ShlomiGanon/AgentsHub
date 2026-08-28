@@ -436,6 +436,33 @@ def test_answer_conversationally_prompt_carries_an_honesty_constraint():
     assert "invent" in prompt.lower() or "fabricate" in prompt.lower()
 
 
+def test_conversational_prompt_grounds_identity_and_capabilities_dynamically():
+    agent = _ScriptedMainAgent("I am the main agent for For Tests.")
+    system_context = {
+        "identity": {"profile_name": "For Tests"},
+        "capabilities": [{"name": "report_event"}],
+        "sub_agents": [{"name": "reference_agent", "role": "checks status"}],
+    }
+
+    answer_conversationally(agent, "who are you?", system_context)
+
+    prompt = agent.calls[0][0]
+    assert '"profile_name": "For Tests"' in prompt
+    assert '"name": "reference_agent"' in prompt
+    assert "generic AI assistant" in prompt
+    assert "same language" in prompt
+
+
+def test_identity_and_capability_questions_are_defined_as_conversational():
+    agent = _ScriptedMainAgent("INTENT: conversational\nREASON: system self-description")
+
+    classify_intent(agent, _protocols(), "what are your capabilities?")
+
+    prompt = agent.calls[0][0]
+    assert "what can you do?" in prompt
+    assert "which sub-agents do you have?" in prompt
+
+
 def test_answer_conversationally_raises_on_an_unusable_response():
     agent = _ScriptedMainAgent("missing info", status="unclear_task")
 

@@ -29,6 +29,8 @@ from agents.reference import ReferenceAgent
 from profiles.spec import AgentSpec
 from protocols.model import CriticalityLevel
 
+PROFILE_NAME = "For Tests"
+
 
 @dataclass(frozen=True)
 class _FixtureProtocol:

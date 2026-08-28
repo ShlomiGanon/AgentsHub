@@ -7,6 +7,8 @@ from agents import Agent, ReferenceAgent
 from profiles.contracts import AgentSpec, OptimizationPolicy
 from protocols import CriticalityLevel, Protocol
 
+PROFILE_NAME = "<service name>"
+
 
 class _ExampleCoreTierSpecialist(Agent):
     """Stand-in for a second, real agent you'd write yourself."""

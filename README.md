@@ -183,9 +183,11 @@ Run any entry point with `--help` for its complete options.
 
 ## Profiles and live settings
 
-Start with `profiles/template.py` when creating a deployment. A profile defines agents, protocols, event types, areas, storage and API settings, the IANA `TIMEZONE` used to resolve relative history periods, conversation retention, optimization policy, and the names of required secret variables. Older profiles retain legacy routing and disabled conversation history. The complete contract is documented in `docs/profile_spec.md`.
+Start with `profiles/template.py` when creating a deployment. Every profile must define a human-facing `PROFILE_NAME`; the Main Agent uses it when introducing the service. A profile also defines agents, protocols, event types, areas, storage and API settings, the IANA `TIMEZONE` used to resolve relative history periods, conversation retention, optimization policy, and the names of required secret variables. Older profiles retain legacy routing and disabled conversation history but must add `PROFILE_NAME` before they can start. The complete contract is documented in `docs/profile_spec.md`.
 
 Free-form messages are classified as questions, reports, requests, or conversation. A message whose action or referent cannot be determined safely receives a synchronous clarification question and creates no job. History questions remain in the read-only question path: the Main Agent emits a constrained query description, SQLite performs parameterized filtering/counting, and the History Agent sees only the bounded records needed for narrative answers.
+
+System self-description is generated naturally rather than returned from a fixed response. For questions about identity, capabilities, protocols, or sub-agents, the model is grounded with the active `PROFILE_NAME` and the currently loaded runtime catalog. Adding an agent, tool, or protocol changes that catalog after restart.
 
 Most profile edits take effect after a restart. These three settings are different: they take effect immediately and are saved beside the deployment database:
 

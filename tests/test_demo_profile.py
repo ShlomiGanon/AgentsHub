@@ -19,6 +19,7 @@ def loaded(monkeypatch, test_core_model, test_sub_model):
 def test_loads_and_validates_successfully(loaded):
     assert loaded.agents
     assert loaded.protocols
+    assert loaded.profile_name == "For Tests"
 
 
 def test_constructs_the_reference_agent_with_a_model(loaded):

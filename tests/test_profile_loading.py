@@ -32,6 +32,13 @@ def test_missing_required_attribute_fails_naming_it(tmp_path, monkeypatch, test_
         load_profile("broken_profile_missing_port", core_model=test_core_model, sub_model=test_sub_model)
 
 
+def test_profile_name_is_required(tmp_path, monkeypatch, test_core_model, test_sub_model):
+    _write(tmp_path, monkeypatch, "profile_missing_name", omit=("PROFILE_NAME",))
+
+    with pytest.raises(ProfileLoadError, match="PROFILE_NAME"):
+        load_profile("profile_missing_name", core_model=test_core_model, sub_model=test_sub_model)
+
+
 def test_missing_bot_token_env_fails_naming_it(tmp_path, monkeypatch, test_core_model, test_sub_model):
     _write(tmp_path, monkeypatch, "profile_missing_bot_env")
     monkeypatch.delenv(BOT_TOKEN_ENV, raising=False)
@@ -61,6 +68,7 @@ def test_valid_minimal_fixture_profile_loads_and_freezes(monkeypatch, test_core_
     assert loaded.areas == ("north_sector", "south_sector")
     assert loaded.resolved_secrets["AGENTSHUB_FIXTURE_BOT_TOKEN"] == "token-value"
     assert tuple(loaded.core_agents) == ("history_agent",)
+    assert loaded.profile_name == "For Tests"
 
 
 def test_loaded_profile_is_frozen(monkeypatch, test_core_model, test_sub_model):
@@ -232,8 +240,14 @@ from protocols.model import CriticalityLevel, Protocol
 from tests.helpers import FakeAgent, FakeProtocol, ShapelessProtocol
 
 
-def _loaded(agents=(), protocols=(), areas=("x",)):
-    return SimpleNamespace(agents=agents, protocols=protocols, areas=areas)
+def _loaded(agents=(), protocols=(), areas=("x",), profile_name="For Tests"):
+    return SimpleNamespace(profile_name=profile_name, agents=agents, protocols=protocols, areas=areas)
+
+
+def test_profile_name_must_be_non_empty():
+    failures = validate_profile(_loaded(profile_name="   "), declared_event_types=["fire"])
+
+    assert any("PROFILE_NAME" in failure for failure in failures)
 
 
 def test_reports_protocol_naming_an_unconstructed_agent():

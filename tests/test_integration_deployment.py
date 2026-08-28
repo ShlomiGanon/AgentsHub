@@ -23,6 +23,7 @@ from agents.reference import ReferenceAgent
 from profiles.spec import AgentSpec
 from protocols.model import Protocol, CriticalityLevel
 
+PROFILE_NAME = "For Tests"
 AGENTS = [AgentSpec(cls=ReferenceAgent, tier="sub")]
 PROTOCOLS = [
     Protocol(

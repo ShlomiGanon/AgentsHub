@@ -25,6 +25,7 @@ from orchestrator.flows import (
     answer_conversationally,
     answer_question,
     answer_question_from_plan,
+    build_system_capability_context,
     begin_report,
     begin_request,
     classify_intent,
@@ -37,7 +38,7 @@ from orchestrator.flows import (
 from protocols import CriticalityLevel, Protocol, ProtocolEditError, add_protocol, remove_protocol, replace_protocol
 
 from profiles.loader import hash_profile_file
-from profiles import OptimizationPolicy
+from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy
 
 from orchestrator.flows import continue_after_approval, continue_after_clarification, decline, resolve_approval, resolve_clarification
 
@@ -110,6 +111,17 @@ def _now() -> str:
 
 def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
     blueprint = Blueprint("messages", __name__)
+    system_context = build_system_capability_context(
+        ctx.loaded_profile.profile_name,
+        ctx.deps.protocol_set.all(),
+        ctx.deps.registry,
+        tuple(
+            event_type
+            for event_type in ctx.deps.event_type_registry.types
+            if event_type != HUMAN_ACTIVATION_TYPE
+        ),
+        tuple(ctx.deps.area_registry.areas),
+    )
 
     @blueprint.route("/Msg", methods=["POST"])
     def post_msg():
@@ -176,6 +188,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
                     ctx.deps.registry,
                     ctx.deps.history_query_service,
                     prior_messages,
+                    system_context,
                 )
             except OrchestrationParseError as exc:
                 logger.warning(
@@ -214,7 +227,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
                 reply = (
                     message_plan.conversational_reply
                     if planner_mode == "merged" and message_plan is not None
-                    else answer_conversationally(ctx.main_agent, text)
+                    else answer_conversationally(ctx.main_agent, text, system_context)
                 )
             except OrchestrationParseError as exc:
                 raise RunFailureError(str(exc)) from exc

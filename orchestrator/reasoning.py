@@ -42,6 +42,73 @@ class MainAgent(Agent):
 
 
 @dataclass(frozen=True)
+class SystemCapability:
+    name: str
+    description: str
+
+
+SYSTEM_CAPABILITIES = (
+    SystemCapability("report_event", "Receive and classify an operational event report."),
+    SystemCapability("request_action", "Accept an action request and run a matching approved protocol."),
+    SystemCapability("ask_current_state", "Answer current-state questions through suitable read-only specialist tools."),
+    SystemCapability("ask_event_history", "Search and explain persisted event history without treating conversation as operational fact."),
+    SystemCapability("handle_human_review", "Request clarification or commander approval when safe execution requires it."),
+)
+
+
+def build_system_capability_context(
+    profile_name: str,
+    protocols: tuple[Protocol, ...],
+    registry: "AgentRegistry",
+    event_types: tuple[str, ...],
+    areas: tuple[str, ...],
+) -> dict:
+    agents = []
+
+    for agent in registry.all():
+        descriptor = agent.descriptor
+        if descriptor.name == "main_agent":
+            continue
+
+        agents.append({
+            "name": descriptor.name,
+            "role": descriptor.role,
+            "tools": [
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "side_effecting": tool.side_effecting,
+                }
+                for tool in descriptor.tools
+            ],
+        })
+
+    return {
+        "identity": {
+            "profile_name": profile_name,
+            "role": "main agent and orchestrator of the event-management service",
+        },
+        "capabilities": [
+            {"name": capability.name, "description": capability.description}
+            for capability in SYSTEM_CAPABILITIES
+        ],
+        "event_types": list(event_types),
+        "areas": list(areas),
+        "protocols": [
+            {
+                "name": protocol.name,
+                "description": protocol.description,
+                "participating_agents": list(protocol.participating_agents),
+                "approved_tools": list(protocol.approved_tools),
+                "requires_approval": protocol.approval_flag,
+            }
+            for protocol in protocols
+        ],
+        "sub_agents": agents,
+    }
+
+
+@dataclass(frozen=True)
 class RiskAssessment:
     score: float
     level: Literal["high", "low"]
@@ -276,12 +343,15 @@ def _build_intent_prompt(message_text: str, protocols: tuple[Protocol, ...]) -> 
         "- REPORT asserts that an operational event happened or is happening without directly asking for action.\n"
         "- REQUEST directly asks the system to perform, stop, or change an action. Protocol fit is supporting evidence, "
         "not the definition: an unsupported action request is still a request.\n"
-        "- CONVERSATIONAL is purely social and contains no operational assertion, lookup, or action.\n"
+        "- CONVERSATIONAL is social talk or a request to describe this system's own identity, capabilities, "
+        "protocols, or sub-agents; it contains no operational assertion, event lookup, or action. For system "
+        "self-description, set social_only=true and the other three intent flags=false.\n"
         "- NEEDS_CLARIFICATION applies when prior context is missing or there are multiple independent operational asks.\n\n"
         "Use one direct ask as primary when facts merely provide context. Social wording never overrides an operational intent. "
         "Quoted or hypothetical action language is not itself a request. Distinguish 'do not dispatch' (request), "
         "'he said do not dispatch' (report), and 'why did you not dispatch?' (question). "
-        "For example, 'do I have any tasks?' is a QUESTION, not CONVERSATIONAL.\n\n"
+        "For example, 'do I have any tasks?' is a QUESTION, not CONVERSATIONAL, while 'what can you do?' "
+        "and 'which sub-agents do you have?' are CONVERSATIONAL system self-description.\n\n"
         f"Available protocols JSON: {json.dumps(protocol_data, ensure_ascii=False, sort_keys=True)}\n"
         f"Message JSON: {json.dumps(message_text, ensure_ascii=False)}\n\n"
         "Return exactly one JSON object and nothing else, with all fields present:\n"
@@ -463,20 +533,28 @@ def classify_intent(main_agent: MainAgent, protocols: tuple[Protocol, ...], mess
     raise last_error
 
 
-def _build_conversational_prompt(message_text: str) -> str:
+def _build_conversational_prompt(message_text: str, system_context: dict | None = None) -> str:
+    context_payload = system_context or {}
+
     return (
-        "Reply naturally and directly to this message — a greeting, thanks, or other small talk "
-        "with nothing to look up, check, or act on. Answer the way a person would: brief, warm, "
-        f"and direct.\n\nMessage: {message_text}\n\n"
-        "Do not invent facts, data, or capabilities you don't actually have. If this message "
-        "turns out to ask for something real you can't honestly answer, say so plainly instead "
-        "of guessing — never fabricate an answer to sound helpful. Respond with only your reply, nothing else."
+        "Reply naturally and directly to this conversational message. The system context below is the sole "
+        "source of truth for your identity and capabilities. Never describe yourself as a generic AI assistant. "
+        "When asked who you are, identify yourself as the main agent managing the named profile's event-management "
+        "services and briefly explain the relevant ways the user can work with you. When asked about capabilities, "
+        "protocols, event types, areas, or sub-agents, answer from the matching context fields only. Do not dump raw "
+        "JSON or list unrelated details. Phrase the answer naturally in the same language as the user's message "
+        "unless the user explicitly requests another language. Keep it concise and do not add generic invitations "
+        "such as asking what is on the user's mind.\n\n"
+        f"System context JSON: {json.dumps(context_payload, ensure_ascii=False, sort_keys=True)}\n"
+        f"Message JSON: {json.dumps(message_text, ensure_ascii=False)}\n\n"
+        "Do not invent facts, data, names, tools, or capabilities absent from the system context. If the context "
+        "does not support the requested detail, say so plainly. Respond with only the natural-language reply."
     )
 
 
-def answer_conversationally(main_agent: MainAgent, message_text: str) -> str:
+def answer_conversationally(main_agent: MainAgent, message_text: str, system_context: dict | None = None) -> str:
     with stage_context("conversational_reply"):
-        agent_result = main_agent.process(_build_conversational_prompt(message_text), [])
+        agent_result = main_agent.process(_build_conversational_prompt(message_text, system_context), [])
     if agent_result.status != "success":
         raise OrchestrationParseError(f"conversational reply did not produce a usable response: {agent_result.text}")
     return agent_result.text.strip()
@@ -1047,6 +1125,7 @@ def _build_message_plan_prompt(
     descriptors: list["AgentDescriptor"],
     history_context: dict,
     conversation_messages: tuple[dict, ...],
+    system_context: dict | None = None,
 ) -> str:
     protocol_data = [{"name": protocol.name, "description": protocol.description} for protocol in protocols]
     agents_data = [
@@ -1064,10 +1143,15 @@ def _build_message_plan_prompt(
         f"Protocols JSON: {json.dumps(protocol_data, ensure_ascii=False, sort_keys=True)}\n"
         f"Agents JSON: {json.dumps(agents_data, ensure_ascii=False, sort_keys=True)}\n"
         f"History vocabulary JSON: {json.dumps(history_context, ensure_ascii=False, sort_keys=True)}\n"
+        f"System identity and capabilities JSON: {json.dumps(system_context or {}, ensure_ascii=False, sort_keys=True)}\n"
         "Return exactly one JSON object containing every intent-analysis field required below, plus question_plan and "
         "conversational_reply. question_plan is null unless primary_intent is question. For a question it uses one of "
         "the existing routing shapes: history, agents, none, or clarification. conversational_reply is a short final "
-        "reply only for conversational intent. Required intent fields: primary_intent, asks_for_information, "
+        "reply only for conversational intent. Questions about this system's identity, capabilities, protocols, or "
+        "sub-agents are conversational and conversational_reply must answer naturally from the supplied system JSON, "
+        "in the same language as the current message; set social_only=true and asks_for_information, "
+        "reports_occurrence, and requests_action to false for those questions. Required intent fields: "
+        "primary_intent, asks_for_information, "
         "reports_occurrence, requests_action, social_only, is_quoted, is_hypothetical, is_followup_without_context, "
         "evidence, matched_protocol_names, reason, ambiguity_reason, clarification_question.\n"
         f"Conversation context JSON: {json.dumps(conversation_messages, ensure_ascii=False, sort_keys=True)}\n"
@@ -1082,12 +1166,20 @@ def plan_message(
     registry: "AgentRegistry",
     history_query_service: "HistoryQueryService",
     conversation_messages: tuple[dict, ...] = (),
+    system_context: dict | None = None,
 ) -> MessagePlan:
     selectable_agents = [agent for agent in registry.all() if agent.name not in {"main_agent", "insights_agent"}]
     descriptors = [agent.descriptor for agent in selectable_agents]
     context_factory = getattr(history_query_service, "planning_context", None)
     history_context = context_factory() if callable(context_factory) else {}
-    prompt = _build_message_plan_prompt(message_text, protocols, descriptors, history_context, conversation_messages)
+    prompt = _build_message_plan_prompt(
+        message_text,
+        protocols,
+        descriptors,
+        history_context,
+        conversation_messages,
+        system_context,
+    )
     policy = InvocationPolicy(
         max_output_tokens=800,
         timeout_seconds=75.0,

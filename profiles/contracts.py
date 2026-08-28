@@ -58,6 +58,7 @@ class OptimizationPolicy:
 @dataclass(frozen=True)
 class LoadedProfile:
     module_path: str
+    profile_name: str
     agents: tuple
     protocols: tuple
     event_types: tuple[str, ...]
@@ -76,6 +77,7 @@ class LoadedProfile:
     optimization_policy: OptimizationPolicy = field(default_factory=OptimizationPolicy)
 
 REQUIRED_PROFILE_ATTRS = (
+    "PROFILE_NAME",
     "AGENTS",
     "PROTOCOLS",
     "EVENT_TYPES",

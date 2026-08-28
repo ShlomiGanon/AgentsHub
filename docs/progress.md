@@ -2628,3 +2628,9 @@ no CI change was needed.
 
 - Updated the root quick start to match the current executable entry points and deployment behavior: virtual-environment setup, explicit per-terminal `.env` loading, initial human and `bot-service` identities, API startup verification through authenticated `GET /SYSTEM`, Telegram and terminal-client startup, and the single-process Waitress command.
 - Added concise startup troubleshooting for missing environment variables, incorrect profile module paths, connection failures, unauthorized identities, and invalid Telegram tokens. Documentation validation: every documented entry point was checked through its current `--help` output and `git diff --check -- README.md` passed.
+
+## Dynamic Main Agent identity and capability description (2026-08-29)
+
+- Added required, startup-validated `PROFILE_NAME` metadata to every profile contract; `profiles.demo` and the minimal fixture use `For Tests`, while the authoring template exposes an explicit service-name placeholder. Profiles without a non-empty name now fail before runtime.
+- Replaced ungrounded generic self-description with model-written answers grounded in a modular runtime catalog containing the active profile name, core interaction capabilities, event types, areas, protocols, registered sub-agents, roles, and exposed tools. Identity/capability/sub-agent questions are routed to this conversational catalog and answers are instructed to match the user's language, remain concise, and avoid invented capabilities.
+- Updated profile and operator documentation and added regression coverage for the required field, validation, dynamic prompt content, routing guidance, and API wiring. Acceptance: focused coverage passed 105 tests; the complete offline suite passed 909 tests with 0 failures and six unchanged third-party CrewAI deprecation warnings in 207.94 seconds; `compileall` and `git diff --check` also passed. No paid live-model call was performed.

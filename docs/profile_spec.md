@@ -9,6 +9,7 @@ module-level names. All are required unless noted.
 
 | Name | Type | Meaning |
 |---|---|---|
+| `PROFILE_NAME` | non-empty `str` | Human-facing service name. The Main Agent uses it when describing its identity; it is never inferred from the Python module path. |
 | `AGENTS` | `list` of `profiles.spec.AgentSpec` | The specialist agents this deployment runs — **declared**, not constructed. Each entry is `AgentSpec(cls=SomeAgent, tier="core"\|"sub")`; `profiles.loader.load_profile` is the only place any of them actually gets built, using whichever already-resolved `TierModel` matches the tier named. See "Model tiers", below. |
 | `PROTOCOLS` | `list` of protocol objects | Each fully populated: name, description, participating agent names, approved tool names, expected success output, criticality, approval flag. |
 | `EVENT_TYPES` | `list[str]` | Must not include `"human_activation"` — that type is added automatically and a profile declaring it is a validation error. |
@@ -48,6 +49,17 @@ six turns for 24 hours.
 Conversation history is isolated by exact `conversation_id`, resolves
 references only, and is never authoritative for facts, permissions, protocols,
 tool outcomes, or approvals.
+
+## Main Agent identity and capability answers
+
+Questions about the system itself, such as “who are you?”, “what can you do?”,
+or “which sub-agents do you have?”, use model-written conversational answers
+grounded in runtime metadata. The model receives `PROFILE_NAME`, event types,
+areas, loaded protocols, and the registered agents and their exposed tools. The
+wording is not stored in the profile or hard-coded as a final response. Adding a
+profile agent, tool, or protocol therefore changes what the Main Agent can
+describe after the next restart. The model is instructed to answer in the
+user's language and not claim names or capabilities absent from that metadata.
 
 ## Model tiers
 

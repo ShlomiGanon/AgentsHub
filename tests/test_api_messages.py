@@ -67,6 +67,10 @@ def test_a_conversational_message_is_answered_directly_with_no_job(tmp_path, tea
     body = resp.get_json()
     assert body["taken_as"] == "conversational"
     assert body["answer"] == "Doing well, thanks for asking!"
+    conversational_prompt = next(call for call in agent.calls if "Reply naturally and directly" in call)
+    assert '"profile_name": "For Tests"' in conversational_prompt
+    assert '"name": "reference_agent"' in conversational_prompt
+    assert '"name": "status_check"' in conversational_prompt
     assert ctx.deps.persistence.fetch_events_range("2000-01-01", "2100-01-01") == []  # no event written
 
 

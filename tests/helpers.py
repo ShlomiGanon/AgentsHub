@@ -44,6 +44,7 @@ class ShapelessProtocol:
 # need a profile module on disk (profiles.loader reads real files, not
 # in-memory objects) start from this and omit/prepend what the test needs.
 PROFILE_ATTR_LINES = {
+    "PROFILE_NAME": 'PROFILE_NAME = "For Tests"',
     "AGENTS": "AGENTS = []",
     "PROTOCOLS": "PROTOCOLS = []",
     "EVENT_TYPES": 'EVENT_TYPES = ["fire"]',

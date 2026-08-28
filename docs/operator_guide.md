@@ -19,12 +19,15 @@ silently running without required telemetry.
 
 A profile is a plain Python module — see `docs/profile_spec.md` for the
 complete, authoritative list of every name the loader expects
-(`AGENTS`, `PROTOCOLS`, `EVENT_TYPES`, `AREAS`, `DB_PATH`, `API_PORT`,
+(`PROFILE_NAME`, `AGENTS`, `PROTOCOLS`, `EVENT_TYPES`, `AREAS`, `DB_PATH`, `API_PORT`,
 `RETRY_COUNT`, `RISK_THRESHOLD`, `LOOKBACK_WINDOW_DAYS`, `BOT_TOKEN_ENV`,
 `MODEL_CREDENTIAL_ENVS`) and exactly what each one means. `profiles/demo.py`
 is a complete, working example to copy from. Two rules worth stating
 plainly here since they're easy to get wrong:
 
+- `PROFILE_NAME` is the human-facing service name used by the Main Agent when
+  it introduces itself. It must be a non-empty string and is intentionally
+  separate from the dotted Python module path.
 - A profile file holds no secret values — only the *names* of the
   environment variables that hold them (`BOT_TOKEN_ENV`,
   `MODEL_CREDENTIAL_ENVS`). It's meant to be safe to commit and to send

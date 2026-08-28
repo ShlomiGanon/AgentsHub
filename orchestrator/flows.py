@@ -34,6 +34,7 @@ from orchestrator.reasoning import (
     assess_final_once,
     assess_risk,
     classify_intent,
+    build_system_capability_context,
     construct_core_agents as construct_main_agent,
     formulate_tasks,
     judge_success,
