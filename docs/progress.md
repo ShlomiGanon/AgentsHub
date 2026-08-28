@@ -2558,3 +2558,12 @@ Full suite: 741 passed, 0 failed (was 736; +5 net new test functions).
 per-mission file-coverage invariant checked mechanically and still holds —
 no new test files were created this pass, only existing ones extended, so
 no CI change was needed.
+
+## Deep behavior-preserving refactor — done (2026-08-28)
+
+- Reorganized every production subsystem into responsibility-focused modules and reduced physical implementation modules from 63 to 42. Public package facades now expose the canonical surfaces; 43 removed module paths remain import-compatible without duplicate physical implementations.
+- Preserved all 106 classes and 521 functions/methods while reducing production code from 11,613 to 8,629 lines. Comment and docstring lines fell from 3,021 to 494 (83.6%) by retaining only concise interface or non-obvious rationale documentation.
+- Centralized model-tier environment resolution, combined duplicated registries, and consolidated agents, protocols, persistence, history, orchestration, API, bot, and tool responsibilities. No behavior, prompt, HTTP/Telegram contract, persistence schema, command, logging, or concurrency semantic was intentionally changed.
+- Updated live architecture, API, profile, operator, and agent-authoring documentation. Added `docs/file_catalog.md`, an English catalog of all 170 first-party files, plus a completeness test and legacy-import identity coverage.
+- Deviations: existing test modules were left physically separate to preserve scenario isolation and all original assertions; historical reports and this append-only log keep their original path references; `orchestrator/question_flow.py` remains a separate responsibility within the five-module orchestrator target.
+- Acceptance: compileall passed; all six executable module `--help` smoke checks passed; architecture, catalog, legacy-import, fresh-database, migration, API, bot, and integration coverage passed as part of the full suite. Final result: 879 passed, 0 failed, with six unchanged third-party CrewAI deprecation warnings.

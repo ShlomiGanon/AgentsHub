@@ -1,26 +1,4 @@
-"""Sensor event simulator (work_plan.md §9.1).
-
-Standalone program — run directly (`python -m tools.simulator ...`), never
-imported by anything else in the system. It is a client of `POST /Event`,
-authenticating as any other caller would (a pre-registered sensor
-identity, provisioned via `cli.user_admin` before this is ever run); it
-has no special access and no import path into the rest of the codebase
-beyond the standard library. This is why `docs/allowed_calls.md` has no
-entry for it — nothing inside the system ever calls it, and it never
-calls anything inside the system except over the same HTTP boundary any
-other API client uses.
-
-Generates several distinct sentence templates per event type and area,
-with randomized location/severity language, rather than one fixed
-string — repeated runs don't produce byte-identical text, so extraction
-is genuinely exercised rather than pattern-matched against one shape.
-This is not natural-language generation; it's enough real variation to
-satisfy this subtask's own "reads like a real sensor report rather than
-a template" bullet short of running a real model to write the reports.
-
-Built on `urllib.request` only, the same choice `bot/http_api_client.py`
-made — no new runtime dependency for a client this small.
-"""
+"""Sensor event simulator (work_plan.md §9.1)."""
 
 import argparse
 import json
@@ -76,11 +54,7 @@ def _generate_text(event_type: str | None, area: str) -> str:
 
 
 def _next_classification_area(event_types: list[str], areas: list[str], repeat_rate: float, unclassifiable_rate: float, recent: list[tuple[str, str]]) -> tuple[str | None, str]:
-    """Pick the (event_type, area) pair for the next event. `recent` is a
-    small pool of already-emitted pairs — reusing one is what gives
-    precedent lookup (§6.5) real matches to find during a live run,
-    per this subtask's own bullet, rather than only in fixtures.
-    """
+    """Pick the (event_type, area) pair for the next event."""
 
     if random.random() < unclassifiable_rate:
         return None, random.choice(areas)

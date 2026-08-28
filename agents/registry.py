@@ -1,15 +1,7 @@
-"""The agent registry (work_plan.md §3.8).
+"""The agent registry (work_plan.md §3.8)."""
 
-Registers the three core agents (from the base configuration — still an
-empty mapping, per profiles/loader.py's documented seam until §5.3/§6.1/
-§6.9 exist) and every specialist agent instance the active profile
-constructed. Accepts agents from no other source: built from exactly the
-two collections passed to `build_agent_registry`, never anything that
-registers itself at import time.
-"""
-
-from agents.base import Agent
-from agents.runtime import AgentDescriptor
+from agents.contracts import AgentDescriptor
+from agents.runtime import Agent
 
 
 class DuplicateAgentNameError(Exception):
@@ -30,9 +22,6 @@ class AgentRegistry:
         return tuple(self._agents.values())
 
     def descriptor_for(self, name: str) -> AgentDescriptor:
-        # Role and tools returned together as one structure (§3.8) — both
-        # live on the descriptor already, so this is just a named path to
-        # it rather than a second call that could drift from `get`.
         return self.get(name).descriptor
 
 

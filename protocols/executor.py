@@ -1,54 +1,19 @@
-"""The protocol executor (work_plan.md §4.4, §4.6, §4.8).
-
-`execute_steps` is the *one* function boundary through which a step list
-runs — the seam §4.8 asks for: nothing else may execute a step except
-through this call, so a later alternative execution mode (steps with
-dependencies between them, instead of a flat ordered list) could be
-selected here without redesigning the interface between the Main Agent
-and the executor. Nothing about that mode exists yet — no field, flag, or
-branch for it — the seam is this function's shape, not a feature.
-
-Composes no task text — `step.task_text` (or, on a retry after an
-unclear-task signal, exactly what `task_rewriter` returned) is sent to the
-agent unmodified. The Insights Agent (§6.9, later) will be shown this text
-as what the agent was asked, and it must be true.
-
-Steps run strictly in order and stop at the first one that doesn't
-succeed (§4.4's "return control... when every step has finished or the
-run has failed") — every step that *did* succeed before that point is
-preserved in the result, never discarded (§4.6). What §4.6 additionally
-asks for — writing partial results onto the event record, notifying the
-event's originator, moving on to the next event in the queue — belongs to
-the orchestrator (§6.11), persistence, and the bot (§8.11), none of which
-exist yet; this module's job ends at producing the data they'll need.
-"""
+"""The protocol executor (work_plan.md §4.4, §4.6, §4.8)."""
 
 from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
-from agents.errors import AgentInvocationError
-from protocols.model import Step
-from tools.tracing import get_trace_id, stage_context
+from agents import AgentInvocationError
+from protocols.contracts import ProtocolRunResult, Step, StepOutcome
+from tools import get_trace_id, stage_context
 
 if TYPE_CHECKING:
-    # agents.base is not an entry point (docs/allowed_calls.md) — Agent is
-    # only ever used here as a type hint.
-    from agents.base import Agent
+    from agents import Agent
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class StepOutcome:
-    step: Step
-    result_text: str | None
-    attempt_count: int
-    succeeded: bool
-    failure_reason: str | None = None
 
 
 def _can_retry(step: Step, agent: Agent) -> bool:
@@ -114,15 +79,6 @@ def execute_step_with_retry(
             continue
 
         return StepOutcome(step=step, result_text=result.text, attempt_count=attempts, succeeded=True)
-
-
-@dataclass(frozen=True)
-class ProtocolRunResult:
-    step_outcomes: tuple[StepOutcome, ...]
-    completed: bool
-    failed_step_index: int | None = None
-    failed_step_agent: str | None = None
-    failure_cause: str | None = None
 
 
 def execute_steps(

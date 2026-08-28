@@ -1,20 +1,12 @@
-"""User administration command (work_plan.md §1.10).
-
-Run from the shell on the machine hosting a deployment. This is the only
-way into the user table — no equivalent exists through the API or the bot,
-deliberately: user management stays outside the running system. Works
-against a database with no users at all, since a fresh deployment has no
-commander and no in-system path could ever create the first one.
-"""
+"""User administration command (work_plan.md §1.10)."""
 
 import argparse
 import os
 import sys
 
 from auth.permissions import PermissionLevel
-from config.base import ModelTierError, TierModel, build_tier_model
-from persistence.exceptions import NotFoundError, PersistenceError
-from persistence.interface import PersistenceInterface, open_persistence
+from config import ModelTierError, TierModel, resolve_tier_model_from_env
+from persistence import NotFoundError, PersistenceError, PersistenceInterface, open_persistence
 from profiles.loader import ProfileLoadError, ProfileValidationError, load_profile
 
 
@@ -49,32 +41,14 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _require_env(name: str) -> str:
-    value = os.environ.get(name)
-    if value is None:
-        raise ModelTierError(f"required environment variable '{name}' is not set")
-    return value
-
-
 def _tier_model_from_environ(prefix: str) -> TierModel:
-    """Read one tier's provider/model name/API key straight from the real
-    process environment — `main`'s own job, the one place in this module
-    `os.environ` is read for model-tier config (see config/base.py's
-    module docstring). `prefix` is `"CORE"` or `"SUB"`.
-    """
+    """Read one tier's provider/model name/API key straight from the real process environment — `main`'s own job, the one place in this module `os.environ` is read for model-tier confi..."""
 
-    provider = _require_env(f"{prefix}_MODEL_PROVIDER")
-    model_name = _require_env(f"{prefix}_MODEL_NAME")
-    api_key_env_name = _require_env(f"{prefix}_MODEL_API_KEY_ENV")
-    api_key = _require_env(api_key_env_name)
-    return build_tier_model(provider, model_name, api_key)
+    return resolve_tier_model_from_env(prefix, error_type=ModelTierError)
 
 
 def main(argv: list[str] | None = None) -> int:
-    """One of the three real entry points (with `api.app.main`,
-    `bot.app.main`) that reads `os.environ` for model-tier config —
-    everything below it takes already-resolved `TierModel` values instead.
-    """
+    """One of the three real entry points (with `api.app.main`, `bot.app.main`) that reads `os.environ` for model-tier config — everything below it takes already-resolved `TierModel` v..."""
 
     args = _build_parser().parse_args(argv)
 

@@ -1,12 +1,4 @@
-"""Permission model (work_plan.md §1.9).
-
-Two levels, ordered so "at least commander" is a meaningful comparison and
-a third level can be inserted later without rewriting comparisons. One
-table maps each action to its minimum level, and one function — used by
-both the API and the bot — answers "does this level permit this action",
-never "is this user a commander". A check written the second way is missed
-when a third level is added and silently grants or denies the wrong thing.
-"""
+"""Permission model (work_plan.md §1.9)."""
 
 from enum import IntEnum
 
@@ -16,8 +8,6 @@ class PermissionLevel(IntEnum):
     COMMANDER = 2
 
 
-# The minimum level each action requires. Add a level or an action by
-# editing this one place.
 ACTION_REQUIREMENTS: dict[str, PermissionLevel] = {
     "send_message": PermissionLevel.VIEWER,
     "view_history": PermissionLevel.VIEWER,

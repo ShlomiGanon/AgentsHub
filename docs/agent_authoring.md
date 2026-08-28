@@ -1,6 +1,6 @@
 # Adding an Agent
 
-Five steps. `agents/reference.py` is the working example — read it
+Five steps. `agents/builtins.py` is the working example — read it
 alongside this rather than expecting this document to reproduce it.
 
 1. **Subclass `agents.base.Agent`** in a new file under `agents/`.
@@ -32,7 +32,7 @@ alongside this rather than expecting this document to reproduce it.
   `@tool` decorator raises immediately, at class-definition time — the
   agent fails to import at all, not later during a run.
 - Omit `name`/`role`/`system_prompt`: the agent fails to *construct*,
-  naming which attribute is missing (`agents/base.py`'s `Agent.__init__`).
+  naming which attribute is missing (`agents/runtime.py`'s `Agent.__init__`).
 - Write the agent but never declare it in a profile: it's simply never
   loaded — `agents.registry` only knows about what's explicitly passed to
   it, nothing self-registers.

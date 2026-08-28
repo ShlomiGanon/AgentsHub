@@ -1,21 +1,4 @@
-"""Telegram Frontend entry point (work_plan.md §8, chiefly §8.1).
-
-The package's one declared entry point (docs/allowed_calls.md). Wires
-together every other module in this package: loads the named profile,
-resolves and validates the bot token, guards against a second instance
-for the same deployment, registers every handler, and runs the polling
-loop.
-
-`bot.http_api_client.HttpApiClient` is the default `BotApiClient` built
-here — real HTTP, against the profile's own `api_port` (§8.1). Every
-handler below stays wrapped so that any unexpected failure reaching it
-becomes a clear chat reply instead of a crash or a silently dropped
-update — including `bot.startup.ApiRequestError` (a real API call that
-failed) and, for any `BotApiClient` implementation that still legitimately
-has no real counterpart for an operation, `ApiNotImplementedError` (see
-`bot.api_client.UnimplementedApiClient`'s own docstring for when that
-still applies).
-"""
+"""Telegram Frontend entry point (work_plan.md §8, chiefly §8.1)."""
 
 import argparse
 import asyncio
@@ -25,49 +8,25 @@ import os
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from config.base import ModelTierError, TierModel, build_tier_model
+from config import ModelTierError, TierModel, resolve_tier_model_from_env
 from profiles.loader import LoadedProfile, ProfileLoadError, ProfileValidationError, load_profile
-from tools.logging_config import configure_logging
+from tools import configure_logging
 
-from bot import commands, holds
-from bot.http_api_client import HttpApiClient
-from bot.deps import BotDeps
-from bot.notifications import NotificationCursorStore, run_notification_poll_loop
-from bot.startup import ApiNotImplementedError, BotStartupError, SingleInstanceLock
-from bot.telegram_client import PTBTelegramClient
-from bot.users import check_permission, resolve_caller
+from bot import presentation
+from bot.client import HttpApiClient, PTBTelegramClient
+from bot.contracts import ApiNotImplementedError, BotDeps, BotStartupError
+from bot.runtime import NotificationCursorStore, SingleInstanceLock, run_notification_poll_loop
+from bot.presentation import check_permission, resolve_caller
 
 logger = logging.getLogger(__name__)
 
 NOTIFICATION_POLL_INTERVAL_SECONDS = 5.0
 
-# The complete, exhaustive set of slash-commands this bot registers.
-# §8.2's own explicit prohibition — no command that adds, changes,
-# removes, or lists users — is what `tests/test_bot_users.py` checks
-# this constant against; a third command added here without updating
-# that test's expectation would fail it loudly rather than passing
-# unnoticed.
 REGISTERED_COMMANDS = ("profile", "settings")
 
 
 def _resolve_bot_token(module_path: str, loaded_profile: LoadedProfile) -> str | None:
-    """The token named by the profile's `BOT_TOKEN_ENV`, already read into
-    `loaded_profile.resolved_secrets` at load time (§1.5) — this re-imports
-    the (already-cached, per `importlib`) profile module only to read the
-    *name* of the variable holding it, never the value itself again.
-
-    `profiles.loader` already fails loudly, before this is ever reached, if
-    the named variable is entirely unset (`os.environ.get(...) is None`).
-    It does not, however, reject an empty or whitespace-only value — that
-    gap is closed here, before any Telegram connection is attempted. Unlike
-    the entirely-unset case, this is deliberately *not* a startup failure:
-    a missing bot token must not block this process (or the separate `api`
-    process — a different OS process entirely, per docs/allowed_calls.md's
-    "bot calls only api... a network boundary, never a Python import") from
-    coming up. Returns `None` (after logging a WARNING naming the specific
-    variable) instead of raising, so the caller can skip the Telegram
-    connection step without treating this as an error.
-    """
+    """The token named by the profile's `BOT_TOKEN_ENV`, already read into `loaded_profile.resolved_secrets` at load time (§1.5) — this re-imports the (already-cached, per `importlib`)..."""
 
     profile_module = importlib.import_module(module_path)
     token_env_name = profile_module.BOT_TOKEN_ENV
@@ -85,15 +44,7 @@ def _resolve_bot_token(module_path: str, loaded_profile: LoadedProfile) -> str |
 
 
 def build_deps(module_path: str, core_model: TierModel, sub_model: TierModel) -> BotDeps | None:
-    """Returns `None` (never raises for this specific reason) when the
-    configured bot token is missing/blank — see `_resolve_bot_token`. Every
-    other failure this function can hit still raises normally.
-
-    `core_model`/`sub_model` are required, already-resolved `TierModel`s,
-    threaded straight through to `load_profile` — no environment access
-    anywhere in this function; `main`, below, is the one place in this
-    module that decides where these values come from.
-    """
+    """Returns `None` (never raises for this specific reason) when the configured bot token is missing/blank — see `_resolve_bot_token`."""
 
     loaded_profile = load_profile(module_path, core_model=core_model, sub_model=sub_model)
     configure_logging(loaded_profile.module_path)
@@ -104,11 +55,6 @@ def build_deps(module_path: str, core_model: TierModel, sub_model: TierModel) ->
 
     telegram_client = PTBTelegramClient(bot_token)
 
-    # Real HTTP, at last — §8.1's "use the profile's port when talking to
-    # the API". Needs bot.api_client.BOT_SERVICE_IDENTITY provisioned in
-    # this deployment's user table first (docs/api_spec.md's "Service
-    # identity" section) — every call fails authentication otherwise, the
-    # same as any other unregistered identity.
     api_client = HttpApiClient(f"http://localhost:{loaded_profile.api_port}")
 
     return BotDeps(loaded_profile=loaded_profile, telegram_client=telegram_client, api_client=api_client)
@@ -127,12 +73,7 @@ def _identity_and_chat_id(update) -> tuple[str, str]:
 
 
 def _guarded(handler: Callable[..., Awaitable[None]]):
-    """Wrap a handler so `ApiNotImplementedError` and any other
-    unexpected exception become a clear chat reply rather than a crash —
-    never a leaked stack trace, matching the spirit of §7.10's error
-    contract even though this bot talks to the seam in `bot.api_client`,
-    not a real API yet.
-    """
+    """Wrap a handler so `ApiNotImplementedError` and any other unexpected exception become a clear chat reply rather than a crash — never a leaked stack trace, matching the spirit of..."""
 
     async def _wrapped(update, context):
         try:
@@ -196,25 +137,21 @@ async def _on_callback_query(update, context) -> None:
 
     namespace = query.data.split(":", 1)[0]
 
-    if namespace == holds.CLARIFICATION_CALLBACK_PREFIX:
-        event_id, choice = holds.parse_clarification_callback_data(query.data)
-        await holds.handle_clarification_answer(deps, chat_id, telegram_identity, event_id, choice)
+    if namespace == presentation.CLARIFICATION_CALLBACK_PREFIX:
+        event_id, choice = presentation.parse_clarification_callback_data(query.data)
+        await presentation.handle_clarification_answer(deps, chat_id, telegram_identity, event_id, choice)
         return
 
-    if namespace == holds.CALLBACK_PREFIX:
-        event_id, choice = holds.parse_callback_data(query.data)
-        await holds.handle_approval_answer(deps, chat_id, telegram_identity, event_id, choice)
+    if namespace == presentation.CALLBACK_PREFIX:
+        event_id, choice = presentation.parse_callback_data(query.data)
+        await presentation.handle_approval_answer(deps, chat_id, telegram_identity, event_id, choice)
         return
 
     logger.warning("unrecognized callback namespace: %s", namespace, extra={"event": "bot_unknown_callback"})
 
 
 def _parse_protocol_write_command(rest: str) -> tuple[str, dict] | str:
-    """Parse `"<name> | <description> | <agents,...> | <tools,...> | "
-    "<expected_success_output> | <criticality> | <true|false>"` into
-    (name, payload), or return an error message. Pipe-delimited because
-    every field but the flag may itself contain commas or spaces.
-    """
+    """Parse `"<name> | <description> | <agents,...> | <tools,...> | " "<expected_success_output> | <criticality> | <true|false>"` into (name, payload), or return an error message."""
 
     fields = [part.strip() for part in rest.split("|")]
     if len(fields) != 7:
@@ -242,20 +179,7 @@ def _parse_protocol_write_command(rest: str) -> tuple[str, dict] | str:
 
 
 async def _resolve_caller_or_refuse(deps: BotDeps, chat_id: str, telegram_identity: str):
-    """Resolve `telegram_identity` and, if unregistered, send the refusal
-    reply and return `None` — the caller must then return immediately.
-    Returns the resolved `CallerContext` on success.
-
-    Required for every interaction, reads included (§8.2's "look up every
-    Telegram identity... on every interaction" — reading is still an
-    interaction, and "allow viewers to read" (§8.7/§8.8) names a real,
-    registered permission level, not "anyone"). `/profile view`/`diff` and
-    `/settings view` need no level check beyond registration itself —
-    viewer is the lowest registered level and §8.7/§8.8 both grant it read
-    access explicitly — so this helper only refuses the unregistered case;
-    a write branch layers its own `check_permission` call on top of what
-    this returns, same as before.
-    """
+    """Resolve `telegram_identity` and, if unregistered, send the refusal reply and return `None` — the caller must then return immediately."""
 
     resolution = await resolve_caller(deps.api_client, telegram_identity)
     if resolution.status == "unregistered":
@@ -274,13 +198,13 @@ async def _on_profile_command(update, context) -> None:
         caller = await _resolve_caller_or_refuse(deps, chat_id, telegram_identity)
         if caller is None:
             return
-        await deps.telegram_client.send_text(chat_id, await commands.view_profile(deps, caller.telegram_identity))
+        await deps.telegram_client.send_text(chat_id, await presentation.view_profile(deps, caller.telegram_identity))
         return
 
     if args[0] == "diff":
         if await _resolve_caller_or_refuse(deps, chat_id, telegram_identity) is None:
             return
-        await deps.telegram_client.send_text(chat_id, await commands.profile_diff_status(deps))
+        await deps.telegram_client.send_text(chat_id, await presentation.profile_diff_status(deps))
         return
 
     if args[0] in ("add", "edit", "remove"):
@@ -292,14 +216,14 @@ async def _on_profile_command(update, context) -> None:
         rest = " ".join(args[1:])
 
         if action == "remove":
-            reply = await commands.write_protocol(deps, caller, "remove", {"name": rest.strip()})
+            reply = await presentation.write_protocol(deps, caller, "remove", {"name": rest.strip()})
         else:
             parsed = _parse_protocol_write_command(rest)
             if isinstance(parsed, str):
                 await deps.telegram_client.send_text(chat_id, parsed)
                 return
             _, payload = parsed
-            reply = await commands.write_protocol(deps, caller, action, payload)
+            reply = await presentation.write_protocol(deps, caller, action, payload)
 
         await deps.telegram_client.send_text(chat_id, reply)
         return
@@ -316,7 +240,7 @@ async def _on_settings_command(update, context) -> None:
         caller = await _resolve_caller_or_refuse(deps, chat_id, telegram_identity)
         if caller is None:
             return
-        await deps.telegram_client.send_text(chat_id, await commands.view_settings(deps, caller.telegram_identity))
+        await deps.telegram_client.send_text(chat_id, await presentation.view_settings(deps, caller.telegram_identity))
         return
 
     if args[0] == "set" and len(args) == 3:
@@ -325,7 +249,7 @@ async def _on_settings_command(update, context) -> None:
             return
 
         _, field, raw_value = args
-        reply = await commands.change_setting(deps, caller, field, raw_value)
+        reply = await presentation.change_setting(deps, caller, field, raw_value)
         await deps.telegram_client.send_text(chat_id, reply)
         return
 
@@ -361,32 +285,14 @@ def run_bot(deps: BotDeps) -> None:
     deps.telegram_client.run_polling(lambda application: register_handlers(application, deps))
 
 
-def _require_env(name: str) -> str:
-    value = os.environ.get(name)
-    if value is None:
-        raise ModelTierError(f"required environment variable '{name}' is not set")
-    return value
-
-
 def _tier_model_from_environ(prefix: str) -> TierModel:
-    """Read one tier's provider/model name/API key straight from the real
-    process environment — `main`'s own job, the one place in this module
-    `os.environ` is read for model-tier config (see config/base.py's
-    module docstring). `prefix` is `"CORE"` or `"SUB"`.
-    """
+    """Read one tier's provider/model name/API key straight from the real process environment — `main`'s own job, the one place in this module `os.environ` is read for model-tier confi..."""
 
-    provider = _require_env(f"{prefix}_MODEL_PROVIDER")
-    model_name = _require_env(f"{prefix}_MODEL_NAME")
-    api_key_env_name = _require_env(f"{prefix}_MODEL_API_KEY_ENV")
-    api_key = _require_env(api_key_env_name)
-    return build_tier_model(provider, model_name, api_key)
+    return resolve_tier_model_from_env(prefix, error_type=ModelTierError)
 
 
 def main(argv: list[str] | None = None) -> None:
-    """One of the three real entry points (with `api.app.main`,
-    `cli.user_admin.main`) that reads `os.environ` for model-tier config —
-    everything below it takes already-resolved `TierModel` values instead.
-    """
+    """One of the three real entry points (with `api.app.main`, `cli.user_admin.main`) that reads `os.environ` for model-tier config — everything below it takes already-resolved `TierM..."""
 
     parser = argparse.ArgumentParser(description="Run the Telegram bot frontend for one deployment (work_plan.md §8).")
     parser.add_argument("profile_module", help="dotted module path of the profile to run, e.g. profiles.demo")
@@ -404,11 +310,6 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"failed to start bot: {exc}") from exc
 
     if deps is None:
-        # The bot token is missing/blank (already logged, with the specific
-        # env var name, inside _resolve_bot_token). Deliberately not a
-        # startup failure — no Telegram connection to make without a token,
-        # so there is nothing further for this process to do, but that is
-        # not an error: exit cleanly (status 0), not via SystemExit(message).
         return
 
     lock = SingleInstanceLock(Path(f"{deps.loaded_profile.db_path}.bot.lock"))

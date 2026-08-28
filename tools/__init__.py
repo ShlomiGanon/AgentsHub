@@ -1,7 +1,56 @@
-"""Shared helpers that belong to no single subsystem.
+"""Public observability facade and executable support package."""
 
-Entry points: `tools.logging_config`, `tools.tracing`. Unlike every other
-package, these two modules may be imported directly by anything, including
-internal (non-entry-point) modules of other packages — see the
-cross-cutting exception in docs/allowed_calls.md.
-"""
+import importlib
+import importlib.abc
+import importlib.util
+import sys
+
+from tools import observability
+from tools.observability import (
+    configure_logging,
+    get_current_stage,
+    get_trace_id,
+    log_ai_interaction,
+    new_trace_id,
+    set_trace_id,
+    stage_context,
+    trace_context,
+    verbose_logging_enabled,
+)
+
+logging_config = observability
+tracing = observability
+sys.modules[f"{__name__}.logging_config"] = observability
+sys.modules[f"{__name__}.tracing"] = observability
+
+class _TerminalAliasFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    alias = f"{__name__}._terminal_client_shared"
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == self.alias:
+            return importlib.util.spec_from_loader(fullname, self)
+        return None
+
+    def create_module(self, spec):
+        module = importlib.import_module("tools.terminal")
+        sys.modules[self.alias] = module
+        return module
+
+    def exec_module(self, module):
+        return None
+
+
+if not any(isinstance(finder, _TerminalAliasFinder) for finder in sys.meta_path):
+    sys.meta_path.insert(0, _TerminalAliasFinder())
+
+__all__ = [
+    "configure_logging",
+    "get_current_stage",
+    "get_trace_id",
+    "log_ai_interaction",
+    "new_trace_id",
+    "set_trace_id",
+    "stage_context",
+    "trace_context",
+    "verbose_logging_enabled",
+]

@@ -1,7 +1,23 @@
-"""Event-type and area registries (work_plan.md §2.1, §2.2).
+"""Public facade for immutable deployment registries."""
 
-Entry points: `registries.event_types`, `registries.areas`. Both wrap a
-closed set read from the active profile at startup — extraction, the
-clarification prompt, and precedent search all read from these rather than
-from the profile directly.
-"""
+import sys
+
+from registries import registry
+from registries.registry import (
+    AreaRegistry,
+    EventTypeRegistry,
+    build_area_registry,
+    build_event_type_registry,
+)
+
+areas = registry
+event_types = registry
+sys.modules[f"{__name__}.areas"] = registry
+sys.modules[f"{__name__}.event_types"] = registry
+
+__all__ = [
+    "AreaRegistry",
+    "EventTypeRegistry",
+    "build_area_registry",
+    "build_event_type_registry",
+]

@@ -1,81 +1,20 @@
-"""The question flow (work_plan.md §6.12).
-
-A question is answered by the same machinery as an event — one call
-chooses which loaded agents are needed and what to ask each — with one
-restriction: every tool passed to every chosen agent is filtered to
-read-only first, whatever the question and whoever asked. The History
-Agent needs no special-casing to be *chosen* for "about the past"
-questions — it's simply one more agent in the registry the selection
-prompt can pick, the same as any other — but it does need special-casing
-once chosen: it must be asked through
-`history.query.HistoryQueryService.query`, never through a bare
-`agent.process()` call like every other agent here. `HistoryQueryService`
-is the enforcement point for "never answer from memory" (§5.7) — it
-retrieves persisted material first and gives the History Agent only that
-retrieved context; calling `.process()` on it directly would hand it a
-bare question with no retrieval step at all, defeating the entire reason
-that service exists.
-
-Two gaps found via live manual testing, both fixed here:
-
-- The agent-selection prompt used to offer exactly one response shape
-  (`AGENT:`/`TASK:` blocks), reused directly from
-  `orchestrator.main_agent._parse_formulation_response` — with no
-  legitimate way to say "none of these agents can answer this," worse off
-  than protocol selection's own pre-NO_MATCH state (which at least had two
-  shapes). A question with no genuine match (e.g. "do I have any tasks?",
-  which matches nothing any loaded agent's role covers) got forced onto
-  the closest-sounding agent, which then correctly reported it couldn't
-  act — but that raw, agent-internal confusion (e.g. "please specify a
-  location") was surfaced verbatim as the final answer to someone who
-  never mentioned a location. Fixed with this module's own dedicated
-  `NONE:` response shape and parser (deliberately *not* reusing
-  `orchestrator.main_agent`'s — its "every named agent must get a task"
-  rule is an unrelated failure mode that has no business being entangled
-  with this one), plus routing a single-agent `unclear_task` result
-  through the same clean "I don't have a way to answer that" presentation
-  a true `NONE` selection gets.
-- A "what is the last event"-shaped question could crash the whole request
-  with a 422: given only agent *roles* (never any actual data) at
-  selection time, the Main Agent could try to answer such a question
-  inline instead of routing it, producing free text that matches neither
-  `AGENT:`/`TASK:` nor `NONE:` and fails to parse. Adding `NONE:` alone
-  doesn't fix this — it's not a clean decline, it's the model not using
-  the structured format at all. Fixed with a narrow, structured
-  classification step ahead of agent-selection (`DIRECT_LOOKUP:` vs.
-  `ROUTE:`, the same shape of structured outcome NO_MATCH already proved
-  out for protocol selection) that, when it recognizes a direct
-  "most recent event" lookup, bypasses agent-selection entirely and calls
-  `history_query_service.answer_most_recent_event` — the same
-  direct-persistence-query pattern `orchestrator/precedent.py
-  ::look_up_precedent` already uses in production, so retrieval never
-  goes through a model at all; the History Agent still always does the
-  interpreting, preserving "never answer from memory." Never raises on its
-  own: an unparseable or ambiguous classification response falls through
-  to the normal routing path unchanged, so this step can only ever remove
-  a crash, never introduce a new one.
-
-Writes nothing to persistence — a question is not an event.
-"""
+"""The question flow (work_plan.md §6.12)."""
 
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from agents.history import HistoryAgent
+from agents import HistoryAgent
 from history.query import HistoryQueryError
-from orchestrator.main_agent import OrchestrationParseError
-from tools.tracing import stage_context
+from orchestrator.decisions import OrchestrationParseError
+from tools import stage_context
 
 if TYPE_CHECKING:
     from agents.runtime import AgentDescriptor
     from agents.registry import AgentRegistry
     from history.query import HistoryQueryService
-    from orchestrator.main_agent import MainAgent
+    from orchestrator.decisions import MainAgent
 
-
-# -- Direct-lookup classification (bypasses agent-selection entirely when
-# recognized) ---------------------------------------------------------------
 
 _DIRECT_LOOKUP_PATTERN = re.compile(r"DIRECT_LOOKUP:\s*(\S+)", re.IGNORECASE)
 
@@ -96,16 +35,7 @@ def _build_direct_lookup_prompt(question: str) -> str:
 
 
 def _is_direct_most_recent_lookup(raw_text: str) -> bool:
-    # Deliberately permissive in only one direction: recognizing the
-    # DIRECT_LOOKUP line is enough to take the fast path; anything else —
-    # a clean "ROUTE: normal", free text, an empty response — falls
-    # through to the normal routing path unchanged. This step must never
-    # raise on its own; it can only remove a crash (a question that used
-    # to reach agent-selection's own parse failure), never add one.
     return _DIRECT_LOOKUP_PATTERN.search(raw_text) is not None
-
-
-# -- Agent selection ---------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -204,13 +134,6 @@ def answer_question(main_agent: "MainAgent", question: str, registry: "AgentRegi
             result = agent.process(task_text, read_only_tools)
 
         if result.status == "unclear_task" and len(chosen_tasks) == 1:
-            # The one agent asked couldn't act on this — the same "forced
-            # onto a wrong-fit agent" outcome NONE exists to prevent,
-            # discovered one step later. Same clean presentation as a true
-            # NONE selection; never the agent's own raw internal wording
-            # (e.g. "please specify a location") verbatim, which reads as
-            # confusing rather than clarifying to someone who asked about
-            # something else entirely.
             return _cant_answer_reply(f"{agent_name} doesn't have a way to help with this question.")
 
         sub_answers[agent_name] = result.text if result.status == "success" else f"(no usable answer: {result.text})"

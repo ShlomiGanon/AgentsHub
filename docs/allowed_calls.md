@@ -1,61 +1,36 @@
-# Allowed Calls
+# Package Boundaries and Allowed Calls
 
-One short reference for which package may import which, per work_plan.md §1.1.
-This is the document the import-graph test (`tests/test_architecture.py`)
-enforces mechanically — if this file and that test ever disagree, the test
-is checking the wrong thing and must be fixed to match this file.
+Each subsystem exposes a package facade and keeps implementation details inside a small set of responsibility-focused modules. Cross-package calls must use a listed public surface; direct access to backend internals remains prohibited.
 
-## The rule
+## Public surfaces
 
-Every package exposes a fixed set of **entry-point modules** — the only
-modules another package may import from it. Everything else inside a
-package is private to that package. A package may always import its own
-internal modules freely; the restriction is only on *cross-package*
-imports.
+| Package | Canonical facade | Stable compatibility modules | Implementation modules |
+|---|---|---|---|
+| `persistence` | `persistence` | `persistence.interface`, `persistence.exceptions` | `contracts`, `schema`, `sqlite` |
+| `config` | `config` | `config.base`, `config.settings_store` | `models`, `settings` |
+| `auth` | `auth.permissions` | none | `permissions` |
+| `registries` | `registries` | `registries.areas`, `registries.event_types` | `registry` |
+| `profiles` | `profiles` | `profiles.loader`, `profiles.spec` | `contracts`, `loader`, `demo`, `example` |
+| `agents` | `agents` | `agents.base`, `agents.registry`, `agents.results`, `agents.errors`, `agents.reference`, `agents.history` | `contracts`, `runtime`, `registry`, `builtins` |
+| `protocols` | `protocols` | `protocols.model`, `protocols.loader`, `protocols.editor`, `protocols.executor` | `contracts`, `service`, `executor` |
+| `history` | `history` | `history.interface`, `history.query` | `contracts`, `events`, `query`, `summaries` |
+| `orchestrator` | `orchestrator.flows` | `orchestrator.main_agent`, `orchestrator.insights`, `orchestrator.precedent`, `orchestrator.queue` | `decisions`, `holds`, `question_flow`, `runtime`, `flows` |
+| `api` | `api.app` | `api.auth`, `api.errors`, `api.ingestion`, `api.management`, `api.operations` | `contracts`, `http`, `routes`, `app` |
+| `bot` | `bot.app`, `bot` | all former bot module paths remain aliases | `contracts`, `client`, `presentation`, `runtime`, `app` |
+| `tools` | `tools` | `tools.logging_config`, `tools.tracing`, `tools._terminal_client_shared` | `observability`, `terminal`, executable clients, simulator |
+| `cli` | shell entry points only | `cli.user_admin` | `user_admin` |
 
-## Entry points per package
+Compatibility modules are aliases registered by package facades; they do not correspond to duplicate physical files. New code should prefer the canonical facade or the physical responsibility module when working inside the same package.
 
-| Package | Entry-point module(s) | Notes |
-|---|---|---|
-| `persistence` | `persistence.interface`, `persistence.exceptions` | Never import `persistence.sqlite_backend` or `persistence.schema` directly outside the package; schema and migrations remain engine-specific behind `open_persistence`. |
-| `config` | `config.base`, `config.settings_store` | |
-| `auth` | `auth.permissions` | |
-| `registries` | `registries.event_types`, `registries.areas` | Read-only closed sets built from a `LoadedProfile` at startup. |
-| `profiles` | `profiles.loader`, `profiles.spec` | Validation is owned by `profiles.loader`; `LoadedProfile`, `AgentSpec`, and the public loading contract remain unchanged. |
-| `tools` | `tools.logging_config`, `tools.tracing` | Shared helpers belonging to no subsystem. |
-| `cli` | none (not generally importable) | `cli.user_admin` is a shell entry point. The terminal frontends in `tools` are the sole caller-specific exception: they invoke the same command function so user writes still have one path. |
-| `agents` | `agents.registry`, `agents.results`, `agents.errors`, `agents.reference`, `agents.base`, `agents.history` | Concrete agents remain one class per module. `agents.base` preserves the Agent contract; `agents.runtime` and `agents.adapter` remain internal framework support. |
-| `protocols` | `protocols.model`, `protocols.loader`, `protocols.editor`, `protocols.executor` | Execution and its retry policy share the executor entry point. |
-| `history` | `history.interface`, `history.query` | `history.interface` exposes writes, extraction, scheduler hooks, and `storage_timestamp`; `history.query` owns historical Q&A, range retrieval, and precedent lookup. Other `history/` modules stay internal. |
-| `orchestrator` | `orchestrator.flows` | |
-| `api` | `api.app` | `api.app.create_app(module_path)` assembles the running API. Internal routes are grouped in `ingestion`, `operations`, and `management`; authentication and error mapping remain separate. |
-| `bot` | `bot.app`, `bot.interface` | `bot.app` is the runtime entry point. `bot.interface` is the narrow supported integration surface used by the two terminal frontends; bot-to-API communication remains a network boundary. |
+## Dependency direction
 
-## Who may call whom
+- Persistence is the bottom layer and imports no application subsystem.
+- Profiles, config, auth, registries, and observability do not call upward into API, bot, or orchestration.
+- Agents, protocols, and history expose domain capabilities to orchestration.
+- Orchestration is the only layer that coordinates business decisions.
+- API translates HTTP into orchestration calls.
+- Bot reaches the application only through HTTP and never imports API internals.
+- CLI user administration is the only user-write path.
+- Raw SQL remains confined to persistence implementation modules.
 
-- **`orchestrator`** calls everything — it is the only component that makes
-  judgment calls and coordinates every other subsystem.
-- **`persistence`** calls nothing outside itself. It is the bottom of the
-  stack; every other subsystem depends on it, never the reverse.
-- **`bot`** calls only `api`. It has no other path into the system.
-- **`api`** calls `orchestrator`, `profiles`, `config`, `auth`, `persistence`.
-- **`agents`**, **`protocols`**, **`history`** are called by `orchestrator`
-  and by each other's entry points where the work plan says so (e.g. the
-  protocol executor calls into `agents`); none of them call `orchestrator`,
-  `api`, or `bot`.
-- **`profiles`**, **`config`**, **`auth`**, **`registries`**, **`tools`** are
-  low-level and may be called by anything; none of them call upward into
-  `orchestrator`, `api`, or `bot`.
-- **`cli`** stands alone. It calls `profiles` (to resolve a database path)
-  and `persistence`/`auth` directly for user administration. Nothing else
-  calls `cli`, and `cli` is the *only* path that writes users — no code in
-  `api`, `bot`, or `orchestrator` may do the same (work_plan.md §1.10).
-
-## Cross-cutting exception (1.8)
-
-`tools.logging_config` and `tools.tracing` are the one deliberate exception
-to "import only entry points": because structured logging and trace-ID
-propagation must be reachable from literally every module that logs
-anything, every package may import them directly, including from internal
-(non-entry-point) modules. No other cross-cutting exception exists — adding
-one requires updating this document first.
+`tests/test_architecture.py` enforces the supported cross-package import graph. `tests/test_legacy_imports.py` separately proves that compatibility aliases resolve to the canonical module objects.

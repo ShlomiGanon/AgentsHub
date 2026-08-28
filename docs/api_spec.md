@@ -71,8 +71,8 @@ genuinely different identities depending on which:
 in `BotApiClient`'s Mission-8-era abstract signatures, even though the
 last two are commander-only writes — meaning the API-side check could
 only ever validate the bot's own blanket service-level access for these
-five, never the real caller's. `bot/api_client.py`, `bot/http_api_client.py`,
-`bot/commands.py` and `bot/app.py`
+five, never the real caller's. `bot/contracts.py`, `bot/client.py`,
+`bot/presentation.py` and `bot/app.py`
 were all updated to thread the real caller's identity through to every
 one of these five — the same shape of fix as the Mission 8 deep audit's
 own §8.2 profile/settings unauthenticated-read fix, this time closing a
@@ -444,7 +444,7 @@ omitted otherwise. `error_class` is one of:
 No response body of any kind, on any endpoint, ever contains a Python
 traceback, an exception's `repr`, or a SQLite error string.
 
-## Mapping to `BotApiClient` (bot/api_client.py) — §7.12
+## Mapping to `BotApiClient` (`bot/contracts.py`) — §7.12
 
 Every `BotApiClient` method is typed to return a success DTO, several with
 their own in-body status field for a condition this API instead reports as

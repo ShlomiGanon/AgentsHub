@@ -11,33 +11,33 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# One entry: package name -> the exact dotted module names other packages
-# may import from it. Empty set means "no other package may import this
-# one at all" (cli).
 ENTRY_POINTS: dict[str, set[str]] = {
-    "persistence": {"persistence.interface", "persistence.exceptions"},
-    "config": {"config.base", "config.settings_store"},
+    "persistence": {"persistence"},
+    "config": {"config"},
     "auth": {"auth.permissions"},
-    "registries": {"registries.event_types", "registries.areas"},
-    "profiles": {"profiles.loader", "profiles.spec"},
-    "tools": {"tools.logging_config", "tools.tracing"},
+    "registries": {"registries"},
+    "profiles": {"profiles", "profiles.loader"},
+    "tools": {"tools"},
     "cli": set(),
-    "agents": {"agents.registry", "agents.results", "agents.errors", "agents.reference", "agents.base", "agents.history"},
-    "protocols": {"protocols.model", "protocols.loader", "protocols.editor", "protocols.executor"},
-    "history": {"history.interface", "history.query"},
+    "agents": {"agents"},
+    "protocols": {"protocols", "protocols.executor"},
+    "history": {"history", "history.query"},
     "orchestrator": {"orchestrator.flows"},
     "api": {"api.app"},
-    "bot": {"bot.app", "bot.interface"},
+    "bot": {"bot", "bot.app"},
 }
 
-# tools.logging_config / tools.tracing are the one deliberate exception:
-# reachable from internal (non-entry-point) modules of every package too.
-CROSS_CUTTING_ALWAYS_ALLOWED = {"tools.logging_config", "tools.tracing"}
+CROSS_CUTTING_ALWAYS_ALLOWED = {"tools"}
 
 # The terminal frontends deliberately invoke the real user-admin command
 # rather than creating a second user-write path. No other package may import
 # cli, and tools may import only this exact module.
-CALLER_SPECIFIC_ALLOWED = {("tools", "cli.user_admin")}
+CALLER_SPECIFIC_ALLOWED = {
+    ("tools", "bot.client"),
+    ("tools", "bot.contracts"),
+    ("tools", "bot.presentation"),
+    ("tools", "cli.user_admin"),
+}
 
 GOVERNED_PACKAGES = set(ENTRY_POINTS)
 

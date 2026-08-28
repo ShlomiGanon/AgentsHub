@@ -1,6 +1,23 @@
-"""The single gateway to storage for every other subsystem.
+"""Public persistence facade."""
 
-Entry points: `persistence.interface`, `persistence.exceptions`. Never
-import `persistence.sqlite_backend` or `persistence.schema` directly —
-those are engine-specific and stay behind the interface.
-"""
+import sys
+
+from persistence import contracts
+from persistence.contracts import NotFoundError, PersistenceError, PersistenceInterface, open_persistence
+
+exceptions = contracts
+interface = contracts
+sys.modules[f"{__name__}.exceptions"] = contracts
+sys.modules[f"{__name__}.interface"] = contracts
+
+from persistence import sqlite
+
+sqlite_backend = sqlite
+sys.modules[f"{__name__}.sqlite_backend"] = sqlite
+
+__all__ = [
+    "NotFoundError",
+    "PersistenceError",
+    "PersistenceInterface",
+    "open_persistence",
+]

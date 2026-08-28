@@ -1,37 +1,20 @@
-"""Holds (work_plan.md §6.2, §6.7).
-
-Both hold mechanisms are owned by this module per the work plan's branch
-grouping, both backed by the same generic `held_events` storage
-(`persistence.sqlite_backend`'s `store_held_event`/`list_held_events`/
-`resolve_held_event`), distinguished only by `kind`.
-
-What this module does *not* do: actually resume execution — from
-extraction-was-unresolved to risk assessment on a clarification answer,
-or from task formulation on approval. Those are the new-event flow's job
-(§6.11). This module produces the *decision* (hold or not, and what the
-answer was) and persists it; wiring that back into a resumed run is
-§6.11's.
-"""
+"""Holds (work_plan.md §6.2, §6.7)."""
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from auth.permissions import PermissionLevel, is_permitted
-from persistence.exceptions import NotFoundError
-from persistence.interface import PersistenceInterface
-from protocols.model import Protocol
+from persistence import NotFoundError, PersistenceInterface
+from protocols import Protocol
 
 if TYPE_CHECKING:
-    from history.extraction import ExtractionResult
-    from orchestrator.main_agent import RiskAssessment
-    from orchestrator.main_agent import ProtocolSelectionResult
-    from registries.event_types import EventTypeRegistry
+    from history import ExtractionResult
+    from orchestrator.decisions import RiskAssessment
+    from orchestrator.decisions import ProtocolSelectionResult
+    from registries import EventTypeRegistry
 
 HoldReason = Literal["flagged_protocol", "ambiguous_selection"]
 
-# Only "classification" ever triggers a clarification hold — an empty area
-# or description doesn't (§2.1/§2.2: those narrow precedent search, they
-# never hold the event). The field name is fixed, not derived per-hold.
 UNRESOLVED_FIELD = "classification"
 
 
@@ -50,26 +33,7 @@ def determine_approval_hold(
     protocols_by_name: dict[str, Protocol],
     originated_from_commander: bool,
 ) -> HoldReason | None:
-    """Return the reason a run must be held, or None to proceed.
-
-    Callers only reach this with a `selected`/`ambiguous` selection — a
-    `no_match` selection (orchestrator.main_agent's NO_MATCH outcome, "no
-    loaded protocol genuinely fits") is intercepted earlier, in
-    `orchestrator.flows.continue_from_risk_assessment`, and never becomes a
-    hold at all: it used to (a third `HoldReason` here), but that left the
-    event with no terminal outcome ever recorded, since nothing could ever
-    resolve it (no candidate, no yes/no, nothing a commander's authority or
-    a high-risk auto-resolution could act on). It's now a real terminal
-    outcome (`"no_match_protocol"`) plus a one-way notification, the same
-    pattern `"uncertain"`/`"closed_on_precedent"` already use — see
-    `bot.api_client.NoMatchNotice`'s own docstring for the full account.
-
-    An ambiguous selection always holds, whoever asked — that hold asks
-    which protocol to run, which a commander's authority doesn't answer. A
-    flagged protocol holds only when the request didn't come from a
-    commander in the first place; their authority bypasses the flag, not
-    the ambiguity.
-    """
+    """Return the reason a run must be held, or None to proceed."""
 
     if selection.status == "ambiguous":
         return "ambiguous_selection"
@@ -88,9 +52,7 @@ def create_approval_hold(
     selection: "ProtocolSelectionResult",
     risk_assessment: "RiskAssessment",
 ) -> str:
-    """Write everything needed to resume: the event, the selected
-    protocol or the candidates, the assessed risk, and why it was held.
-    """
+    """Write everything needed to resume: the event, the selected protocol or the candidates, the assessed risk, and why it was held."""
 
     hold = {
         "event_id": event_id,
@@ -113,19 +75,7 @@ def answer_approval_hold(
     answering_level: PermissionLevel,
     decision: Literal["approved", "rejected"] | str,
 ) -> HoldAnswerResult:
-    """Accept an answer only from a commander, validated *now* — at the
-    moment they answer, not whatever level they held when the hold was
-    created. A second answer to an already-resolved hold is reported
-    distinctly, never silently accepted as if it were the first.
-
-    `decision` accepts a third shape beyond `"approved"`/`"rejected"`: a
-    candidate protocol name, for a hold whose reason is
-    `"ambiguous_selection"` (§6.4's no-clear-fit-at-low-risk case) — a
-    commander is choosing *which* protocol runs, not answering yes/no.
-    This is additive: a `"flagged_protocol"` hold's approve/reject
-    handling below is completely unchanged, reached exactly as it always
-    was, for every value of `decision`.
-    """
+    """Accept an answer only from a commander, validated *now* — at the moment they answer, not whatever level they held when the hold was created."""
 
     if not is_permitted(answering_level, "approve_run"):
         return HoldAnswerResult(status="unauthorized", message=f"level {answering_level.name} may not approve a run")
@@ -143,7 +93,6 @@ def answer_approval_hold(
     try:
         persistence.resolve_held_event("approval", hold_id, {"resolved_by": answering_identity, "decision": decision})
     except NotFoundError as exc:
-        # Resolved by someone else between the list() above and this call.
         return HoldAnswerResult(status="not_found", message=str(exc))
 
     status: Literal["approved", "rejected"] = "approved" if decision == "approved" else "rejected"
@@ -157,11 +106,7 @@ def _answer_ambiguous_selection_hold(
     held: dict,
     decision: str,
 ) -> HoldAnswerResult:
-    """`"approved"`/`"rejected"` answer nothing here — an ambiguous hold
-    asks which protocol to run, never a yes/no question (§6.7's own
-    second bullet). Validated against exactly the candidates recorded on
-    this hold at creation time (§6.4/§6.7), never a wider set.
-    """
+    """`"approved"`/`"rejected"` answer nothing here — an ambiguous hold asks which protocol to run, never a yes/no question (§6.7's own second bullet)."""
 
     candidates = held["candidate_protocol_names"]
     if decision not in candidates:
@@ -175,33 +120,18 @@ def _answer_ambiguous_selection_hold(
     except NotFoundError as exc:
         return HoldAnswerResult(status="not_found", message=str(exc))
 
-    # The pre-resolution snapshot's `selected_protocol_name` is still the
-    # `None` it was created with (§6.4 never sets one for this reason) —
-    # override it with the chosen candidate so a caller resuming from
-    # `hold["selected_protocol_name"]` gets a real protocol, not nothing.
     resolved_hold = {**held, "selected_protocol_name": decision}
     return HoldAnswerResult(status="approved", hold=resolved_hold)
 
 
-# -- Clarification holds (§6.2) ------------------------------------------
-
-
 def determine_clarification_hold(extraction_result: "ExtractionResult") -> bool:
-    """True when the event must be held — extraction couldn't resolve a
-    classification, whether because the text didn't fit any registered
-    type or because the source stated a type outside the registry
-    (`history.extraction.extract_event` already nullifies the latter case,
-    so a `None` classification is the one unified signal for both).
-    """
+    """True when the event must be held — extraction couldn't resolve a classification, whether because the text didn't fit any registered type or because the source stated a type outs..."""
 
     return extraction_result.classification is None
 
 
 def create_clarification_hold(persistence: PersistenceInterface, event_id: str, raw_text: str) -> str:
-    """Write everything needed to resume: the event, the raw text, and
-    which field couldn't be resolved — in the terms the prompt will show
-    a commander.
-    """
+    """Write everything needed to resume: the event, the raw text, and which field couldn't be resolved — in the terms the prompt will show a commander."""
 
     hold = {
         "event_id": event_id,
@@ -220,12 +150,7 @@ def answer_clarification_hold(
     chosen_classification: str,
     event_type_registry: "EventTypeRegistry",
 ) -> HoldAnswerResult:
-    """Accept a resolution only from a commander, and only a
-    classification drawn from the loaded registry — free text is rejected
-    outright, since the registry is fixed for the run and accepting
-    anything outside it defeats the constraint everything downstream
-    relies on.
-    """
+    """Accept a resolution only from a commander, and only a classification drawn from the loaded registry — free text is rejected outright, since the registry is fixed for the run and..."""
 
     if not is_permitted(answering_level, "resolve_hold"):
         return HoldAnswerResult(status="unauthorized", message=f"level {answering_level.name} may not resolve a hold")

@@ -1,39 +1,4 @@
-"""SQLite schema (work_plan.md §2.9 owns this module in full).
-
-Implements the users table (§1.10 slice, Mission 1), the events and
-event_steps tables (§2.3, §2.5, §2.8), the three summary tables (§2.6,
-§2.8), and the held_events table (§6.7, Mission 6 — owned by
-orchestrator holds per work_plan.md's branch grouping, not the Data
-Layer, but built here since that's where table DDL lives).
-
-Schema notes:
-- `entities` and `precedent_matched_event_ids` are JSON-encoded TEXT —
-  SQLite has no native array type, and nothing above persistence.interface
-  ever sees the encoding (persistence.sqlite_backend decodes/encodes at
-  the boundary).
-- `raw_text` (§2.5) is written once by `append_event` and never appears in
-  any UPDATE this module builds — see persistence/sqlite_backend.py's
-  update-column whitelist.
-- `occurred_at` is nullable, unlike the rest of the envelope. §6.11 writes
-  the event (raw text + envelope) *before* extraction runs, so a
-  Telegram-sourced event has no occurrence timestamp yet at `append_event`
-  time — extraction fills it in later via `update_event`. A sensor-sourced
-  event can have it set at append time, since 7.3 sets it equal to
-  `received_at` immediately with nothing to extract.
-- `event_steps` uses a composite primary key `(event_id, step_index)`,
-  which is also its own uniqueness guarantee and its index (§2.8).
-- Each summary table's `UNIQUE(period_start, period_end)` is both the §2.8
-  index on period boundaries and what lets `write_summary` upsert instead
-  of duplicating a row for a period that already has one (§5.5).
-- `source_message_id` (§8.9/§8.11) is the originating Telegram message's
-  own ID — null for a sensor-sourced event, which has no Telegram message
-  to reference. Written once by `append_event`, like the rest of the
-  envelope, and read back much later, possibly after several model calls
-  and a queued continuation, by `api/operations.py` to populate a
-  `job_finished`/`job_failed` notification's `reply_to_message_id` — this
-  is the one place that value survives between the original incoming
-  message and the eventual asynchronous reply to it.
-"""
+"""SQLite schema (work_plan.md §2.9 owns this module in full)."""
 
 import sqlite3
 
@@ -44,7 +9,6 @@ CREATE TABLE IF NOT EXISTS users (
 );
 """
 
-# -- Events (§2.3, §2.5) -------------------------------------------------
 
 EVENTS_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS events (
@@ -90,7 +54,6 @@ CREATE TABLE IF NOT EXISTS events (
 );
 """
 
-# One record per executed step (§2.3). `allowed_tools` is JSON-encoded TEXT.
 EVENT_STEPS_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS event_steps (
     event_id TEXT NOT NULL REFERENCES events(event_id),
@@ -104,7 +67,6 @@ CREATE TABLE IF NOT EXISTS event_steps (
 );
 """
 
-# -- Summaries (§2.6) -----------------------------------------------------
 
 # The name persistence.sqlite_backend maps a `level` argument to.
 SUMMARY_TABLE_NAMES = {
@@ -132,7 +94,6 @@ DAILY_SUMMARIES_TABLE_DDL = _summary_table_ddl(SUMMARY_TABLE_NAMES["daily"])
 MONTHLY_SUMMARIES_TABLE_DDL = _summary_table_ddl(SUMMARY_TABLE_NAMES["monthly"])
 YEARLY_SUMMARIES_TABLE_DDL = _summary_table_ddl(SUMMARY_TABLE_NAMES["yearly"])
 
-# -- Indexes (§2.8) ---------------------------------------------------------
 
 INDEXES_DDL = """
 CREATE INDEX IF NOT EXISTS idx_events_occurred_at ON events(occurred_at);
@@ -147,8 +108,6 @@ LOG_ENTRIES_INDEXES_DDL = """
 CREATE INDEX IF NOT EXISTS idx_log_entries_trace_id ON log_entries(trace_id);
 """
 
-
-# -- Held events (§6.7; both hold kinds share one table) --------------------
 
 # `kind` distinguishes "clarification" from "approval" rows — an event is in
 # at most one at a time (docs/vocabulary.md#hold-states), but the table

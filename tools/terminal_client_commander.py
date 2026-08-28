@@ -1,106 +1,4 @@
-"""Terminal stand-in for a commander's Telegram session (manual testing tool).
-
-Lets you exercise a running `api.app` server as a commander-level user by
-typing in a terminal instead of using Telegram, while going through exactly
-the same code the real bot goes through:
-
-  * `bot.app.handle_incoming_message` for free-form text (message
-    mode) — the same function `bot.app._on_text_message` calls.
-  * `bot.http_api_client.HttpApiClient` for every HTTP call to the API —
-    the bot's own real client, not a stub.
-  * `bot.notifications.NotificationCursorStore` and
-    `bot.notifications.run_notification_poll_loop`'s own shape (a
-    continuous background task, started at process startup, dispatching
-    every notification unconditionally) for everything that arrives
-    asynchronously — the same mechanism `bot.app` gives the real bot,
-    reused as closely as a single shared terminal (see below) allows.
-
-Nothing here reimplements message wording, permission checks, or dispatch
-semantics — `bot.notifications.dispatch_notification` plus
-`bot.holds`/`bot.holds`'s own formatting and answer-handling are
-unmodified real bot code throughout.
-
-Every capability here — resolving a clarification hold, answering an
-approval — is commander-only per `auth/permissions.py`'s own
-`ACTION_REQUIREMENTS` (`resolve_hold`, `approve_run`, both COMMANDER); this
-file exists because that table says so, not because of anything decided
-here. See `tools/terminal_client_viewer.py` for the VIEWER-permitted
-counterpart (`send_message`, `view_history`) — message and event mode only,
-no hold-answering capability, because the real permission table gives a
-viewer none.
-
-Background polling, and why it replaced the old reactive wait (found live,
-2026-08): a prior version of this tool only ever polled `GET /Notifications`
-as a side effect of the operator's own submission, filtering out anything
-not about that specific job. A hold created by someone else's activity
-while this process sat idle at the prompt — even *after* it had already
-started — was therefore never shown, no matter how long it stayed open,
-because nothing ever polled again until the operator made a submission of
-their own, and even then only their own job's notifications were surfaced.
-The real bot has no such gap: `bot.app`'s `_post_init` starts
-`run_notification_poll_loop` as a standing background task the moment the
-bot's own polling starts, and `dispatch_notification` has no per-job filter
-at all — every notification is handled, for every event, unconditionally.
-This file now does the same: `_background_poll_loop` starts at REPL
-startup and never stops until the process exits, using the same
-`NotificationCursorStore` the real bot persists to disk with (a separate,
-per-identity file — see `main`'s own comment on the path — so two
-concurrent commander sessions, or a real bot, never fight over one cursor).
-
-One companion problem this creates and solves, not present in the real
-bot: `bot.notifications.deliver_job_result` (and the hold-broadcast functions in
-`bot.holds`/`bot.holds`) send to whichever `chat_id`s they're
-given — safe in a real deployment, where different chat_ids are different
-people's separate phones, but this tool's `ConsoleTelegramClient` used to
-print regardless of `chat_id`. Fully unconditional dispatch onto one shared
-terminal would otherwise print *other* identities' job results and
-duplicate hold broadcasts (one per registered commander) alongside this
-session's own. `tools._terminal_client_shared.ConsoleTelegramClient` is now
-identity-aware for exactly this reason — constructed with the one identity
-this terminal represents, silently dropping anything addressed elsewhere,
-the same way a real deployment's *other* chats never see it either.
-
-The other companion problem: printing a hold's prompt the instant the
-background task discovers it would interrupt the operator mid-keystroke at
-the "message>" prompt — a different, and worse, failure than the one this
-redesign fixes. So the background task never prints anything itself; it
-only accumulates what arrived (`_BackgroundState.arrived`) and the
-foreground loop drains and displays it exactly once per turn — right
-before showing the next prompt, never during one (`_drain_arrived`, called
-at the top of every REPL iteration). A hold surfaced this way still needs
-an answer, and the terminal has no equivalent of Telegram's out-of-band
-button tap — so answering happens through an explicit `/holds` command,
-typed at the "message>" prompt whenever the operator is ready, which walks
-every not-yet-answered hold via the same `_prompt_clarification`/
-`_prompt_approval` UI. Each offers a `[s]` "skip for now" choice that sends
-nothing to the server and leaves the hold genuinely open — re-queued for a
-later `/holds` call, since the notification stream will never redeliver
-something the cursor has already advanced past.
-
-This process is a CLIENT. It does not start the server. Run the API
-separately first, e.g.:
-
-    python -m api.app profiles.demo
-
-(needs CORE_MODEL_*/SUB_MODEL_* environment variables set — the same ones
-`api.app.main` itself requires; see `.env.example`.) Then, in another
-terminal, with the same environment variables available (needed only for
-the one-time `cli.user_admin` provisioning step below):
-
-    python -m tools.terminal_client_commander --profile profiles.demo
-
-Sensor events (§7.3's `POST /Event`) have no bot-side equivalent to reuse
-— the bot never submits one, only sensors do — so event mode sends that
-request the same minimal way `bot.http_api_client._do_request` sends
-every other request, reusing that exact helper rather than a second
-hand-rolled HTTP call.
-
-On clean exit (normal quit, Ctrl+C, EOFError, or any other exception) this
-process removes the one test identity *it* provisioned this session — see
-`tools._terminal_client_shared.cleanup_test_identity`'s own docstring for
-the two scoping rules (never `bot-service`; never an identity that already
-existed before this session started).
-"""
+"""Terminal stand-in for a commander's Telegram session (manual testing tool)."""
 
 import argparse
 import asyncio
@@ -108,7 +6,7 @@ import importlib
 import sys
 from pathlib import Path
 
-from bot.interface import (
+from bot import (
     ApiRequestError,
     BotDeps,
     BotError,
@@ -121,7 +19,7 @@ from bot.interface import (
     handle_incoming_message,
     parse_approval_callback_data,
 )
-from tools._terminal_client_shared import (
+from tools.terminal import (
     CONSOLE_CHAT_ID,
     ConsoleTelegramClient,
     ObservingApiClient,
@@ -138,14 +36,7 @@ _HOLD_KINDS = ("clarification_hold", "approval_hold")
 
 
 class _BackgroundState:
-    """Shared, single-writer-single-reader state between the background
-    poll task and the foreground REPL loop — safe with no locking since
-    both run as coroutines on the one asyncio event loop (never truly
-    concurrent at the bytecode level); the background task only ever
-    appends/overwrites, the foreground only ever drains at a point where
-    the background task is guaranteed to be suspended (`await`ing its own
-    next poll or sleep).
-    """
+    """Shared, single-writer-single-reader state between the background poll task and the foreground REPL loop — safe with no locking since both run as coroutines on the one asyncio ev..."""
 
     def __init__(self):
         self.arrived: list = []
@@ -153,24 +44,7 @@ class _BackgroundState:
 
 
 async def _initial_cursor(deps: BotDeps, cursor_store: NotificationCursorStore, cursor_path: Path, identity: str) -> int:
-    """First-ever run for this identity+deployment: fast-forward past
-    whatever is already in `notification_log`, without displaying or
-    acting on any of it, then persist that starting point immediately.
-
-    Found live in an earlier pass: the demo (or any shared/reused)
-    database persists `notification_log` across every process that has
-    ever run against it — sensor-simulator runs, earlier manual testing,
-    another developer's session. Starting from cursor 0, as the real bot's
-    own first-ever deployment run would, replays that entire backlog on
-    the very first poll. A genuinely fresh real deployment doesn't hit
-    this (its own `notification_log` starts empty), but this tool's own
-    database very much does — worth keeping this one-time skip rather than
-    matching the real bot's "replay once is fine" stance literally.
-
-    Every run *after* this one — including a plain restart — reads the
-    persisted cursor back and resumes from exactly there, same as the real
-    bot: nothing taken here is re-bootstrapped or reset on a later run.
-    """
+    """First-ever run for this identity+deployment: fast-forward past whatever is already in `notification_log`, without displaying or acting on any of it, then persist that starting p..."""
 
     if cursor_path.exists():
         return cursor_store.read()
@@ -194,14 +68,7 @@ async def _background_poll_loop(
     state: _BackgroundState,
     stop_event: asyncio.Event,
 ) -> None:
-    """Mirrors `bot.notifications.run_notification_poll_loop`'s own shape
-    — a standing loop, started once, running until told to stop — but
-    never calls `dispatch_notification` itself: printing here would land
-    in the middle of whatever the operator is mid-typing at the "message>"
-    prompt. It only accumulates (`state.arrived`) for `_drain_arrived` to
-    display at the next safe point. A failed poll is recorded the same way
-    (`state.poll_error`), never printed directly, for the same reason.
-    """
+    """Mirrors `bot.notifications.run_notification_poll_loop`'s own shape — a standing loop, started once, running until told to stop — but never calls `dispatch_notification` itself:..."""
 
     while not stop_event.is_set():
         try:
@@ -220,13 +87,7 @@ async def _background_poll_loop(
 
 
 async def _drain_arrived(deps: BotDeps, state: _BackgroundState, pending_holds: list) -> None:
-    """The one place anything the background task found gets shown —
-    called at the top of every REPL iteration, i.e. always between turns,
-    never while a prompt is outstanding. Every notification is dispatched
-    unconditionally (no job-scoped filtering, matching the real bot); a
-    hold needs more than a dispatched print to be acted on, so it's also
-    queued for `/holds`.
-    """
+    """The one place anything the background task found gets shown — called at the top of every REPL iteration, i.e."""
 
     if state.poll_error:
         print(f"\n(background polling hit an error and is retrying: {state.poll_error})")
@@ -251,11 +112,7 @@ async def _drain_arrived(deps: BotDeps, state: _BackgroundState, pending_holds: 
 
 
 async def _prompt_clarification(deps: BotDeps, answering_identity: str, notice) -> bool:
-    """Returns True once resolved, False if skipped. A skipped hold is
-    re-queued by the caller (`_handle_holds_command`), never dropped — the
-    notification stream will never redeliver something the cursor has
-    already advanced past, so this is the only way to see it again.
-    """
+    """Returns True once resolved, False if skipped."""
 
     print(f"\nClarification hold — event {notice.event_id}")
     print("Choose the correct classification:")
@@ -281,22 +138,7 @@ async def _prompt_clarification(deps: BotDeps, answering_identity: str, notice) 
 
 
 async def _prompt_approval(deps: BotDeps, answering_identity: str, notice) -> bool:
-    """Same return contract as `_prompt_clarification`. Re-renders the
-    prompt text via the same `approval.format_approval_prompt` the
-    background drain already printed once — reached again here possibly
-    much later, via `/holds`, after other output has scrolled by.
-
-    `format_approval_prompt` always returns at least one button for every
-    approval hold that can be created today: `flagged_protocol` always has
-    exactly two (Approve/Reject), and `ambiguous_selection` always has two
-    or more by construction (an "ambiguous" selection with fewer than two
-    genuine candidates couldn't have been reported as ambiguous in the
-    first place). The former third case, a report-only no-buttons hold for
-    `orchestrator.main_agent`'s NO_MATCH outcome, no longer reaches this
-    function at all — that's a real terminal outcome plus a one-way
-    notification now (`bot.holds.notify_no_match`), never a
-    `held_events` row, so there is nothing here left to display or skip.
-    """
+    """Same return contract as `_prompt_clarification`."""
 
     text, buttons = format_approval_prompt(notice)
     print(f"\n{text}")
@@ -371,12 +213,6 @@ async def _run_repl(
                     mode = await choose_mode()
                     continue
                 if text == "/holds":
-                    # Drain again, right here: the top-of-loop drain ran
-                    # *before* this prompt was shown, so anything that
-                    # arrived while the operator was typing "/holds" itself
-                    # is still sitting silently in `state.arrived` — without
-                    # this, they'd have to invoke /holds a second time to
-                    # see it.
                     await _drain_arrived(deps, state, pending_holds)
                     await _handle_holds_command(deps, pending_holds, test_identity)
                     continue
@@ -388,10 +224,6 @@ async def _run_repl(
                     continue
 
                 print(reply)
-                # No synchronous wait for a result here — whatever happens
-                # to this submission, including landing on a hold, arrives
-                # asynchronously through the background loop above, the
-                # same way a real commander's own Telegram chat works.
 
             else:  # event mode
                 payload = await choose_event_payload(test_identity)

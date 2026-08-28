@@ -67,7 +67,7 @@ litellm's implicit, provider-named env lookup (e.g. `OPENROUTER_API_KEY`)
 can only hold one value process-wide and cannot express that, for any
 provider. The resolved key is passed explicitly as `crewai.LLM(model=...,
 api_key=...)` (a real, documented crewai/LiteLLM constructor —
-`agents/adapter.py`), never inferred from provider name.
+`agents/runtime.py`), never inferred from provider name.
 
 `config.base.build_tier_model(provider, model_name, api_key)` is a pure
 function — three plain strings in, one `config.base.TierModel` out
@@ -100,7 +100,7 @@ see Failure behavior, below.
 `agents.base.Agent.__init__` (and every concrete agent's own `__init__`,
 per `docs/agent_authoring.md`) accepts `api_key` as a second, optional
 parameter, defaulting to `None` — an agent constructed the old way, with
-only a bare model string, still works exactly as before: `agents/adapter.py`
+only a bare model string, still works exactly as before: `agents/runtime.py`
 falls back to litellm's implicit env lookup when `api_key` is `None`.
 
 **No default is ever substituted, for any of the six `CORE_MODEL_*`/
@@ -235,8 +235,8 @@ in tests before the real classes exist — **with one exception**:
 `.criticality` must be a real `protocols.model.CriticalityLevel` member
 (`LOW`, `MEDIUM`, or `HIGH`), not merely present. A plain string like
 `"low"` satisfies every structural check above but is not accepted —
-`api/management.py` and `protocols/editor.py` both call `.name` on it
-(crashing on anything else), and `orchestrator/main_agent.py`'s high-risk
+`api/routes.py` and `protocols/service.py` both call `.name` on it
+(crashing on anything else), and `orchestrator/decisions.py`'s high-risk
 tie-break compares it by severity, which only a real, ordered
 `CriticalityLevel` guarantees; a string would compare alphabetically
 instead and could silently select the wrong protocol. This is the same

@@ -2,23 +2,13 @@
 
 import json
 import logging
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from history.time_utils import day_bounds, month_bounds, parse_timestamp, storage_timestamp, year_bounds
-from tools.tracing import get_trace_id
+from history.contracts import HistoryAnswer, HistoryQueryError, HistorySource, PrecedentMatch, RetrievedSource
+from history.events import day_bounds, month_bounds, parse_timestamp, storage_timestamp, year_bounds
+from tools import get_trace_id
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class RetrievedSource:
-    level: str
-    period_start: str
-    period_end: str
-    source_id: str
-    content: object
-    matched_event_ids: tuple[str, ...]
 
 
 def _exact_summary(persistence, level: str, start: datetime, end: datetime) -> dict | None:
@@ -114,18 +104,6 @@ def retrieve_range(persistence, start: datetime, end: datetime, classification: 
     return sources
 
 
-@dataclass(frozen=True)
-class PrecedentMatch:
-    event_id: str
-    classification: str
-    area: str
-    occurred_at: str
-    protocol_name: str | None
-    steps_summary: list[dict]
-    outcome: str | None
-    resolved: bool
-
-
 def find_precedents(
     persistence,
     settings_store,
@@ -179,27 +157,6 @@ def find_precedents(
         },
     )
     return matches
-
-
-class HistoryQueryError(Exception):
-    """A historical answer could not be produced from retrieved material."""
-
-
-@dataclass(frozen=True)
-class HistorySource:
-    level: str
-    period_start: str
-    period_end: str
-    source_id: str
-
-
-@dataclass(frozen=True)
-class HistoryAnswer:
-    answer: str
-    sources_used: tuple[HistorySource, ...]
-    time_start: str | None
-    time_end: str | None
-    total_events_matched: int
 
 
 class HistoryQueryService:
@@ -276,25 +233,7 @@ class HistoryQueryService:
         )
 
     def answer_most_recent_event(self, question: str) -> HistoryAnswer:
-        """A narrow, direct-lookup path for "what is the last event"-shaped
-        questions (orchestrator.question_flow's own direct-lookup
-        classification decides when to call this instead of the general
-        agent-selection/routing path).
-
-        Bypasses `query()`'s range-based `retrieve_range` context-building
-        entirely: fetches every event via the same primitive
-        `_resolve_bounds` already uses to find the *earliest* one
-        (`persistence.fetch_events_range`), and picks the *most recent* one
-        directly, in code — the same production pattern
-        `orchestrator/precedent.py::look_up_precedent` already uses (a
-        direct, deterministic persistence query, no model call for
-        retrieval). The History Agent still does the interpreting: it is
-        handed only the one retrieved event's raw fields, framed as the
-        answer to compose from, never a bare question with nothing to
-        ground it — the same "never answer from memory" guarantee `query()`
-        upholds, just with the record already narrowed to one event instead
-        of asking a model to find the latest one inside a pile of context.
-        """
+        """A narrow, direct-lookup path for "what is the last event"-shaped questions (orchestrator.question_flow's own direct-lookup classification decides when to call this instead of th..."""
 
         now = self._clock()
         all_events = self._persistence.fetch_events_range("0001-01-01T00:00:00", storage_timestamp(now))

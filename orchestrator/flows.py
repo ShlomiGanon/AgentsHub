@@ -1,38 +1,4 @@
-"""The new-event flow and the package's declared entry point (work_plan.md §6.11, §6.14).
-
-`FlowDeps` bundles everything a flow needs — including
-`history_query_service`, which *is* §6.14's "one persistent handle to the
-history query interface, created at startup and used by every flow":
-precedent lookup, the Insights Agent's comparison, and the question flow
-all take it from here rather than each opening a second path into
-history. No separate module was needed for 6.14 once this bundle existed.
-
-Every write to the event record goes through `history.interface`'s
-dedicated functions — never a raw `persistence.update_event` call from
-this module — matching Mission 5's write path exactly.
-
-Restartability (§6.11's explicit requirement): the two `resume_*`
-functions take only a hold ID and an answer, and re-read everything else
-— the event's already-extracted fields, the hold's own payload — from
-persistence. Neither depends on anything held in memory from the original
-call, so a resume works identically whether it happens in the same
-process or after a full restart.
-
-Every entry and resumption point below is actually two pieces composed
-together: a fast, synchronous "begin"/"resolve" prefix that only writes a
-record and returns, and a "run"/"continue" piece that does the real work
-(model calls, tool calls) and can take a while. `process_report`,
-`process_request`, `resume_after_clarification`, and the approved branch
-of `resume_after_approval` compose their own two pieces back into one
-synchronous call, so every one of Mission 6's own tests keeps working
-unchanged. §7.2 (the async job mechanism) is what actually needs them
-kept apart: it calls a "begin"/"resolve" piece inline in the request
-handler to get an event ID back immediately, then submits the matching
-"run"/"continue" piece to `orchestrator.queue.SerialEventQueue` instead of
-running it in the request. §7.11's deny path is the one exception that
-stays fully synchronous even for the API — declining is genuinely final,
-with no continuation to queue.
-"""
+"""The new-event flow and the package's declared entry point (work_plan.md §6.11, §6.14)."""
 
 import functools
 import logging
@@ -40,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal
 
-from history.interface import (
+from history import (
     ExtractionExecutionError,
     InitialEventEnvelope,
     StepExecutionEnvelope,
@@ -60,8 +26,8 @@ from orchestrator.holds import (
     determine_approval_hold,
     determine_clarification_hold,
 )
-from orchestrator.insights import build_insight, construct_core_agents as construct_insights_agent
-from orchestrator.main_agent import (
+from orchestrator.decisions import build_insight, construct_insights_agent
+from orchestrator.decisions import (
     OrchestrationParseError,
     answer_conversationally,
     assess_risk,
@@ -72,29 +38,25 @@ from orchestrator.main_agent import (
     rewrite_task,
     select_protocol,
 )
-from orchestrator.precedent import determine_closure, look_up_precedent
+from orchestrator.decisions import determine_closure, look_up_precedent
 from orchestrator.question_flow import answer_question
-from orchestrator.queue import SerialEventQueue
-from profiles.spec import HUMAN_ACTIVATION_TYPE
+from orchestrator.runtime import SerialEventQueue
+from profiles import HUMAN_ACTIVATION_TYPE
 from protocols.executor import execute_steps
-from tools.tracing import get_trace_id
+from tools import get_trace_id
 
 if TYPE_CHECKING:
-    from agents.base import Agent
+    from agents import Agent
     from agents.registry import AgentRegistry
     from auth.permissions import PermissionLevel
-    from config.base import BaseConfig
-    from config.settings_store import SettingsStore
+    from config import BaseConfig, SettingsStore
     from history.query import HistoryQueryService
     from orchestrator.holds import HoldAnswerResult, HoldReason
-    from orchestrator.insights import InsightsAgent
-    from orchestrator.main_agent import MainAgent
-    from persistence.interface import PersistenceInterface
+    from orchestrator.decisions import InsightsAgent, MainAgent
+    from persistence import PersistenceInterface
     from profiles.loader import LoadedProfile
-    from protocols.loader import ProtocolSet
-    from protocols.model import Protocol
-    from registries.areas import AreaRegistry
-    from registries.event_types import EventTypeRegistry
+    from protocols import Protocol, ProtocolSet
+    from registries import AreaRegistry, EventTypeRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -103,11 +65,6 @@ FlowOutcome = Literal[
     "held_for_clarification", "held_for_approval",
 ]
 
-# orchestrator.main_agent.SuccessVerdict.verdict speaks "success"/"failure"/
-# "uncertain" (its own, separately-evolved sentinel vocabulary); history.write
-# .VALID_OUTCOMES speaks "succeeded"/"failed"/"uncertain". Translate here,
-# at the one point they meet, rather than coupling either module's
-# vocabulary to the other's.
 _VERDICT_TO_OUTCOME: dict[str, FlowOutcome] = {
     "success": "succeeded",
     "failure": "failed",
@@ -158,20 +115,12 @@ def _now() -> str:
 
 
 def _log_event_outcome(event_id: str, outcome: str, **detail) -> None:
-    """One place every terminal outcome (§1.8's "final verdict") is
-    logged — closed on precedent, declined, failed, succeeded, or
-    uncertain — so a run can be reassembled by querying its trace ID and
-    seeing exactly how it ended, without hunting across every branch that
-    can produce an outcome.
-    """
+    """One place every terminal outcome (§1.8's "final verdict") is logged — closed on precedent, declined, failed, succeeded, or uncertain — so a run can be reassembled by querying it..."""
 
     logger.info(
         "event outcome",
         extra={"event": "event_outcome", "event_id": event_id, "outcome": outcome, "trace_id": get_trace_id(), **detail},
     )
-
-
-# -- Entry points: brand new messages ----------------------------------
 
 
 def begin_report(
@@ -182,18 +131,7 @@ def begin_report(
     sender_identity: str,
     source_message_id: str | None = None,
 ) -> str:
-    """The synchronous prefix of a report: write the raw text and return
-    the event ID, before any model call runs (§7.2's own requirement —
-    "before any processing begins"). Pass the returned event ID to
-    `run_report_extraction` next, either inline (as `process_report`
-    does) or via a queued continuation (as §7.2/§7.3/§7.4 do).
-
-    `source_message_id` — the originating Telegram message's own ID, when
-    there is one (never for `source="sensor"`) — is what lets a much later
-    asynchronous reply (§8.9/§8.11, via `api/operations.py`) actually
-    reference the message that started this event, rather than send an
-    unreferenced reply. Written once, alongside the rest of the envelope.
-    """
+    """The synchronous prefix of a report: write the raw text and return the event ID, before any model call runs (§7.2's own requirement — "before any processing begins")."""
 
     event_id = record_initial_event(
         deps.persistence,
@@ -220,11 +158,7 @@ def begin_report(
 
 
 def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent") -> FlowResult:
-    """The rest of a report: extraction through outcome. Re-reads the
-    event `begin_report` already wrote rather than taking `raw_text`/
-    `source`/`received_at` as arguments — this is the piece §7.2 queues,
-    so it must work from the event ID alone.
-    """
+    """The rest of a report: extraction through outcome."""
 
     event = deps.persistence.fetch_event(event_id)
     raw_text, source, received_at = event["raw_text"], event["source"], event["received_at"]
@@ -279,37 +213,14 @@ def process_report(
     received_at: str,
     sender_identity: str,
 ) -> FlowResult:
-    """A report of something that happened, run synchronously start to
-    finish — `begin_report` + `run_report_extraction` composed back into
-    one call. A report never originates from "a commander's own request"
-    (§6.4/§6.7's bypass is for requests only), so closure/approval logic
-    downstream always treats it as not commander-originated.
-
-    Not called from any production entry point — `api/ingestion.py` and
-    `api/ingestion.py` use `begin_report`/`run_report_extraction` directly,
-    split apart across the request/queued-continuation boundary §7.2
-    requires. This function is the orchestrator package's own deliberate
-    synchronous test-facing composition (see the module docstring above):
-    it lets `tests/test_orchestrator_flows.py` exercise the full flow's
-    logic in one call, independent of `api/`'s queueing concerns. Kept
-    intentionally, not leftover scaffolding — found and reviewed during
-    the server_report.md audit (2026-08).
-    """
+    """A report of something that happened, run synchronously start to finish — `begin_report` + `run_report_extraction` composed back into one call."""
 
     event_id = begin_report(deps, raw_text, source, received_at, sender_identity)
     return run_report_extraction(deps, event_id, main_agent, insights_agent)
 
 
 def begin_request(deps: FlowDeps, raw_text: str, received_at: str, sender_identity: str, source_message_id: str | None = None) -> str:
-    """The synchronous prefix of a request: write the raw text, already
-    classified `human_activation` (§6.13 — there is nothing to extract),
-    and return the event ID. Pass it to `continue_from_risk_assessment`
-    next, either inline (as `process_request` does) or via a queued
-    continuation (as §7.4 does).
-
-    `source_message_id` — see `begin_report`'s docstring; the same
-    reasoning applies here.
-    """
+    """The synchronous prefix of a request: write the raw text, already classified `human_activation` (§6.13 — there is nothing to extract), and return the event ID."""
 
     event_id = record_initial_event(
         deps.persistence,
@@ -342,16 +253,7 @@ def process_request(
     sender_identity: str,
     originated_from_commander: bool,
 ) -> FlowResult:
-    """A person's request for an action, run synchronously start to
-    finish — `begin_request` + `continue_from_risk_assessment` composed
-    back into one call.
-
-    Not called from any production entry point — same status as
-    `process_report` above: `api/ingestion.py` uses `begin_request` +
-    `continue_from_risk_assessment` directly, split apart for §7.2's
-    async job mechanism. Kept as the orchestrator's own deliberate
-    synchronous test-facing composition, not leftover scaffolding.
-    """
+    """A person's request for an action, run synchronously start to finish — `begin_request` + `continue_from_risk_assessment` composed back into one call."""
 
     event_id = begin_request(deps, raw_text, received_at, sender_identity)
     return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent, originated_from_commander)
@@ -366,23 +268,7 @@ def process_message(
     received_at: str,
     is_commander: bool,
 ) -> tuple[Literal["question", "report", "request", "conversational"], object]:
-    """Route a person's message by intent (§6.13). Returns which of the
-    four the message was taken as, alongside the result — a question's or
-    conversational reply's answer (`str`), or a `FlowResult` for a report
-    or request.
-
-    Not called from any production entry point. `api/ingestion.py::post_msg`
-    is the real implementation of this same routing — it composes
-    `classify_intent` with the split primitives itself (`begin_report`/
-    `run_report_extraction`, `begin_request`/`continue_from_risk_assessment`)
-    rather than calling this function, exactly so a report/request can be
-    acknowledged immediately and finished as a queued continuation (§7.2).
-    This function (and `process_report`/`process_request`, which it calls)
-    is the orchestrator package's own deliberate synchronous test-facing
-    composition, kept intentionally so `tests/test_orchestrator_flows.py`
-    can exercise full-flow routing in one call — not leftover scaffolding
-    from before `api/` existed.
-    """
+    """Route a person's message by intent (§6.13)."""
 
     intent = classify_intent(main_agent, deps.protocol_set.all(), message_text)
 
@@ -398,9 +284,6 @@ def process_message(
     return "request", process_request(deps, main_agent, insights_agent, message_text, received_at, sender_identity, is_commander)
 
 
-# -- Resumption points ----------------------------------------------------
-
-
 def resolve_clarification(
     deps: FlowDeps,
     hold_id: str,
@@ -408,12 +291,7 @@ def resolve_clarification(
     answering_level: "PermissionLevel",
     chosen_classification: str,
 ) -> "HoldAnswerResult":
-    """The synchronous prefix of answering a clarification hold: validate
-    and record the answer, nothing more. A resolved answer always needs a
-    continuation (`continue_after_clarification`) — unlike an approval
-    answer, there is no "final, no continuation" branch here, since
-    resolving a classification never itself ends a run.
-    """
+    """The synchronous prefix of answering a clarification hold: validate and record the answer, nothing more."""
 
     answer = answer_clarification_hold(deps.persistence, hold_id, answering_identity, answering_level, chosen_classification, deps.event_type_registry)
     if answer.status != "resolved":
@@ -443,11 +321,7 @@ def resolve_clarification(
 
 
 def continue_after_clarification(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent") -> FlowResult:
-    """Resume at risk assessment, not extraction — the other extracted
-    fields are still valid and re-running extraction would discard the
-    commander's decision (§6.2's own rule). This is a full run (§7.11's
-    own note) — the piece §7.2/§7.11 queue rather than run inline.
-    """
+    """Resume at risk assessment, not extraction — the other extracted fields are still valid and re-running extraction would discard the commander's decision (§6.2's own rule)."""
 
     return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent, originated_from_commander=False)
 
@@ -461,10 +335,7 @@ def resume_after_clarification(
     answering_level: "PermissionLevel",
     chosen_classification: str,
 ):
-    """Answer a clarification hold and resume, synchronously start to
-    finish — `resolve_clarification` + `continue_after_clarification`
-    composed back into one call.
-    """
+    """Answer a clarification hold and resume, synchronously start to finish — `resolve_clarification` + `continue_after_clarification` composed back into one call."""
 
     answer = resolve_clarification(deps, hold_id, answering_identity, answering_level, chosen_classification)
     if answer.status != "resolved":
@@ -480,14 +351,7 @@ def resolve_approval(
     answering_level: "PermissionLevel",
     decision: Literal["approved", "rejected"] | str,
 ) -> "HoldAnswerResult":
-    """The synchronous prefix of answering an approval hold: validate and
-    record the answer, nothing more. Unlike a clarification answer, what
-    follows genuinely forks: `rejected` is already final (see
-    `resume_after_approval`'s own handling) and needs no continuation;
-    `approved` — including a resolved candidate-protocol selection for an
-    ambiguous-selection hold (§6.4/§6.7), which `answer_approval_hold`
-    also reports as `"approved"` — needs `continue_after_approval`.
-    """
+    """The synchronous prefix of answering an approval hold: validate and record the answer, nothing more."""
 
     answer = answer_approval_hold(deps.persistence, hold_id, answering_identity, answering_level, decision)
     if answer.status not in ("approved", "rejected"):
@@ -503,8 +367,6 @@ def resolve_approval(
         },
     )
 
-    # Same reasoning as resolve_clarification's own "hold resolved" log,
-    # above — who answered and what they decided.
     logger.info(
         "approval hold resolved",
         extra={
@@ -518,10 +380,7 @@ def resolve_approval(
 
 
 def decline(deps: FlowDeps, event_id: str) -> FlowResult:
-    """Record a rejected approval hold's outcome as declined — the
-    synchronous, no-continuation-needed branch `resume_after_approval`
-    and `api.operations`'s deny path (§7.11) both share.
-    """
+    """Record a rejected approval hold's outcome as declined — the synchronous, no-continuation-needed branch `resume_after_approval` and `api.operations`'s deny path (§7.11) both share."""
 
     record_event_outcome(deps.persistence, event_id, "declined")
     _log_event_outcome(event_id, "declined")
@@ -529,11 +388,7 @@ def decline(deps: FlowDeps, event_id: str) -> FlowResult:
 
 
 def continue_after_approval(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent", selected_protocol_name: str) -> FlowResult:
-    """Resume execution from task formulation through protocol execution
-    — the approved branch only. This is not free: it costs the same
-    several-model-call run §7.2 exists to avoid blocking a request on, so
-    it is the piece §7.2/§7.11 queue rather than run inline.
-    """
+    """Resume execution from task formulation through protocol execution — the approved branch only."""
 
     protocol = deps.protocol_set.get(selected_protocol_name)
     event = deps.persistence.fetch_event(event_id)
@@ -551,12 +406,7 @@ def resume_after_approval(
     answering_level: "PermissionLevel",
     decision: Literal["approved", "rejected"] | str,
 ):
-    """Answer an approval hold and resume, synchronously start to finish
-    — `resolve_approval` + (on approval only) `continue_after_approval`
-    composed back into one call. End the run as declined on rejection,
-    writing that outcome to the event record; declining is already final
-    here, with nothing left to continue.
-    """
+    """Answer an approval hold and resume, synchronously start to finish — `resolve_approval` + (on approval only) `continue_after_approval` composed back into one call."""
 
     answer = resolve_approval(deps, hold_id, answering_identity, answering_level, decision)
     if answer.status not in ("approved", "rejected"):
@@ -568,9 +418,6 @@ def resume_after_approval(
         return decline(deps, event_id)
 
     return continue_after_approval(deps, event_id, main_agent, insights_agent, answer.hold["selected_protocol_name"])
-
-
-# -- Internal continuation --------------------------------------------------
 
 
 def _look_up_precedent_if_possible(deps: FlowDeps, event_id: str, event: dict) -> tuple:
@@ -597,14 +444,6 @@ def continue_from_risk_assessment(deps: FlowDeps, event_id: str, main_agent: "Ma
     try:
         selection = select_protocol(main_agent, raw_text, classification, area, description, deps.protocol_set.all(), risk_assessment.level)
     except OrchestrationParseError as exc:
-        # Previously uncaught here: a parse failure at this call site would
-        # propagate out of continue_from_risk_assessment entirely and be
-        # silently swallowed by orchestrator.queue.SerialEventQueue's
-        # generic handler (logged, but the event left with no recorded
-        # outcome at all) — worse than the ordinary [RUN FAILED] path every
-        # other stage already gets. Same reporting pattern as
-        # run_report_extraction's own extraction failure, just for this
-        # stage.
         record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
         _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="protocol_selection")
         return FlowResult(event_id, "failed", str(exc))
@@ -682,7 +521,6 @@ def _run_protocol(
 ) -> FlowResult:
     formulation = formulate_tasks(main_agent, protocol, deps.registry, raw_text, classification, area, description, precedent_context=precedent_matches)
     if not formulation.success:
-        # Rerun formulation once — no agent has executed yet, nothing has touched the world (§6.11).
         formulation = formulate_tasks(main_agent, protocol, deps.registry, raw_text, classification, area, description, precedent_context=precedent_matches)
 
     if not formulation.success:
@@ -721,7 +559,6 @@ def _run_protocol(
         try:
             verdict = judge_success(main_agent, protocol, run_result.step_outcomes, insight_text=insight_text)
         except OrchestrationParseError as exc:
-            # Rerun only the judgment, never the agents, which already acted (§6.10). Both attempts failed.
             record_event_outcome(deps.persistence, event_id, "failed", failure_reason=f"success judgment failed: {exc}", insight_text=insight_text)
             _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="judgment")
             return FlowResult(event_id, "failed", str(exc))

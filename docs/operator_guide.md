@@ -26,7 +26,7 @@ plainly here since they're easy to get wrong:
 
 ## Adding an agent
 
-See `docs/agent_authoring.md` for the full walkthrough — `agents/reference.py`
+See `docs/agent_authoring.md` for the full walkthrough — `agents/builtins.py`
 (`ReferenceAgent`) is the working example it points at, a complete,
 minimal agent with one read-only tool and one side-effecting one. Add the
 new agent's class to your profile's `AGENTS` list, constructed with
@@ -140,7 +140,7 @@ restart; these three specifically never do.
 
 ## Reading the run logs
 
-Every log record is one JSON object per line (`tools/logging_config.py`),
+Every log record is one JSON object per line (`tools/observability.py`),
 carrying `timestamp`, `level`, `logger`, `message`, `profile_name`, and
 `trace_id`. One trace ID is generated the moment an event or message
 enters the system (`POST /Event`, `POST /Msg`, or a hold's resumption via
