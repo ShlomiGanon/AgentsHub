@@ -4,7 +4,9 @@ The request and response shape of every endpoint the API layer serves.
 Every field name and meaning is drawn from `docs/vocabulary.md`
 (work_plan.md §1.2) — this document doesn't restate what a field *means*,
 only how it's carried over HTTP. All bodies are JSON. All timestamps are
-ISO-8601 strings.
+ISO-8601 strings. Every response includes `X-Trace-ID`. A caller may supply a
+valid `X-Trace-ID` and `X-Client-Request-ID`; otherwise the server creates a
+trace identifier. The trace follows queued work through its final notification.
 
 Every endpoint authenticates the caller first (§7.9) — see
 **Authentication** below — and every error response uses the one shape
@@ -118,7 +120,7 @@ here; intent classification (§6.13) decides which.
 
 Request:
 ```json
-{ "text": "any status update on gate 3?", "sender_identity": "1002003", "source_message_id": "4821" }
+{ "text": "any status update on gate 3?", "sender_identity": "1002003", "source_message_id": "4821", "conversation_id": "telegram:1002003:main" }
 ```
 `source_message_id` — the originating Telegram message's own ID — is
 optional in the request body (a caller with no message to reference, or
@@ -127,10 +129,23 @@ later `job_finished`/`job_failed` entry in `GET /Notifications` (§8.12)
 needs to carry a real `reply_to_message_id`, per work_plan.md §2.3's
 `events.source_message_id` column: written once here, read back there.
 
+`conversation_id` is optional. When absent, behavior is compatible with old
+clients and no conversation memory is read or written. Conversation is a
+reference aid only: permissions, protocols, event facts and outcomes are
+always read from their authoritative stores.
+
 Response, when the message was a **question** — answered inline, no job:
 ```json
-{ "taken_as": "question", "answer": "Gate 3 is currently nominal." }
+{
+  "taken_as": "question",
+  "answer": "Gate 3 is currently nominal.",
+  "provenance": {
+    "timezone": "Asia/Jerusalem", "time_start": null, "time_end": null,
+    "filters": {}, "matched_count": 1, "truncated": false, "source_ids": ["e3f1..."]
+  }
+}
 ```
+`provenance` is optional and does not replace the stable `answer` field.
 
 Conversation is also answered inline. When the intent cannot be chosen safely, the same synchronous shape asks for clarification and creates no event:
 
@@ -372,6 +387,13 @@ COMMANDER-level (`view_commander_roster`) — see **Service identity**
 above for who the real caller is and why this isn't VIEWER-level like
 most reads in this system.
 
+## Notification waiting
+
+`GET /Notifications` accepts `since=<cursor>` and optional
+`wait_seconds=<0..30>`. The wait defaults to zero for backward-compatible
+immediate polling; a positive value waits until a notification commit or
+timeout without changing cursor ordering or at-least-once delivery.
+
 ## `GET /Notifications` (§8.12)
 
 `GET /Notifications?since=<cursor>` — `since` is an opaque, caller-tracked
@@ -388,7 +410,8 @@ integer cursor (omit or `0` for "everything ever recorded"). `200 OK`:
         "selected_protocol_name": "dispatch_response", "candidate_protocol_names": []
       },
       "target_chat_ids": [],
-      "reply_to_message_id": null
+      "reply_to_message_id": null,
+      "trace_id": "1b7f..."
     }
   ],
   "next_cursor": 7
@@ -420,6 +443,14 @@ entry serving both: `"uncertain"` produces a `job_finished` entry (for
 whoever submitted the event) and a separate `uncertain_verdict` entry
 (for commanders); `"closed_on_precedent"` produces `job_finished` plus a
 separate `precedent_closure` entry, the same way.
+
+## `POST /Msg/Stream`
+
+Optional SSE transport for verified final text. It is hidden with `404` unless
+the profile enables streaming. Event types are `ack`, `delta`, `final`, and
+`error`; structured decisions and unvalidated model output are never emitted.
+The provider adapter may emit only `final`/`error` when token streaming is not
+available, and persistence stores only the final answer.
 
 ## Errors (§7.10)
 

@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 
 from agents import ReferenceAgent
-from profiles.contracts import AgentSpec
+from profiles.contracts import AgentSpec, OptimizationPolicy
 from protocols import CriticalityLevel, Protocol
 
 AGENTS = [
@@ -72,6 +72,9 @@ RETRY_COUNT = 3
 RISK_THRESHOLD = 0.6
 LOOKBACK_WINDOW_DAYS = 30
 TIMEZONE = "UTC"
+CONVERSATION_HISTORY_TURNS = 6
+CONVERSATION_HISTORY_TTL_HOURS = 24
+OPTIMIZATION_POLICY = OptimizationPolicy()
 
 BOT_TOKEN_ENV = "BOT_TOKEN"
 MODEL_CREDENTIAL_ENVS = []

@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Mapping
 
 if TYPE_CHECKING:
     from agents import Agent
@@ -29,6 +29,33 @@ class ProfileValidationError(Exception):
 
 
 @dataclass(frozen=True)
+class StageModelPolicy:
+    tier: Literal["core", "sub"] = "core"
+    max_output_tokens: int = 700
+    timeout_seconds: float = 60.0
+    reasoning_effort: Literal["none", "low", "medium", "high"] = "none"
+
+
+@dataclass(frozen=True)
+class OptimizationPolicy:
+    planner_mode: Literal["legacy", "shadow", "merged"] = "legacy"
+    operational_decision_mode: Literal["separate", "shadow", "merged"] = "separate"
+    final_assessment_mode: Literal["separate", "low_risk_merged"] = "separate"
+    structured_output_mode: Literal["off", "auto", "required"] = "off"
+    streaming_enabled: bool = False
+    event_queue_mode: Literal["serial", "policy"] = "serial"
+    event_workers: int = 4
+    event_queue_size: int = 100
+    reserved_continuation_percent: int = 20
+    specialist_fanout: int = 4
+    provider_concurrency: int = 8
+    notification_wait_seconds: int = 20
+    direct_deadline_seconds: int = 75
+    job_deadline_seconds: int = 180
+    stage_model_policies: Mapping[str, StageModelPolicy] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class LoadedProfile:
     module_path: str
     agents: tuple
@@ -44,6 +71,9 @@ class LoadedProfile:
     core_agents: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
     resolved_secrets: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
     timezone_name: str = "UTC"
+    conversation_history_turns: int = 0
+    conversation_history_ttl_hours: int = 24
+    optimization_policy: OptimizationPolicy = field(default_factory=OptimizationPolicy)
 
 REQUIRED_PROFILE_ATTRS = (
     "AGENTS",

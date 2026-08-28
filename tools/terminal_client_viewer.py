@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import importlib
 import sys
+import uuid
 
 from bot import ApiRequestError, BotDeps, BotError, HttpApiClient, dispatch_notification, handle_incoming_message
 from tools.terminal_support import (
@@ -37,69 +38,76 @@ async def _wait_for_completion(deps: BotDeps, cursor: int, job_id: str, poll_int
 
     print("\n(waiting for a result — Ctrl+C to stop waiting and return to the prompt)")
 
+    transport_backoff = 0.5
     while True:
         try:
-            notifications, cursor = await deps.api_client.poll_pending_notifications(cursor)
+            notifications, cursor = await deps.api_client.poll_pending_notifications(cursor, 20)
         except ApiRequestError as exc:
             print(f"(polling failed: {exc}; retrying)")
-            await asyncio.sleep(poll_interval)
+            await asyncio.sleep(transport_backoff)
+            transport_backoff = min(30.0, transport_backoff * 2)
             continue
+        transport_backoff = 0.5
 
         for note in notifications:
             await dispatch_notification(deps, note)
             if note.kind in ("job_finished", "job_failed") and notification_subject_id(note) == job_id:
                 return cursor
 
-        if not notifications:
-            await asyncio.sleep(poll_interval)
 
 
 async def _run_repl(deps: BotDeps, observing_client: ObservingApiClient, base_url: str, test_identity: str, poll_interval: float) -> None:
-    cursor = await _bootstrap_notification_cursor(deps)
-    mode = await choose_mode()
+    await deps.api_client.start()
+    conversation_id = f"terminal-viewer:{test_identity}:{uuid.uuid4().hex}"
+    try:
+        cursor = await _bootstrap_notification_cursor(deps)
+        mode = await choose_mode()
+        while mode is not None:
+            if mode == "message":
+                text = (await ainput("\nmessage> ")).strip()
+                if not text:
+                    continue
+                if text in ("/quit", "/exit"):
+                    break
+                if text == "/mode":
+                    mode = await choose_mode()
+                    continue
 
-    while mode is not None:
-        if mode == "message":
-            text = (await ainput("\nmessage> ")).strip()
-            if not text:
-                continue
-            if text in ("/quit", "/exit"):
-                break
-            if text == "/mode":
-                mode = await choose_mode()
-                continue
+                try:
+                    reply = await handle_incoming_message(
+                        deps, test_identity, text, new_message_id(), conversation_id=conversation_id
+                    )
+                except (ApiRequestError, BotError) as exc:
+                    print(f"(request failed: {exc})")
+                    continue
 
-            try:
-                reply = await handle_incoming_message(deps, test_identity, text, new_message_id())
-            except (ApiRequestError, BotError) as exc:
-                print(f"(request failed: {exc})")
-                continue
+                print(reply)
 
-            print(reply)
+                submission = observing_client.last_submission
+                if submission is not None and submission.kind != "question" and submission.job_id:
+                    cursor = await _wait_for_completion(deps, cursor, submission.job_id, poll_interval)
 
-            submission = observing_client.last_submission
-            if submission is not None and submission.kind != "question" and submission.job_id:
-                cursor = await _wait_for_completion(deps, cursor, submission.job_id, poll_interval)
+            else:  # event mode
+                payload = await choose_event_payload(test_identity)
+                if payload is None:
+                    mode = await choose_mode()
+                    continue
 
-        else:  # event mode
-            payload = await choose_event_payload(test_identity)
-            if payload is None:
-                mode = await choose_mode()
-                continue
+                text, sender = payload
+                try:
+                    status, response_payload = submit_event(base_url, text, sender)
+                except ApiRequestError as exc:
+                    print(f"(request failed: {exc})")
+                    continue
 
-            text, sender = payload
-            try:
-                status, response_payload = submit_event(base_url, text, sender)
-            except ApiRequestError as exc:
-                print(f"(request failed: {exc})")
-                continue
+                if status >= 400:
+                    print(f"submission refused ({status}): {response_payload.get('message', response_payload)}")
+                    continue
 
-            if status >= 400:
-                print(f"submission refused ({status}): {response_payload.get('message', response_payload)}")
-                continue
-
-            print(f"submitted: event_id={response_payload['event_id']} status={response_payload['status']}")
-            cursor = await _wait_for_completion(deps, cursor, response_payload["event_id"], poll_interval)
+                print(f"submitted: event_id={response_payload['event_id']} status={response_payload['status']}")
+                cursor = await _wait_for_completion(deps, cursor, response_payload["event_id"], poll_interval)
+    finally:
+        await deps.api_client.close()
 
 
 def main(argv: list[str] | None = None) -> None:

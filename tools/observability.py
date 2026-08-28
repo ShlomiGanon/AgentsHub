@@ -2,8 +2,13 @@
 
 import json
 import logging
+import os
+import re
 import sys
+import threading
+import time
 import uuid
+from collections import defaultdict
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Callable
@@ -14,10 +19,29 @@ if TYPE_CHECKING:
 
 _current_trace_id: ContextVar[str] = ContextVar("current_trace_id", default="")
 _current_stage: ContextVar[str] = ContextVar("current_stage", default="")
+_TRACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_latency_samples: dict[str, list[float]] = defaultdict(list)
+_latency_lock = threading.Lock()
+
+try:
+    from opentelemetry import metrics, trace
+except ImportError:
+    metrics = None
+    trace = None
+
+_tracer = trace.get_tracer("agentshub") if trace is not None else None
+_meter = metrics.get_meter("agentshub") if metrics is not None else None
+_stage_histogram = _meter.create_histogram("agentshub.stage.duration", unit="s") if _meter is not None else None
+_telemetry_configured = False
 
 
 def new_trace_id() -> str:
     return uuid.uuid4().hex
+
+
+def normalize_trace_id(value: str | None) -> str:
+    candidate = (value or "").strip()
+    return candidate if _TRACE_ID_PATTERN.fullmatch(candidate) else new_trace_id()
 
 
 def get_trace_id() -> str:
@@ -44,10 +68,116 @@ def get_current_stage() -> str:
 @contextmanager
 def stage_context(stage: str):
     token = _current_stage.set(stage)
+    started = time.monotonic()
+    status = "success"
+    termination_reason = "completed"
+    span_context = _tracer.start_as_current_span(stage) if _tracer is not None else None
+
+    if span_context is not None:
+        span_context.__enter__()
+
     try:
         yield
+    except BaseException as exc:
+        status = "error"
+        termination_reason = type(exc).__name__
+        if span_context is not None:
+            span = trace.get_current_span()
+            span.record_exception(exc)
+            span.set_attribute("agentshub.status", status)
+        raise
     finally:
+        duration_seconds = time.monotonic() - started
+        with _latency_lock:
+            _latency_samples[stage].append(duration_seconds)
+
+        if _stage_histogram is not None:
+            _stage_histogram.record(duration_seconds, {"stage": stage, "status": status})
+
+        logger.info(
+            "stage finished",
+            extra={
+                "event": "stage_finished",
+                "stage": stage,
+                "status": status,
+                "termination_reason": termination_reason,
+                "duration_seconds": duration_seconds,
+                "trace_id": get_trace_id(),
+                "telemetry_only": True,
+            },
+        )
+
+        if span_context is not None:
+            span = trace.get_current_span()
+            span.set_attribute("agentshub.status", status)
+            span.set_attribute("agentshub.termination_reason", termination_reason)
+            span.set_attribute("agentshub.duration_seconds", duration_seconds)
+            span_context.__exit__(None, None, None)
+
         _current_stage.reset(token)
+
+
+@contextmanager
+def telemetry_span(name: str, **attributes: Any):
+    if _tracer is None:
+        yield
+        return
+    with _tracer.start_as_current_span(name) as span:
+        for key, value in attributes.items():
+            if value is not None:
+                span.set_attribute(f"agentshub.{key}", value)
+        yield
+
+
+def latency_snapshot() -> dict[str, dict[str, float | int]]:
+    with _latency_lock:
+        copied = {stage: sorted(samples) for stage, samples in _latency_samples.items()}
+
+    def _percentile(samples: list[float], ratio: float) -> float:
+        if not samples:
+            return 0.0
+        index = min(len(samples) - 1, max(0, int((len(samples) - 1) * ratio)))
+        return samples[index]
+
+    return {
+        stage: {
+            "count": len(samples),
+            "p50": _percentile(samples, 0.50),
+            "p95": _percentile(samples, 0.95),
+            "p99": _percentile(samples, 0.99),
+        }
+        for stage, samples in copied.items()
+    }
+
+
+def configure_telemetry() -> None:
+    global _telemetry_configured
+    mode = os.environ.get("OBSERVABILITY_MODE", "log").strip().lower()
+    if mode not in {"log", "otlp"}:
+        raise RuntimeError("OBSERVABILITY_MODE must be 'log' or 'otlp'")
+    if mode == "otlp" and not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        raise RuntimeError("OBSERVABILITY_MODE=otlp requires OTEL_EXPORTER_OTLP_ENDPOINT")
+    if mode != "otlp" or _telemetry_configured:
+        return
+
+    try:
+        from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.sdk.metrics import MeterProvider
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    except ImportError as exc:
+        raise RuntimeError("OBSERVABILITY_MODE=otlp requires the OpenTelemetry SDK and OTLP exporter") from exc
+
+    resource = Resource.create({"service.name": "agentshub", "service.instance.id": _active_profile_name or "unknown"})
+    tracer_provider = TracerProvider(resource=resource)
+    tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+    trace.set_tracer_provider(tracer_provider)
+    metric_reader = PeriodicExportingMetricReader(OTLPMetricExporter())
+    metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=[metric_reader]))
+    _telemetry_configured = True
 
 _RESERVED_LOG_RECORD_ATTRS = frozenset(logging.makeLogRecord({}).__dict__)
 
@@ -275,6 +405,8 @@ class _PersistenceLogHandler(logging.Handler):
         self._warned = False
 
     def emit(self, record: logging.LogRecord) -> None:
+        if getattr(record, "telemetry_only", False):
+            return
         try:
             trace_id = _resolve_trace_id(record) or None
 

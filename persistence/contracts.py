@@ -46,6 +46,10 @@ class PersistenceInterface(ABC):
         """Return the single event identified by `event_id`, or None."""
 
     @abstractmethod
+    def fetch_event_by_source_message(self, source: str, sender_identity: str, source_message_id: str) -> dict | None:
+        """Return an idempotently ingested event, if present."""
+
+    @abstractmethod
     def fetch_events_range(self, start: Any, end: Any) -> list[dict]:
         """Return events whose occurrence timestamp falls in [start, end)."""
 
@@ -101,6 +105,27 @@ class PersistenceInterface(ABC):
     def fetch_notifications_since(self, since: int) -> list[dict]:
         """Return every notification-log row with `sequence_id > since`, in ascending order — `since=0` returns everything ever recorded."""
 
+
+    @abstractmethod
+    def wait_for_notifications_since(self, since: int, timeout_seconds: float) -> list[dict]:
+        """Wait up to a bounded timeout for notification rows after `since`."""
+
+    @abstractmethod
+    def append_conversation_message(
+        self,
+        conversation_id: str,
+        role: Literal["user", "assistant"],
+        content: str,
+        *,
+        ttl_hours: int,
+        max_turns: int,
+        event_id: str | None = None,
+    ) -> None:
+        """Append and prune one conversation's bounded context."""
+
+    @abstractmethod
+    def fetch_conversation_messages(self, conversation_id: str, limit: int) -> list[dict]:
+        """Return bounded conversation messages in chronological order."""
 
     @abstractmethod
     def read_user(self, telegram_identity: str) -> dict | None:

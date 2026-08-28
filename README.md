@@ -21,13 +21,15 @@ Each deployment is defined by a Python profile. A profile selects its agents, pr
 - A model-provider API key supported by CrewAI.
 - A Telegram bot token when running the Telegram frontend.
 
-Install the runtime dependencies:
+From the repository root, create and activate a virtual environment, then install the runtime dependencies:
 
 ```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 ```
 
-For development and testing, also install:
+For development and testing, also install the test dependencies:
 
 ```powershell
 python -m pip install -r requirements-dev.txt
@@ -35,7 +37,7 @@ python -m pip install -r requirements-dev.txt
 
 ## Quick start
 
-The included `profiles.demo` profile listens on port `8902` and stores its database in the operating system's temporary directory.
+The commands below are PowerShell commands and must be run from the repository root. The included `profiles.demo` profile listens on `127.0.0.1:8902` and stores its database in the operating system's temporary directory.
 
 ### 1. Configure the environment
 
@@ -50,6 +52,8 @@ Load the file into the current PowerShell process:
 ```powershell
 .\load-env.ps1
 ```
+
+AgentsHub does not read `.env` automatically. Run `.\load-env.ps1` in every new terminal before starting the API, bot, or an administration command. On another shell, export the same variables using that shell's normal mechanism.
 
 The important variables are:
 
@@ -69,6 +73,8 @@ python -m cli.user_admin --profile profiles.demo add --telegram-id <your-telegra
 python -m cli.user_admin --profile profiles.demo add --telegram-id bot-service --level commander
 ```
 
+Use the human user's numeric Telegram ID for `<your-telegram-id>`. The `bot-service` row is an internal service identity and must remain at commander level. If you only use a terminal client, it provisions its own temporary test identity and ensures `bot-service` exists automatically.
+
 User administration is intentionally available only from the host CLI:
 
 ```powershell
@@ -83,22 +89,50 @@ python -m cli.user_admin --profile profiles.demo remove --telegram-id <id>
 python -m api.app profiles.demo
 ```
 
-The API binds to `127.0.0.1` by default. Use `--host` only when the deployment has appropriate network and TLS controls.
+Keep this process running. The API binds to `127.0.0.1` by default and initializes or migrates the profile's SQLite database during startup. Use `--host` only when the deployment has appropriate network and TLS controls.
+
+From another terminal with the environment loaded, verify the running deployment with a registered identity:
+
+```powershell
+Invoke-RestMethod `
+  -Uri http://127.0.0.1:8902/SYSTEM `
+  -Headers @{ "X-Identity" = "<your-telegram-id>" }
+```
+
+For a production-style local process, use one Waitress process and at least 16 threads:
+
+```powershell
+python -m api.app profiles.demo --server waitress --threads 16
+```
 
 ### 4. Start a client
 
-For the Telegram frontend, open another terminal, load the same environment, and run:
+For the Telegram frontend, open another terminal, activate the virtual environment, load `.env`, and run:
 
 ```powershell
+.\.venv\Scripts\Activate.ps1
+.\load-env.ps1
 python -m bot.app profiles.demo
 ```
 
-For local end-to-end testing without Telegram, use one of the terminal clients against the running API:
+The API must already be running. The bot connects to the profile's `API_PORT`, validates `BOT_TOKEN`, and exits if another bot process already owns the same deployment lock.
+
+For local end-to-end testing without Telegram, use one of the terminal clients against the running API. They create the required test identity when they start and remove that identity when they exit normally:
 
 ```powershell
 python -m tools.terminal_client_commander --profile profiles.demo
 python -m tools.terminal_client_viewer --profile profiles.demo
 ```
+
+Stop any foreground process with `Ctrl+C`. The SQLite database remains on disk, so restarting the same profile resumes its existing deployment state; durable bot notification cursors also prevent already-delivered notifications from being replayed after a normal restart.
+
+### Common startup failures
+
+- `required environment variable ... is not set`: activate the intended terminal environment and run `.\load-env.ps1` again.
+- `could not import profile module`: run the command from the repository root and pass a dotted module name such as `profiles.demo`, not a file path.
+- Connection refused from the bot or a terminal client: start `api.app` first and confirm that the client and API use the same profile and port.
+- HTTP `401`: register that exact identity with `cli.user_admin` against the same profile.
+- Telegram token validation failure: replace the example `BOT_TOKEN` in `.env` with a real token and reload the environment.
 
 ## Runtime flow
 
@@ -137,6 +171,7 @@ The removed implementation paths remain package-level compatibility aliases wher
 
 ```text
 python -m api.app <profile_module>
+python -m api.app <profile_module> --server waitress --threads 16
 python -m bot.app <profile_module>
 python -m cli.user_admin --profile <profile_module> ...
 python -m tools.simulator --port <port> --identity <identity> ...
@@ -148,7 +183,7 @@ Run any entry point with `--help` for its complete options.
 
 ## Profiles and live settings
 
-Start with `profiles/template.py` when creating a deployment. A profile defines agents, protocols, event types, areas, storage and API settings, the IANA `TIMEZONE` used to resolve relative history periods, and the names of required secret variables. `TIMEZONE` defaults to `UTC` for older profiles. The complete contract is documented in `docs/profile_spec.md`.
+Start with `profiles/template.py` when creating a deployment. A profile defines agents, protocols, event types, areas, storage and API settings, the IANA `TIMEZONE` used to resolve relative history periods, conversation retention, optimization policy, and the names of required secret variables. Older profiles retain legacy routing and disabled conversation history. The complete contract is documented in `docs/profile_spec.md`.
 
 Free-form messages are classified as questions, reports, requests, or conversation. A message whose action or referent cannot be determined safely receives a synchronous clarification question and creates no job. History questions remain in the read-only question path: the Main Agent emits a constrained query description, SQLite performs parameterized filtering/counting, and the History Agent sees only the bounded records needed for narrative answers.
 
@@ -164,6 +199,7 @@ Normal operation emits structured records with trace IDs and stores them in the 
 
 - `LOG_CONSOLE_JSON=false` disables only the JSON console stream.
 - `DEBUG_VERBOSE_LOGGING=true` enables model prompts/responses and other sensitive diagnostic detail. Do not leave it enabled in normal operation.
+- `OBSERVABILITY_MODE=log|otlp` selects local structured spans or OTLP export. `OTEL_EXPORTER_OTLP_ENDPOINT` is mandatory in `otlp` mode.
 
 See `docs/operator_guide.md` for log fields, trace flow, and operational guidance.
 
@@ -187,7 +223,7 @@ $env:TEST_SUB_TEST_KEY = "test-key"
 python -m pytest -q
 ```
 
-The current suite collects 879 tests. `tests/sanity_check_real_model_call.py` is an opt-in, billed smoke check and is not collected by pytest.
+The exact test count is intentionally not hard-coded here. `tests/sanity_check_real_model_call.py` and `tools/evaluate_response_pipeline.py --live` are opt-in, billed checks and are not collected by pytest.
 
 ## Documentation
 
@@ -202,4 +238,4 @@ The current suite collects 879 tests. `tests/sanity_check_real_model_call.py` is
 
 ## Deployment note
 
-The default setup is intended for a single localhost deployment. Before exposing it beyond localhost, complete the hardening work covering secrets, TLS, process supervision, backups, resource limits, monitoring, and release management in `docs/PRODUCTION_READY.md`.
+Localhost keeps Flask as the default server. Production instructions use one API process under Waitress with at least 16 threads so long-polling requests cannot starve ordinary API traffic. Before exposing it beyond localhost, complete the hardening work covering secrets, TLS, process supervision, backups, resource limits, monitoring, and release management in `docs/PRODUCTION_READY.md`.

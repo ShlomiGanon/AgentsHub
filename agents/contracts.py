@@ -1,7 +1,37 @@
 """Immutable agent descriptors and tool declaration primitives."""
 
 from dataclasses import dataclass
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
+
+
+@dataclass(frozen=True)
+class InvocationPolicy:
+    max_output_tokens: int | None = None
+    timeout_seconds: float | None = None
+    reasoning_effort: Literal["none", "low", "medium", "high"] = "none"
+    response_schema: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ProviderCapabilities:
+    strict_json_schema: bool = False
+    usage_metrics: bool = False
+    streaming: bool = False
+    reasoning_effort: bool = False
+    thread_safe_client: bool = False
+
+
+def provider_capabilities(model: str) -> ProviderCapabilities:
+    provider = model.split("/", 1)[0].lower()
+    if provider == "openai":
+        return ProviderCapabilities(
+            strict_json_schema=True,
+            usage_metrics=True,
+            streaming=True,
+            reasoning_effort=True,
+            thread_safe_client=False,
+        )
+    return ProviderCapabilities()
 
 
 @dataclass(frozen=True)

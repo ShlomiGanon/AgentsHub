@@ -7,6 +7,14 @@ that don't live anywhere else yet. `docs/PRODUCTION_READY.md` covers production
 hardening (secrets, TLS, backups, monitoring); this document assumes a
 single localhost deployment, per `work_plan.md` §9.21's own scope.
 
+## Production process and telemetry
+
+Run one API process with `python -m api.app <profile> --server waitress
+--threads 16` (or more threads after load testing). Flask remains the localhost
+default. If `OBSERVABILITY_MODE=otlp`, startup fails unless
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set, preventing a production instance from
+silently running without required telemetry.
+
 ## Writing a profile from scratch
 
 A profile is a plain Python module — see `docs/profile_spec.md` for the

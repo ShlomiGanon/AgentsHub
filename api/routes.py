@@ -1,29 +1,35 @@
 """Consolidated responsibility module for routes."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import json
+import time
 
 from typing import TYPE_CHECKING
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, make_response, request, stream_with_context
 
-from api.request_boundary import ConflictError, InvalidInputError, NotFoundError, RunFailureError, authenticate, require
+from api.request_boundary import ConflictError, InvalidInputError, NotFoundError, RunFailureError, ServiceUnavailableError, authenticate, require
 from history import storage_timestamp
 
 from orchestrator.flows import begin_report, run_report_extraction
 
-from tools import get_trace_id, new_trace_id, set_trace_id, trace_context
+from tools import get_trace_id, new_trace_id, set_trace_id, stage_context, trace_context
 
 import logging
 
 from auth.permissions import PermissionLevel
+from agents import set_invocation_deadline
 
 from orchestrator.flows import (
     OrchestrationParseError,
     answer_conversationally,
     answer_question,
+    answer_question_from_plan,
     begin_report,
     begin_request,
     classify_intent,
+    plan_message,
+    WorkItem,
     continue_from_risk_assessment,
     run_report_extraction,
 )
@@ -31,6 +37,7 @@ from orchestrator.flows import (
 from protocols import CriticalityLevel, Protocol, ProtocolEditError, add_protocol, remove_protocol, replace_protocol
 
 from profiles.loader import hash_profile_file
+from profiles import OptimizationPolicy
 
 from orchestrator.flows import continue_after_approval, continue_after_clarification, decline, resolve_approval, resolve_clarification
 
@@ -47,6 +54,7 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/Event", methods=["POST"])
     def post_event():
+        optimization_policy = getattr(ctx.loaded_profile, "optimization_policy", OptimizationPolicy())
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, "send_message")
 
@@ -59,15 +67,31 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
         if not sender_identity:
             raise InvalidInputError("'sender_identity' is required", field="sender_identity")
 
-        trace_id = new_trace_id()
+        reservation = ctx.queue.reserve(False)
+        if reservation is None:
+            raise ServiceUnavailableError("event queue is full; retry later")
+
+        trace_id = get_trace_id() or new_trace_id()
         set_trace_id(trace_id)
-        event_id = begin_report(ctx.deps, text, "sensor", _now(), sender_identity)
+        deadline_at = storage_timestamp(datetime.now(timezone.utc) + timedelta(seconds=optimization_policy.job_deadline_seconds))
+        try:
+            event_id = begin_report(ctx.deps, text, "sensor", _now(), sender_identity, deadline_at=deadline_at)
+        except Exception:
+            ctx.queue.release_reservation(reservation)
+            raise
 
         def _work() -> None:
             with trace_context(trace_id):
                 run_report_extraction(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent)
 
-        ctx.queue.submit((event_id, _work))
+        ctx.queue.submit(
+            WorkItem(
+                (event_id, _work), trace_id=trace_id,
+                deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
+                concurrency_keys=(f"sender:{sender_identity}",),
+            ),
+            reservation,
+        )
 
         return jsonify({"event_id": event_id, "status": "queued"}), 202
 
@@ -96,17 +120,77 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
         text = request_payload.get("text")
         sender_identity = request_payload.get("sender_identity")
         source_message_id = request_payload.get("source_message_id")
+        conversation_id = request_payload.get("conversation_id")
 
         if not text:
             raise InvalidInputError("'text' is required", field="text")
         if not sender_identity:
             raise InvalidInputError("'sender_identity' is required", field="sender_identity")
+        if conversation_id is not None and (not isinstance(conversation_id, str) or not conversation_id.strip() or len(conversation_id) > 200):
+            raise InvalidInputError("'conversation_id' must be a non-empty string of at most 200 characters", field="conversation_id")
 
-        trace_id = new_trace_id()
+        trace_id = get_trace_id() or new_trace_id()
         set_trace_id(trace_id)
 
+        optimization_policy = getattr(ctx.loaded_profile, "optimization_policy", OptimizationPolicy())
+        set_invocation_deadline(time.monotonic() + optimization_policy.direct_deadline_seconds)
+        history_turns = getattr(ctx.loaded_profile, "conversation_history_turns", 0)
+        history_ttl = getattr(ctx.loaded_profile, "conversation_history_ttl_hours", 24)
+
+        def _remember(role: str, content: str, event_id: str | None = None) -> None:
+            if conversation_id is not None and history_turns > 0:
+                ctx.deps.persistence.append_conversation_message(
+                    conversation_id,
+                    role,
+                    content,
+                    ttl_hours=history_ttl,
+                    max_turns=history_turns,
+                    event_id=event_id,
+                )
+
+        if source_message_id:
+            existing_event = ctx.deps.persistence.fetch_event_by_source_message("telegram", sender_identity, str(source_message_id))
+            if existing_event is not None:
+                existing_kind = "request" if existing_event.get("classification") == "human_activation" else "report"
+                return jsonify({
+                    "taken_as": existing_kind,
+                    "event_id": existing_event["event_id"],
+                    "status": "queued" if existing_event.get("outcome") is None else existing_event["outcome"],
+                    "duplicate": True,
+                }), 202
+
+        prior_messages: tuple[dict, ...] = ()
+        if conversation_id is not None and history_turns > 0:
+            prior_messages = tuple(ctx.deps.persistence.fetch_conversation_messages(conversation_id, history_turns * 2))
+
+        _remember("user", text)
+
+        message_plan = None
+        planner_mode = optimization_policy.planner_mode
+        if planner_mode in {"shadow", "merged"}:
+            try:
+                message_plan = plan_message(
+                    ctx.main_agent,
+                    ctx.deps.protocol_set.all(),
+                    text,
+                    ctx.deps.registry,
+                    ctx.deps.history_query_service,
+                    prior_messages,
+                )
+            except OrchestrationParseError as exc:
+                logger.warning(
+                    "merged message planner failed validation",
+                    extra={"event": "message_plan_invalid", "planner_mode": planner_mode, "reason": str(exc), "trace_id": trace_id},
+                )
+                if planner_mode == "merged":
+                    answer = "Could you clarify what you want me to check, record, or do?"
+                    _remember("assistant", answer)
+                    return jsonify({"taken_as": "clarification", "answer": answer})
+
         try:
-            intent = classify_intent(ctx.main_agent, ctx.deps.protocol_set.all(), text)
+            intent = message_plan.intent if planner_mode == "merged" and message_plan is not None else classify_intent(
+                ctx.main_agent, ctx.deps.protocol_set.all(), text
+            )
         except OrchestrationParseError as exc:
             raise RunFailureError(str(exc)) from exc
 
@@ -118,48 +202,134 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
         received_at = _now()
 
         if intent.intent == "needs_clarification":
+            answer = intent.clarification_question or "Could you clarify what you want me to do?"
+            _remember("assistant", answer)
             return jsonify({
                 "taken_as": "clarification",
-                "answer": intent.clarification_question or "Could you clarify what you want me to do?",
+                "answer": answer,
             })
 
         if intent.intent == "conversational":
             try:
-                reply = answer_conversationally(ctx.main_agent, text)
+                reply = (
+                    message_plan.conversational_reply
+                    if planner_mode == "merged" and message_plan is not None
+                    else answer_conversationally(ctx.main_agent, text)
+                )
             except OrchestrationParseError as exc:
                 raise RunFailureError(str(exc)) from exc
+            _remember("assistant", reply)
             return jsonify({"taken_as": "conversational", "answer": reply})
 
         if intent.intent == "question":
             require(level, "view_history")
             try:
-                answer = answer_question(ctx.main_agent, text, ctx.deps.registry, ctx.deps.history_query_service)
+                if planner_mode == "merged" and message_plan is not None and message_plan.question_selection is not None:
+                    question_answer = answer_question_from_plan(
+                        ctx.main_agent,
+                        text,
+                        message_plan.question_selection,
+                        ctx.deps.registry,
+                        ctx.deps.history_query_service,
+                        max_fanout=optimization_policy.specialist_fanout,
+                    )
+                    answer = question_answer.text
+                    provenance = question_answer.provenance
+                else:
+                    answer = answer_question(ctx.main_agent, text, ctx.deps.registry, ctx.deps.history_query_service)
+                    provenance = None
             except OrchestrationParseError as exc:
                 raise RunFailureError(str(exc)) from exc
-            return jsonify({"taken_as": "question", "answer": answer})
+            _remember("assistant", answer)
+            response_payload = {"taken_as": "question", "answer": answer}
+            if provenance is not None:
+                response_payload["provenance"] = provenance
+            return jsonify(response_payload)
 
         if intent.intent == "report":
-            event_id = begin_report(ctx.deps, text, "telegram", received_at, sender_identity, source_message_id)
+            reservation = ctx.queue.reserve(False)
+            if reservation is None:
+                raise ServiceUnavailableError("event queue is full; retry later")
+            deadline_at = storage_timestamp(datetime.now(timezone.utc) + timedelta(seconds=optimization_policy.job_deadline_seconds))
+            try:
+                event_id = begin_report(
+                    ctx.deps, text, "telegram", received_at, sender_identity, source_message_id,
+                    conversation_id=conversation_id, deadline_at=deadline_at,
+                )
+            except Exception:
+                ctx.queue.release_reservation(reservation)
+                raise
 
             def _work() -> None:
                 with trace_context(trace_id):
                     run_report_extraction(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent)
 
-            ctx.queue.submit((event_id, _work))
+            ctx.queue.submit(
+                WorkItem(
+                    (event_id, _work), trace_id=trace_id,
+                    deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
+                    concurrency_keys=(f"sender:{sender_identity}",),
+                ),
+                reservation,
+            )
+            _remember("assistant", f"Queued report. Job ID: {event_id}.", event_id)
             return jsonify({"taken_as": "report", "event_id": event_id, "status": "queued"}), 202
 
         if intent.intent != "request":
             raise RunFailureError(f"unsupported message intent: {intent.intent!r}")
 
         is_commander = level >= PermissionLevel.COMMANDER
-        event_id = begin_request(ctx.deps, text, received_at, sender_identity, source_message_id)
+        reservation = ctx.queue.reserve(False)
+        if reservation is None:
+            raise ServiceUnavailableError("event queue is full; retry later")
+        deadline_at = storage_timestamp(datetime.now(timezone.utc) + timedelta(seconds=optimization_policy.job_deadline_seconds))
+        try:
+            event_id = begin_request(
+                ctx.deps, text, received_at, sender_identity, source_message_id,
+                conversation_id=conversation_id, deadline_at=deadline_at,
+            )
+        except Exception:
+            ctx.queue.release_reservation(reservation)
+            raise
 
         def _work() -> None:
             with trace_context(trace_id):
                 continue_from_risk_assessment(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent, is_commander)
 
-        ctx.queue.submit((event_id, _work))
+        ctx.queue.submit(
+            WorkItem(
+                (event_id, _work), trace_id=trace_id,
+                deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
+                concurrency_keys=(f"sender:{sender_identity}",),
+            ),
+            reservation,
+        )
+        _remember("assistant", f"Queued request. Job ID: {event_id}.", event_id)
         return jsonify({"taken_as": "request", "event_id": event_id, "status": "queued"}), 202
+
+    @blueprint.route("/Msg/Stream", methods=["POST"])
+    def post_msg_stream():
+        optimization_policy = getattr(ctx.loaded_profile, "optimization_policy", OptimizationPolicy())
+        if not optimization_policy.streaming_enabled:
+            raise NotFoundError("message streaming is not enabled for this profile")
+
+        completed_response = make_response(post_msg())
+        payload = completed_response.get_json(silent=True) or {}
+
+        @stream_with_context
+        def _events():
+            if completed_response.status_code >= 400:
+                event_name = "error"
+            elif completed_response.status_code == 202:
+                event_name = "ack"
+            else:
+                event_name = "final"
+            yield f"event: {event_name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+        response = Response(_events(), status=completed_response.status_code, mimetype="text/event-stream")
+        response.headers["Cache-Control"] = "no-cache"
+        response.headers["X-Accel-Buffering"] = "no"
+        return response
 
     return blueprint
 
@@ -463,15 +633,22 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
         if not classification:
             raise InvalidInputError("'classification' is required", field="classification")
 
-        trace_id = new_trace_id()
+        trace_id = get_trace_id() or new_trace_id()
         set_trace_id(trace_id)
 
+        optimization_policy = getattr(ctx.loaded_profile, "optimization_policy", OptimizationPolicy())
         hold = _pending_hold_or_raise(ctx, "clarification", event_id)
+
+        reservation = ctx.queue.reserve(True)
+        if reservation is None:
+            raise ServiceUnavailableError("event queue is full; retry later")
 
         answer = resolve_clarification(ctx.deps, hold["hold_id"], identity, level, classification)
         if answer.status == "invalid_classification":
+            ctx.queue.release_reservation(reservation)
             raise InvalidInputError(answer.message, field="classification")
         if answer.status != "resolved":
+            ctx.queue.release_reservation(reservation)
             # A hold resolved by someone else between the check above
             # and this call — a narrow race; not_found is the accurate
             # status, reported generically rather than re-querying for
@@ -482,7 +659,15 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
             with trace_context(trace_id):
                 continue_after_clarification(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent)
 
-        ctx.queue.submit((event_id, _work))
+        ctx.queue.submit(
+            WorkItem(
+                (event_id, _work), trace_id=trace_id,
+                priority=0,
+                deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
+                concurrency_keys=(f"sender:{identity}",),
+            ),
+            reservation,
+        )
         return jsonify({"event_id": event_id, "status": "queued"}), 202
 
     @blueprint.route("/Approve/<event_id>", methods=["POST"])
@@ -496,19 +681,27 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
         if not decision:
             raise InvalidInputError("'decision' is required — 'approved', 'rejected', or a candidate protocol name", field="decision")
 
-        trace_id = new_trace_id()
+        trace_id = get_trace_id() or new_trace_id()
         set_trace_id(trace_id)
 
+        optimization_policy = getattr(ctx.loaded_profile, "optimization_policy", OptimizationPolicy())
         hold = _pending_hold_or_raise(ctx, "approval", event_id)
+
+        reservation = ctx.queue.reserve(True)
+        if reservation is None:
+            raise ServiceUnavailableError("event queue is full; retry later")
 
         answer = resolve_approval(ctx.deps, hold["hold_id"], identity, level, decision)
         if answer.status == "invalid_candidate":
+            ctx.queue.release_reservation(reservation)
             raise InvalidInputError(answer.message, field="decision")
         if answer.status not in ("approved", "rejected"):
+            ctx.queue.release_reservation(reservation)
             # Same narrow race as the clarify path above.
             raise InvalidInputError(answer.message)
 
         if answer.status == "rejected":
+            ctx.queue.release_reservation(reservation)
             decline(ctx.deps, event_id)
             return jsonify({"event_id": event_id, "status": "declined"})
 
@@ -518,7 +711,14 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
             with trace_context(trace_id):
                 continue_after_approval(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent, selected_protocol_name)
 
-        ctx.queue.submit((event_id, _work))
+        ctx.queue.submit(
+            WorkItem(
+                (event_id, _work), trace_id=trace_id, priority=0,
+                deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
+                concurrency_keys=(f"sender:{identity}",),
+            ),
+            reservation,
+        )
         return jsonify({"event_id": event_id, "status": "queued"}), 202
 
     return blueprint
@@ -625,12 +825,14 @@ def _reply_to_message_id(ctx: "ApiContext", kind: str, event_id: str) -> str | N
 
 def _format_notification(ctx: "ApiContext", notification_row: dict) -> dict:
     builder = _PAYLOAD_BUILDERS[notification_row["kind"]]
+    event = ctx.deps.persistence.fetch_event(notification_row["event_id"])
     return {
         "sequence_id": notification_row["sequence_id"],
         "kind": notification_row["kind"],
         "payload": builder(ctx, notification_row["event_id"]),
         "target_chat_ids": _target_chat_ids(ctx, notification_row["kind"], notification_row["event_id"]),
         "reply_to_message_id": _reply_to_message_id(ctx, notification_row["kind"], notification_row["event_id"]),
+        "trace_id": event.get("trace_id") if event is not None else None,
     }
 
 
@@ -643,6 +845,7 @@ def build_notifications_blueprint(ctx: "ApiContext") -> Blueprint:
         require(level, "poll_notifications")
 
         raw_since = request.args.get("since", "0")
+        raw_wait_seconds = request.args.get("wait_seconds", "0")
         try:
             since = int(raw_since)
             if since < 0:
@@ -650,8 +853,16 @@ def build_notifications_blueprint(ctx: "ApiContext") -> Blueprint:
         except ValueError:
             raise InvalidInputError("'since' must be a non-negative integer cursor", field="since")
 
-        notification_rows = ctx.deps.persistence.fetch_notifications_since(since)
-        notifications = [_format_notification(ctx, notification_row) for notification_row in notification_rows]
+        try:
+            wait_seconds = int(raw_wait_seconds)
+            if not 0 <= wait_seconds <= 30:
+                raise ValueError
+        except ValueError:
+            raise InvalidInputError("'wait_seconds' must be an integer between 0 and 30", field="wait_seconds")
+
+        with stage_context("notification_delivery"):
+            notification_rows = ctx.deps.persistence.wait_for_notifications_since(since, wait_seconds)
+            notifications = [_format_notification(ctx, notification_row) for notification_row in notification_rows]
         next_cursor = notification_rows[-1]["sequence_id"] if notification_rows else since
 
         return jsonify({"notifications": notifications, "next_cursor": next_cursor})

@@ -1335,3 +1335,26 @@ The module names below follow the skeleton defined in 1.1.
 7. **B19**, alone.
 8. **B20**, then **B21** and **B22** in parallel.
 9. **B23** throughout, each suite following its branch; **B24** last.
+
+## IMPROVE-A through IMPROVE-E — response latency and quality (2026-08-28)
+
+- **IMPROVE-A:** monotonic stage spans, trace propagation, optional OTLP,
+  versioned bilingual eval corpus, paid live-eval runner, and corrected cost
+  documentation.
+- **IMPROVE-B:** managed async HTTP with bounded timeouts/GET retries, removal
+  of the free-text `/User` preflight, commit-aware notification long polling,
+  batched event-step reads, scoped read connections, conversation retention,
+  and Telegram typing lifecycle.
+- **IMPROVE-C:** validated `MessagePlan`, legacy/shadow/merged modes, provider
+  capability adapter, invocation budgets, provenance, bounded read-only
+  specialist fan-out, and safe clarification on invalid decisions.
+- **IMPROVE-D:** cached imports/tool classes, per-call tool allowlists,
+  stage-model policy contracts, optional combined operational/final decisions,
+  and quality-gated activation defaults.
+- **IMPROVE-E:** DAG step dependencies, bounded safe parallelism, policy-aware
+  queue admission/reservations/resource keys/deadlines, Telegram ingestion
+  idempotency, and a gated verified-text SSE surface.
+
+Activation remains conditional on the live baselines, held-out evals, safety
+checks, and staged rollout gates in `IMPROVE.MD`; implementation presence is
+not permission to enable a mode that has not passed its gate.

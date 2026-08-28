@@ -23,3 +23,8 @@ python-telegram-bot==22.8
 # matches orchestrator.queue.SerialEventQueue and the blocking crewai
 # calls already built, no asyncio impedance mismatch).
 flask>=3.1
+httpx>=0.28
+waitress>=3.0
+opentelemetry-api>=1.30
+opentelemetry-sdk>=1.30
+opentelemetry-exporter-otlp-proto-http>=1.30

@@ -61,10 +61,13 @@ async def dispatch_notification(deps: "BotDeps", notification: "BotNotification"
     raise ValueError(f"unknown notification kind: {notification.kind!r}")
 
 
-async def run_notification_poll_once(deps: "BotDeps", since: int = 0) -> tuple[int, int]:
+async def run_notification_poll_once(deps: "BotDeps", since: int = 0, wait_seconds: int = 0) -> tuple[int, int]:
     """Fetch and dispatch whatever is pending since `since`."""
 
-    notifications, next_cursor = await deps.api_client.poll_pending_notifications(since)
+    if wait_seconds:
+        notifications, next_cursor = await deps.api_client.poll_pending_notifications(since, wait_seconds)
+    else:
+        notifications, next_cursor = await deps.api_client.poll_pending_notifications(since)
 
     for notification in notifications:
         await dispatch_notification(deps, notification)
@@ -82,20 +85,32 @@ async def run_notification_poll_loop(
 
     cursor = cursor_store.read() if cursor_store is not None else 0
     iterations = 0
+    policy = getattr(deps.loaded_profile, "optimization_policy", None)
+    wait_seconds = getattr(policy, "notification_wait_seconds", 0)
+    transport_backoff = 0.5
 
     while max_iterations is None or iterations < max_iterations:
+        failed_transport = False
         try:
-            _count, cursor = await run_notification_poll_once(deps, cursor)
+            _count, cursor = await run_notification_poll_once(deps, cursor, wait_seconds)
+            transport_backoff = 0.5
             if cursor_store is not None:
                 cursor_store.write(cursor)
         except ApiNotImplementedError as exc:
             logger.info("notification poll skipped: %s", exc, extra={"event": "notification_poll_not_implemented"})
+        except ApiRequestError:
+            failed_transport = True
+            logger.exception("notification transport failed; reconnecting", extra={"event": "notification_transport_failed"})
         except Exception:
             logger.exception("notification poll failed; continuing", extra={"event": "notification_poll_failed"})
 
         iterations += 1
         if max_iterations is None or iterations < max_iterations:
-            await asyncio.sleep(poll_interval_seconds)
+            if failed_transport:
+                await asyncio.sleep(transport_backoff)
+                transport_backoff = min(30.0, transport_backoff * 2)
+            elif wait_seconds == 0:
+                await asyncio.sleep(poll_interval_seconds)
 
 
 if TYPE_CHECKING:

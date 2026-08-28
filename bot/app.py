@@ -14,7 +14,7 @@ from tools import configure_logging
 
 from bot import interactions
 from bot.transports import HttpApiClient, PTBTelegramClient
-from bot.contracts import ApiNotImplementedError, BotDeps, BotStartupError
+from bot.contracts import ApiNotImplementedError, ApiRequestError, BotDeps, BotStartupError
 from bot.background_services import NotificationCursorStore, SingleInstanceLock, run_notification_poll_loop
 from bot.interactions import check_permission, resolve_caller
 
@@ -96,19 +96,23 @@ def _guarded(handler: Callable[..., Awaitable[None]]):
     return _wrapped
 
 
-async def handle_incoming_message(deps: BotDeps, telegram_identity: str, text: str, message_id: str) -> str:
+async def handle_incoming_message(
+    deps: BotDeps,
+    telegram_identity: str,
+    text: str,
+    message_id: str,
+    conversation_id: str | None = None,
+) -> str:
     """Route free-form Telegram text through the single message endpoint."""
 
-    resolution = await resolve_caller(deps.api_client, telegram_identity)
-    if resolution.status == "unregistered":
-        return resolution.refusal_message
-
-    caller = resolution.caller
-    refusal = check_permission(caller, "send_message")
-    if refusal is not None:
-        return refusal
-
-    submission_result = await deps.api_client.submit_message(text, telegram_identity, message_id)
+    try:
+        submission_result = await deps.api_client.submit_message(text, telegram_identity, message_id, conversation_id)
+    except ApiRequestError as exc:
+        if exc.status_code == 401:
+            return interactions._unregistered_message(telegram_identity)
+        if exc.status_code == 403:
+            return f"Refused: {exc.message}"
+        raise
     if submission_result.kind in {"question", "conversational", "clarification"}:
         return submission_result.answer_text or "(no answer was returned)"
 
@@ -124,8 +128,22 @@ async def _on_text_message(update, context) -> None:
     deps: BotDeps = context.bot_data["deps"]
     telegram_identity, chat_id = _identity_and_chat_id(update)
 
-    reply = await handle_incoming_message(deps, telegram_identity, update.message.text, str(update.message.message_id))
-    await deps.telegram_client.send_text(chat_id, reply)
+    thread_id = getattr(update.message, "message_thread_id", None)
+    conversation_id = f"telegram:{chat_id}:{thread_id if thread_id is not None else 'main'}"
+
+    async def _show_activity() -> None:
+        while True:
+            await deps.telegram_client.send_activity(chat_id, "typing")
+            await asyncio.sleep(4.0)
+
+    activity_task = asyncio.create_task(_show_activity())
+    try:
+        reply = await handle_incoming_message(
+            deps, telegram_identity, update.message.text, str(update.message.message_id), conversation_id
+        )
+        await deps.telegram_client.send_text(chat_id, reply)
+    finally:
+        activity_task.cancel()
 
 
 async def _on_callback_query(update, context) -> None:
@@ -268,10 +286,16 @@ def register_handlers(application, deps: BotDeps) -> None:
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _guarded(_on_text_message)))
 
     async def _post_init(started_application) -> None:
+        await deps.api_client.start()
         cursor_store = NotificationCursorStore(Path(f"{deps.loaded_profile.db_path}.notification_cursor"))
         started_application.create_task(run_notification_poll_loop(deps, NOTIFICATION_POLL_INTERVAL_SECONDS, cursor_store=cursor_store))
 
     application.post_init = _post_init
+
+    async def _post_shutdown(_stopped_application) -> None:
+        await deps.api_client.close()
+
+    application.post_shutdown = _post_shutdown
 
 
 def run_bot(deps: BotDeps) -> None:

@@ -26,6 +26,29 @@ A profile module must stay safe to commit and to send to another team in
 full: it holds no secret values, only the names of the environment
 variables that hold them.
 
+## Conversation and optimization settings
+
+Three optional module-level names extend the profile contract:
+
+- `CONVERSATION_HISTORY_TURNS` is a non-negative integer and defaults to `0`
+  (disabled). It limits retained user/assistant turns per conversation.
+- `CONVERSATION_HISTORY_TTL_HOURS` is positive and defaults to `24`; old
+  messages are pruned on write.
+- `OPTIMIZATION_POLICY` is a `profiles.OptimizationPolicy` and defaults to a
+  legacy-safe policy. Changes take effect after restart.
+
+`OptimizationPolicy()` defaults to the legacy planner, separate risk/selection
+and insight/judgment, serial queue, and disabled structured output/streaming.
+It also controls worker/queue capacity, continuation reservation,
+specialist/provider concurrency, notification wait, direct/job deadlines, and
+optional per-stage `StageModelPolicy` entries. Shadow modes can be measured
+without affecting the user. `profiles/demo.py` and the authoring template keep
+six turns for 24 hours.
+
+Conversation history is isolated by exact `conversation_id`, resolves
+references only, and is never authoritative for facts, permissions, protocols,
+tool outcomes, or approvals.
+
 ## Model tiers
 
 Every agent in the system picks a **tier** — `"core"` or `"sub"` — rather

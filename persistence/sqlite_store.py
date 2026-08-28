@@ -5,13 +5,26 @@ import sqlite3
 import threading
 import uuid
 from concurrent.futures import Future
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from queue import SimpleQueue
 
 from persistence.contracts import EventSearchCriteria, NotFoundError, PersistenceError, PersistenceInterface
 from persistence.schema import SUMMARY_TABLE_NAMES, run_migrations
+from tools import telemetry_span
 
 _STOP = object()
+
+
+class _ReadConnectionLease:
+    def __init__(self, connection: sqlite3.Connection):
+        self._connection = connection
+
+    def execute(self, *args, **kwargs):
+        with telemetry_span("sqlite_read", operation="execute"):
+            return self._connection.execute(*args, **kwargs)
+
+    def close(self) -> None:
+        return None
 
 _EVENT_COLUMNS = (
     "event_id",
@@ -44,12 +57,19 @@ _EVENT_COLUMNS = (
     "insight_text",
     "outcome",
     "outcome_failure_reason",
+    "trace_id",
+    "conversation_id",
+    "deadline_at",
+    "ingestion_key",
 )
 
 _EVENT_JSON_COLUMNS = {"entities", "precedent_matched_event_ids"}
 _EVENT_BOOL_COLUMNS = {"occurred_at_is_fallback", "clarification_held", "approval_held"}
 
-_EVENT_IMMUTABLE_COLUMNS = {"event_id", "received_at", "source", "sender_identity", "source_message_id", "raw_text"}
+_EVENT_IMMUTABLE_COLUMNS = {
+    "event_id", "received_at", "source", "sender_identity", "source_message_id", "raw_text",
+    "trace_id", "conversation_id", "deadline_at", "ingestion_key",
+}
 _UPDATABLE_EVENT_COLUMNS = frozenset(_EVENT_COLUMNS) - _EVENT_IMMUTABLE_COLUMNS
 
 _HELD_EVENT_RESERVED_KEYS = {"hold_id", "event_id", "created_at"}
@@ -87,6 +107,8 @@ def _decode_step_row(step_row: sqlite3.Row) -> dict:
     decoded = dict(step_row)
     if decoded.get("allowed_tools") is not None:
         decoded["allowed_tools"] = json.loads(decoded["allowed_tools"])
+    if decoded.get("depends_on") is not None:
+        decoded["depends_on"] = json.loads(decoded["depends_on"])
     return decoded
 
 
@@ -107,17 +129,21 @@ def _upsert_steps(connection: sqlite3.Connection, event_id: str, steps: list[dic
             "allowed_tools": json.dumps(step.get("allowed_tools", [])),
             "result_text": step.get("result_text"),
             "attempt_count": step.get("attempt_count", 0),
+            "step_id": step.get("step_id") or str(step["step_index"]),
+            "depends_on": json.dumps(step.get("depends_on", [])),
         }
         connection.execute(
             """
-            INSERT INTO event_steps (event_id, step_index, agent_name, task_text, allowed_tools, result_text, attempt_count)
-            VALUES (:event_id, :step_index, :agent_name, :task_text, :allowed_tools, :result_text, :attempt_count)
+            INSERT INTO event_steps (event_id, step_index, agent_name, task_text, allowed_tools, result_text, attempt_count, step_id, depends_on)
+            VALUES (:event_id, :step_index, :agent_name, :task_text, :allowed_tools, :result_text, :attempt_count, :step_id, :depends_on)
             ON CONFLICT(event_id, step_index) DO UPDATE SET
                 agent_name = excluded.agent_name,
                 task_text = excluded.task_text,
                 allowed_tools = excluded.allowed_tools,
                 result_text = excluded.result_text,
-                attempt_count = excluded.attempt_count
+                attempt_count = excluded.attempt_count,
+                step_id = excluded.step_id,
+                depends_on = excluded.depends_on
             """,
             payload,
         )
@@ -199,12 +225,21 @@ class SQLitePersistence(PersistenceInterface):
         run_migrations(db_path)
 
         self._write_queue: SimpleQueue = SimpleQueue()
+        self._notification_condition = threading.Condition()
+        self._notification_generation = 0
+        self._read_local = threading.local()
+        self._read_connections: list[sqlite3.Connection] = []
+        self._read_connections_lock = threading.Lock()
         self._writer_thread = threading.Thread(target=self._run_writer, daemon=True)
         self._writer_thread.start()
 
     def close(self) -> None:
         self._write_queue.put(_STOP)
         self._writer_thread.join()
+        with self._read_connections_lock:
+            connections, self._read_connections = self._read_connections, []
+        for connection in connections:
+            connection.close()
 
 
     def _run_writer(self) -> None:
@@ -237,12 +272,23 @@ class SQLitePersistence(PersistenceInterface):
 
         future: Future = Future()
         self._write_queue.put((write_operation, future))
-        return future.result()
+        with telemetry_span("sqlite_write", operation="commit"):
+            return future.result()
 
-    def _read_connection(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.db_path)
-        connection.row_factory = sqlite3.Row
-        return connection
+    def _wake_notification_waiters(self) -> None:
+        with self._notification_condition:
+            self._notification_generation += 1
+            self._notification_condition.notify_all()
+
+    def _read_connection(self) -> _ReadConnectionLease:
+        connection = getattr(self._read_local, "connection", None)
+        if connection is None:
+            connection = sqlite3.connect(self.db_path, check_same_thread=False)
+            connection.row_factory = sqlite3.Row
+            self._read_local.connection = connection
+            with self._read_connections_lock:
+                self._read_connections.append(connection)
+        return _ReadConnectionLease(connection)
 
     def _attach_steps(self, connection: sqlite3.Connection, event: dict) -> dict:
         step_rows = connection.execute(
@@ -252,15 +298,43 @@ class SQLitePersistence(PersistenceInterface):
         event["steps"] = [_decode_step_row(step_row) for step_row in step_rows]
         return event
 
+    def _attach_steps_many(self, connection: sqlite3.Connection, events: list[dict]) -> list[dict]:
+        if not events:
+            return events
+
+        event_ids = [event["event_id"] for event in events]
+        placeholders = ", ".join("?" for _ in event_ids)
+        step_rows = connection.execute(
+            f"SELECT * FROM event_steps WHERE event_id IN ({placeholders}) ORDER BY event_id, step_index",
+            event_ids,
+        ).fetchall()
+        steps_by_event: dict[str, list[dict]] = {event_id: [] for event_id in event_ids}
+        for step_row in step_rows:
+            steps_by_event[step_row["event_id"]].append(_decode_step_row(step_row))
+        for event in events:
+            event["steps"] = steps_by_event[event["event_id"]]
+        return events
+
 
     def append_event(self, event: dict) -> str:
         event_id = event.get("event_id") or uuid.uuid4().hex
         event_row = {column: _encode_event_value(column, event.get(column)) for column in _EVENT_COLUMNS}
         event_row["event_id"] = event_id
+        if event_row.get("source_message_id") and event_row.get("ingestion_key") is None:
+            event_row["ingestion_key"] = "\x1f".join(
+                (str(event_row.get("source") or ""), str(event_row.get("sender_identity") or ""), str(event_row["source_message_id"]))
+            )
         steps = event.get("steps") or []
 
         def _do(connection: sqlite3.Connection) -> str:
             try:
+                if event_row.get("ingestion_key"):
+                    existing = connection.execute(
+                        "SELECT event_id FROM events WHERE ingestion_key = ?", (event_row["ingestion_key"],)
+                    ).fetchone()
+                    if existing is not None:
+                        return existing["event_id"]
+
                 columns = ", ".join(_EVENT_COLUMNS)
                 placeholders = ", ".join(f":{column}" for column in _EVENT_COLUMNS)
                 connection.execute(f"INSERT INTO events ({columns}) VALUES ({placeholders})", event_row)
@@ -282,8 +356,8 @@ class SQLitePersistence(PersistenceInterface):
             raise PersistenceError(f"cannot update event column(s): {', '.join(sorted(unknown_columns))}")
 
         def _do(connection: sqlite3.Connection) -> None:
-            exists = connection.execute("SELECT 1 FROM events WHERE event_id = ?", (event_id,)).fetchone()
-            if exists is None:
+            existing = connection.execute("SELECT outcome FROM events WHERE event_id = ?", (event_id,)).fetchone()
+            if existing is None:
                 raise NotFoundError(f"no such event: '{event_id}'")
 
             try:
@@ -297,11 +371,17 @@ class SQLitePersistence(PersistenceInterface):
                     _upsert_steps(connection, event_id, steps)
 
                 outcome = column_updates.get("outcome")
-                if outcome is not None:
-                    for notification_kind in _OUTCOME_TO_NOTIFICATION_KINDS.get(outcome, ()):
-                        _insert_notification(connection, notification_kind, event_id)
+                notification_kinds = (
+                    _OUTCOME_TO_NOTIFICATION_KINDS.get(outcome, ())
+                    if outcome is not None and outcome != existing["outcome"]
+                    else ()
+                )
+                for notification_kind in notification_kinds:
+                    _insert_notification(connection, notification_kind, event_id)
 
                 connection.commit()
+                if notification_kinds:
+                    self._wake_notification_waiters()
             except sqlite3.Error as exc:
                 connection.rollback()
                 raise PersistenceError(f"failed to update event '{event_id}': {exc}") from exc
@@ -326,7 +406,8 @@ class SQLitePersistence(PersistenceInterface):
                 "ORDER BY occurred_at",
                 (start, end),
             ).fetchall()
-            return [self._attach_steps(connection, _decode_event_row(event_row)) for event_row in event_rows]
+            decoded_events = [_decode_event_row(event_row) for event_row in event_rows]
+            return self._attach_steps_many(connection, decoded_events)
         finally:
             connection.close()
 
@@ -338,7 +419,19 @@ class SQLitePersistence(PersistenceInterface):
                 "AND occurred_at IS NOT NULL AND occurred_at >= ? AND occurred_at < ? ORDER BY occurred_at",
                 (event_type, area, window_start, window_end),
             ).fetchall()
-            return [self._attach_steps(connection, _decode_event_row(event_row)) for event_row in event_rows]
+            decoded_events = [_decode_event_row(event_row) for event_row in event_rows]
+            return self._attach_steps_many(connection, decoded_events)
+        finally:
+            connection.close()
+
+    def fetch_event_by_source_message(self, source: str, sender_identity: str, source_message_id: str) -> dict | None:
+        ingestion_key = "\x1f".join((source, sender_identity, source_message_id))
+        connection = self._read_connection()
+        try:
+            event_row = connection.execute("SELECT * FROM events WHERE ingestion_key = ?", (ingestion_key,)).fetchone()
+            if event_row is None:
+                return None
+            return self._attach_steps(connection, _decode_event_row(event_row))
         finally:
             connection.close()
 
@@ -357,7 +450,8 @@ class SQLitePersistence(PersistenceInterface):
                 f"ORDER BY {time_column} {direction}, event_id {direction} LIMIT ?",
                 (*parameters, criteria.limit),
             ).fetchall()
-            return [self._attach_steps(connection, _decode_event_row(event_row)) for event_row in event_rows]
+            decoded_events = [_decode_event_row(event_row) for event_row in event_rows]
+            return self._attach_steps_many(connection, decoded_events)
         finally:
             connection.close()
 
@@ -548,6 +642,7 @@ class SQLitePersistence(PersistenceInterface):
                 )
                 _insert_notification(connection, f"{kind}_hold", event_id)
                 connection.commit()
+                self._wake_notification_waiters()
                 return hold_id
             except sqlite3.Error as exc:
                 connection.rollback()
@@ -623,5 +718,76 @@ class SQLitePersistence(PersistenceInterface):
                 (since,),
             ).fetchall()
             return [dict(notification_row) for notification_row in notification_rows]
+        finally:
+            connection.close()
+
+    def wait_for_notifications_since(self, since: int, timeout_seconds: float) -> list[dict]:
+        timeout_seconds = max(0.0, min(float(timeout_seconds), 30.0))
+        with self._notification_condition:
+            generation = self._notification_generation
+
+        rows = self.fetch_notifications_since(since)
+        if rows or timeout_seconds == 0:
+            return rows
+
+        with self._notification_condition:
+            if generation == self._notification_generation:
+                self._notification_condition.wait(timeout_seconds)
+
+        return self.fetch_notifications_since(since)
+
+    def append_conversation_message(
+        self,
+        conversation_id: str,
+        role: str,
+        content: str,
+        *,
+        ttl_hours: int,
+        max_turns: int,
+        event_id: str | None = None,
+    ) -> None:
+        if not conversation_id or role not in {"user", "assistant"} or not content:
+            raise PersistenceError("conversation message requires a conversation_id, valid role, and content")
+        if ttl_hours <= 0 or max_turns <= 0:
+            return
+
+        now = datetime.now(timezone.utc)
+        cutoff = (now - timedelta(hours=ttl_hours)).isoformat()
+        keep_messages = max_turns * 2
+
+        def _do(connection: sqlite3.Connection) -> None:
+            try:
+                connection.execute(
+                    "DELETE FROM conversation_messages WHERE conversation_id = ? AND created_at < ?",
+                    (conversation_id, cutoff),
+                )
+                connection.execute(
+                    "INSERT INTO conversation_messages (conversation_id, role, content, created_at, event_id) VALUES (?, ?, ?, ?, ?)",
+                    (conversation_id, role, content, now.isoformat(), event_id),
+                )
+                connection.execute(
+                    "DELETE FROM conversation_messages WHERE conversation_id = ? AND message_id NOT IN "
+                    "(SELECT message_id FROM conversation_messages WHERE conversation_id = ? ORDER BY message_id DESC LIMIT ?)",
+                    (conversation_id, conversation_id, keep_messages),
+                )
+                connection.commit()
+            except sqlite3.Error as exc:
+                connection.rollback()
+                raise PersistenceError(f"failed to append conversation message: {exc}") from exc
+
+        self._submit_write(_do)
+
+    def fetch_conversation_messages(self, conversation_id: str, limit: int) -> list[dict]:
+        if not 1 <= limit <= 200:
+            raise PersistenceError("conversation message limit must be between 1 and 200")
+        connection = self._read_connection()
+        try:
+            rows = connection.execute(
+                "SELECT message_id, conversation_id, role, content, created_at, event_id FROM "
+                "(SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY message_id DESC LIMIT ?) "
+                "ORDER BY message_id",
+                (conversation_id, limit),
+            ).fetchall()
+            return [dict(row) for row in rows]
         finally:
             connection.close()

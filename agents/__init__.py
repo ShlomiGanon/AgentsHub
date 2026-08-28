@@ -5,6 +5,9 @@ import sys
 from agents import contracts
 from agents.contracts import (
     AgentDescriptor,
+    InvocationPolicy,
+    ProviderCapabilities,
+    provider_capabilities,
     AgentFrameworkNotReadyError,
     AgentInvocationError,
     AgentModelError,
@@ -23,7 +26,15 @@ sys.modules[f"{__name__}.errors"] = contracts
 sys.modules[f"{__name__}.results"] = contracts
 
 from agents import runtime
-from agents.runtime import Agent, AgentRegistry, DuplicateAgentNameError, build_agent_registry
+from agents.runtime import (
+    Agent,
+    AgentRegistry,
+    DuplicateAgentNameError,
+    build_agent_registry,
+    configure_provider_concurrency,
+    configure_structured_output_mode,
+    set_invocation_deadline,
+)
 
 adapter = runtime
 base = runtime
@@ -52,11 +63,17 @@ __all__ = [
     "AgentResult",
     "AgentTimeoutError",
     "AgentToolConstructionError",
+    "configure_provider_concurrency",
+    "configure_structured_output_mode",
+    "set_invocation_deadline",
     "DuplicateAgentNameError",
     "HistoryAgent",
+    "InvocationPolicy",
+    "ProviderCapabilities",
     "ReferenceAgent",
     "ToolInfo",
     "build_agent_registry",
     "parse_agent_output",
+    "provider_capabilities",
     "tool",
 ]

@@ -156,6 +156,19 @@ CREATE TABLE IF NOT EXISTS log_entries (
 );
 """
 
+CONVERSATION_MESSAGES_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    message_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    event_id TEXT REFERENCES events(event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_messages_lookup
+    ON conversation_messages(conversation_id, created_at DESC, message_id DESC);
+"""
+
 
 def _summary_v4_ddl(table_name: str) -> str:
     return f"""
@@ -194,6 +207,22 @@ MIGRATIONS: list[tuple[int, str, str]] = [
     (9, "add source_message_id to events", "ALTER TABLE events ADD COLUMN source_message_id TEXT;"),
     (10, "create log_entries table", LOG_ENTRIES_TABLE_DDL + LOG_ENTRIES_INDEXES_DDL),
     (11, "add indexed history query paths", HISTORY_QUERY_INDEXES_DDL),
+    (
+        12,
+        "add trace conversation deadline and ingestion identity to events",
+        "ALTER TABLE events ADD COLUMN trace_id TEXT;"
+        "ALTER TABLE events ADD COLUMN conversation_id TEXT;"
+        "ALTER TABLE events ADD COLUMN deadline_at TEXT;"
+        "ALTER TABLE events ADD COLUMN ingestion_key TEXT;"
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_ingestion_key ON events(ingestion_key) WHERE ingestion_key IS NOT NULL;",
+    ),
+    (13, "create conversation message history", CONVERSATION_MESSAGES_TABLE_DDL),
+    (
+        14,
+        "add protocol step dependency metadata",
+        "ALTER TABLE event_steps ADD COLUMN step_id TEXT;"
+        "ALTER TABLE event_steps ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]';",
+    ),
 ]
 
 
@@ -201,6 +230,7 @@ def run_migrations(db_path: str) -> None:
     connection = sqlite3.connect(db_path)
     try:
         current_version = connection.execute("PRAGMA user_version").fetchone()[0]
+        migrated = False
         for version, _description, sql in MIGRATIONS:
             if version <= current_version:
                 continue
@@ -218,6 +248,10 @@ def run_migrations(db_path: str) -> None:
                 connection.executescript(sql)
 
             connection.execute(f"PRAGMA user_version = {version}")
+            connection.commit()
+            migrated = True
+        if migrated:
+            connection.execute("ANALYZE")
             connection.commit()
     finally:
         connection.close()

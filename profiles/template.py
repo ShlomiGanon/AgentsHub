@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 
 from agents import Agent, ReferenceAgent
-from profiles.contracts import AgentSpec
+from profiles.contracts import AgentSpec, OptimizationPolicy
 from protocols import CriticalityLevel, Protocol
 
 
@@ -52,6 +52,9 @@ RETRY_COUNT = 3
 RISK_THRESHOLD = 0.6
 LOOKBACK_WINDOW_DAYS = 30
 TIMEZONE = "UTC"  # IANA name, used to resolve relative history periods
+CONVERSATION_HISTORY_TURNS = 6
+CONVERSATION_HISTORY_TTL_HOURS = 24
+OPTIMIZATION_POLICY = OptimizationPolicy()
 
 BOT_TOKEN_ENV = "YOUR_BOT_TOKEN_ENV_VAR_NAME"
 

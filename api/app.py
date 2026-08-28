@@ -1,27 +1,31 @@
 """API startup wiring — the package's declared entry point."""
 
 import os
+import logging
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from flask import Flask
+from flask import Flask, g, request
 
-from agents import build_agent_registry
+from agents import build_agent_registry, configure_provider_concurrency, configure_structured_output_mode, set_invocation_deadline
 from config import ModelTierError, SettingsStore, TierModel, load_base_config, resolve_tier_model_from_env
 from history import SummaryScheduler
 from history.query import HistoryQueryService
-from orchestrator.flows import FlowDeps, SerialEventQueue, assemble_core_agents
+from orchestrator.flows import FlowDeps, PolicyAwareEventQueue, SerialEventQueue, assemble_core_agents
 from persistence import open_persistence
 from profiles import build_area_registry, build_event_type_registry
 from profiles.loader import load_profile
 from protocols import load_protocols
-from tools import configure_logging, set_trace_id
+from tools import configure_logging, configure_telemetry, get_trace_id, normalize_trace_id, set_trace_id
 
 if TYPE_CHECKING:
     from agents import Agent
     from history import SummaryScheduler
     from orchestrator.flows import FlowDeps, SerialEventQueue
     from profiles.loader import LoadedProfile
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -45,6 +49,8 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
     """`core_model`/`sub_model` are the two already-resolved `TierModel`s — required, no default, no environment access anywhere in this function (`config.base` never reaches into `os...."""
 
     loaded_profile = load_profile(module_path, core_model=core_model, sub_model=sub_model)
+    configure_provider_concurrency(loaded_profile.optimization_policy.provider_concurrency)
+    configure_structured_output_mode(loaded_profile.optimization_policy.structured_output_mode)
 
     persistence = open_persistence(loaded_profile.db_path)
     configure_logging(loaded_profile.module_path, persistence=persistence)
@@ -79,9 +85,19 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
         event_type_registry=build_event_type_registry(loaded_profile),
         area_registry=build_area_registry(loaded_profile),
         history_query_service=history_query_service,
+        optimization_policy=loaded_profile.optimization_policy,
     )
 
-    queue = SerialEventQueue(_dispatch_queue_item)
+    queue_policy = loaded_profile.optimization_policy
+    if queue_policy.event_queue_mode == "policy":
+        queue = PolicyAwareEventQueue(
+            _dispatch_queue_item,
+            workers=queue_policy.event_workers,
+            max_size=queue_policy.event_queue_size,
+            reserved_continuation_percent=queue_policy.reserved_continuation_percent,
+        )
+    else:
+        queue = SerialEventQueue(_dispatch_queue_item)
     queue.start()
 
     scheduler = SummaryScheduler(persistence, history_agent)
@@ -102,7 +118,27 @@ def build_app(ctx: ApiContext) -> Flask:
 
     @app.before_request
     def _reset_trace_id_for_this_request() -> None:
-        set_trace_id("")
+        set_trace_id(normalize_trace_id(request.headers.get("X-Trace-ID")))
+        g.request_started_at = time.monotonic()
+
+    @app.after_request
+    def _finish_request(response):
+        logger.info(
+            "API request finished",
+            extra={
+                "event": "api_request_finished",
+                "route": request.path,
+                "method": request.method,
+                "status_code": response.status_code,
+                "duration_seconds": time.monotonic() - g.request_started_at,
+                "trace_id": get_trace_id(),
+                "telemetry_only": True,
+            },
+        )
+        response.headers["X-Trace-ID"] = get_trace_id()
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        set_invocation_deadline(None)
+        return response
 
     from api.request_boundary import register_error_handlers
     from api.routes import (
@@ -147,7 +183,12 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run the API layer for one deployment (work_plan.md §7, §9.21).")
     parser.add_argument("profile_module", help="dotted module path of the profile to run, e.g. profiles.demo")
     parser.add_argument("--host", default="127.0.0.1", help="network interface to bind (default: 127.0.0.1, localhost only)")
+    parser.add_argument("--server", choices=("flask", "waitress"), default="flask", help="HTTP server (default: flask for local development)")
+    parser.add_argument("--threads", type=int, default=16, help="Waitress worker threads (default: 16, minimum: 4)")
     args = parser.parse_args(argv)
+
+    if args.server == "waitress" and args.threads < 4:
+        parser.error("--threads must be at least 4 when --server=waitress")
 
     try:
         core_model = _tier_model_from_environ("CORE")
@@ -156,8 +197,17 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"failed to start API: {exc}") from exc
 
     ctx = build_context(args.profile_module, core_model=core_model, sub_model=sub_model)
+    configure_telemetry()
     app = build_app(ctx)
-    app.run(host=args.host, port=ctx.loaded_profile.api_port)
+    parser_mode = getattr(args, "server", "flask")
+    if parser_mode == "waitress":
+        try:
+            from waitress import serve
+        except ImportError as exc:
+            raise SystemExit("failed to start API: waitress is not installed") from exc
+        serve(app, host=args.host, port=ctx.loaded_profile.api_port, threads=args.threads)
+    else:
+        app.run(host=args.host, port=ctx.loaded_profile.api_port, threaded=True)
 
 
 if __name__ == "__main__":

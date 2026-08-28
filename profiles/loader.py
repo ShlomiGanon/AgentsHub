@@ -17,8 +17,10 @@ from profiles.contracts import (
     AreaRegistry,
     EventTypeRegistry,
     LoadedProfile,
+    OptimizationPolicy,
     ProfileLoadError,
     ProfileValidationError,
+    StageModelPolicy,
     protocol_missing_attrs,
 )
 from protocols import CriticalityLevel
@@ -60,6 +62,49 @@ def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> lis
         ZoneInfo(timezone_name)
     except (TypeError, ZoneInfoNotFoundError):
         failures.append(f"profile timezone {timezone_name!r} is not a valid IANA timezone")
+
+    history_turns = getattr(loaded, "conversation_history_turns", 0)
+    if type(history_turns) is not int or history_turns < 0:
+        failures.append("CONVERSATION_HISTORY_TURNS must be a non-negative integer")
+
+    history_ttl = getattr(loaded, "conversation_history_ttl_hours", 24)
+    if type(history_ttl) not in {int, float} or history_ttl <= 0:
+        failures.append("CONVERSATION_HISTORY_TTL_HOURS must be positive")
+
+    policy = getattr(loaded, "optimization_policy", OptimizationPolicy())
+    if not isinstance(policy, OptimizationPolicy):
+        failures.append("OPTIMIZATION_POLICY must be a profiles.OptimizationPolicy")
+    else:
+        if policy.planner_mode not in {"legacy", "shadow", "merged"}:
+            failures.append("OPTIMIZATION_POLICY.planner_mode is invalid")
+        if policy.operational_decision_mode not in {"separate", "shadow", "merged"}:
+            failures.append("OPTIMIZATION_POLICY.operational_decision_mode is invalid")
+        if policy.final_assessment_mode not in {"separate", "low_risk_merged"}:
+            failures.append("OPTIMIZATION_POLICY.final_assessment_mode is invalid")
+        if policy.structured_output_mode not in {"off", "auto", "required"}:
+            failures.append("OPTIMIZATION_POLICY.structured_output_mode is invalid")
+        if policy.event_queue_mode not in {"serial", "policy"}:
+            failures.append("OPTIMIZATION_POLICY.event_queue_mode is invalid")
+        if not 1 <= policy.event_workers <= 64:
+            failures.append("OPTIMIZATION_POLICY.event_workers must be between 1 and 64")
+        if policy.event_queue_size < policy.event_workers:
+            failures.append("OPTIMIZATION_POLICY.event_queue_size must be at least event_workers")
+        if not 0 <= policy.reserved_continuation_percent <= 80:
+            failures.append("OPTIMIZATION_POLICY.reserved_continuation_percent must be between 0 and 80")
+        if not 1 <= policy.notification_wait_seconds <= 30:
+            failures.append("OPTIMIZATION_POLICY.notification_wait_seconds must be between 1 and 30")
+        if not 1 <= policy.specialist_fanout <= 4:
+            failures.append("OPTIMIZATION_POLICY.specialist_fanout must be between 1 and 4")
+        if not 1 <= policy.provider_concurrency <= 64:
+            failures.append("OPTIMIZATION_POLICY.provider_concurrency must be between 1 and 64")
+        if policy.direct_deadline_seconds <= 0 or policy.job_deadline_seconds <= 0:
+            failures.append("OPTIMIZATION_POLICY deadlines must be positive")
+        for stage_name, stage_policy in policy.stage_model_policies.items():
+            if not isinstance(stage_name, str) or not stage_name or not isinstance(stage_policy, StageModelPolicy):
+                failures.append("OPTIMIZATION_POLICY.stage_model_policies must map stage names to StageModelPolicy")
+                continue
+            if stage_policy.max_output_tokens <= 0 or stage_policy.timeout_seconds <= 0:
+                failures.append(f"stage model policy {stage_name!r} requires positive token and timeout budgets")
 
     return failures
 
@@ -235,6 +280,9 @@ def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) 
         core_agents=MappingProxyType(core_agents),
         resolved_secrets=MappingProxyType(resolved_secrets),
         timezone_name=getattr(profile_module, "TIMEZONE", "UTC"),
+        conversation_history_turns=getattr(profile_module, "CONVERSATION_HISTORY_TURNS", 0),
+        conversation_history_ttl_hours=getattr(profile_module, "CONVERSATION_HISTORY_TTL_HOURS", 24),
+        optimization_policy=getattr(profile_module, "OPTIMIZATION_POLICY", OptimizationPolicy()),
     )
 
     failures = validate_profile(loaded, declared_event_types=profile_module.EVENT_TYPES)

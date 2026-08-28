@@ -50,6 +50,11 @@ class RunFailureError(ApiError):
     status_code = 422
 
 
+class ServiceUnavailableError(ApiError):
+    error_class = "service_unavailable"
+    status_code = 503
+
+
 
 
 
@@ -98,7 +103,10 @@ def register_error_handlers(app: Flask) -> None:
         error_payload = {"error_class": error.error_class, "message": error.message}
         if error.field is not None:
             error_payload["field"] = error.field
-        return jsonify(error_payload), error.status_code
+        response = jsonify(error_payload)
+        if error.status_code == 503:
+            response.headers["Retry-After"] = "1"
+        return response, error.status_code
 
     @app.errorhandler(HTTPException)
     def _handle_http_exception(error: HTTPException):

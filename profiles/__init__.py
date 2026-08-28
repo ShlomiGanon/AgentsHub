@@ -9,8 +9,10 @@ from profiles.contracts import (
     EventTypeRegistry,
     HUMAN_ACTIVATION_TYPE,
     LoadedProfile,
+    OptimizationPolicy,
     ProfileLoadError,
     ProfileValidationError,
+    StageModelPolicy,
 )
 
 spec = contracts
@@ -37,8 +39,10 @@ __all__ = [
     "EventTypeRegistry",
     "HUMAN_ACTIVATION_TYPE",
     "LoadedProfile",
+    "OptimizationPolicy",
     "ProfileLoadError",
     "ProfileValidationError",
+    "StageModelPolicy",
     "build_area_registry",
     "build_event_type_registry",
     "hash_profile_file",

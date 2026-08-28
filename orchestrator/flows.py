@@ -30,17 +30,21 @@ from orchestrator.reasoning import build_insight, construct_insights_agent
 from orchestrator.reasoning import (
     OrchestrationParseError,
     answer_conversationally,
+    answer_question_from_plan,
+    assess_final_once,
     assess_risk,
     classify_intent,
     construct_core_agents as construct_main_agent,
     formulate_tasks,
     judge_success,
+    make_operational_decision,
+    plan_message,
     rewrite_task,
     select_protocol,
 )
 from orchestrator.reasoning import answer_question, determine_closure, look_up_precedent
-from orchestrator.event_queue import SerialEventQueue
-from profiles import HUMAN_ACTIVATION_TYPE
+from orchestrator.event_queue import PolicyAwareEventQueue, SerialEventQueue, WorkItem
+from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy
 from protocols.executor import execute_steps
 from tools import get_trace_id
 
@@ -58,6 +62,25 @@ if TYPE_CHECKING:
     from profiles import AreaRegistry, EventTypeRegistry
 
 logger = logging.getLogger(__name__)
+
+
+def _deadline_failure(deps: "FlowDeps", event_id: str, next_stage: str) -> "FlowResult | None":
+    event = deps.persistence.fetch_event(event_id)
+    deadline_at = event.get("deadline_at") if event is not None else None
+    if not deadline_at:
+        return None
+    try:
+        deadline = datetime.fromisoformat(deadline_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) < deadline:
+        return None
+    reason = f"event deadline exceeded before {next_stage}"
+    record_event_outcome(deps.persistence, event_id, "failed", failure_reason=reason)
+    _log_event_outcome(event_id, "failed", failure_reason=reason, stage=next_stage)
+    return FlowResult(event_id, "failed", reason)
 
 FlowOutcome = Literal[
     "closed_on_precedent", "declined", "succeeded", "failed", "uncertain", "no_match_protocol",
@@ -90,6 +113,7 @@ class FlowDeps:
     event_type_registry: "EventTypeRegistry"
     area_registry: "AreaRegistry"
     history_query_service: "HistoryQueryService"
+    optimization_policy: OptimizationPolicy = OptimizationPolicy()
 
 
 @dataclass(frozen=True)
@@ -129,6 +153,8 @@ def begin_report(
     received_at: str,
     sender_identity: str,
     source_message_id: str | None = None,
+    conversation_id: str | None = None,
+    deadline_at: str | None = None,
 ) -> str:
     """The synchronous prefix of a report: write the raw text and return the event ID, before any model call runs (§7.2's own requirement — "before any processing begins")."""
 
@@ -137,6 +163,7 @@ def begin_report(
         InitialEventEnvelope(
             raw_text=raw_text, source=source, received_at=received_at, sender_identity=sender_identity,
             source_message_id=source_message_id,
+            trace_id=get_trace_id() or None, conversation_id=conversation_id, deadline_at=deadline_at,
         ),
     )
 
@@ -153,6 +180,10 @@ def begin_report(
 
 def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent") -> FlowResult:
     """The rest of a report: extraction through outcome."""
+
+    deadline_failure = _deadline_failure(deps, event_id, "extraction")
+    if deadline_failure is not None:
+        return deadline_failure
 
     event = deps.persistence.fetch_event(event_id)
     raw_text, source, received_at = event["raw_text"], event["source"], event["received_at"]
@@ -209,7 +240,15 @@ def process_report(
     return run_report_extraction(deps, event_id, main_agent, insights_agent)
 
 
-def begin_request(deps: FlowDeps, raw_text: str, received_at: str, sender_identity: str, source_message_id: str | None = None) -> str:
+def begin_request(
+    deps: FlowDeps,
+    raw_text: str,
+    received_at: str,
+    sender_identity: str,
+    source_message_id: str | None = None,
+    conversation_id: str | None = None,
+    deadline_at: str | None = None,
+) -> str:
     """The synchronous prefix of a request: write the raw text, already classified `human_activation` (§6.13 — there is nothing to extract), and return the event ID."""
 
     event_id = record_initial_event(
@@ -217,6 +256,7 @@ def begin_request(deps: FlowDeps, raw_text: str, received_at: str, sender_identi
         InitialEventEnvelope(
             raw_text=raw_text, source="telegram", received_at=received_at, sender_identity=sender_identity,
             source_message_id=source_message_id, occurred_at=received_at, occurred_at_is_fallback=False,
+            trace_id=get_trace_id() or None, conversation_id=conversation_id, deadline_at=deadline_at,
         ),
     )
     record_event_state(deps.persistence, event_id, {"classification": HUMAN_ACTIVATION_TYPE})
@@ -417,18 +457,38 @@ def _look_up_precedent_if_possible(deps: FlowDeps, event_id: str, event: dict) -
 
 
 def continue_from_risk_assessment(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent", originated_from_commander: bool) -> FlowResult:
+    deadline_failure = _deadline_failure(deps, event_id, "risk_assessment")
+    if deadline_failure is not None:
+        return deadline_failure
     event = deps.persistence.fetch_event(event_id)
     raw_text, classification, area = event["raw_text"], event["classification"], event["area"]
     description, severity = event["description"], event["severity"]
 
+    operational_mode = deps.optimization_policy.operational_decision_mode
+    combined_decision = None
+    if operational_mode in {"shadow", "merged"}:
+        try:
+            combined_decision = make_operational_decision(
+                main_agent, raw_text, classification, area, description, severity,
+                deps.protocol_set.all(), deps.settings_store.get_risk_threshold(),
+            )
+        except OrchestrationParseError as exc:
+            logger.warning(
+                "combined operational decision failed validation",
+                extra={"event": "operational_decision_invalid", "mode": operational_mode, "reason": str(exc), "trace_id": get_trace_id()},
+            )
+            if operational_mode == "merged":
+                record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
+                return FlowResult(event_id, "failed", str(exc))
+
     try:
-        risk_assessment = assess_risk(
-            main_agent,
-            classification,
-            area,
-            description,
-            severity,
-            deps.settings_store.get_risk_threshold(),
+        risk_assessment = (
+            combined_decision.risk
+            if operational_mode == "merged" and combined_decision is not None
+            else assess_risk(
+                main_agent, classification, area, description, severity,
+                deps.settings_store.get_risk_threshold(),
+            )
         )
     except OrchestrationParseError as exc:
         record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
@@ -443,8 +503,15 @@ def continue_from_risk_assessment(deps: FlowDeps, event_id: str, main_agent: "Ma
         },
     )
 
+    deadline_failure = _deadline_failure(deps, event_id, "protocol_selection")
+    if deadline_failure is not None:
+        return deadline_failure
     try:
-        selection = select_protocol(main_agent, raw_text, classification, area, description, deps.protocol_set.all(), risk_assessment.level)
+        selection = (
+            combined_decision.selection
+            if operational_mode == "merged" and combined_decision is not None
+            else select_protocol(main_agent, raw_text, classification, area, description, deps.protocol_set.all(), risk_assessment.level)
+        )
     except OrchestrationParseError as exc:
         record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
         _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="protocol_selection")
@@ -518,6 +585,9 @@ def _run_protocol(
     area: str | None,
     description: str | None,
 ) -> FlowResult:
+    deadline_failure = _deadline_failure(deps, event_id, "formulation")
+    if deadline_failure is not None:
+        return deadline_failure
     formulation = formulate_tasks(main_agent, protocol, deps.registry, raw_text, classification, area, description, precedent_context=precedent_matches)
     if not formulation.success:
         formulation = formulate_tasks(main_agent, protocol, deps.registry, raw_text, classification, area, description, precedent_context=precedent_matches)
@@ -530,6 +600,9 @@ def _run_protocol(
     agents_by_name = {name: deps.registry.get(name) for name in protocol.participating_agents}
     task_rewriter = functools.partial(rewrite_task, main_agent)
 
+    deadline_failure = _deadline_failure(deps, event_id, "execution")
+    if deadline_failure is not None:
+        return deadline_failure
     run_result = execute_steps(list(formulation.steps), agents_by_name, deps.settings_store, task_rewriter=task_rewriter)
 
     for index, outcome in enumerate(run_result.step_outcomes):
@@ -538,6 +611,7 @@ def _run_protocol(
             StepExecutionEnvelope(
                 step_index=index, agent_name=outcome.step.agent_name, task_text=outcome.step.task_text,
                 allowed_tools=list(outcome.step.allowed_tools), result_text=outcome.result_text, attempt_count=outcome.attempt_count,
+                step_id=outcome.step.step_id, depends_on=outcome.step.depends_on,
             ),
         )
 
@@ -546,21 +620,49 @@ def _run_protocol(
         _log_event_outcome(event_id, "failed", failure_reason=run_result.failure_cause, stage="execution", failed_step_agent=run_result.failed_step_agent)
         return FlowResult(event_id, "failed", run_result.failure_cause or "")
 
-    insight_text = build_insight(insights_agent, protocol, run_result.step_outcomes, comparable_history=precedent_matches)
+    deadline_failure = _deadline_failure(deps, event_id, "final_assessment")
+    if deadline_failure is not None:
+        return deadline_failure
+    final_assessment = None
+    persisted_event = deps.persistence.fetch_event(event_id)
+    if (
+        deps.optimization_policy.final_assessment_mode == "low_risk_merged"
+        and persisted_event is not None
+        and persisted_event.get("risk_level") == "low"
+    ):
+        try:
+            final_assessment = assess_final_once(main_agent, protocol, run_result.step_outcomes, precedent_matches)
+        except OrchestrationParseError as exc:
+            logger.warning(
+                "merged final assessment failed; using separate verifiers",
+                extra={"event": "final_assessment_invalid", "reason": str(exc), "trace_id": get_trace_id()},
+            )
+
+    insight_text = (
+        final_assessment.insight
+        if final_assessment is not None
+        else build_insight(insights_agent, protocol, run_result.step_outcomes, comparable_history=precedent_matches)
+    )
     logger.info(
         "insight generated",
         extra={"event": "insight_generated", "event_id": event_id, "protocol": protocol.name, "insight_text": insight_text, "trace_id": get_trace_id()},
     )
 
-    try:
-        verdict = judge_success(main_agent, protocol, run_result.step_outcomes, insight_text=insight_text)
-    except OrchestrationParseError:
+    deadline_failure = _deadline_failure(deps, event_id, "judgment")
+    if deadline_failure is not None:
+        return deadline_failure
+    if final_assessment is not None:
+        verdict = final_assessment.verdict
+    else:
         try:
             verdict = judge_success(main_agent, protocol, run_result.step_outcomes, insight_text=insight_text)
-        except OrchestrationParseError as exc:
-            record_event_outcome(deps.persistence, event_id, "failed", failure_reason=f"success judgment failed: {exc}", insight_text=insight_text)
-            _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="judgment")
-            return FlowResult(event_id, "failed", str(exc))
+        except OrchestrationParseError:
+            try:
+                verdict = judge_success(main_agent, protocol, run_result.step_outcomes, insight_text=insight_text)
+            except OrchestrationParseError as exc:
+                record_event_outcome(deps.persistence, event_id, "failed", failure_reason=f"success judgment failed: {exc}", insight_text=insight_text)
+                _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="judgment")
+                return FlowResult(event_id, "failed", str(exc))
 
     outcome = _VERDICT_TO_OUTCOME[verdict.verdict]
     record_event_outcome(deps.persistence, event_id, outcome, insight_text=insight_text)

@@ -68,6 +68,12 @@ own p50 latency is, roughly in sequence (this system's flow does not
 parallelize independent calls today), is the honest estimate to build
 from, not this review's own mocked-model number.
 
+The legacy full sensor path can use up to seven calls, and a Telegram
+report/request up to eight including intent. The six-call fixture table above
+is retained as the exact scenario it measured. Merged planner/decision/final
+assessment modes and read-only fan-out are gated optimizations, so production
+estimates must come from traces grouped by active profile policy.
+
 ## Calls that could be merged or reused
 
 `orchestrator.precedent.look_up_precedent` and `orchestrator.insights

@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import importlib
 import sys
+import uuid
 from pathlib import Path
 
 from bot import (
@@ -70,20 +71,26 @@ async def _background_poll_loop(
 ) -> None:
     """Mirrors `bot.notifications.run_notification_poll_loop`'s own shape — a standing loop, started once, running until told to stop — but never calls `dispatch_notification` itself:..."""
 
+    transport_backoff = 0.5
     while not stop_event.is_set():
         try:
-            notifications, cursor = await deps.api_client.poll_pending_notifications(cursor)
+            notifications, cursor = await deps.api_client.poll_pending_notifications(cursor, 20)
         except ApiRequestError as exc:
             state.poll_error = str(exc)
+            reconnect_delay = transport_backoff
+            transport_backoff = min(30.0, transport_backoff * 2)
         else:
             state.poll_error = None
             cursor_store.write(cursor)
             state.arrived.extend(notifications)
+            reconnect_delay = 0
+            transport_backoff = 0.5
 
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=poll_interval)
-        except asyncio.TimeoutError:
-            pass
+        if reconnect_delay:
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=reconnect_delay)
+            except asyncio.TimeoutError:
+                pass
 
 
 async def _drain_arrived(deps: BotDeps, state: _BackgroundState, pending_holds: list) -> None:
@@ -188,6 +195,8 @@ async def _run_repl(
     cursor_store: NotificationCursorStore,
     cursor_path: Path,
 ) -> None:
+    await deps.api_client.start()
+    conversation_id = f"terminal-commander:{test_identity}:{uuid.uuid4().hex}"
     cursor = await _initial_cursor(deps, cursor_store, cursor_path, test_identity)
 
     state = _BackgroundState()
@@ -218,7 +227,9 @@ async def _run_repl(
                     continue
 
                 try:
-                    reply = await handle_incoming_message(deps, test_identity, text, new_message_id())
+                    reply = await handle_incoming_message(
+                        deps, test_identity, text, new_message_id(), conversation_id=conversation_id
+                    )
                 except (ApiRequestError, BotError) as exc:
                     print(f"(request failed: {exc})")
                     continue
@@ -250,6 +261,7 @@ async def _run_repl(
             await background_task
         except asyncio.CancelledError:
             pass
+        await deps.api_client.close()
 
 
 def main(argv: list[str] | None = None) -> None:

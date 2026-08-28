@@ -368,4 +368,8 @@ def test_step_has_exactly_three_fields():
     assert step.agent_name == "reference_agent"
     assert step.task_text == "check gate 3"
     assert step.allowed_tools == ("check_status",)
-    assert {f for f in step.__dataclass_fields__} == {"agent_name", "task_text", "allowed_tools"}
+    assert {f for f in step.__dataclass_fields__} == {
+        "agent_name", "task_text", "allowed_tools", "step_id", "depends_on"
+    }
+    assert step.step_id == ""
+    assert step.depends_on == ()

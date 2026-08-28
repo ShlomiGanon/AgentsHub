@@ -31,6 +31,9 @@ class InitialEventEnvelope:
     occurred_at: str | None = None
     occurred_at_is_fallback: bool = False
     event_id: str | None = None
+    trace_id: str | None = None
+    conversation_id: str | None = None
+    deadline_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,8 @@ class StepExecutionEnvelope:
     allowed_tools: list[str]
     result_text: str | None
     attempt_count: int
+    step_id: str = ""
+    depends_on: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

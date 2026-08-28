@@ -12,7 +12,7 @@ which exists to fail loudly, not to be a test double.
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from bot.api_client import BotApiClient, BotNotification, HoldAnswerOutcome, JobResult, MessageSubmissionResult, ProfileView, SettingsView, UserLookupResult, WriteResult
+from bot.api_client import ApiRequestError, BotApiClient, BotNotification, HoldAnswerOutcome, JobResult, MessageSubmissionResult, ProfileView, SettingsView, UserLookupResult, WriteResult
 from bot.telegram_client import TelegramClient
 
 
@@ -77,8 +77,15 @@ class FakeBotApiClient(BotApiClient):
         self.calls.append(("list_commander_chat_ids",))
         return self.commander_chat_ids
 
-    async def submit_message(self, text: str, sender_identity: str, source_message_id: str) -> MessageSubmissionResult:
-        self.calls.append(("submit_message", text, sender_identity, source_message_id))
+    async def submit_message(
+        self, text: str, sender_identity: str, source_message_id: str, conversation_id: str | None = None
+    ) -> MessageSubmissionResult:
+        if sender_identity not in self.users:
+            raise ApiRequestError(401, f"'{sender_identity}' is not a registered identity")
+        call = ("submit_message", text, sender_identity, source_message_id)
+        self.calls.append(call)
+        if conversation_id is not None:
+            self.calls.append(("submit_message_conversation", conversation_id))
         assert self.message_submission_result is not None, "test must set message_submission_result"
         return self.message_submission_result
 
@@ -120,6 +127,6 @@ class FakeBotApiClient(BotApiClient):
         self.calls.append(("get_job_result", job_id, caller_identity))
         return self.job_result
 
-    async def poll_pending_notifications(self, since: int) -> tuple[tuple[BotNotification, ...], int]:
+    async def poll_pending_notifications(self, since: int, wait_seconds: int = 0) -> tuple[tuple[BotNotification, ...], int]:
         self.calls.append(("poll_pending_notifications", since))
         return self.pending_notifications, since + len(self.pending_notifications)

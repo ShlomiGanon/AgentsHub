@@ -77,6 +77,7 @@ class MessageSubmissionResult:
     answer_text: str | None = None
     job_id: str | None = None
     awaiting_approval: bool = False
+    provenance: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -206,10 +207,17 @@ class BotNotification:
         | FailureNotice
     )
     reply_to_message_id: str | None = None
+    trace_id: str | None = None
 
 
 class BotApiClient(ABC):
     """Everything `bot/` needs from the API Layer."""
+
+    async def start(self) -> None:
+        """Open lifecycle-managed transport resources when needed."""
+
+    async def close(self) -> None:
+        """Close lifecycle-managed transport resources."""
 
 
     @abstractmethod
@@ -221,7 +229,13 @@ class BotApiClient(ABC):
 
 
     @abstractmethod
-    async def submit_message(self, text: str, sender_identity: str, source_message_id: str) -> MessageSubmissionResult:
+    async def submit_message(
+        self,
+        text: str,
+        sender_identity: str,
+        source_message_id: str,
+        conversation_id: str | None = None,
+    ) -> MessageSubmissionResult:
         """`source_message_id` — the incoming Telegram message's own ID — is what an eventual asynchronous job result (§8.9) or failure notification (§8.11) needs to send its reply *as a r..."""
 
 
@@ -266,7 +280,7 @@ class BotApiClient(ABC):
 
 
     @abstractmethod
-    async def poll_pending_notifications(self, since: int) -> tuple[tuple[BotNotification, ...], int]:
+    async def poll_pending_notifications(self, since: int, wait_seconds: int = 0) -> tuple[tuple[BotNotification, ...], int]:
         """Everything newly relevant since the caller's own `since` cursor (0 for "from the beginning"), plus the cursor to pass as `since` on the next call."""
 
 
@@ -279,7 +293,9 @@ class UnimplementedApiClient(BotApiClient):
     async def list_commander_chat_ids(self) -> tuple[str, ...]:
         raise ApiNotImplementedError("list_commander_chat_ids", "§7.9 (authentication/authorization enforcement)")
 
-    async def submit_message(self, text: str, sender_identity: str, source_message_id: str) -> MessageSubmissionResult:
+    async def submit_message(
+        self, text: str, sender_identity: str, source_message_id: str, conversation_id: str | None = None
+    ) -> MessageSubmissionResult:
         raise ApiNotImplementedError("submit_message", "§7.4 (POST /Msg)")
 
     async def answer_clarification_hold(
@@ -308,5 +324,5 @@ class UnimplementedApiClient(BotApiClient):
     async def get_job_result(self, job_id: str, caller_identity: str) -> JobResult | None:
         raise ApiNotImplementedError("get_job_result", "§7.2 (async job mechanism)")
 
-    async def poll_pending_notifications(self, since: int) -> tuple[tuple[BotNotification, ...], int]:
+    async def poll_pending_notifications(self, since: int, wait_seconds: int = 0) -> tuple[tuple[BotNotification, ...], int]:
         raise ApiNotImplementedError("poll_pending_notifications", "§7.2 (async job mechanism)")

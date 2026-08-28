@@ -3,12 +3,12 @@
 import asyncio
 
 import json
+import random
+import uuid
 
-import urllib.error
+from urllib.parse import quote
 
-import urllib.parse
-
-import urllib.request
+import httpx
 
 from typing import Literal
 
@@ -38,44 +38,94 @@ from abc import ABC, abstractmethod
 from typing import Callable, Sequence
 
 from bot.interactions import split_message
+from tools import get_trace_id, new_trace_id, stage_context
 
 def _do_request(url: str, method: str, identity: str, request_payload: dict | None) -> tuple[int, dict]:
-    request_bytes = json.dumps(request_payload).encode("utf-8") if request_payload is not None else None
-    headers = {"X-Identity": identity}
-    if request_bytes is not None:
-        headers["Content-Type"] = "application/json"
-
-    request = urllib.request.Request(url, data=request_bytes, method=method, headers=headers)
-
     try:
-        with urllib.request.urlopen(request) as response:
-            response_bytes = response.read()
-            return response.status, (json.loads(response_bytes) if response_bytes else {})
-    except urllib.error.HTTPError as exc:
-        response_bytes = exc.read()
+        response = httpx.request(
+            method,
+            url,
+            headers={"X-Identity": identity},
+            json=request_payload,
+            timeout=httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=75.0),
+        )
+        if not response.content:
+            return response.status_code, {}
         try:
-            payload = json.loads(response_bytes) if response_bytes else {}
-        except json.JSONDecodeError:
-            payload = {"message": response_bytes.decode("utf-8", errors="replace")}
-        return exc.code, payload
-    except urllib.error.URLError as exc:
-        raise ApiRequestError(None, str(exc.reason)) from exc
+            return response.status_code, response.json()
+        except ValueError:
+            return response.status_code, {"message": response.text}
+    except httpx.HTTPError as exc:
+        raise ApiRequestError(None, str(exc)) from exc
 
 
 class HttpApiClient(BotApiClient):
     def __init__(self, base_url: str):
         self._base_url = base_url.rstrip("/")
+        self._client: httpx.AsyncClient | None = None
 
-    async def _call(self, method: str, path: str, identity: str, request_payload: dict | None = None) -> tuple[int, dict]:
-        url = f"{self._base_url}{path}"
-        return await asyncio.to_thread(_do_request, url, method, identity, request_payload)
+    async def start(self) -> None:
+        if self._client is None:
+            self._client = self._build_client()
+
+    async def close(self) -> None:
+        client, self._client = self._client, None
+        if client is not None:
+            await client.aclose()
+
+    def _build_client(self) -> httpx.AsyncClient:
+        timeout = httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=75.0)
+        limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
+        return httpx.AsyncClient(base_url=self._base_url, timeout=timeout, limits=limits)
+
+    async def _call(
+        self,
+        method: str,
+        path: str,
+        identity: str,
+        request_payload: dict | None = None,
+        *,
+        read_timeout: float | None = None,
+    ) -> tuple[int, dict]:
+        persistent_client = self._client
+        client = persistent_client or self._build_client()
+        headers = {
+            "X-Identity": identity,
+            "X-Trace-ID": get_trace_id() or new_trace_id(),
+            "X-Client-Request-ID": uuid.uuid4().hex,
+        }
+        attempts = 3 if method == "GET" else 1
+
+        try:
+            for attempt in range(attempts):
+                try:
+                    timeout = None if read_timeout is None else httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=read_timeout)
+                    with stage_context("bot_http"):
+                        response = await client.request(method, path, headers=headers, json=request_payload, timeout=timeout)
+                    try:
+                        payload = response.json() if response.content else {}
+                    except ValueError:
+                        payload = {"message": response.text}
+
+                    if method != "GET" or response.status_code < 500 or attempt == attempts - 1:
+                        return response.status_code, payload
+                except (httpx.TimeoutException, httpx.TransportError) as exc:
+                    if attempt == attempts - 1:
+                        raise ApiRequestError(None, str(exc)) from exc
+
+                await asyncio.sleep(random.uniform(0.0, 0.2 * (2 ** attempt)))
+        finally:
+            if persistent_client is None:
+                await client.aclose()
+
+        raise ApiRequestError(None, "request failed without a response")
 
     def _raise_for_error(self, status: int, payload: dict) -> None:
         raise ApiRequestError(status, payload.get("message", ""), payload.get("error_class"), payload.get("field"))
 
 
     async def resolve_user(self, telegram_identity: str) -> UserLookupResult:
-        status, response_payload = await self._call("GET", f"/User/{urllib.parse.quote(telegram_identity, safe='')}", BOT_SERVICE_IDENTITY)
+        status, response_payload = await self._call("GET", f"/User/{quote(telegram_identity, safe='')}", BOT_SERVICE_IDENTITY)
         if status >= 400:
             self._raise_for_error(status, response_payload)
         return UserLookupResult(registered=response_payload["registered"], permission_level=response_payload["permission_level"])
@@ -87,15 +137,28 @@ class HttpApiClient(BotApiClient):
             self._raise_for_error(status, response_payload)
         return tuple(c["telegram_identity"] for c in response_payload["commanders"])
 
-    async def submit_message(self, text: str, sender_identity: str, source_message_id: str) -> MessageSubmissionResult:
+    async def submit_message(
+        self,
+        text: str,
+        sender_identity: str,
+        source_message_id: str,
+        conversation_id: str | None = None,
+    ) -> MessageSubmissionResult:
+        body = {"text": text, "sender_identity": sender_identity, "source_message_id": source_message_id}
+        if conversation_id is not None:
+            body["conversation_id"] = conversation_id
         status, response_payload = await self._call(
-            "POST", "/Msg", sender_identity, {"text": text, "sender_identity": sender_identity, "source_message_id": source_message_id}
+            "POST", "/Msg", sender_identity, body
         )
         if status >= 400:
             self._raise_for_error(status, response_payload)
 
         if response_payload["taken_as"] in {"question", "conversational", "clarification"}:
-            return MessageSubmissionResult(kind=response_payload["taken_as"], answer_text=response_payload.get("answer"))
+            return MessageSubmissionResult(
+                kind=response_payload["taken_as"],
+                answer_text=response_payload.get("answer"),
+                provenance=response_payload.get("provenance"),
+            )
 
         return MessageSubmissionResult(kind=response_payload["taken_as"], job_id=response_payload.get("event_id"), awaiting_approval=False)
 
@@ -166,9 +229,9 @@ class HttpApiClient(BotApiClient):
         if action == "add":
             status, response_payload = await self._call("POST", "/Protocol", caller_identity, protocol_payload)
         elif action == "edit":
-            status, response_payload = await self._call("PUT", f"/Protocol/{urllib.parse.quote(name, safe='')}", caller_identity, protocol_payload)
+            status, response_payload = await self._call("PUT", f"/Protocol/{quote(name, safe='')}", caller_identity, protocol_payload)
         else:
-            status, response_payload = await self._call("DELETE", f"/Protocol/{urllib.parse.quote(name, safe='')}", caller_identity, None)
+            status, response_payload = await self._call("DELETE", f"/Protocol/{quote(name, safe='')}", caller_identity, None)
 
         if status in (401, 403):
             self._raise_for_error(status, response_payload)
@@ -214,8 +277,13 @@ class HttpApiClient(BotApiClient):
             failed_step_agent_name=response_payload.get("failed_step_agent_name"),
         )
 
-    async def poll_pending_notifications(self, since: int) -> tuple[tuple[BotNotification, ...], int]:
-        status, response_payload = await self._call("GET", f"/Notifications?since={since}", BOT_SERVICE_IDENTITY)
+    async def poll_pending_notifications(self, since: int, wait_seconds: int = 0) -> tuple[tuple[BotNotification, ...], int]:
+        status, response_payload = await self._call(
+            "GET",
+            f"/Notifications?since={since}&wait_seconds={wait_seconds}",
+            BOT_SERVICE_IDENTITY,
+            read_timeout=max(5.0, wait_seconds + 5.0),
+        )
         if status >= 400:
             self._raise_for_error(status, response_payload)
 
@@ -225,6 +293,7 @@ class HttpApiClient(BotApiClient):
                 target_chat_ids=tuple(entry["target_chat_ids"]),
                 payload=self._parse_notification_payload(entry["kind"], entry["payload"]),
                 reply_to_message_id=entry.get("reply_to_message_id"),
+                trace_id=entry.get("trace_id"),
             )
             for entry in response_payload["notifications"]
         )
@@ -286,6 +355,8 @@ class HttpApiClient(BotApiClient):
         raise ValueError(f"unknown notification kind: {kind!r}")
 
 class TelegramClient(ABC):
+    async def send_activity(self, chat_id: str, action: str) -> None:
+        """Show non-text activity feedback when the transport supports it."""
     @abstractmethod
     async def validate_token(self) -> bool:
         """True if Telegram accepts the configured token, False if it rejects it outright (§8.1's "fail at startup ..."""
@@ -326,25 +397,31 @@ class PTBTelegramClient(TelegramClient):
             return False
 
     async def send_text(self, chat_id: str, text: str) -> None:
-        for chunk in split_message(text):
-            await self._application.bot.send_message(chat_id=chat_id, text=chunk)
+        with stage_context("telegram_send"):
+            for chunk in split_message(text):
+                await self._application.bot.send_message(chat_id=chat_id, text=chunk)
+
+    async def send_activity(self, chat_id: str, action: str) -> None:
+        await self._application.bot.send_chat_action(chat_id=chat_id, action=action)
 
     async def send_with_buttons(self, chat_id: str, text: str, buttons: Sequence[tuple[str, str]]) -> None:
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
         markup = InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=callback_data)] for label, callback_data in buttons])
 
-        chunks = split_message(text)
-        for chunk in chunks[:-1]:
-            await self._application.bot.send_message(chat_id=chat_id, text=chunk)
-        await self._application.bot.send_message(chat_id=chat_id, text=chunks[-1], reply_markup=markup)
+        with stage_context("telegram_send"):
+            chunks = split_message(text)
+            for chunk in chunks[:-1]:
+                await self._application.bot.send_message(chat_id=chat_id, text=chunk)
+            await self._application.bot.send_message(chat_id=chat_id, text=chunks[-1], reply_markup=markup)
 
     async def send_reply(self, chat_id: str, text: str, reply_to_message_id: str | None) -> None:
-        chunks = split_message(text)
-        if chunks:
-            await self._application.bot.send_message(chat_id=chat_id, text=chunks[0], reply_to_message_id=reply_to_message_id)
-        for chunk in chunks[1:]:
-            await self._application.bot.send_message(chat_id=chat_id, text=chunk)
+        with stage_context("telegram_send"):
+            chunks = split_message(text)
+            if chunks:
+                await self._application.bot.send_message(chat_id=chat_id, text=chunks[0], reply_to_message_id=reply_to_message_id)
+            for chunk in chunks[1:]:
+                await self._application.bot.send_message(chat_id=chat_id, text=chunk)
 
     async def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> None:
         await self._application.bot.answer_callback_query(callback_query_id=callback_query_id, text=text)

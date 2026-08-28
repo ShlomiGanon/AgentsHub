@@ -30,6 +30,8 @@ class Step:
     agent_name: str
     task_text: str
     allowed_tools: tuple[str, ...]
+    step_id: str = ""
+    depends_on: tuple[str, ...] = ()
 
 
 class ProtocolEditError(Exception):

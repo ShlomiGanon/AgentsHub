@@ -8,12 +8,16 @@ import sys
 from tools import observability
 from tools.observability import (
     configure_logging,
+    configure_telemetry,
     get_current_stage,
     get_trace_id,
     log_ai_interaction,
+    latency_snapshot,
     new_trace_id,
+    normalize_trace_id,
     set_trace_id,
     stage_context,
+    telemetry_span,
     trace_context,
     verbose_logging_enabled,
 )
@@ -46,12 +50,16 @@ if not any(isinstance(finder, _TerminalAliasFinder) for finder in sys.meta_path)
 
 __all__ = [
     "configure_logging",
+    "configure_telemetry",
     "get_current_stage",
     "get_trace_id",
     "log_ai_interaction",
+    "latency_snapshot",
     "new_trace_id",
+    "normalize_trace_id",
     "set_trace_id",
     "stage_context",
+    "telemetry_span",
     "trace_context",
     "verbose_logging_enabled",
 ]

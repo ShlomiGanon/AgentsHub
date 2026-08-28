@@ -59,6 +59,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `fixtures/__init__.py` | Fixture | Internal | Marks reusable fixtures as a package. |
 | `fixtures/profiles/__init__.py` | Fixture | Internal | Marks fixture deployment profiles as a package. |
 | `fixtures/profiles/minimal_profile.py` | Fixture | Internal | Defines the minimal valid profile used by loading and integration tests. |
+| `fixtures/response_eval_v1.jsonl` | Fixture | Internal | Provides a versioned Hebrew and English response-quality corpus. |
 | `fixtures/seed_events.py` | Fixture | Internal | Provides deterministic historical event fixtures. |
 | `history/__init__.py` | Production | Public facade | Exposes the history facade and compatibility module aliases. |
 | `history/contracts.py` | Production | Private implementation | Defines history extraction, query, summary, and persistence-transfer contracts. |
@@ -150,10 +151,12 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_protocol_retry.py` | Test | Internal | Verifies protocol retry behavior and edge cases. |
 | `tests/test_question_answering.py` | Test | Internal | Verifies question routing and read-only specialist/history answers. |
 | `tests/test_reference_agent.py` | Test | Internal | Verifies reference agent behavior and edge cases. |
+| `tests/test_response_improvements.py` | Test | Internal | Verifies conversation retention, long polling, trace propagation, queue ordering, idempotency, and streaming gates. |
 | `tests/test_sqlite_store.py` | Test | Internal | Verifies SQLite serialization, concurrency, and user persistence. |
 | `tests/test_user_admin.py` | Test | Internal | Verifies user admin behavior and edge cases. |
 | `tools/__init__.py` | Production | Public facade | Exposes shared observability helpers and lazy terminal compatibility aliases. |
 | `tools/observability.py` | Production | Private implementation | Provides trace contexts, structured logging, and human/JSON output. |
+| `tools/evaluate_response_pipeline.py` | Production | Public entry point | Runs versioned offline response evals and opt-in billed live evaluation. |
 | `tools/simulator.py` | Production | Public entry point | Provides the event-simulator executable entry point. |
 | `tools/terminal_client_commander.py` | Production | Public entry point | Provides the commander terminal-client executable workflow. |
 | `tools/terminal_client_viewer.py` | Production | Public entry point | Provides the viewer terminal-client executable workflow. |

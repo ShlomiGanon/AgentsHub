@@ -2592,3 +2592,39 @@ no CI change was needed.
 - Preserved direct answers through the HTTP and Telegram paths for questions, conversation, and clarification, without creating false job acknowledgements. Decision-only agents are excluded from question delegation.
 - Added a manual, billed real-model intent evaluation mode to `tests/sanity_check_real_model_call.py`; it was intentionally not executed during local acceptance because it can use network access and incur provider charges.
 - Acceptance: all 879 pre-existing pytest node IDs remain byte-for-byte identical as a set (same SHA-256 fingerprint), 17 focused tests were added, and the complete suite passes with 896 passed and 0 failed. Architecture, catalog, legacy-import, migration, fresh-database, persistence, API, bot, and integration coverage all pass; the six warnings are unchanged third-party CrewAI deprecations. No repository-control operation was performed.
+
+## IMPROVE-A — observability and quality gate infrastructure implemented (2026-08-28)
+
+- Added monotonic stage spans with completion reason, trace propagation from HTTP through events and notifications, local structured telemetry, optional OTLP export with startup validation, and manual spans for HTTP, queues, models, tools, SQLite, notification delivery, and Telegram sends. Telemetry-only records remain outside the durable business-event log and full prompts remain debug-only.
+- Added the versioned bilingual `fixtures/response_eval_v1.jsonl` corpus and `tools/evaluate_response_pipeline.py`; offline corpus validation found 12 cases split evenly between development and held-out. The billed `--live` mode was intentionally not run.
+- Corrected the model-call documentation and removed the hard-coded README test count. Activation status: implemented; live p50/p95/p99 baseline and one-week quality gate still pending external traffic.
+
+## IMPROVE-B — transport, persistence, and waiting implemented (2026-08-28)
+
+- Removed the free-text bot `/User` preflight, preserved the existing 401/403 refusal behavior, replaced the bot HTTP transport with lifecycle-managed `httpx` and bounded timeouts/retries, and moved bot/terminal polling to 20-second long polling with transport-only exponential backoff.
+- Notification waiters now wake only after a transaction that committed a notification. Event-step reads are batched, read connections are thread-scoped and closed on shutdown, migrations run `ANALYZE` only when applied, and conversation history is isolated, TTL/turn bounded, and disabled for legacy profiles.
+- Telegram typing now refreshes during perceptible work and always stops on completion, error, or cancellation. Activation status: backward-compatible API behavior is active; conversation memory is enabled only by profiles that opt into a nonzero turn count.
+
+## IMPROVE-C and IMPROVE-D — model-call and runtime optimizations implemented behind gates (2026-08-28)
+
+- Added validated `MessagePlan`, `QuestionAnswer` provenance, conversation-reference context, bounded parallel read-only specialists, strict provider capability adaptation, one focused JSON repair, explicit invocation budgets, and legacy/shadow/merged planner modes.
+- Added optional combined operational and low-risk final decisions, cached CrewAI imports/tool classes, per-call `ContextVar` allowlists, provider concurrency control, shared direct-request deadlines, and validated stage-model policy contracts. Invalid or semantically unsafe decisions clarify/fail instead of becoming actions.
+- Activation status: legacy planner, separate verifiers, structured output off, and serial queue remain the default. Model selection, merged modes, and non-inferiority claims require the live/held-out gates and were not asserted locally.
+
+## IMPROVE-E — concurrency, capacity, idempotency, and streaming surface implemented (2026-08-28)
+
+- Added DAG `step_id`/`depends_on`, deterministic result ordering, parallel read-only execution, cross-event side-effect tool locks, provider/fan-out limits, and failure blocking for dependents without forced cancellation of started non-idempotent work.
+- Added the bounded policy-aware worker pool, continuation reservations, sender ordering, admission-before-event creation, 503/`Retry-After`, additive ingestion uniqueness, idempotent outcome notifications, persisted deadlines, and pre-stage budget checks.
+- Added the gated `/Msg/Stream` SSE surface. It emits verified `ack`, `final`, or `error` events today; token `delta` delivery and Telegram drafts remain capability-dependent and therefore streaming stays disabled by default.
+
+## IMPROVE local acceptance — passed; live rollout gates pending (2026-08-28)
+
+- Added nine focused regression tests for conversation isolation/pruning, long-poll wakeup, duplicate ingestion/outcomes, queue ordering/reserved capacity, DAG failure ordering, trace headers, and the streaming gate. Updated the existing Step contract assertion for its additive dependency fields.
+- Acceptance: `compileall`, architecture boundaries, exact file catalog, offline eval loading, and the complete suite pass. Final result: 905 passed, 0 failed in 222.22 seconds, with six unchanged third-party CrewAI deprecation warnings.
+- The final mocked full-run benchmark measured 175.8ms submission-to-persisted-outcome while preserving the measured legacy call counts; this is below the supplied 494.7ms starting point but is not a live-provider SLO. A prior warm run measured 152.4ms, illustrating why live distributions—not one mocked sample—remain the release gate.
+- Deviations/pending gates: no paid live eval, week-long traffic baseline, canary rollout, 10%/50% rollout, human calibration, production load test, Telegram draft test, or provider/model quality selection was performed. Those operations require live credentials/traffic and the feature flags remain rollback-safe until they pass.
+
+## README runtime guide refreshed (2026-08-29)
+
+- Updated the root quick start to match the current executable entry points and deployment behavior: virtual-environment setup, explicit per-terminal `.env` loading, initial human and `bot-service` identities, API startup verification through authenticated `GET /SYSTEM`, Telegram and terminal-client startup, and the single-process Waitress command.
+- Added concise startup troubleshooting for missing environment variables, incorrect profile module paths, connection failures, unauthorized identities, and invalid Telegram tokens. Documentation validation: every documented entry point was checked through its current `--help` output and `git diff --check -- README.md` passed.
