@@ -22,10 +22,10 @@ def tool(name: str, description: str, *, side_effecting: bool, idempotent: bool 
     if not side_effecting and idempotent is not None:
         raise ValueError(f"tool '{name}': idempotent has no meaning for a read-only tool (side_effecting=False)")
 
-    info = ToolInfo(name=name, description=description, side_effecting=side_effecting, idempotent=idempotent)
+    tool_info = ToolInfo(name=name, description=description, side_effecting=side_effecting, idempotent=idempotent)
 
     def _decorator(func: Callable) -> Callable:
-        setattr(func, _TOOL_META_ATTR, info)
+        setattr(func, _TOOL_META_ATTR, tool_info)
         return func
 
     return _decorator
@@ -39,9 +39,9 @@ def exposed_tools_for(agent_instance) -> tuple[ToolInfo, ...]:
     tools = []
     for attr_name in dir(type(agent_instance)):
         method = getattr(type(agent_instance), attr_name, None)
-        info = tool_info_of(method)
-        if info is not None:
-            tools.append(info)
+        tool_info = tool_info_of(method)
+        if tool_info is not None:
+            tools.append(tool_info)
 
     return tuple(tools)
 

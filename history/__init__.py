@@ -2,7 +2,7 @@
 
 import sys
 
-from history import contracts, events, query, summaries
+from history import contracts, event_pipeline, query, summaries
 from history.contracts import (
     ExtractionExecutionError,
     ExtractionResult,
@@ -15,7 +15,7 @@ from history.contracts import (
     StepExecutionEnvelope,
     SummaryGenerationError,
 )
-from history.events import (
+from history.event_pipeline import (
     day_bounds,
     extract_event,
     month_bounds,
@@ -31,14 +31,16 @@ from history.events import (
 from history.query import HistoryQueryService, find_precedents, retrieve_range
 from history.summaries import SummaryScheduler, generate_summary
 
-extraction = events
-time_utils = events
-write = events
+events = event_pipeline
+extraction = event_pipeline
+time_utils = event_pipeline
+write = event_pipeline
 scheduler = summaries
 interface = sys.modules[__name__]
-sys.modules[f"{__name__}.extraction"] = events
-sys.modules[f"{__name__}.time_utils"] = events
-sys.modules[f"{__name__}.write"] = events
+sys.modules[f"{__name__}.events"] = event_pipeline
+sys.modules[f"{__name__}.extraction"] = event_pipeline
+sys.modules[f"{__name__}.time_utils"] = event_pipeline
+sys.modules[f"{__name__}.write"] = event_pipeline
 sys.modules[f"{__name__}.scheduler"] = summaries
 sys.modules[f"{__name__}.interface"] = sys.modules[__name__]
 

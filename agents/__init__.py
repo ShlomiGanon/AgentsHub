@@ -23,21 +23,23 @@ sys.modules[f"{__name__}.errors"] = contracts
 sys.modules[f"{__name__}.results"] = contracts
 
 from agents import runtime
-from agents.runtime import Agent
+from agents.runtime import Agent, AgentRegistry, DuplicateAgentNameError, build_agent_registry
 
 adapter = runtime
 base = runtime
 sys.modules[f"{__name__}.adapter"] = runtime
 sys.modules[f"{__name__}.base"] = runtime
+sys.modules[f"{__name__}.registry"] = runtime
 
-from agents import builtins, registry
-from agents.builtins import HistoryAgent, ReferenceAgent
-from agents.registry import AgentRegistry, DuplicateAgentNameError, build_agent_registry
+from agents import standard_agents
+from agents.standard_agents import HistoryAgent, ReferenceAgent
 
-history = builtins
-reference = builtins
-sys.modules[f"{__name__}.history"] = builtins
-sys.modules[f"{__name__}.reference"] = builtins
+history = standard_agents
+reference = standard_agents
+builtins = standard_agents
+sys.modules[f"{__name__}.builtins"] = standard_agents
+sys.modules[f"{__name__}.history"] = standard_agents
+sys.modules[f"{__name__}.reference"] = standard_agents
 
 __all__ = [
     "Agent",

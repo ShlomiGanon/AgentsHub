@@ -10,30 +10,36 @@ deps = contracts
 sys.modules[f"{__name__}.api_client"] = contracts
 sys.modules[f"{__name__}.deps"] = contracts
 
-from bot import presentation
+from bot import interactions
 
-commands = presentation
-formatting = presentation
-holds = presentation
-users = presentation
+commands = interactions
+formatting = interactions
+holds = interactions
+users = interactions
+presentation = interactions
 for legacy_name in ("commands", "formatting", "holds", "users"):
-    sys.modules[f"{__name__}.{legacy_name}"] = presentation
+    sys.modules[f"{__name__}.{legacy_name}"] = interactions
+sys.modules[f"{__name__}.presentation"] = interactions
 
-from bot import client
-from bot.client import HttpApiClient, PTBTelegramClient, TelegramClient, _do_request
+from bot import transports
+from bot.transports import HttpApiClient, PTBTelegramClient, TelegramClient, _do_request
 
-http_api_client = client
-telegram_client = client
-sys.modules[f"{__name__}.http_api_client"] = client
-sys.modules[f"{__name__}.telegram_client"] = client
+http_api_client = transports
+telegram_client = transports
+client = transports
+sys.modules[f"{__name__}.client"] = transports
+sys.modules[f"{__name__}.http_api_client"] = transports
+sys.modules[f"{__name__}.telegram_client"] = transports
 
-from bot import runtime
-from bot.runtime import NotificationCursorStore, SingleInstanceLock, dispatch_notification
+from bot import background_services
+from bot.background_services import NotificationCursorStore, SingleInstanceLock, dispatch_notification
 
-notifications = runtime
-startup = runtime
-sys.modules[f"{__name__}.notifications"] = runtime
-sys.modules[f"{__name__}.startup"] = runtime
+notifications = background_services
+startup = background_services
+runtime = background_services
+sys.modules[f"{__name__}.runtime"] = background_services
+sys.modules[f"{__name__}.notifications"] = background_services
+sys.modules[f"{__name__}.startup"] = background_services
 
 from bot import app
 from bot.app import handle_incoming_message
@@ -42,11 +48,11 @@ interface = sys.modules[__name__]
 sys.modules[f"{__name__}.interface"] = sys.modules[__name__]
 
 do_request = _do_request
-format_approval_prompt = presentation.format_approval_prompt
-handle_approval_answer = presentation.handle_approval_answer
-handle_clarification_answer = presentation.handle_clarification_answer
-parse_approval_callback_data = presentation.parse_callback_data
-split_message = presentation.split_message
+format_approval_prompt = interactions.format_approval_prompt
+handle_approval_answer = interactions.handle_approval_answer
+handle_clarification_answer = interactions.handle_clarification_answer
+parse_approval_callback_data = interactions.parse_callback_data
+split_message = interactions.split_message
 
 __all__ = [
     "ApiRequestError",

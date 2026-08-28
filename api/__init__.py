@@ -1,9 +1,10 @@
 """Public API facade."""
 
 import sys
+from types import ModuleType
 
-from api import http
-from api.http import (
+from api import request_boundary
+from api.request_boundary import (
     ApiError,
     AuthenticationError,
     AuthorizationError,
@@ -16,10 +17,12 @@ from api.http import (
     require,
 )
 
-auth = http
-errors = http
-sys.modules[f"{__name__}.auth"] = http
-sys.modules[f"{__name__}.errors"] = http
+auth = request_boundary
+errors = request_boundary
+http = request_boundary
+sys.modules[f"{__name__}.auth"] = request_boundary
+sys.modules[f"{__name__}.errors"] = request_boundary
+sys.modules[f"{__name__}.http"] = request_boundary
 
 from api import routes
 
@@ -31,8 +34,21 @@ sys.modules[f"{__name__}.management"] = routes
 sys.modules[f"{__name__}.operations"] = routes
 
 from api import app
-from api.app import build_app, build_context, create_app
-from api.contracts import ApiContext
+from api.app import ApiContext, build_app, build_context, create_app
+
+contracts = ModuleType(f"{__name__}.contracts")
+contracts.ApiContext = ApiContext
+for error_type in (
+    ApiError,
+    AuthenticationError,
+    AuthorizationError,
+    ConflictError,
+    InvalidInputError,
+    NotFoundError,
+    RunFailureError,
+):
+    setattr(contracts, error_type.__name__, error_type)
+sys.modules[contracts.__name__] = contracts
 
 __all__ = [
     "ApiContext",

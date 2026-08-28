@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 def _can_retry(step: Step, agent: Agent) -> bool:
     exposed = {tool.name: tool for tool in agent.exposed_tools()}
     for tool_name in step.allowed_tools:
-        info = exposed.get(tool_name)
-        if info is not None and info.side_effecting and not info.idempotent:
+        tool_info = exposed.get(tool_name)
+        if tool_info is not None and tool_info.side_effecting and not tool_info.idempotent:
             return False
 
     return True
@@ -45,7 +45,7 @@ def execute_step_with_retry(
 
         try:
             with stage_context("step_execution"):
-                result = agent.process(current_task_text, list(step.allowed_tools))
+                agent_result = agent.process(current_task_text, list(step.allowed_tools))
         except AgentInvocationError as exc:
             last_failure_reason = str(exc)
             logger.info(
@@ -60,11 +60,11 @@ def execute_step_with_retry(
             sleep_fn(backoff_seconds)
             continue
 
-        if result.status == "unclear_task":
-            last_failure_reason = f"task unclear: {result.text}"
+        if agent_result.status == "unclear_task":
+            last_failure_reason = f"task unclear: {agent_result.text}"
             logger.info(
                 "step reported task unclear",
-                extra={"event": "step_unclear", "agent": step.agent_name, "attempt": attempts, "missing": result.text, "trace_id": get_trace_id()},
+                extra={"event": "step_unclear", "agent": step.agent_name, "attempt": attempts, "missing": agent_result.text, "trace_id": get_trace_id()},
             )
 
             if task_rewriter is None:
@@ -73,12 +73,12 @@ def execute_step_with_retry(
             if attempts >= attempt_limit or not _can_retry(step, agent):
                 return StepOutcome(step=step, result_text=None, attempt_count=attempts, succeeded=False, failure_reason=last_failure_reason)
 
-            current_task_text = task_rewriter(step, result.text)
+            current_task_text = task_rewriter(step, agent_result.text)
             logger.info("retrying step with rewritten task", extra={"event": "step_retry", "agent": step.agent_name, "attempt": attempts + 1, "cause": last_failure_reason, "trace_id": get_trace_id()})
             sleep_fn(backoff_seconds)
             continue
 
-        return StepOutcome(step=step, result_text=result.text, attempt_count=attempts, succeeded=True)
+        return StepOutcome(step=step, result_text=agent_result.text, attempt_count=attempts, succeeded=True)
 
 
 def execute_steps(

@@ -26,8 +26,8 @@ from orchestrator.holds import (
     determine_approval_hold,
     determine_clarification_hold,
 )
-from orchestrator.decisions import build_insight, construct_insights_agent
-from orchestrator.decisions import (
+from orchestrator.reasoning import build_insight, construct_insights_agent
+from orchestrator.reasoning import (
     OrchestrationParseError,
     answer_conversationally,
     assess_risk,
@@ -38,25 +38,24 @@ from orchestrator.decisions import (
     rewrite_task,
     select_protocol,
 )
-from orchestrator.decisions import determine_closure, look_up_precedent
-from orchestrator.question_flow import answer_question
-from orchestrator.runtime import SerialEventQueue
+from orchestrator.reasoning import answer_question, determine_closure, look_up_precedent
+from orchestrator.event_queue import SerialEventQueue
 from profiles import HUMAN_ACTIVATION_TYPE
 from protocols.executor import execute_steps
 from tools import get_trace_id
 
 if TYPE_CHECKING:
     from agents import Agent
-    from agents.registry import AgentRegistry
+    from agents.runtime import AgentRegistry
     from auth.permissions import PermissionLevel
     from config import BaseConfig, SettingsStore
     from history.query import HistoryQueryService
     from orchestrator.holds import HoldAnswerResult, HoldReason
-    from orchestrator.decisions import InsightsAgent, MainAgent
+    from orchestrator.reasoning import InsightsAgent, MainAgent
     from persistence import PersistenceInterface
     from profiles.loader import LoadedProfile
     from protocols import Protocol, ProtocolSet
-    from registries import AreaRegistry, EventTypeRegistry
+    from profiles import AreaRegistry, EventTypeRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -102,10 +101,10 @@ class FlowResult:
 
 def _model_invoker_for(main_agent: "MainAgent"):
     def _invoke(prompt: str) -> str:
-        result = main_agent.process(prompt, [])
-        if result.status != "success":
-            raise ExtractionExecutionError(f"main agent could not produce a usable extraction response: {result.text}")
-        return result.text
+        agent_result = main_agent.process(prompt, [])
+        if agent_result.status != "success":
+            raise ExtractionExecutionError(f"main agent could not produce a usable extraction response: {agent_result.text}")
+        return agent_result.text
 
     return _invoke
 
@@ -141,11 +140,6 @@ def begin_report(
         ),
     )
 
-    # The first log record of a report's own trace (§1.8 follow-up
-    # coverage audit gap): without this, reconstructing a run from the log
-    # sink alone starts at "extraction result" with no record of what was
-    # actually submitted or by whom — the raw text and sender only ever
-    # lived in the `events` table, never in the log stream itself.
     logger.info(
         "report received",
         extra={
@@ -186,10 +180,6 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
         },
     )
 
-    # No scheduler wired up here — FlowDeps has none; §5.6's late-arriving-
-    # event hook is an available extension point once a real startup
-    # sequence (§7/§9) constructs and threads a SummaryScheduler through,
-    # not required by §6.11's own bullets.
     record_extracted_fields(deps.persistence, event_id, extraction_result)
 
     if determine_clarification_hold(extraction_result):
@@ -231,8 +221,6 @@ def begin_request(deps: FlowDeps, raw_text: str, received_at: str, sender_identi
     )
     record_event_state(deps.persistence, event_id, {"classification": HUMAN_ACTIVATION_TYPE})
 
-    # Same reasoning as begin_report's own "report received" log, above —
-    # the first record of a request's own trace.
     logger.info(
         "request received",
         extra={
@@ -294,6 +282,7 @@ def resolve_clarification(
     """The synchronous prefix of answering a clarification hold: validate and record the answer, nothing more."""
 
     answer = answer_clarification_hold(deps.persistence, hold_id, answering_identity, answering_level, chosen_classification, deps.event_type_registry)
+    # Only a resolved hold may resume orchestration side effects.
     if answer.status != "resolved":
         return answer  # unauthorized / not_found / invalid_classification — nothing to resume
 
@@ -303,12 +292,6 @@ def resolve_clarification(
         {"classification": chosen_classification, "clarification_resolved_by": answering_identity, "clarification_chosen_classification": chosen_classification},
     )
 
-    # Who answered and what they chose (§1.8 follow-up coverage audit gap)
-    # — §1.8 itself only requires logging that a hold was *created*
-    # (already done, in run_report_extraction); without this, "why did
-    # this event proceed the way it did" can only be answered by reading
-    # the events/held_events tables, never the log stream a trace ID
-    # otherwise reconstructs everything else from.
     logger.info(
         "clarification hold resolved",
         extra={
@@ -338,6 +321,7 @@ def resume_after_clarification(
     """Answer a clarification hold and resume, synchronously start to finish — `resolve_clarification` + `continue_after_clarification` composed back into one call."""
 
     answer = resolve_clarification(deps, hold_id, answering_identity, answering_level, chosen_classification)
+    # Only a resolved hold may resume orchestration side effects.
     if answer.status != "resolved":
         return answer  # unauthorized / not_found / invalid_classification — nothing to resume
 
@@ -461,14 +445,18 @@ def continue_from_risk_assessment(deps: FlowDeps, event_id: str, main_agent: "Ma
 
     precedent_matches = _look_up_precedent_if_possible(deps, event_id, event)
     if precedent_matches:
-        record_event_state(deps.persistence, event_id, {"precedent_matched_event_ids": [p.event_id for p in precedent_matches]})
+        record_event_state(
+            deps.persistence,
+            event_id,
+            {"precedent_matched_event_ids": [precedent_match.event_id for precedent_match in precedent_matches]},
+        )
 
     closing_event_id = determine_closure(risk_assessment.level, classification, precedent_matches)
     logger.info(
         "precedent closure decision",
         extra={
             "event": "precedent_closure", "event_id": event_id,
-            "matched_event_ids": [p.event_id for p in precedent_matches],
+            "matched_event_ids": [precedent_match.event_id for precedent_match in precedent_matches],
             "closed": closing_event_id is not None, "closing_event_id": closing_event_id, "trace_id": get_trace_id(),
         },
     )
@@ -478,20 +466,13 @@ def continue_from_risk_assessment(deps: FlowDeps, event_id: str, main_agent: "Ma
         _log_event_outcome(event_id, "closed_on_precedent", precedent_event_id=closing_event_id)
         return FlowResult(event_id, "closed_on_precedent", f"closed against resolved precedent '{closing_event_id}'")
 
+    # No-match is terminal because there is no actionable hold to resolve.
     if selection.status == "no_match":
-        # A real terminal outcome plus a one-way notification, not a hold —
-        # there is no candidate to approve/reject/select, so nothing could
-        # ever resolve a held_events row for this; leaving it as a hold
-        # meant the event never reached a terminal outcome at all. Matches
-        # "uncertain"/"closed_on_precedent"'s own pattern exactly: write the
-        # outcome, and persistence.sqlite_backend._OUTCOME_TO_NOTIFICATION_KINDS
-        # fires the informational push (to commanders) and the submitter's
-        # own job_finished result as a side effect of that one write.
         record_event_outcome(deps.persistence, event_id, "no_match_protocol", failure_reason=selection.reason)
         _log_event_outcome(event_id, "no_match_protocol", reason=selection.reason)
         return FlowResult(event_id, "no_match_protocol", selection.reason)
 
-    protocols_by_name = {p.name: p for p in deps.protocol_set.all()}
+    protocols_by_name = {protocol.name: protocol for protocol in deps.protocol_set.all()}
     hold_reason: "HoldReason | None" = determine_approval_hold(selection, protocols_by_name, originated_from_commander)
 
     if hold_reason is not None:

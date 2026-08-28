@@ -1,7 +1,7 @@
 import pytest
 
 from persistence.exceptions import NotFoundError, PersistenceError
-from persistence.sqlite_backend import SQLitePersistence
+from persistence.sqlite_store import SQLitePersistence
 
 
 @pytest.fixture

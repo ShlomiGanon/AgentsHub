@@ -20,17 +20,17 @@ import threading
 
 from agents.history import HistoryAgent
 from agents.reference import ReferenceAgent
-from agents.registry import build_agent_registry
+from agents.runtime import build_agent_registry
 from api.app import ApiContext
-from config.settings_store import SettingsStore
+from config.live_settings import SettingsStore
 from history.interface import SummaryScheduler
 from history.query import HistoryQueryService
 from orchestrator.flows import FlowDeps, SerialEventQueue
-from persistence.sqlite_backend import SQLitePersistence
+from persistence.sqlite_store import SQLitePersistence
 from protocols.loader import ProtocolSet
 from protocols.model import CriticalityLevel, Protocol
-from registries.areas import AreaRegistry
-from registries.event_types import EventTypeRegistry
+from profiles import AreaRegistry
+from profiles import EventTypeRegistry
 
 VIEWER_IDENTITY = "viewer-1"
 COMMANDER_IDENTITY = "commander-1"
@@ -127,7 +127,7 @@ def happy_path_agent(risk_score="0.2", selected="status_check", verdict="success
         "Choose the protocol": f"SELECTED: {selected}\nREASON: fits",
         "participating in the": f"AGENT: reference_agent\nTASK: {agent_task}",
         "VERDICT:": f"VERDICT: {verdict}\nREASONING: matches expected output",
-        # orchestrator.question_flow's direct-lookup classification, ahead
+        # orchestrator.reasoning's direct-lookup classification, ahead
         # of agent-selection for every question — "ROUTE: normal" here
         # keeps every existing question-answering test's own
         # "Decide which of the following agents" dispatch entry reachable

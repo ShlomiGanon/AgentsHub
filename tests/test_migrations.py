@@ -71,7 +71,7 @@ def test_migration_six_adds_event_index_to_an_existing_version_five_database(tmp
 
 import json
 
-from config.settings_store import SettingsStore
+from config.live_settings import SettingsStore
 
 
 def test_first_run_takes_starting_values_from_profile_and_writes_file(tmp_path):

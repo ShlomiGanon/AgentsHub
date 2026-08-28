@@ -12,11 +12,11 @@ from config import ModelTierError, TierModel, resolve_tier_model_from_env
 from profiles.loader import LoadedProfile, ProfileLoadError, ProfileValidationError, load_profile
 from tools import configure_logging
 
-from bot import presentation
-from bot.client import HttpApiClient, PTBTelegramClient
+from bot import interactions
+from bot.transports import HttpApiClient, PTBTelegramClient
 from bot.contracts import ApiNotImplementedError, BotDeps, BotStartupError
-from bot.runtime import NotificationCursorStore, SingleInstanceLock, run_notification_poll_loop
-from bot.presentation import check_permission, resolve_caller
+from bot.background_services import NotificationCursorStore, SingleInstanceLock, run_notification_poll_loop
+from bot.interactions import check_permission, resolve_caller
 
 logger = logging.getLogger(__name__)
 
@@ -108,15 +108,15 @@ async def handle_incoming_message(deps: BotDeps, telegram_identity: str, text: s
     if refusal is not None:
         return refusal
 
-    result = await deps.api_client.submit_message(text, telegram_identity, message_id)
-    if result.kind == "question":
-        return result.answer_text or "(no answer was returned)"
+    submission_result = await deps.api_client.submit_message(text, telegram_identity, message_id)
+    if submission_result.kind == "question":
+        return submission_result.answer_text or "(no answer was returned)"
 
-    lines = [f"Got it — taken as a {result.kind}."]
-    if result.awaiting_approval:
+    lines = [f"Got it — taken as a {submission_result.kind}."]
+    if submission_result.awaiting_approval:
         lines.append("It is now waiting for a commander's approval.")
-    elif result.job_id:
-        lines.append(f"Job ID: {result.job_id}. You'll hear back here once it's done.")
+    elif submission_result.job_id:
+        lines.append(f"Job ID: {submission_result.job_id}. You'll hear back here once it's done.")
     return "\n".join(lines)
 
 
@@ -137,14 +137,14 @@ async def _on_callback_query(update, context) -> None:
 
     namespace = query.data.split(":", 1)[0]
 
-    if namespace == presentation.CLARIFICATION_CALLBACK_PREFIX:
-        event_id, choice = presentation.parse_clarification_callback_data(query.data)
-        await presentation.handle_clarification_answer(deps, chat_id, telegram_identity, event_id, choice)
+    if namespace == interactions.CLARIFICATION_CALLBACK_PREFIX:
+        event_id, choice = interactions.parse_clarification_callback_data(query.data)
+        await interactions.handle_clarification_answer(deps, chat_id, telegram_identity, event_id, choice)
         return
 
-    if namespace == presentation.CALLBACK_PREFIX:
-        event_id, choice = presentation.parse_callback_data(query.data)
-        await presentation.handle_approval_answer(deps, chat_id, telegram_identity, event_id, choice)
+    if namespace == interactions.CALLBACK_PREFIX:
+        event_id, choice = interactions.parse_callback_data(query.data)
+        await interactions.handle_approval_answer(deps, chat_id, telegram_identity, event_id, choice)
         return
 
     logger.warning("unrecognized callback namespace: %s", namespace, extra={"event": "bot_unknown_callback"})
@@ -198,13 +198,13 @@ async def _on_profile_command(update, context) -> None:
         caller = await _resolve_caller_or_refuse(deps, chat_id, telegram_identity)
         if caller is None:
             return
-        await deps.telegram_client.send_text(chat_id, await presentation.view_profile(deps, caller.telegram_identity))
+        await deps.telegram_client.send_text(chat_id, await interactions.view_profile(deps, caller.telegram_identity))
         return
 
     if args[0] == "diff":
         if await _resolve_caller_or_refuse(deps, chat_id, telegram_identity) is None:
             return
-        await deps.telegram_client.send_text(chat_id, await presentation.profile_diff_status(deps))
+        await deps.telegram_client.send_text(chat_id, await interactions.profile_diff_status(deps))
         return
 
     if args[0] in ("add", "edit", "remove"):
@@ -216,14 +216,14 @@ async def _on_profile_command(update, context) -> None:
         rest = " ".join(args[1:])
 
         if action == "remove":
-            reply = await presentation.write_protocol(deps, caller, "remove", {"name": rest.strip()})
+            reply = await interactions.write_protocol(deps, caller, "remove", {"name": rest.strip()})
         else:
             parsed = _parse_protocol_write_command(rest)
             if isinstance(parsed, str):
                 await deps.telegram_client.send_text(chat_id, parsed)
                 return
             _, payload = parsed
-            reply = await presentation.write_protocol(deps, caller, action, payload)
+            reply = await interactions.write_protocol(deps, caller, action, payload)
 
         await deps.telegram_client.send_text(chat_id, reply)
         return
@@ -240,7 +240,7 @@ async def _on_settings_command(update, context) -> None:
         caller = await _resolve_caller_or_refuse(deps, chat_id, telegram_identity)
         if caller is None:
             return
-        await deps.telegram_client.send_text(chat_id, await presentation.view_settings(deps, caller.telegram_identity))
+        await deps.telegram_client.send_text(chat_id, await interactions.view_settings(deps, caller.telegram_identity))
         return
 
     if args[0] == "set" and len(args) == 3:
@@ -249,7 +249,7 @@ async def _on_settings_command(update, context) -> None:
             return
 
         _, field, raw_value = args
-        reply = await presentation.change_setting(deps, caller, field, raw_value)
+        reply = await interactions.change_setting(deps, caller, field, raw_value)
         await deps.telegram_client.send_text(chat_id, reply)
         return
 
@@ -267,13 +267,6 @@ def register_handlers(application, deps: BotDeps) -> None:
     application.add_handler(CallbackQueryHandler(_guarded(_on_callback_query)))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _guarded(_on_text_message)))
 
-    # `Application.post_init` runs once the polling loop actually starts —
-    # the earliest point at which `application.create_task` (which needs a
-    # running event loop) is safe to call. This is what starts the §8.4-
-    # §8.6/§8.9/§8.11/§8.12 notification poll loop alongside message
-    # handling. The cursor store is built here, not earlier, since it
-    # needs `deps.loaded_profile.db_path` — real only once a real profile
-    # started this bot, never assumed at import time.
     async def _post_init(started_application) -> None:
         cursor_store = NotificationCursorStore(Path(f"{deps.loaded_profile.db_path}.notification_cursor"))
         started_application.create_task(run_notification_poll_loop(deps, NOTIFICATION_POLL_INTERVAL_SECONDS, cursor_store=cursor_store))
@@ -305,14 +298,14 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"failed to start bot: {exc}") from exc
 
     try:
-        deps = build_deps(args.profile_module, core_model=core_model, sub_model=sub_model)
+        bot_dependencies = build_deps(args.profile_module, core_model=core_model, sub_model=sub_model)
     except (ProfileLoadError, ProfileValidationError) as exc:
         raise SystemExit(f"failed to start bot: {exc}") from exc
 
-    if deps is None:
+    if bot_dependencies is None:
         return
 
-    lock = SingleInstanceLock(Path(f"{deps.loaded_profile.db_path}.bot.lock"))
+    lock = SingleInstanceLock(Path(f"{bot_dependencies.loaded_profile.db_path}.bot.lock"))
 
     try:
         lock.acquire()
@@ -320,13 +313,13 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(str(exc)) from exc
 
     try:
-        asyncio.run(_validate_bot_token(deps))
+        asyncio.run(_validate_bot_token(bot_dependencies))
     except BotStartupError as exc:
         lock.release()
         raise SystemExit(str(exc)) from exc
 
     try:
-        run_bot(deps)
+        run_bot(bot_dependencies)
     finally:
         lock.release()
 

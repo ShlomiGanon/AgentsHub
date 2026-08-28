@@ -6,7 +6,7 @@ import threading
 from datetime import datetime, timezone
 
 from history.contracts import SummaryGenerationError
-from history.events import day_bounds, month_bounds, parse_timestamp, storage_timestamp, year_bounds
+from history.event_pipeline import day_bounds, month_bounds, parse_timestamp, storage_timestamp, year_bounds
 
 
 logger = logging.getLogger(__name__)
@@ -49,10 +49,10 @@ def _summary_prompt(level: str, period_start: str, period_end: str, records: lis
 
 
 def _invoke(history_agent, prompt: str) -> str:
-    result = history_agent.process(prompt, allowed_tools=[])
-    if result.status != "success":
-        raise SummaryGenerationError(f"history agent could not summarize: {result.text}")
-    return result.text
+    agent_result = history_agent.process(prompt, allowed_tools=[])
+    if agent_result.status != "success":
+        raise SummaryGenerationError(f"history agent could not summarize: {agent_result.text}")
+    return agent_result.text
 
 
 def generate_summary(
@@ -167,8 +167,8 @@ class SummaryScheduler:
                 for event in events
                 if start <= parse_timestamp(event["occurred_at"]) < end
             ]
-            existing = _exact_summary(self._persistence, "daily", start, end)
-            if existing is None or self._daily_stale(existing, period_events):
+            existing_summary = _exact_summary(self._persistence, "daily", start, end)
+            if existing_summary is None or self._daily_stale(existing_summary, period_events):
                 generate_summary(self._persistence, self._history_agent, "daily", start, end, now)
                 actions.append(f"daily:{storage_timestamp(start)}")
 
@@ -188,8 +188,8 @@ class SummaryScheduler:
                 if start <= parse_timestamp(summary["period_start"])
                 and parse_timestamp(summary["period_end"]) <= end
             ]
-            existing = _exact_summary(self._persistence, "monthly", start, end)
-            if existing is None or self._parent_stale(existing, children):
+            existing_summary = _exact_summary(self._persistence, "monthly", start, end)
+            if existing_summary is None or self._parent_stale(existing_summary, children):
                 generate_summary(self._persistence, self._history_agent, "monthly", start, end, now)
                 actions.append(f"monthly:{storage_timestamp(start)}")
 
@@ -209,8 +209,8 @@ class SummaryScheduler:
                 if start <= parse_timestamp(summary["period_start"])
                 and parse_timestamp(summary["period_end"]) <= end
             ]
-            existing = _exact_summary(self._persistence, "yearly", start, end)
-            if existing is None or self._parent_stale(existing, children):
+            existing_summary = _exact_summary(self._persistence, "yearly", start, end)
+            if existing_summary is None or self._parent_stale(existing_summary, children):
                 generate_summary(self._persistence, self._history_agent, "yearly", start, end, now)
                 actions.append(f"yearly:{storage_timestamp(start)}")
 

@@ -3,7 +3,7 @@ import uuid
 import pytest
 
 from cli.user_admin import main
-from persistence.sqlite_backend import SQLitePersistence
+from persistence.sqlite_store import SQLitePersistence
 from tests.helpers import write_profile_module
 
 BOT_TOKEN_ENV = "TEST_USER_ADMIN_BOT_TOKEN"

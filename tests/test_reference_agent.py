@@ -80,7 +80,7 @@ not just that it loads without error.
 import pytest
 
 from fixtures.seed_events import REFERENCE_NOW, SEED_EVENTS, load_seed_dataset
-from persistence.sqlite_backend import SQLitePersistence
+from persistence.sqlite_store import SQLitePersistence
 
 
 @pytest.fixture

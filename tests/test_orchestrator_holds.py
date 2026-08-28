@@ -12,9 +12,9 @@ from orchestrator.holds import (
 )
 from orchestrator.main_agent import RiskAssessment
 from orchestrator.main_agent import ProtocolSelectionResult
-from persistence.sqlite_backend import SQLitePersistence
+from persistence.sqlite_store import SQLitePersistence
 from protocols.model import CriticalityLevel, Protocol
-from registries.event_types import EventTypeRegistry
+from profiles import EventTypeRegistry
 
 
 def _protocol(name, approval_flag):

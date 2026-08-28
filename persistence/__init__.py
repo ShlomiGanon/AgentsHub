@@ -10,10 +10,12 @@ interface = contracts
 sys.modules[f"{__name__}.exceptions"] = contracts
 sys.modules[f"{__name__}.interface"] = contracts
 
-from persistence import sqlite
+from persistence import sqlite_store
 
-sqlite_backend = sqlite
-sys.modules[f"{__name__}.sqlite_backend"] = sqlite
+sqlite = sqlite_store
+sqlite_backend = sqlite_store
+sys.modules[f"{__name__}.sqlite"] = sqlite_store
+sys.modules[f"{__name__}.sqlite_backend"] = sqlite_store
 
 __all__ = [
     "NotFoundError",

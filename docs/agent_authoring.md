@@ -1,6 +1,6 @@
 # Adding an Agent
 
-Five steps. `agents/builtins.py` is the working example — read it
+Five steps. `agents/standard_agents.py` is the working example — read it
 alongside this rather than expecting this document to reproduce it.
 
 1. **Subclass `agents.base.Agent`** in a new file under `agents/`.
@@ -34,7 +34,7 @@ alongside this rather than expecting this document to reproduce it.
 - Omit `name`/`role`/`system_prompt`: the agent fails to *construct*,
   naming which attribute is missing (`agents/runtime.py`'s `Agent.__init__`).
 - Write the agent but never declare it in a profile: it's simply never
-  loaded — `agents.registry` only knows about what's explicitly passed to
+  loaded — `agents.runtime` only knows about what's explicitly passed to
   it, nothing self-registers.
 - Declare it as anything other than an `AgentSpec` (e.g. an already-
   constructed instance, the pre-`AgentSpec` shape): `load_profile` fails

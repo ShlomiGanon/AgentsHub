@@ -2567,3 +2567,19 @@ no CI change was needed.
 - Updated live architecture, API, profile, operator, and agent-authoring documentation. Added `docs/file_catalog.md`, an English catalog of all 170 first-party files, plus a completeness test and legacy-import identity coverage.
 - Deviations: existing test modules were left physically separate to preserve scenario isolation and all original assertions; historical reports and this append-only log keep their original path references; `orchestrator/question_flow.py` remains a separate responsibility within the five-module orchestrator target.
 - Acceptance: compileall passed; all six executable module `--help` smoke checks passed; architecture, catalog, legacy-import, fresh-database, migration, API, bot, and integration coverage passed as part of the full suite. Final result: 879 passed, 0 failed, with six unchanged third-party CrewAI deprecation warnings.
+
+## Responsibility consolidation and descriptive renames — done (2026-08-28)
+
+- Reduced the current production tree from 13 to 12 packages and from 42 to 38 implementation modules. Removed `registries`; its immutable area/event-type contracts and builders now belong to `profiles`. Merged the agent registry into runtime, API context/errors into their request-boundary owners, and question routing into orchestrator reasoning.
+- Renamed implementation files around their actual responsibilities: standard agents, request boundary, bot transports/interactions/background services, environment/live settings, history event pipeline, orchestrator reasoning/event queue, SQLite store, profile template, protocol repository, and terminal support. Package facades preserve every supported former implementation path except the intentionally removed `registries.*` package.
+- Consolidated tests by responsibility while retaining every test function and assertion. The `tests` tree now contains 63 Python files and still collects exactly 879 pytest items.
+- Replaced generic local names with domain-specific names and reduced production comment/docstring lines from 494 to 229, retaining only public contracts and non-obvious invariants such as CrewAI signatures, atomic writes, transaction coupling, retry/idempotency, cursor behavior, and lazy terminal loading.
+- Updated live architecture, API, profile, operator, and agent-authoring documentation. Regenerated `docs/file_catalog.md` as a concise English description of all 153 current first-party files; historical reports and earlier progress entries remain unchanged.
+- Acceptance: `compileall`, architecture, catalog, compatibility aliases, migrations, fresh-database paths, all integration coverage, and all six cold-process `--help` commands passed. Final suite result: 879 passed, 0 failed, with the same six third-party CrewAI deprecation warnings.
+
+## README aligned with the consolidated project — done (2026-08-28)
+
+- Replaced the obsolete prompt fragment and duplicated startup notes with a complete developer-facing overview of AgentsHub, its runtime flow, profile model, configuration, user bootstrap, API/bot/terminal startup, logging, testing, and deployment boundaries.
+- Documented the current 12-package responsibility layout and all six stable executable entry points, including the intentional removal of `registries` and the move of area/event-type registries into `profiles`.
+- Added direct routing to the authoritative operator, Telegram, profile, agent-authoring, API, package-boundary, file-catalog, and production-hardening documents.
+- Acceptance: every README file reference resolves, Markdown fences are balanced, the stale-path/prompt scan is empty, `tests/test_file_catalog.py` passes, and `git diff --check -- README.md` reports no content errors.

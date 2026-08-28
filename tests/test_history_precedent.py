@@ -1,4 +1,4 @@
-from config.settings_store import SettingsStore
+from config.live_settings import SettingsStore
 from history.query import HistoryQueryService
 from persistence.interface import open_persistence
 

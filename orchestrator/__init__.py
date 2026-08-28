@@ -3,8 +3,8 @@
 import sys
 from types import ModuleType
 
-from orchestrator import decisions, runtime
-from orchestrator.decisions import (
+from orchestrator import event_queue, reasoning
+from orchestrator.reasoning import (
     InsightsAgent,
     MainAgent,
     OrchestrationParseError,
@@ -14,20 +14,26 @@ from orchestrator.decisions import (
     determine_closure,
     look_up_precedent,
 )
-from orchestrator.runtime import SerialEventQueue
+from orchestrator.event_queue import SerialEventQueue
 
-main_agent = decisions
-precedent = decisions
-queue = runtime
-sys.modules[f"{__name__}.main_agent"] = decisions
-sys.modules[f"{__name__}.precedent"] = decisions
-sys.modules[f"{__name__}.queue"] = runtime
+decisions = reasoning
+main_agent = reasoning
+precedent = reasoning
+question_flow = reasoning
+runtime = event_queue
+queue = event_queue
+sys.modules[f"{__name__}.decisions"] = reasoning
+sys.modules[f"{__name__}.main_agent"] = reasoning
+sys.modules[f"{__name__}.precedent"] = reasoning
+sys.modules[f"{__name__}.question_flow"] = reasoning
+sys.modules[f"{__name__}.runtime"] = event_queue
+sys.modules[f"{__name__}.queue"] = event_queue
 
 insights = ModuleType(f"{__name__}.insights")
 insights.InsightsAgent = InsightsAgent
 insights.build_insight = build_insight
 insights.construct_core_agents = construct_insights_agent
-insights._build_insight_prompt = decisions._build_insight_prompt
+insights._build_insight_prompt = reasoning._build_insight_prompt
 sys.modules[insights.__name__] = insights
 
 from orchestrator import flows

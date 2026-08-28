@@ -5,172 +5,155 @@ This English catalog describes every tracked or pending first-party file in the 
 | Path | Category | Visibility | Purpose |
 |---|---|---|---|
 | `$null` | Project | Internal | Preserves a historical captured smoke-test logging artifact. |
-| `.env.example` | Project | Internal | Lists the environment variables required to configure a deployment without secret values. |
-| `.github/workflows/ci.yml` | Automation | Internal | Defines repository automation configuration. |
-| `.gitignore` | Project | Internal | Excludes generated, local, secret, and runtime artifacts from version control. |
-| `.vscode/extensions.json` | Project | Internal | Supports repository configuration for 'extensions.json'. |
-| `README.md` | Project | Internal | Introduces the project and documents the primary startup commands. |
-| `agents/__init__.py` | Production | Public facade | Defines the agents Python package facade or package marker. |
-| `agents/builtins.py` | Production | Private implementation | Defines the built-in History and Reference agents. |
-| `agents/contracts.py` | Production | Private implementation | Defines agent results, descriptors, tool metadata, parsing, and typed invocation errors. |
-| `agents/registry.py` | Production | Private implementation | Builds and queries the active immutable agent registry. |
-| `agents/runtime.py` | Production | Private implementation | Implements agent invocation, CrewAI adaptation, dynamic tool schemas, and per-call tool enforcement. |
-| `api/__init__.py` | Production | Public facade | Defines the api Python package facade or package marker. |
-| `api/app.py` | Production | Public entry point | Builds dependencies and starts the Flask API process. |
-| `api/contracts.py` | Production | Private implementation | Defines the API dependency context and HTTP-visible error contracts. |
-| `api/http.py` | Production | Private implementation | Implements authentication, authorization, and HTTP error translation. |
-| `api/routes.py` | Production | Private implementation | Defines all ingestion, operation, management, hold, job, and notification routes. |
-| `auth/__init__.py` | Production | Public facade | Defines the auth Python package facade or package marker. |
-| `auth/permissions.py` | Production | Private implementation | Defines permission levels, action requirements, and authorization checks. |
-| `bot/__init__.py` | Production | Public facade | Defines the bot Python package facade or package marker. |
-| `bot/app.py` | Production | Public entry point | Builds dependencies, routes incoming Telegram updates, and starts the bot process. |
-| `bot/client.py` | Production | Private implementation | Implements HTTP API access and Telegram transport adapters. |
-| `bot/contracts.py` | Production | Private implementation | Defines bot DTOs, dependency contracts, client interfaces, and bot errors. |
-| `bot/presentation.py` | Production | Private implementation | Implements bot commands, holds, permission messages, formatting, and notification presentation. |
-| `bot/runtime.py` | Production | Private implementation | Runs notification polling, cursor persistence, startup checks, and single-instance locking. |
-| `cli/__init__.py` | Production | Public facade | Defines the cli Python package facade or package marker. |
-| `cli/user_admin.py` | Production | Public entry point | Provides the deployment user-administration command-line interface. |
-| `config/__init__.py` | Production | Public facade | Defines the config Python package facade or package marker. |
-| `config/models.py` | Production | Private implementation | Defines process configuration, model tiers, debug flags, and environment resolution. |
-| `config/settings.py` | Production | Private implementation | Persists the three live runtime settings atomically. |
-| `conftest.py` | Project | Internal | Ensures the repo root is on sys.path regardless of how pytest is invoked, so `import persistence.interface`, `import tests.helpers`, etc. resolve the same way whether run as `pytest` or `python -m pytest`. Also defines `test_core_model`/`test_sub_model` (below) — the test suite's own model-tier config source, built from `TEST_`-prefixed real process environment variables (shell export, CI secrets, ...), never a file. Every function in the model-tier chain (`config.base.build_tier_model`/ `load_base_config`, `profiles.loader.load_profile`, `api.app.build_context`, `bot.app.build_deps`) takes already-resolved `config.base.TierModel` values as specific named parameters — none of them read `os.environ`, or take a `Mapping` representing it, at all. Only four places in the production system and automated test suite read `os.environ` for model-tier config: `api.app.main`, `bot.app.main`, `cli.user_admin.main`, and these two fixtures. (A handful of standalone, hand-run scripts under `tests/` — never collected by pytest, never imported by anything — read model-tier-shaped variables of their own accord too; see `docs/profile_spec.md`'s "Model tiers" section.) `real_tier_env` (below) is not a fifth such place — it never reads a resolved value from `os.environ` itself. It only *writes* the real `CORE_MODEL_*`/`SUB_MODEL_*` variables (mirroring `test_core_model`/ `test_sub_model`'s already-configured `TEST_` values) for the rare test that must exercise one of the three real `main()` entry points end to end, so that root's own environment read has something real to find. `_reset_trace_id_between_tests` (below) exists because of one specific gap `api.app.build_app`'s own `before_request` hook cannot close on its own: that hook resets `tools.tracing`'s trace-ID contextvar at the start of every real HTTP request, on whichever thread serves it — but a test using Flask's `test_client()` (unlike `tests.api_fakes.RunningApiServer`, which serves on its own background thread) runs the whole request in-process, on the *same* thread pytest itself runs on. Without this fixture, `tools.tracing.set_trace_id` (needed so a route's trace ID survives long enough for werkzeug's own request-log line to carry it — see that function's own docstring) would leave its value sitting on that shared thread's context, visible to whatever unrelated test runs next. |
-| `docs/DEMO_READY.md` | Documentation | Internal | Documents DEMO_READY — Minimum Path to a Stable Demonstration. |
-| `docs/GT critial agents.pptx.pdf` | Documentation | Internal | Stores the reference artifact 'GT critial agents.pptx'. |
-| `docs/PRODUCTION_READY.md` | Documentation | Internal | Documents NEXT_STAGE — Production Readiness. |
-| `docs/agent_authoring.md` | Documentation | Internal | Documents Adding an Agent. |
-| `docs/allowed_calls.md` | Documentation | Internal | Documents Allowed Calls. |
-| `docs/api_spec.md` | Documentation | Internal | Documents API Spec (work_plan.md §7.1). |
-| `docs/code_example.py` | Documentation | Internal | Implements code example. |
-| `docs/cost_latency_review.md` | Documentation | Internal | Documents Cost and latency review (work_plan.md §9.20). |
-| `docs/file_catalog.md` | Documentation | Internal | Documents File Catalog. |
-| `docs/how_to_connect_telegram.md` | Documentation | Internal | Documents How to Connect Telegram. |
-| `docs/investigation_summary.md` | Documentation | Internal | Documents Investigation Summary — Conversational Path & Performance. |
-| `docs/links.txt` | Documentation | Internal | Stores the project reference notes 'links'. |
-| `docs/operator_guide.md` | Documentation | Internal | Documents Operator Guide (work_plan.md §9.22). |
-| `docs/profile_spec.md` | Documentation | Internal | Documents Profile Specification. |
-| `docs/progress.md` | Documentation | Internal | Documents Progress Log. |
-| `docs/questions.txt` | Documentation | Internal | Stores the project reference notes 'questions'. |
-| `docs/server_report.md` | Documentation | Internal | Documents Server Report — Verification Audit. |
-| `docs/vocabulary.md` | Documentation | Internal | Documents Domain Vocabulary. |
-| `docs/work_plan.md` | Documentation | Internal | Documents Work Plan — Field-Report Multi-Agent System. |
-| `docs/ארכיטקטוררה.pptx` | Documentation | Internal | Stores the reference artifact 'ארכיטקטוררה'. |
-| `docs/מצגת ארכיטקטורה.pptx` | Documentation | Internal | Stores the reference artifact 'מצגת ארכיטקטורה'. |
-| `docs/תיאור מבנה מערכת.pdf` | Documentation | Internal | Stores the reference artifact 'תיאור מבנה מערכת'. |
-| `docs/תיאור משימות שבועיות.pdf` | Documentation | Internal | Stores the reference artifact 'תיאור משימות שבועיות'. |
-| `fixtures/__init__.py` | Fixture | Internal | Defines the fixtures Python package facade or package marker. |
-| `fixtures/profiles/__init__.py` | Fixture | Internal | Defines the profiles Python package facade or package marker. |
-| `fixtures/profiles/minimal_profile.py` | Fixture | Internal | A minimal valid profile module, used by tests for §1.5/§1.6. Satisfies docs/profile_spec.md in full. `AGENTS` declares one real agent (`agents.reference.ReferenceAgent`, on the "sub" tier) via `profiles.spec.AgentSpec` — every `AGENTS` entry must be a real, constructible agent class now (profiles.loader.load_profile builds it at load time), not a duck-typed stand-in; `ReferenceAgent` already exposes the `check_status` tool this fixture's one protocol needs, so it doubles as the simplest real agent to use here. `_FixtureProtocol` stays a minimal, duck-typed stand-in for `PROTOCOLS` — protocols/spec's structural contract hasn't changed and doesn't need a real `protocols.model.Protocol`. `criticality` is the one field this contract requires to be a real `CriticalityLevel` enum member specifically (§1.6, tightened after the Mission 8 coverage audit found two consumers crash and one silently miscompares on a plain string) — every other field on `_FixtureProtocol` stays a plain, minimal stand-in. The two named environment variables (BOT_TOKEN_ENV, MODEL_CREDENTIAL_ENVS) must be set before this module is loaded through profiles.loader — tests set them (e.g. via monkeypatch.setenv) since a profile module never holds secret values itself. |
-| `fixtures/seed_events.py` | Fixture | Internal | Seed dataset (work_plan.md §2.12). Fixture events spanning several months as **completed historical records** — each already classified, risk-assessed, protocol-assigned, stepped, and outcomed, as if the database were the product of months of running rather than a queue of things still to process. Classifications/areas match `fixtures/profiles/minimal_profile.py` ("fire", "medical", "human_activation" / "north_sector", "south_sector"). All timestamps sit around a fixed reference "now" of 2026-08-20T12:00:00, against a typical 30-day lookback window, so which records fall inside vs. outside that window is deliberate, not incidental — see the comments below. Every event dict here is shaped exactly like what `persistence.interface.append_event` accepts (including a `"steps"` key, upserted into `event_steps` in the same call). |
-| `history/__init__.py` | Production | Public facade | Defines the history Python package facade or package marker. |
-| `history/contracts.py` | Production | Private implementation | Defines history extraction, event, query, precedent, and summary contracts. |
-| `history/events.py` | Production | Private implementation | Implements timestamp normalization, extraction, and durable event state writes. |
-| `history/query.py` | Production | Private implementation | Retrieves historical sources, answers questions, and searches precedents. |
-| `history/summaries.py` | Production | Private implementation | Generates and reconciles daily, monthly, and yearly history summaries. |
-| `instructions.md` | Project | Internal | Defines repository-specific engineering and architecture rules. |
-| `load-env.ps1` | Project | Internal | Loads local environment variables for PowerShell development sessions. |
-| `orchestrator/__init__.py` | Production | Public facade | Defines the orchestrator Python package facade or package marker. |
-| `orchestrator/decisions.py` | Production | Private implementation | Implements Main and Insights agent decisions, prompts, parsers, and precedent closure. |
-| `orchestrator/flows.py` | Production | Private implementation | Implements the durable event, request, hold, and resume state machine. |
+| `.env.example` | Project | Internal | Lists deployment environment variables without storing secret values. |
+| `.github/workflows/ci.yml` | Automation | Internal | Runs the repository's continuous-integration checks. |
+| `.gitignore` | Project | Internal | Excludes generated, local, secret, and runtime artifacts. |
+| `.vscode/extensions.json` | Project | Internal | Recommends editor extensions for this workspace. |
+| `README.md` | Project | Internal | Introduces the system and its primary startup commands. |
+| `agents/__init__.py` | Production | Public facade | Exposes the public agent facade and compatibility module aliases. |
+| `agents/contracts.py` | Production | Private implementation | Defines agent results, descriptors, tool metadata, parsing, and typed errors. |
+| `agents/runtime.py` | Production | Private implementation | Constructs and invokes agents, enforces tools, adapts CrewAI, and owns the runtime registry. |
+| `agents/standard_agents.py` | Production | Private implementation | Implements the standard History and Reference agents. |
+| `api/__init__.py` | Production | Public facade | Exposes the API facade and compatibility module aliases. |
+| `api/app.py` | Production | Public entry point | Builds API dependencies, owns ApiContext, and starts Flask. |
+| `api/request_boundary.py` | Production | Private implementation | Authenticates requests and translates API and HTTP failures into responses. |
+| `api/routes.py` | Production | Private implementation | Defines ingestion, management, hold, job, system, and notification routes. |
+| `auth/__init__.py` | Production | Public facade | Exposes authorization contracts. |
+| `auth/permissions.py` | Production | Private implementation | Maps actions to permission levels and evaluates authorization. |
+| `bot/__init__.py` | Production | Public facade | Exposes the bot facade and compatibility module aliases. |
+| `bot/app.py` | Production | Public entry point | Builds bot dependencies, routes Telegram updates, and starts polling. |
+| `bot/background_services.py` | Production | Private implementation | Polls and dispatches notifications, persists cursors, and manages single-instance startup. |
+| `bot/contracts.py` | Production | Private implementation | Defines bot DTOs, client interfaces, dependency contracts, and errors. |
+| `bot/interactions.py` | Production | Private implementation | Formats messages and handles commands, holds, settings, and profile interactions. |
+| `bot/transports.py` | Production | Private implementation | Implements HTTP API access and Telegram transport adapters. |
+| `cli/__init__.py` | Production | Public facade | Marks the command-line package. |
+| `cli/user_admin.py` | Production | Public entry point | Provides the user-administration command-line entry point. |
+| `config/__init__.py` | Production | Public facade | Exposes environment and live-settings configuration facades. |
+| `config/environment.py` | Production | Private implementation | Resolves model tiers and process flags from environment values. |
+| `config/live_settings.py` | Production | Private implementation | Persists retry, risk, and lookback settings atomically. |
+| `conftest.py` | Project | Internal | Defines repository-wide pytest fixtures, model-tier configuration, and trace isolation. |
+| `docs/DEMO_READY.md` | Documentation | Internal | Documents DEMO READY. |
+| `docs/GT critial agents.pptx.pdf` | Documentation | Internal | Stores the GT critial agents.pptx reference artifact. |
+| `docs/PRODUCTION_READY.md` | Documentation | Internal | Documents PRODUCTION READY. |
+| `docs/agent_authoring.md` | Documentation | Internal | Documents agent authoring. |
+| `docs/allowed_calls.md` | Documentation | Internal | Documents allowed calls. |
+| `docs/api_spec.md` | Documentation | Internal | Documents api spec. |
+| `docs/code_example.py` | Documentation | Internal | Documents code example. |
+| `docs/cost_latency_review.md` | Documentation | Internal | Documents cost latency review. |
+| `docs/file_catalog.md` | Documentation | Internal | Documents file catalog. |
+| `docs/how_to_connect_telegram.md` | Documentation | Internal | Documents how to connect telegram. |
+| `docs/investigation_summary.md` | Documentation | Internal | Documents investigation summary. |
+| `docs/links.txt` | Documentation | Internal | Documents links. |
+| `docs/operator_guide.md` | Documentation | Internal | Documents operator guide. |
+| `docs/profile_spec.md` | Documentation | Internal | Documents profile spec. |
+| `docs/progress.md` | Documentation | Internal | Documents progress. |
+| `docs/questions.txt` | Documentation | Internal | Documents questions. |
+| `docs/server_report.md` | Documentation | Internal | Documents server report. |
+| `docs/vocabulary.md` | Documentation | Internal | Documents vocabulary. |
+| `docs/work_plan.md` | Documentation | Internal | Documents work plan. |
+| `docs/ארכיטקטוררה.pptx` | Documentation | Internal | Stores the ארכיטקטוררה reference artifact. |
+| `docs/מצגת ארכיטקטורה.pptx` | Documentation | Internal | Stores the מצגת ארכיטקטורה reference artifact. |
+| `docs/תיאור מבנה מערכת.pdf` | Documentation | Internal | Stores the תיאור מבנה מערכת reference artifact. |
+| `docs/תיאור משימות שבועיות.pdf` | Documentation | Internal | Stores the תיאור משימות שבועיות reference artifact. |
+| `fixtures/__init__.py` | Fixture | Internal | Marks reusable fixtures as a package. |
+| `fixtures/profiles/__init__.py` | Fixture | Internal | Marks fixture deployment profiles as a package. |
+| `fixtures/profiles/minimal_profile.py` | Fixture | Internal | Defines the minimal valid profile used by loading and integration tests. |
+| `fixtures/seed_events.py` | Fixture | Internal | Provides deterministic historical event fixtures. |
+| `history/__init__.py` | Production | Public facade | Exposes the history facade and compatibility module aliases. |
+| `history/contracts.py` | Production | Private implementation | Defines history extraction, query, summary, and persistence-transfer contracts. |
+| `history/event_pipeline.py` | Production | Private implementation | Extracts events, normalizes timestamps, and writes durable history state. |
+| `history/query.py` | Production | Private implementation | Retrieves raw and summarized history and searches precedents. |
+| `history/summaries.py` | Production | Private implementation | Generates and reconciles daily, monthly, and yearly summaries. |
+| `instructions.md` | Project | Internal | Defines repository-specific development and architecture rules. |
+| `load-env.ps1` | Project | Internal | Loads local development environment variables into PowerShell. |
+| `orchestrator/__init__.py` | Production | Public facade | Exposes orchestration capabilities and compatibility module aliases. |
+| `orchestrator/event_queue.py` | Production | Private implementation | Serializes event processing on a dedicated worker. |
+| `orchestrator/flows.py` | Production | Private implementation | Coordinates report, request, hold-resume, protocol, and outcome workflows. |
 | `orchestrator/holds.py` | Production | Private implementation | Creates and resolves clarification and approval holds. |
-| `orchestrator/question_flow.py` | Production | Private implementation | Routes questions to historical or specialist agents using read-only tools. |
-| `orchestrator/runtime.py` | Production | Private implementation | Provides the single-worker serial event queue. |
-| `persistence/__init__.py` | Production | Public facade | Defines the persistence Python package facade or package marker. |
-| `persistence/contracts.py` | Production | Private implementation | Defines the engine-agnostic persistence interface and public persistence errors. |
-| `persistence/schema.py` | Production | Private implementation | Defines the SQLite schema and immutable migration sequence. |
-| `persistence/sqlite.py` | Production | Private implementation | Implements serialized SQLite reads, writes, transactions, and row conversion. |
-| `profiles/__init__.py` | Production | Public facade | Defines the profiles Python package facade or package marker. |
-| `profiles/contracts.py` | Production | Private implementation | Defines profile declarations, immutable loaded profiles, and validation errors. |
+| `orchestrator/reasoning.py` | Production | Private implementation | Prompts and parses Main/Insights decisions, questions, selection, formulation, and judgment. |
+| `persistence/__init__.py` | Production | Public facade | Exposes persistence contracts, constructors, and compatibility aliases. |
+| `persistence/contracts.py` | Production | Private implementation | Defines persistence interfaces and domain errors. |
+| `persistence/schema.py` | Production | Private implementation | Owns immutable migration DDL and the current SQLite schema. |
+| `persistence/sqlite_store.py` | Production | Private implementation | Implements serialized SQLite persistence, transactions, and row conversion. |
+| `profiles/__init__.py` | Production | Public facade | Exposes profile contracts, loading, registries, and compatibility aliases. |
+| `profiles/contracts.py` | Production | Private implementation | Defines profile declarations, loaded-profile state, and area/event-type registries. |
 | `profiles/demo.py` | Production | Private implementation | Defines the runnable demonstration deployment profile. |
-| `profiles/example.py` | Production | Private implementation | Provides a reference profile for authoring new deployments. |
-| `profiles/loader.py` | Production | Private implementation | Imports, constructs, validates, hashes, and freezes deployment profiles. |
-| `protocols/__init__.py` | Production | Public facade | Defines the protocols Python package facade or package marker. |
-| `protocols/contracts.py` | Production | Private implementation | Defines protocol, step, criticality, edit, and execution result contracts. |
-| `protocols/executor.py` | Production | Private implementation | Executes ordered protocol steps with safe retry and task rewriting. |
-| `protocols/service.py` | Production | Private implementation | Loads protocol sets and atomically edits protocol declarations in profile source. |
+| `profiles/loader.py` | Production | Private implementation | Imports, validates, hashes, and constructs deployment profiles and registries. |
+| `profiles/template.py` | Production | Private implementation | Provides a reference template for authoring deployment profiles. |
+| `protocols/__init__.py` | Production | Public facade | Exposes protocol contracts, execution, repository operations, and aliases. |
+| `protocols/contracts.py` | Production | Private implementation | Defines protocols, steps, criticality, results, and edit errors. |
+| `protocols/executor.py` | Production | Private implementation | Executes protocol steps with retry and idempotency enforcement. |
+| `protocols/repository.py` | Production | Private implementation | Loads protocols and atomically edits declarations in profile source. |
 | `pytest.ini` | Project | Internal | Configures pytest discovery and execution. |
-| `refactor.md` | Project | Internal | Records the approved deep behavior-preserving refactor plan and acceptance criteria. |
-| `registries/__init__.py` | Production | Public facade | Defines the registries Python package facade or package marker. |
-| `registries/registry.py` | Production | Private implementation | Builds immutable area and event-type registries. |
-| `requirements-dev.txt` | Project | Internal | Pins development and test-only Python dependencies. |
-| `requirements.txt` | Project | Internal | Pins runtime Python dependencies. |
-| `tests/__init__.py` | Test | Internal | Defines the tests Python package facade or package marker. |
-| `tests/api_fakes.py` | Test | Internal | Shared building blocks for the api/ test suite. Plain helper functions and classes, not fixtures — each test_api_*.py file wires its own pytest fixtures around these, the same pattern tests/helpers.py already established for profile-validation fakes. `build_context` constructs a real `api.app.ApiContext` — real `SQLitePersistence`, a real `AgentRegistry` with a real `ReferenceAgent` and `HistoryAgent`, a real `FlowDeps`, a real (unstarted) `SerialEventQueue`, a real (unstarted) `SummaryScheduler` — with only the Main/Insights Agent slots filled by a caller-supplied scripted stand-in, mirroring tests/test_orchestrator_flows.py's own `deps` fixture. Nothing here talks to a real model; `agents.adapter._get_crewai` still needs monkeypatching wherever a real `ReferenceAgent`/`HistoryAgent` is actually invoked — each test file brings its own autouse fixture for that, same as tests/test_orchestrator_flows.py already does. |
-| `tests/bot_fakes.py` | Test | Internal | Fakes for testing `bot/` without a real Telegram connection or a real API Layer (work_plan.md §8). Mirrors `tests/helpers.py`'s role for Missions 1/4, kept in its own file since Mission 8 is the first to need this many fakes for one package. `FakeBotApiClient` implements the full `BotApiClient` interface with canned, test-controlled responses — used to test every `bot/` module's own logic in isolation from `bot.api_client.UnimplementedApiClient`, which exists to fail loudly, not to be a test double. |
-| `tests/helpers.py` | Test | Internal | Small duck-typed stand-ins for Agent/Protocol, used only by tests. Sections 3/4 haven't landed the real classes yet — profiles.loader checks structural shape (see profiles/spec.py), so these fakes are enough to exercise every branch of that validation without depending on fixtures meant to represent a *valid* profile. `criticality` is the one field `profiles.loader` requires to be a real `CriticalityLevel` enum member specifically (§1.6, tightened after the Mission 8 coverage audit) — every other field here stays a plain, minimal stand-in. |
-| `tests/sanity_check_real_model_call.py` | Test | Internal | A real, live, billed sanity check against an actual model API. NOT part of the automated test suite and never collected by pytest: this repo's `pytest.ini` sets `python_files = test_*.py`, and this file deliberately does not match that glob (despite living in `tests/`, an already-approved project directory — no new top-level directory needed). Run it by hand, never from CI, never with a fake/mocked key: python tests/sanity_check_real_model_call.py What this proves, end to end, with zero mocking and zero shortcuts — literally the same functions production code calls, not a hand-rolled stand-in for them: 1. This script itself reads CORE_MODEL_PROVIDER / CORE_MODEL_NAME / CORE_MODEL_API_KEY_ENV from the real environment and calls config.base.build_tier_model(provider, model_name, api_key) — the exact same read-then-build sequence api.app.main/bot.app.main/ cli.user_admin.main each do at their own boundary (config.base itself never reaches into the environment; see its module docstring) — then passes the result to config.base.load_base_config(core_model=...). 2. orchestrator.main_agent.construct_core_agents(base_config) — the exact function orchestrator.flows.assemble_core_agents calls in production — builds a real MainAgent from the resolved tier. 3. MainAgent.process(...) -> agents.base.Agent.process() -> agents.adapter.invoke() -> a real crewai.LLM(model=..., api_key=...) and a real crewai.Agent(...).kickoff(...) — a genuine outbound call. Before running, set (in this shell, never committed anywhere): CORE_MODEL_PROVIDER=openrouter CORE_MODEL_NAME=<a real, ideally free-or-cheap OpenRouter model id> CORE_MODEL_API_KEY_ENV=<name of another env var that holds your key> <that other env var>=<your real OpenRouter API key> This costs real money (however little, for one short prompt) and needs a real key — it will not run, and must never be made to run, in CI or the normal test suite. |
-| `tests/test_agent_adapter.py` | Test | Internal | Verifies agent adapter behavior. |
-| `tests/test_agent_permission_enforcement.py` | Test | Internal | Verifies agent permission enforcement behavior. |
-| `tests/test_agent_registry.py` | Test | Internal | Verifies agent registry behavior. |
-| `tests/test_api_app.py` | Test | Internal | api/app.py's own wiring (work_plan.md §7, `build_context`/`create_app`). Every other `test_api_*.py` file builds its `ApiContext` through `tests/api_fakes.py`'s hand-rolled `build_context` — a parallel implementation that mimics `api.app.build_context`'s wiring but never calls it. This file is the one place the *real* `api.app.build_context`/ `create_app` are exercised, against a real profile (`fixtures.profiles.minimal_profile`) — the exact gap the Mission 8 coverage audit found: nothing had ever called these functions for real, and the first real call crashed (`api/management.py::protocol_to_dict` assumed `criticality` was always a real `CriticalityLevel` enum; the fixture profile it was tried against used a plain string). Fixed at the validation boundary (§1.6) rather than at the consumer — see `profiles/loader.py`'s and `fixtures/profiles/minimal_profile.py`'s own notes on that decision. |
-| `tests/test_api_errors.py` | Test | Internal | Verifies api errors behavior. |
-| `tests/test_api_holds.py` | Test | Internal | Verifies api holds behavior. |
-| `tests/test_api_jobs.py` | Test | Internal | Verifies api jobs behavior. |
-| `tests/test_api_messages.py` | Test | Internal | Verifies api messages behavior. |
-| `tests/test_api_notifications.py` | Test | Internal | GET /Notifications (work_plan.md §8.12). |
-| `tests/test_api_protocols.py` | Test | Internal | Verifies api protocols behavior. |
-| `tests/test_api_system.py` | Test | Internal | Verifies api system behavior. |
-| `tests/test_api_unified_ingestion.py` | Test | Internal | §7.5's own convergence proof: /Event and /Msg-as-report must converge on the same new-event flow the moment the text is known to be an event, with exactly two differences — the recorded source, and whether the occurrence timestamp is extracted from the text or set to the received timestamp. Verified with a test, not by inspection, per §7.5's own rule. |
-| `tests/test_architecture.py` | Test | Internal | Import-graph check (work_plan.md §1.1). Fails the build the day a package imports a module of another package that is not that package's declared entry point. Mirrors docs/allowed_calls.md — if the two ever disagree, this test is wrong and must be updated to match that document, not the other way around. |
-| `tests/test_area_registry.py` | Test | Internal | Verifies area registry behavior. |
-| `tests/test_base_config.py` | Test | Internal | Verifies base config behavior. |
-| `tests/test_bot_api_client.py` | Test | Internal | bot/api_client.py (work_plan.md §8, the Mission-7 seam). Confirms `UnimplementedApiClient` — the seam every other §8 module is built against — never pretends to succeed: every operation raises `ApiNotImplementedError`, naming the exact work_plan.md §7 subtask it is blocked on. This is the one test that keeps the "current, complete list of Mission-7 gaps" property true as the interface grows. |
-| `tests/test_bot_app.py` | Test | Internal | bot/app.py (work_plan.md §8.1 and the package's wiring). |
-| `tests/test_bot_approval.py` | Test | Internal | bot/holds.py (work_plan.md §8.5). |
-| `tests/test_bot_clarification.py` | Test | Internal | bot/holds.py (work_plan.md §8.4). |
-| `tests/test_bot_entrypoint.py` | Test | Internal | bot/app.py (work_plan.md §8.3). |
-| `tests/test_bot_failures.py` | Test | Internal | bot/notifications.py (work_plan.md §8.11). |
-| `tests/test_bot_http_api_client.py` | Test | Internal | bot/http_api_client.py — every method against a real, running api/* server over a genuine HTTP socket (work_plan.md §8.12-§8.14's "HttpApiClient" build step). `tests/api_fakes.py::RunningApiServer` is what makes this genuine — `app.test_client()` dispatches WSGI calls in-process and never opens a real socket, so it cannot prove `HttpApiClient`'s own `urllib` requests actually work. This file is what proves `UnimplementedApiClient`'s old methods are genuinely superseded, not just renamed: every one of these tests would fail if `HttpApiClient` silently fell back to raising `ApiNotImplementedError`, or produced a response shape `BotApiClient`'s DTOs can't parse. |
-| `tests/test_bot_notifications.py` | Test | Internal | bot/notifications.py — the shared proactive-push dispatcher introduced for work_plan.md §8.4 and reused by §8.5, §8.6, §8.9, §8.11. |
-| `tests/test_bot_precedent_notify.py` | Test | Internal | bot/notifications.py (work_plan.md §8.6). |
-| `tests/test_bot_profile_commands.py` | Test | Internal | bot/commands.py (work_plan.md §8.7). |
-| `tests/test_bot_results.py` | Test | Internal | bot/notifications.py (work_plan.md §8.9). |
-| `tests/test_bot_settings_commands.py` | Test | Internal | bot/commands.py (work_plan.md §8.8). |
-| `tests/test_bot_telegram_client.py` | Test | Internal | bot/telegram_client.py (work_plan.md §8.1, §8.10). Exercises `PTBTelegramClient` against the real, installed `python-telegram-bot` `Application`/`Bot` classes, with only the network- performing methods (`Bot.get_me`, `Bot.send_message`, `Bot.answer_callback_query`) replaced by `AsyncMock`s — everything else (building the `Application`, routing through `bot.formatting.split_message`) is exercised for real. See that module's docstring for what remains unverified against a live bot token. |
-| `tests/test_bot_users.py` | Test | Internal | bot/users.py (work_plan.md §8.2). |
-| `tests/test_demo_profile.py` | Test | Internal | Verifies demo profile behavior. |
-| `tests/test_file_catalog.py` | Test | Internal | Ensures the English file catalog describes the current repository tree. |
-| `tests/test_history_agent.py` | Test | Internal | Verifies history agent behavior. |
-| `tests/test_history_extraction.py` | Test | Internal | Verifies history extraction behavior. |
-| `tests/test_history_logging.py` | Test | Internal | Verifies history logging behavior. |
-| `tests/test_history_precedent.py` | Test | Internal | Verifies history precedent behavior. |
-| `tests/test_history_query.py` | Test | Internal | Verifies history query behavior. |
-| `tests/test_history_time_utils.py` | Test | Internal | history/time_utils.py — direct, targeted tests. Every existing test exercises this module only indirectly, through history/scheduler.py's/history/scheduler.py's own tests calling reconcile() — none of them target this module's own boundary conditions. This file does. |
-| `tests/test_integration_cost_and_latency_review.py` | Test | Internal | 9.20 — Review cost and latency (work_plan.md §9.20). This subtask is a review, not a correctness test — its own bullets ask for measurement and analysis, not a pass/fail claim. This file is the real instrumentation that produces the numbers `docs/cost_latency_review.md` reports; it exists so those numbers are reproducible and re-checkable, not hand-typed guesses. It fails only if the instrumentation itself breaks (e.g. a stage's call count regresses to zero) — it is not a tuning target in itself. |
-| `tests/test_integration_deployment.py` | Test | Internal | 9.21 — Set up deployment (work_plan.md §9.21). Uses the *real* `api.app.build_context`/`build_app`/`main` — not `tests/api_fakes.py`'s test-only fixture — since this subtask is about proving the actual startup wiring works, not the test double that stands in for it everywhere else. Scope stays localhost-demo packaging only, per this subtask's own refined text: production process supervision, TLS, and everything else `docs/NEXT_STAGE.md` covers is explicitly out of scope here. |
-| `tests/test_integration_end_to_end_flow.py` | Test | Internal | 9.2 — Run the end-to-end flow test (work_plan.md §9.2). Drives one event from the simulator's own submission path (`POST /Event`, against a real running API) through every stage — extraction, risk assessment, protocol selection, precedent lookup, task formulation, execution, insights, judgment, and the history write — and confirms both that the event record carries everything each stage should have written, and that one trace ID connects every log record produced along the way. Run first among Mission 9's integration tests, per this subtask's own last bullet: almost every later one assumes this path works. |
-| `tests/test_integration_history_accuracy.py` | Test | Internal | 9.16 — Test history accuracy over time (work_plan.md §9.16). Multi-month fidelity and cross-level query assembly are already covered by `tests/test_history_fidelity.py::test_seed_dataset_survives_three_summary_levels_with_contradictions` and `tests/test_history_query.py`; downtime-gap backfill is already covered by `tests/test_history_scheduler.py::test_reconciliation_builds_bottom_up_and_is_idempotent`. What isn't covered anywhere: a late-arriving report actually causing all three summary levels to regenerate, not just waking the scheduler thread (`test_late_telegram_notification_wakes_only_for_existing_stale_day` only asserts the wake event is set, never that a reconciliation pass afterward really regenerates every level). |
-| `tests/test_integration_hold_restart_and_flow.py` | Test | Internal | 9.7 / 9.9 — restart-mid-hold and continued-processing-behind-a-hold (work_plan.md §9.7, §9.9). Most of §9.7/§9.8/§9.9/§9.10/§9.11/§9.12/§9.13's own bullets are already covered, bullet for bullet, by extensive pre-existing test suites: `tests/test_orchestrator_holds.py`, `tests/test_orchestrator_precedent.py`, `tests/test_orchestrator_formulation.py`, `tests/test_orchestrator_judgment.py` (all Mission 6, real orchestrator functions, no HTTP), and `tests/test_api_holds.py`/`tests/test_api_messages.py` (Mission 7, real HTTP against a fake `ApiContext`). `tests/test_orchestrator_flows.py:: test_a_held_event_resumes_correctly_after_a_simulated_restart` already proves restart-survival for an *approval* hold at the orchestrator level. What none of those combine: restart-survival proven through the real `api/*` HTTP routes specifically (a fresh process boundary reaching the hold through `POST /Clarify`/`POST /Approve`, not by calling `resume_after_approval` directly), for *both* hold kinds, and the claim that events behind a held one keep flowing rather than blocking on it. This file is exactly that remaining, non-redundant scope. |
-| `tests/test_integration_ingestion_parity.py` | Test | Internal | 9.6 — Test ingestion parity (work_plan.md §9.6). `tests/test_api_unified_ingestion.py` (§7.5's own convergence proof) already confirms `POST /Event` and `POST /Msg` converge at the API layer. This file's own, non-redundant scope per this subtask's refined text: proving the bot's own real code path converges too — through `bot.app.handle_incoming_message` calling a real `bot.http_api_client.HttpApiClient` against a real running API, not a second direct `POST /Msg` call. |
-| `tests/test_integration_log_sink.py` | Test | Internal | The DB-backed structured-log sink, end to end (work_plan.md §1.8 follow-up). Drives one event through a real running API (mirroring `tests/test_integration_end_to_end_flow.py`'s own harness exactly) with the DB-backed log sink attached, then queries `persistence.fetch_log_entries` directly — not stdout — and confirms a complete, correctly-ordered set of rows for that one trace ID, across every module involved. Complements `tests/test_persistence_conformance.py` (which proves the write/read path works in isolation) and `tests/test_logging.py` (which proves the handler itself behaves correctly against a fake) — this is the one place a real request, a real SQLite file, and the real handler all run together. |
-| `tests/test_integration_profile_editing_and_settings.py` | Test | Internal | 9.17 — Test profile editing and settings persistence (work_plan.md §9.17). Most bullets already covered: "running system unchanged" by `tests/test_api_protocols.py::test_post_protocol_does_not_change_the_running_loaded_set`, "GET /SYSTEM reports pending change" by `tests/test_api_system.py ::test_get_system_reports_a_pending_profile_change_after_the_file_is_edited`, "changed threshold survives a restart" by `tests/test_settings_store.py ::test_later_run_prefers_the_settings_file_over_profile_starting_values`, "reject a profile-owned field" by `tests/test_api_system.py ::test_put_system_rejects_a_profile_owned_field_by_name`. This file adds the two genuinely uncovered bullets: a real restart actually loading and selecting the newly-added protocol, and a risk-threshold change taking effect on the very next event submitted through the real API. |
-| `tests/test_integration_profile_isolation.py` | Test | Internal | 9.4 — Test profile isolation (work_plan.md §9.4). Two full deployments — two real running API servers, two real SQLite files, two real settings stores — run at once and must never leak state into each other. |
-| `tests/test_integration_profile_loading.py` | Test | Internal | 9.3 — Test profile loading and validation (work_plan.md §9.3). Most of this subtask's bullets are already thoroughly covered at the unit level — `tests/test_profile_loading.py` (missing env vars, hash tracking) and `tests/test_profile_validation.py` (unconstructed agent, unapproved tool, unset approval flag, one failure per bad protocol). This file adds the two bullets that aren't covered anywhere else: an exhaustive "loads exactly this and nothing else" check, and the two-profiles-different-model routing check, which is a profile-level integration concern distinct from `tests/test_agent_adapter.py`'s own adapter-level model-routing test. |
-| `tests/test_integration_retry_exhaustion.py` | Test | Internal | 9.14 — Test retry and idempotency (work_plan.md §9.14). The first three bullets (idempotency blocking retry after a side-effecting tool acted, read-only retry to the limit, the limit read live) are already covered directly against `protocols.executor.execute_step_with_retry` in `tests/test_protocol_retry.py`. `tests/test_api_jobs.py` already covers "keeps the successful steps' results" at the rendering level. What's missing, and what this file adds: the real retry-exhaustion path, through the real (mocked-at-the-crewai-boundary) executor, actually notifying the originator and letting the next event proceed — not simulated by writing outcomes to persistence directly. |
-| `tests/test_integration_serial_processing_under_load.py` | Test | Internal | 9.19 — Test serial processing under load (work_plan.md §9.19). Distinct from `tests/test_persistence_sqlite_backend.py`'s own concurrency suite, which proves the serialized-writer design holds under raw concurrent `persistence` calls in isolation. This file proves it holds under a real simulator-driven burst through the *entire* flow — extraction, risk assessment, protocol selection, the Insights Agent, and a real running summary scheduler all at once — reusing that file's own real-threads-plus-timeout technique for detecting a hang (`orchestrator. queue.SerialEventQueue.wait_until_idle` already provides the equivalent here, since everything routes through one real queue). |
-| `tests/test_integration_user_administration.py` | Test | Internal | 9.5 — Test user administration (work_plan.md §9.5). Most of this subtask's bullets are already covered at the unit level (`tests/test_user_admin.py`'s own CLI tests, `tests/test_bot_users.py`'s refusal-message tests). This file adds what isn't covered anywhere else: a real end-to-end proof that a commander added via `cli.user_admin` can actually approve a real held run through the real API, and a structural check — over the real registered Flask routes, not by inspection — that no `api/*` route creates, changes, or removes a user, including the two read-only lookups added after this subtask was first drafted (`GET /Commanders`, `GET /User/<identity>`, §8.13/§8.14). |
-| `tests/test_legacy_imports.py` | Test | Internal | Compatibility coverage for module paths replaced by the deep refactor. |
-| `tests/test_logging.py` | Test | Internal | Verifies logging behavior. |
-| `tests/test_main_agent.py` | Test | Internal | Verifies main agent behavior. |
-| `tests/test_migrations.py` | Test | Internal | Verifies migrations behavior. |
-| `tests/test_orchestrator_flows.py` | Test | Internal | Verifies orchestrator flows behavior. |
-| `tests/test_orchestrator_holds.py` | Test | Internal | Verifies orchestrator holds behavior. |
-| `tests/test_orchestrator_insights.py` | Test | Internal | Verifies orchestrator insights behavior. |
-| `tests/test_orchestrator_judgment.py` | Test | Internal | Verifies orchestrator judgment behavior. |
-| `tests/test_orchestrator_question_flow.py` | Test | Internal | Verifies orchestrator question flow behavior. |
-| `tests/test_orchestrator_selection.py` | Test | Internal | Verifies orchestrator selection behavior. |
-| `tests/test_permissions.py` | Test | Internal | Verifies permissions behavior. |
-| `tests/test_persistence_conformance.py` | Test | Internal | Backend-swap conformance suite (work_plan.md §2.11). Written against persistence.interface only. The `persistence` fixture below is the *only* place a concrete engine is named — adding a second backend means adding its class to IMPLEMENTATIONS and nothing else in this file changes. No test body may reference SQLite, a SQL string, or a file layout; passing this suite unchanged is the definition of a valid replacement engine. |
-| `tests/test_persistence_events.py` | Test | Internal | Verifies persistence events behavior. |
-| `tests/test_persistence_sqlite_backend.py` | Test | Internal | persistence/sqlite_backend.py's own concurrency guarantee (work_plan.md §2.9): one serialized writer thread draining a queue, backed by SQLite's WAL mode, so concurrent readers proceed without blocking on an in-flight write. Every other persistence test drives the backend single-threaded — this file is the one place that guarantee is actually exercised under real multi-threaded contention, with a real temporary file (concurrent writers against `:memory:` wouldn't even share a database), not mocked or asyncio-simulated. |
-| `tests/test_profile_loading.py` | Test | Internal | Verifies profile loading behavior. |
-| `tests/test_protocol_editor.py` | Test | Internal | Verifies protocol editor behavior. |
-| `tests/test_protocol_loader.py` | Test | Internal | Verifies protocol loader behavior. |
-| `tests/test_protocol_retry.py` | Test | Internal | Verifies protocol retry behavior. |
-| `tests/test_reference_agent.py` | Test | Internal | Verifies reference agent behavior. |
-| `tests/test_user_admin.py` | Test | Internal | Verifies user admin behavior. |
-| `tools/__init__.py` | Production | Public facade | Defines the tools Python package facade or package marker. |
-| `tools/observability.py` | Production | Private implementation | Provides tracing, stage context, structured logging, and the database log sink. |
-| `tools/simulator.py` | Production | Public entry point | Emits synthetic sensor events against a running API deployment. |
-| `tools/terminal.py` | Production | Private implementation | Provides shared console clients and terminal workflow helpers. |
-| `tools/terminal_client_commander.py` | Production | Public entry point | Runs the commander terminal client. |
-| `tools/terminal_client_viewer.py` | Production | Public entry point | Runs the viewer terminal client. |
+| `refactor.md` | Project | Internal | Records the behavior-preserving refactor design and implementation outcomes. |
+| `requirements-dev.txt` | Project | Internal | Pins development and test dependencies. |
+| `requirements.txt` | Project | Internal | Pins production runtime dependencies. |
+| `tests/__init__.py` | Test | Internal | Marks the automated test suite as a package. |
+| `tests/api_fakes.py` | Test | Internal | Provides reusable API contexts, clients, and server fakes for tests. |
+| `tests/bot_fakes.py` | Test | Internal | Provides reusable bot API and Telegram fakes for tests. |
+| `tests/helpers.py` | Test | Internal | Provides shared test builders and persistence helpers. |
+| `tests/sanity_check_real_model_call.py` | Test | Internal | Runs an opt-in billed real-model smoke check outside pytest discovery. |
+| `tests/test_agent_permission_enforcement.py` | Test | Internal | Verifies agent permission enforcement behavior and edge cases. |
+| `tests/test_agent_registry.py` | Test | Internal | Verifies agent registry behavior and edge cases. |
+| `tests/test_agent_runtime.py` | Test | Internal | Verifies agent construction, invocation, CrewAI adaptation, and output handling. |
+| `tests/test_api_app.py` | Test | Internal | Verifies api app behavior and edge cases. |
+| `tests/test_api_holds.py` | Test | Internal | Verifies api holds behavior and edge cases. |
+| `tests/test_api_jobs.py` | Test | Internal | Verifies api jobs behavior and edge cases. |
+| `tests/test_api_messages.py` | Test | Internal | Verifies api messages behavior and edge cases. |
+| `tests/test_api_notifications.py` | Test | Internal | Verifies api notifications behavior and edge cases. |
+| `tests/test_api_protocols.py` | Test | Internal | Verifies api protocols behavior and edge cases. |
+| `tests/test_api_request_boundary.py` | Test | Internal | Verifies authentication and structured API error translation. |
+| `tests/test_api_system.py` | Test | Internal | Verifies api system behavior and edge cases. |
+| `tests/test_api_unified_ingestion.py` | Test | Internal | Verifies api unified ingestion behavior and edge cases. |
+| `tests/test_architecture.py` | Test | Internal | Enforces package boundaries and prevents recreation of the registries package. |
+| `tests/test_bot_app.py` | Test | Internal | Verifies bot dependency wiring, entry-point behavior, and update routing. |
+| `tests/test_bot_background_services.py` | Test | Internal | Verifies notification polling, delivery, failures, results, and startup services. |
+| `tests/test_bot_holds.py` | Test | Internal | Verifies clarification and approval interaction lifecycles. |
+| `tests/test_bot_interactions.py` | Test | Internal | Verifies profile, settings, user, formatting, and command interactions. |
+| `tests/test_bot_transports.py` | Test | Internal | Verifies bot HTTP clients, abstract client behavior, and Telegram transports. |
+| `tests/test_demo_profile.py` | Test | Internal | Verifies demo profile behavior and edge cases. |
+| `tests/test_environment_config.py` | Test | Internal | Verifies environment-backed model and runtime configuration. |
+| `tests/test_file_catalog.py` | Test | Internal | Ensures this catalog exactly matches the first-party repository tree. |
+| `tests/test_history_agent.py` | Test | Internal | Verifies history agent behavior and edge cases. |
+| `tests/test_history_event_pipeline.py` | Test | Internal | Verifies extraction, time normalization, and durable history writes. |
+| `tests/test_history_logging.py` | Test | Internal | Verifies history logging behavior and edge cases. |
+| `tests/test_history_precedent.py` | Test | Internal | Verifies history precedent behavior and edge cases. |
+| `tests/test_history_query.py` | Test | Internal | Verifies history query behavior and edge cases. |
+| `tests/test_integration_cost_and_latency_review.py` | Test | Internal | Verifies the cost and latency review scenario across real subsystem boundaries. |
+| `tests/test_integration_deployment.py` | Test | Internal | Verifies the deployment scenario across real subsystem boundaries. |
+| `tests/test_integration_end_to_end_flow.py` | Test | Internal | Verifies the end to end flow scenario across real subsystem boundaries. |
+| `tests/test_integration_history_accuracy.py` | Test | Internal | Verifies the history accuracy scenario across real subsystem boundaries. |
+| `tests/test_integration_hold_restart_and_flow.py` | Test | Internal | Verifies the hold restart and flow scenario across real subsystem boundaries. |
+| `tests/test_integration_ingestion_parity.py` | Test | Internal | Verifies the ingestion parity scenario across real subsystem boundaries. |
+| `tests/test_integration_log_sink.py` | Test | Internal | Verifies the log sink scenario across real subsystem boundaries. |
+| `tests/test_integration_profile_editing_and_settings.py` | Test | Internal | Verifies the profile editing and settings scenario across real subsystem boundaries. |
+| `tests/test_integration_profile_isolation.py` | Test | Internal | Verifies the profile isolation scenario across real subsystem boundaries. |
+| `tests/test_integration_profile_loading.py` | Test | Internal | Verifies the profile loading scenario across real subsystem boundaries. |
+| `tests/test_integration_retry_exhaustion.py` | Test | Internal | Verifies the retry exhaustion scenario across real subsystem boundaries. |
+| `tests/test_integration_serial_processing_under_load.py` | Test | Internal | Verifies the serial processing under load scenario across real subsystem boundaries. |
+| `tests/test_integration_user_administration.py` | Test | Internal | Verifies the user administration scenario across real subsystem boundaries. |
+| `tests/test_legacy_imports.py` | Test | Internal | Verifies supported implementation-path aliases resolve to canonical modules. |
+| `tests/test_migrations.py` | Test | Internal | Verifies migrations behavior and edge cases. |
+| `tests/test_observability.py` | Test | Internal | Verifies tracing and structured logging behavior. |
+| `tests/test_orchestrator_flows.py` | Test | Internal | Verifies orchestrator flows behavior and edge cases. |
+| `tests/test_orchestrator_holds.py` | Test | Internal | Verifies orchestrator holds behavior and edge cases. |
+| `tests/test_orchestrator_insights.py` | Test | Internal | Verifies orchestrator insights behavior and edge cases. |
+| `tests/test_orchestrator_judgment.py` | Test | Internal | Verifies orchestrator judgment behavior and edge cases. |
+| `tests/test_orchestrator_reasoning.py` | Test | Internal | Verifies Main Agent reasoning, parsing, and decisions. |
+| `tests/test_orchestrator_selection.py` | Test | Internal | Verifies orchestrator selection behavior and edge cases. |
+| `tests/test_permissions.py` | Test | Internal | Verifies permissions behavior and edge cases. |
+| `tests/test_persistence_conformance.py` | Test | Internal | Verifies persistence conformance behavior and edge cases. |
+| `tests/test_persistence_events.py` | Test | Internal | Verifies persistence events behavior and edge cases. |
+| `tests/test_profile_loading.py` | Test | Internal | Verifies profile imports, validation, construction, and registry configuration. |
+| `tests/test_protocol_repository.py` | Test | Internal | Verifies protocol loading, validation, rendering, and atomic editing. |
+| `tests/test_protocol_retry.py` | Test | Internal | Verifies protocol retry behavior and edge cases. |
+| `tests/test_question_answering.py` | Test | Internal | Verifies question routing and read-only specialist/history answers. |
+| `tests/test_reference_agent.py` | Test | Internal | Verifies reference agent behavior and edge cases. |
+| `tests/test_sqlite_store.py` | Test | Internal | Verifies SQLite serialization, concurrency, and user persistence. |
+| `tests/test_user_admin.py` | Test | Internal | Verifies user admin behavior and edge cases. |
+| `tools/__init__.py` | Production | Public facade | Exposes shared observability helpers and lazy terminal compatibility aliases. |
+| `tools/observability.py` | Production | Private implementation | Provides trace contexts, structured logging, and human/JSON output. |
+| `tools/simulator.py` | Production | Public entry point | Provides the event-simulator executable entry point. |
+| `tools/terminal_client_commander.py` | Production | Public entry point | Provides the commander terminal-client executable workflow. |
+| `tools/terminal_client_viewer.py` | Production | Public entry point | Provides the viewer terminal-client executable workflow. |
+| `tools/terminal_support.py` | Production | Private implementation | Shares terminal HTTP, notification, identity, and interactive-mode helpers. |

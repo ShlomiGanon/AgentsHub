@@ -60,7 +60,7 @@ def test_partial_day_falls_back_to_raw_events(tmp_path):
     finally:
         store.close()
 
-# -- answer_most_recent_event (orchestrator.question_flow's direct-lookup
+# -- answer_most_recent_event (orchestrator.reasoning's direct-lookup
 # path, question-flow-repros follow-up) ------------------------------------
 
 

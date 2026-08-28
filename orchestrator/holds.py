@@ -9,9 +9,8 @@ from protocols import Protocol
 
 if TYPE_CHECKING:
     from history import ExtractionResult
-    from orchestrator.decisions import RiskAssessment
-    from orchestrator.decisions import ProtocolSelectionResult
-    from registries import EventTypeRegistry
+    from orchestrator.reasoning import ProtocolSelectionResult, RiskAssessment
+    from profiles import EventTypeRegistry
 
 HoldReason = Literal["flagged_protocol", "ambiguous_selection"]
 
@@ -80,7 +79,10 @@ def answer_approval_hold(
     if not is_permitted(answering_level, "approve_run"):
         return HoldAnswerResult(status="unauthorized", message=f"level {answering_level.name} may not approve a run")
 
-    held = next((h for h in persistence.list_held_events("approval") if h["hold_id"] == hold_id), None)
+    held = next(
+        (held_event for held_event in persistence.list_held_events("approval") if held_event["hold_id"] == hold_id),
+        None,
+    )
     if held is None:
         return HoldAnswerResult(
             status="not_found",
@@ -161,7 +163,10 @@ def answer_clarification_hold(
             message=f"'{chosen_classification}' is not in the loaded event-type registry",
         )
 
-    held = next((h for h in persistence.list_held_events("clarification") if h["hold_id"] == hold_id), None)
+    held = next(
+        (held_event for held_event in persistence.list_held_events("clarification") if held_event["hold_id"] == hold_id),
+        None,
+    )
     if held is None:
         return HoldAnswerResult(
             status="not_found",

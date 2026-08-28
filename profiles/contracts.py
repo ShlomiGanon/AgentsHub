@@ -87,3 +87,19 @@ def protocol_missing_attrs(protocol: Any) -> list[str]:
             missing.append(attr_name)
 
     return missing
+
+
+@dataclass(frozen=True)
+class AreaRegistry:
+    areas: tuple[str, ...]
+
+    def is_valid(self, area: str) -> bool:
+        return area in self.areas
+
+
+@dataclass(frozen=True)
+class EventTypeRegistry:
+    types: tuple[str, ...]
+
+    def is_valid(self, event_type: str) -> bool:
+        return event_type in self.types

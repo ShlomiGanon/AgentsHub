@@ -135,7 +135,7 @@ import pytest
 from api.auth import authenticate, require
 from api.errors import AuthenticationError, AuthorizationError
 from auth.permissions import PermissionLevel
-from persistence.sqlite_backend import SQLitePersistence
+from persistence.sqlite_store import SQLitePersistence
 
 
 @pytest.fixture

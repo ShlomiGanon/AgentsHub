@@ -6,7 +6,7 @@ import importlib
 import sys
 
 from bot import ApiRequestError, BotDeps, BotError, HttpApiClient, dispatch_notification, handle_incoming_message
-from tools.terminal import (
+from tools.terminal_support import (
     ConsoleTelegramClient,
     ObservingApiClient,
     ainput,
@@ -89,17 +89,17 @@ async def _run_repl(deps: BotDeps, observing_client: ObservingApiClient, base_ur
 
             text, sender = payload
             try:
-                status, body = submit_event(base_url, text, sender)
+                status, response_payload = submit_event(base_url, text, sender)
             except ApiRequestError as exc:
                 print(f"(request failed: {exc})")
                 continue
 
             if status >= 400:
-                print(f"submission refused ({status}): {body.get('message', body)}")
+                print(f"submission refused ({status}): {response_payload.get('message', response_payload)}")
                 continue
 
-            print(f"submitted: event_id={body['event_id']} status={body['status']}")
-            cursor = await _wait_for_completion(deps, cursor, body["event_id"], poll_interval)
+            print(f"submitted: event_id={response_payload['event_id']} status={response_payload['status']}")
+            cursor = await _wait_for_completion(deps, cursor, response_payload["event_id"], poll_interval)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -134,10 +134,6 @@ def main(argv: list[str] | None = None) -> None:
         try:
             asyncio.run(_run_repl(deps, observing_client, base_url, args.identity, args.poll_interval))
         except (KeyboardInterrupt, EOFError):
-            # EOFError alongside KeyboardInterrupt: every `ainput()` call in
-            # this REPL can raise it (closed stdin, a piped/scripted input
-            # stream running dry, Ctrl+D/Ctrl+Z) — same graceful-shutdown
-            # treatment as Ctrl+C, not a crash.
             pass
     finally:
         cleanup_test_identity(args.profile, args.identity, created_this_session)

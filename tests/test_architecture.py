@@ -1,10 +1,4 @@
-"""Import-graph check (work_plan.md §1.1).
-
-Fails the build the day a package imports a module of another package that
-is not that package's declared entry point. Mirrors docs/allowed_calls.md —
-if the two ever disagree, this test is wrong and must be updated to match
-that document, not the other way around.
-"""
+"""Import-graph and package-boundary checks."""
 
 import ast
 from pathlib import Path
@@ -15,7 +9,6 @@ ENTRY_POINTS: dict[str, set[str]] = {
     "persistence": {"persistence"},
     "config": {"config"},
     "auth": {"auth.permissions"},
-    "registries": {"registries"},
     "profiles": {"profiles", "profiles.loader"},
     "tools": {"tools"},
     "cli": set(),
@@ -33,9 +26,9 @@ CROSS_CUTTING_ALWAYS_ALLOWED = {"tools"}
 # rather than creating a second user-write path. No other package may import
 # cli, and tools may import only this exact module.
 CALLER_SPECIFIC_ALLOWED = {
-    ("tools", "bot.client"),
+    ("tools", "bot.transports"),
     ("tools", "bot.contracts"),
-    ("tools", "bot.presentation"),
+    ("tools", "bot.interactions"),
     ("tools", "cli.user_admin"),
 }
 
@@ -112,6 +105,8 @@ def _violations_for_file(file_path: Path) -> list[str]:
 
 
 def test_no_cross_package_imports_outside_entry_points():
+    assert not (REPO_ROOT / "registries").exists()
+
     all_violations = []
 
     for file_path in _iter_governed_python_files():

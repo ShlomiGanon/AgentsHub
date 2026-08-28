@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from flask import Blueprint, jsonify, request
 
-from api.http import ConflictError, InvalidInputError, NotFoundError, RunFailureError, authenticate, require
+from api.request_boundary import ConflictError, InvalidInputError, NotFoundError, RunFailureError, authenticate, require
 from history import storage_timestamp
 
 from orchestrator.flows import begin_report, run_report_extraction
@@ -50,9 +50,9 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, "send_message")
 
-        body = request.get_json(silent=True) or {}
-        text = body.get("text")
-        sender_identity = body.get("sender_identity")
+        request_payload = request.get_json(silent=True) or {}
+        text = request_payload.get("text")
+        sender_identity = request_payload.get("sender_identity")
 
         if not text:
             raise InvalidInputError("'text' is required", field="text")
@@ -92,10 +92,10 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, "send_message")
 
-        body = request.get_json(silent=True) or {}
-        text = body.get("text")
-        sender_identity = body.get("sender_identity")
-        source_message_id = body.get("source_message_id")
+        request_payload = request.get_json(silent=True) or {}
+        text = request_payload.get("text")
+        sender_identity = request_payload.get("sender_identity")
+        source_message_id = request_payload.get("source_message_id")
 
         if not text:
             raise InvalidInputError("'text' is required", field="text")
@@ -169,16 +169,16 @@ def protocol_to_dict(protocol: Protocol) -> dict:
     }
 
 
-def _protocol_from_body(body: dict, name_override: str | None = None) -> Protocol:
+def _protocol_from_body(request_payload: dict, name_override: str | None = None) -> Protocol:
     try:
         return Protocol(
-            name=name_override if name_override is not None else body["name"],
-            description=body["description"],
-            participating_agents=tuple(body["participating_agents"]),
-            approved_tools=tuple(body["approved_tools"]),
-            expected_success_output=body["expected_success_output"],
-            criticality=CriticalityLevel[str(body["criticality"]).upper()],
-            approval_flag=body["approval_flag"],
+            name=name_override if name_override is not None else request_payload["name"],
+            description=request_payload["description"],
+            participating_agents=tuple(request_payload["participating_agents"]),
+            approved_tools=tuple(request_payload["approved_tools"]),
+            expected_success_output=request_payload["expected_success_output"],
+            criticality=CriticalityLevel[str(request_payload["criticality"]).upper()],
+            approval_flag=request_payload["approval_flag"],
         )
     except KeyError as exc:
         raise InvalidInputError(f"missing required field: {exc.args[0]}", field=str(exc.args[0])) from exc
@@ -204,30 +204,30 @@ def build_protocols_blueprint(ctx: "ApiContext") -> Blueprint:
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, "edit_profile")
 
-        body = request.get_json(silent=True) or {}
-        new_protocol = _protocol_from_body(body)
+        request_payload = request.get_json(silent=True) or {}
+        new_protocol = _protocol_from_body(request_payload)
 
         try:
-            result = add_protocol(ctx.loaded_profile.module_path, ctx.deps.protocol_set.all(), _agents_by_name(), new_protocol)
+            protocol_edit_message = add_protocol(ctx.loaded_profile.module_path, ctx.deps.protocol_set.all(), _agents_by_name(), new_protocol)
         except ProtocolEditError as exc:
             raise InvalidInputError(str(exc)) from exc
 
-        return jsonify({"message": result})
+        return jsonify({"message": protocol_edit_message})
 
     @blueprint.route("/Protocol/<name>", methods=["PUT"])
     def update_protocol(name):
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, "edit_profile")
 
-        body = request.get_json(silent=True) or {}
-        updated_protocol = _protocol_from_body(body, name_override=name)
+        request_payload = request.get_json(silent=True) or {}
+        updated_protocol = _protocol_from_body(request_payload, name_override=name)
 
         try:
-            result = replace_protocol(ctx.loaded_profile.module_path, ctx.deps.protocol_set.all(), _agents_by_name(), updated_protocol)
+            protocol_edit_message = replace_protocol(ctx.loaded_profile.module_path, ctx.deps.protocol_set.all(), _agents_by_name(), updated_protocol)
         except ProtocolEditError as exc:
             raise InvalidInputError(str(exc)) from exc
 
-        return jsonify({"message": result})
+        return jsonify({"message": protocol_edit_message})
 
     @blueprint.route("/Protocol/<name>", methods=["DELETE"])
     def delete_protocol(name):
@@ -235,11 +235,11 @@ def build_protocols_blueprint(ctx: "ApiContext") -> Blueprint:
         require(level, "edit_profile")
 
         try:
-            result = remove_protocol(ctx.loaded_profile.module_path, ctx.deps.protocol_set.all(), name)
+            protocol_edit_message = remove_protocol(ctx.loaded_profile.module_path, ctx.deps.protocol_set.all(), name)
         except ProtocolEditError as exc:
             raise InvalidInputError(str(exc)) from exc
 
-        return jsonify({"message": result})
+        return jsonify({"message": protocol_edit_message})
 
     return blueprint
 
@@ -286,30 +286,30 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, "change_settings")
 
-        body = request.get_json(silent=True) or {}
+        request_payload = request.get_json(silent=True) or {}
 
-        unknown = sorted(set(body) - _SETTINGS_FIELDS)
+        unknown = sorted(set(request_payload) - _SETTINGS_FIELDS)
         if unknown:
             field = unknown[0]
             raise InvalidInputError(f"'{field}' belongs to the profile and takes effect only on a restart", field=field)
 
-        if "retry_count" in body:
-            value = body["retry_count"]
-            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        if "retry_count" in request_payload:
+            setting_value = request_payload["retry_count"]
+            if not isinstance(setting_value, int) or isinstance(setting_value, bool) or setting_value < 0:
                 raise InvalidInputError("'retry_count' must be a non-negative integer", field="retry_count")
-            ctx.deps.settings_store.set_retry_count(value)
+            ctx.deps.settings_store.set_retry_count(setting_value)
 
-        if "risk_threshold" in body:
-            value = body["risk_threshold"]
-            if not isinstance(value, (int, float)) or isinstance(value, bool) or not (0.0 <= value <= 1.0):
+        if "risk_threshold" in request_payload:
+            setting_value = request_payload["risk_threshold"]
+            if not isinstance(setting_value, (int, float)) or isinstance(setting_value, bool) or not (0.0 <= setting_value <= 1.0):
                 raise InvalidInputError("'risk_threshold' must be a number between 0.0 and 1.0", field="risk_threshold")
-            ctx.deps.settings_store.set_risk_threshold(value)
+            ctx.deps.settings_store.set_risk_threshold(setting_value)
 
-        if "lookback_window_days" in body:
-            value = body["lookback_window_days"]
-            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        if "lookback_window_days" in request_payload:
+            setting_value = request_payload["lookback_window_days"]
+            if not isinstance(setting_value, int) or isinstance(setting_value, bool) or setting_value < 1:
                 raise InvalidInputError("'lookback_window_days' must be a positive integer", field="lookback_window_days")
-            ctx.deps.settings_store.set_lookback_window_days(value)
+            ctx.deps.settings_store.set_lookback_window_days(setting_value)
 
         return jsonify({
             "retry_count": ctx.deps.settings_store.get_retry_count(),
@@ -373,26 +373,26 @@ def job_status(ctx: "ApiContext", event_id: str) -> dict | None:
         return None
 
     if event["outcome"] is not None:
-        body = {"event_id": event_id, "status": event["outcome"]}
+        response_payload = {"event_id": event_id, "status": event["outcome"]}
         if event.get("insight_text") is not None:
-            body["insight_text"] = event["insight_text"]
+            response_payload["insight_text"] = event["insight_text"]
 
         steps_completed = _steps_completed(event)
         if steps_completed:
-            body["steps_completed"] = steps_completed
+            response_payload["steps_completed"] = steps_completed
 
         if event["outcome"] == "failed":
             if event.get("outcome_failure_reason"):
-                body["detail"] = event["outcome_failure_reason"]
+                response_payload["detail"] = event["outcome_failure_reason"]
             failed_step_agent_name = _failed_step_agent_name(event)
             if failed_step_agent_name is not None:
-                body["failed_step_agent_name"] = failed_step_agent_name
+                response_payload["failed_step_agent_name"] = failed_step_agent_name
         elif event["outcome"] == "closed_on_precedent" and event.get("precedent_closed_by_event_id"):
-            body["detail"] = f"closed against resolved precedent '{event['precedent_closed_by_event_id']}'"
+            response_payload["detail"] = f"closed against resolved precedent '{event['precedent_closed_by_event_id']}'"
         elif event["outcome"] == "no_match_protocol" and event.get("outcome_failure_reason"):
-            body["detail"] = event["outcome_failure_reason"]
+            response_payload["detail"] = event["outcome_failure_reason"]
 
-        return body
+        return response_payload
 
     approval_hold = ctx.deps.persistence.fetch_held_event("approval", event_id)
     if approval_hold is not None and not approval_hold["resolved"]:
@@ -448,8 +448,8 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
         require(level, "resolve_hold")
         identity = request.headers.get("X-Identity")
 
-        body = request.get_json(silent=True) or {}
-        classification = body.get("classification")
+        request_payload = request.get_json(silent=True) or {}
+        classification = request_payload.get("classification")
         if not classification:
             raise InvalidInputError("'classification' is required", field="classification")
 
@@ -481,8 +481,8 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
         require(level, "approve_run")
         identity = request.headers.get("X-Identity")
 
-        body = request.get_json(silent=True) or {}
-        decision = body.get("decision")
+        request_payload = request.get_json(silent=True) or {}
+        decision = request_payload.get("decision")
         if not decision:
             raise InvalidInputError("'decision' is required — 'approved', 'rejected', or a candidate protocol name", field="decision")
 
@@ -613,14 +613,14 @@ def _reply_to_message_id(ctx: "ApiContext", kind: str, event_id: str) -> str | N
     return event.get("source_message_id")
 
 
-def _format_notification(ctx: "ApiContext", row: dict) -> dict:
-    builder = _PAYLOAD_BUILDERS[row["kind"]]
+def _format_notification(ctx: "ApiContext", notification_row: dict) -> dict:
+    builder = _PAYLOAD_BUILDERS[notification_row["kind"]]
     return {
-        "sequence_id": row["sequence_id"],
-        "kind": row["kind"],
-        "payload": builder(ctx, row["event_id"]),
-        "target_chat_ids": _target_chat_ids(ctx, row["kind"], row["event_id"]),
-        "reply_to_message_id": _reply_to_message_id(ctx, row["kind"], row["event_id"]),
+        "sequence_id": notification_row["sequence_id"],
+        "kind": notification_row["kind"],
+        "payload": builder(ctx, notification_row["event_id"]),
+        "target_chat_ids": _target_chat_ids(ctx, notification_row["kind"], notification_row["event_id"]),
+        "reply_to_message_id": _reply_to_message_id(ctx, notification_row["kind"], notification_row["event_id"]),
     }
 
 
@@ -640,9 +640,9 @@ def build_notifications_blueprint(ctx: "ApiContext") -> Blueprint:
         except ValueError:
             raise InvalidInputError("'since' must be a non-negative integer cursor", field="since")
 
-        rows = ctx.deps.persistence.fetch_notifications_since(since)
-        notifications = [_format_notification(ctx, row) for row in rows]
-        next_cursor = rows[-1]["sequence_id"] if rows else since
+        notification_rows = ctx.deps.persistence.fetch_notifications_since(since)
+        notifications = [_format_notification(ctx, notification_row) for notification_row in notification_rows]
+        next_cursor = notification_rows[-1]["sequence_id"] if notification_rows else since
 
         return jsonify({"notifications": notifications, "next_cursor": next_cursor})
 

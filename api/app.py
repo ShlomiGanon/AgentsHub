@@ -1,24 +1,37 @@
 """API startup wiring — the package's declared entry point."""
 
 import os
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from flask import Flask
 
-from agents import Agent, build_agent_registry
-from api.contracts import ApiContext
+from agents import build_agent_registry
 from config import ModelTierError, SettingsStore, TierModel, load_base_config, resolve_tier_model_from_env
 from history import SummaryScheduler
 from history.query import HistoryQueryService
 from orchestrator.flows import FlowDeps, SerialEventQueue, assemble_core_agents
 from persistence import open_persistence
+from profiles import build_area_registry, build_event_type_registry
 from profiles.loader import load_profile
 from protocols import load_protocols
-from registries import build_area_registry, build_event_type_registry
 from tools import configure_logging, set_trace_id
 
 if TYPE_CHECKING:
+    from agents import Agent
+    from history import SummaryScheduler
+    from orchestrator.flows import FlowDeps, SerialEventQueue
     from profiles.loader import LoadedProfile
+
+
+@dataclass(frozen=True)
+class ApiContext:
+    deps: "FlowDeps"
+    main_agent: "Agent"
+    insights_agent: "Agent"
+    loaded_profile: "LoadedProfile"
+    queue: "SerialEventQueue"
+    scheduler: "SummaryScheduler"
 
 
 def _dispatch_queue_item(item: object) -> None:
@@ -79,18 +92,11 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
 def build_app(ctx: ApiContext) -> Flask:
     app = Flask(__name__)
 
-    # Isolates each request's trace ID on the thread that serves it, before
-    # anything else runs — see tools.tracing.set_trace_id's own docstring
-    # for why a route sets one this way instead of scoping it with
-    # trace_context. Without this reset, a route that never mints a trace
-    # ID at all (a plain read like GET /SYSTEM) would inherit whatever
-    # value a *previous*, unrelated request left set on this same
-    # request-serving thread — a false correlation, worse than none.
     @app.before_request
     def _reset_trace_id_for_this_request() -> None:
         set_trace_id("")
 
-    from api.http import register_error_handlers
+    from api.request_boundary import register_error_handlers
     from api.routes import (
         build_events_blueprint,
         build_holds_blueprint,

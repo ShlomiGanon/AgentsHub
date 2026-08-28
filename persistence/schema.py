@@ -68,7 +68,6 @@ CREATE TABLE IF NOT EXISTS event_steps (
 """
 
 
-# The name persistence.sqlite_backend maps a `level` argument to.
 SUMMARY_TABLE_NAMES = {
     "daily": "daily_summaries",
     "monthly": "monthly_summaries",
@@ -101,25 +100,13 @@ CREATE INDEX IF NOT EXISTS idx_events_classification_area ON events(classificati
 CREATE INDEX IF NOT EXISTS idx_event_steps_event_id ON event_steps(event_id);
 """
 
-# Its own index DDL, not folded into INDEXES_DDL above — that constant is
-# migration 5's frozen historical SQL (see persistence/schema.py), and
-# log_entries didn't exist yet when migration 5 shipped.
+# Keep migration-era DDL immutable; newer indexes stay separate.
 LOG_ENTRIES_INDEXES_DDL = """
 CREATE INDEX IF NOT EXISTS idx_log_entries_trace_id ON log_entries(trace_id);
 """
 
 
-# `kind` distinguishes "clarification" from "approval" rows — an event is in
-# at most one at a time (docs/vocabulary.md#hold-states), but the table
-# itself doesn't enforce that; the orchestration layer does. `payload` and
-# `resolution` are JSON-encoded TEXT, kind-specific (an approval hold's
-# payload carries the selected protocol or candidates + assessed risk; a
-# future clarification hold's would carry the unresolved field) — decoded
-# only at the persistence.sqlite_backend boundary, same as the events
-# table's JSON columns. This table is distinct from the events table's own
-# clarification_*/approval_* columns: those record the *resolved outcome*
-# on the event itself; this table is the operational queue of currently-open
-# holds, read by whoever prompts a commander and writes an answer back.
+# Kind-specific hold data is JSON stored at the persistence boundary.
 HELD_EVENTS_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS held_events (
     hold_id TEXT PRIMARY KEY,
@@ -134,19 +121,8 @@ CREATE TABLE IF NOT EXISTS held_events (
 );
 """
 
-# -- Notification log (§8.12) ------------------------------------------------
 
-# One row per notification-worthy state change — a hold created
-# (persistence.sqlite_backend.store_held_event) or an event's outcome set
-# (persistence.sqlite_backend.update_event, on its "outcome" transitioning
-# from null) — written in the same transaction/commit as that state change,
-# never as a separate queued write, so the two can never drift apart on a
-# crash between them. `sequence_id`'s AUTOINCREMENT ordering is the whole
-# cursor mechanism the notification feed (§8.12) polls with — no separate
-# index needed, the primary key already provides it. `kind` is one of
-# bot.api_client.BotNotificationKind's seven values. Read-only above the
-# persistence boundary: nothing outside persistence.sqlite_backend ever
-# inserts into this table directly.
+# State changes and their notification cursor advance in one transaction.
 NOTIFICATION_LOG_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS notification_log (
     sequence_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -156,36 +132,7 @@ CREATE TABLE IF NOT EXISTS notification_log (
 );
 """
 
-# -- Structured log entries (work_plan.md §1.8 follow-up — DB-backed sink) ---
-#
-# One row per `logger.*` call site captured by `tools.logging_config`'s
-# handler — the DB-backed counterpart to the JSON object every log record
-# already prints to stdout (`tools.logging_config._JsonFormatter`). `id`'s
-# AUTOINCREMENT ordering, not `timestamp`, is what `fetch_log_entries`
-# relies on to return a trace's rows in the order they actually happened:
-# every write here goes through the same single serialized writer thread
-# every other persistence write does (§2.9), so insertion order exactly
-# matches logger-call order regardless of clock resolution — two records
-# logged in the same microsecond still land in the right order. `timestamp`
-# is captured by the write path itself, not by the caller, and is for
-# human-readable display only; it deliberately uses its own precision
-# independent of `history.interface.storage_timestamp`'s whole-second
-# convention (§9.19/§9.20) — that convention exists for lexicographic
-# range-query comparison against other `occurred_at`/`received_at` values,
-# which nothing here does; this table is only ever queried by `trace_id`.
-# `details` is one JSON-encoded TEXT blob — level, logger name, message,
-# and every event-specific structured field a call site passed via
-# `extra=` — rather than fixed named columns, mirroring `events.entities`/
-# `held_events.payload`'s own reasoning: call sites pass an open-ended,
-# per-event set of fields (§1.8's eleven event kinds each carry different
-# structured detail), not one fixed shape. `trace_id` is its own column,
-# not a `details` key, since it's the primary thing this table is filtered
-# by; nullable because not every log record is produced inside a trace
-# (e.g. startup-time warnings, or a request's own access-log line, which
-# fires outside any trace_context) — `tools.tracing.get_trace_id()` itself
-# returns `""` outside any trace, by that module's own design, and the
-# write path stores that case as SQL NULL rather than an empty string, so
-# "no trace" reads unambiguously rather than as an empty trace ID.
+# Open-ended structured log details are serialized as JSON.
 LOG_ENTRIES_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS log_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

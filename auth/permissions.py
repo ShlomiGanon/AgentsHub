@@ -15,11 +15,6 @@ ACTION_REQUIREMENTS: dict[str, PermissionLevel] = {
     "approve_run": PermissionLevel.COMMANDER,
     "edit_profile": PermissionLevel.COMMANDER,
     "change_settings": PermissionLevel.COMMANDER,
-    # §8.13/§8.12 — the bot's own service identity is the only real caller
-    # of either (docs/allowed_calls.md: "bot calls only api"), and both
-    # expose commander-shaped information (the full commander roster; every
-    # notification kind, including clarification/approval hold detail) —
-    # commander level, same as the things they exist to let the bot deliver.
     "view_commander_roster": PermissionLevel.COMMANDER,
     "poll_notifications": PermissionLevel.COMMANDER,
 }

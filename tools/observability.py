@@ -142,13 +142,6 @@ def _render_protocol_selection(f: dict[str, Any], record: logging.LogRecord) -> 
         candidates = f.get("candidate_names") or []
         return f"protocol selection → ambiguous among [{', '.join(candidates)}]"
     if status == "no_match":
-        # Found live: before this branch existed, a real NO_MATCH selection
-        # (orchestrator.main_agent's own status, distinct from "ambiguous")
-        # fell through to the line above with an empty candidate list —
-        # printing "ambiguous among []" for an event that was never
-        # actually ambiguous, only ever mismatched here in the console
-        # summary (the stored data and every other rendering — job status,
-        # notifications — always had it right).
         return f"protocol selection → no match ({_truncate(f.get('reason', ''))})"
     return f"protocol selection → {status} ({_truncate(f.get('reason', ''))})"
 

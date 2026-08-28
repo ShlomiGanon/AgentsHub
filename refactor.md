@@ -1,5 +1,11 @@
 # Deep Behavior-Preserving Refactor Plan
 
+## Current consolidation status
+
+The second refactor was implemented on 2026-08-28. The current tree has 12 production packages, 38 implementation modules, 63 Python files under `tests`, and 153 cataloged first-party files. Production comments and docstrings total 229 lines. The `registries` package was removed; its immutable contracts and builders now belong to `profiles`. Tests were grouped by responsibility without deleting test functions or assertions, renamed implementation paths retain package-level compatibility aliases, and all six executable module paths remain physical files.
+
+The sections below retain the original deep-refactor plan and its earlier completion record for traceability. The current filesystem and `docs/file_catalog.md` are authoritative.
+
 ## Implementation Status — Complete
 
 Completed on 2026-08-28.

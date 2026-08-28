@@ -235,8 +235,8 @@ in tests before the real classes exist — **with one exception**:
 `.criticality` must be a real `protocols.model.CriticalityLevel` member
 (`LOW`, `MEDIUM`, or `HIGH`), not merely present. A plain string like
 `"low"` satisfies every structural check above but is not accepted —
-`api/routes.py` and `protocols/service.py` both call `.name` on it
-(crashing on anything else), and `orchestrator/decisions.py`'s high-risk
+`api/routes.py` and `protocols/repository.py` both call `.name` on it
+(crashing on anything else), and `orchestrator/reasoning.py`'s high-risk
 tie-break compares it by severity, which only a real, ordered
 `CriticalityLevel` guarantees; a string would compare alphabetically
 instead and could silently select the wrong protocol. This is the same

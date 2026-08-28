@@ -71,8 +71,8 @@ genuinely different identities depending on which:
 in `BotApiClient`'s Mission-8-era abstract signatures, even though the
 last two are commander-only writes — meaning the API-side check could
 only ever validate the bot's own blanket service-level access for these
-five, never the real caller's. `bot/contracts.py`, `bot/client.py`,
-`bot/presentation.py` and `bot/app.py`
+five, never the real caller's. `bot/contracts.py`, `bot/transports.py`,
+`bot/interactions.py` and `bot/app.py`
 were all updated to thread the real caller's identity through to every
 one of these five — the same shape of fix as the Mission 8 deep audit's
 own §8.2 profile/settings unauthenticated-read fix, this time closing a
@@ -80,7 +80,7 @@ server-side-enforcement gap rather than a missing check entirely. Verified
 with a dedicated test per affected method confirming the real API now
 genuinely refuses an unauthorized identity for that specific call — not
 just that the bot's own client-side check would have caught it
-(`tests/test_bot_http_api_client.py`, `tests/test_bot_app.py`).
+(`tests/test_bot_transports.py`, `tests/test_bot_app.py`).
 
 ## The acknowledgment shape
 

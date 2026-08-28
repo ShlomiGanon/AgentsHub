@@ -11,7 +11,7 @@ replacement engine.
 import pytest
 
 from persistence.exceptions import NotFoundError
-from persistence.sqlite_backend import SQLitePersistence
+from persistence.sqlite_store import SQLitePersistence
 
 IMPLEMENTATIONS = [SQLitePersistence]
 
@@ -333,7 +333,7 @@ JSON round-tripping, ordering, kind isolation in depth).
 import pytest
 
 from persistence.exceptions import NotFoundError
-from persistence.sqlite_backend import SQLitePersistence
+from persistence.sqlite_store import SQLitePersistence
 
 
 @pytest.fixture

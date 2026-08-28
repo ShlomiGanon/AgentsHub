@@ -24,16 +24,17 @@ sys.modules[f"{__name__}.logging_config"] = observability
 sys.modules[f"{__name__}.tracing"] = observability
 
 class _TerminalAliasFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
-    alias = f"{__name__}._terminal_client_shared"
+    aliases = {f"{__name__}.terminal", f"{__name__}._terminal_client_shared"}
 
     def find_spec(self, fullname, path=None, target=None):
-        if fullname == self.alias:
+        if fullname in self.aliases:
             return importlib.util.spec_from_loader(fullname, self)
         return None
 
     def create_module(self, spec):
-        module = importlib.import_module("tools.terminal")
-        sys.modules[self.alias] = module
+        module = importlib.import_module("tools.terminal_support")
+        for alias in self.aliases:
+            sys.modules[alias] = module
         return module
 
     def exec_module(self, module):

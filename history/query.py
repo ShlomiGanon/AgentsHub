@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from history.contracts import HistoryAnswer, HistoryQueryError, HistorySource, PrecedentMatch, RetrievedSource
-from history.events import day_bounds, month_bounds, parse_timestamp, storage_timestamp, year_bounds
+from history.event_pipeline import day_bounds, month_bounds, parse_timestamp, storage_timestamp, year_bounds
 from tools import get_trace_id
 
 logger = logging.getLogger(__name__)
@@ -72,9 +72,9 @@ def retrieve_range(persistence, start: datetime, end: datetime, classification: 
             if summary is None:
                 continue
 
-            source = _summary_source(level, summary, classification, area)
-            if source is not None:
-                sources.append(source)
+            history_source = _summary_source(level, summary, classification, area)
+            if history_source is not None:
+                sources.append(history_source)
             cursor = candidate_end
             used_summary = True
             break
@@ -205,9 +205,9 @@ class HistoryQueryService:
             "record is insufficient and preserve contradictions.\n"
             f"Question: {question}\nContext: {json.dumps(context, ensure_ascii=False, sort_keys=True)}"
         )
-        result = self._history_agent.process(prompt, allowed_tools=[])
-        if result.status != "success":
-            raise HistoryQueryError(f"history agent could not answer: {result.text}")
+        agent_result = self._history_agent.process(prompt, allowed_tools=[])
+        if agent_result.status != "success":
+            raise HistoryQueryError(f"history agent could not answer: {agent_result.text}")
 
         matched_ids = {
             event_id
@@ -225,7 +225,7 @@ class HistoryQueryService:
         )
 
         return HistoryAnswer(
-            answer=result.text,
+            answer=agent_result.text,
             sources_used=sources,
             time_start=storage_timestamp(start),
             time_end=storage_timestamp(end),
@@ -247,19 +247,19 @@ class HistoryQueryService:
             "already been searched for you; do not ask for more context or claim none was given.\n"
             f"Question: {question}\nMost recent event: {json.dumps(most_recent, ensure_ascii=False, sort_keys=True, default=str)}"
         )
-        result = self._history_agent.process(prompt, allowed_tools=[])
-        if result.status != "success":
-            raise HistoryQueryError(f"history agent could not answer: {result.text}")
+        agent_result = self._history_agent.process(prompt, allowed_tools=[])
+        if agent_result.status != "success":
+            raise HistoryQueryError(f"history agent could not answer: {agent_result.text}")
 
-        source = HistorySource(
+        history_source = HistorySource(
             level="raw_event",
             period_start=most_recent["occurred_at"],
             period_end=most_recent["occurred_at"],
             source_id=most_recent["event_id"],
         )
         return HistoryAnswer(
-            answer=result.text,
-            sources_used=(source,),
+            answer=agent_result.text,
+            sources_used=(history_source,),
             time_start=most_recent["occurred_at"],
             time_end=most_recent["occurred_at"],
             total_events_matched=1,

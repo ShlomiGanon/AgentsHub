@@ -6,7 +6,7 @@ import pytest
 from agents import adapter
 from agents.history import HistoryAgent
 from agents.reference import ReferenceAgent
-from agents.registry import build_agent_registry
+from agents.runtime import build_agent_registry
 from auth.permissions import PermissionLevel
 from config.base import BaseConfig, TierModel
 from history.query import HistoryQueryService
@@ -28,11 +28,11 @@ from orchestrator.flows import (
 )
 from orchestrator.insights import InsightsAgent
 from orchestrator.main_agent import MainAgent
-from persistence.sqlite_backend import SQLitePersistence
+from persistence.sqlite_store import SQLitePersistence
 from protocols.loader import ProtocolSet
 from protocols.model import CriticalityLevel, Protocol
-from registries.areas import AreaRegistry
-from registries.event_types import EventTypeRegistry
+from profiles import AreaRegistry
+from profiles import EventTypeRegistry
 
 
 @pytest.fixture(autouse=True)
@@ -647,7 +647,7 @@ import pytest
 
 from agents import adapter
 from agents.reference import ReferenceAgent
-from agents.registry import build_agent_registry
+from agents.runtime import build_agent_registry
 from orchestrator.main_agent import OrchestrationParseError, _parse_formulation_response, formulate_tasks, rewrite_task
 from protocols.model import CriticalityLevel, Protocol, Step
 

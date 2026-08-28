@@ -10,7 +10,7 @@ import types
 import pytest
 
 from agents import adapter
-from config.settings_store import SettingsStore
+from config.live_settings import SettingsStore
 from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, RunningApiServer, build_context, happy_path_agent
 from tools.simulator import _post_event
 

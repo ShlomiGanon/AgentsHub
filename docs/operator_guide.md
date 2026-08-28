@@ -26,7 +26,7 @@ plainly here since they're easy to get wrong:
 
 ## Adding an agent
 
-See `docs/agent_authoring.md` for the full walkthrough — `agents/builtins.py`
+See `docs/agent_authoring.md` for the full walkthrough — `agents/standard_agents.py`
 (`ReferenceAgent`) is the working example it points at, a complete,
 minimal agent with one read-only tool and one side-effecting one. Add the
 new agent's class to your profile's `AGENTS` list, constructed with

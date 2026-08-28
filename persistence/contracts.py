@@ -99,6 +99,6 @@ class PersistenceInterface(ABC):
 def open_persistence(db_path: str) -> PersistenceInterface:
     """Construct the concrete backend for `db_path`."""
 
-    from persistence.sqlite import SQLitePersistence
+    from persistence.sqlite_store import SQLitePersistence
 
     return SQLitePersistence(db_path)

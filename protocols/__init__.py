@@ -15,9 +15,9 @@ from protocols.contracts import (
 model = contracts
 sys.modules[f"{__name__}.model"] = contracts
 
-from protocols import executor, service
+from protocols import executor, repository
 from protocols.executor import execute_step_with_retry, execute_steps
-from protocols.service import (
+from protocols.repository import (
     EDIT_SUCCESS_MESSAGE,
     ProtocolSet,
     add_protocol,
@@ -27,10 +27,12 @@ from protocols.service import (
     replace_protocol,
 )
 
-loader = service
-editor = service
-sys.modules[f"{__name__}.loader"] = service
-sys.modules[f"{__name__}.editor"] = service
+service = repository
+loader = repository
+editor = repository
+sys.modules[f"{__name__}.service"] = repository
+sys.modules[f"{__name__}.loader"] = repository
+sys.modules[f"{__name__}.editor"] = repository
 
 __all__ = [
     "CriticalityLevel",

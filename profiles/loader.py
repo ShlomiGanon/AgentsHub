@@ -13,12 +13,22 @@ from profiles.contracts import (
     HUMAN_ACTIVATION_TYPE,
     REQUIRED_PROFILE_ATTRS,
     AgentSpec,
+    AreaRegistry,
+    EventTypeRegistry,
     LoadedProfile,
     ProfileLoadError,
     ProfileValidationError,
     protocol_missing_attrs,
 )
 from protocols import CriticalityLevel
+
+
+def build_area_registry(loaded_profile: "LoadedProfile") -> AreaRegistry:
+    return AreaRegistry(areas=loaded_profile.areas)
+
+
+def build_event_type_registry(loaded_profile: "LoadedProfile") -> EventTypeRegistry:
+    return EventTypeRegistry(types=loaded_profile.event_types)
 
 def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> list[str]:
     failures: list[str] = []
@@ -132,13 +142,13 @@ def _resolve_secrets(module: ModuleType, module_path: str) -> dict[str, str]:
     resolved: dict[str, str] = {}
 
     for var_name in var_names:
-        value = os.environ.get(var_name)
-        if value is None:
+        secret_value = os.environ.get(var_name)
+        if secret_value is None:
             raise ProfileLoadError(
                 f"profile '{module_path}' names environment variable "
                 f"'{var_name}' but it is not set"
             )
-        resolved[var_name] = value
+        resolved[var_name] = secret_value
 
     return resolved
 
@@ -184,32 +194,32 @@ def validate_single_protocol(protocol, agents_by_name: dict) -> list[str]:
 def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) -> LoadedProfile:
     """`core_model`/`sub_model` are the two already-resolved `TierModel`s — required, no default, no environment access for model-tier config anywhere in this function (the pre-existin..."""
 
-    module = _import_profile_module(module_path)
-    _check_required_attrs(module, module_path)
+    profile_module = _import_profile_module(module_path)
+    _check_required_attrs(profile_module, module_path)
 
-    resolved_secrets = _resolve_secrets(module, module_path)
+    resolved_secrets = _resolve_secrets(profile_module, module_path)
     core_agents = _construct_core_agents(load_base_config(core_model=core_model))
-    agents = _construct_agents_from_specs(module, module_path, core_model=core_model, sub_model=sub_model)
+    agents = _construct_agents_from_specs(profile_module, module_path, core_model=core_model, sub_model=sub_model)
 
-    event_types = tuple(module.EVENT_TYPES) + (HUMAN_ACTIVATION_TYPE,)
+    event_types = tuple(profile_module.EVENT_TYPES) + (HUMAN_ACTIVATION_TYPE,)
 
     loaded = LoadedProfile(
         module_path=module_path,
         agents=agents,
-        protocols=tuple(module.PROTOCOLS),
+        protocols=tuple(profile_module.PROTOCOLS),
         event_types=event_types,
-        areas=tuple(module.AREAS),
-        db_path=module.DB_PATH,
-        api_port=module.API_PORT,
-        retry_count=module.RETRY_COUNT,
-        risk_threshold=module.RISK_THRESHOLD,
-        lookback_window_days=module.LOOKBACK_WINDOW_DAYS,
+        areas=tuple(profile_module.AREAS),
+        db_path=profile_module.DB_PATH,
+        api_port=profile_module.API_PORT,
+        retry_count=profile_module.RETRY_COUNT,
+        risk_threshold=profile_module.RISK_THRESHOLD,
+        lookback_window_days=profile_module.LOOKBACK_WINDOW_DAYS,
         profile_file_hash=hash_profile_file(module_path),
         core_agents=MappingProxyType(core_agents),
         resolved_secrets=MappingProxyType(resolved_secrets),
     )
 
-    failures = validate_profile(loaded, declared_event_types=module.EVENT_TYPES)
+    failures = validate_profile(loaded, declared_event_types=profile_module.EVENT_TYPES)
     if failures:
         raise ProfileValidationError(failures)
 

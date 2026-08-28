@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from bot.client import TelegramClient
+    from bot.transports import TelegramClient
     from profiles.loader import LoadedProfile
 
 
@@ -48,29 +48,7 @@ class BotDeps:
 
 PermissionLevelName = Literal["viewer", "commander"]
 
-# The bot process's own registered identity — presented as X-Identity on
-# every outbound call that has no specific Telegram user's identity to
-# forward: resolve_user, list_commander_chat_ids, poll_pending_notifications,
-# and get_profile_diff_status (§7.7's diff check carries no permission
-# implication — it just compares two hashes). Every other call that used to
-# have no per-user identity to forward — get_profile_view, get_settings_view,
-# get_job_result, write_protocol, write_setting — was fixed to take a
-# caller_identity parameter and use *that* instead, the same way
-# answer_clarification_hold/answer_approval_hold/submit_message already did,
-# once this was found to be a real server-side permission-enforcement gap
-# (found and fixed in the same audit-driven pass that closed §8.12-§8.14).
-# The one exception left, get_profile_diff_status, is deliberately not one
-# of these five — it carries no write, no protocol/settings content, and no
-# dedicated action key in auth.permissions.ACTION_REQUIREMENTS, only the
-# same "registered at all" baseline every interaction already requires. See
-# docs/api_spec.md's "Service identity" section for the full reasoning and
-# the provisioning step this identity requires before a real HttpApiClient
-# can make its first call.
-#
-# Not a secret — same reasoning as BOT_TOKEN_ENV naming an *environment
-# variable* rather than embedding a token: this is just a string every
-# deployment's own user table must have a row for, provisioned via
-# cli.user_admin exactly like the first human commander is.
+# Public deployment identity for service-level API calls; it is not a secret.
 BOT_SERVICE_IDENTITY = "bot-service"
 
 BotOutcome = Literal[
@@ -137,19 +115,6 @@ class UncertainVerdictNotice:
     insight_text: str
 
 
-# -- §8.5-adjacent: no-match notice — a one-way FYI, never a hold ----------
-#
-# orchestrator.main_agent's NO_MATCH outcome ("no loaded protocol genuinely
-# fits this request") used to be delivered as a third approval-hold reason
-# — found, during a later audit, to leave the underlying event with no
-# terminal outcome ever recorded (nothing could ever resolve it, so nothing
-# ever called record_event_outcome) and no real action for a commander to
-# take (no buttons, no candidate, nothing to approve/reject/select).
-# Restructured to match orchestrator.flows.FlowOutcome's own
-# "no_match_protocol" — a real terminal outcome, exactly like "uncertain"/
-# "closed_on_precedent" — with this as the informational push that rides
-# along with it (persistence.sqlite_backend._OUTCOME_TO_NOTIFICATION_KINDS),
-# never a held_events row.
 @dataclass(frozen=True)
 class NoMatchNotice:
     event_id: str
@@ -166,7 +131,6 @@ class HoldAnswerOutcome:
     message: str = ""
 
 
-# -- §8.6: precedent-closure notifications ----------------------------------
 
 
 @dataclass(frozen=True)
@@ -207,19 +171,8 @@ class SettingsView:
     lookback_window_days: int
 
 
-# -- §8.4/§8.5/§8.6/§8.9/§8.11: the unified proactive-push feed --------------
-#
-# work_plan.md §7.2 leaves "how a finished result reaches whoever submitted
-# it" as one of the API's own open design points ("implement one path, not
-# an unspecified mixture"); the same question applies to §8.4/§8.5/§8.6's
-# unprompted pushes. Rather than guess at §7's eventual mechanism (a
-# webhook the API calls into the bot with, versus the bot polling the API),
-# every push-style notification funnels through one shape,
-# `BotNotification`, and one retrieval method, `poll_pending_notifications`.
-# Whichever mechanism §7 ends up choosing, it only has to produce this one
-# shape; `bot.notifications.dispatch_notification` (built for §8.4, reused
-# by §8.5/§8.6/§8.9/§8.11) is the only thing that reads it.
 
+# Every asynchronous bot delivery uses the same cursor-backed notification shape.
 BotNotificationKind = Literal[
     "clarification_hold",
     "approval_hold",

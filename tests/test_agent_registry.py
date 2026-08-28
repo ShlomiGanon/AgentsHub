@@ -1,7 +1,7 @@
 import pytest
 
 from agents.base import Agent
-from agents.registry import DuplicateAgentNameError, build_agent_registry
+from agents.runtime import DuplicateAgentNameError, build_agent_registry
 from agents.runtime import tool
 
 

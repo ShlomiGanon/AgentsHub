@@ -19,7 +19,7 @@ from bot import (
     handle_incoming_message,
     parse_approval_callback_data,
 )
-from tools.terminal import (
+from tools.terminal_support import (
     CONSOLE_CHAT_ID,
     ConsoleTelegramClient,
     ObservingApiClient,
@@ -116,20 +116,20 @@ async def _prompt_clarification(deps: BotDeps, answering_identity: str, notice) 
 
     print(f"\nClarification hold — event {notice.event_id}")
     print("Choose the correct classification:")
-    for i, choice in enumerate(notice.available_classifications, start=1):
-        print(f"  [{i}] {choice}")
+    for choice_number, choice in enumerate(notice.available_classifications, start=1):
+        print(f"  [{choice_number}] {choice}")
     print("  [s] Skip for now (leave this hold open)")
 
     while True:
-        raw = (await ainput("your choice> ")).strip()
-        if raw.lower() == "s":
+        selected_option = (await ainput("your choice> ")).strip()
+        if selected_option.lower() == "s":
             print("(skipped — this hold is still open; use /holds to come back to it)")
             return False
-        if raw.isdigit() and 1 <= int(raw) <= len(notice.available_classifications):
-            chosen = notice.available_classifications[int(raw) - 1]
+        if selected_option.isdigit() and 1 <= int(selected_option) <= len(notice.available_classifications):
+            chosen = notice.available_classifications[int(selected_option) - 1]
             break
-        if raw in notice.available_classifications:
-            chosen = raw
+        if selected_option in notice.available_classifications:
+            chosen = selected_option
             break
         print("Invalid choice — pick one of the numbers above, or 's' to skip.")
 
@@ -143,21 +143,21 @@ async def _prompt_approval(deps: BotDeps, answering_identity: str, notice) -> bo
     text, buttons = format_approval_prompt(notice)
     print(f"\n{text}")
     print("\nChoose:")
-    for i, (label, _data) in enumerate(buttons, start=1):
-        print(f"  [{i}] {label}")
+    for choice_number, (label, _data) in enumerate(buttons, start=1):
+        print(f"  [{choice_number}] {label}")
     print("  [s] Skip for now (leave this hold open)")
 
     while True:
-        raw = (await ainput("your choice> ")).strip()
-        if raw.lower() == "s":
+        selected_option = (await ainput("your choice> ")).strip()
+        if selected_option.lower() == "s":
             print("(skipped — this hold is still open; use /holds to come back to it)")
             return False
-        if raw.isdigit() and 1 <= int(raw) <= len(buttons):
-            _, data = buttons[int(raw) - 1]
+        if selected_option.isdigit() and 1 <= int(selected_option) <= len(buttons):
+            _, callback_data = buttons[int(selected_option) - 1]
             break
         print("Invalid choice — pick one of the numbers above, or 's' to skip.")
 
-    event_id, choice = parse_approval_callback_data(data)
+    event_id, choice = parse_approval_callback_data(callback_data)
     await handle_approval_answer(deps, CONSOLE_CHAT_ID, answering_identity, event_id, choice)
     return True
 
@@ -233,16 +233,16 @@ async def _run_repl(
 
                 text, sender = payload
                 try:
-                    status, body = submit_event(base_url, text, sender)
+                    status, response_payload = submit_event(base_url, text, sender)
                 except ApiRequestError as exc:
                     print(f"(request failed: {exc})")
                     continue
 
                 if status >= 400:
-                    print(f"submission refused ({status}): {body.get('message', body)}")
+                    print(f"submission refused ({status}): {response_payload.get('message', response_payload)}")
                     continue
 
-                print(f"submitted: event_id={body['event_id']} status={body['status']}")
+                print(f"submitted: event_id={response_payload['event_id']} status={response_payload['status']}")
     finally:
         stop_event.set()
         background_task.cancel()
@@ -279,38 +279,19 @@ def main(argv: list[str] | None = None) -> None:
 
     http_client = HttpApiClient(base_url)
     observing_client = ObservingApiClient(http_client)
-    deps = BotDeps(loaded_profile=None, telegram_client=ConsoleTelegramClient(args.identity), api_client=observing_client)
+    bot_dependencies = BotDeps(loaded_profile=None, telegram_client=ConsoleTelegramClient(args.identity), api_client=observing_client)
 
-    # Distinct from the real bot's own `{db_path}.notification_cursor` (so
-    # this tool never fights a real bot process over one cursor file) and
-    # scoped per `--identity` (so two commander sessions testing
-    # independently — different identities against the same deployment —
-    # each resume their own progress rather than clobbering one another's).
     cursor_path = Path(f"{profile_module.DB_PATH}.notification_cursor.terminal_commander.{args.identity}")
     cursor_store = NotificationCursorStore(cursor_path)
 
     try:
         try:
             asyncio.run(
-                _run_repl(deps, observing_client, base_url, args.identity, args.poll_interval, cursor_store, cursor_path)
+                _run_repl(bot_dependencies, observing_client, base_url, args.identity, args.poll_interval, cursor_store, cursor_path)
             )
         except (KeyboardInterrupt, EOFError):
-            # EOFError alongside KeyboardInterrupt: every `ainput()` call in
-            # this REPL can raise it (closed stdin, a piped/scripted input
-            # stream running dry, Ctrl+D/Ctrl+Z) — found live producing a
-            # raw traceback instead of a clean exit, at the exact moment a
-            # real answer was finally due. Same graceful-shutdown treatment
-            # as Ctrl+C, not a crash.
             pass
     finally:
-        # Runs on every exit path, including an unexpected exception — a
-        # deliberately wider net than just the three named cases, so a
-        # genuine crash never leaves a stale test identity behind either.
-        # cursor_path travels with it (see cleanup_test_identity's own
-        # docstring): deleting the identity without also deleting its
-        # cursor file is exactly what let a later session provisioning the
-        # same default name replay a dead identity's old notification
-        # backlog instead of bootstrapping fresh (found live, 2026-08).
         cleanup_test_identity(args.profile, args.identity, created_this_session, cursor_path=cursor_path)
 
     print("\nGoodbye.")
