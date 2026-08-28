@@ -28,5 +28,101 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: Run full test suite
+      # Keep responsibility-level failures visible while using only current
+      # post-refactor test paths. Every test_*.py module appears once below.
+      - name: Mission 1 - Foundations
+        run: >
+          python -m pytest -q
+          tests/test_architecture.py
+          tests/test_environment_config.py
+          tests/test_file_catalog.py
+          tests/test_legacy_imports.py
+          tests/test_observability.py
+          tests/test_permissions.py
+          tests/test_profile_loading.py
+          tests/test_user_admin.py
+
+      - name: Mission 2 - Data Layer
+        run: >
+          python -m pytest -q
+          tests/test_migrations.py
+          tests/test_persistence_conformance.py
+          tests/test_persistence_events.py
+          tests/test_sqlite_store.py
+
+      - name: Mission 3 - Agent Framework
+        run: >
+          python -m pytest -q
+          tests/test_agent_permission_enforcement.py
+          tests/test_agent_registry.py
+          tests/test_agent_runtime.py
+          tests/test_reference_agent.py
+
+      - name: Mission 4 - Protocol Engine
+        run: >
+          python -m pytest -q
+          tests/test_demo_profile.py
+          tests/test_protocol_repository.py
+          tests/test_protocol_retry.py
+
+      - name: Mission 5 - History System
+        run: >
+          python -m pytest -q
+          tests/test_history_agent.py
+          tests/test_history_event_pipeline.py
+          tests/test_history_logging.py
+          tests/test_history_precedent.py
+          tests/test_history_query.py
+
+      - name: Mission 6 - Main Agent Orchestration
+        run: >
+          python -m pytest -q
+          tests/test_orchestrator_flows.py
+          tests/test_orchestrator_holds.py
+          tests/test_orchestrator_insights.py
+          tests/test_orchestrator_judgment.py
+          tests/test_orchestrator_reasoning.py
+          tests/test_orchestrator_selection.py
+          tests/test_question_answering.py
+
+      - name: Mission 7 - API Layer
+        run: >
+          python -m pytest -q
+          tests/test_api_app.py
+          tests/test_api_holds.py
+          tests/test_api_jobs.py
+          tests/test_api_messages.py
+          tests/test_api_notifications.py
+          tests/test_api_protocols.py
+          tests/test_api_request_boundary.py
+          tests/test_api_system.py
+          tests/test_api_unified_ingestion.py
+
+      - name: Mission 8 - Telegram Frontend
+        run: >
+          python -m pytest -q
+          tests/test_bot_app.py
+          tests/test_bot_background_services.py
+          tests/test_bot_holds.py
+          tests/test_bot_interactions.py
+          tests/test_bot_transports.py
+
+      - name: Mission 9 - Integration and Hardening
+        run: >
+          python -m pytest -q
+          tests/test_integration_cost_and_latency_review.py
+          tests/test_integration_deployment.py
+          tests/test_integration_end_to_end_flow.py
+          tests/test_integration_history_accuracy.py
+          tests/test_integration_hold_restart_and_flow.py
+          tests/test_integration_ingestion_parity.py
+          tests/test_integration_log_sink.py
+          tests/test_integration_profile_editing_and_settings.py
+          tests/test_integration_profile_isolation.py
+          tests/test_integration_profile_loading.py
+          tests/test_integration_retry_exhaustion.py
+          tests/test_integration_serial_processing_under_load.py
+          tests/test_integration_user_administration.py
+
+      - name: Full suite (drift check)
         run: python -m pytest -q
