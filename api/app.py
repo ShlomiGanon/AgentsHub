@@ -61,7 +61,15 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
     registry = build_agent_registry(core_agents, list(loaded_profile.agents))
 
     history_agent = registry.get("history_agent")
-    history_query_service = HistoryQueryService(persistence, history_agent, settings_store)
+    history_query_service = HistoryQueryService(
+        persistence,
+        history_agent,
+        settings_store,
+        classifications=loaded_profile.event_types,
+        areas=loaded_profile.areas,
+        protocol_names=tuple(protocol.name for protocol in loaded_profile.protocols),
+        timezone_name=loaded_profile.timezone_name,
+    )
 
     deps = FlowDeps(
         persistence=persistence,

@@ -94,8 +94,8 @@ class HttpApiClient(BotApiClient):
         if status >= 400:
             self._raise_for_error(status, response_payload)
 
-        if response_payload["taken_as"] == "question":
-            return MessageSubmissionResult(kind="question", answer_text=response_payload.get("answer"))
+        if response_payload["taken_as"] in {"question", "conversational", "clarification"}:
+            return MessageSubmissionResult(kind=response_payload["taken_as"], answer_text=response_payload.get("answer"))
 
         return MessageSubmissionResult(kind=response_payload["taken_as"], job_id=response_payload.get("event_id"), awaiting_approval=False)
 

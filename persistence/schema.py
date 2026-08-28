@@ -105,6 +105,20 @@ LOG_ENTRIES_INDEXES_DDL = """
 CREATE INDEX IF NOT EXISTS idx_log_entries_trace_id ON log_entries(trace_id);
 """
 
+HISTORY_QUERY_INDEXES_DDL = """
+CREATE INDEX IF NOT EXISTS idx_events_classification_area_occurred_at
+    ON events(classification, area, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_events_classification_occurred_at
+    ON events(classification, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_events_area_occurred_at
+    ON events(area, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_events_outcome_occurred_at
+    ON events(outcome, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_events_protocol_occurred_at
+    ON events(selected_protocol, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_events_received_at ON events(received_at);
+"""
+
 
 # Kind-specific hold data is JSON stored at the persistence boundary.
 HELD_EVENTS_TABLE_DDL = """
@@ -179,6 +193,7 @@ MIGRATIONS: list[tuple[int, str, str]] = [
     (8, "create notification_log table", NOTIFICATION_LOG_TABLE_DDL),
     (9, "add source_message_id to events", "ALTER TABLE events ADD COLUMN source_message_id TEXT;"),
     (10, "create log_entries table", LOG_ENTRIES_TABLE_DDL + LOG_ENTRIES_INDEXES_DDL),
+    (11, "add indexed history query paths", HISTORY_QUERY_INDEXES_DDL),
 ]
 
 

@@ -36,6 +36,27 @@ def test_user_version_reflects_the_latest_migration(tmp_path):
     assert version == MIGRATIONS[-1][0]
 
 
+def test_history_query_indexes_are_present_on_a_fresh_database(tmp_path):
+    import sqlite3
+
+    db_path = str(tmp_path / "history-indexes.db")
+    run_migrations(db_path)
+    connection = sqlite3.connect(db_path)
+    try:
+        index_names = {row[1] for row in connection.execute("PRAGMA index_list(events)").fetchall()}
+    finally:
+        connection.close()
+
+    assert {
+        "idx_events_classification_area_occurred_at",
+        "idx_events_classification_occurred_at",
+        "idx_events_area_occurred_at",
+        "idx_events_outcome_occurred_at",
+        "idx_events_protocol_occurred_at",
+        "idx_events_received_at",
+    } <= index_names
+
+
 def test_running_again_on_an_up_to_date_database_applies_nothing(tmp_path):
     db_path = str(tmp_path / "fresh.db")
 

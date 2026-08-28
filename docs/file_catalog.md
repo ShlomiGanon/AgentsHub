@@ -9,6 +9,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `.github/workflows/ci.yml` | Automation | Internal | Runs the repository's continuous-integration checks. |
 | `.gitignore` | Project | Internal | Excludes generated, local, secret, and runtime artifacts. |
 | `.vscode/extensions.json` | Project | Internal | Recommends editor extensions for this workspace. |
+| `IMPROVE.MD` | Documentation | Internal | Reports evidence-backed improvements for Main Agent response latency and quality. |
 | `README.md` | Project | Internal | Introduces the system and its primary startup commands. |
 | `agents/__init__.py` | Production | Public facade | Exposes the public agent facade and compatibility module aliases. |
 | `agents/contracts.py` | Production | Private implementation | Defines agent results, descriptors, tool metadata, parsing, and typed errors. |

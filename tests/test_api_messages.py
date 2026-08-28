@@ -220,3 +220,87 @@ def test_a_question_the_main_agent_cannot_route_becomes_a_run_failure_error(tmp_
 
     assert resp.status_code == 422
     assert resp.get_json()["error_class"] == "run_failure"
+
+
+def test_ambiguous_intent_returns_clarification_without_writing_an_event(tmp_path, teardown_ctx):
+    import json
+
+    agent = happy_path_agent()
+    agent._dispatch["kind of message"] = json.dumps({
+        "primary_intent": "needs_clarification",
+        "asks_for_information": False,
+        "reports_occurrence": False,
+        "requests_action": False,
+        "social_only": False,
+        "is_quoted": False,
+        "is_hypothetical": False,
+        "is_followup_without_context": True,
+        "evidence": {},
+        "matched_protocol_names": [],
+        "reason": "missing referent",
+        "ambiguity_reason": "there is no prior message context",
+        "clarification_question": "Which location do you mean?",
+    })
+    ctx = _ctx_with(tmp_path, agent)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    response = client.post(
+        "/Msg",
+        headers=auth_headers(VIEWER_IDENTITY),
+        json={"text": "check there", "sender_identity": VIEWER_IDENTITY},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {"taken_as": "clarification", "answer": "Which location do you mean?"}
+    assert ctx.deps.persistence.fetch_events_range("2000-01-01", "2100-01-01") == []
+
+
+def test_history_count_question_uses_the_structured_database_route(tmp_path, teardown_ctx):
+    import json
+
+    agent = happy_path_agent(intent="question")
+    agent._dispatch["Decide whether this question can be answered by directly looking up"] = "ROUTE: normal"
+    agent._dispatch["Decide which of the following agents"] = json.dumps({
+        "route": "history",
+        "history_query": {
+            "operation": "count",
+            "time_start": "2026-08-01T00:00:00",
+            "time_end": "2026-09-01T00:00:00",
+            "time_basis": "occurred_at",
+            "classifications": ["fire"],
+            "areas": ["north_sector"],
+            "outcomes": [],
+            "protocol_names": [],
+            "event_ids": [],
+            "risk_levels": [],
+            "order": "newest",
+            "group_by": "none",
+            "limit": 50,
+        },
+        "reason": "count stored fires",
+    })
+    ctx = _ctx_with(tmp_path, agent)
+    teardown_ctx.append(ctx)
+    for event_id in ("fire-1", "fire-2"):
+        ctx.deps.persistence.append_event({
+            "event_id": event_id,
+            "received_at": "2026-08-10T10:00:00",
+            "source": "sensor",
+            "sender_identity": "sensor-1",
+            "occurred_at": "2026-08-10T10:00:00",
+            "raw_text": "fire in north sector",
+            "classification": "fire",
+            "area": "north_sector",
+        })
+    client = build_app(ctx).test_client()
+
+    response = client.post(
+        "/Msg",
+        headers=auth_headers(VIEWER_IDENTITY),
+        json={"text": "How many northern fires were there in August?", "sender_identity": VIEWER_IDENTITY},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["taken_as"] == "question"
+    assert response.get_json()["answer"] == "2 matching events."

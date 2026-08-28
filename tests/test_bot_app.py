@@ -556,6 +556,29 @@ def test_question_returns_the_answer_directly():
     assert reply == "12 events last week."
 
 
+def test_conversational_message_returns_the_api_answer_directly():
+    api = FakeBotApiClient(
+        users={"v1": "viewer"},
+        message_submission_result=MessageSubmissionResult(kind="conversational", answer_text="Hello! How can I help?"),
+    )
+
+    reply = _run(handle_incoming_message(_deps(api), "v1", "hello", "m1"))
+
+    assert reply == "Hello! How can I help?"
+
+
+def test_intent_clarification_returns_the_question_without_creating_a_job_message():
+    api = FakeBotApiClient(
+        users={"v1": "viewer"},
+        message_submission_result=MessageSubmissionResult(kind="clarification", answer_text="Which gate do you mean?"),
+    )
+
+    reply = _run(handle_incoming_message(_deps(api), "v1", "check there", "m1"))
+
+    assert reply == "Which gate do you mean?"
+    assert "Job ID" not in reply
+
+
 def test_report_acknowledges_with_job_id_and_kind():
     api = FakeBotApiClient(
         users={"v1": "viewer"},

@@ -2583,3 +2583,12 @@ no CI change was needed.
 - Documented the current 12-package responsibility layout and all six stable executable entry points, including the intentional removal of `registries` and the move of area/event-type registries into `profiles`.
 - Added direct routing to the authoritative operator, Telegram, profile, agent-authoring, API, package-boundary, file-catalog, and production-hardening documents.
 - Acceptance: every README file reference resolves, Markdown fences are balanced, the stale-path/prompt scan is empty, `tests/test_file_catalog.py` passes, and `git diff --check -- README.md` reports no content errors.
+
+## Structured intent routing and indexed history questions — done (2026-08-28)
+
+- Replaced permissive intent fallthrough with validated structured decisions for questions, reports, requests, conversation, and safe clarification. Evidence must come from the original message, protocol selections must reference loaded protocols, malformed model output is retried once, and an unknown intent can no longer become a request implicitly.
+- Added structured history queries for bounded event lists, latest-event lookup, counts, grouped aggregates, comparisons, and event details. Filters cover time basis and range, classifications, areas, outcomes, protocols, event IDs, and risk levels; all database predicates remain application-owned and parameterized.
+- Added profile timezone validation and SQLite migration 11 indexes for common time, classification, area, outcome, and protocol searches. Deterministic count and aggregate questions no longer require a model call, while narrative summaries receive only bounded matching events.
+- Preserved direct answers through the HTTP and Telegram paths for questions, conversation, and clarification, without creating false job acknowledgements. Decision-only agents are excluded from question delegation.
+- Added a manual, billed real-model intent evaluation mode to `tests/sanity_check_real_model_call.py`; it was intentionally not executed during local acceptance because it can use network access and incur provider charges.
+- Acceptance: all 879 pre-existing pytest node IDs remain byte-for-byte identical as a set (same SHA-256 fingerprint), 17 focused tests were added, and the complete suite passes with 896 passed and 0 failed. Architecture, catalog, legacy-import, migration, fresh-database, persistence, API, bot, and integration coverage all pass; the six warnings are unchanged third-party CrewAI deprecations. No repository-control operation was performed.

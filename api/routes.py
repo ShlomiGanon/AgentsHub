@@ -117,6 +117,12 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
 
         received_at = _now()
 
+        if intent.intent == "needs_clarification":
+            return jsonify({
+                "taken_as": "clarification",
+                "answer": intent.clarification_question or "Could you clarify what you want me to do?",
+            })
+
         if intent.intent == "conversational":
             try:
                 reply = answer_conversationally(ctx.main_agent, text)
@@ -125,6 +131,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
             return jsonify({"taken_as": "conversational", "answer": reply})
 
         if intent.intent == "question":
+            require(level, "view_history")
             try:
                 answer = answer_question(ctx.main_agent, text, ctx.deps.registry, ctx.deps.history_query_service)
             except OrchestrationParseError as exc:
@@ -140,6 +147,9 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
 
             ctx.queue.submit((event_id, _work))
             return jsonify({"taken_as": "report", "event_id": event_id, "status": "queued"}), 202
+
+        if intent.intent != "request":
+            raise RunFailureError(f"unsupported message intent: {intent.intent!r}")
 
         is_commander = level >= PermissionLevel.COMMANDER
         event_id = begin_request(ctx.deps, text, received_at, sender_identity, source_message_id)

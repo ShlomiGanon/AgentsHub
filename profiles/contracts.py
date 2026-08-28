@@ -43,6 +43,7 @@ class LoadedProfile:
     profile_file_hash: str
     core_agents: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
     resolved_secrets: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
+    timezone_name: str = "UTC"
 
 REQUIRED_PROFILE_ATTRS = (
     "AGENTS",

@@ -255,10 +255,13 @@ def process_message(
     sender_identity: str,
     received_at: str,
     is_commander: bool,
-) -> tuple[Literal["question", "report", "request", "conversational"], object]:
+) -> tuple[Literal["question", "report", "request", "conversational", "clarification"], object]:
     """Route a person's message by intent (§6.13)."""
 
     intent = classify_intent(main_agent, deps.protocol_set.all(), message_text)
+
+    if intent.intent == "needs_clarification":
+        return "clarification", intent.clarification_question or "Could you clarify what you want me to do?"
 
     if intent.intent == "conversational":
         return "conversational", answer_conversationally(main_agent, message_text)
@@ -269,7 +272,10 @@ def process_message(
     if intent.intent == "report":
         return "report", process_report(deps, main_agent, insights_agent, message_text, "telegram", received_at, sender_identity)
 
-    return "request", process_request(deps, main_agent, insights_agent, message_text, received_at, sender_identity, is_commander)
+    if intent.intent == "request":
+        return "request", process_request(deps, main_agent, insights_agent, message_text, received_at, sender_identity, is_commander)
+
+    raise OrchestrationParseError(f"unsupported message intent: {intent.intent!r}")
 
 
 def resolve_clarification(
@@ -415,7 +421,19 @@ def continue_from_risk_assessment(deps: FlowDeps, event_id: str, main_agent: "Ma
     raw_text, classification, area = event["raw_text"], event["classification"], event["area"]
     description, severity = event["description"], event["severity"]
 
-    risk_assessment = assess_risk(main_agent, classification, area, description, severity, deps.settings_store.get_risk_threshold())
+    try:
+        risk_assessment = assess_risk(
+            main_agent,
+            classification,
+            area,
+            description,
+            severity,
+            deps.settings_store.get_risk_threshold(),
+        )
+    except OrchestrationParseError as exc:
+        record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
+        _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="risk_assessment")
+        return FlowResult(event_id, "failed", str(exc))
     record_event_state(deps.persistence, event_id, {"risk_level": risk_assessment.level, "risk_reason": risk_assessment.reason})
     logger.info(
         "risk assessed",

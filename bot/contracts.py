@@ -73,7 +73,7 @@ class UserLookupResult:
 
 @dataclass(frozen=True)
 class MessageSubmissionResult:
-    kind: Literal["question", "report", "request"]
+    kind: Literal["question", "report", "request", "conversational", "clarification"]
     answer_text: str | None = None
     job_id: str | None = None
     awaiting_approval: bool = False

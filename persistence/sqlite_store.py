@@ -8,7 +8,7 @@ from concurrent.futures import Future
 from datetime import datetime, timezone
 from queue import SimpleQueue
 
-from persistence.contracts import NotFoundError, PersistenceError, PersistenceInterface
+from persistence.contracts import EventSearchCriteria, NotFoundError, PersistenceError, PersistenceInterface
 from persistence.schema import SUMMARY_TABLE_NAMES, run_migrations
 
 _STOP = object()
@@ -145,6 +145,51 @@ def _summary_table_name(level: str) -> str:
     if table_name is None:
         raise PersistenceError(f"unknown summary level: '{level}' (expected one of {sorted(SUMMARY_TABLE_NAMES)})")
     return table_name
+
+
+_SEARCH_FILTER_COLUMNS = {
+    "classifications": "classification",
+    "areas": "area",
+    "outcomes": "outcome",
+    "protocol_names": "selected_protocol",
+    "event_ids": "event_id",
+    "risk_levels": "risk_level",
+}
+_AGGREGATE_EXPRESSIONS = {
+    "classification": "classification",
+    "area": "area",
+    "outcome": "outcome",
+    "protocol": "selected_protocol",
+    "day": "substr(occurred_at, 1, 10)",
+    "month": "substr(occurred_at, 1, 7)",
+}
+
+
+def _search_where(criteria: EventSearchCriteria) -> tuple[str, list[object], str]:
+    if criteria.time_basis not in {"occurred_at", "received_at"}:
+        raise PersistenceError(f"unsupported event time basis: {criteria.time_basis!r}")
+
+    clauses: list[str] = []
+    parameters: list[object] = []
+    time_column = criteria.time_basis
+    clauses.append(f"{time_column} IS NOT NULL")
+
+    if criteria.time_start is not None:
+        clauses.append(f"{time_column} >= ?")
+        parameters.append(criteria.time_start)
+    if criteria.time_end is not None:
+        clauses.append(f"{time_column} < ?")
+        parameters.append(criteria.time_end)
+
+    for attribute_name, column_name in _SEARCH_FILTER_COLUMNS.items():
+        values = tuple(getattr(criteria, attribute_name))
+        if not values:
+            continue
+        placeholders = ", ".join("?" for _ in values)
+        clauses.append(f"{column_name} IN ({placeholders})")
+        parameters.extend(values)
+
+    return (" AND ".join(clauses) if clauses else "1 = 1"), parameters, time_column
 
 
 class SQLitePersistence(PersistenceInterface):
@@ -294,6 +339,63 @@ class SQLitePersistence(PersistenceInterface):
                 (event_type, area, window_start, window_end),
             ).fetchall()
             return [self._attach_steps(connection, _decode_event_row(event_row)) for event_row in event_rows]
+        finally:
+            connection.close()
+
+    def search_events(self, criteria: EventSearchCriteria) -> list[dict]:
+        if criteria.order not in {"newest", "oldest"}:
+            raise PersistenceError(f"unsupported event order: {criteria.order!r}")
+        if not 1 <= criteria.limit <= 500:
+            raise PersistenceError("event search limit must be between 1 and 500")
+
+        where_sql, parameters, time_column = _search_where(criteria)
+        direction = "DESC" if criteria.order == "newest" else "ASC"
+        connection = self._read_connection()
+        try:
+            event_rows = connection.execute(
+                f"SELECT * FROM events WHERE {where_sql} "
+                f"ORDER BY {time_column} {direction}, event_id {direction} LIMIT ?",
+                (*parameters, criteria.limit),
+            ).fetchall()
+            return [self._attach_steps(connection, _decode_event_row(event_row)) for event_row in event_rows]
+        finally:
+            connection.close()
+
+    def count_events(self, criteria: EventSearchCriteria) -> int:
+        where_sql, parameters, _time_column = _search_where(criteria)
+        connection = self._read_connection()
+        try:
+            return int(connection.execute(f"SELECT COUNT(*) FROM events WHERE {where_sql}", parameters).fetchone()[0])
+        finally:
+            connection.close()
+
+    def aggregate_events(self, criteria: EventSearchCriteria, group_by: str) -> list[dict]:
+        expression = _AGGREGATE_EXPRESSIONS.get(group_by)
+        if expression is None:
+            raise PersistenceError(f"unsupported event aggregation: {group_by!r}")
+
+        where_sql, parameters, _time_column = _search_where(criteria)
+        connection = self._read_connection()
+        try:
+            rows = connection.execute(
+                f"SELECT {expression} AS group_value, COUNT(*) AS event_count "
+                f"FROM events WHERE {where_sql} GROUP BY {expression} ORDER BY event_count DESC, group_value",
+                parameters,
+            ).fetchall()
+            return [{"group": row["group_value"], "count": int(row["event_count"])} for row in rows]
+        finally:
+            connection.close()
+
+    def fetch_event_time_boundary(self, criteria: EventSearchCriteria, *, latest: bool) -> str | None:
+        where_sql, parameters, time_column = _search_where(criteria)
+        aggregate = "MAX" if latest else "MIN"
+        connection = self._read_connection()
+        try:
+            row = connection.execute(
+                f"SELECT {aggregate}({time_column}) FROM events WHERE {where_sql} AND {time_column} IS NOT NULL",
+                parameters,
+            ).fetchone()
+            return row[0] if row is not None else None
         finally:
             connection.close()
 

@@ -6,6 +6,7 @@ import importlib.util
 import os
 from pathlib import Path
 from types import MappingProxyType, ModuleType
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from agents import HistoryAgent
 from config import BaseConfig, TierModel, load_base_config
@@ -34,6 +35,11 @@ def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> lis
     failures: list[str] = []
     agents_by_name = {agent.name: agent for agent in loaded.agents}
 
+    protocol_names = [getattr(protocol, "name", None) for protocol in loaded.protocols]
+    duplicate_protocol_names = sorted({name for name in protocol_names if name and protocol_names.count(name) > 1})
+    if duplicate_protocol_names:
+        failures.append(f"profile declares duplicate protocol names: {', '.join(duplicate_protocol_names)}")
+
     for protocol in loaded.protocols:
         failures.extend(_validate_protocol(protocol, agents_by_name))
 
@@ -49,6 +55,12 @@ def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> lis
     if not loaded.areas:
         failures.append("profile declares no areas — extraction has nothing to resolve a location to")
 
+    timezone_name = getattr(loaded, "timezone_name", "UTC")
+    try:
+        ZoneInfo(timezone_name)
+    except (TypeError, ZoneInfoNotFoundError):
+        failures.append(f"profile timezone {timezone_name!r} is not a valid IANA timezone")
+
     return failures
 
 
@@ -61,6 +73,11 @@ def _validate_protocol(protocol, agents_by_name: dict) -> list[str]:
             f"{', '.join(missing_attrs)}"
         )
         return failures
+
+    if not isinstance(protocol.name, str) or not protocol.name.strip():
+        failures.append("protocol name must be a non-empty string")
+    elif any(character in protocol.name for character in ("\r", "\n", "\x00")):
+        failures.append(f"protocol name {protocol.name!r} contains control characters")
 
     exposed_by_participants: set[str] = set()
     for agent_name in protocol.participating_agents:
@@ -217,6 +234,7 @@ def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) 
         profile_file_hash=hash_profile_file(module_path),
         core_agents=MappingProxyType(core_agents),
         resolved_secrets=MappingProxyType(resolved_secrets),
+        timezone_name=getattr(profile_module, "TIMEZONE", "UTC"),
     )
 
     failures = validate_profile(loaded, declared_event_types=profile_module.EVENT_TYPES)

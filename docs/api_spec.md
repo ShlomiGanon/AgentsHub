@@ -113,7 +113,7 @@ equal to the receipt time server-side; nothing here can override it.
 
 ## `POST /Msg`
 
-Human ingestion (§7.4) — reports, requests, and questions all arrive
+Human ingestion (§7.4) — reports, requests, questions, and conversation all arrive
 here; intent classification (§6.13) decides which.
 
 Request:
@@ -132,13 +132,19 @@ Response, when the message was a **question** — answered inline, no job:
 { "taken_as": "question", "answer": "Gate 3 is currently nominal." }
 ```
 
+Conversation is also answered inline. When the intent cannot be chosen safely, the same synchronous shape asks for clarification and creates no event:
+
+```json
+{ "taken_as": "clarification", "answer": "Which location do you mean?" }
+```
+
 Response, when the message became a **report** or **request** —
 `202 Accepted`, the acknowledgment shape plus which it was taken as:
 ```json
 { "taken_as": "report", "event_id": "e3f1...", "status": "queued" }
 ```
 
-`taken_as` is one of `"question" | "report" | "request"`.
+`taken_as` is one of `"question" | "report" | "request" | "conversational" | "clarification"`. Only reports and requests create jobs.
 
 ## `GET /Job/<event_id>`
 

@@ -51,6 +51,7 @@ API_PORT = 9999
 RETRY_COUNT = 3
 RISK_THRESHOLD = 0.6
 LOOKBACK_WINDOW_DAYS = 30
+TIMEZONE = "UTC"  # IANA name, used to resolve relative history periods
 
 BOT_TOKEN_ENV = "YOUR_BOT_TOKEN_ENV_VAR_NAME"
 

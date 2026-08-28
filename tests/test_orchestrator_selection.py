@@ -120,6 +120,13 @@ def test_unclear_task_status_raises():
         select_protocol(agent, "raw", "fire", "north", "d", (_protocol("a"),), risk_level="low")
 
 
+def test_selection_rejects_a_protocol_name_that_is_not_loaded():
+    agent = _ScriptedMainAgent("SELECTED: invented_protocol\nREASON: guessed")
+
+    with pytest.raises(OrchestrationParseError, match="unavailable protocol"):
+        select_protocol(agent, "raw", "fire", "north", "d", (_protocol("real_protocol"),), risk_level="low")
+
+
 def test_end_to_end_through_the_mocked_adapter(monkeypatch):
     from agents.reference import ReferenceAgent
 

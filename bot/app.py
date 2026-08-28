@@ -109,7 +109,7 @@ async def handle_incoming_message(deps: BotDeps, telegram_identity: str, text: s
         return refusal
 
     submission_result = await deps.api_client.submit_message(text, telegram_identity, message_id)
-    if submission_result.kind == "question":
+    if submission_result.kind in {"question", "conversational", "clarification"}:
         return submission_result.answer_text or "(no answer was returned)"
 
     lines = [f"Got it — taken as a {submission_result.kind}."]

@@ -45,11 +45,30 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from agents.errors import AgentInvocationError
 from config.base import ModelTierError, build_tier_model, load_base_config
 
 PROMPT = "Reply with exactly the word: pong"
+
+INTENT_CASES = (
+    ("hello, thanks for your help", "conversational"),
+    ("what is the current status at gate 3?", "question"),
+    ("smoke is visible near gate 3", "report"),
+    ("please dispatch a response to gate 3", "request"),
+    ("there is smoke at gate 3, please dispatch a response", "request"),
+    ("he said 'dispatch a response', but I am only reporting what he said", "report"),
+    ("why did you not dispatch a response?", "question"),
+    ("שלום, תודה על העזרה", "conversational"),
+    ("מה היה האירוע האחרון?", "question"),
+    ("יש עשן בשער 3", "report"),
+    ("תשלח בבקשה צוות לשער 3", "request"),
+)
 
 
 def _require_env(name: str) -> str:
@@ -176,6 +195,40 @@ def crewai_check() -> int:
     if not api_key:
         print("FAIL: CORE_MODEL_KEY is not set.")
         return 1
+
+
+def intent_check() -> int:
+    """Run a small billed evaluation through the production intent classifier."""
+
+    try:
+        provider = _require_env("CORE_MODEL_PROVIDER")
+        model_name = _require_env("CORE_MODEL_NAME")
+        api_key_env_name = _require_env("CORE_MODEL_API_KEY_ENV")
+        core_model = build_tier_model(provider, model_name, _require_env(api_key_env_name))
+        base_config = load_base_config(core_model=core_model)
+    except ModelTierError as exc:
+        print(f"FAIL at env / tier resolution: {exc}")
+        return 1
+
+    from orchestrator.main_agent import classify_intent, construct_core_agents
+    from profiles.demo import PROTOCOLS
+
+    main_agent = construct_core_agents(base_config)["main_agent"]
+    failures = []
+    for message, expected in INTENT_CASES:
+        try:
+            result = classify_intent(main_agent, tuple(PROTOCOLS), message)
+            actual = result.intent
+        except Exception as exc:
+            actual = f"ERROR:{type(exc).__name__}:{exc}"
+        marker = "PASS" if actual == expected else "FAIL"
+        print(f"{marker}: expected={expected:<14} actual={actual:<30} message={message!r}")
+        if actual != expected:
+            failures.append((message, expected, actual))
+
+    request_false_positives = [item for item in failures if item[1] != "request" and item[2] == "request"]
+    print(f"\n{len(INTENT_CASES) - len(failures)}/{len(INTENT_CASES)} correct; request false positives={len(request_false_positives)}")
+    return 1 if failures else 0
     try:
         from crewai import LLM
 
@@ -189,10 +242,11 @@ def crewai_check() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Manual live-model checks; never run from CI.")
-    parser.add_argument("check", nargs="?", choices=("production", "key", "openrouter", "crewai"), default="production")
+    parser.add_argument("check", nargs="?", choices=("production", "intent", "key", "openrouter", "crewai"), default="production")
     selected = parser.parse_args(argv).check
     return {
         "production": production_check,
+        "intent": intent_check,
         "key": key_check,
         "openrouter": openrouter_check,
         "crewai": crewai_check,

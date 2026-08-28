@@ -1,7 +1,8 @@
 """The persistence interface (work_plan.md §2.7)."""
 
 from abc import ABC, abstractmethod
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 
 class PersistenceError(Exception):
@@ -10,6 +11,21 @@ class PersistenceError(Exception):
 
 class NotFoundError(PersistenceError):
     """The requested persisted record does not exist."""
+
+
+@dataclass(frozen=True)
+class EventSearchCriteria:
+    time_start: str | None = None
+    time_end: str | None = None
+    time_basis: Literal["occurred_at", "received_at"] = "occurred_at"
+    classifications: tuple[str, ...] = ()
+    areas: tuple[str, ...] = ()
+    outcomes: tuple[str, ...] = ()
+    protocol_names: tuple[str, ...] = ()
+    event_ids: tuple[str, ...] = ()
+    risk_levels: tuple[str, ...] = ()
+    order: Literal["newest", "oldest"] = "newest"
+    limit: int = 50
 
 
 class PersistenceInterface(ABC):
@@ -36,6 +52,22 @@ class PersistenceInterface(ABC):
     @abstractmethod
     def fetch_events_by_type_area_window(self, event_type: str, area: str, window_start: Any, window_end: Any) -> list[dict]:
         """Return events matching both classification and area within a window — precedent search's read path."""
+
+    @abstractmethod
+    def search_events(self, criteria: EventSearchCriteria) -> list[dict]:
+        """Return a bounded event list using only allowlisted filters."""
+
+    @abstractmethod
+    def count_events(self, criteria: EventSearchCriteria) -> int:
+        """Count events using the constrained search vocabulary."""
+
+    @abstractmethod
+    def aggregate_events(self, criteria: EventSearchCriteria, group_by: str) -> list[dict]:
+        """Count matching events grouped by one allowlisted field."""
+
+    @abstractmethod
+    def fetch_event_time_boundary(self, criteria: EventSearchCriteria, *, latest: bool) -> str | None:
+        """Return a matching time boundary without loading event rows."""
 
 
     @abstractmethod

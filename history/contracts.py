@@ -1,6 +1,7 @@
 """Passive contracts shared by history event, query, and summary services."""
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 class ExtractionExecutionError(Exception):
@@ -68,6 +69,48 @@ class HistoryQueryError(Exception):
     pass
 
 
+HistoryOperation = Literal[
+    "latest",
+    "event_details",
+    "list",
+    "count",
+    "aggregate",
+    "compare",
+    "similar_cases",
+    "narrative",
+]
+HistoryTimeBasis = Literal["occurred_at", "received_at"]
+HistoryOrder = Literal["newest", "oldest"]
+HistoryGroupBy = Literal["none", "classification", "area", "outcome", "protocol", "day", "month"]
+
+
+@dataclass(frozen=True)
+class HistoryQuerySpec:
+    """A validated, model-independent description of a history lookup."""
+
+    operation: HistoryOperation = "narrative"
+    time_start: str | None = None
+    time_end: str | None = None
+    time_basis: HistoryTimeBasis = "occurred_at"
+    classifications: tuple[str, ...] = ()
+    areas: tuple[str, ...] = ()
+    outcomes: tuple[str, ...] = ()
+    protocol_names: tuple[str, ...] = ()
+    event_ids: tuple[str, ...] = ()
+    risk_levels: tuple[str, ...] = ()
+    order: HistoryOrder = "newest"
+    group_by: HistoryGroupBy = "none"
+    limit: int = 50
+
+
+@dataclass(frozen=True)
+class HistorySearchResult:
+    events: tuple[dict, ...] = ()
+    total_count: int = 0
+    aggregates: tuple[dict, ...] = ()
+    truncated: bool = False
+
+
 @dataclass(frozen=True)
 class HistorySource:
     level: str
@@ -83,6 +126,8 @@ class HistoryAnswer:
     time_start: str | None
     time_end: str | None
     total_events_matched: int
+    applied_query: HistoryQuerySpec | None = None
+    truncated: bool = False
 
 
 class SummaryGenerationError(Exception):

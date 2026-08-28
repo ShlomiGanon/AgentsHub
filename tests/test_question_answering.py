@@ -342,6 +342,78 @@ def test_a_classification_call_reporting_unclear_task_falls_back_to_normal_routi
 
     assert answer == "gate 3 is nominal"
 
+
+def test_structured_history_route_executes_a_validated_history_query_spec():
+    import json
+    from types import SimpleNamespace
+
+    class _StructuredHistoryService:
+        def __init__(self):
+            self.spec = None
+
+        def planning_context(self):
+            return {"current_time_utc": "2026-08-28T10:00:00", "classifications": ["fire"], "areas": ["north"]}
+
+        def query_spec(self, question, spec):
+            self.spec = spec
+            return SimpleNamespace(answer="2 matching events.")
+
+    route = json.dumps({
+        "route": "history",
+        "history_query": {
+            "operation": "count",
+            "time_start": "2026-08-01T00:00:00",
+            "time_end": "2026-09-01T00:00:00",
+            "time_basis": "occurred_at",
+            "classifications": ["fire"],
+            "areas": ["north"],
+            "outcomes": [],
+            "protocol_names": [],
+            "event_ids": [],
+            "risk_levels": [],
+            "order": "newest",
+            "group_by": "none",
+            "limit": 50,
+        },
+        "reason": "stored-event count",
+    })
+    main_agent = _ScriptedMainAgent([_ROUTE_NORMAL, (route, "success")])
+    service = _StructuredHistoryService()
+
+    answer = answer_question(main_agent, "How many fires were in the north?", build_agent_registry({}, []), service)
+
+    assert answer == "2 matching events."
+    assert service.spec.operation == "count"
+    assert service.spec.classifications == ("fire",)
+
+
+def test_question_router_does_not_expose_decision_only_agents():
+    main_registry_agent = _ScriptedAgent("main_agent")
+    insights_registry_agent = _ScriptedAgent("insights_agent")
+    reference_agent = _ScriptedAgent("reference_agent", READ_ONLY_TOOL)
+    registry = build_agent_registry({}, [main_registry_agent, insights_registry_agent, reference_agent])
+    main_agent = _ScriptedMainAgent([_ROUTE_NORMAL, ("NONE: no matching capability", "success")])
+
+    answer_question(main_agent, "some unsupported question", registry, NO_HISTORY_SERVICE)
+
+    selection_prompt = main_agent.calls[1][0]
+    assert '"name": "main_agent"' not in selection_prompt
+    assert '"name": "insights_agent"' not in selection_prompt
+    assert '"name": "reference_agent"' in selection_prompt
+
+
+def test_direct_lookup_marker_requires_the_exact_supported_value():
+    reference_agent = _ScriptedAgent("reference_agent", READ_ONLY_TOOL, response_text="gate 3 is nominal")
+    registry = build_agent_registry({}, [reference_agent])
+    main_agent = _ScriptedMainAgent([
+        ("DIRECT_LOOKUP: anything", "success"),
+        ("AGENT: reference_agent\nTASK: check gate 3", "success"),
+    ])
+
+    answer = answer_question(main_agent, "is gate 3 ok?", registry, NO_HISTORY_SERVICE)
+
+    assert answer == "gate 3 is nominal"
+
 import threading
 import time
 

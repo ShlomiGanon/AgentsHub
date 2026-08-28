@@ -464,3 +464,56 @@ def test_end_to_end_through_the_mocked_adapter(monkeypatch):
     result = classify_intent(main_agent, _protocols(), "smoke seen near gate 3")
 
     assert result.intent == "report"
+
+
+def _structured_intent(**overrides):
+    import json
+
+    payload = {
+        "primary_intent": "request",
+        "asks_for_information": False,
+        "reports_occurrence": False,
+        "requests_action": True,
+        "social_only": False,
+        "is_quoted": False,
+        "is_hypothetical": False,
+        "is_followup_without_context": False,
+        "evidence": {"request": "dispatch someone"},
+        "matched_protocol_names": ["dispatch_response"],
+        "reason": "explicit action request",
+        "ambiguity_reason": None,
+        "clarification_question": None,
+    }
+    payload.update(overrides)
+    return json.dumps(payload)
+
+
+def test_structured_intent_requires_evidence_from_the_original_message():
+    agent = _ScriptedMainAgent(_structured_intent(evidence={"request": "words not in the message"}))
+
+    with pytest.raises(OrchestrationParseError):
+        classify_intent(agent, _protocols(), "please dispatch someone")
+
+
+def test_structured_intent_returns_a_safe_clarification_decision():
+    agent = _ScriptedMainAgent(
+        _structured_intent(
+            primary_intent="needs_clarification",
+            requests_action=False,
+            evidence={},
+            matched_protocol_names=[],
+            reason="missing prior context",
+            ambiguity_reason="the referent is missing",
+            clarification_question="What should I dispatch?",
+        )
+    )
+
+    result = classify_intent(agent, _protocols(), "do that")
+
+    assert result.intent == "needs_clarification"
+    assert result.clarification_question == "What should I dispatch?"
+
+
+def test_legacy_intent_parser_rejects_multiple_intent_blocks():
+    with pytest.raises(OrchestrationParseError):
+        _parse_intent_response("INTENT: request\nREASON: first\nINTENT: question\nREASON: second")

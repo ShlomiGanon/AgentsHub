@@ -18,6 +18,7 @@ module-level names. All are required unless noted.
 | `RETRY_COUNT` | `int` | Starting value only; the settings store owns it after first run. |
 | `RISK_THRESHOLD` | `float` | Starting value only. |
 | `LOOKBACK_WINDOW_DAYS` | `int` | Starting value only. |
+| `TIMEZONE` | IANA timezone `str` | Optional; defaults to `"UTC"`. Resolves relative history questions such as “today” and “last month” before bounds are converted to UTC. |
 | `BOT_TOKEN_ENV` | `str` | Name of the environment variable holding the Telegram bot token — never the token itself. |
 | `MODEL_CREDENTIAL_ENVS` | `list[str]` | Names of the environment variables holding model credentials — never the values. |
 

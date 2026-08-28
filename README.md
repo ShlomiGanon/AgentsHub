@@ -11,7 +11,7 @@ Each deployment is defined by a Python profile. A profile selects its agents, pr
 - Per-call tool allowlists and side-effect/idempotency enforcement.
 - Protocol selection, task formulation, retries, and final judgment.
 - Commander clarification and approval holds that survive restarts.
-- Historical queries, precedent matching, and scheduled summaries.
+- Indexed historical questions by time, event type, area, outcome, protocol, or event ID, plus precedent matching and scheduled summaries.
 - Serialized SQLite writes, notification cursors, and structured trace logs.
 - Profile editing with atomic source writes and three immediately persisted live settings.
 
@@ -103,12 +103,13 @@ python -m tools.terminal_client_viewer --profile profiles.demo
 ## Runtime flow
 
 1. The API authenticates the caller and accepts a message or sensor event.
-2. The Main Agent classifies message intent or the history pipeline extracts structured event fields.
-3. Orchestration assesses risk, checks precedents, and selects a protocol.
-4. Missing classification or ambiguous/flagged execution creates a durable hold for a commander.
-5. Approved protocol steps run serially with explicit tool permissions and retry rules.
-6. The Insights Agent judges the result; persistence records the outcome and notification in the same transaction.
-7. The bot or terminal client delivers holds, notices, failures, and final results through the cursor-backed notification feed.
+2. The Main Agent produces a validated intent decision; ambiguous messages ask for clarification instead of falling through to an action.
+3. Questions use read-only specialists or a structured, indexed history query. Reports and requests enter orchestration.
+4. Orchestration assesses risk, checks precedents, and selects a protocol.
+5. Missing classification or ambiguous/flagged execution creates a durable hold for a commander.
+6. Approved protocol steps run serially with explicit tool permissions and retry rules.
+7. The Insights Agent judges the result; persistence records the outcome and notification in the same transaction.
+8. The bot or terminal client delivers holds, notices, failures, and final results through the cursor-backed notification feed.
 
 ## Project structure
 
@@ -147,7 +148,9 @@ Run any entry point with `--help` for its complete options.
 
 ## Profiles and live settings
 
-Start with `profiles/template.py` when creating a deployment. A profile defines agents, protocols, event types, areas, storage and API settings, and the names of required secret variables. The complete contract is documented in `docs/profile_spec.md`.
+Start with `profiles/template.py` when creating a deployment. A profile defines agents, protocols, event types, areas, storage and API settings, the IANA `TIMEZONE` used to resolve relative history periods, and the names of required secret variables. `TIMEZONE` defaults to `UTC` for older profiles. The complete contract is documented in `docs/profile_spec.md`.
+
+Free-form messages are classified as questions, reports, requests, or conversation. A message whose action or referent cannot be determined safely receives a synchronous clarification question and creates no job. History questions remain in the read-only question path: the Main Agent emits a constrained query description, SQLite performs parameterized filtering/counting, and the History Agent sees only the bounded records needed for narrative answers.
 
 Most profile edits take effect after a restart. These three settings are different: they take effect immediately and are saved beside the deployment database:
 

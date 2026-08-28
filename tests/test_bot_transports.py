@@ -210,6 +210,21 @@ def test_submit_message_question(tmp_path):
         assert result.answer_text
 
 
+def test_submit_message_conversational_preserves_the_direct_answer(tmp_path):
+    agent = happy_path_agent(intent="conversational")
+    agent._dispatch["Reply naturally and directly"] = "Hello!"
+    ctx = build_context(tmp_path, main_agent=agent)
+    ctx.deps.persistence.write_user(BOT_SERVICE_IDENTITY, "commander")
+    with RunningApiServer(ctx) as running:
+        client = HttpApiClient(running.base_url)
+
+        result = _run(client.submit_message("hello", VIEWER_IDENTITY, "m1"))
+
+        assert result.kind == "conversational"
+        assert result.answer_text == "Hello!"
+        assert result.job_id is None
+
+
 def test_submit_message_report_never_claims_to_know_awaiting_approval(tmp_path):
     ctx = build_context(tmp_path, main_agent=happy_path_agent(intent="report"))
     ctx.deps.persistence.write_user(BOT_SERVICE_IDENTITY, "commander")

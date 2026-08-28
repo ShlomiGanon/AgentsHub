@@ -227,3 +227,102 @@ def test_retrieve_range_itself_is_unaffected_by_the_precedent_specific_widening(
         assert event_id not in {s.source_id for s in sources if s.level == "raw_event"}
     finally:
         store.close()
+
+
+def _history_event(event_id, occurred_at, classification="fire", area="north", outcome="succeeded"):
+    return {
+        "event_id": event_id,
+        "received_at": occurred_at,
+        "source": "sensor",
+        "sender_identity": "sensor-1",
+        "occurred_at": occurred_at,
+        "raw_text": f"{classification} in {area}",
+        "classification": classification,
+        "area": area,
+        "outcome": outcome,
+    }
+
+
+def test_structured_count_is_computed_by_the_database_without_calling_the_history_agent(tmp_path):
+    from history.contracts import HistoryQuerySpec
+
+    store = open_persistence(str(tmp_path / "structured-count.db"))
+    try:
+        store.append_event(_history_event("f1", "2026-08-01T10:00:00"))
+        store.append_event(_history_event("f2", "2026-08-02T10:00:00"))
+        store.append_event(_history_event("m1", "2026-08-02T11:00:00", classification="medical"))
+        agent = FakeHistoryAgent()
+        service = HistoryQueryService(store, agent, classifications=("fire", "medical"), areas=("north",))
+
+        answer = service.query_spec(
+            "How many fires were there?",
+            HistoryQuerySpec(
+                operation="count",
+                time_start="2026-08-01T00:00:00",
+                time_end="2026-08-03T00:00:00",
+                classifications=("fire",),
+            ),
+        )
+
+        assert answer.total_events_matched == 2
+        assert answer.answer == "2 matching events."
+        assert agent.last_prompt is None
+    finally:
+        store.close()
+
+
+def test_structured_latest_uses_the_filtered_database_result(tmp_path):
+    from history.contracts import HistoryQuerySpec
+
+    store = open_persistence(str(tmp_path / "structured-latest.db"))
+    try:
+        store.append_event(_history_event("north-old", "2026-08-01T10:00:00"))
+        store.append_event(_history_event("north-new", "2026-08-03T10:00:00"))
+        store.append_event(_history_event("south-newer", "2026-08-04T10:00:00", area="south"))
+        service = HistoryQueryService(store, FakeHistoryAgent(), classifications=("fire",), areas=("north", "south"))
+
+        answer = service.query_spec(
+            "What is the latest northern fire?",
+            HistoryQuerySpec(operation="latest", classifications=("fire",), areas=("north",)),
+        )
+
+        assert answer.sources_used[0].source_id == "north-new"
+        assert "north-new" in answer.answer
+    finally:
+        store.close()
+
+
+def test_structured_aggregate_groups_counts_in_sql(tmp_path):
+    from history.contracts import HistoryQuerySpec
+
+    store = open_persistence(str(tmp_path / "structured-aggregate.db"))
+    try:
+        store.append_event(_history_event("n1", "2026-08-01T10:00:00"))
+        store.append_event(_history_event("n2", "2026-08-02T10:00:00"))
+        store.append_event(_history_event("s1", "2026-08-02T11:00:00", area="south"))
+        service = HistoryQueryService(store, FakeHistoryAgent(), areas=("north", "south"))
+
+        answer = service.query_spec(
+            "Compare north and south",
+            HistoryQuerySpec(operation="compare", group_by="area"),
+        )
+
+        assert "north: 2" in answer.answer
+        assert "south: 1" in answer.answer
+    finally:
+        store.close()
+
+
+def test_structured_query_rejects_unknown_registry_values_before_search(tmp_path):
+    import pytest
+
+    from history.contracts import HistoryQueryError, HistoryQuerySpec
+
+    store = open_persistence(str(tmp_path / "structured-validation.db"))
+    try:
+        service = HistoryQueryService(store, FakeHistoryAgent(), classifications=("fire",))
+
+        with pytest.raises(HistoryQueryError, match="unknown classification"):
+            service.query_spec("Any floods?", HistoryQuerySpec(operation="count", classifications=("flood",)))
+    finally:
+        store.close()
