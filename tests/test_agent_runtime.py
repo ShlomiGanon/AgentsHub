@@ -88,6 +88,36 @@ def test_invoke_returns_raw_text_on_success(monkeypatch):
     assert captured["agent_kwargs"]["max_execution_time"] == 30
 
 
+def test_invoke_converts_a_fractional_remaining_deadline_for_crewai(monkeypatch):
+    fake_module, captured = _make_fake_crewai(lambda text: _FakeOutput("ok"))
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+    monkeypatch.setattr(adapter.time, "monotonic", lambda: 100.0)
+    adapter.set_invocation_deadline(158.72)
+
+    try:
+        result = adapter.invoke(_descriptor(), {}, "x", 60)
+    finally:
+        adapter.set_invocation_deadline(None)
+
+    assert result == "ok"
+    assert captured["agent_kwargs"]["max_execution_time"] == 58
+
+
+def test_invoke_refuses_to_start_crewai_with_less_than_one_second_remaining(monkeypatch):
+    fake_module, captured = _make_fake_crewai(lambda text: _FakeOutput("should not run"))
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+    monkeypatch.setattr(adapter.time, "monotonic", lambda: 100.0)
+    adapter.set_invocation_deadline(100.75)
+
+    try:
+        with pytest.raises(AgentTimeoutError, match="less than one second"):
+            adapter.invoke(_descriptor(), {}, "x", 60)
+    finally:
+        adapter.set_invocation_deadline(None)
+
+    assert "agent_kwargs" not in captured
+
+
 def test_invoke_routes_to_the_descriptors_own_model(monkeypatch):
     fake_module, captured = _make_fake_crewai(lambda text: _FakeOutput("ok"))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)

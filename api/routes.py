@@ -211,7 +211,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
 
         try:
             intent = message_plan.intent if planner_mode == "merged" and message_plan is not None else classify_intent(
-                ctx.main_agent, ctx.deps.protocol_set.all(), text
+                ctx.main_agent, ctx.deps.protocol_set.all(), text, prior_messages
             )
         except OrchestrationParseError as exc:
             raise RunFailureError(str(exc)) from exc
@@ -237,7 +237,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
                 reply = (
                     message_plan.conversational_reply
                     if planner_mode == "merged" and message_plan is not None
-                    else answer_conversationally(ctx.main_agent, text, system_context)
+                    else answer_conversationally(ctx.main_agent, text, system_context, prior_messages)
                 )
             except OrchestrationParseError as exc:
                 raise RunFailureError(str(exc)) from exc

@@ -408,6 +408,21 @@ def test_conversational_prompt_explicitly_distinguishes_from_a_real_question():
     assert "CONVERSATIONAL" in prompt
 
 
+def test_classify_intent_receives_prior_conversation_for_followup_resolution():
+    agent = _ScriptedMainAgent("INTENT: conversational\nREASON: follows the prior system conversation")
+    conversation = (
+        {"role": "user", "content": "What protocols do you have?"},
+        {"role": "assistant", "content": "I cannot share protocol details with you."},
+    )
+
+    result = classify_intent(agent, _protocols(), "Not even one?", conversation)
+
+    assert result.intent == "conversational"
+    prompt = agent.calls[0][0]
+    assert "What protocols do you have?" in prompt
+    assert "I cannot share protocol details with you." in prompt
+
+
 # -- answer_conversationally ----------------------------------------------
 
 
@@ -451,6 +466,21 @@ def test_conversational_prompt_grounds_identity_and_capabilities_dynamically():
     assert '"name": "reference_agent"' in prompt
     assert "generic AI assistant" in prompt
     assert "same language" in prompt
+
+
+def test_answer_conversationally_receives_prior_user_and_assistant_messages():
+    agent = _ScriptedMainAgent("No, I cannot share even one protocol name with you.")
+    conversation = (
+        {"role": "user", "content": "What protocols do you have?"},
+        {"role": "assistant", "content": "I cannot share protocol details with you."},
+    )
+
+    reply = answer_conversationally(agent, "Not even one?", {}, conversation)
+
+    assert reply == "No, I cannot share even one protocol name with you."
+    prompt = agent.calls[0][0]
+    assert "What protocols do you have?" in prompt
+    assert "I cannot share protocol details with you." in prompt
 
 
 def test_identity_and_capability_questions_are_defined_as_conversational():

@@ -267,13 +267,24 @@ def invoke(
             )
         effective_timeout = min(effective_timeout, remaining_seconds)
 
+    # CrewAI validates `max_execution_time` as an integer. Keep the precise
+    # floating-point timeout for deadline and semaphore accounting, but give
+    # CrewAI a whole number that never exceeds the remaining budget.
+    if effective_timeout < 1:
+        raise AgentTimeoutError(
+            descriptor.name,
+            "less than one second remains before the invocation deadline",
+            trace_id=get_trace_id(),
+        )
+    crewai_timeout_seconds = int(effective_timeout)
+
     crewai_agent = crewai_module.Agent(
         role=descriptor.role,
         goal="Complete the task given, or state clearly what is missing if it cannot be completed.",
         backstory=backstory,
         llm=llm,
         tools=crewai_tools,
-        max_execution_time=effective_timeout,
+        max_execution_time=crewai_timeout_seconds,
         verbose=False,
     )
     agent_built_at = time.monotonic()
