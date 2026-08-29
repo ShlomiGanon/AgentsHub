@@ -27,6 +27,7 @@ _DUMMY_ARGS = {
     "write_setting": ("retry_count", 3, "u1"),
     "get_job_result": ("job1", "u1"),
     "poll_pending_notifications": (0,),
+    "poll_trace": ("trace-1", 0, 0, "u1"),
 }
 
 
@@ -79,6 +80,9 @@ _PROFILE_TEMPLATE = """
 from protocols.model import Protocol, CriticalityLevel
 
 PROFILE_NAME = "For Tests"
+DEFAULT_LANGUAGE = "en"
+MAX_ITER = 8
+MODEL_TIMEOUT_SECONDS = 30
 AGENTS = []
 PROTOCOLS = [
     Protocol(
@@ -120,7 +124,7 @@ def _mock_crewai(monkeypatch):
         def kickoff(self, text):
             return _FakeOutput("status nominal")
 
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, tools=types.SimpleNamespace(BaseTool=object))
+    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
 
@@ -253,6 +257,34 @@ def test_answer_clarification_hold_resolved_then_conflict(server):
     second = _run(client.answer_clarification_hold(event_id, "fire", COMMANDER_IDENTITY))
     assert second.status == "not_found"
     assert second.resolved_by == COMMANDER_IDENTITY
+
+
+def test_poll_trace_returns_server_rendered_messages_for_commander(server, monkeypatch):
+    import config.base as base_config
+
+    monkeypatch.setattr(base_config, "DEEP_DEBUG", True)
+    server.ctx.deps.persistence.write_log_entry(
+        "transport-trace",
+        {"event": "intent_classified", "intent": "question"},
+    )
+    client = HttpApiClient(server.base_url)
+
+    result = _run(client.poll_trace("transport-trace", 0, 0, COMMANDER_IDENTITY))
+
+    assert result.messages == ("Trace: Main Agent classified the message as question.",)
+    assert result.next_cursor > 0
+
+
+def test_poll_trace_is_forbidden_to_viewer(server, monkeypatch):
+    import config.base as base_config
+
+    monkeypatch.setattr(base_config, "DEEP_DEBUG", True)
+    client = HttpApiClient(server.base_url)
+
+    with pytest.raises(ApiRequestError) as exc_info:
+        _run(client.poll_trace("transport-trace", 0, 0, VIEWER_IDENTITY))
+
+    assert exc_info.value.status_code == 403
 
 
 def test_answer_clarification_hold_unauthorized(server):
@@ -577,6 +609,25 @@ def test_send_text_splits_long_text_into_multiple_messages(client, monkeypatch):
     _run(client.send_text("chat-1", long_text))
 
     assert send.await_count == 3
+
+
+def test_status_message_can_be_sent_edited_and_deleted(client, monkeypatch):
+    sent_message = type("Sent", (), {"message_id": 73})()
+    send = AsyncMock(return_value=sent_message)
+    edit = AsyncMock()
+    delete = AsyncMock()
+    monkeypatch.setattr(type(client._application.bot), "send_message", send)
+    monkeypatch.setattr(type(client._application.bot), "edit_message_text", edit)
+    monkeypatch.setattr(type(client._application.bot), "delete_message", delete)
+
+    message_id = _run(client.send_status("chat-1", "thinking"))
+    _run(client.edit_status("chat-1", message_id, "done"))
+    _run(client.delete_status("chat-1", message_id))
+
+    assert message_id == "73"
+    send.assert_awaited_once_with(chat_id="chat-1", text="thinking")
+    edit.assert_awaited_once_with(chat_id="chat-1", message_id=73, text="done")
+    delete.assert_awaited_once_with(chat_id="chat-1", message_id=73)
 
 
 def test_send_with_buttons_attaches_an_inline_keyboard(client, monkeypatch):

@@ -15,6 +15,7 @@ from agents.contracts import (
     AgentResult,
     AgentTimeoutError,
     AgentToolConstructionError,
+    AgentWarmupError,
     ToolInfo,
     parse_agent_output,
     tool,
@@ -33,8 +34,11 @@ from agents.runtime import (
     build_agent_registry,
     configure_provider_concurrency,
     configure_structured_output_mode,
+    configure_invocation_limits,
+    initialize_agent_runtime,
     set_invocation_deadline,
 )
+from agents.provider_telemetry import install_crewai_provider_telemetry
 
 adapter = runtime
 base = runtime
@@ -63,8 +67,12 @@ __all__ = [
     "AgentResult",
     "AgentTimeoutError",
     "AgentToolConstructionError",
+    "AgentWarmupError",
     "configure_provider_concurrency",
     "configure_structured_output_mode",
+    "configure_invocation_limits",
+    "install_crewai_provider_telemetry",
+    "initialize_agent_runtime",
     "set_invocation_deadline",
     "DuplicateAgentNameError",
     "HistoryAgent",

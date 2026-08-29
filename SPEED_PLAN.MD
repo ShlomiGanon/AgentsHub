@@ -624,7 +624,48 @@ Make startup, configuration, diagnostics, language behavior, and client behavior
 - No documentation advertises streaming.
 - CLI is documented as the one-to-one Telegram simulator.
 
-## 17. Stage 12: Verification and Quality Gates
+## 17. Stage 12: Update GitHub CI for Read-Only Validation
+
+### Objective
+
+Update the existing GitHub Actions CI workflow so every new contract and test is exercised automatically without granting or performing repository or external-system write operations.
+
+### File work
+
+- `.github/workflows/ci.yml`: add the new focused test modules to the appropriate mission groups, add a complete offline-suite coverage guard or final complete-suite job, and define every required `TEST_*` environment variable explicitly.
+- Add checks for catalog parity, profile-required fields, removal of `/Msg/Stream`, Deep Debug authorization, provider instrumentation, warmup behavior through fakes, LLM cache isolation, Telegram/CLI parity, and documentation/file-catalog consistency.
+- Keep live provider calls, paid evaluations, Telegram network calls, deployment, and mutation outside CI.
+
+### Read-only safety rules
+
+1. Set workflow or job permissions to `contents: read` and do not grant write scopes.
+2. Do not use `pull_request_target`.
+3. Do not commit, push, create or update pull requests, publish releases, deploy, upload to production services, or modify repository settings.
+4. Do not use real provider, Telegram, or production credentials.
+5. Use explicit fake `TEST_*` credentials and mocked network boundaries.
+6. Do not run startup warmup against a live provider in CI; test warmup through deterministic fakes.
+7. Do not write to the checked-out repository as part of validation. Temporary test data must use runner temporary directories.
+8. Artifact upload is omitted unless the user separately approves it, because it creates external state in GitHub.
+
+### Sequential execution
+
+1. Inventory every `tests/test_*.py` file after implementation.
+2. Ensure every test module is included exactly once in the mission grouping or in an explicitly documented final suite command.
+3. Add all required test environment variables.
+4. Add `git diff --check`, catalog validation, and file-catalog validation commands.
+5. Declare read-only workflow permissions.
+6. Validate the YAML locally without triggering or dispatching a GitHub workflow.
+7. Run the same commands locally before the final verification stage.
+
+### Success gate
+
+- CI has only read permissions and contains no external mutation step.
+- CI makes no paid or live network call.
+- Every offline test module is covered.
+- All required `TEST_*` variables are explicit.
+- CI commands pass locally before the workflow file is considered complete.
+
+## 18. Stage 13: Verification and Quality Gates
 
 ### Objective
 
@@ -675,7 +716,7 @@ Prove correctness, compatibility, security, and performance before declaring the
 - Every fixed user-facing string comes from the selected catalog.
 - Deferred behavior remains disabled and documented in `docs/Next_Plan.md`.
 
-## 18. Sequential Commit and Progress Discipline
+## 19. Sequential Commit and Progress Discipline
 
 Implement stages strictly in numeric order. After each stage:
 

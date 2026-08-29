@@ -81,6 +81,13 @@ class MessageSubmissionResult:
 
 
 @dataclass(frozen=True)
+class TracePollResult:
+    messages: tuple[str, ...]
+    next_cursor: int
+    terminal: bool = False
+
+
+@dataclass(frozen=True)
 class JobResult:
     job_id: str
     outcome: BotOutcome
@@ -245,6 +252,7 @@ class BotApiClient(ABC):
         sender_identity: str,
         source_message_id: str,
         conversation_id: str | None = None,
+        trace_id: str | None = None,
     ) -> MessageSubmissionResult:
         """`source_message_id` — the incoming Telegram message's own ID — is what an eventual asynchronous job result (§8.9) or failure notification (§8.11) needs to send its reply *as a r..."""
 
@@ -293,6 +301,16 @@ class BotApiClient(ABC):
     async def poll_pending_notifications(self, since: int, wait_seconds: int = 0) -> tuple[tuple[BotNotification, ...], int]:
         """Everything newly relevant since the caller's own `since` cursor (0 for "from the beginning"), plus the cursor to pass as `since` on the next call."""
 
+    @abstractmethod
+    async def poll_trace(
+        self,
+        trace_id: str,
+        since: int,
+        wait_seconds: int,
+        caller_identity: str,
+    ) -> TracePollResult:
+        """Return commander-authorized deterministic live trace messages."""
+
 
 class UnimplementedApiClient(BotApiClient):
     """The only concrete `BotApiClient` today."""
@@ -304,7 +322,8 @@ class UnimplementedApiClient(BotApiClient):
         raise ApiNotImplementedError("list_commander_chat_ids", "§7.9 (authentication/authorization enforcement)")
 
     async def submit_message(
-        self, text: str, sender_identity: str, source_message_id: str, conversation_id: str | None = None
+        self, text: str, sender_identity: str, source_message_id: str,
+        conversation_id: str | None = None, trace_id: str | None = None,
     ) -> MessageSubmissionResult:
         raise ApiNotImplementedError("submit_message", "§7.4 (POST /Msg)")
 
@@ -333,6 +352,11 @@ class UnimplementedApiClient(BotApiClient):
 
     async def get_job_result(self, job_id: str, caller_identity: str) -> JobResult | None:
         raise ApiNotImplementedError("get_job_result", "§7.2 (async job mechanism)")
+
+    async def poll_trace(
+        self, trace_id: str, since: int, wait_seconds: int, caller_identity: str
+    ) -> TracePollResult:
+        raise ApiNotImplementedError("poll_trace", "§7 commander Deep Debug trace feed")
 
     async def poll_pending_notifications(self, since: int, wait_seconds: int = 0) -> tuple[tuple[BotNotification, ...], int]:
         raise ApiNotImplementedError("poll_pending_notifications", "§7.2 (async job mechanism)")

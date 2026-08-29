@@ -52,3 +52,17 @@ it will only ever be read by another engineer in this repository.
 - Declare it as anything other than an `AgentSpec` (e.g. an already-
   constructed instance, the pre-`AgentSpec` shape): `load_profile` fails
   loudly at load time, naming the bad `AGENTS` index.
+
+## Provider capabilities and LLM reuse
+
+`agents.contracts.ProviderCapabilities.thread_safe_client` is the only switch
+that permits process-wide LLM reuse. Its default is `False`; do not enable it
+from assumption or model name alone. Enabling it requires provider/library
+documentation review plus concurrent isolation tests.
+
+The runtime cache contains only immutable provider construction state. Its key
+separates model, timeout, token/reasoning/response-format options, and a
+non-reversible credential identity. Prompts, conversation turns, trace IDs,
+callbacks carrying request state, tool allowlists, response objects, and
+CrewAI Agent instances must never enter the cache. A provider without the
+explicit capability always gets an isolated LLM object.

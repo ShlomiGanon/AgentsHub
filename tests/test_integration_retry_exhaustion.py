@@ -29,7 +29,7 @@ def _mock_crewai_always_fails(monkeypatch):
         def kickoff(self, text):
             raise RuntimeError("scripted model failure")
 
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, tools=types.SimpleNamespace(BaseTool=object))
+    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
 

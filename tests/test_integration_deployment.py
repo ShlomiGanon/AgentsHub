@@ -18,12 +18,22 @@ from api.app import build_context as real_build_context
 from cli.user_admin import main as user_admin_main
 from tests.api_fakes import auth_headers
 
+
+@pytest.fixture(autouse=True)
+def _mock_startup_warmup(monkeypatch):
+    """This offline deployment test verifies wiring, never a paid provider."""
+
+    monkeypatch.setattr("api.app.initialize_agent_runtime", lambda agents: tuple(agent.model for agent in agents))
+
 _PROFILE_TEMPLATE = """
 from agents.reference import ReferenceAgent
 from profiles.spec import AgentSpec
 from protocols.model import Protocol, CriticalityLevel
 
 PROFILE_NAME = "For Tests"
+DEFAULT_LANGUAGE = "en"
+MAX_ITER = 8
+MODEL_TIMEOUT_SECONDS = 30
 AGENTS = [AgentSpec(cls=ReferenceAgent, tier="sub")]
 PROTOCOLS = [
     Protocol(

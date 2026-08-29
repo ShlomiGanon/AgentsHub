@@ -2726,3 +2726,124 @@ no CI change was needed.
 - `GET /Job/<event_id>` exposes `waiting_for_event_data`, the missing fields, the natural question, and work already completed. Terminal clients stop their completion wait when the question arrives so the reporter can answer it, then wait again after the update is queued.
 - Updated `README.md` and `docs/api_spec.md` with the persisted wait/resume lifecycle, `event_update` message response, `waiting_for_event_data` job status, and reporter-targeted `event_data_hold` notification contract.
 - Focused tests were added for executor wait/resume behavior, formulation-field validation, and the additive migration columns. Per the user's explicit request, tests were not executed at the end of this change. A read-only Python AST check was attempted but the managed environment denied access to `python.exe`; no escalation was requested because test or runtime execution was explicitly out of scope.
+## SPEED_PLAN Stage 0 — Baseline and change inventory (2026-08-29)
+
+- Completed the pre-change inventory for profile contracts, user-facing strings, Telegram/CLI presentation paths, structured logging, SQLite trace persistence, CrewAI invocation boundaries, and affected tests.
+- Confirmed that `SPEED.md` remains the performance baseline; no runtime behavior changed in this stage.
+- Confirmed reusable foundations: `log_entries` keyed by trace ID, notification long polling, structured decision events, `ProviderCapabilities`, and existing Telegram typing support.
+- Confirmed implementation gaps: fixed UI prose is distributed across API/bot/CLI/orchestration modules; stage/model telemetry is excluded from durable logs; inner CrewAI provider calls are not individually correlated; `/Msg/Stream` is post-completion SSE; Telegram and CLI do not share a status/edit lifecycle.
+
+## SPEED_PLAN Stage 1 — Localization contracts and catalog validation (2026-08-29)
+
+- Added the `messages` package with separate immutable English and Hebrew UI catalogs, a dedicated `model_messages.py` surface for user-facing model formulation instructions, strict lookup/formatting, and startup validation for equal keys and placeholders.
+- Added required `DEFAULT_LANGUAGE` profile configuration and carried the selected immutable catalog in `LoadedProfile`. `profiles.demo` selects Hebrew; the template and offline fixtures select English.
+- Updated all repository test-profile builders that declare full profiles and added focused coverage for missing/invalid languages, catalog parity, placeholder drift, strict formatting, and unsupported languages.
+- Focused verification: `47 passed` in `2.42s` for `tests/test_messages.py` and `tests/test_profile_loading.py`.
+## 2026-08-29 - SPEED_PLAN Stage 2 complete
+
+- Migrated fixed API, bot, hold, notification, and terminal-client interface text to the validated English/Hebrew message catalogs.
+- Added stable API `error_code` values while keeping localized human-readable messages separate.
+- Centralized only user-facing model formulation instructions in `messages/model_messages.py`; routing, extraction, and validation prompts remain local.
+- Verified the focused localization, API, bot, history, and reasoning suite: 278 tests passed.
+- No authorization, routing, queue, protocol, or side-effect behavior was changed in this stage.
+
+## 2026-08-29 - SPEED_PLAN Stage 3 complete
+
+- Added a shared status-message transport contract used by both Telegram and terminal clients.
+- Every free-form message now sends the localized thinking status immediately and edits it once to the synchronous result, localized failure, or asynchronous ACK with Task ID.
+- Added Telegram-safe long-message splitting and edit-failure recovery that sends the final response before attempting best-effort stale-status deletion.
+- Kept the existing later notification path unchanged for asynchronous final results.
+- Focused verification: 105 bot transport, presentation, application, and deployment tests passed.
+
+## 2026-08-29 - SPEED_PLAN Stage 4 complete
+
+- Removed the misleading `POST /Msg/Stream` SSE route and its Flask streaming implementation.
+- Removed the unused `OptimizationPolicy.streaming_enabled` runtime field.
+- Removed the obsolete endpoint from API and authorization documentation while retaining `SPEED.md` as the historical findings record.
+- Added/retained route coverage proving `/Msg/Stream` is unavailable; 44 focused response and API tests passed.
+
+## 2026-08-29 - SPEED_PLAN Stage 5 complete
+
+- Added strict environment-backed `DEEP_DEBUG` configuration, separate from verbose console logging, and limited raw prompt/response persistence to that flag.
+- Persisted an explicit allowlist of stage, API, queue, outer-model, and provider telemetry records instead of dropping all `telemetry_only` records.
+- Added cursor-based and condition-backed trace reads to the persistence contract and SQLite implementation.
+- Extended outer model telemetry with status, termination reason, latency milliseconds, timeout, and total-token metadata when supplied.
+- `EXPLAIN QUERY PLAN` confirmed the cursor query uses `idx_log_entries_trace_id` with the rowid bound, so no additional index was added.
+- Focused verification: 126 environment, observability, persistence, runtime, and durable-log integration tests passed.
+
+## 2026-08-29 - SPEED_PLAN Stage 6 complete
+
+- Registered idempotent handlers on CrewAI 1.15.17's public `LLMCallStartedEvent`, `LLMCallCompletedEvent`, and `LLMCallFailedEvent` event bus.
+- Correlated every inner provider request by CrewAI call ID with the current AgentsHub trace and stage, including an out-of-order handler recovery path.
+- Persisted provider/model, latency, status, finish metadata, and provider-supplied input/output/cache/total usage without estimating unavailable values.
+- Added a four-call simulated tool-loop test and failure/race coverage; 49 focused runtime, provider telemetry, API startup, and durable-log tests passed.
+
+## 2026-08-29 - SPEED_PLAN Stage 7 complete
+
+- Added the commander-only `view_live_trace` permission operation without adding it to `ViewerAllowedAction`.
+- Added bounded, cursor-ordered `/Trace/<trace_id>` long polling with server-side authorization and deterministic profile-language rendering.
+- Added shared Telegram/commander-CLI trace polling keyed to the same client-generated trace ID; viewer clients resolve their role but never poll or display protected trace data.
+- Rendered API/Main Agent receipt, intent, extraction, queue, stages, risk, protocol, holds, steps, tools, provider metrics, insights, judgment, and final outcome while explicitly ignoring raw `model_io` records.
+- Preserved the one-edit status lifecycle; live trace entries are separate messages and require no LLM call.
+- Focused API, permission, message-catalog, bot, transport, flow, and deployment verification passed (121-test suite plus dedicated HTTP trace-client checks).
+
+## 2026-08-29 - SPEED_PLAN Stage 8 complete
+
+- Made `MAX_ITER` and `MODEL_TIMEOUT_SECONDS` required profile fields, with bounded startup validation and explicit values of 8 and 30 seconds in all shipped profiles and test fixtures.
+- Passed the profile limits into CrewAI Agent/LLM construction, set `max_retry_limit=0`, and disabled provider retry through `additional_params.num_retries=0` without changing protocol-step retry behavior.
+- Kept shorter invocation/deadline budgets as outer execution bounds while retaining the approved 30-second provider-network timeout.
+- Focused verification: 85 profile-loader, runtime, and API startup tests passed.
+
+## 2026-08-29 - SPEED_PLAN Stage 9 complete
+
+- Added fail-fast CrewAI runtime initialization before queue workers, the history scheduler, or the HTTP listener start.
+- Startup now makes one minimal tool-free call per unique configured Provider/Model, using the profile timeout, an eight-token output cap, deterministic temperature, and no provider retry.
+- Warmup records startup trace/stage telemetry, rejects empty or non-text responses, stops on the first failure, closes opened persistence resources, and never includes credentials in returned identifiers or errors.
+- Focused verification: 45 runtime and real API wiring tests passed, including model deduplication, malformed response, timeout/failure, secret non-disclosure, and startup ordering.
+
+## 2026-08-29 - SPEED_PLAN Stage 10 complete
+
+- Added a bounded, lock-protected LRU cache for CrewAI LLM objects, with process-lifetime scope and a maximum of 32 immutable configurations.
+- Reuse is strictly capability-gated through `ProviderCapabilities.thread_safe_client`; unknown providers and the current OpenAI capability remain isolated and never use the cache.
+- Cache identity includes the full non-secret LLM option set and a SHA-256 credential identity. Prompts, conversations, trace IDs, callbacks, tool allowlists, and responses are never cached or logged as cache keys.
+- Model calls are not globally serialized. Concurrent construction is deduplicated under the cache lock, while concurrent calls proceed independently after lookup.
+- Focused verification: 52 runtime, provider telemetry, concurrency, and tool-permission tests passed.
+
+## 2026-08-29 - SPEED_PLAN Stage 11 complete
+
+- Updated README startup instructions for required profile fields, real fail-fast model warmup, Telegram/CLI one-edit status parity, Deep Debug, and offline test isolation.
+- Updated profile and agent authoring documentation for `DEFAULT_LANGUAGE`, `MAX_ITER`, `MODEL_TIMEOUT_SECONDS`, warmup, and capability-gated LLM reuse with prohibited request-state caching.
+- Documented localized stable API errors, notification long polling, commander-only trace polling, and the explicit absence of `/Msg/Stream`.
+- Added `DEEP_DEBUG=false` to `.env.example`, corrected the operator guide's raw model-I/O flag, and documented its indefinite SQLite sensitivity.
+- Updated the exact first-party file catalog and appended the active/deferred plan references to `docs/work_plan.md`.
+- Focused documentation-contract verification: 54 catalog, message, and profile tests passed.
+
+## 2026-08-29 - SPEED_PLAN Stage 12 complete
+
+- Updated `.github/workflows/ci.yml` locally only; no workflow was triggered and no GitHub API, repository, pull request, release, deployment, or settings write was performed.
+- Declared workflow-wide `contents: read`, disabled checkout credential persistence, and added explicit fake test model settings plus deterministic Deep Debug/logging flags.
+- Added local guards for YAML readability, forbidden mutation surfaces, whitespace, exact offline test-module coverage, and post-suite tracked-file cleanliness.
+- Added all new catalog, telemetry, trace, presentation, capability, and response-regression modules to the existing mission groups.
+- Kept live warmup, paid providers, Telegram network calls, artifacts, and deployment outside CI. Local workflow inspection confirmed all 64 `tests/test_*.py` modules are listed exactly once.
+
+## 2026-08-29 - SPEED_PLAN Stage 13 complete
+
+- Ran the complete offline suite with explicit fake `TEST_CORE_MODEL_*` and `TEST_SUB_MODEL_*` settings: 1,010 passed, 0 failed in 307.70 seconds. Six unchanged CrewAI deprecation warnings came only from real-library construction tests.
+- The first full run exposed legacy CrewAI fakes that lacked the now-required explicit `LLM` constructor. Updated those offline boundaries, then used `--last-failed` until clean before rerunning the entire suite from the start.
+- Final focused verification after startup error-mapping cleanup: 52 API startup, architecture, file-catalog, and runtime tests passed.
+- Mocked full-path benchmark: 252.9ms with the same five Main Agent stages plus one Insights call. This is approximately 16% below the 301.0ms `SPEED.MD` local baseline and remains a structural comparison, not a live-provider SLO.
+- `EXPLAIN QUERY PLAN` reported `SEARCH log_entries USING INDEX idx_log_entries_trace_id (trace_id=? AND rowid>?)` for cursor-based trace retrieval.
+- Local CI validation confirmed read-only permissions and exact one-time coverage of all 64 offline test modules. `git diff --check` returned no whitespace errors; Git emitted only the repository's existing Windows LF-to-CRLF conversion notices.
+- Automated English/Hebrew catalog, viewer/commander authorization, Telegram/CLI presentation parity, Deep Debug, trace ordering, concurrency, persistence, routing, history, holds, and side-effect regressions all passed in the complete suite.
+- Deliberate remaining gate: no real provider warmup, paid live eval, or Telegram-network smoke test was run. Startup warmup behavior is fully fake-tested, but operator-approved live credentials are still required before production rollout.
+- No GitHub workflow was dispatched and no remote write was performed.
+
+## 2026-08-29 - CrewAI warmup compatibility correction
+
+- Corrected the provider retry configuration introduced during SPEED_PLAN: `max_retries=0` is now passed as CrewAI/OpenAI-compatible client configuration instead of forwarding the invalid request parameter `additional_params.num_retries=0` to `Completions.create`.
+- Added a no-network regression test against the installed CrewAI OpenRouter constructor. It verifies that the client owns the zero-retry setting and that `num_retries` cannot enter completion request parameters.
+- Deduplicated terminal CrewAI provider events by `call_id` with a bounded 4,096-entry identity window. Repeated failure events no longer create duplicate telemetry or orphaned pending-finish state, while finish-before-start correlation remains supported.
+- Suppressed CrewAI's duplicated raw root messages that incorrectly label OpenRouter failures as OpenAI failures. The retained structured failure record identifies the configured provider/model and preserves the underlying technical error in logs.
+- Removed the eager `api.app` import from `api/__init__.py` and preserved facade/legacy exports through lazy loading. `python -m api.app` is now first-loaded by runpy and no longer emits the pre-import `RuntimeWarning`.
+- Focused offline verification passed: 134 runtime, real-constructor, provider telemetry, observability, API facade, startup-wiring, and legacy-import tests. Six existing CrewAI construction deprecation warnings remain unchanged.
+- No model call, external provider API request, paid operation, Telegram request, or other network operation was performed. The real CrewAI coverage constructed local objects with a dummy key only.

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from bot import app
-from bot.api_client import MessageSubmissionResult, ProfileView, SettingsView, WriteResult
+from bot.api_client import MessageSubmissionResult, ProfileView, SettingsView, TracePollResult, WriteResult
 from bot.deps import BotDeps
 from bot.startup import ApiNotImplementedError, BotStartupError, SingleInstanceLock
 from tests.bot_fakes import FakeBotApiClient, FakeTelegramClient
@@ -219,8 +219,10 @@ def test_on_text_message_replies_in_the_same_chat():
     update = _fake_update(text="how many events?")
     _run(app._on_text_message(update, _fake_context(deps)))
 
-    assert telegram.sent[-1].chat_id == "99"
-    assert telegram.sent[-1].text == "42 events"
+    assert telegram.status_events == [
+        ("send", "99", "1", "The model is thinking..."),
+        ("edit", "99", "1", "42 events"),
+    ]
 
 
 def test_on_text_message_forwards_the_real_incoming_message_id():
@@ -253,6 +255,41 @@ def test_on_text_message_uses_a_conversation_id_scoped_to_chat_and_thread():
     conversation_ids = [call[1] for call in api.calls if call[0] == "submit_message_conversation"]
     assert conversation_ids == ["telegram:chat-a:main", "telegram:chat-b:main", "telegram:chat-a:thread-1"]
     assert len(set(conversation_ids)) == 3
+
+
+def test_deep_debug_commander_receives_separate_trace_messages(monkeypatch):
+    monkeypatch.setattr(app, "deep_debug_enabled", lambda: True)
+    api = FakeBotApiClient(
+        users={"42": "commander"},
+        message_submission_result=MessageSubmissionResult(kind="question", answer_text="final"),
+        trace_results=[TracePollResult(("trace one", "trace two"), 2, False)],
+    )
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
+
+    _run(app._on_text_message(_fake_update(text="question"), _fake_context(deps)))
+
+    assert [message.text for message in telegram.sent] == ["trace one", "trace two"]
+    assert telegram.status_events[-1] == ("edit", "99", "1", "final")
+    trace_calls = [call for call in api.calls if call[0] == "poll_trace"]
+    assert len(trace_calls) == 1
+    assert trace_calls[0][3] == 0
+    assert ("submit_message_trace", trace_calls[0][1]) in api.calls
+
+
+def test_deep_debug_viewer_never_polls_trace(monkeypatch):
+    monkeypatch.setattr(app, "deep_debug_enabled", lambda: True)
+    api = FakeBotApiClient(
+        users={"42": "viewer"},
+        message_submission_result=MessageSubmissionResult(kind="question", answer_text="final"),
+    )
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
+
+    _run(app._on_text_message(_fake_update(text="question"), _fake_context(deps)))
+
+    assert not any(call[0] == "poll_trace" for call in api.calls)
+    assert telegram.sent == []
 
 
 def test_on_profile_command_view_replies_with_the_profile():
@@ -621,7 +658,7 @@ def test_report_acknowledges_with_job_id_and_kind():
 
     reply = _run(handle_incoming_message(_deps(api), "v1", "there is smoke near the depot", "m1"))
 
-    assert "report" in reply
+    assert "queued" in reply
     assert "job-42" in reply
 
 

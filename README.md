@@ -61,6 +61,7 @@ The important variables are:
 - `CORE_MODEL_PROVIDER`, `CORE_MODEL_NAME`, and `CORE_MODEL_API_KEY_ENV`
 - `SUB_MODEL_PROVIDER`, `SUB_MODEL_NAME`, and `SUB_MODEL_API_KEY_ENV`
 - The key variables named by `CORE_MODEL_API_KEY_ENV` and `SUB_MODEL_API_KEY_ENV`
+- `DEEP_DEBUG=false` for normal operation; enable it only for a bounded commander diagnostic session.
 
 Profiles contain only environment-variable names, never secret values.
 
@@ -90,6 +91,12 @@ python -m api.app profiles.demo
 ```
 
 Keep this process running. The API binds to `127.0.0.1` by default and initializes or migrates the profile's SQLite database during startup. Use `--host` only when the deployment has appropriate network and TLS controls.
+
+Before opening the HTTP listener, startup imports CrewAI and makes one real,
+minimal provider call for every unique Provider/Model configured by the active
+profile. This can be billed and fails startup if any model, credential,
+provider, response, or 30-second timeout check fails. Queue workers and
+scheduled summaries do not start before all warmup checks succeed.
 
 From another terminal with the environment loaded, verify the running deployment with a registered identity:
 
@@ -123,6 +130,13 @@ For local end-to-end testing without Telegram, use one of the terminal clients a
 python -m tools.terminal_client_commander --profile profiles.demo
 python -m tools.terminal_client_viewer --profile profiles.demo
 ```
+
+The terminal clients are the one-to-one test simulator for Telegram. Both
+surfaces immediately show the profile-language "model is thinking" status and
+replace it once with the final response, localized error, or queued ACK and
+Task ID. Later asynchronous results remain separate notifications. With
+`DEEP_DEBUG=true`, commander clients additionally receive ordered trace
+messages; viewer clients never request or display them.
 
 Stop any foreground process with `Ctrl+C`. The SQLite database remains on disk, so restarting the same profile resumes its existing deployment state; durable bot notification cursors also prevent already-delivered notifications from being replayed after a normal restart.
 
@@ -183,7 +197,7 @@ Run any entry point with `--help` for its complete options.
 
 ## Profiles and live settings
 
-Start with `profiles/template.py` when creating a deployment. Every profile must define a human-facing `PROFILE_NAME`; the Main Agent uses it when introducing the service. A profile also defines agents, protocols, event types, areas, storage and API settings, the IANA `TIMEZONE` used to resolve relative history periods, conversation retention, optimization policy, and the names of required secret variables. Older profiles retain legacy routing and disabled conversation history but must add `PROFILE_NAME` before they can start. The complete contract is documented in `docs/profile_spec.md`.
+Start with `profiles/template.py` when creating a deployment. Every profile must define a human-facing `PROFILE_NAME`, `DEFAULT_LANGUAGE` (`"en"` or `"he"`), `MAX_ITER`, and `MODEL_TIMEOUT_SECONDS`; shipped profiles use 8 iterations and 30 seconds. The Main Agent uses the profile name when introducing the service, and every fixed client/API message uses the selected language for the full server process. A profile also defines agents, protocols, event types, areas, storage and API settings, the IANA `TIMEZONE` used to resolve relative history periods, conversation retention, optimization policy, and the names of required secret variables. The complete contract is documented in `docs/profile_spec.md`.
 
 Free-form messages are classified as questions, reports, requests, or conversation. A message whose action or referent cannot be determined safely receives a synchronous clarification question and creates no job. History questions remain in the read-only question path: the Main Agent emits a constrained query description, SQLite performs parameterized filtering/counting, and the History Agent sees only the bounded records needed for narrative answers.
 
@@ -228,7 +242,8 @@ that do not answer the data request continue through normal intent routing.
 Normal operation emits structured records with trace IDs and stores them in the deployment database. Human-readable log lines are written separately for terminal use.
 
 - `LOG_CONSOLE_JSON=false` disables only the JSON console stream.
-- `DEBUG_VERBOSE_LOGGING=true` enables model prompts/responses and other sensitive diagnostic detail. Do not leave it enabled in normal operation.
+- `DEBUG_VERBOSE_LOGGING=true` lowers the console/log threshold to DEBUG for local diagnostics; it does not enable raw model-I/O persistence.
+- `DEEP_DEBUG=true` enables commander-only live traces and persistence of raw model prompts/responses. It is read once at startup, adds no model calls, and may retain sensitive data indefinitely in SQLite; leave it false during normal operation.
 - `OBSERVABILITY_MODE=log|otlp` selects local structured spans or OTLP export. `OTEL_EXPORTER_OTLP_ENDPOINT` is mandatory in `otlp` mode.
 
 See `docs/operator_guide.md` for log fields, trace flow, and operational guidance.
@@ -254,6 +269,9 @@ python -m pytest -q
 ```
 
 The exact test count is intentionally not hard-coded here. `tests/sanity_check_real_model_call.py` and `tools/evaluate_response_pipeline.py --live` are opt-in, billed checks and are not collected by pytest.
+
+The normal pytest suite mocks warmup and all network boundaries. It never uses
+real model or Telegram credentials and makes no paid provider call.
 
 ## Documentation
 

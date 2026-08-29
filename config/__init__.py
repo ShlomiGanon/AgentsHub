@@ -5,6 +5,7 @@ import sys
 from config import environment, live_settings
 from config.environment import (
     BaseConfig,
+    DEEP_DEBUG,
     DEBUG_FLAG,
     LOG_CONSOLE_JSON_ENABLED,
     ModelTierError,
@@ -26,6 +27,7 @@ sys.modules[f"{__name__}.settings_store"] = live_settings
 
 __all__ = [
     "BaseConfig",
+    "DEEP_DEBUG",
     "DEBUG_FLAG",
     "LOG_CONSOLE_JSON_ENABLED",
     "ModelTierError",

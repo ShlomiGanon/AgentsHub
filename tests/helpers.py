@@ -45,6 +45,9 @@ class ShapelessProtocol:
 # in-memory objects) start from this and omit/prepend what the test needs.
 PROFILE_ATTR_LINES = {
     "PROFILE_NAME": 'PROFILE_NAME = "For Tests"',
+    "DEFAULT_LANGUAGE": 'DEFAULT_LANGUAGE = "en"',
+    "MAX_ITER": "MAX_ITER = 8",
+    "MODEL_TIMEOUT_SECONDS": "MODEL_TIMEOUT_SECONDS = 30",
     "AGENTS": "AGENTS = []",
     "PROTOCOLS": "PROTOCOLS = []",
     "EVENT_TYPES": 'EVENT_TYPES = ["fire"]',

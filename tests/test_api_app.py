@@ -16,6 +16,9 @@ notes on that decision.
 """
 
 import os
+from pathlib import Path
+import subprocess
+import sys
 import types
 
 import pytest
@@ -26,6 +29,20 @@ from api.app import build_app, build_context
 
 BOT_TOKEN_ENV = "AGENTSHUB_FIXTURE_BOT_TOKEN"
 MODEL_CRED_ENV = "AGENTSHUB_FIXTURE_MODEL_KEY"
+
+
+def test_module_entry_point_does_not_preimport_api_app():
+    result = subprocess.run(
+        [sys.executable, "-W", "error::RuntimeWarning", "-m", "api.app", "--help"],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "RuntimeWarning" not in result.stderr
 
 
 @pytest.fixture(autouse=True)
@@ -46,8 +63,9 @@ def _mock_crewai(monkeypatch):
         def kickoff(self, text):
             return _FakeOutput("status nominal, no anomalies")
 
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, tools=types.SimpleNamespace(BaseTool=object))
+    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+    monkeypatch.setattr(api_app, "initialize_agent_runtime", lambda agents: tuple(agent.model for agent in agents))
 
 
 @pytest.fixture(autouse=True)
@@ -68,6 +86,39 @@ def test_build_context_succeeds_against_a_real_profile(test_core_model, test_sub
     finally:
         ctx.queue.stop()
         ctx.deps.persistence.close()
+
+
+def test_model_warmup_finishes_before_queue_and_scheduler_start(monkeypatch, test_core_model, test_sub_model):
+    order = []
+    monkeypatch.setattr(api_app, "initialize_agent_runtime", lambda agents: order.append("warmup"))
+
+    original_queue_start = api_app.SerialEventQueue.start
+    original_scheduler_start = api_app.SummaryScheduler.start
+    monkeypatch.setattr(api_app.SerialEventQueue, "start", lambda self: (order.append("queue"), original_queue_start(self))[1])
+    monkeypatch.setattr(
+        api_app.SummaryScheduler,
+        "start",
+        lambda self: (order.append("scheduler"), original_scheduler_start(self))[1],
+    )
+
+    ctx = build_context("fixtures.profiles.minimal_profile", core_model=test_core_model, sub_model=test_sub_model)
+    try:
+        assert order[:3] == ["warmup", "queue", "scheduler"]
+    finally:
+        ctx.scheduler.stop()
+        ctx.queue.stop()
+        ctx.deps.persistence.close()
+
+
+def test_model_warmup_failure_prevents_queue_start(monkeypatch, test_core_model, test_sub_model):
+    monkeypatch.setattr(api_app, "initialize_agent_runtime", lambda agents: (_ for _ in ()).throw(RuntimeError("bad model")))
+    queue_started = []
+    monkeypatch.setattr(api_app.SerialEventQueue, "start", lambda self: queue_started.append(True))
+
+    with pytest.raises(RuntimeError, match="bad model"):
+        build_context("fixtures.profiles.minimal_profile", core_model=test_core_model, sub_model=test_sub_model)
+
+    assert queue_started == []
 
 
 def test_get_system_succeeds_against_the_real_wiring(test_core_model, test_sub_model):
@@ -131,6 +182,22 @@ def test_main_fails_loudly_naming_the_missing_tier_env_var(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
     with pytest.raises(SystemExit, match="CORE_MODEL_PROVIDER"):
+        api_app.main(["fixtures.profiles.minimal_profile"])
+
+
+def test_main_translates_runtime_warmup_failure_before_starting_http(monkeypatch):
+    from agents import AgentWarmupError
+    from config import TierModel
+
+    monkeypatch.setattr(api_app, "_tier_model_from_environ", lambda prefix: TierModel("openai/test", "secret"))
+    monkeypatch.setattr(api_app, "configure_telemetry", lambda: None)
+    monkeypatch.setattr(
+        api_app,
+        "build_context",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AgentWarmupError("runtime", "model unavailable")),
+    )
+
+    with pytest.raises(SystemExit, match="failed to start API.*model unavailable"):
         api_app.main(["fixtures.profiles.minimal_profile"])
 
 import pytest

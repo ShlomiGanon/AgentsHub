@@ -18,6 +18,7 @@ from history.contracts import (
 )
 from history.event_pipeline import day_bounds, month_bounds, parse_timestamp, storage_timestamp, year_bounds
 from history.field_catalog import FIELD_BY_KEY, FIELD_MEANINGS_GLOSSARY
+from messages.model_messages import HISTORY_LATEST_INSTRUCTION, HISTORY_LIST_INSTRUCTION
 from persistence import EventSearchCriteria, PersistenceError
 from tools import get_trace_id
 
@@ -423,12 +424,7 @@ class HistoryQueryService:
         views = [_build_semantic_event_view(event) for event in events]
 
         if normalized.operation == "latest":
-            prompt = _history_agent_prompt(
-                "Describe this one most recent stored event naturally, in one or two sentences. Always state its "
-                "Event ID explicitly, exactly as given, so it can be referenced again. State plainly when a fact "
-                "is missing rather than inventing it.",
-                question, views,
-            )
+            prompt = _history_agent_prompt(HISTORY_LATEST_INSTRUCTION, question, views)
             agent_result = self._history_agent.process(prompt, allowed_tools=[])
             if agent_result.status != "success":
                 raise HistoryQueryError(f"history agent could not answer: {agent_result.text}")
@@ -440,13 +436,7 @@ class HistoryQueryService:
                 "faithfully, distinguish a missing value from a false one, and always state the Event ID."
             )
         elif normalized.operation == "list":
-            prompt = _history_agent_prompt(
-                "List these stored events naturally. Give each one its own short entry, numbered in the order "
-                "given, and always state that event's own Event ID explicitly within its entry, so any one of "
-                "them can be referenced again later by number or by ID. State plainly when a fact is missing "
-                "rather than inventing it.",
-                question, views,
-            )
+            prompt = _history_agent_prompt(HISTORY_LIST_INSTRUCTION, question, views)
             agent_result = self._history_agent.process(prompt, allowed_tools=[])
             if agent_result.status != "success":
                 raise HistoryQueryError(f"history agent could not answer: {agent_result.text}")

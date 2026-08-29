@@ -252,6 +252,8 @@ class SQLitePersistence(PersistenceInterface):
         self._write_queue: SimpleQueue = SimpleQueue()
         self._notification_condition = threading.Condition()
         self._notification_generation = 0
+        self._log_condition = threading.Condition()
+        self._log_generation = 0
         self._read_local = threading.local()
         self._read_connections: list[sqlite3.Connection] = []
         self._read_connections_lock = threading.Lock()
@@ -304,6 +306,11 @@ class SQLitePersistence(PersistenceInterface):
         with self._notification_condition:
             self._notification_generation += 1
             self._notification_condition.notify_all()
+
+    def _wake_log_waiters(self) -> None:
+        with self._log_condition:
+            self._log_generation += 1
+            self._log_condition.notify_all()
 
     def _read_connection(self) -> _ReadConnectionLease:
         connection = getattr(self._read_local, "connection", None)
@@ -618,6 +625,7 @@ class SQLitePersistence(PersistenceInterface):
                     (trace_id, timestamp, payload),
                 )
                 connection.commit()
+                self._wake_log_waiters()
             except sqlite3.Error as exc:
                 connection.rollback()
                 raise PersistenceError(f"failed to write log entry: {exc}") from exc
@@ -625,11 +633,15 @@ class SQLitePersistence(PersistenceInterface):
         self._submit_write(_do)
 
     def fetch_log_entries(self, trace_id: str) -> list[dict]:
+        return self.fetch_log_entries_since(trace_id, 0)
+
+    def fetch_log_entries_since(self, trace_id: str, since: int) -> list[dict]:
         connection = self._read_connection()
         try:
             log_entry_rows = connection.execute(
-                "SELECT id, trace_id, timestamp, details FROM log_entries WHERE trace_id = ? ORDER BY id",
-                (trace_id,),
+                "SELECT id, trace_id, timestamp, details FROM log_entries "
+                "WHERE trace_id = ? AND id > ? ORDER BY id",
+                (trace_id, since),
             ).fetchall()
 
             entries = []
@@ -642,6 +654,23 @@ class SQLitePersistence(PersistenceInterface):
             return entries
         finally:
             connection.close()
+
+    def wait_for_log_entries_since(
+        self, trace_id: str, since: int, timeout_seconds: float
+    ) -> list[dict]:
+        timeout_seconds = max(0.0, min(float(timeout_seconds), 30.0))
+        with self._log_condition:
+            generation = self._log_generation
+
+        rows = self.fetch_log_entries_since(trace_id, since)
+        if rows or timeout_seconds == 0:
+            return rows
+
+        with self._log_condition:
+            if generation == self._log_generation:
+                self._log_condition.wait(timeout_seconds)
+
+        return self.fetch_log_entries_since(trace_id, since)
 
 
     def store_held_event(self, kind: str, hold: dict) -> str:

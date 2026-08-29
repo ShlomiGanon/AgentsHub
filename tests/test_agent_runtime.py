@@ -2,17 +2,20 @@
 
 import sys
 import types
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from agents import adapter
 from agents.runtime import AgentDescriptor
+from agents import InvocationPolicy, ProviderCapabilities
 from agents.errors import (
     AgentFrameworkNotReadyError,
     AgentModelError,
     AgentOutputParseError,
     AgentTimeoutError,
     AgentToolConstructionError,
+    AgentWarmupError,
 )
 from agents.runtime import ToolInfo
 
@@ -24,6 +27,13 @@ class _FakeOutput:
 
 class _FakeBaseTool:
     pass
+
+
+@pytest.fixture(autouse=True)
+def _empty_llm_cache():
+    adapter._clear_llm_cache()
+    yield
+    adapter._clear_llm_cache()
 
 
 def _make_fake_crewai(kickoff_behavior):
@@ -38,7 +48,11 @@ def _make_fake_crewai(kickoff_behavior):
         def kickoff(self, text):
             return kickoff_behavior(text)
 
-    fake_module = types.SimpleNamespace(Agent=_FakeAgent, tools=types.SimpleNamespace(BaseTool=_FakeBaseTool))
+    class _FakeLLM:
+        def __init__(self, **kwargs):
+            captured["llm_kwargs"] = kwargs
+
+    fake_module = types.SimpleNamespace(Agent=_FakeAgent, LLM=_FakeLLM, tools=types.SimpleNamespace(BaseTool=_FakeBaseTool))
     return fake_module, captured
 
 
@@ -46,6 +60,10 @@ def _descriptor(**overrides):
     fields = {"name": "a1", "role": "role", "system_prompt": "prompt", "tools": (), "model": "some-model"}
     fields.update(overrides)
     return AgentDescriptor(**fields)
+
+
+def _runtime_agent(**descriptor_overrides):
+    return types.SimpleNamespace(descriptor=_descriptor(**descriptor_overrides))
 
 
 # -- crewai not installed --------------------------------------------------
@@ -84,7 +102,13 @@ def test_invoke_returns_raw_text_on_success(monkeypatch):
     result = adapter.invoke(_descriptor(model="model-x"), {}, "do the thing", 30)
 
     assert result == "handled: do the thing"
-    assert captured["agent_kwargs"]["llm"] == "model-x"
+    assert captured["llm_kwargs"] == {
+        "model": "model-x",
+        "timeout": 30.0,
+        "max_retries": 0,
+    }
+    assert captured["agent_kwargs"]["max_iter"] == 8
+    assert captured["agent_kwargs"]["max_retry_limit"] == 0
     assert captured["agent_kwargs"]["max_execution_time"] == 30
 
 
@@ -100,7 +124,7 @@ def test_invoke_converts_a_fractional_remaining_deadline_for_crewai(monkeypatch)
         adapter.set_invocation_deadline(None)
 
     assert result == "ok"
-    assert captured["agent_kwargs"]["max_execution_time"] == 58
+    assert captured["agent_kwargs"]["max_execution_time"] == 30
 
 
 def test_invoke_refuses_to_start_crewai_with_less_than_one_second_remaining(monkeypatch):
@@ -123,13 +147,182 @@ def test_invoke_routes_to_the_descriptors_own_model(monkeypatch):
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
     adapter.invoke(_descriptor(model="agent-one-model"), {}, "x", 10)
-    first_model = captured["agent_kwargs"]["llm"]
+    first_model = captured["llm_kwargs"]["model"]
 
     adapter.invoke(_descriptor(model="agent-two-model"), {}, "x", 10)
-    second_model = captured["agent_kwargs"]["llm"]
+    second_model = captured["llm_kwargs"]["model"]
 
     assert first_model == "agent-one-model"
     assert second_model == "agent-two-model"
+
+
+# -- startup warmup ---------------------------------------------------------
+
+
+def test_runtime_warmup_calls_each_unique_model_once(monkeypatch):
+    calls = []
+    options = []
+
+    class _FakeLLM:
+        def __init__(self, **kwargs):
+            options.append(kwargs)
+
+        def call(self, messages):
+            calls.append(messages)
+            return "OK"
+
+    fake_module = types.SimpleNamespace(LLM=_FakeLLM)
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+
+    warmed = adapter.initialize_agent_runtime(
+        [
+            _runtime_agent(model="openai/model-a", api_key="secret-a"),
+            _runtime_agent(name="a2", model="openai/model-a", api_key="secret-a"),
+            _runtime_agent(name="a3", model="other/model-b", api_key="secret-b"),
+        ]
+    )
+
+    assert warmed == ("openai/model-a", "other/model-b")
+    assert len(calls) == 2
+    assert all(call == [{"role": "user", "content": "Reply with OK."}] for call in calls)
+    assert options[0] == {
+        "model": "openai/model-a",
+        "timeout": 30.0,
+        "max_retries": 0,
+        "api_key": "secret-a",
+        "max_tokens": 8,
+        "temperature": 0,
+    }
+
+
+@pytest.mark.parametrize("bad_response", ["", None, {"content": "OK"}])
+def test_runtime_warmup_fails_fast_on_malformed_response_without_exposing_secret(monkeypatch, bad_response):
+    class _FakeLLM:
+        def __init__(self, **kwargs):
+            pass
+
+        def call(self, messages):
+            return bad_response
+
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: types.SimpleNamespace(LLM=_FakeLLM))
+
+    with pytest.raises(AgentWarmupError) as exc_info:
+        adapter.initialize_agent_runtime([_runtime_agent(model="openai/model-a", api_key="top-secret")])
+
+    assert "openai/model-a" in str(exc_info.value)
+    assert "top-secret" not in str(exc_info.value)
+
+
+def test_runtime_warmup_stops_after_first_provider_failure(monkeypatch):
+    constructed = []
+
+    class _FakeLLM:
+        def __init__(self, **kwargs):
+            constructed.append(kwargs["model"])
+
+        def call(self, messages):
+            raise TimeoutError("simulated timeout")
+
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: types.SimpleNamespace(LLM=_FakeLLM))
+
+    with pytest.raises(AgentWarmupError):
+        adapter.initialize_agent_runtime(
+            [_runtime_agent(model="one/model"), _runtime_agent(name="a2", model="two/model")]
+        )
+
+    assert constructed == ["one/model"]
+
+
+# -- capability-gated LLM reuse --------------------------------------------
+
+
+def _cache_test_crewai():
+    created_llms = []
+    agent_llms = []
+
+    class _FakeLLM:
+        def __init__(self, **kwargs):
+            self.options = kwargs
+            created_llms.append(self)
+
+    class _FakeAgent:
+        def __init__(self, **kwargs):
+            self.llm = kwargs["llm"]
+            agent_llms.append(self.llm)
+
+        def kickoff(self, text):
+            return _FakeOutput(f"ok:{text}")
+
+    module = types.SimpleNamespace(Agent=_FakeAgent, LLM=_FakeLLM, tools=types.SimpleNamespace(BaseTool=_FakeBaseTool))
+    return module, created_llms, agent_llms
+
+
+def test_unknown_provider_never_reuses_llm(monkeypatch):
+    fake_module, created_llms, _ = _cache_test_crewai()
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+
+    descriptor = _descriptor(model="unknown/model")
+    adapter.invoke(descriptor, {}, "one", 30)
+    adapter.invoke(descriptor, {}, "two", 30)
+
+    assert len(created_llms) == 2
+
+
+def test_explicitly_thread_safe_provider_reuses_identical_llm_configuration(monkeypatch):
+    fake_module, created_llms, agent_llms = _cache_test_crewai()
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+    monkeypatch.setattr(
+        adapter,
+        "provider_capabilities",
+        lambda model: ProviderCapabilities(thread_safe_client=True),
+    )
+
+    descriptor = _descriptor(model="safe/model", api_key="secret")
+    adapter.invoke(descriptor, {}, "one", 30)
+    adapter.invoke(descriptor, {}, "two", 30)
+
+    assert len(created_llms) == 1
+    assert agent_llms[0] is agent_llms[1]
+
+
+def test_llm_cache_isolates_credentials_and_invocation_options(monkeypatch):
+    fake_module, created_llms, _ = _cache_test_crewai()
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+    monkeypatch.setattr(
+        adapter,
+        "provider_capabilities",
+        lambda model: ProviderCapabilities(thread_safe_client=True),
+    )
+
+    adapter.invoke(_descriptor(model="safe/model", api_key="one"), {}, "a", 30)
+    adapter.invoke(_descriptor(model="safe/model", api_key="two"), {}, "b", 30)
+    adapter.invoke(
+        _descriptor(model="safe/model", api_key="one"),
+        {},
+        "c",
+        30,
+        InvocationPolicy(max_output_tokens=25),
+    )
+
+    assert len(created_llms) == 3
+    assert all("one" not in repr(key) and "two" not in repr(key) for key in adapter._llm_cache)
+
+
+def test_thread_safe_llm_cache_constructs_once_under_concurrent_calls(monkeypatch):
+    fake_module, created_llms, _ = _cache_test_crewai()
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+    monkeypatch.setattr(
+        adapter,
+        "provider_capabilities",
+        lambda model: ProviderCapabilities(thread_safe_client=True),
+    )
+    descriptor = _descriptor(model="safe/model", api_key="secret")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda index: adapter.invoke(descriptor, {}, f"call-{index}", 30), range(16)))
+
+    assert len(created_llms) == 1
+    assert results == [f"ok:call-{index}" for index in range(16)]
 
 
 # -- Explicit api_key -> crewai.LLM(model=..., api_key=...) -----------------
@@ -157,11 +350,16 @@ def test_invoke_builds_an_explicit_crewai_llm_when_api_key_is_set(monkeypatch):
 
     adapter.invoke(_descriptor(model="openrouter/anthropic/claude-3.5-sonnet", api_key="sk-or-secret"), {}, "x", 10)
 
-    assert captured["llm_kwargs"] == {"model": "openrouter/anthropic/claude-3.5-sonnet", "api_key": "sk-or-secret"}
+    assert captured["llm_kwargs"] == {
+        "model": "openrouter/anthropic/claude-3.5-sonnet",
+        "timeout": 30.0,
+        "max_retries": 0,
+        "api_key": "sk-or-secret",
+    }
     assert isinstance(captured["agent_kwargs"]["llm"], _FakeLLM)
 
 
-def test_invoke_falls_back_to_a_bare_model_string_when_there_is_no_api_key(monkeypatch):
+def test_invoke_builds_a_timed_llm_when_there_is_no_api_key(monkeypatch):
     # Legacy construction path (no api_key at all) — unchanged behavior,
     # relies on litellm's own implicit env-var lookup, same as before
     # api_key existed.
@@ -170,7 +368,11 @@ def test_invoke_falls_back_to_a_bare_model_string_when_there_is_no_api_key(monke
 
     adapter.invoke(_descriptor(model="plain-model", api_key=None), {}, "x", 10)
 
-    assert captured["agent_kwargs"]["llm"] == "plain-model"
+    assert captured["llm_kwargs"] == {
+        "model": "plain-model",
+        "timeout": 30.0,
+        "max_retries": 0,
+    }
 
 
 def test_invoke_gives_two_agents_on_the_same_provider_genuinely_independent_keys(monkeypatch):
@@ -197,8 +399,14 @@ def test_invoke_gives_two_agents_on_the_same_provider_genuinely_independent_keys
     adapter.invoke(_descriptor(model="openrouter/model-a", api_key="key-one"), {}, "x", 10)
     adapter.invoke(_descriptor(model="openrouter/model-b", api_key="key-two"), {}, "x", 10)
 
-    assert captured_llms[0] == {"model": "openrouter/model-a", "api_key": "key-one"}
-    assert captured_llms[1] == {"model": "openrouter/model-b", "api_key": "key-two"}
+    assert captured_llms[0] == {
+        "model": "openrouter/model-a", "timeout": 30.0,
+        "max_retries": 0, "api_key": "key-one",
+    }
+    assert captured_llms[1] == {
+        "model": "openrouter/model-b", "timeout": 30.0,
+        "max_retries": 0, "api_key": "key-two",
+    }
     assert captured_llms[0]["api_key"] != captured_llms[1]["api_key"]
 
 
@@ -528,6 +736,24 @@ def test_real_crewai_llm_constructs_with_the_exact_kwargs_invoke_uses():
     llm = crewai_module.LLM(model="openrouter/anthropic/claude-3.5-sonnet", api_key="sk-or-test-key")
 
     assert isinstance(llm, crewai_module.BaseLLM)
+
+
+def test_real_crewai_openrouter_retry_limit_is_client_configuration_not_a_request_parameter():
+    """Catch provider-option drift without making a network request."""
+
+    crewai_module = _real_crewai_module()
+    descriptor = _descriptor(
+        model="openrouter/anthropic/claude-sonnet-4.6",
+        api_key="construction-only-key",
+    )
+
+    options = adapter._llm_options(descriptor, timeout_seconds=30)
+    llm = crewai_module.LLM(**options)
+    request = llm._prepare_completion_params([{"role": "user", "content": "test"}])
+
+    assert llm.max_retries == 0
+    assert "num_retries" not in llm.additional_params
+    assert "num_retries" not in request
 
 
 def test_real_crewai_agent_constructs_with_an_explicit_llm_object_and_the_exact_kwargs_invoke_uses():

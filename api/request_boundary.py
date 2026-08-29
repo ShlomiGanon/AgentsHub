@@ -7,6 +7,7 @@ from flask import Flask, jsonify
 from werkzeug.exceptions import HTTPException
 
 from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
+from messages import get_current_catalog
 from tools import get_trace_id
 
 if TYPE_CHECKING:
@@ -19,9 +20,10 @@ class ApiError(Exception):
     error_class = "invalid_input"
     status_code = 400
 
-    def __init__(self, message: str, field: str | None = None):
+    def __init__(self, message: str, field: str | None = None, details: dict | None = None):
         self.message = message
         self.field = field
+        self.details = dict(details or {})
         super().__init__(message)
 
 
@@ -69,25 +71,31 @@ class ServiceUnavailableError(ApiError):
 
 
 
-_GENERIC_INTERNAL_MESSAGE = "an internal error occurred"
-
 IDENTITY_HEADER = "X-Identity"
 
 
 def authenticate(persistence: "PersistenceInterface", identity: str | None) -> PermissionLevel:
     if not identity:
-        raise AuthenticationError("no identity supplied")
+        raise AuthenticationError(get_current_catalog().text("api.identity_required"))
 
     user = persistence.read_user(identity)
     if user is None:
-        raise AuthenticationError(f"'{identity}' is not a registered identity")
+        raise AuthenticationError(
+            get_current_catalog().text("api.identity_unregistered", identity=identity)
+        )
 
     return PermissionLevel[user["permission_level"].upper()]
 
 
 def require(level: PermissionLevel, operation: RequestedOperation) -> None:
     if not is_permitted(level, operation):
-        raise AuthorizationError(f"level {level.name} may not {operation.value.replace('_', ' ')}")
+        raise AuthorizationError(
+            get_current_catalog().text(
+                "api.operation_forbidden",
+                level=level.name,
+                operation=operation.value.replace("_", " "),
+            )
+        )
 
 
 def register_error_handlers(app: Flask) -> None:
@@ -100,9 +108,14 @@ def register_error_handlers(app: Flask) -> None:
                 "error_message": error.message, "field": error.field, "trace_id": get_trace_id(),
             },
         )
-        error_payload = {"error_class": error.error_class, "message": error.message}
+        error_payload = {
+            "error_class": error.error_class,
+            "error_code": error.error_class,
+            "message": error.message,
+        }
         if error.field is not None:
             error_payload["field"] = error.field
+        error_payload.update(error.details)
         response = jsonify(error_payload)
         if error.status_code == 503:
             response.headers["Retry-After"] = "1"
@@ -110,7 +123,11 @@ def register_error_handlers(app: Flask) -> None:
 
     @app.errorhandler(HTTPException)
     def _handle_http_exception(error: HTTPException):
-        error_payload = {"error_class": "invalid_input", "message": error.description or error.name}
+        error_payload = {
+            "error_class": "invalid_input",
+            "error_code": "invalid_input",
+            "message": error.description or error.name,
+        }
         return jsonify(error_payload), error.code or 500
 
     @app.errorhandler(Exception)
@@ -119,4 +136,10 @@ def register_error_handlers(app: Flask) -> None:
             "unhandled exception in an API request",
             extra={"event": "api_unexpected_error", "trace_id": get_trace_id()},
         )
-        return jsonify({"error_class": "internal_error", "message": _GENERIC_INTERNAL_MESSAGE}), 500
+        return jsonify(
+            {
+                "error_class": "internal_error",
+                "error_code": "internal_error",
+                "message": get_current_catalog().text("api.internal_error"),
+            }
+        ), 500

@@ -28,7 +28,7 @@ def _mock_crewai(monkeypatch):
         def kickoff(self, text):
             return _FakeOutput("status nominal, no anomalies")
 
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, tools=types.SimpleNamespace(BaseTool=object))
+    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
 

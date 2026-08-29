@@ -1,19 +1,27 @@
 """Consolidated responsibility module for routes."""
 
 from datetime import datetime, timedelta, timezone
-import json
 import time
 
 from typing import TYPE_CHECKING
 
-from flask import Blueprint, Response, jsonify, make_response, request, stream_with_context
+from flask import Blueprint, jsonify, request
 
 from api.request_boundary import AuthorizationError, ConflictError, InvalidInputError, NotFoundError, RunFailureError, ServiceUnavailableError, authenticate, require
 from history import storage_timestamp
 
 from orchestrator.flows import begin_report, run_report_extraction
 
-from tools import get_trace_id, new_trace_id, set_trace_id, stage_context, trace_context
+from tools import (
+    get_trace_id,
+    is_valid_trace_id,
+    new_trace_id,
+    render_deep_debug_entry,
+    set_trace_id,
+    stage_context,
+    trace_context,
+)
+from config import environment as base_config
 
 import logging
 
@@ -54,6 +62,7 @@ def _now() -> str:
 
 def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
     blueprint = Blueprint("events", __name__)
+    messages = ctx.loaded_profile.message_catalog
 
     @blueprint.route("/Event", methods=["POST"])
     def post_event():
@@ -66,13 +75,15 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
         sender_identity = request_payload.get("sender_identity")
 
         if not text:
-            raise InvalidInputError("'text' is required", field="text")
+            raise InvalidInputError(messages.text("api.field_required", field="text"), field="text")
         if not sender_identity:
-            raise InvalidInputError("'sender_identity' is required", field="sender_identity")
+            raise InvalidInputError(
+                messages.text("api.field_required", field="sender_identity"), field="sender_identity"
+            )
 
         reservation = ctx.queue.reserve(False)
         if reservation is None:
-            raise ServiceUnavailableError("event queue is full; retry later")
+            raise ServiceUnavailableError(messages.text("api.queue_full"))
 
         trace_id = get_trace_id() or new_trace_id()
         set_trace_id(trace_id)
@@ -113,6 +124,7 @@ def _now() -> str:
 
 def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
     blueprint = Blueprint("messages", __name__)
+    messages = ctx.loaded_profile.message_catalog
     non_human_activation_event_types = tuple(
         event_type
         for event_type in ctx.deps.event_type_registry.types
@@ -146,11 +158,13 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
         conversation_id = request_payload.get("conversation_id")
 
         if not text:
-            raise InvalidInputError("'text' is required", field="text")
+            raise InvalidInputError(messages.text("api.field_required", field="text"), field="text")
         if not sender_identity:
-            raise InvalidInputError("'sender_identity' is required", field="sender_identity")
+            raise InvalidInputError(
+                messages.text("api.field_required", field="sender_identity"), field="sender_identity"
+            )
         if conversation_id is not None and (not isinstance(conversation_id, str) or not conversation_id.strip() or len(conversation_id) > 200):
-            raise InvalidInputError("'conversation_id' must be a non-empty string of at most 200 characters", field="conversation_id")
+            raise InvalidInputError(messages.text("api.conversation_id_invalid"), field="conversation_id")
 
         trace_id = get_trace_id() or new_trace_id()
         set_trace_id(trace_id)
@@ -203,7 +217,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
         if matching_event_data_hold:
             reservation = ctx.queue.reserve(True)
             if reservation is None:
-                raise ServiceUnavailableError("event queue is full; retry the event detail later")
+                raise ServiceUnavailableError(messages.text("api.queue_full_event_detail"))
             try:
                 event_data_reply = apply_event_data_reply(
                     ctx.deps,
@@ -219,7 +233,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
                     "event data reply failed validation",
                     extra={"event": "event_data_reply_invalid", "reason": str(exc), "trace_id": trace_id},
                 )
-                question = pending_hold.get("question", "Please provide the missing event details again.")
+                question = pending_hold.get("question", messages.text("api.event_detail_again"))
                 _remember("assistant", question, pending_hold["event_id"])
                 return jsonify(
                     {
@@ -291,7 +305,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
                     extra={"event": "message_plan_invalid", "planner_mode": planner_mode, "reason": str(exc), "trace_id": trace_id},
                 )
                 if planner_mode == "merged":
-                    answer = "Could you clarify what you want me to check, record, or do?"
+                    answer = messages.text("api.clarify_check_record_do")
                     _remember("assistant", answer)
                     return jsonify({"taken_as": "clarification", "answer": answer})
 
@@ -310,7 +324,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
         received_at = _now()
 
         if intent.intent == "needs_clarification":
-            answer = intent.clarification_question or "Could you clarify what you want me to do?"
+            answer = intent.clarification_question or messages.text("api.clarify_action")
             _remember("assistant", answer)
             return jsonify({
                 "taken_as": "clarification",
@@ -369,7 +383,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
             require(level, RequestedOperation.REPORT_EVENT)
             reservation = ctx.queue.reserve(False)
             if reservation is None:
-                raise ServiceUnavailableError("event queue is full; retry later")
+                raise ServiceUnavailableError(messages.text("api.queue_full"))
             deadline_at = storage_timestamp(datetime.now(timezone.utc) + timedelta(seconds=optimization_policy.job_deadline_seconds))
             try:
                 event_id = begin_report(
@@ -392,7 +406,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
                 ),
                 reservation,
             )
-            _remember("assistant", f"Queued report. Job ID: {event_id}.", event_id)
+            _remember("assistant", messages.text("api.queued_report", task_id=event_id), event_id)
             return jsonify({"taken_as": "report", "event_id": event_id, "status": "queued"}), 202
 
         if intent.intent != "request":
@@ -402,7 +416,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
         is_commander = level >= PermissionLevel.COMMANDER
         reservation = ctx.queue.reserve(False)
         if reservation is None:
-            raise ServiceUnavailableError("event queue is full; retry later")
+            raise ServiceUnavailableError(messages.text("api.queue_full"))
         deadline_at = storage_timestamp(datetime.now(timezone.utc) + timedelta(seconds=optimization_policy.job_deadline_seconds))
         try:
             event_id = begin_request(
@@ -425,32 +439,8 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
             ),
             reservation,
         )
-        _remember("assistant", f"Queued request. Job ID: {event_id}.", event_id)
+        _remember("assistant", messages.text("api.queued_request", task_id=event_id), event_id)
         return jsonify({"taken_as": "request", "event_id": event_id, "status": "queued"}), 202
-
-    @blueprint.route("/Msg/Stream", methods=["POST"])
-    def post_msg_stream():
-        optimization_policy = getattr(ctx.loaded_profile, "optimization_policy", OptimizationPolicy())
-        if not optimization_policy.streaming_enabled:
-            raise NotFoundError("message streaming is not enabled for this profile")
-
-        completed_response = make_response(post_msg())
-        payload = completed_response.get_json(silent=True) or {}
-
-        @stream_with_context
-        def _events():
-            if completed_response.status_code >= 400:
-                event_name = "error"
-            elif completed_response.status_code == 202:
-                event_name = "ack"
-            else:
-                event_name = "final"
-            yield f"event: {event_name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-        response = Response(_events(), status=completed_response.status_code, mimetype="text/event-stream")
-        response.headers["Cache-Control"] = "no-cache"
-        response.headers["X-Accel-Buffering"] = "no"
-        return response
 
     return blueprint
 
@@ -482,9 +472,16 @@ def _protocol_from_body(request_payload: dict, name_override: str | None = None)
             approval_flag=request_payload["approval_flag"],
         )
     except KeyError as exc:
-        raise InvalidInputError(f"missing required field: {exc.args[0]}", field=str(exc.args[0])) from exc
+        from messages import get_current_catalog
+        raise InvalidInputError(
+            get_current_catalog().text("api.missing_required_field", field=exc.args[0]),
+            field=str(exc.args[0]),
+        ) from exc
     except (TypeError, AttributeError) as exc:
-        raise InvalidInputError(f"malformed protocol body: {exc}") from exc
+        from messages import get_current_catalog
+        raise InvalidInputError(
+            get_current_catalog().text("api.malformed_protocol", reason=exc)
+        ) from exc
 
 
 def build_protocols_blueprint(ctx: "ApiContext") -> Blueprint:
@@ -553,6 +550,7 @@ _SETTINGS_FIELDS = {"retry_count", "risk_threshold", "lookback_window_days"}
 
 def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
     blueprint = Blueprint("system", __name__)
+    messages = ctx.loaded_profile.message_catalog
 
     @blueprint.route("/SYSTEM", methods=["GET"])
     def get_system():
@@ -604,30 +602,72 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
         unknown = sorted(set(request_payload) - _SETTINGS_FIELDS)
         if unknown:
             field = unknown[0]
-            raise InvalidInputError(f"'{field}' belongs to the profile and takes effect only on a restart", field=field)
+            raise InvalidInputError(messages.text("api.profile_field_restart", field=field), field=field)
 
         if "retry_count" in request_payload:
             setting_value = request_payload["retry_count"]
             if not isinstance(setting_value, int) or isinstance(setting_value, bool) or setting_value < 0:
-                raise InvalidInputError("'retry_count' must be a non-negative integer", field="retry_count")
+                raise InvalidInputError(messages.text("api.retry_nonnegative_integer"), field="retry_count")
             ctx.deps.settings_store.set_retry_count(setting_value)
 
         if "risk_threshold" in request_payload:
             setting_value = request_payload["risk_threshold"]
             if not isinstance(setting_value, (int, float)) or isinstance(setting_value, bool) or not (0.0 <= setting_value <= 1.0):
-                raise InvalidInputError("'risk_threshold' must be a number between 0.0 and 1.0", field="risk_threshold")
+                raise InvalidInputError(messages.text("api.risk_threshold_range"), field="risk_threshold")
             ctx.deps.settings_store.set_risk_threshold(setting_value)
 
         if "lookback_window_days" in request_payload:
             setting_value = request_payload["lookback_window_days"]
             if not isinstance(setting_value, int) or isinstance(setting_value, bool) or setting_value < 1:
-                raise InvalidInputError("'lookback_window_days' must be a positive integer", field="lookback_window_days")
+                raise InvalidInputError(messages.text("api.lookback_positive_integer"), field="lookback_window_days")
             ctx.deps.settings_store.set_lookback_window_days(setting_value)
 
         return jsonify({
             "retry_count": ctx.deps.settings_store.get_retry_count(),
             "risk_threshold": ctx.deps.settings_store.get_risk_threshold(),
             "lookback_window_days": ctx.deps.settings_store.get_lookback_window_days(),
+        })
+
+    @blueprint.route("/Trace/<trace_id>", methods=["GET"])
+    def get_trace(trace_id: str):
+        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
+        require(level, RequestedOperation.VIEW_LIVE_TRACE)
+        if not base_config.DEEP_DEBUG:
+            raise NotFoundError(messages.text("api.deep_debug_disabled"))
+        if not is_valid_trace_id(trace_id):
+            raise InvalidInputError(messages.text("api.trace_id_invalid"), field="trace_id")
+
+        try:
+            since = int(request.args.get("since", "0"))
+        except (TypeError, ValueError) as exc:
+            raise InvalidInputError(messages.text("api.cursor_invalid"), field="since") from exc
+        if since < 0:
+            raise InvalidInputError(messages.text("api.cursor_invalid"), field="since")
+
+        try:
+            wait_seconds = int(request.args.get("wait_seconds", "0"))
+        except (TypeError, ValueError) as exc:
+            raise InvalidInputError(messages.text("api.wait_invalid"), field="wait_seconds") from exc
+        if not 0 <= wait_seconds <= 30:
+            raise InvalidInputError(messages.text("api.wait_invalid"), field="wait_seconds")
+
+        entries = ctx.deps.persistence.wait_for_log_entries_since(
+            trace_id,
+            since,
+            wait_seconds,
+        )
+        rendered = []
+        for entry in entries:
+            rendered_text = render_deep_debug_entry(entry, messages)
+            if rendered_text is not None:
+                rendered.append({"id": entry["id"], "text": rendered_text})
+
+        next_cursor = max((entry["id"] for entry in entries), default=since)
+        terminal = any(entry.get("event") == "event_outcome" for entry in entries)
+        return jsonify({
+            "entries": rendered,
+            "next_cursor": next_cursor,
+            "terminal": terminal,
         })
 
     return blueprint
@@ -639,6 +679,7 @@ if TYPE_CHECKING:
 
 def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
     blueprint = Blueprint("users", __name__)
+    messages = ctx.loaded_profile.message_catalog
 
     @blueprint.route("/User/<identity>", methods=["GET"])
     def get_user(identity):
@@ -650,7 +691,7 @@ def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
         # look up only their own identity. A commander (e.g. bot-service, which
         # resolves every caller's registration) is unrestricted by this check.
         if level is PermissionLevel.VIEWER and identity != caller_identity:
-            raise AuthorizationError("level VIEWER may not view another identity's registration")
+            raise AuthorizationError(messages.text("api.other_identity_forbidden"))
 
         user = ctx.deps.persistence.read_user(identity)
         if user is None:
@@ -745,6 +786,7 @@ def job_status(ctx: "ApiContext", event_id: str) -> dict | None:
 
 def build_jobs_blueprint(ctx: "ApiContext") -> Blueprint:
     blueprint = Blueprint("jobs", __name__)
+    messages = ctx.loaded_profile.message_catalog
 
     @blueprint.route("/Job/<event_id>", methods=["GET"])
     def get_job(event_id):
@@ -760,11 +802,11 @@ def build_jobs_blueprint(ctx: "ApiContext") -> Blueprint:
         if level is PermissionLevel.VIEWER:
             event = ctx.deps.persistence.fetch_event(event_id)
             if event is None or event.get("sender_identity") != caller_identity:
-                raise NotFoundError(f"no such job '{event_id}'")
+                raise NotFoundError(messages.text("api.job_not_found", task_id=event_id))
 
         status = job_status(ctx, event_id)
         if status is None:
-            raise NotFoundError(f"no such job '{event_id}'")
+            raise NotFoundError(messages.text("api.job_not_found", task_id=event_id))
 
         return jsonify(status)
 
@@ -778,14 +820,27 @@ if TYPE_CHECKING:
 def _pending_hold_or_raise(ctx: "ApiContext", kind: str, event_id: str) -> dict:
     hold = ctx.deps.persistence.fetch_held_event(kind, event_id)
     if hold is None:
-        raise NotFoundError(f"no {kind} hold was ever created against event '{event_id}'")
+        raise NotFoundError(
+            ctx.loaded_profile.message_catalog.text("api.hold_not_found", kind=kind, event_id=event_id)
+        )
     if hold["resolved"]:
-        raise ConflictError(f"already resolved by '{hold['resolved_by']}' at {hold['resolved_at']}")
+        raise ConflictError(
+            ctx.loaded_profile.message_catalog.text(
+                "api.hold_resolved",
+                identity=hold["resolved_by"],
+                resolved_at=hold["resolved_at"],
+            ),
+            details={
+                "resolved_by": hold["resolved_by"],
+                "resolved_at": hold["resolved_at"],
+            },
+        )
     return hold
 
 
 def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
     blueprint = Blueprint("holds", __name__)
+    messages = ctx.loaded_profile.message_catalog
 
     @blueprint.route("/Clarify/<event_id>", methods=["POST"])
     def post_clarify(event_id):
@@ -796,7 +851,9 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
         request_payload = request.get_json(silent=True) or {}
         classification = request_payload.get("classification")
         if not classification:
-            raise InvalidInputError("'classification' is required", field="classification")
+            raise InvalidInputError(
+                messages.text("api.field_required", field="classification"), field="classification"
+            )
 
         trace_id = get_trace_id() or new_trace_id()
         set_trace_id(trace_id)
@@ -806,7 +863,7 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
 
         reservation = ctx.queue.reserve(True)
         if reservation is None:
-            raise ServiceUnavailableError("event queue is full; retry later")
+            raise ServiceUnavailableError(messages.text("api.queue_full"))
 
         answer = resolve_clarification(ctx.deps, hold["hold_id"], identity, level, classification)
         if answer.status == "invalid_classification":
@@ -844,7 +901,7 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
         request_payload = request.get_json(silent=True) or {}
         decision = request_payload.get("decision")
         if not decision:
-            raise InvalidInputError("'decision' is required — 'approved', 'rejected', or a candidate protocol name", field="decision")
+            raise InvalidInputError(messages.text("api.decision_required"), field="decision")
 
         trace_id = get_trace_id() or new_trace_id()
         set_trace_id(trace_id)
@@ -854,7 +911,7 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
 
         reservation = ctx.queue.reserve(True)
         if reservation is None:
-            raise ServiceUnavailableError("event queue is full; retry later")
+            raise ServiceUnavailableError(messages.text("api.queue_full"))
 
         answer = resolve_approval(ctx.deps, hold["hold_id"], identity, level, decision)
         if answer.status == "invalid_candidate":
@@ -1014,6 +1071,7 @@ def _format_notification(ctx: "ApiContext", notification_row: dict) -> dict:
 
 def build_notifications_blueprint(ctx: "ApiContext") -> Blueprint:
     blueprint = Blueprint("notifications", __name__)
+    messages = ctx.loaded_profile.message_catalog
 
     @blueprint.route("/Notifications", methods=["GET"])
     def get_notifications():
@@ -1027,14 +1085,14 @@ def build_notifications_blueprint(ctx: "ApiContext") -> Blueprint:
             if since < 0:
                 raise ValueError
         except ValueError:
-            raise InvalidInputError("'since' must be a non-negative integer cursor", field="since")
+            raise InvalidInputError(messages.text("api.cursor_invalid"), field="since")
 
         try:
             wait_seconds = int(raw_wait_seconds)
             if not 0 <= wait_seconds <= 30:
                 raise ValueError
         except ValueError:
-            raise InvalidInputError("'wait_seconds' must be an integer between 0 and 30", field="wait_seconds")
+            raise InvalidInputError(messages.text("api.wait_invalid"), field="wait_seconds")
 
         with stage_context("notification_delivery"):
             notification_rows = ctx.deps.persistence.wait_for_notifications_since(since, wait_seconds)

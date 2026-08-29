@@ -12,6 +12,7 @@ def _parse_debug_flag(raw: str | None) -> bool:
 
 
 DEBUG_FLAG = _parse_debug_flag(os.environ.get("DEBUG_VERBOSE_LOGGING"))
+DEEP_DEBUG = _parse_debug_flag(os.environ.get("DEEP_DEBUG"))
 
 
 def _parse_console_json_flag(raw: str | None) -> bool:

@@ -33,7 +33,7 @@ def _fake_crewai(response_text="status nominal, no anomalies"):
         def kickoff(self, text):
             return _FakeOutput(response_text)
 
-    return types.SimpleNamespace(Agent=_FakeCrewAgent, tools=types.SimpleNamespace(BaseTool=object))
+    return types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
 
 
 def _fake_crewai_that_calls_a_tool(tool_name_to_call, response_text="status nominal, no anomalies"):
@@ -59,7 +59,7 @@ def _fake_crewai_that_calls_a_tool(tool_name_to_call, response_text="status nomi
                 tool._run(location="gate-3")
             return _FakeOutput(response_text)
 
-    return types.SimpleNamespace(Agent=_FakeCrewAgent, tools=types.SimpleNamespace(BaseTool=object))
+    return types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
 
 
 def _fake_crewai_failing_once_then_succeeding(response_text="status nominal, no anomalies"):
@@ -87,7 +87,7 @@ def _fake_crewai_failing_once_then_succeeding(response_text="status nominal, no 
                 raise RuntimeError("transient failure")
             return _FakeOutput(response_text)
 
-    return types.SimpleNamespace(Agent=_FakeCrewAgent, tools=types.SimpleNamespace(BaseTool=object)), calls
+    return types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object)), calls
 
 
 def _extraction_trace_id(ctx, event_id: str) -> str:
@@ -147,12 +147,23 @@ def test_querying_by_trace_id_returns_every_log_row_for_one_request_in_order(tmp
     assert ids == sorted(ids)
     assert len(set(ids)) == len(ids)  # no duplicates
 
-    events_in_order = [e["event"] for e in entries if "event" in e]
+    telemetry_events = {
+        "api_request_finished",
+        "model_invocation_finished",
+        "queue_started",
+        "stage_finished",
+    }
+    events_in_order = [
+        e["event"] for e in entries
+        if "event" in e and e["event"] not in telemetry_events
+    ]
     expected_order = [
-        "report_received", "extraction_result", "risk_assessed", "protocol_selection",
+        "api_request_started", "report_received", "extraction_result", "risk_assessed", "protocol_selection",
         "precedent_closure", "step_start", "step_result", "insight_generated", "final_verdict", "event_outcome",
     ]
     assert events_in_order == expected_order
+    assert any(e.get("event") == "stage_finished" for e in entries)
+    assert any(e.get("event") == "model_invocation_finished" for e in entries)
 
     # -- Complete: every row belongs to this trace, and none of the
     # required detail was dropped between the JSON line and the DB row.

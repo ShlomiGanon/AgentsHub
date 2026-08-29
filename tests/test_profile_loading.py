@@ -39,6 +39,57 @@ def test_profile_name_is_required(tmp_path, monkeypatch, test_core_model, test_s
         load_profile("profile_missing_name", core_model=test_core_model, sub_model=test_sub_model)
 
 
+def test_default_language_is_required(tmp_path, monkeypatch, test_core_model, test_sub_model):
+    _write(tmp_path, monkeypatch, "profile_missing_language", omit=("DEFAULT_LANGUAGE",))
+
+    with pytest.raises(ProfileLoadError, match="DEFAULT_LANGUAGE"):
+        load_profile("profile_missing_language", core_model=test_core_model, sub_model=test_sub_model)
+
+
+def test_default_language_must_be_supported(tmp_path, monkeypatch, test_core_model, test_sub_model):
+    _write(
+        tmp_path,
+        monkeypatch,
+        "profile_invalid_language",
+        overrides={"DEFAULT_LANGUAGE": 'DEFAULT_LANGUAGE = "fr"'},
+    )
+    monkeypatch.setenv(BOT_TOKEN_ENV, "token")
+    monkeypatch.setenv(MODEL_CRED_ENV, "key")
+
+    with pytest.raises(ProfileValidationError, match="DEFAULT_LANGUAGE"):
+        load_profile("profile_invalid_language", core_model=test_core_model, sub_model=test_sub_model)
+
+
+@pytest.mark.parametrize("field", ["MAX_ITER", "MODEL_TIMEOUT_SECONDS"])
+def test_invocation_limits_are_required(tmp_path, monkeypatch, test_core_model, test_sub_model, field):
+    module_name = f"profile_missing_{field.lower()}"
+    _write(tmp_path, monkeypatch, module_name, omit=(field,))
+
+    with pytest.raises(ProfileLoadError, match=field):
+        load_profile(module_name, core_model=test_core_model, sub_model=test_sub_model)
+
+
+@pytest.mark.parametrize(
+    "suffix,field,value",
+    [
+        ("max_zero", "MAX_ITER", "0"),
+        ("max_bool", "MAX_ITER", "True"),
+        ("timeout_zero", "MODEL_TIMEOUT_SECONDS", "0"),
+        ("timeout_infinite", "MODEL_TIMEOUT_SECONDS", "float('inf')"),
+    ],
+)
+def test_invocation_limits_must_be_bounded(
+    tmp_path, monkeypatch, test_core_model, test_sub_model, suffix, field, value
+):
+    module_name = f"profile_invalid_{suffix}"
+    _write(tmp_path, monkeypatch, module_name, overrides={field: f"{field} = {value}"})
+    monkeypatch.setenv(BOT_TOKEN_ENV, "token")
+    monkeypatch.setenv(MODEL_CRED_ENV, "key")
+
+    with pytest.raises(ProfileValidationError, match=field):
+        load_profile(module_name, core_model=test_core_model, sub_model=test_sub_model)
+
+
 def test_missing_bot_token_env_fails_naming_it(tmp_path, monkeypatch, test_core_model, test_sub_model):
     _write(tmp_path, monkeypatch, "profile_missing_bot_env")
     monkeypatch.delenv(BOT_TOKEN_ENV, raising=False)
@@ -241,7 +292,15 @@ from tests.helpers import FakeAgent, FakeProtocol, ShapelessProtocol
 
 
 def _loaded(agents=(), protocols=(), areas=("x",), profile_name="For Tests"):
-    return SimpleNamespace(profile_name=profile_name, agents=agents, protocols=protocols, areas=areas)
+    return SimpleNamespace(
+        profile_name=profile_name,
+        default_language="en",
+        max_iter=8,
+        model_timeout_seconds=30.0,
+        agents=agents,
+        protocols=protocols,
+        areas=areas,
+    )
 
 
 def test_profile_name_must_be_non_empty():

@@ -219,7 +219,7 @@ def test_api_returns_and_accepts_trace_id(tmp_path):
         ctx.deps.persistence.close()
 
 
-def test_streaming_endpoint_is_hidden_when_profile_flag_is_off(tmp_path):
+def test_removed_streaming_endpoint_is_not_registered(tmp_path):
     ctx = build_context(tmp_path)
     try:
         response = build_app(ctx).test_client().post(

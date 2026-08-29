@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from itertools import count
 from typing import Callable
 
-from tools import stage_context, trace_context
+from tools import get_trace_id, stage_context, trace_context
 
 logger = logging.getLogger(__name__)
 _STOP = object()
@@ -54,7 +54,7 @@ class SerialEventQueue:
         return None
 
     def submit(self, queued_item, reservation: QueueReservation | None = None) -> None:
-        self._queue.put(queued_item.payload if isinstance(queued_item, WorkItem) else queued_item)
+        self._queue.put(queued_item if isinstance(queued_item, WorkItem) else WorkItem(queued_item))
 
     def qsize(self) -> int:
         return self._queue.qsize()
@@ -71,13 +71,26 @@ class SerialEventQueue:
 
     def _run(self) -> None:
         while True:
-            queued_item = self._queue.get()
-            if queued_item is _STOP:
+            queued = self._queue.get()
+            if queued is _STOP:
                 self._queue.task_done()
                 return
+            work_item: WorkItem = queued
+            queued_item = work_item.payload
             self._currently_processing = queued_item
             try:
-                self._process_fn(queued_item)
+                with trace_context(work_item.trace_id or None):
+                    logger.info(
+                        "queue item started",
+                        extra={
+                            "event": "queue_started",
+                            "trace_id": get_trace_id(),
+                            "queue_wait_seconds": time.monotonic() - work_item.submitted_at,
+                            "telemetry_only": True,
+                        },
+                    )
+                    with stage_context("queue_execution"):
+                        self._process_fn(queued_item)
             except Exception:
                 logger.exception(
                     "event processing failed; continuing with the next queued event",

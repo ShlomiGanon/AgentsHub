@@ -8,9 +8,19 @@ from typing import TYPE_CHECKING
 
 from flask import Flask, g, request
 
-from agents import build_agent_registry, configure_provider_concurrency, configure_structured_output_mode, set_invocation_deadline
+from agents import (
+    AgentInvocationError,
+    build_agent_registry,
+    configure_provider_concurrency,
+    configure_structured_output_mode,
+    configure_invocation_limits,
+    initialize_agent_runtime,
+    install_crewai_provider_telemetry,
+    set_invocation_deadline,
+)
 from config import ModelTierError, SettingsStore, TierModel, load_base_config, resolve_tier_model_from_env
 from history import SummaryScheduler
+from messages import set_current_catalog
 from history.query import HistoryQueryService
 from orchestrator.flows import FlowDeps, PolicyAwareEventQueue, SerialEventQueue, assemble_core_agents
 from persistence import open_persistence
@@ -51,9 +61,11 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
     loaded_profile = load_profile(module_path, core_model=core_model, sub_model=sub_model)
     configure_provider_concurrency(loaded_profile.optimization_policy.provider_concurrency)
     configure_structured_output_mode(loaded_profile.optimization_policy.structured_output_mode)
+    configure_invocation_limits(loaded_profile.max_iter, loaded_profile.model_timeout_seconds)
 
     persistence = open_persistence(loaded_profile.db_path)
     configure_logging(loaded_profile.module_path, persistence=persistence)
+    install_crewai_provider_telemetry()
     base_config = load_base_config(core_model=core_model)
 
     settings_store = SettingsStore(
@@ -65,6 +77,12 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
 
     core_agents = assemble_core_agents(loaded_profile, base_config)
     registry = build_agent_registry(core_agents, list(loaded_profile.agents))
+
+    try:
+        initialize_agent_runtime(list(registry.all()))
+    except Exception:
+        persistence.close()
+        raise
 
     history_agent = registry.get("history_agent")
     history_query_service = HistoryQueryService(
@@ -120,8 +138,18 @@ def build_app(ctx: ApiContext) -> Flask:
 
     @app.before_request
     def _reset_trace_id_for_this_request() -> None:
+        set_current_catalog(ctx.loaded_profile.message_catalog)
         set_trace_id(normalize_trace_id(request.headers.get("X-Trace-ID")))
         g.request_started_at = time.monotonic()
+        logger.info(
+            "API request started",
+            extra={
+                "event": "api_request_started",
+                "route": request.path,
+                "method": request.method,
+                "trace_id": get_trace_id(),
+            },
+        )
 
     @app.after_request
     def _finish_request(response):
@@ -198,8 +226,11 @@ def main(argv: list[str] | None = None) -> None:
     except ModelTierError as exc:
         raise SystemExit(f"failed to start API: {exc}") from exc
 
-    ctx = build_context(args.profile_module, core_model=core_model, sub_model=sub_model)
     configure_telemetry()
+    try:
+        ctx = build_context(args.profile_module, core_model=core_model, sub_model=sub_model)
+    except AgentInvocationError as exc:
+        raise SystemExit(f"failed to start API: {exc}") from exc
     app = build_app(ctx)
     parser_mode = getattr(args, "server", "flask")
     if parser_mode == "waitress":

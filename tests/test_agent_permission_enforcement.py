@@ -90,9 +90,8 @@ def test_blocked_attempt_is_logged(caplog):
 
 
 def test_allowed_attempt_is_logged(caplog):
-    # DEBUG, not INFO — a successful tool call is internal detail, noise
-    # in normal operation, unlike a blocked call (which stays INFO,
-    # asserted separately above by test_blocked_attempt_is_logged).
+    # Successful calls are INFO so the structured record is available to
+    # commander-only Deep Debug. Normal clients never render these entries.
     agent = _ToolAgent()
 
     token = base._current_allowed_tools.set(frozenset({"read_thing"}))
@@ -104,7 +103,7 @@ def test_allowed_attempt_is_logged(caplog):
 
     calls = [r for r in caplog.records if getattr(r, "event", None) == "tool_call"]
     assert len(calls) == 1
-    assert calls[0].levelname == "DEBUG"
+    assert calls[0].levelname == "INFO"
     assert calls[0].agent == "test_agent"
     assert calls[0].tool == "read_thing"
 

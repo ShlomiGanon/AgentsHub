@@ -136,6 +136,39 @@ def test_a_record_with_no_active_trace_context_is_passed_through_as_no_trace(cap
     assert written_trace_id is None  # never an empty string masquerading as "no trace"
 
 
+def test_approved_telemetry_only_records_are_persisted(capsys):
+    fake = _FakePersistence()
+    configure_logging("test_profile", persistence=fake)
+
+    with trace_context("trace-telemetry"):
+        logging.getLogger("test").info(
+            "stage finished",
+            extra={
+                "event": "stage_finished",
+                "stage": "question",
+                "duration_seconds": 0.25,
+                "telemetry_only": True,
+            },
+        )
+
+    [(trace_id, details)] = fake.calls
+    assert trace_id == "trace-telemetry"
+    assert details["event"] == "stage_finished"
+    assert details["duration_seconds"] == 0.25
+
+
+def test_unapproved_telemetry_only_noise_is_not_persisted(capsys):
+    fake = _FakePersistence()
+    configure_logging("test_profile", persistence=fake)
+
+    logging.getLogger("third_party").info(
+        "noisy metric",
+        extra={"event": "unapproved_metric", "telemetry_only": True},
+    )
+
+    assert fake.calls == []
+
+
 # -- Human-readable console formatter (§1.8 follow-up, terminal pass) -------
 
 
@@ -196,6 +229,28 @@ def test_console_line_for_an_unrecognized_event_falls_back_to_the_raw_message(ca
 
     line = capsys.readouterr().err.strip()
     assert "HTTP Request" in line
+
+
+def test_crewai_raw_openai_compatible_error_is_replaced_by_structured_provider_failure(capsys):
+    configure_logging("test_profile")
+
+    logging.error("OpenAI API call failed: invalid provider request parameter")
+    logging.getLogger("agents.provider_telemetry").info(
+        "provider request failed",
+        extra={
+            "event": "provider_request_failed",
+            "provider": "openrouter",
+            "model": "openrouter/anthropic/test-model",
+            "error_detail": "invalid provider request parameter",
+        },
+    )
+
+    captured = capsys.readouterr()
+    assert "OpenAI API call failed" not in captured.out
+    assert "OpenAI API call failed" not in captured.err
+    assert captured.err.count("provider request failed") == 1
+    assert "openrouter" in captured.err
+    assert "invalid provider request parameter" in captured.err
 
 
 def test_console_line_truncates_a_long_value_instead_of_wrapping(capsys):
@@ -333,7 +388,7 @@ def _mock_crewai(monkeypatch):
         def kickoff(self, text):
             return _FakeOutput("status nominal, no anomalies")
 
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, tools=types.SimpleNamespace(BaseTool=object))
+    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
 

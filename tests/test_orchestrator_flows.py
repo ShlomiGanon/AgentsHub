@@ -56,7 +56,7 @@ def _mock_crewai(monkeypatch):
         def kickoff(self, text):
             return _FakeOutput("status nominal, no anomalies")
 
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, tools=types.SimpleNamespace(BaseTool=object))
+    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
 
@@ -901,7 +901,7 @@ def test_end_to_end_through_the_mocked_adapter(monkeypatch, registry):
         def kickoff(self, text):
             return _FakeOutput("AGENT: reference_agent\nTASK: check gate 3 status")
 
-    fake_module = types.SimpleNamespace(Agent=_FakeAgent, tools=types.SimpleNamespace(BaseTool=object))
+    fake_module = types.SimpleNamespace(Agent=_FakeAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
     main_agent = MainAgent(model="fake-model")

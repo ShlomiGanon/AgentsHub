@@ -157,6 +157,16 @@ class PersistenceInterface(ABC):
     def fetch_log_entries(self, trace_id: str) -> list[dict]:
         """Return every log entry recorded for `trace_id`, oldest first — each dict merging `details` back out with `id`/`trace_id`/ `timestamp`, reconstructing the full original record."""
 
+    @abstractmethod
+    def fetch_log_entries_since(self, trace_id: str, since: int) -> list[dict]:
+        """Return trace entries with an ID greater than the supplied cursor."""
+
+    @abstractmethod
+    def wait_for_log_entries_since(
+        self, trace_id: str, since: int, timeout_seconds: float
+    ) -> list[dict]:
+        """Wait up to 30 seconds for trace entries newer than the cursor."""
+
 
 def open_persistence(db_path: str) -> PersistenceInterface:
     """Construct the concrete backend for `db_path`."""

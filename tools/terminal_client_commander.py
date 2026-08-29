@@ -6,6 +6,7 @@ import importlib
 import sys
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 from bot import (
     ApiRequestError,
@@ -17,9 +18,11 @@ from bot import (
     format_approval_prompt,
     handle_approval_answer,
     handle_clarification_answer,
-    handle_incoming_message,
+    present_incoming_message,
     parse_approval_callback_data,
 )
+from bot.interactions import message_catalog_for
+from messages import get_catalog
 from tools.terminal_support import (
     CONSOLE_CHAT_ID,
     ConsoleTelegramClient,
@@ -54,9 +57,9 @@ async def _initial_cursor(deps: BotDeps, cursor_store: NotificationCursorStore, 
     cursor_store.write(cursor)
     if notifications:
         print(
-            f"(first run for identity {identity!r} — skipping {len(notifications)} pre-existing notification(s) "
-            "already in this deployment's history; every run after this one resumes from here, the same way "
-            "the real bot does)"
+            message_catalog_for(deps).text(
+                "terminal.first_run_skip", identity=repr(identity), count=len(notifications)
+            )
         )
     return cursor
 
@@ -97,7 +100,11 @@ async def _drain_arrived(deps: BotDeps, state: _BackgroundState, pending_holds: 
     """The one place anything the background task found gets shown — called at the top of every REPL iteration, i.e."""
 
     if state.poll_error:
-        print(f"\n(background polling hit an error and is retrying: {state.poll_error})")
+        print(
+            "\n" + message_catalog_for(deps).text(
+                "terminal.poll_background_error", reason=state.poll_error
+            )
+        )
         state.poll_error = None
 
     if not state.arrived:
@@ -106,7 +113,11 @@ async def _drain_arrived(deps: BotDeps, state: _BackgroundState, pending_holds: 
     to_process = state.arrived[:]
     state.arrived.clear()
 
-    print(f"\n--- {len(to_process)} new notification(s) since your last turn ---")
+    print(
+        "\n" + message_catalog_for(deps).text(
+            "terminal.new_notifications", count=len(to_process)
+        )
+    )
     hold_count = 0
     for note in to_process:
         await dispatch_notification(deps, note)
@@ -115,22 +126,27 @@ async def _drain_arrived(deps: BotDeps, state: _BackgroundState, pending_holds: 
             hold_count += 1
 
     if hold_count:
-        print(f"\n({hold_count} of those need an answer — type /holds to review)")
+        print(
+            "\n" + message_catalog_for(deps).text(
+                "terminal.holds_need_answer", count=hold_count
+            )
+        )
 
 
 async def _prompt_clarification(deps: BotDeps, answering_identity: str, notice) -> bool:
     """Returns True once resolved, False if skipped."""
 
-    print(f"\nClarification hold — event {notice.event_id}")
-    print("Choose the correct classification:")
+    messages = message_catalog_for(deps)
+    print("\n" + messages.text("terminal.clarification_hold", event_id=notice.event_id))
+    print(messages.text("terminal.choose_classification"))
     for choice_number, choice in enumerate(notice.available_classifications, start=1):
         print(f"  [{choice_number}] {choice}")
-    print("  [s] Skip for now (leave this hold open)")
+    print(messages.text("terminal.skip_hold"))
 
     while True:
-        selected_option = (await ainput("your choice> ")).strip()
+        selected_option = (await ainput(messages.text("terminal.your_choice"))).strip()
         if selected_option.lower() == "s":
-            print("(skipped — this hold is still open; use /holds to come back to it)")
+            print(messages.text("terminal.skipped_hold"))
             return False
         if selected_option.isdigit() and 1 <= int(selected_option) <= len(notice.available_classifications):
             chosen = notice.available_classifications[int(selected_option) - 1]
@@ -138,7 +154,7 @@ async def _prompt_clarification(deps: BotDeps, answering_identity: str, notice) 
         if selected_option in notice.available_classifications:
             chosen = selected_option
             break
-        print("Invalid choice — pick one of the numbers above, or 's' to skip.")
+        print(messages.text("terminal.invalid_hold_choice"))
 
     await handle_clarification_answer(deps, CONSOLE_CHAT_ID, answering_identity, notice.event_id, chosen)
     return True
@@ -147,22 +163,23 @@ async def _prompt_clarification(deps: BotDeps, answering_identity: str, notice) 
 async def _prompt_approval(deps: BotDeps, answering_identity: str, notice) -> bool:
     """Same return contract as `_prompt_clarification`."""
 
-    text, buttons = format_approval_prompt(notice)
+    messages = message_catalog_for(deps)
+    text, buttons = format_approval_prompt(notice, messages)
     print(f"\n{text}")
-    print("\nChoose:")
+    print("\n" + messages.text("terminal.choose"))
     for choice_number, (label, _data) in enumerate(buttons, start=1):
         print(f"  [{choice_number}] {label}")
-    print("  [s] Skip for now (leave this hold open)")
+    print(messages.text("terminal.skip_hold"))
 
     while True:
-        selected_option = (await ainput("your choice> ")).strip()
+        selected_option = (await ainput(messages.text("terminal.your_choice"))).strip()
         if selected_option.lower() == "s":
-            print("(skipped — this hold is still open; use /holds to come back to it)")
+            print(messages.text("terminal.skipped_hold"))
             return False
         if selected_option.isdigit() and 1 <= int(selected_option) <= len(buttons):
             _, callback_data = buttons[int(selected_option) - 1]
             break
-        print("Invalid choice — pick one of the numbers above, or 's' to skip.")
+        print(messages.text("terminal.invalid_hold_choice"))
 
     event_id, choice = parse_approval_callback_data(callback_data)
     await handle_approval_answer(deps, CONSOLE_CHAT_ID, answering_identity, event_id, choice)
@@ -171,7 +188,7 @@ async def _prompt_approval(deps: BotDeps, answering_identity: str, notice) -> bo
 
 async def _handle_holds_command(deps: BotDeps, pending_holds: list, answering_identity: str) -> None:
     if not pending_holds:
-        print("No pending holds right now.")
+        print(message_catalog_for(deps).text("terminal.no_holds"))
         return
 
     to_review = pending_holds[:]
@@ -207,53 +224,65 @@ async def _run_repl(
     )
 
     try:
-        mode = await choose_mode()
+        messages = message_catalog_for(deps)
+        mode = await choose_mode(messages)
 
         while mode is not None:
             await _drain_arrived(deps, state, pending_holds)
 
             if mode == "message":
-                text = (await ainput("\nmessage> ")).strip()
+                text = (await ainput(messages.text("terminal.message_prompt"))).strip()
                 if not text:
                     continue
                 if text in ("/quit", "/exit"):
                     break
                 if text == "/mode":
-                    mode = await choose_mode()
+                    mode = await choose_mode(messages)
                     continue
                 if text == "/holds":
                     await _drain_arrived(deps, state, pending_holds)
                     await _handle_holds_command(deps, pending_holds, test_identity)
                     continue
 
-                try:
-                    reply = await handle_incoming_message(
-                        deps, test_identity, text, new_message_id(), conversation_id=conversation_id
-                    )
-                except (ApiRequestError, BotError) as exc:
-                    print(f"(request failed: {exc})")
-                    continue
-
-                print(reply)
+                await present_incoming_message(
+                    deps,
+                    CONSOLE_CHAT_ID,
+                    test_identity,
+                    text,
+                    new_message_id(),
+                    conversation_id=conversation_id,
+                )
 
             else:  # event mode
-                payload = await choose_event_payload(test_identity)
+                payload = await choose_event_payload(test_identity, messages)
                 if payload is None:
-                    mode = await choose_mode()
+                    mode = await choose_mode(messages)
                     continue
 
                 text, sender = payload
                 try:
                     status, response_payload = submit_event(base_url, text, sender)
                 except ApiRequestError as exc:
-                    print(f"(request failed: {exc})")
+                    print(messages.text("terminal.request_failed", reason=exc))
                     continue
 
                 if status >= 400:
-                    print(f"submission refused ({status}): {response_payload.get('message', response_payload)}")
+                    print(
+                        messages.text(
+                            "terminal.submission_refused",
+                            status=status,
+                            reason=response_payload.get("message", response_payload),
+                        )
+                    )
                     continue
 
-                print(f"submitted: event_id={response_payload['event_id']} status={response_payload['status']}")
+                print(
+                    messages.text(
+                        "terminal.submitted",
+                        event_id=response_payload["event_id"],
+                        status=response_payload["status"],
+                    )
+                )
     finally:
         stop_event.set()
         background_task.cancel()
@@ -281,17 +310,28 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"could not import profile module '{args.profile}': {exc}") from exc
 
     base_url = f"http://{args.host}:{profile_module.API_PORT}"
+    messages = get_catalog(profile_module.DEFAULT_LANGUAGE)
 
-    print(f"Profile:  {args.profile}")
-    print(f"Database: {profile_module.DB_PATH}")
-    print(f"API:      {base_url}  (make sure `python -m api.app {args.profile}` is already running)")
-    print("(background polling starts immediately; type /holds at the message prompt any time to review open holds)")
+    print(messages.text("terminal.profile", profile=args.profile))
+    print(messages.text("terminal.database", database=profile_module.DB_PATH))
+    print(
+        messages.text(
+            "terminal.api", base_url=base_url, command=f"python -m api.app {args.profile}"
+        )
+    )
+    print(messages.text("terminal.background"))
 
-    created_this_session = ensure_test_identity(args.profile, args.identity, "commander", profile_module)
+    created_this_session = ensure_test_identity(
+        args.profile, args.identity, "commander", profile_module, messages
+    )
 
     http_client = HttpApiClient(base_url)
     observing_client = ObservingApiClient(http_client)
-    bot_dependencies = BotDeps(loaded_profile=None, telegram_client=ConsoleTelegramClient(args.identity), api_client=observing_client)
+    bot_dependencies = BotDeps(
+        loaded_profile=SimpleNamespace(message_catalog=messages),
+        telegram_client=ConsoleTelegramClient(args.identity),
+        api_client=observing_client,
+    )
 
     cursor_path = Path(f"{profile_module.DB_PATH}.notification_cursor.terminal_commander.{args.identity}")
     cursor_store = NotificationCursorStore(cursor_path)
@@ -306,7 +346,7 @@ def main(argv: list[str] | None = None) -> None:
     finally:
         cleanup_test_identity(args.profile, args.identity, created_this_session, cursor_path=cursor_path)
 
-    print("\nGoodbye.")
+    print(messages.text("terminal.goodbye"))
 
 
 if __name__ == "__main__":

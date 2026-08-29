@@ -10,21 +10,29 @@ from typing import Awaitable, Callable
 
 from config import ModelTierError, TierModel, resolve_tier_model_from_env
 from profiles.loader import LoadedProfile, ProfileLoadError, ProfileValidationError, load_profile
-from tools import configure_logging
+from tools import configure_logging, deep_debug_enabled, new_trace_id
 
 from auth.permissions import RequestedOperation
 
 from bot import interactions
 from bot.transports import HttpApiClient, PTBTelegramClient
-from bot.contracts import ApiNotImplementedError, ApiRequestError, BotDeps, BotStartupError
+from bot.contracts import (
+    ApiNotImplementedError,
+    ApiRequestError,
+    BotDeps,
+    BotStartupError,
+    MessageSubmissionResult,
+)
 from bot.background_services import NotificationCursorStore, SingleInstanceLock, run_notification_poll_loop
 from bot.interactions import check_permission, resolve_caller
+from bot.presentation import replace_status
 
 logger = logging.getLogger(__name__)
 
 NOTIFICATION_POLL_INTERVAL_SECONDS = 5.0
 
 REGISTERED_COMMANDS = ("profile", "settings")
+_background_trace_tasks: set[asyncio.Task] = set()
 
 
 def _resolve_bot_token(module_path: str, loaded_profile: LoadedProfile) -> str | None:
@@ -78,21 +86,23 @@ def _guarded(handler: Callable[..., Awaitable[None]]):
     """Wrap a handler so `ApiNotImplementedError` and any other unexpected exception become a clear chat reply rather than a crash — never a leaked stack trace, matching the spirit of..."""
 
     async def _wrapped(update, context):
+        deps = context.bot_data["deps"]
+        messages = interactions.message_catalog_for(deps)
         try:
             await handler(update, context)
         except ApiNotImplementedError as exc:
             logger.info("handler blocked on unimplemented API: %s", exc, extra={"event": "bot_api_not_implemented"})
             if update.effective_chat is not None:
-                await context.bot_data["deps"].telegram_client.send_text(
+                await deps.telegram_client.send_text(
                     str(update.effective_chat.id),
-                    f"This isn't available yet: {exc}",
+                    messages.text("bot.not_available", reason=exc),
                 )
         except Exception:
             logger.exception("unhandled error in bot handler", extra={"event": "bot_handler_failed"})
             if update.effective_chat is not None:
-                await context.bot_data["deps"].telegram_client.send_text(
+                await deps.telegram_client.send_text(
                     str(update.effective_chat.id),
-                    "Something went wrong handling that. It has been logged.",
+                    messages.text("bot.handler_error"),
                 )
 
     return _wrapped
@@ -107,23 +117,158 @@ async def handle_incoming_message(
 ) -> str:
     """Route free-form Telegram text through the single message endpoint."""
 
-    try:
-        submission_result = await deps.api_client.submit_message(text, telegram_identity, message_id, conversation_id)
-    except ApiRequestError as exc:
-        if exc.status_code == 401:
-            return interactions._unregistered_message(telegram_identity)
-        if exc.status_code == 403:
-            return f"Refused: {exc.message}"
-        raise
-    if submission_result.kind in {"question", "conversational", "clarification", "event_update"}:
-        return submission_result.answer_text or "(no answer was returned)"
+    reply, _submission = await _submit_and_format_message(
+        deps,
+        telegram_identity,
+        text,
+        message_id,
+        conversation_id,
+    )
+    return reply
 
-    lines = [f"Got it — taken as a {submission_result.kind}."]
+
+async def _submit_and_format_message(
+    deps: BotDeps,
+    telegram_identity: str,
+    text: str,
+    message_id: str,
+    conversation_id: str | None,
+    trace_id: str | None = None,
+) -> tuple[str, MessageSubmissionResult | None]:
+    """Submit one message and return both presentation text and semantic result."""
+
+    try:
+        submission_result = await deps.api_client.submit_message(
+            text,
+            telegram_identity,
+            message_id,
+            conversation_id,
+            trace_id,
+        )
+    except ApiRequestError as exc:
+        messages = interactions.message_catalog_for(deps)
+        if exc.status_code == 401:
+            return interactions._unregistered_message(telegram_identity, messages), None
+        if exc.status_code == 403:
+            return messages.text("bot.refused", message=exc.message), None
+        raise
+    messages = interactions.message_catalog_for(deps)
+    if submission_result.kind in {"question", "conversational", "clarification", "event_update"}:
+        return submission_result.answer_text or messages.text("bot.no_answer"), submission_result
+
+    if submission_result.job_id:
+        return messages.text("status.async_ack", task_id=submission_result.job_id), submission_result
+
+    lines = [messages.text("bot.taken_as", kind=submission_result.kind)]
     if submission_result.awaiting_approval:
-        lines.append("It is now waiting for a commander's approval.")
+        lines.append(messages.text("bot.waiting_approval"))
     elif submission_result.job_id:
-        lines.append(f"Job ID: {submission_result.job_id}. You'll hear back here once it's done.")
-    return "\n".join(lines)
+        lines.append(messages.text("bot.job_queued", job_id=submission_result.job_id))
+    return "\n".join(lines), submission_result
+
+
+async def _poll_live_trace(
+    deps: BotDeps,
+    chat_id: str,
+    telegram_identity: str,
+    trace_id: str,
+    stop_when_idle: asyncio.Event,
+) -> None:
+    cursor = 0
+    while True:
+        stopping = stop_when_idle.is_set()
+        result = await deps.api_client.poll_trace(
+            trace_id,
+            cursor,
+            0 if stopping else 5,
+            telegram_identity,
+        )
+        cursor = result.next_cursor
+        for debug_message in result.messages:
+            await deps.telegram_client.send_text(chat_id, debug_message)
+        if result.terminal or stopping:
+            return
+
+
+def _keep_trace_task(task: asyncio.Task) -> None:
+    _background_trace_tasks.add(task)
+
+    def _finished(completed: asyncio.Task) -> None:
+        _background_trace_tasks.discard(completed)
+        if not completed.cancelled() and completed.exception() is not None:
+            logger.warning(
+                "live Deep Debug polling stopped after an error: %s",
+                completed.exception(),
+                extra={"event": "deep_debug_poll_failed"},
+            )
+
+    task.add_done_callback(_finished)
+
+
+async def present_incoming_message(
+    deps: BotDeps,
+    chat_id: str,
+    telegram_identity: str,
+    text: str,
+    message_id: str,
+    conversation_id: str | None = None,
+) -> str | None:
+    """Present one free-form message with the shared status/edit lifecycle."""
+
+    messages = interactions.message_catalog_for(deps)
+    status_message_id = await deps.telegram_client.send_status(
+        chat_id,
+        messages.text("status.thinking"),
+    )
+    trace_id = new_trace_id()
+    trace_stop = asyncio.Event()
+    trace_task: asyncio.Task | None = None
+    submission: MessageSubmissionResult | None = None
+    try:
+        if deep_debug_enabled():
+            caller = await deps.api_client.resolve_user(telegram_identity)
+            if caller.registered and caller.permission_level == "commander":
+                trace_task = asyncio.create_task(
+                    _poll_live_trace(deps, chat_id, telegram_identity, trace_id, trace_stop)
+                )
+
+        reply, submission = await _submit_and_format_message(
+            deps,
+            telegram_identity,
+            text,
+            message_id,
+            conversation_id,
+            trace_id,
+        )
+    except ApiNotImplementedError as exc:
+        logger.info(
+            "message request blocked on unimplemented API: %s",
+            exc,
+            extra={"event": "bot_api_not_implemented"},
+        )
+        reply = messages.text("bot.not_available", reason=exc)
+    except ApiRequestError as exc:
+        reply = messages.text("error.request_failed", reason=exc.message)
+    except Exception:
+        logger.exception("unhandled error in message request", extra={"event": "bot_handler_failed"})
+        reply = messages.text("bot.handler_error")
+        submission = None
+
+    await replace_status(deps.telegram_client, chat_id, status_message_id, reply)
+    if trace_task is not None:
+        if submission is not None and submission.job_id:
+            _keep_trace_task(trace_task)
+        else:
+            trace_stop.set()
+            try:
+                await trace_task
+            except Exception:
+                logger.warning(
+                    "live Deep Debug polling stopped after an error",
+                    exc_info=True,
+                    extra={"event": "deep_debug_poll_failed"},
+                )
+    return reply
 
 
 async def _on_text_message(update, context) -> None:
@@ -140,10 +285,14 @@ async def _on_text_message(update, context) -> None:
 
     activity_task = asyncio.create_task(_show_activity())
     try:
-        reply = await handle_incoming_message(
-            deps, telegram_identity, update.message.text, str(update.message.message_id), conversation_id
+        await present_incoming_message(
+            deps,
+            chat_id,
+            telegram_identity,
+            update.message.text,
+            str(update.message.message_id),
+            conversation_id,
         )
-        await deps.telegram_client.send_text(chat_id, reply)
     finally:
         activity_task.cancel()
 
@@ -170,21 +319,18 @@ async def _on_callback_query(update, context) -> None:
     logger.warning("unrecognized callback namespace: %s", namespace, extra={"event": "bot_unknown_callback"})
 
 
-def _parse_protocol_write_command(rest: str) -> tuple[str, dict] | str:
+def _parse_protocol_write_command(rest: str, catalog=None) -> tuple[str, dict] | str:
     """Parse `"<name> | <description> | <agents,...> | <tools,...> | " "<expected_success_output> | <criticality> | <true|false>"` into (name, payload), or return an error message."""
 
     fields = [part.strip() for part in rest.split("|")]
+    messages = catalog or interactions._catalog()
     if len(fields) != 7:
-        return (
-            "Refused: expected 7 pipe-separated fields — name | description | "
-            "participating_agents (comma-separated) | approved_tools (comma-separated) | "
-            "expected_success_output | criticality | approval_flag (true/false)."
-        )
+        return messages.text("protocol.expected_fields")
 
     name, description, agents_csv, tools_csv, expected_output, criticality, flag_text = fields
 
     if flag_text.lower() not in ("true", "false"):
-        return "Refused: 'approval_flag' must be exactly 'true' or 'false'."
+        return messages.text("protocol.flag_boolean")
 
     payload = {
         "name": name,
@@ -201,7 +347,9 @@ def _parse_protocol_write_command(rest: str) -> tuple[str, dict] | str:
 async def _resolve_caller_or_refuse(deps: BotDeps, chat_id: str, telegram_identity: str):
     """Resolve `telegram_identity` and, if unregistered, send the refusal reply and return `None` — the caller must then return immediately."""
 
-    resolution = await resolve_caller(deps.api_client, telegram_identity)
+    resolution = await resolve_caller(
+        deps.api_client, telegram_identity, interactions.message_catalog_for(deps)
+    )
     if resolution.status == "unregistered":
         await deps.telegram_client.send_text(chat_id, resolution.refusal_message)
         return None
@@ -218,7 +366,9 @@ async def _on_profile_command(update, context) -> None:
         caller = await _resolve_caller_or_refuse(deps, chat_id, telegram_identity)
         if caller is None:
             return
-        refusal = check_permission(caller, RequestedOperation.VIEW_PROFILE_OVERVIEW)
+        refusal = check_permission(
+            caller, RequestedOperation.VIEW_PROFILE_OVERVIEW, interactions.message_catalog_for(deps)
+        )
         if refusal is not None:
             await deps.telegram_client.send_text(chat_id, refusal)
             return
@@ -229,7 +379,9 @@ async def _on_profile_command(update, context) -> None:
         caller = await _resolve_caller_or_refuse(deps, chat_id, telegram_identity)
         if caller is None:
             return
-        refusal = check_permission(caller, RequestedOperation.VIEW_PROFILE_OVERVIEW)
+        refusal = check_permission(
+            caller, RequestedOperation.VIEW_PROFILE_OVERVIEW, interactions.message_catalog_for(deps)
+        )
         if refusal is not None:
             await deps.telegram_client.send_text(chat_id, refusal)
             return
@@ -247,7 +399,7 @@ async def _on_profile_command(update, context) -> None:
         if action == "remove":
             reply = await interactions.write_protocol(deps, caller, "remove", {"name": rest.strip()})
         else:
-            parsed = _parse_protocol_write_command(rest)
+            parsed = _parse_protocol_write_command(rest, interactions.message_catalog_for(deps))
             if isinstance(parsed, str):
                 await deps.telegram_client.send_text(chat_id, parsed)
                 return
@@ -257,7 +409,9 @@ async def _on_profile_command(update, context) -> None:
         await deps.telegram_client.send_text(chat_id, reply)
         return
 
-    await deps.telegram_client.send_text(chat_id, "Usage: /profile view | diff | add ... | edit ... | remove <name>")
+    await deps.telegram_client.send_text(
+        chat_id, interactions.message_catalog_for(deps).text("command.profile_usage")
+    )
 
 
 async def _on_settings_command(update, context) -> None:
@@ -269,7 +423,9 @@ async def _on_settings_command(update, context) -> None:
         caller = await _resolve_caller_or_refuse(deps, chat_id, telegram_identity)
         if caller is None:
             return
-        refusal = check_permission(caller, RequestedOperation.VIEW_SETTINGS)
+        refusal = check_permission(
+            caller, RequestedOperation.VIEW_SETTINGS, interactions.message_catalog_for(deps)
+        )
         if refusal is not None:
             await deps.telegram_client.send_text(chat_id, refusal)
             return
@@ -286,7 +442,9 @@ async def _on_settings_command(update, context) -> None:
         await deps.telegram_client.send_text(chat_id, reply)
         return
 
-    await deps.telegram_client.send_text(chat_id, "Usage: /settings view | set <retry_count|risk_threshold|lookback_window_days> <value>")
+    await deps.telegram_client.send_text(
+        chat_id, interactions.message_catalog_for(deps).text("command.settings_usage")
+    )
 
 
 def register_handlers(application, deps: BotDeps) -> None:

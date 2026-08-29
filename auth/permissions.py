@@ -37,6 +37,7 @@ class RequestedOperation(Enum):
     RESOLVE_CLARIFICATION = "resolve_clarification"
     APPROVE_RUN = "approve_run"
     POLL_NOTIFICATIONS = "poll_notifications"
+    VIEW_LIVE_TRACE = "view_live_trace"
 
 
 class ViewerAllowedAction(Enum):

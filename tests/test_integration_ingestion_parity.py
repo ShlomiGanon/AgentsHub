@@ -40,7 +40,7 @@ def _mock_crewai(monkeypatch):
         def kickoff(self, text):
             return _FakeOutput("status nominal, no anomalies")
 
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, tools=types.SimpleNamespace(BaseTool=object))
+    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
 
@@ -76,7 +76,7 @@ def test_the_real_bot_path_converges_with_a_sensor_submission(tmp_path):
     with RunningApiServer(bot_ctx) as bot_server:
         bot_deps = BotDeps(loaded_profile=None, telegram_client=_FakeTelegramClient(), api_client=HttpApiClient(bot_server.base_url))
         reply = _run(handle_incoming_message(bot_deps, VIEWER_IDENTITY, same_text, "12345"))
-        assert "report" in reply.lower()
+        assert "Task ID:" in reply
         bot_ctx.queue.wait_until_idle()
         via_bot = bot_ctx.deps.persistence.fetch_events_range("2000-01-01T00:00:00", "2100-01-01T00:00:00")[0]
 

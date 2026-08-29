@@ -30,6 +30,7 @@ from bot.contracts import (
     ProtocolView,
     WriteResult,
     SettingsView,
+    TracePollResult,
     UncertainVerdictNotice,
     UserLookupResult,
 )
@@ -87,12 +88,13 @@ class HttpApiClient(BotApiClient):
         request_payload: dict | None = None,
         *,
         read_timeout: float | None = None,
+        trace_id_override: str | None = None,
     ) -> tuple[int, dict]:
         persistent_client = self._client
         client = persistent_client or self._build_client()
         headers = {
             "X-Identity": identity,
-            "X-Trace-ID": get_trace_id() or new_trace_id(),
+            "X-Trace-ID": trace_id_override or get_trace_id() or new_trace_id(),
             "X-Client-Request-ID": uuid.uuid4().hex,
         }
         attempts = 3 if method == "GET" else 1
@@ -144,12 +146,13 @@ class HttpApiClient(BotApiClient):
         sender_identity: str,
         source_message_id: str,
         conversation_id: str | None = None,
+        trace_id: str | None = None,
     ) -> MessageSubmissionResult:
         body = {"text": text, "sender_identity": sender_identity, "source_message_id": source_message_id}
         if conversation_id is not None:
             body["conversation_id"] = conversation_id
         status, response_payload = await self._call(
-            "POST", "/Msg", sender_identity, body
+            "POST", "/Msg", sender_identity, body, trace_id_override=trace_id
         )
         if status >= 400:
             self._raise_for_error(status, response_payload)
@@ -188,7 +191,10 @@ class HttpApiClient(BotApiClient):
         if status == 404:
             return HoldAnswerOutcome(status="not_found", message=response_payload.get("message", ""))
         if status == 409:
-            resolved_by, message = self._parse_already_resolved_message(response_payload.get("message", ""))
+            resolved_by = response_payload.get("resolved_by")
+            message = response_payload.get("message", "")
+            if resolved_by is None:
+                resolved_by, message = self._parse_already_resolved_message(message)
             return HoldAnswerOutcome(status="not_found", resolved_by=resolved_by, message=message)
         if status == 400:
             return HoldAnswerOutcome(status=invalid_field_status, message=response_payload.get("message", ""))
@@ -200,9 +206,11 @@ class HttpApiClient(BotApiClient):
     @staticmethod
     def _parse_already_resolved_message(message: str) -> tuple[str | None, str]:
         marker = "already resolved by '"
-        if marker not in message:
+        lowered = message.lower()
+        if marker not in lowered:
             return None, message
-        after = message.split(marker, 1)[1]
+        marker_index = lowered.index(marker)
+        after = message[marker_index + len(marker):]
         resolved_by = after.split("'", 1)[0]
         return resolved_by, message
 
@@ -313,6 +321,28 @@ class HttpApiClient(BotApiClient):
         )
         return notifications, response_payload["next_cursor"]
 
+    async def poll_trace(
+        self,
+        trace_id: str,
+        since: int,
+        wait_seconds: int,
+        caller_identity: str,
+    ) -> TracePollResult:
+        status, response_payload = await self._call(
+            "GET",
+            f"/Trace/{quote(trace_id, safe='')}?since={since}&wait_seconds={wait_seconds}",
+            caller_identity,
+            read_timeout=max(5.0, wait_seconds + 5.0),
+            trace_id_override=new_trace_id(),
+        )
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+        return TracePollResult(
+            messages=tuple(entry["text"] for entry in response_payload["entries"]),
+            next_cursor=response_payload["next_cursor"],
+            terminal=bool(response_payload.get("terminal")),
+        )
+
     @staticmethod
     def _parse_notification_payload(kind: str, payload: dict):
         if kind == "clarification_hold":
@@ -386,6 +416,18 @@ class TelegramClient(ABC):
     async def send_text(self, chat_id: str, text: str) -> None: ...
 
     @abstractmethod
+    async def send_status(self, chat_id: str, text: str) -> str:
+        """Send a temporary status and return its transport-specific message ID."""
+
+    @abstractmethod
+    async def edit_status(self, chat_id: str, message_id: str, text: str) -> None:
+        """Replace a previously sent status message."""
+
+    @abstractmethod
+    async def delete_status(self, chat_id: str, message_id: str) -> None:
+        """Delete a stale status message on a best-effort recovery path."""
+
+    @abstractmethod
     async def send_with_buttons(self, chat_id: str, text: str, buttons: Sequence[tuple[str, str]]) -> None:
         """`buttons` is a sequence of (label, callback_data) pairs, laid out one per row — used for clarification/approval choices (§8.4, §8.5), never for free text (§8.4's own "buttons ra..."""
 
@@ -421,6 +463,23 @@ class PTBTelegramClient(TelegramClient):
         with stage_context("telegram_send"):
             for chunk in split_message(text):
                 await self._application.bot.send_message(chat_id=chat_id, text=chunk)
+
+    async def send_status(self, chat_id: str, text: str) -> str:
+        with stage_context("telegram_send"):
+            message = await self._application.bot.send_message(chat_id=chat_id, text=text)
+        return str(message.message_id)
+
+    async def edit_status(self, chat_id: str, message_id: str, text: str) -> None:
+        with stage_context("telegram_edit"):
+            await self._application.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=int(message_id),
+                text=text,
+            )
+
+    async def delete_status(self, chat_id: str, message_id: str) -> None:
+        with stage_context("telegram_delete"):
+            await self._application.bot.delete_message(chat_id=chat_id, message_id=int(message_id))
 
     async def send_activity(self, chat_id: str, action: str) -> None:
         await self._application.bot.send_chat_action(chat_id=chat_id, action=action)

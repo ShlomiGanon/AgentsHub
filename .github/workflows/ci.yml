@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -17,9 +20,15 @@ jobs:
       TEST_SUB_MODEL_NAME: test-sub-model
       TEST_SUB_MODEL_API_KEY_ENV: SUB_TEST_KEY
       TEST_SUB_TEST_KEY: test-key
+      DEEP_DEBUG: "false"
+      DEBUG_VERBOSE_LOGGING: "false"
+      OBSERVABILITY_MODE: log
+      PYTHONDONTWRITEBYTECODE: "1"
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v6
         with:
@@ -27,6 +36,41 @@ jobs:
 
       - name: Install dependencies
         run: python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Validate workflow YAML and read-only contract
+        shell: python
+        run: |
+          from pathlib import Path
+          import yaml
+
+          workflow = Path(".github/workflows/ci.yml")
+          parsed = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+          assert parsed["permissions"] == {"contents": "read"}
+          text = workflow.read_text(encoding="utf-8")
+          forbidden = (
+              "pull_request_" + "target:",
+              "git " + "push",
+              "gh " + "pr",
+              "upload-" + "artifact",
+          )
+          assert not any(item in text for item in forbidden)
+
+      - name: Validate offline test-module coverage
+        shell: python
+        run: |
+          from collections import Counter
+          from pathlib import Path
+          import re
+
+          workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+          declared = re.findall(r"tests/test_[a-z0-9_]+[.]py", workflow)
+          expected = sorted(path.as_posix() for path in Path("tests").glob("test_*.py"))
+          counts = Counter(declared)
+          assert sorted(counts) == expected, (sorted(set(expected) - set(counts)), sorted(set(counts) - set(expected)))
+          assert all(count == 1 for count in counts.values()), counts
+
+      - name: Check patch whitespace
+        run: git diff --check
 
       # Keep responsibility-level failures visible while using only current
       # post-refactor test paths. Every test_*.py module appears once below.
@@ -37,6 +81,7 @@ jobs:
           tests/test_environment_config.py
           tests/test_file_catalog.py
           tests/test_legacy_imports.py
+          tests/test_messages.py
           tests/test_observability.py
           tests/test_permissions.py
           tests/test_profile_loading.py
@@ -56,6 +101,7 @@ jobs:
           tests/test_agent_permission_enforcement.py
           tests/test_agent_registry.py
           tests/test_agent_runtime.py
+          tests/test_provider_telemetry.py
           tests/test_reference_agent.py
 
       - name: Mission 4 - Protocol Engine
@@ -78,6 +124,7 @@ jobs:
         run: >
           python -m pytest -v --color=yes
           tests/test_orchestrator_flows.py
+          tests/test_orchestrator_capabilities.py
           tests/test_orchestrator_holds.py
           tests/test_orchestrator_insights.py
           tests/test_orchestrator_judgment.py
@@ -96,6 +143,7 @@ jobs:
           tests/test_api_protocols.py
           tests/test_api_request_boundary.py
           tests/test_api_system.py
+          tests/test_api_trace.py
           tests/test_api_unified_ingestion.py
 
       - name: Mission 8 - Telegram Frontend
@@ -105,6 +153,7 @@ jobs:
           tests/test_bot_background_services.py
           tests/test_bot_holds.py
           tests/test_bot_interactions.py
+          tests/test_bot_presentation.py
           tests/test_bot_transports.py
 
       - name: Mission 9 - Integration and Hardening
@@ -123,3 +172,7 @@ jobs:
           tests/test_integration_retry_exhaustion.py
           tests/test_integration_serial_processing_under_load.py
           tests/test_integration_user_administration.py
+          tests/test_response_improvements.py
+
+      - name: Confirm tests did not modify tracked files
+        run: git diff --exit-code

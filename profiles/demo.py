@@ -8,6 +8,9 @@ from profiles.contracts import AgentSpec, OptimizationPolicy
 from protocols import CriticalityLevel, Protocol
 
 PROFILE_NAME = "For Tests"
+DEFAULT_LANGUAGE = "he"
+MAX_ITER = 8
+MODEL_TIMEOUT_SECONDS = 30
 
 AGENTS = [
     AgentSpec(cls=ReferenceAgent, tier="sub"),

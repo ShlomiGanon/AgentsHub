@@ -4,12 +4,14 @@ import hashlib
 import importlib
 import importlib.util
 import os
+import math
 from pathlib import Path
 from types import MappingProxyType, ModuleType
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from agents import HistoryAgent
 from config import BaseConfig, TierModel, load_base_config
+from messages import MessageCatalogError, get_catalog
 from profiles.contracts import (
     HUMAN_ACTIVATION_TYPE,
     REQUIRED_PROFILE_ATTRS,
@@ -41,6 +43,19 @@ def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> lis
         failures.append("PROFILE_NAME must be a non-empty string")
     elif any(character in loaded.profile_name for character in ("\r", "\n", "\x00")):
         failures.append("PROFILE_NAME must not contain control characters")
+
+    if getattr(loaded, "default_language", "en") not in {"en", "he"}:
+        failures.append("DEFAULT_LANGUAGE must be 'en' or 'he'")
+
+    if type(loaded.max_iter) is not int or not 1 <= loaded.max_iter <= 100:
+        failures.append("MAX_ITER must be an integer between 1 and 100")
+    if (
+        type(loaded.model_timeout_seconds) not in {int, float}
+        or not math.isfinite(loaded.model_timeout_seconds)
+        or loaded.model_timeout_seconds <= 0
+        or loaded.model_timeout_seconds > 600
+    ):
+        failures.append("MODEL_TIMEOUT_SECONDS must be a finite number between 0 and 600")
 
     protocol_names = [getattr(protocol, "name", None) for protocol in loaded.protocols]
     duplicate_protocol_names = sorted({name for name in protocol_names if name and protocol_names.count(name) > 1})
@@ -270,6 +285,11 @@ def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) 
 
     event_types = tuple(profile_module.EVENT_TYPES) + (HUMAN_ACTIVATION_TYPE,)
 
+    try:
+        message_catalog = get_catalog(profile_module.DEFAULT_LANGUAGE)
+    except MessageCatalogError as exc:
+        raise ProfileValidationError([str(exc)]) from exc
+
     loaded = LoadedProfile(
         module_path=module_path,
         profile_name=(
@@ -287,6 +307,10 @@ def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) 
         risk_threshold=profile_module.RISK_THRESHOLD,
         lookback_window_days=profile_module.LOOKBACK_WINDOW_DAYS,
         profile_file_hash=hash_profile_file(module_path),
+        default_language=profile_module.DEFAULT_LANGUAGE,
+        message_catalog=message_catalog,
+        max_iter=profile_module.MAX_ITER,
+        model_timeout_seconds=profile_module.MODEL_TIMEOUT_SECONDS,
         core_agents=MappingProxyType(core_agents),
         resolved_secrets=MappingProxyType(resolved_secrets),
         timezone_name=getattr(profile_module, "TIMEZONE", "UTC"),

@@ -11,8 +11,11 @@ This English catalog describes every tracked or pending first-party file in the 
 | `.vscode/extensions.json` | Project | Internal | Recommends editor extensions for this workspace. |
 | `IMPROVE.MD` | Documentation | Internal | Reports evidence-backed improvements for Main Agent response latency and quality. |
 | `README.md` | Project | Internal | Introduces the system and its primary startup commands. |
+| `SPEED.MD` | Documentation | Internal | Records the measured response-latency investigation and evidence. |
+| `SPEED_PLAN.MD` | Documentation | Internal | Defines the approved sequential implementation and verification plan for current speed and operator-experience work. |
 | `agents/__init__.py` | Production | Public facade | Exposes the public agent facade and compatibility module aliases. |
 | `agents/contracts.py` | Production | Private implementation | Defines agent results, descriptors, tool metadata, parsing, and typed errors. |
+| `agents/provider_telemetry.py` | Production | Private implementation | Correlates CrewAI provider-call events with AgentsHub traces, stages, latency, and usage. |
 | `agents/runtime.py` | Production | Private implementation | Constructs and invokes agents, enforces tools, adapts CrewAI, and owns the runtime registry. |
 | `agents/standard_agents.py` | Production | Private implementation | Implements the standard History and Reference agents. |
 | `api/__init__.py` | Production | Public facade | Exposes the API facade and compatibility module aliases. |
@@ -26,6 +29,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `bot/background_services.py` | Production | Private implementation | Polls and dispatches notifications, persists cursors, and manages single-instance startup. |
 | `bot/contracts.py` | Production | Private implementation | Defines bot DTOs, client interfaces, dependency contracts, and errors. |
 | `bot/interactions.py` | Production | Private implementation | Formats messages and handles commands, holds, settings, and profile interactions. |
+| `bot/presentation.py` | Production | Private implementation | Implements the shared Telegram/CLI status replacement and fallback lifecycle. |
 | `bot/transports.py` | Production | Private implementation | Implements HTTP API access and Telegram transport adapters. |
 | `cli/__init__.py` | Production | Public facade | Marks the command-line package. |
 | `cli/user_admin.py` | Production | Public entry point | Provides the user-administration command-line entry point. |
@@ -45,7 +49,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `docs/how_to_connect_telegram.md` | Documentation | Internal | Documents how to connect telegram. |
 | `docs/investigation_summary.md` | Documentation | Internal | Documents investigation summary. |
 | `docs/links.txt` | Documentation | Internal | Documents links. |
-| `docs/Next_Plan.md` | Documentation | Internal | Documents the next plan. |
+| `docs/Next_Plan.md` | Documentation | Internal | Defines deferred optimizations that remain disabled until the current speed changes pass their gates. |
 | `docs/operator_guide.md` | Documentation | Internal | Documents operator guide. |
 | `docs/profile_spec.md` | Documentation | Internal | Documents profile spec. |
 | `docs/progress.md` | Documentation | Internal | Documents progress. |
@@ -71,6 +75,11 @@ This English catalog describes every tracked or pending first-party file in the 
 | `history/summaries.py` | Production | Private implementation | Generates and reconciles daily, monthly, and yearly summaries. |
 | `instructions.md` | Project | Internal | Defines repository-specific development and architecture rules. |
 | `load-env.ps1` | Project | Internal | Loads local development environment variables into PowerShell. |
+| `messages/__init__.py` | Production | Public facade | Selects and validates the active immutable user-interface message catalog. |
+| `messages/catalog.py` | Production | Private implementation | Defines strict catalog lookup, formatting, key parity, and placeholder validation. |
+| `messages/en.py` | Production | Private implementation | Contains every fixed English user-interface string. |
+| `messages/he.py` | Production | Private implementation | Contains every fixed Hebrew user-interface string. |
+| `messages/model_messages.py` | Production | Private implementation | Centralizes prompts used only to formulate natural user-facing model text. |
 | `orchestrator/__init__.py` | Production | Public facade | Exposes orchestration capabilities and compatibility module aliases. |
 | `orchestrator/capabilities.py` | Production | Private implementation | Builds the role-aware, per-caller Main Agent capability and system context. |
 | `orchestrator/event_queue.py` | Production | Private implementation | Serializes event processing on a dedicated worker. |
@@ -110,12 +119,14 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_api_protocols.py` | Test | Internal | Verifies api protocols behavior and edge cases. |
 | `tests/test_api_request_boundary.py` | Test | Internal | Verifies authentication and structured API error translation. |
 | `tests/test_api_system.py` | Test | Internal | Verifies api system behavior and edge cases. |
+| `tests/test_api_trace.py` | Test | Internal | Verifies commander-only Deep Debug trace polling, authorization, ordering, and rendering. |
 | `tests/test_api_unified_ingestion.py` | Test | Internal | Verifies api unified ingestion behavior and edge cases. |
 | `tests/test_architecture.py` | Test | Internal | Enforces package boundaries and prevents recreation of the registries package. |
 | `tests/test_bot_app.py` | Test | Internal | Verifies bot dependency wiring, entry-point behavior, and update routing. |
 | `tests/test_bot_background_services.py` | Test | Internal | Verifies notification polling, delivery, failures, results, and startup services. |
 | `tests/test_bot_holds.py` | Test | Internal | Verifies clarification and approval interaction lifecycles. |
 | `tests/test_bot_interactions.py` | Test | Internal | Verifies profile, settings, user, formatting, and command interactions. |
+| `tests/test_bot_presentation.py` | Test | Internal | Verifies shared status editing, long-message splitting, and fallback behavior. |
 | `tests/test_bot_transports.py` | Test | Internal | Verifies bot HTTP clients, abstract client behavior, and Telegram transports. |
 | `tests/test_demo_profile.py` | Test | Internal | Verifies demo profile behavior and edge cases. |
 | `tests/test_environment_config.py` | Test | Internal | Verifies environment-backed model and runtime configuration. |
@@ -140,6 +151,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_integration_user_administration.py` | Test | Internal | Verifies the user administration scenario across real subsystem boundaries. |
 | `tests/test_legacy_imports.py` | Test | Internal | Verifies supported implementation-path aliases resolve to canonical modules. |
 | `tests/test_migrations.py` | Test | Internal | Verifies migrations behavior and edge cases. |
+| `tests/test_messages.py` | Test | Internal | Verifies language catalogs, key and placeholder parity, strict formatting, and selection. |
 | `tests/test_observability.py` | Test | Internal | Verifies tracing and structured logging behavior. |
 | `tests/test_orchestrator_flows.py` | Test | Internal | Verifies orchestrator flows behavior and edge cases. |
 | `tests/test_orchestrator_capabilities.py` | Test | Internal | Verifies role-aware capability descriptor and system-context behavior. |
@@ -154,9 +166,10 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_profile_loading.py` | Test | Internal | Verifies profile imports, validation, construction, and registry configuration. |
 | `tests/test_protocol_repository.py` | Test | Internal | Verifies protocol loading, validation, rendering, and atomic editing. |
 | `tests/test_protocol_retry.py` | Test | Internal | Verifies protocol retry behavior and edge cases. |
+| `tests/test_provider_telemetry.py` | Test | Internal | Verifies CrewAI provider-event correlation, usage fields, failures, and race recovery. |
 | `tests/test_question_answering.py` | Test | Internal | Verifies question routing and read-only specialist/history answers. |
 | `tests/test_reference_agent.py` | Test | Internal | Verifies reference agent behavior and edge cases. |
-| `tests/test_response_improvements.py` | Test | Internal | Verifies conversation retention, long polling, trace propagation, queue ordering, idempotency, and streaming gates. |
+| `tests/test_response_improvements.py` | Test | Internal | Verifies conversation retention, long polling, trace propagation, queue ordering, idempotency, and removal of the obsolete stream route. |
 | `tests/test_sqlite_store.py` | Test | Internal | Verifies SQLite serialization, concurrency, and user persistence. |
 | `tests/test_user_admin.py` | Test | Internal | Verifies user admin behavior and edge cases. |
 | `tools/__init__.py` | Production | Public facade | Exposes shared observability helpers and lazy terminal compatibility aliases. |

@@ -41,7 +41,7 @@ def _mock_crewai(monkeypatch):
         def kickoff(self, text):
             return _FakeOutput("status nominal, no anomalies")
 
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, tools=types.SimpleNamespace(BaseTool=object))
+    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
 
@@ -180,7 +180,7 @@ def test_model_io_is_not_logged_when_the_debug_flag_is_off(tmp_path, monkeypatch
     the full decision journey with nothing missing.
     """
 
-    monkeypatch.setattr(base_config, "DEBUG_FLAG", False)
+    monkeypatch.setattr(base_config, "DEEP_DEBUG", False)
 
     captured = io.StringIO()
     monkeypatch.setattr("sys.stdout", captured)
@@ -217,7 +217,7 @@ def test_model_io_is_logged_with_prompt_response_stage_and_trace_id_when_the_deb
     from orchestrator.main_agent import MainAgent
     from tests.api_fakes import extraction_response
 
-    monkeypatch.setattr(base_config, "DEBUG_FLAG", True)
+    monkeypatch.setattr(base_config, "DEEP_DEBUG", True)
 
     dispatch = {
         "Extract this operational event": extraction_response(),
@@ -243,7 +243,7 @@ def test_model_io_is_logged_with_prompt_response_stage_and_trace_id_when_the_deb
                     return _DispatchedOutput(response_text)
             raise AssertionError(f"no scripted response for prompt starting: {text[:150]!r}")
 
-    dispatched_module = types.SimpleNamespace(Agent=_DispatchedCrewAgent, tools=types.SimpleNamespace(BaseTool=object))
+    dispatched_module = types.SimpleNamespace(Agent=_DispatchedCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: dispatched_module)
 
     captured = io.StringIO()
@@ -262,7 +262,7 @@ def test_model_io_is_logged_with_prompt_response_stage_and_trace_id_when_the_deb
 
     model_io_records = [r for r in records if r.get("event") == "model_io"]
     assert model_io_records, "no model_io records were logged even though the debug flag was on"
-    assert all(r["level"] == "DEBUG" for r in model_io_records)
+    assert all(r["level"] == "INFO" for r in model_io_records)
 
     for record in model_io_records:
         assert record["prompt"], "the full prompt must be present, not summarized or truncated"

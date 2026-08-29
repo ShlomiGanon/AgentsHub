@@ -12,6 +12,11 @@ Every endpoint authenticates the caller first (§7.9) — see
 **Authentication** below — and every error response uses the one shape
 in **Errors** (§7.10), regardless of which endpoint produced it.
 
+There is no `/Msg/Stream` endpoint. Clients present an immediate localized
+status and replace it once when `POST /Msg` returns; asynchronous submissions
+replace it with an ACK containing the Task ID and receive the final result
+later through notifications.
+
 ## Authorization (docs/Next_Plan.md)
 
 After authentication, every endpoint checks one `auth.permissions.RequestedOperation`
@@ -500,7 +505,7 @@ timeout without changing cursor ordering or at-least-once delivery.
 
 ## `GET /Notifications` (§8.12)
 
-`GET /Notifications?since=<cursor>` — `since` is an opaque, caller-tracked
+`GET /Notifications?since=<cursor>&wait_seconds=20` — `since` is an opaque, caller-tracked
 integer cursor (omit or `0` for "everything ever recorded"). `200 OK`:
 ```json
 {
@@ -548,13 +553,24 @@ whoever submitted the event) and a separate `uncertain_verdict` entry
 (for commanders); `"closed_on_precedent"` produces `job_finished` plus a
 separate `precedent_closure` entry, the same way.
 
-## `POST /Msg/Stream`
+## `GET /Trace/<trace_id>`
 
-Optional SSE transport for verified final text. It is hidden with `404` unless
-the profile enables streaming. Event types are `ack`, `delta`, `final`, and
-`error`; structured decisions and unvalidated model output are never emitted.
-The provider adapter may emit only `final`/`error` when token streaming is not
-available, and persistence stores only the final answer.
+Commander-only (`view_live_trace`) cursor-based long polling for Deep Debug.
+It exists only as an authorized diagnostic surface: when `DEEP_DEBUG` is off,
+it responds as unavailable; viewers are denied before any trace data is read.
+`since` is a non-negative committed log-entry ID and `wait_seconds` is 0-30.
+
+```json
+{
+  "entries": [{"id": 42, "text": "Trace: Main Agent classified the message as report."}],
+  "next_cursor": 42,
+  "terminal": false
+}
+```
+
+`text` is rendered server-side from the active profile's message catalog.
+Raw prompts, raw model responses, credentials, headers, and chain-of-thought
+are never returned by this endpoint. Polling it performs no LLM call.
 
 ## Errors (§7.10)
 
@@ -562,10 +578,15 @@ One shape, every endpoint, every failure:
 ```json
 {
   "error_class": "invalid_input",
+  "error_code": "invalid_input",
   "message": "human-readable, specific",
   "field": "risk_threshold"
 }
 ```
+`error_code` and `error_class` remain stable English integration values;
+`message` is localized from `DEFAULT_LANGUAGE`. HTTP status codes are not
+localized. Existing clients may continue reading `error_class` while new
+clients should prefer `error_code`.
 `field` is present only when one specific field or protocol is at fault;
 omitted otherwise. `error_class` is one of:
 

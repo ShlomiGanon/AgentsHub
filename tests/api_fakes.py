@@ -219,6 +219,11 @@ class _FakeLoadedProfile:
 
         self.module_path = module_path
         self.profile_name = "For Tests"
+        self.default_language = "en"
+        from messages import get_catalog
+        self.message_catalog = get_catalog(self.default_language)
+        self.max_iter = 8
+        self.model_timeout_seconds = 30
         # Defaults to 0 (conversation memory off) to match every existing
         # test's assumptions unchanged; a test exercising follow-up
         # behavior (docs/Next_Plan.md Stage 5) passes a positive value.

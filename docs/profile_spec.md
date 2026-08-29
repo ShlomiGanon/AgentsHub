@@ -10,6 +10,9 @@ module-level names. All are required unless noted.
 | Name | Type | Meaning |
 |---|---|---|
 | `PROFILE_NAME` | non-empty `str` | Human-facing service name. The Main Agent uses it when describing its identity; it is never inferred from the Python module path. |
+| `DEFAULT_LANGUAGE` | `"en"` or `"he"` | Required process-wide language for fixed API, Telegram, and CLI text. It is selected once at profile startup; no model call detects language. |
+| `MAX_ITER` | `int`, 1-100 | Required CrewAI agent-loop limit. Shipped profiles use `8`. |
+| `MODEL_TIMEOUT_SECONDS` | finite positive `int` or `float`, at most 600 | Required provider-network timeout. Shipped profiles use `30`. |
 | `AGENTS` | `list` of `profiles.spec.AgentSpec` | The specialist agents this deployment runs — **declared**, not constructed. Each entry is `AgentSpec(cls=SomeAgent, tier="core"\|"sub")`; `profiles.loader.load_profile` is the only place any of them actually gets built, using whichever already-resolved `TierModel` matches the tier named. See "Model tiers", below. |
 | `PROTOCOLS` | `list` of protocol objects | Each fully populated: name, description, participating agent names, approved tool names, expected success output, criticality, approval flag. |
 | `EVENT_TYPES` | `list[str]` | Must not include `"human_activation"` — that type is added automatically and a profile declaring it is a validation error. |
@@ -39,7 +42,7 @@ Three optional module-level names extend the profile contract:
   legacy-safe policy. Changes take effect after restart.
 
 `OptimizationPolicy()` defaults to the legacy planner, separate risk/selection
-and insight/judgment, serial queue, and disabled structured output/streaming.
+and insight/judgment, serial queue, and disabled structured output.
 It also controls worker/queue capacity, continuation reservation,
 specialist/provider concurrency, notification wait, direct/job deadlines, and
 optional per-stage `StageModelPolicy` entries. Shadow modes can be measured
@@ -49,6 +52,15 @@ six turns for 24 hours.
 Conversation history is isolated by exact `conversation_id`, resolves
 references only, and is never authoritative for facts, permissions, protocols,
 tool outcomes, or approvals.
+
+`DEFAULT_LANGUAGE`, `MAX_ITER`, and `MODEL_TIMEOUT_SECONDS` have no legacy
+fallback. A missing or invalid value fails profile loading before the server
+accepts traffic. Changing any of them requires restart.
+
+After profile and credentials load, API startup makes one real, minimal,
+tool-free verification call per unique Provider/Model. The configured timeout
+and disabled provider retry apply to warmup too. Any failure aborts startup;
+there is no degraded mode.
 
 ## Main Agent identity and capability answers
 

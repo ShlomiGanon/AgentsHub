@@ -16,7 +16,12 @@ from bot.contracts import (
     BotStartupError,
 )
 
-from bot.interactions import format_failure_notice, format_header, format_job_result
+from bot.interactions import (
+    format_failure_notice,
+    format_header,
+    format_job_result,
+    message_catalog_for,
+)
 
 from pathlib import Path
 
@@ -39,7 +44,7 @@ async def dispatch_notification(deps: "BotDeps", notification: "BotNotification"
         return
 
     if notification.kind == "event_data_hold":
-        text = interactions.format_event_data_needed(notification.payload)
+        text = interactions.format_event_data_needed(notification.payload, message_catalog_for(deps))
         for chat_id in notification.target_chat_ids:
             await deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id)
         return
@@ -125,7 +130,7 @@ if TYPE_CHECKING:
 
 async def deliver_failure_notification(deps: "BotDeps", notification: "BotNotification") -> None:
     notice = notification.payload
-    text = format_failure_notice(notice)
+    text = format_failure_notice(notice, message_catalog_for(deps))
 
     for chat_id in notification.target_chat_ids:
         await deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id)
@@ -137,7 +142,7 @@ if TYPE_CHECKING:
 
 async def deliver_job_result(deps: "BotDeps", notification: "BotNotification") -> None:
     job_result = notification.payload
-    text = format_job_result(job_result)
+    text = format_job_result(job_result, message_catalog_for(deps))
 
     for chat_id in notification.target_chat_ids:
         await deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id)
@@ -147,17 +152,19 @@ if TYPE_CHECKING:
     from bot.contracts import BotDeps, PrecedentClosureNotice
 
 
-def format_precedent_closure_notice(notice: "PrecedentClosureNotice") -> str:
-    return (
-        f"{format_header('precedent_closure')}\n\n"
-        f"Event: {notice.raw_text}\n\n"
-        f"Closed against precedent {notice.matched_precedent_event_id}, "
-        f"which ended: {notice.precedent_ending}"
+def format_precedent_closure_notice(notice: "PrecedentClosureNotice", catalog=None) -> str:
+    messages = catalog or interactions._catalog()
+    return messages.text(
+        "notice.precedent",
+        header=format_header("precedent_closure", messages),
+        raw_text=notice.raw_text,
+        precedent_id=notice.matched_precedent_event_id,
+        ending=notice.precedent_ending,
     )
 
 
 async def notify_precedent_closure(deps: "BotDeps", notice: "PrecedentClosureNotice") -> None:
-    text = format_precedent_closure_notice(notice)
+    text = format_precedent_closure_notice(notice, message_catalog_for(deps))
 
     for chat_id in await deps.api_client.list_commander_chat_ids():
         await deps.telegram_client.send_text(chat_id, text)

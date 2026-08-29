@@ -22,7 +22,12 @@ def test_api_error_produces_the_one_fixed_shape():
     resp = client.get("/boom")
 
     assert resp.status_code == 400
-    assert resp.get_json() == {"error_class": "invalid_input", "message": "'x' is required", "field": "x"}
+    assert resp.get_json() == {
+        "error_class": "invalid_input",
+        "error_code": "invalid_input",
+        "message": "'x' is required",
+        "field": "x",
+    }
 
 
 def test_api_error_without_a_field_omits_the_key():
@@ -123,7 +128,7 @@ def _mock_crewai(monkeypatch):
         def kickoff(self, text):
             return _FakeOutput("status nominal, no anomalies")
 
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, tools=types.SimpleNamespace(BaseTool=object))
+    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
 

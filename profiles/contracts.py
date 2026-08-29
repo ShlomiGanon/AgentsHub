@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal, Mapping
 
 if TYPE_CHECKING:
     from agents import Agent
+    from messages import MessageCatalog
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,6 @@ class OptimizationPolicy:
     operational_decision_mode: Literal["separate", "shadow", "merged"] = "separate"
     final_assessment_mode: Literal["separate", "low_risk_merged"] = "separate"
     structured_output_mode: Literal["off", "auto", "required"] = "off"
-    streaming_enabled: bool = False
     event_queue_mode: Literal["serial", "policy"] = "serial"
     event_workers: int = 4
     event_queue_size: int = 100
@@ -69,6 +69,10 @@ class LoadedProfile:
     risk_threshold: float
     lookback_window_days: int
     profile_file_hash: str
+    default_language: Literal["en", "he"]
+    message_catalog: "MessageCatalog"
+    max_iter: int
+    model_timeout_seconds: float
     core_agents: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
     resolved_secrets: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
     timezone_name: str = "UTC"
@@ -78,6 +82,9 @@ class LoadedProfile:
 
 REQUIRED_PROFILE_ATTRS = (
     "PROFILE_NAME",
+    "DEFAULT_LANGUAGE",
+    "MAX_ITER",
+    "MODEL_TIMEOUT_SECONDS",
     "AGENTS",
     "PROTOCOLS",
     "EVENT_TYPES",

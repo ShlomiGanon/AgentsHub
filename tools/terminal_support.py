@@ -9,6 +9,7 @@ from typing import Sequence
 from bot.transports import HttpApiClient, TelegramClient, _do_request
 from bot.contracts import BOT_SERVICE_IDENTITY
 from bot.interactions import split_message
+from messages import MessageCatalog, get_catalog
 from persistence import open_persistence
 
 CONSOLE_CHAT_ID = "terminal"
@@ -27,14 +28,18 @@ async def ainput(prompt: str = "") -> str:
     return await asyncio.to_thread(input, prompt)
 
 SAMPLE_EVENT_TEXTS = [
-    ("Fire report — north sector", "Smoke and rising temperature reported in north_sector."),
-    ("Medical report — south sector", "A person has collapsed and is unconscious in south_sector."),
+    ("terminal.sample_fire", "Smoke and rising temperature reported in north_sector."),
+    ("terminal.sample_medical", "A person has collapsed and is unconscious in south_sector."),
     (
-        "Unclassifiable reading (drives a clarification hold)",
+        "terminal.sample_unknown",
         "Readings received that do not match any known pattern in this deployment.",
     ),
-    ("Custom — type your own text", None),
+    ("terminal.sample_custom", None),
 ]
+
+
+def _catalog(catalog: MessageCatalog | None = None) -> MessageCatalog:
+    return catalog or get_catalog("en")
 
 
 class ConsoleTelegramClient(TelegramClient):
@@ -42,6 +47,7 @@ class ConsoleTelegramClient(TelegramClient):
 
     def __init__(self, owning_identity: str):
         self._owning_identity = owning_identity
+        self._next_status_id = 1
 
     def _addressed_to_this_console(self, chat_id: str) -> bool:
         return chat_id in (self._owning_identity, CONSOLE_CHAT_ID)
@@ -54,6 +60,21 @@ class ConsoleTelegramClient(TelegramClient):
             return
         for chunk in split_message(text):
             print(f"\n{chunk}")
+
+    async def send_status(self, chat_id: str, text: str) -> str:
+        status_id = f"console-status-{self._next_status_id}"
+        self._next_status_id += 1
+        if self._addressed_to_this_console(chat_id):
+            print(f"\n{text}", end="", flush=True)
+        return status_id
+
+    async def edit_status(self, chat_id: str, message_id: str, text: str) -> None:
+        if self._addressed_to_this_console(chat_id):
+            print(f"\r\x1b[2K{text}")
+
+    async def delete_status(self, chat_id: str, message_id: str) -> None:
+        if self._addressed_to_this_console(chat_id):
+            print("\r\x1b[2K", end="", flush=True)
 
     async def send_with_buttons(self, chat_id: str, text: str, buttons: Sequence[tuple[str, str]]) -> None:
         if not self._addressed_to_this_console(chat_id):
@@ -103,44 +124,50 @@ def submit_event(base_url: str, text: str, sender_identity: str) -> tuple[int, d
     return do_request(f"{base_url}/Event", "POST", sender_identity, {"text": text, "sender_identity": sender_identity})
 
 
-async def choose_mode() -> str | None:
+async def choose_mode(catalog: MessageCatalog | None = None) -> str | None:
+    messages = _catalog(catalog)
     while True:
-        selected_option = (await ainput("\nMode — [m]essage, [e]vent, or [q]uit? ")).strip().lower()
+        selected_option = (await ainput(messages.text("terminal.mode_prompt"))).strip().lower()
         if selected_option in ("m", "message"):
             return "message"
         if selected_option in ("e", "event"):
             return "event"
         if selected_option in ("q", "quit", "exit"):
             return None
-        print("Please type 'm', 'e', or 'q'.")
+        print(messages.text("terminal.mode_invalid"))
 
 
-async def choose_event_payload(default_sender: str) -> tuple[str, str] | None:
-    print("\nSample sensor events:")
-    for choice_number, (label, _) in enumerate(SAMPLE_EVENT_TEXTS, start=1):
-        print(f"  [{choice_number}] {label}")
-    print("  [q] back to mode selection")
+async def choose_event_payload(
+    default_sender: str, catalog: MessageCatalog | None = None
+) -> tuple[str, str] | None:
+    messages = _catalog(catalog)
+    print(messages.text("terminal.sample_events"))
+    for choice_number, (label_key, _) in enumerate(SAMPLE_EVENT_TEXTS, start=1):
+        print(f"  [{choice_number}] {messages.text(label_key)}")
+    print(messages.text("terminal.back"))
 
-    selected_option = (await ainput("choose> ")).strip().lower()
+    selected_option = (await ainput(messages.text("terminal.choose_prompt"))).strip().lower()
     if selected_option in ("q", "quit", "exit"):
         return None
     if not selected_option.isdigit() or not (1 <= int(selected_option) <= len(SAMPLE_EVENT_TEXTS)):
-        print("Invalid choice.")
-        return await choose_event_payload(default_sender)
+        print(messages.text("terminal.invalid_choice"))
+        return await choose_event_payload(default_sender, messages)
 
     _label, preset_text = SAMPLE_EVENT_TEXTS[int(selected_option) - 1]
     if preset_text is None:
-        text = (await ainput("event text> ")).strip()
+        text = (await ainput(messages.text("terminal.event_text"))).strip()
     else:
-        typed = (await ainput(f"event text [{preset_text}]> ")).strip()
+        typed = (await ainput(messages.text("terminal.event_text_default", default=preset_text))).strip()
         text = typed or preset_text
 
-    typed_sender = (await ainput(f"sender identity [{default_sender}]> ")).strip()
+    typed_sender = (await ainput(messages.text("terminal.sender_default", default=default_sender))).strip()
     sender = typed_sender or default_sender
     return text, sender
 
 
-def ensure_bot_service_commander(profile_module_path: str, profile_module) -> None:
+def ensure_bot_service_commander(
+    profile_module_path: str, profile_module, catalog: MessageCatalog | None = None
+) -> None:
     """`bot-service` is a durable, deployment-wide fixture both CLIs need at commander level (`list_commander_chat_ids`/`poll_pending_notifications` always authenticate as it, regardle..."""
 
     store = open_persistence(profile_module.DB_PATH)
@@ -151,7 +178,8 @@ def ensure_bot_service_commander(profile_module_path: str, profile_module) -> No
     finally:
         store.close()
 
-    print(f"Provisioning the bot's own service identity via `cli.user_admin`: {BOT_SERVICE_IDENTITY!r}")
+    messages = _catalog(catalog)
+    print(messages.text("terminal.provision_service", identity=repr(BOT_SERVICE_IDENTITY)))
     exit_code = _run_user_admin(["--profile", profile_module_path, "add", "--telegram-id", BOT_SERVICE_IDENTITY, "--level", "commander"])
     if exit_code != 0:
         raise SystemExit(
@@ -160,10 +188,17 @@ def ensure_bot_service_commander(profile_module_path: str, profile_module) -> No
         )
 
 
-def ensure_test_identity(profile_module_path: str, test_identity: str, level: str, profile_module) -> bool:
+def ensure_test_identity(
+    profile_module_path: str,
+    test_identity: str,
+    level: str,
+    profile_module,
+    catalog: MessageCatalog | None = None,
+) -> bool:
     """Check the real database directly (persistence layer) for `test_identity` at `level`; provision it via the existing `cli.user_admin` command if missing or at the wrong level — ne..."""
 
-    ensure_bot_service_commander(profile_module_path, profile_module)
+    messages = _catalog(catalog)
+    ensure_bot_service_commander(profile_module_path, profile_module, messages)
 
     store = open_persistence(profile_module.DB_PATH)
     try:
@@ -173,10 +208,18 @@ def ensure_test_identity(profile_module_path: str, test_identity: str, level: st
         store.close()
 
     if already_correct:
-        print(f"{level.capitalize()}-level identity already present: {test_identity!r}.")
+        print(
+            messages.text(
+                "terminal.identity_exists", level=level.capitalize(), identity=repr(test_identity)
+            )
+        )
         return False
 
-    print(f"Provisioning {level}-level identity via `cli.user_admin`: {test_identity!r}")
+    print(
+        messages.text(
+            "terminal.provision_identity", level=level, identity=repr(test_identity)
+        )
+    )
     exit_code = _run_user_admin(["--profile", profile_module_path, "add", "--telegram-id", test_identity, "--level", level])
     if exit_code != 0:
         raise SystemExit(

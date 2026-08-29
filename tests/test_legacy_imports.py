@@ -25,7 +25,6 @@ ALIASES = [
     ("bot.deps", "bot.contracts"),
     ("bot.formatting", "bot.interactions"),
     ("bot.holds", "bot.interactions"),
-    ("bot.presentation", "bot.interactions"),
     ("bot.client", "bot.transports"),
     ("bot.http_api_client", "bot.transports"),
     ("bot.runtime", "bot.background_services"),

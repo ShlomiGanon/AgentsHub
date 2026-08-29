@@ -13,6 +13,9 @@ _PROFILE_TEMPLATE = """
 from protocols.model import Protocol, CriticalityLevel
 
 PROFILE_NAME = "For Tests"
+DEFAULT_LANGUAGE = "en"
+MAX_ITER = 8
+MODEL_TIMEOUT_SECONDS = 30
 AGENTS = []
 PROTOCOLS = []
 EVENT_TYPES = ["fire"]
@@ -40,7 +43,7 @@ def _mock_crewai(monkeypatch):
         def kickoff(self, text):
             return _FakeOutput("status nominal, no anomalies")
 
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, tools=types.SimpleNamespace(BaseTool=object))
+    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
 

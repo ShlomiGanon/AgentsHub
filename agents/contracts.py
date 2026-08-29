@@ -134,3 +134,7 @@ class AgentToolConstructionError(AgentInvocationError):
 
 class AgentFrameworkNotReadyError(AgentInvocationError):
     pass
+
+
+class AgentWarmupError(AgentInvocationError):
+    """A configured provider/model failed its startup verification call."""

@@ -137,7 +137,7 @@ def test_end_to_end_through_the_mocked_adapter(monkeypatch):
         def kickoff(self, text):
             return _FakeOutput("Consistent with a prior resolved incident at the same location.")
 
-    fake_module = types.SimpleNamespace(Agent=_FakeAgent, tools=types.SimpleNamespace(BaseTool=object))
+    fake_module = types.SimpleNamespace(Agent=_FakeAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
     agent = InsightsAgent(model="fake-model")

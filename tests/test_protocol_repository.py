@@ -15,6 +15,9 @@ _PROFILE_TEMPLATE = """
 from protocols.model import Protocol, CriticalityLevel
 
 PROFILE_NAME = "For Tests"
+DEFAULT_LANGUAGE = "en"
+MAX_ITER = 8
+MODEL_TIMEOUT_SECONDS = 30
 AGENTS = []
 PROTOCOLS = [
     Protocol(
@@ -363,14 +366,19 @@ def test_criticality_is_ordered_for_tie_breaking():
     assert max(CriticalityLevel.LOW, CriticalityLevel.HIGH, CriticalityLevel.MEDIUM) == CriticalityLevel.HIGH
 
 
-def test_step_has_exactly_three_fields():
+def test_step_fields_include_dependencies_and_required_event_data():
     step = Step(agent_name="reference_agent", task_text="check gate 3", allowed_tools=("check_status",))
 
     assert step.agent_name == "reference_agent"
     assert step.task_text == "check gate 3"
     assert step.allowed_tools == ("check_status",)
     assert {f for f in step.__dataclass_fields__} == {
-        "agent_name", "task_text", "allowed_tools", "step_id", "depends_on"
+        "agent_name",
+        "task_text",
+        "allowed_tools",
+        "step_id",
+        "depends_on",
+        "required_event_fields",
     }
     assert step.step_id == ""
     assert step.depends_on == ()

@@ -1,5 +1,6 @@
 """Public API facade."""
 
+import importlib
 import sys
 from types import ModuleType
 
@@ -33,11 +34,35 @@ sys.modules[f"{__name__}.ingestion"] = routes
 sys.modules[f"{__name__}.management"] = routes
 sys.modules[f"{__name__}.operations"] = routes
 
-from api import app
-from api.app import ApiContext, build_app, build_context, create_app
+_APP_EXPORTS = frozenset({"ApiContext", "build_app", "build_context", "create_app"})
 
-contracts = ModuleType(f"{__name__}.contracts")
-contracts.ApiContext = ApiContext
+
+def __getattr__(name: str):
+    """Load API application wiring only when a facade export is requested.
+
+    Keeping ``api.app`` out of package initialization is required for the
+    supported ``python -m api.app`` entry point: runpy must be the first code
+    to load that module.
+    """
+
+    if name not in _APP_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    app_module = importlib.import_module("api.app")
+    value = getattr(app_module, name)
+    globals()[name] = value
+    return value
+
+
+class _ContractsModule(ModuleType):
+    def __getattr__(self, name: str):
+        if name != "ApiContext":
+            raise AttributeError(f"module {self.__name__!r} has no attribute {name!r}")
+        value = __getattr__(name)
+        setattr(self, name, value)
+        return value
+
+
+contracts = _ContractsModule(f"{__name__}.contracts")
 for error_type in (
     ApiError,
     AuthenticationError,
@@ -48,6 +73,15 @@ for error_type in (
     RunFailureError,
 ):
     setattr(contracts, error_type.__name__, error_type)
+contracts.__all__ = ["ApiContext", *(error_type.__name__ for error_type in (
+    ApiError,
+    AuthenticationError,
+    AuthorizationError,
+    ConflictError,
+    InvalidInputError,
+    NotFoundError,
+    RunFailureError,
+))]
 sys.modules[contracts.__name__] = contracts
 
 __all__ = [

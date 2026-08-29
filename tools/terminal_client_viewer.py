@@ -5,9 +5,14 @@ import asyncio
 import importlib
 import sys
 import uuid
+from types import SimpleNamespace
 
-from bot import ApiRequestError, BotDeps, BotError, HttpApiClient, dispatch_notification, handle_incoming_message
+from bot import ApiRequestError, BotDeps, BotError, HttpApiClient, dispatch_notification
+from bot.app import present_incoming_message
+from bot.interactions import message_catalog_for
+from messages import get_catalog
 from tools.terminal_support import (
+    CONSOLE_CHAT_ID,
     ConsoleTelegramClient,
     ObservingApiClient,
     ainput,
@@ -27,8 +32,9 @@ async def _bootstrap_notification_cursor(deps: BotDeps) -> int:
     notifications, cursor = await deps.api_client.poll_pending_notifications(0)
     if notifications:
         print(
-            f"(skipping {len(notifications)} pre-existing notification(s) already in this deployment's "
-            "history, from before this session started)"
+            message_catalog_for(deps).text(
+                "terminal.skip_existing", count=len(notifications)
+            )
         )
     return cursor
 
@@ -36,14 +42,15 @@ async def _bootstrap_notification_cursor(deps: BotDeps) -> int:
 async def _wait_for_completion(deps: BotDeps, cursor: int, job_id: str, poll_interval: float) -> int:
     """Poll `GET /Notifications` exactly as `bot.notifications .run_notification_poll_once` does, until the one that finishes `job_id` arrives."""
 
-    print("\n(waiting for a result — Ctrl+C to stop waiting and return to the prompt)")
+    messages = message_catalog_for(deps)
+    print(messages.text("terminal.waiting"))
 
     transport_backoff = 0.5
     while True:
         try:
             notifications, cursor = await deps.api_client.poll_pending_notifications(cursor, 20)
         except ApiRequestError as exc:
-            print(f"(polling failed: {exc}; retrying)")
+            print(messages.text("terminal.poll_failed", reason=exc))
             await asyncio.sleep(transport_backoff)
             transport_backoff = min(30.0, transport_backoff * 2)
             continue
@@ -61,50 +68,62 @@ async def _run_repl(deps: BotDeps, observing_client: ObservingApiClient, base_ur
     conversation_id = f"terminal-viewer:{test_identity}:{uuid.uuid4().hex}"
     try:
         cursor = await _bootstrap_notification_cursor(deps)
-        mode = await choose_mode()
+        messages = message_catalog_for(deps)
+        mode = await choose_mode(messages)
         while mode is not None:
             if mode == "message":
-                text = (await ainput("\nmessage> ")).strip()
+                text = (await ainput(messages.text("terminal.message_prompt"))).strip()
                 if not text:
                     continue
                 if text in ("/quit", "/exit"):
                     break
                 if text == "/mode":
-                    mode = await choose_mode()
+                    mode = await choose_mode(messages)
                     continue
 
-                try:
-                    reply = await handle_incoming_message(
-                        deps, test_identity, text, new_message_id(), conversation_id=conversation_id
-                    )
-                except (ApiRequestError, BotError) as exc:
-                    print(f"(request failed: {exc})")
-                    continue
-
-                print(reply)
+                await present_incoming_message(
+                    deps,
+                    CONSOLE_CHAT_ID,
+                    test_identity,
+                    text,
+                    new_message_id(),
+                    conversation_id=conversation_id,
+                )
 
                 submission = observing_client.last_submission
                 if submission is not None and submission.kind != "question" and submission.job_id:
                     cursor = await _wait_for_completion(deps, cursor, submission.job_id, poll_interval)
 
             else:  # event mode
-                payload = await choose_event_payload(test_identity)
+                payload = await choose_event_payload(test_identity, messages)
                 if payload is None:
-                    mode = await choose_mode()
+                    mode = await choose_mode(messages)
                     continue
 
                 text, sender = payload
                 try:
                     status, response_payload = submit_event(base_url, text, sender)
                 except ApiRequestError as exc:
-                    print(f"(request failed: {exc})")
+                    print(messages.text("terminal.request_failed", reason=exc))
                     continue
 
                 if status >= 400:
-                    print(f"submission refused ({status}): {response_payload.get('message', response_payload)}")
+                    print(
+                        messages.text(
+                            "terminal.submission_refused",
+                            status=status,
+                            reason=response_payload.get("message", response_payload),
+                        )
+                    )
                     continue
 
-                print(f"submitted: event_id={response_payload['event_id']} status={response_payload['status']}")
+                print(
+                    messages.text(
+                        "terminal.submitted",
+                        event_id=response_payload["event_id"],
+                        status=response_payload["status"],
+                    )
+                )
                 cursor = await _wait_for_completion(deps, cursor, response_payload["event_id"], poll_interval)
     finally:
         await deps.api_client.close()
@@ -127,16 +146,27 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"could not import profile module '{args.profile}': {exc}") from exc
 
     base_url = f"http://{args.host}:{profile_module.API_PORT}"
+    messages = get_catalog(profile_module.DEFAULT_LANGUAGE)
 
-    print(f"Profile:  {args.profile}")
-    print(f"Database: {profile_module.DB_PATH}")
-    print(f"API:      {base_url}  (make sure `python -m api.app {args.profile}` is already running)")
+    print(messages.text("terminal.profile", profile=args.profile))
+    print(messages.text("terminal.database", database=profile_module.DB_PATH))
+    print(
+        messages.text(
+            "terminal.api", base_url=base_url, command=f"python -m api.app {args.profile}"
+        )
+    )
 
-    created_this_session = ensure_test_identity(args.profile, args.identity, "viewer", profile_module)
+    created_this_session = ensure_test_identity(
+        args.profile, args.identity, "viewer", profile_module, messages
+    )
 
     http_client = HttpApiClient(base_url)
     observing_client = ObservingApiClient(http_client)
-    deps = BotDeps(loaded_profile=None, telegram_client=ConsoleTelegramClient(args.identity), api_client=observing_client)
+    deps = BotDeps(
+        loaded_profile=SimpleNamespace(message_catalog=messages),
+        telegram_client=ConsoleTelegramClient(args.identity),
+        api_client=observing_client,
+    )
 
     try:
         try:
@@ -146,7 +176,7 @@ def main(argv: list[str] | None = None) -> None:
     finally:
         cleanup_test_identity(args.profile, args.identity, created_this_session)
 
-    print("\nGoodbye.")
+    print(messages.text("terminal.goodbye"))
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Literal
 from dataclasses import dataclass
 
 from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
+from messages import MessageCatalog, get_catalog
 
 from typing import TYPE_CHECKING
 
@@ -25,21 +26,30 @@ MessageKind = Literal[
     "event_data_needed",
 ]
 
-_HEADERS: dict[MessageKind, str] = {
-    "clarification_needed": "[CLARIFICATION NEEDED — please reply]",
-    "approval_needed": "[APPROVAL NEEDED — please reply]",
-    "precedent_closure": "[NOTICE — closed on precedent — no reply needed]",
-    "uncertain_verdict": "[NOTICE — uncertain verdict — no reply needed]",
-    "no_match": "[NOTICE — no protocol available — no reply needed]",
-    "result": "[RESULT]",
-    "failed": "[RUN FAILED]",
-    "declined": "[DECLINED]",
-    "event_data_needed": "[MORE EVENT DETAILS NEEDED]",
+_HEADER_KEYS: dict[MessageKind, str] = {
+    "clarification_needed": "header.clarification_needed",
+    "approval_needed": "header.approval_needed",
+    "precedent_closure": "header.precedent_closure",
+    "uncertain_verdict": "header.uncertain_verdict",
+    "no_match": "header.no_match",
+    "result": "header.result",
+    "failed": "header.failed",
+    "declined": "header.declined",
+    "event_data_needed": "header.event_data_needed",
 }
 
 
-def format_header(kind: MessageKind) -> str:
-    return _HEADERS[kind]
+def _catalog(catalog: MessageCatalog | None = None) -> MessageCatalog:
+    return catalog or get_catalog("en")
+
+
+def message_catalog_for(deps) -> MessageCatalog:
+    loaded_profile = getattr(deps, "loaded_profile", None)
+    return getattr(loaded_profile, "message_catalog", None) or get_catalog("en")
+
+
+def format_header(kind: MessageKind, catalog: MessageCatalog | None = None) -> str:
+    return _catalog(catalog).text(_HEADER_KEYS[kind])
 
 
 def _split_on(text: str, separator: str, limit: int) -> list[str] | None:
@@ -85,37 +95,45 @@ def split_message(text: str, limit: int = TELEGRAM_MESSAGE_LIMIT) -> list[str]:
     return [text[i : i + limit] for i in range(0, len(text), limit)]
 
 
-def format_job_result(result: "JobResult") -> str:
+def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None) -> str:
+    messages = _catalog(catalog)
     kind: MessageKind = "result" if result.outcome != "declined" else "declined"
-    lines = [format_header(kind), "", f"Verdict: {result.outcome}"]
+    lines = [format_header(kind, messages), "", messages.text("result.verdict", outcome=result.outcome)]
 
     if result.failure_reason:
         lines += ["", result.failure_reason]
 
     if result.steps_completed:
-        lines += ["", "What was done:"]
+        lines += ["", messages.text("result.what_was_done")]
         lines += [f"- {step}" for step in result.steps_completed]
 
     if result.insight_text:
-        lines += ["", "Insight:", result.insight_text]
+        lines += ["", messages.text("result.insight"), result.insight_text]
 
     return "\n".join(lines)
 
 
-def format_failure_notice(notice: "FailureNotice") -> str:
-    lines = [format_header("failed"), "", f"Failed step: {notice.failed_step_agent_name or '(unknown)'}", f"Reason: {notice.failure_reason}"]
+def format_failure_notice(notice: "FailureNotice", catalog: MessageCatalog | None = None) -> str:
+    messages = _catalog(catalog)
+    agent = notice.failed_step_agent_name or messages.text("common.unknown")
+    lines = [
+        format_header("failed", messages),
+        "",
+        messages.text("failure.failed_step", agent=agent),
+        messages.text("failure.reason", reason=notice.failure_reason),
+    ]
 
     if notice.steps_completed_before_failure:
-        lines += ["", "Completed before the failure:"]
+        lines += ["", messages.text("failure.completed_before")]
         lines += [f"- {step}" for step in notice.steps_completed_before_failure]
     else:
-        lines += ["", "Nothing completed before the failure."]
+        lines += ["", messages.text("failure.nothing_completed")]
 
     return "\n".join(lines)
 
 
-def format_event_data_needed(notice) -> str:
-    return f"{format_header('event_data_needed')}\n\n{notice.question}"
+def format_event_data_needed(notice, catalog: MessageCatalog | None = None) -> str:
+    return f"{format_header('event_data_needed', catalog)}\n\n{notice.question}"
 
 if TYPE_CHECKING:
     from bot.contracts import BotApiClient
@@ -136,83 +154,104 @@ class UserResolutionResult:
     refusal_message: str = ""
 
 
-def _unregistered_message(telegram_identity: str) -> str:
-    return (
-        f"You are not a registered user of this system (identity: {telegram_identity}). "
-        f"An administrator must add you before you can use this bot."
-    )
+def _unregistered_message(telegram_identity: str, catalog: MessageCatalog | None = None) -> str:
+    return _catalog(catalog).text("auth.unregistered", identity=telegram_identity)
 
 
-async def resolve_caller(api_client: "BotApiClient", telegram_identity: str) -> UserResolutionResult:
+async def resolve_caller(
+    api_client: "BotApiClient", telegram_identity: str, catalog: MessageCatalog | None = None
+) -> UserResolutionResult:
     lookup = await api_client.resolve_user(telegram_identity)
 
     if not lookup.registered or lookup.permission_level is None:
-        return UserResolutionResult(status="unregistered", refusal_message=_unregistered_message(telegram_identity))
+        return UserResolutionResult(
+            status="unregistered",
+            refusal_message=_unregistered_message(telegram_identity, catalog),
+        )
 
     level = _LEVEL_BY_NAME[lookup.permission_level]
     return UserResolutionResult(status="ok", caller=CallerContext(telegram_identity=telegram_identity, level=level))
 
 
-def check_permission(caller: CallerContext, operation: RequestedOperation) -> str | None:
+def check_permission(
+    caller: CallerContext, operation: RequestedOperation, catalog: MessageCatalog | None = None
+) -> str | None:
     """None when `caller` may perform `operation`; otherwise a message naming the refused operation — never a silent no-op (§8.2: "A silent no-op leaves a commander believing they approved s..."""
 
     if is_permitted(caller.level, operation):
         return None
 
-    return (
-        f"Refused: '{operation.value}' requires commander level; your account "
-        f"({caller.telegram_identity}) is registered as {caller.level.name.lower()}."
+    return _catalog(catalog).text(
+        "auth.operation_refused",
+        operation=operation.value,
+        identity=caller.telegram_identity,
+        level=caller.level.name.lower(),
     )
 
 if TYPE_CHECKING:
     from bot.contracts import BotDeps, ProfileView
 
-NOTHING_CHANGED_NOTICE = "Nothing has changed in the running system — this edit applies from the next start."
+NOTHING_CHANGED_NOTICE = get_catalog("en").text("profile.nothing_changed")
 
 
-def format_profile_view(view: "ProfileView") -> str:
+def format_profile_view(view: "ProfileView", catalog: MessageCatalog | None = None) -> str:
     """Agents and protocols are commander-only (`view_system_internals`); a viewer's
     `ProfileView` simply arrives with those fields empty, so their sections are
     omitted entirely here rather than shown as an empty, misleading heading."""
 
-    lines = [f"Profile: {view.profile_name}"]
+    messages = _catalog(catalog)
+    lines = [messages.text("profile.name", profile_name=view.profile_name)]
 
     if view.agent_names:
-        lines += ["", "Agents:", *[f"- {name}" for name in view.agent_names]]
+        lines += ["", messages.text("profile.agents"), *[f"- {name}" for name in view.agent_names]]
 
     if view.protocols:
-        lines += ["", "Protocols:"]
+        lines += ["", messages.text("profile.protocols")]
         for protocol in view.protocols:
-            flag = "requires approval" if protocol.approval_flag else "no approval required"
-            lines.append(f"- {protocol.name} (criticality: {protocol.criticality}, {flag}): {protocol.description}")
+            flag_key = "profile.protocol_requires_approval" if protocol.approval_flag else "profile.protocol_no_approval"
+            lines.append(
+                messages.text(
+                    "profile.protocol_line",
+                    name=protocol.name,
+                    criticality=protocol.criticality,
+                    approval=messages.text(flag_key),
+                    description=protocol.description,
+                )
+            )
 
-    lines += ["", "Event types: " + ", ".join(view.event_types), "Areas: " + ", ".join(view.areas)]
+    lines += [
+        "",
+        messages.text("profile.event_types", event_types=", ".join(view.event_types)),
+        messages.text("profile.areas", areas=", ".join(view.areas)),
+    ]
 
     return "\n".join(lines)
 
 
 async def view_profile(deps: "BotDeps", caller_identity: str) -> str:
     view = await deps.api_client.get_profile_view(caller_identity)
-    return format_profile_view(view)
+    return format_profile_view(view, message_catalog_for(deps))
 
 
 async def profile_diff_status(deps: "BotDeps") -> str:
     status = await deps.api_client.get_profile_diff_status()
 
     if status:
-        return "The profile file on disk differs from what is running. A restart is pending to pick up the change."
+        return message_catalog_for(deps).text("profile.restart_pending")
 
-    return "The profile file on disk matches what is running. No restart is pending."
+    return message_catalog_for(deps).text("profile.restart_not_pending")
 
 
-def _validate_protocol_write_payload(action: Literal["add", "edit", "remove"], payload: dict) -> str | None:
+def _validate_protocol_write_payload(
+    action: Literal["add", "edit", "remove"], payload: dict, catalog: MessageCatalog | None = None
+) -> str | None:
     """None if `payload` is acceptable to send on; otherwise the refusal message."""
 
     if action == "remove":
         return None
 
     if "approval_flag" not in payload or not isinstance(payload.get("approval_flag"), bool):
-        return "Refused: 'approval_flag' must be given explicitly as true or false — it is never defaulted."
+        return _catalog(catalog).text("protocol.approval_flag_required")
 
     return None
 
@@ -227,20 +266,21 @@ _PROTOCOL_WRITE_OPERATIONS: dict[str, RequestedOperation] = {
 async def write_protocol(
     deps: "BotDeps", caller: CallerContext, action: Literal["add", "edit", "remove"], protocol_payload: dict
 ) -> str:
-    refusal = check_permission(caller, _PROTOCOL_WRITE_OPERATIONS[action])
+    messages = message_catalog_for(deps)
+    refusal = check_permission(caller, _PROTOCOL_WRITE_OPERATIONS[action], messages)
     if refusal is not None:
         return refusal
 
-    validation_refusal = _validate_protocol_write_payload(action, protocol_payload)
+    validation_refusal = _validate_protocol_write_payload(action, protocol_payload, messages)
     if validation_refusal is not None:
         return validation_refusal
 
     protocol_write_result = await deps.api_client.write_protocol(action, protocol_payload, caller.telegram_identity)
 
     if not protocol_write_result.accepted:
-        return f"Rejected: {protocol_write_result.message}"
+        return messages.text("common.rejected", message=protocol_write_result.message)
 
-    return f"{protocol_write_result.message}\n\n{NOTHING_CHANGED_NOTICE}"
+    return f"{protocol_write_result.message}\n\n{messages.text('profile.nothing_changed')}"
 
 
 if TYPE_CHECKING:
@@ -249,67 +289,71 @@ if TYPE_CHECKING:
 SettingField = Literal["retry_count", "risk_threshold", "lookback_window_days"]
 
 
-def format_settings_view(view: "SettingsView") -> str:
-    return (
-        f"Retry count: {view.retry_count}\n"
-        f"Risk threshold: {view.risk_threshold}\n"
-        f"Lookback window (days): {view.lookback_window_days}"
+def format_settings_view(view: "SettingsView", catalog: MessageCatalog | None = None) -> str:
+    return _catalog(catalog).text(
+        "settings.view",
+        retry_count=view.retry_count,
+        risk_threshold=view.risk_threshold,
+        lookback_window_days=view.lookback_window_days,
     )
 
 
 async def view_settings(deps: "BotDeps", caller_identity: str) -> str:
     view = await deps.api_client.get_settings_view(caller_identity)
-    return format_settings_view(view)
+    return format_settings_view(view, message_catalog_for(deps))
 
 
-def _validate_value(field: SettingField, raw_value: str) -> tuple[object | None, str | None]:
+def _validate_value(
+    field: SettingField, raw_value: str, catalog: MessageCatalog | None = None
+) -> tuple[object | None, str | None]:
     """Returns (parsed_value, refusal_message) — exactly one is not None."""
 
     if field == "retry_count":
         try:
             parsed_value = int(raw_value)
         except ValueError:
-            return None, f"Refused: 'retry_count' must be a whole number, got {raw_value!r}."
+            return None, _catalog(catalog).text("settings.retry_whole", value=repr(raw_value))
         if parsed_value < 0:
-            return None, "Refused: 'retry_count' cannot be negative."
+            return None, _catalog(catalog).text("settings.retry_nonnegative")
         return parsed_value, None
 
     if field == "risk_threshold":
         try:
             parsed_value = float(raw_value)
         except ValueError:
-            return None, f"Refused: 'risk_threshold' must be a number, got {raw_value!r}."
+            return None, _catalog(catalog).text("settings.risk_number", value=repr(raw_value))
         if not (0.0 <= parsed_value <= 1.0):
-            return None, "Refused: 'risk_threshold' must be between 0.0 and 1.0."
+            return None, _catalog(catalog).text("settings.risk_range")
         return parsed_value, None
 
     if field == "lookback_window_days":
         try:
             parsed_value = int(raw_value)
         except ValueError:
-            return None, f"Refused: 'lookback_window_days' must be a whole number, got {raw_value!r}."
+            return None, _catalog(catalog).text("settings.lookback_whole", value=repr(raw_value))
         if parsed_value <= 0:
-            return None, "Refused: 'lookback_window_days' must be at least 1 — a zero-length window is a configuration error."
+            return None, _catalog(catalog).text("settings.lookback_positive")
         return parsed_value, None
 
-    return None, f"Refused: unknown setting {field!r}. Only retry_count, risk_threshold, and lookback_window_days may be changed."
+    return None, _catalog(catalog).text("settings.unknown", field=repr(field))
 
 
 async def change_setting(deps: "BotDeps", caller: CallerContext, field: str, raw_value: str) -> str:
-    refusal = check_permission(caller, RequestedOperation.CHANGE_SETTINGS)
+    messages = message_catalog_for(deps)
+    refusal = check_permission(caller, RequestedOperation.CHANGE_SETTINGS, messages)
     if refusal is not None:
         return refusal
 
-    setting_value, validation_refusal = _validate_value(field, raw_value)  # type: ignore[arg-type]
+    setting_value, validation_refusal = _validate_value(field, raw_value, messages)  # type: ignore[arg-type]
     if validation_refusal is not None:
         return validation_refusal
 
     setting_write_result = await deps.api_client.write_setting(field, setting_value, caller.telegram_identity)
 
     if not setting_write_result.accepted:
-        return f"Rejected: {setting_write_result.message}"
+        return messages.text("common.rejected", message=setting_write_result.message)
 
-    return f"{setting_write_result.message}\n\nThis took effect immediately and has been saved — unlike a profile edit, no restart is needed."
+    return messages.text("settings.saved", message=setting_write_result.message)
 
 if TYPE_CHECKING:
     from bot.contracts import BotDeps, HeldApprovalNotice, NoMatchNotice, UncertainVerdictNotice
@@ -326,25 +370,35 @@ def parse_callback_data(data: str) -> tuple[str, str]:
     return event_id, choice
 
 
-def format_approval_prompt(notice: "HeldApprovalNotice") -> tuple[str, list[tuple[str, str]]]:
+def format_approval_prompt(
+    notice: "HeldApprovalNotice", catalog: MessageCatalog | None = None
+) -> tuple[str, list[tuple[str, str]]]:
     """Return (message text, buttons) — buttons differ by hold reason."""
 
-    header = format_header("approval_needed")
-    common = f"Risk: {notice.risk_level} ({notice.risk_reason})"
+    messages = _catalog(catalog)
+    header = format_header("approval_needed", messages)
+    common = messages.text(
+        "approval.risk", risk_level=notice.risk_level, risk_reason=notice.risk_reason
+    )
 
     if notice.reason == "flagged_protocol":
-        text = (
-            f"{header}\n\n"
-            f"Protocol flagged for approval: {notice.selected_protocol_name}\n"
-            f"{common}\n\n"
-            f"Should this run?"
+        text = messages.text(
+            "approval.flagged",
+            header=header,
+            protocol_name=notice.selected_protocol_name,
+            risk=common,
         )
-        buttons = [("Approve", build_callback_data(notice.event_id, "approved")), ("Reject", build_callback_data(notice.event_id, "rejected"))]
+        buttons = [
+            (messages.text("approval.approve"), build_callback_data(notice.event_id, "approved")),
+            (messages.text("approval.reject"), build_callback_data(notice.event_id, "rejected")),
+        ]
         return text, buttons
 
     if notice.reason == "ambiguous_selection":
-        candidates = ", ".join(notice.candidate_protocol_names) or "(none)"
-        text = f"{header}\n\nMultiple protocols fit equally well:\n{candidates}\n{common}\n\nWhich should run?"
+        candidates = ", ".join(notice.candidate_protocol_names) or messages.text("common.none")
+        text = messages.text(
+            "approval.ambiguous", header=header, candidates=candidates, risk=common
+        )
         buttons = [(name, build_callback_data(notice.event_id, name)) for name in notice.candidate_protocol_names]
         return text, buttons
 
@@ -352,70 +406,82 @@ def format_approval_prompt(notice: "HeldApprovalNotice") -> tuple[str, list[tupl
 
 
 async def push_approval_prompt(deps: "BotDeps", notice: "HeldApprovalNotice") -> None:
-    text, buttons = format_approval_prompt(notice)
+    text, buttons = format_approval_prompt(notice, message_catalog_for(deps))
 
     for chat_id in await deps.api_client.list_commander_chat_ids():
         await deps.telegram_client.send_with_buttons(chat_id, text, buttons)
 
 
-def format_uncertain_verdict_notice(notice: "UncertainVerdictNotice") -> str:
-    return f"{format_header('uncertain_verdict')}\n\nEvent {notice.event_id} finished with an uncertain verdict.\n\nInsight:\n{notice.insight_text}"
+def format_uncertain_verdict_notice(
+    notice: "UncertainVerdictNotice", catalog: MessageCatalog | None = None
+) -> str:
+    messages = _catalog(catalog)
+    return messages.text(
+        "notice.uncertain",
+        header=format_header("uncertain_verdict", messages),
+        event_id=notice.event_id,
+        insight=notice.insight_text,
+    )
 
 
 async def notify_uncertain_verdict(deps: "BotDeps", notice: "UncertainVerdictNotice") -> None:
-    text = format_uncertain_verdict_notice(notice)
+    text = format_uncertain_verdict_notice(notice, message_catalog_for(deps))
 
     for chat_id in await deps.api_client.list_commander_chat_ids():
         await deps.telegram_client.send_text(chat_id, text)
 
 
-def format_no_match_notice(notice: "NoMatchNotice") -> str:
-    why = notice.reason or "(no reason given)"
-    return (
-        f"{format_header('no_match')}\n\n"
-        f"No existing protocol can fulfill this request.\n"
-        f"Raw text: {notice.raw_text}\n"
-        f"{why}\n"
-        f"Risk: {notice.risk_level} ({notice.risk_reason})"
+def format_no_match_notice(notice: "NoMatchNotice", catalog: MessageCatalog | None = None) -> str:
+    messages = _catalog(catalog)
+    why = notice.reason or messages.text("common.no_reason")
+    return messages.text(
+        "notice.no_match",
+        header=format_header("no_match", messages),
+        raw_text=notice.raw_text,
+        reason=why,
+        risk_level=notice.risk_level,
+        risk_reason=notice.risk_reason,
     )
 
 
 async def notify_no_match(deps: "BotDeps", notice: "NoMatchNotice") -> None:
-    text = format_no_match_notice(notice)
+    text = format_no_match_notice(notice, message_catalog_for(deps))
 
     for chat_id in await deps.api_client.list_commander_chat_ids():
         await deps.telegram_client.send_text(chat_id, text)
 
 
-def _describe_outcome(outcome) -> str:
+def _describe_outcome(outcome, catalog: MessageCatalog | None = None) -> str:
+    messages = _catalog(catalog)
     if outcome.status == "approved":
-        return "Recorded — the protocol has been resumed."
+        return messages.text("approval.resumed")
 
     if outcome.status == "rejected":
-        return "Recorded — declined; the event will not run."
+        return messages.text("approval.rejected")
 
     if outcome.status in ("unauthorized", "invalid_classification", "invalid_candidate"):
         return outcome.message
 
-    who = f" by {outcome.resolved_by}" if outcome.resolved_by else ""
-    return f"This approval was already answered{who}. {outcome.message}".strip()
+    who = messages.text("common.by_identity", identity=outcome.resolved_by) if outcome.resolved_by else ""
+    return messages.text("approval.already_answered", who=who, message=outcome.message).strip()
 
 
 async def handle_approval_answer(deps: "BotDeps", chat_id: str, answering_identity: str, event_id: str, choice: str) -> None:
     """`choice` is already "approved"/"rejected" for a flagged-protocol hold (the button's callback data), or the chosen candidate's protocol name for an ambiguous-selection hold — see..."""
 
-    resolution = await resolve_caller(deps.api_client, answering_identity)
+    messages = message_catalog_for(deps)
+    resolution = await resolve_caller(deps.api_client, answering_identity, messages)
     if resolution.status == "unregistered":
         await deps.telegram_client.send_text(chat_id, resolution.refusal_message)
         return
 
-    refusal = check_permission(resolution.caller, RequestedOperation.APPROVE_RUN)
+    refusal = check_permission(resolution.caller, RequestedOperation.APPROVE_RUN, messages)
     if refusal is not None:
         await deps.telegram_client.send_text(chat_id, refusal)
         return
 
     outcome = await deps.api_client.answer_approval_hold(event_id, choice, answering_identity)
-    await deps.telegram_client.send_text(chat_id, _describe_outcome(outcome))
+    await deps.telegram_client.send_text(chat_id, _describe_outcome(outcome, messages))
 
 
 if TYPE_CHECKING:
@@ -433,26 +499,30 @@ def parse_clarification_callback_data(data: str) -> tuple[str, str]:
     return event_id, classification
 
 
-def format_clarification_prompt(notice: "HeldClarificationNotice") -> str:
-    return (
-        f"{format_header('clarification_needed')}\n\n"
-        f"Raw report:\n{notice.raw_text}\n\n"
-        f"Could not resolve: {notice.unresolved_field}.\n"
-        f"Choose the correct classification below."
+def format_clarification_prompt(
+    notice: "HeldClarificationNotice", catalog: MessageCatalog | None = None
+) -> str:
+    messages = _catalog(catalog)
+    return messages.text(
+        "clarification.prompt",
+        header=format_header("clarification_needed", messages),
+        raw_text=notice.raw_text,
+        field=notice.unresolved_field,
     )
 
 
 async def push_clarification_prompt(deps: "BotDeps", notice: "HeldClarificationNotice") -> None:
-    text = format_clarification_prompt(notice)
+    text = format_clarification_prompt(notice, message_catalog_for(deps))
     buttons = [(choice, build_clarification_callback_data(notice.event_id, choice)) for choice in notice.available_classifications]
 
     for chat_id in await deps.api_client.list_commander_chat_ids():
         await deps.telegram_client.send_with_buttons(chat_id, text, buttons)
 
 
-def _describe_clarification_outcome(outcome) -> str:
+def _describe_clarification_outcome(outcome, catalog: MessageCatalog | None = None) -> str:
+    messages = _catalog(catalog)
     if outcome.status == "resolved":
-        return "Recorded — the flow has resumed with your choice."
+        return messages.text("clarification.resumed")
 
     if outcome.status == "unauthorized":
         return outcome.message
@@ -462,22 +532,23 @@ def _describe_clarification_outcome(outcome) -> str:
 
     # "not_found": already resolved, by this same race or someone else —
     # never silently re-accepted as if it were the first answer (§8.4).
-    who = f" by {outcome.resolved_by}" if outcome.resolved_by else ""
-    return f"This clarification was already resolved{who}. {outcome.message}".strip()
+    who = messages.text("common.by_identity", identity=outcome.resolved_by) if outcome.resolved_by else ""
+    return messages.text("clarification.already_resolved", who=who, message=outcome.message).strip()
 
 
 async def handle_clarification_answer(
     deps: "BotDeps", chat_id: str, answering_identity: str, event_id: str, chosen_classification: str
 ) -> None:
-    resolution = await resolve_caller(deps.api_client, answering_identity)
+    messages = message_catalog_for(deps)
+    resolution = await resolve_caller(deps.api_client, answering_identity, messages)
     if resolution.status == "unregistered":
         await deps.telegram_client.send_text(chat_id, resolution.refusal_message)
         return
 
-    refusal = check_permission(resolution.caller, RequestedOperation.RESOLVE_CLARIFICATION)
+    refusal = check_permission(resolution.caller, RequestedOperation.RESOLVE_CLARIFICATION, messages)
     if refusal is not None:
         await deps.telegram_client.send_text(chat_id, refusal)
         return
 
     outcome = await deps.api_client.answer_clarification_hold(event_id, chosen_classification, answering_identity)
-    await deps.telegram_client.send_text(chat_id, _describe_clarification_outcome(outcome))
+    await deps.telegram_client.send_text(chat_id, _describe_clarification_outcome(outcome, messages))

@@ -194,7 +194,7 @@ filter the whole log stream to that one value — every record with it
 belongs to that one run, in order, regardless of which stage or agent
 produced it.
 
-**Off by default, behind `DEBUG_VERBOSE_LOGGING`** — internal detail
+**Off by default, behind `DEEP_DEBUG`** — internal detail
 that's noise in normal operation but useful when diagnosing a live run,
 most valuably the first time this runs against a real model rather than
 a mock (a parse failure or an unexpected response shape is the likeliest
@@ -217,7 +217,7 @@ problem, and the INFO log alone can't show what produced it):
   outcome an operator actually needs ("did anything match, did it close
   the event") is `precedent_closure`, at INFO, above.
 
-**Set `DEBUG_VERBOSE_LOGGING=true` in the process environment before
+**Set `DEEP_DEBUG=true` in the process environment before
 starting the API or the bot** to turn this on (`false`, `0`, unset, or
 any other value is off — an explicit falsy value is never mistaken for
 "set"; read once at startup, not reconfigurable while running). **Its
@@ -226,3 +226,11 @@ event or message text verbatim, prompt structure, and model output. This
 is a diagnostic mode for investigating a specific problem, not something
 to leave on in normal operation or route to a shared log collector
 without the same care given to the raw event text itself.
+
+When enabled, authenticated commanders can also follow the same committed
+trace live through Telegram or the commander CLI. Entries are deterministic
+catalog strings rendered from structured records; they do not invoke a model
+and never include the raw prompt/response. Viewer clients neither poll nor
+display this route. Raw `model_io` remains in SQLite and can persist until the
+deployment database is explicitly removed or retained data is otherwise
+managed by the operator.

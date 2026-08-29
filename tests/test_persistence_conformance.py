@@ -309,6 +309,34 @@ def test_fetch_log_entries_for_an_unknown_trace_id_returns_empty_list(persistenc
     assert persistence.fetch_log_entries("never-logged") == []
 
 
+def test_fetch_log_entries_since_uses_an_exclusive_cursor(persistence):
+    persistence.write_log_entry("trace-cursor", {"message": "first"})
+    persistence.write_log_entry("trace-cursor", {"message": "second"})
+    entries = persistence.fetch_log_entries("trace-cursor")
+
+    newer = persistence.fetch_log_entries_since("trace-cursor", entries[0]["id"])
+
+    assert [entry["message"] for entry in newer] == ["second"]
+
+
+def test_wait_for_log_entries_returns_after_a_committed_write(persistence):
+    import threading
+    import time
+
+    def _write_later():
+        time.sleep(0.02)
+        persistence.write_log_entry("trace-wait", {"message": "arrived"})
+
+    writer = threading.Thread(target=_write_later)
+    writer.start()
+    try:
+        entries = persistence.wait_for_log_entries_since("trace-wait", 0, 1.0)
+    finally:
+        writer.join()
+
+    assert [entry["message"] for entry in entries] == ["arrived"]
+
+
 def test_log_entries_for_one_trace_id_are_returned_in_the_order_they_were_written(persistence):
     for i in range(5):
         persistence.write_log_entry("trace-1", {"message": f"step {i}", "i": i})

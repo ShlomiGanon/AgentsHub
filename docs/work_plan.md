@@ -1375,3 +1375,14 @@ completion entry of each stage. No historical section above was rewritten —
 where a later detail in `docs/Next_Plan.md` supersedes something stated
 above (e.g. `auth`'s permission model, or "every caller" receiving the same
 system context), that later document is authoritative going forward.
+
+## SPEED_PLAN.md — current latency and operator-experience implementation (2026-08-29)
+
+`SPEED_PLAN.MD` is the active sequential implementation plan derived from the
+evidence in `SPEED.MD`. It covers localized UI catalogs, Telegram/CLI status
+parity, removal of the misleading stream endpoint, durable provider telemetry,
+commander-only Deep Debug, required invocation limits, startup warmup,
+capability-gated LLM reuse, documentation, read-only GitHub CI, and final
+offline verification. Deferred planner/model-policy and structural
+optimizations are recorded separately in the overwritten `docs/Next_Plan.md`
+and are not activated by the current work.

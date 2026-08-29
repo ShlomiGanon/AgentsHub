@@ -2,7 +2,8 @@
 
 import sys
 
-from history import contracts, event_pipeline, query, summaries
+from history import contracts, event_pipeline, field_catalog, query, summaries
+from history.field_catalog import EVENT_FIELD_CATALOG
 from history.contracts import (
     ExtractionExecutionError,
     ExtractionResult,
@@ -49,6 +50,7 @@ sys.modules[f"{__name__}.interface"] = sys.modules[__name__]
 
 __all__ = [
     "ExtractionExecutionError",
+    "EVENT_FIELD_CATALOG",
     "ExtractionResult",
     "HistoryAnswer",
     "HistoryQuerySpec",

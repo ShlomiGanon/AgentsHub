@@ -41,7 +41,7 @@ Maps every API route, bot command/callback, and message intent to its `Requested
 | Entry point | `RequestedOperation` | Viewer allowed |
 |---|---|---|
 | `POST /Event` | `submit_event` | yes |
-| `POST /Msg`, `POST /Msg/Stream` (entry gate, before intent is known) | `submit_message` | yes |
+| `POST /Msg` (entry gate, before intent is known) | `submit_message` | yes |
 | `POST /Msg` — resolved `conversational` intent | `converse` | yes |
 | `POST /Msg` — resolved `question` intent | `ask_question` | yes — own submitted events only |
 | `POST /Msg` — resolved `report` intent | `report_event` | yes |
@@ -60,6 +60,7 @@ Maps every API route, bot command/callback, and message intent to its `Requested
 | `POST /Clarify/<event_id>` | `resolve_clarification` | no |
 | `POST /Approve/<event_id>` | `approve_run` | no |
 | `GET /Notifications` | `poll_notifications` | no |
+| `GET /Trace/<trace_id>` | `view_live_trace` | no |
 | bot `/profile view`, `/profile diff` | `view_profile_overview` | yes |
 | bot `/profile add\|edit\|remove` | `create_protocol` / `update_protocol` / `delete_protocol` | no |
 | bot `/settings view` | `view_settings` | no |

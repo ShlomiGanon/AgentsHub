@@ -15,11 +15,14 @@ from tools.observability import (
     latency_snapshot,
     new_trace_id,
     normalize_trace_id,
+    is_valid_trace_id,
+    render_deep_debug_entry,
     set_trace_id,
     stage_context,
     telemetry_span,
     trace_context,
     verbose_logging_enabled,
+    deep_debug_enabled,
 )
 
 logging_config = observability
@@ -57,9 +60,12 @@ __all__ = [
     "latency_snapshot",
     "new_trace_id",
     "normalize_trace_id",
+    "is_valid_trace_id",
+    "render_deep_debug_entry",
     "set_trace_id",
     "stage_context",
     "telemetry_span",
     "trace_context",
     "verbose_logging_enabled",
+    "deep_debug_enabled",
 ]

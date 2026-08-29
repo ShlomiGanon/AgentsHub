@@ -44,6 +44,130 @@ def normalize_trace_id(value: str | None) -> str:
     return candidate if _TRACE_ID_PATTERN.fullmatch(candidate) else new_trace_id()
 
 
+def is_valid_trace_id(value: str | None) -> bool:
+    """Return whether a caller-supplied trace ID is valid without replacing it."""
+
+    return bool(_TRACE_ID_PATTERN.fullmatch((value or "").strip()))
+
+
+def _debug_tokens(entry: dict[str, Any], catalog: Any) -> str:
+    values = (entry.get("input_tokens"), entry.get("output_tokens"), entry.get("cache_tokens"))
+    if entry.get("total_tokens") is not None:
+        return str(entry["total_tokens"])
+    if all(value is None for value in values):
+        return catalog.text("debug.tokens_unavailable")
+    return catalog.text(
+        "debug.tokens_breakdown",
+        input=values[0] if values[0] is not None else "-",
+        output=values[1] if values[1] is not None else "-",
+        cache=values[2] if values[2] is not None else "-",
+    )
+
+
+def render_deep_debug_entry(entry: dict[str, Any], catalog: Any) -> str | None:
+    """Render one approved structured trace record without exposing raw model I/O."""
+
+    event = entry.get("event")
+    if event == "api_request_started":
+        return catalog.text("debug.api_received")
+    if event == "intent_classified":
+        return catalog.text("debug.intent", intent=entry.get("intent", "?"))
+    if event == "report_received":
+        return catalog.text("debug.report", event_id=entry.get("event_id", "?"))
+    if event == "request_received":
+        return catalog.text("debug.request", event_id=entry.get("event_id", "?"))
+    if event == "extraction_result":
+        return catalog.text(
+            "debug.extraction",
+            classification=entry.get("classification") or "-",
+            area=entry.get("area") or "-",
+        )
+    if event == "risk_assessed":
+        return catalog.text("debug.risk", risk_level=entry.get("risk_level", "?"))
+    if event == "protocol_selection":
+        return catalog.text(
+            "debug.protocol",
+            status=entry.get("status", "?"),
+            protocol=entry.get("protocol_name") or "-",
+        )
+    if event in {"hold_created", "hold_resolved"}:
+        return catalog.text(
+            "debug.hold_created" if event == "hold_created" else "debug.hold_resolved",
+            hold_kind=entry.get("hold_kind", "?"),
+            event_id=entry.get("event_id", "?"),
+        )
+    if event == "queue_started":
+        return catalog.text(
+            "debug.queue",
+            wait_ms=round(float(entry.get("queue_wait_seconds") or 0) * 1000, 3),
+        )
+    if event == "stage_finished":
+        return catalog.text(
+            "debug.stage",
+            stage=entry.get("stage", "?"),
+            status=entry.get("status", "?"),
+            latency_ms=round(float(entry.get("duration_seconds") or 0) * 1000, 3),
+        )
+    if event == "step_start":
+        return catalog.text(
+            "debug.step_start",
+            step_index=entry.get("step_index", "?"),
+            agent=entry.get("agent", "?"),
+        )
+    if event == "step_result":
+        return catalog.text(
+            "debug.step_result",
+            step_index=entry.get("step_index", "?"),
+            agent=entry.get("agent", "?"),
+            status="success" if entry.get("succeeded") else "failed",
+        )
+    if event in {"step_retry", "step_failed"}:
+        return catalog.text(
+            "debug.step_retry" if event == "step_retry" else "debug.step_failed",
+            agent=entry.get("agent", "?"),
+            attempt=entry.get("attempt", "?"),
+        )
+    if event == "protocol_waiting_for_event_data":
+        return catalog.text(
+            "debug.waiting_data",
+            fields=", ".join(entry.get("missing_event_fields") or ("-",)),
+        )
+    if event == "tool_call":
+        return catalog.text(
+            "debug.tool",
+            agent=entry.get("agent", "?"),
+            tool=entry.get("tool", "?"),
+            status=entry.get("status", "?"),
+        )
+    if event == "tool_blocked":
+        return catalog.text(
+            "debug.tool_blocked",
+            agent=entry.get("agent", "?"),
+            tool=entry.get("tool", "?"),
+        )
+    if event in {"provider_request_finished", "provider_request_failed"}:
+        return catalog.text(
+            "debug.provider_failed" if event == "provider_request_failed" else "debug.provider",
+            provider=entry.get("provider", "?"),
+            model=entry.get("model", "?"),
+            latency_ms=entry.get("latency_ms", "?"),
+            tokens=_debug_tokens(entry, catalog),
+        )
+    if event == "insight_generated":
+        return catalog.text("debug.insight", protocol=entry.get("protocol", "?"))
+    if event == "final_verdict":
+        return catalog.text("debug.judgment", verdict=entry.get("verdict", "?"))
+    if event == "event_outcome":
+        return catalog.text(
+            "debug.outcome",
+            event_id=entry.get("event_id", "?"),
+            outcome=entry.get("outcome", "?"),
+        )
+    if event in {"queue_processing_failed", "queue_deadline_expired"}:
+        return catalog.text("debug.queue_failed")
+    return None
+
+
 def get_trace_id() -> str:
     return _current_trace_id.get()
 
@@ -354,6 +478,12 @@ def _render_model_io(f: dict[str, Any], record: logging.LogRecord) -> str:
     return f"model I/O → {f.get('agent', '?')} [{f.get('stage', '?')}]"
 
 
+def _render_provider_request_failed(f: dict[str, Any], record: logging.LogRecord) -> str:
+    target = f"{f.get('provider', '?')}/{f.get('model', '?')}"
+    detail = _truncate(f.get("error_detail") or f.get("termination_reason", "provider error"))
+    return f"provider request failed → {target} ({detail})"
+
+
 _EVENT_RENDERERS: dict[str, Callable[[dict[str, Any], logging.LogRecord], str]] = {
     "intent_classified": _render_intent_classified,
     "extraction_result": _render_extraction_result,
@@ -378,7 +508,29 @@ _EVENT_RENDERERS: dict[str, Callable[[dict[str, Any], logging.LogRecord], str]] 
     "api_error": _render_api_error,
     "api_unexpected_error": _render_api_unexpected_error,
     "model_io": _render_model_io,
+    "provider_request_failed": _render_provider_request_failed,
 }
+
+
+class _RedundantCrewAIErrorFilter(logging.Filter):
+    """Hide CrewAI's duplicated, provider-mislabelled raw error records.
+
+    The correlated ``provider_request_failed`` event retains the real provider,
+    model, trace and underlying error. CrewAI emits these raw root records in
+    both its inner and outer call wrappers and labels OpenRouter as OpenAI.
+    """
+
+    _PREFIXES = (
+        "OpenAI API call failed:",
+        "OpenAI Responses API call failed:",
+        "Failed to connect to OpenAI API:",
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not (
+            record.name == "root"
+            and record.getMessage().startswith(self._PREFIXES)
+        )
 
 
 class _HumanReadableFormatter(logging.Formatter):
@@ -405,7 +557,18 @@ class _PersistenceLogHandler(logging.Handler):
         self._warned = False
 
     def emit(self, record: logging.LogRecord) -> None:
-        if getattr(record, "telemetry_only", False):
+        durable_telemetry_events = {
+            "api_request_finished",
+            "model_invocation_finished",
+            "provider_request_finished",
+            "provider_request_failed",
+            "queue_started",
+            "stage_finished",
+        }
+        if (
+            getattr(record, "telemetry_only", False)
+            and getattr(record, "event", None) not in durable_telemetry_events
+        ):
             return
         try:
             trace_id = _resolve_trace_id(record) or None
@@ -452,6 +615,8 @@ def configure_logging(profile_name: str, level: int | None = None, persistence: 
     root = logging.getLogger()
     root.setLevel(level if level is not None else (logging.DEBUG if base_config.DEBUG_FLAG else logging.INFO))
     root.handlers.clear()
+    if not any(isinstance(log_filter, _RedundantCrewAIErrorFilter) for log_filter in root.filters):
+        root.addFilter(_RedundantCrewAIErrorFilter())
 
     if base_config.LOG_CONSOLE_JSON_ENABLED:
         json_handler = logging.StreamHandler(stream=sys.stdout)
@@ -472,13 +637,19 @@ def verbose_logging_enabled() -> bool:
     return base_config.DEBUG_FLAG
 
 
+def deep_debug_enabled() -> bool:
+    """Whether full structured model I/O persistence is enabled."""
+
+    return base_config.DEEP_DEBUG
+
+
 def log_ai_interaction(agent_name: str, prompt: str, response: str, stage: str = "", trace_id: str | None = None) -> None:
     """Log one exact model exchange — the full prompt sent and the full raw response received, before any parsing — at DEBUG, through the same structured JSON logger and trace-ID mecha..."""
 
-    if not base_config.DEBUG_FLAG:
+    if not base_config.DEEP_DEBUG:
         return
 
-    logger.debug(
+    logger.info(
         "model interaction",
         extra={
             "event": "model_io",

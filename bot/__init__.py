@@ -16,10 +16,8 @@ commands = interactions
 formatting = interactions
 holds = interactions
 users = interactions
-presentation = interactions
 for legacy_name in ("commands", "formatting", "holds", "users"):
     sys.modules[f"{__name__}.{legacy_name}"] = interactions
-sys.modules[f"{__name__}.presentation"] = interactions
 
 from bot import transports
 from bot.transports import HttpApiClient, PTBTelegramClient, TelegramClient, _do_request
@@ -42,7 +40,7 @@ sys.modules[f"{__name__}.notifications"] = background_services
 sys.modules[f"{__name__}.startup"] = background_services
 
 from bot import app
-from bot.app import handle_incoming_message
+from bot.app import handle_incoming_message, present_incoming_message
 
 interface = sys.modules[__name__]
 sys.modules[f"{__name__}.interface"] = sys.modules[__name__]
@@ -68,6 +66,7 @@ __all__ = [
     "handle_approval_answer",
     "handle_clarification_answer",
     "handle_incoming_message",
+    "present_incoming_message",
     "parse_approval_callback_data",
     "split_message",
 ]

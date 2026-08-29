@@ -27,6 +27,21 @@ def test_debug_flag_parsing_is_strict_not_any_non_empty_string():
     assert _parse_debug_flag("  true  ") is True
 
 
+def test_deep_debug_defaults_off_and_is_read_once_at_import(monkeypatch):
+    import importlib
+    import config.base as base_config
+
+    monkeypatch.setenv("DEEP_DEBUG", "true")
+    importlib.reload(base_config)
+    try:
+        assert base_config.DEEP_DEBUG is True
+    finally:
+        monkeypatch.delenv("DEEP_DEBUG", raising=False)
+        importlib.reload(base_config)
+
+    assert base_config.DEEP_DEBUG is False
+
+
 def test_debug_flag_is_read_from_the_environment_variable_once_at_import(monkeypatch):
     import importlib
 

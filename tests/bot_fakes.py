@@ -12,7 +12,7 @@ which exists to fail loudly, not to be a test double.
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from bot.api_client import ApiRequestError, BotApiClient, BotNotification, HoldAnswerOutcome, JobResult, MessageSubmissionResult, ProfileView, SettingsView, UserLookupResult, WriteResult
+from bot.api_client import ApiRequestError, BotApiClient, BotNotification, HoldAnswerOutcome, JobResult, MessageSubmissionResult, ProfileView, SettingsView, TracePollResult, UserLookupResult, WriteResult
 from bot.telegram_client import TelegramClient
 
 
@@ -29,12 +29,26 @@ class FakeTelegramClient(TelegramClient):
         self.token_is_valid = token_is_valid
         self.sent: list[SentMessage] = []
         self.answered_callback_query_ids: list[str] = []
+        self.status_events: list[tuple] = []
+        self._next_status_id = 1
 
     async def validate_token(self) -> bool:
         return self.token_is_valid
 
     async def send_text(self, chat_id: str, text: str) -> None:
         self.sent.append(SentMessage(chat_id=chat_id, text=text))
+
+    async def send_status(self, chat_id: str, text: str) -> str:
+        message_id = str(self._next_status_id)
+        self._next_status_id += 1
+        self.status_events.append(("send", chat_id, message_id, text))
+        return message_id
+
+    async def edit_status(self, chat_id: str, message_id: str, text: str) -> None:
+        self.status_events.append(("edit", chat_id, message_id, text))
+
+    async def delete_status(self, chat_id: str, message_id: str) -> None:
+        self.status_events.append(("delete", chat_id, message_id))
 
     async def send_with_buttons(self, chat_id: str, text: str, buttons: Sequence[tuple[str, str]]) -> None:
         self.sent.append(SentMessage(chat_id=chat_id, text=text, buttons=tuple(buttons)))
@@ -63,6 +77,7 @@ class FakeBotApiClient(BotApiClient):
     settings_write_result: WriteResult | None = None
     job_result: JobResult | None = None
     pending_notifications: tuple[BotNotification, ...] = ()
+    trace_results: list[TracePollResult] = field(default_factory=list)
 
     calls: list[tuple] = field(default_factory=list)
 
@@ -78,7 +93,8 @@ class FakeBotApiClient(BotApiClient):
         return self.commander_chat_ids
 
     async def submit_message(
-        self, text: str, sender_identity: str, source_message_id: str, conversation_id: str | None = None
+        self, text: str, sender_identity: str, source_message_id: str,
+        conversation_id: str | None = None, trace_id: str | None = None,
     ) -> MessageSubmissionResult:
         if sender_identity not in self.users:
             raise ApiRequestError(401, f"'{sender_identity}' is not a registered identity")
@@ -86,6 +102,8 @@ class FakeBotApiClient(BotApiClient):
         self.calls.append(call)
         if conversation_id is not None:
             self.calls.append(("submit_message_conversation", conversation_id))
+        if trace_id is not None:
+            self.calls.append(("submit_message_trace", trace_id))
         assert self.message_submission_result is not None, "test must set message_submission_result"
         return self.message_submission_result
 
@@ -130,3 +148,11 @@ class FakeBotApiClient(BotApiClient):
     async def poll_pending_notifications(self, since: int, wait_seconds: int = 0) -> tuple[tuple[BotNotification, ...], int]:
         self.calls.append(("poll_pending_notifications", since))
         return self.pending_notifications, since + len(self.pending_notifications)
+
+    async def poll_trace(
+        self, trace_id: str, since: int, wait_seconds: int, caller_identity: str
+    ) -> TracePollResult:
+        self.calls.append(("poll_trace", trace_id, since, wait_seconds, caller_identity))
+        if self.trace_results:
+            return self.trace_results.pop(0)
+        return TracePollResult((), since, False)
