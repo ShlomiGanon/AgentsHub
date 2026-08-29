@@ -14,8 +14,10 @@ from history.contracts import (
     HistorySource,
     PrecedentMatch,
     RetrievedSource,
+    SemanticEventView,
 )
 from history.event_pipeline import day_bounds, month_bounds, parse_timestamp, storage_timestamp, year_bounds
+from history.field_catalog import FIELD_BY_KEY, FIELD_MEANINGS_GLOSSARY
 from persistence import EventSearchCriteria, PersistenceError
 from tools import get_trace_id
 
@@ -35,6 +37,54 @@ _HISTORY_OUTCOMES = {
 }
 _RISK_LEVELS = {"high", "low"}
 _MAX_HISTORY_RESULTS = 100
+
+
+def _build_semantic_event_view(event: dict) -> SemanticEventView:
+    """Filter one raw persistence record down to its narrative-category fields
+    only (history/field_catalog.py) — internal plumbing (trace_id,
+    conversation_id, deadline_at, ingestion identity) is never included, for
+    any caller, and a field is omitted entirely when its value is None rather
+    than shown as a false empty fact."""
+
+    fields: list[tuple[str, object]] = []
+    for definition in FIELD_BY_KEY.values():
+        if definition.category != "narrative" or definition.key in ("event_id", "steps"):
+            continue
+        if definition.key not in event:
+            continue
+        value = event[definition.key]
+        if value is None:
+            continue
+        fields.append((definition.label, value))
+
+    return SemanticEventView(
+        event_id=event["event_id"],
+        fields=tuple(fields),
+        steps=tuple(event.get("steps") or ()),
+    )
+
+
+def _semantic_view_payload(view: SemanticEventView) -> dict:
+    payload = {FIELD_BY_KEY["event_id"].label: view.event_id, **dict(view.fields)}
+    if view.steps:
+        payload[FIELD_BY_KEY["steps"].label] = view.steps
+    return payload
+
+
+def _history_agent_prompt(instruction: str, question: str, views: list[SemanticEventView]) -> str:
+    """Build a History Agent prompt from already-filtered `SemanticEventView`s only —
+    never a raw persistence record. Includes the field glossary so the agent can
+    faithfully explain what a present field means without inventing semantics."""
+
+    events_payload = [_semantic_view_payload(view) for view in views]
+    return (
+        f"{instruction}\n"
+        "Every field below is already filtered to what you may discuss for this caller — treat any field not "
+        "present as not available, never guess or infer it. Field meanings, for reference if asked what one means:\n"
+        f"{json.dumps(FIELD_MEANINGS_GLOSSARY, ensure_ascii=False, sort_keys=True)}\n"
+        f"Question: {question}\n"
+        f"Events: {json.dumps(events_payload, ensure_ascii=False, sort_keys=True, default=str)}"
+    )
 
 
 def _exact_summary(persistence, level: str, start: datetime, end: datetime) -> dict | None:
@@ -284,7 +334,7 @@ class HistoryQueryService:
         )
 
     @staticmethod
-    def _criteria(spec: HistoryQuerySpec, *, limit: int | None = None) -> EventSearchCriteria:
+    def _criteria(spec: HistoryQuerySpec, *, limit: int | None = None, sender_identity: str | None = None) -> EventSearchCriteria:
         return EventSearchCriteria(
             time_start=spec.time_start,
             time_end=spec.time_end,
@@ -295,6 +345,7 @@ class HistoryQueryService:
             protocol_names=spec.protocol_names,
             event_ids=spec.event_ids,
             risk_levels=spec.risk_levels,
+            sender_identity=sender_identity,
             order=spec.order,
             limit=limit if limit is not None else spec.limit,
         )
@@ -311,18 +362,15 @@ class HistoryQueryService:
             for event in events
         )
 
-    @staticmethod
-    def _event_line(event: dict) -> str:
-        occurred_at = event.get("occurred_at") or event.get("received_at") or "unknown time"
-        classification = event.get("classification") or "unclassified"
-        area = event.get("area") or "unknown area"
-        outcome = event.get("outcome") or "no outcome yet"
-        return f"{event['event_id']}: {occurred_at}, {classification}, {area}, outcome={outcome}"
+    def query_spec(self, question: str, spec: HistoryQuerySpec, *, sender_identity_filter: str | None = None) -> HistoryAnswer:
+        """`sender_identity_filter` restricts every count/search/aggregate this call performs to events submitted
+        by exactly this identity — the ownership scoping a viewer's `ask_question` operation requires
+        (docs/Next_Plan.md §5 decision record). `None` (a commander, or an already-unrestricted caller) applies
+        no such restriction. This is the single enforcement point: every operation below shares this criteria."""
 
-    def query_spec(self, question: str, spec: HistoryQuerySpec) -> HistoryAnswer:
         started_at = time.perf_counter()
         normalized = self._validate_spec(spec)
-        criteria = self._criteria(normalized)
+        criteria = self._criteria(normalized, sender_identity=sender_identity_filter)
 
         def _finish(answer: HistoryAnswer) -> HistoryAnswer:
             logger.info(
@@ -360,7 +408,9 @@ class HistoryQueryService:
                 return _finish(HistoryAnswer(answer or "No matching events.", (), normalized.time_start, normalized.time_end, total_count, normalized, False))
 
             query_limit = 1 if normalized.operation == "latest" else normalized.limit
-            events = tuple(self._persistence.search_events(self._criteria(normalized, limit=query_limit)))
+            events = tuple(self._persistence.search_events(
+                self._criteria(normalized, limit=query_limit, sender_identity=sender_identity_filter)
+            ))
         except PersistenceError as exc:
             raise HistoryQueryError(str(exc)) from exc
 
@@ -370,26 +420,48 @@ class HistoryQueryService:
         if not events:
             raise HistoryQueryError("no stored events match the requested history filters")
 
+        views = [_build_semantic_event_view(event) for event in events]
+
         if normalized.operation == "latest":
-            answer = self._event_line(events[0])
-            return _finish(HistoryAnswer(answer, sources, normalized.time_start, normalized.time_end, total_count, normalized, False))
+            prompt = _history_agent_prompt(
+                "Describe this one most recent stored event naturally, in one or two sentences. Always state its "
+                "Event ID explicitly, exactly as given, so it can be referenced again. State plainly when a fact "
+                "is missing rather than inventing it.",
+                question, views,
+            )
+            agent_result = self._history_agent.process(prompt, allowed_tools=[])
+            if agent_result.status != "success":
+                raise HistoryQueryError(f"history agent could not answer: {agent_result.text}")
+            return _finish(HistoryAnswer(agent_result.text, sources, normalized.time_start, normalized.time_end, total_count, normalized, False))
 
         if normalized.operation == "event_details" and len(events) == 1:
-            context_label = "Stored event"
+            context_instruction = (
+                "Answer only from the one supplied stored event. Explain the fields relevant to the question "
+                "faithfully, distinguish a missing value from a false one, and always state the Event ID."
+            )
         elif normalized.operation == "list":
-            answer = "\n".join(self._event_line(event) for event in events)
+            prompt = _history_agent_prompt(
+                "List these stored events naturally. Give each one its own short entry, numbered in the order "
+                "given, and always state that event's own Event ID explicitly within its entry, so any one of "
+                "them can be referenced again later by number or by ID. State plainly when a fact is missing "
+                "rather than inventing it.",
+                question, views,
+            )
+            agent_result = self._history_agent.process(prompt, allowed_tools=[])
+            if agent_result.status != "success":
+                raise HistoryQueryError(f"history agent could not answer: {agent_result.text}")
+            answer = agent_result.text
             if truncated:
-                answer += f"\nShowing {len(events)} of {total_count} matching events."
+                answer += f"\n\nShowing {len(events)} of {total_count} matching events."
             return _finish(HistoryAnswer(answer, sources, normalized.time_start, normalized.time_end, total_count, normalized, truncated))
         else:
-            context_label = "Filtered stored history"
+            context_instruction = (
+                "Answer only from the supplied, database-filtered history. Preserve contradictions, state when "
+                "the records are insufficient, do not claim that omitted records were searched, and always state "
+                "each discussed event's Event ID explicitly."
+            )
 
-        prompt = (
-            "Answer only from the supplied, database-filtered history. Preserve contradictions, state "
-            "when the records are insufficient, and do not claim that omitted records were searched.\n"
-            f"Question: {question}\n{context_label}: "
-            f"{json.dumps(events, ensure_ascii=False, sort_keys=True, default=str)}"
-        )
+        prompt = _history_agent_prompt(context_instruction, question, views)
         agent_result = self._history_agent.process(prompt, allowed_tools=[])
         if agent_result.status != "success":
             raise HistoryQueryError(f"history agent could not answer: {agent_result.text}")
@@ -411,9 +483,23 @@ class HistoryQueryService:
         time_end: str | None = None,
         classification: str | None = None,
         area: str | None = None,
+        *,
+        sender_identity_filter: str | None = None,
     ) -> HistoryAnswer:
         start, end = self._resolve_bounds(time_start, time_end)
         retrieved = retrieve_range(self._persistence, start, end, classification, area)
+
+        if sender_identity_filter is not None:
+            # A rolled-up period summary (`level` daily/monthly/yearly) is prose
+            # covering potentially many senders' events with no way to redact
+            # just one sender's share of it — it can never be safely shown to an
+            # ownership-scoped caller, so it is dropped entirely rather than
+            # risked. Only raw, per-event sources the caller actually owns
+            # remain (docs/Next_Plan.md §5 decision record).
+            retrieved = [
+                source for source in retrieved
+                if source.level == "raw_event" and source.content.get("sender_identity") == sender_identity_filter
+            ]
 
         context = [
             {
@@ -421,14 +507,20 @@ class HistoryQueryService:
                 "period_start": source.period_start,
                 "period_end": source.period_end,
                 "source_id": source.source_id,
-                "content": source.content,
+                "content": (
+                    _semantic_view_payload(_build_semantic_event_view(source.content))
+                    if source.level == "raw_event"
+                    else source.content
+                ),
                 "matched_event_ids": source.matched_event_ids,
             }
             for source in retrieved
         ]
         prompt = (
             "Answer the question only from the supplied stored history context. State when the "
-            "record is insufficient and preserve contradictions.\n"
+            "record is insufficient and preserve contradictions. If asked what a field means, use only the "
+            "meanings given here, never invented database semantics:\n"
+            f"{json.dumps(FIELD_MEANINGS_GLOSSARY, ensure_ascii=False, sort_keys=True)}\n"
             f"Question: {question}\nContext: {json.dumps(context, ensure_ascii=False, sort_keys=True)}"
         )
         agent_result = self._history_agent.process(prompt, allowed_tools=[])
@@ -458,21 +550,29 @@ class HistoryQueryService:
             total_events_matched=len(matched_ids),
         )
 
-    def answer_most_recent_event(self, question: str) -> HistoryAnswer:
-        """A narrow, direct-lookup path for "what is the last event"-shaped questions (orchestrator.question_flow's own direct-lookup classification decides when to call this instead of th..."""
+    def answer_most_recent_event(self, question: str, *, sender_identity_filter: str | None = None) -> HistoryAnswer:
+        """A narrow, direct-lookup path for "what is the last event"-shaped questions (orchestrator.question_flow's own direct-lookup classification decides when to call this instead of th...
+
+        `sender_identity_filter` restricts the lookup to the caller's own most
+        recent event (docs/Next_Plan.md §5 decision record); `None` (a
+        commander) applies no restriction."""
 
         now = self._clock()
-        criteria = EventSearchCriteria(time_end=storage_timestamp(now), order="newest", limit=1)
+        criteria = EventSearchCriteria(
+            time_end=storage_timestamp(now), sender_identity=sender_identity_filter, order="newest", limit=1
+        )
         events = self._persistence.search_events(criteria)
         if not events:
             raise HistoryQueryError("no events have been recorded yet")
 
         most_recent = events[0]
+        view = _build_semantic_event_view(most_recent)
 
-        prompt = (
-            "Answer the question using only the one most recent event supplied below — the record has "
-            "already been searched for you; do not ask for more context or claim none was given.\n"
-            f"Question: {question}\nMost recent event: {json.dumps(most_recent, ensure_ascii=False, sort_keys=True, default=str)}"
+        prompt = _history_agent_prompt(
+            "Answer the question using only the one most recent event supplied below — the record has already "
+            "been searched for you; do not ask for more context or claim none was given. Always state its "
+            "Event ID explicitly.",
+            question, [view],
         )
         agent_result = self._history_agent.process(prompt, allowed_tools=[])
         if agent_result.status != "success":

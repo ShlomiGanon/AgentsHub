@@ -42,73 +42,6 @@ class MainAgent(Agent):
 
 
 @dataclass(frozen=True)
-class SystemCapability:
-    name: str
-    description: str
-
-
-SYSTEM_CAPABILITIES = (
-    SystemCapability("report_event", "Receive and classify an operational event report."),
-    SystemCapability("request_action", "Accept an action request and run a matching approved protocol."),
-    SystemCapability("ask_current_state", "Answer current-state questions through suitable read-only specialist tools."),
-    SystemCapability("ask_event_history", "Search and explain persisted event history without treating conversation as operational fact."),
-    SystemCapability("handle_human_review", "Request clarification or commander approval when safe execution requires it."),
-)
-
-
-def build_system_capability_context(
-    profile_name: str,
-    protocols: tuple[Protocol, ...],
-    registry: "AgentRegistry",
-    event_types: tuple[str, ...],
-    areas: tuple[str, ...],
-) -> dict:
-    agents = []
-
-    for agent in registry.all():
-        descriptor = agent.descriptor
-        if descriptor.name == "main_agent":
-            continue
-
-        agents.append({
-            "name": descriptor.name,
-            "role": descriptor.role,
-            "tools": [
-                {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "side_effecting": tool.side_effecting,
-                }
-                for tool in descriptor.tools
-            ],
-        })
-
-    return {
-        "identity": {
-            "profile_name": profile_name,
-            "role": "main agent and orchestrator of the event-management service",
-        },
-        "capabilities": [
-            {"name": capability.name, "description": capability.description}
-            for capability in SYSTEM_CAPABILITIES
-        ],
-        "event_types": list(event_types),
-        "areas": list(areas),
-        "protocols": [
-            {
-                "name": protocol.name,
-                "description": protocol.description,
-                "participating_agents": list(protocol.participating_agents),
-                "approved_tools": list(protocol.approved_tools),
-                "requires_approval": protocol.approval_flag,
-            }
-            for protocol in protocols
-        ],
-        "sub_agents": agents,
-    }
-
-
-@dataclass(frozen=True)
 class RiskAssessment:
     score: float
     level: Literal["high", "low"]
@@ -538,13 +471,18 @@ def _build_conversational_prompt(message_text: str, system_context: dict | None 
 
     return (
         "Reply naturally and directly to this conversational message. The system context below is the sole "
-        "source of truth for your identity and capabilities. Never describe yourself as a generic AI assistant. "
-        "When asked who you are, identify yourself as the main agent managing the named profile's event-management "
-        "services and briefly explain the relevant ways the user can work with you. When asked about capabilities, "
-        "protocols, event types, areas, or sub-agents, answer from the matching context fields only. Do not dump raw "
-        "JSON or list unrelated details. Phrase the answer naturally in the same language as the user's message "
-        "unless the user explicitly requests another language. Keep it concise and do not add generic invitations "
-        "such as asking what is on the user's mind.\n\n"
+        "source of truth for your identity and capabilities, and it is already filtered for exactly what this "
+        "caller is permitted to know — never describe yourself as a generic AI assistant. When asked who you are, "
+        "identify yourself as the main agent managing the named profile's event-management services and briefly "
+        "explain the relevant ways the user can work with you. When asked what you can do, list only the "
+        "capabilities present in the context — never more, never fewer. When asked about protocols, sub-agents, "
+        "tools, or other runtime details, answer only from the matching context fields; if such a field is absent "
+        "from the context entirely, that means it is not available to this caller — say plainly that this detail "
+        "isn't something you can share with them, in one short, natural sentence, without naming, counting, "
+        "hinting at, or otherwise describing what the missing field would have contained. Do not dump raw JSON or "
+        "list unrelated details. Phrase the answer naturally in the same language as the user's message unless the "
+        "user explicitly requests another language. Keep it concise and do not add generic invitations such as "
+        "asking what is on the user's mind.\n\n"
         f"System context JSON: {json.dumps(context_payload, ensure_ascii=False, sort_keys=True)}\n"
         f"Message JSON: {json.dumps(message_text, ensure_ascii=False)}\n\n"
         "Do not invent facts, data, names, tools, or capabilities absent from the system context. If the context "
@@ -933,13 +871,17 @@ _AGENT_TASK_PATTERN = re.compile(r"AGENT:\s*(\S+)\s*\n\s*TASK:\s*(.+?)(?=\nAGENT
 _NONE_PATTERN = re.compile(r"NONE:\s*(.+)", re.IGNORECASE | re.DOTALL)
 
 
-def _build_direct_lookup_prompt(question: str) -> str:
+def _build_direct_lookup_prompt(question: str, conversation_messages: tuple[dict, ...] = ()) -> str:
     return (
         "Decide whether this question can be answered by directly looking up the single most recent "
         "event in the historical record — questions like \"what is the last event\", \"what just "
         "happened\", or \"what was the most recent report\" — as opposed to a question needing "
         "broader reasoning, filtering by area or classification, comparison across multiple events, "
-        "or an agent-specific action.\n\n"
+        "or an agent-specific action. A question referring back to a specific event already discussed "
+        "earlier in this conversation (\"that event\", \"the first one\", \"what happened after that?\") "
+        "is not a most-recent-event lookup even if it sounds similar — route it normally instead, so the "
+        "reference can be resolved to that event's own Event ID.\n\n"
+        f"Conversation context JSON: {json.dumps(conversation_messages, ensure_ascii=False, sort_keys=True)}\n"
         f"Question: {question}\n\n"
         "If this is a direct \"most recent event\" lookup, respond in exactly this format, one line:\n"
         "DIRECT_LOOKUP: most_recent\n\n"
@@ -989,6 +931,7 @@ def _build_agent_selection_prompt(
     question: str,
     descriptors: list["AgentDescriptor"],
     history_context: dict | None = None,
+    conversation_messages: tuple[dict, ...] = (),
 ) -> str:
     agents_data = []
     for descriptor in descriptors:
@@ -1005,7 +948,16 @@ def _build_agent_selection_prompt(
         "that is not listed. Multiple specialists are allowed.\n\n"
         f"Question JSON: {json.dumps(question, ensure_ascii=False)}\n"
         f"Available agents JSON: {json.dumps(agents_data, ensure_ascii=False, sort_keys=True)}\n"
-        f"History query vocabulary JSON: {json.dumps(history_context or {}, ensure_ascii=False, sort_keys=True)}\n\n"
+        f"History query vocabulary JSON: {json.dumps(history_context or {}, ensure_ascii=False, sort_keys=True)}\n"
+        f"Conversation context JSON: {json.dumps(conversation_messages, ensure_ascii=False, sort_keys=True)}\n\n"
+        "The conversation context is references only, never operational fact — never answer from what a prior "
+        "message claims happened. If the current question refers back to an event already discussed there "
+        "(\"that event\", \"the first one\", \"what happened after that?\"), use the conversation context only to "
+        "identify which stable Event ID(s) the reference means (a prior assistant answer that discussed one "
+        "event, or a numbered list of several, in the order given), then route to history with "
+        "operation=\"event_details\" and exactly those event_ids, so the current record is fetched fresh rather "
+        "than trusting the remembered text. If more than one previously discussed event could plausibly match "
+        "the reference, route to clarification and ask which one, rather than guessing.\n"
         "For a history route, resolve relative calendar periods using current_time_local and timezone, "
         "then return absolute ISO-8601 bounds. "
         "Use only listed classifications, areas, protocols, outcomes, and risk levels. "
@@ -1144,6 +1096,19 @@ def _build_message_plan_prompt(
         f"Agents JSON: {json.dumps(agents_data, ensure_ascii=False, sort_keys=True)}\n"
         f"History vocabulary JSON: {json.dumps(history_context, ensure_ascii=False, sort_keys=True)}\n"
         f"System identity and capabilities JSON: {json.dumps(system_context or {}, ensure_ascii=False, sort_keys=True)}\n"
+        "Protocols JSON and Agents JSON exist only so you can route this message correctly (matching it against real "
+        "protocols/agents, detecting a quoted protocol/agent name) — never as a source for conversational_reply, even "
+        "if the message directly or indirectly asks for protocol names, agent names, tool names, or a count of "
+        "either. conversational_reply may only ever draw from System identity and capabilities JSON; if that JSON "
+        "does not contain what was asked, say plainly that it is not something you can share with this caller, "
+        "without naming, counting, or hinting at what Protocols JSON or Agents JSON actually contain.\n"
+        "If a question refers back to an event already discussed in the conversation context (\"that event\", \"the "
+        "first one\", \"what happened after that?\"), use the conversation context only to identify which stable "
+        "Event ID(s) the reference means (a prior assistant answer that discussed one event, or a numbered list of "
+        "several, in the order given), then set question_plan to the history route with "
+        "operation=\"event_details\" and exactly those event_ids, so the current record is fetched fresh rather "
+        "than trusting the remembered text. If more than one previously discussed event could plausibly match, use "
+        "the clarification route and ask which one, rather than guessing.\n"
         "Return exactly one JSON object containing every intent-analysis field required below, plus question_plan and "
         "conversational_reply. question_plan is null unless primary_intent is question. For a question it uses one of "
         "the existing routing shapes: history, agents, none, or clarification. conversational_reply is a short final "
@@ -1218,7 +1183,12 @@ def answer_question_from_plan(
     history_query_service: "HistoryQueryService",
     *,
     max_fanout: int = 4,
+    caller_sender_identity_filter: str | None = None,
 ) -> QuestionAnswer:
+    """`caller_sender_identity_filter` restricts every history lookup this call performs to events the caller
+    themselves submitted — the ownership scoping a viewer's `ask_question` operation requires
+    (docs/Next_Plan.md §5 decision record). `None` (a commander) applies no restriction."""
+
     if selection.status == "none":
         return QuestionAnswer(_cant_answer_reply(selection.reason))
     if selection.status == "clarification":
@@ -1227,7 +1197,9 @@ def answer_question_from_plan(
         assert selection.history_query_spec is not None
         try:
             with stage_context("question_history_query"):
-                history_answer = history_query_service.query_spec(question, selection.history_query_spec)
+                history_answer = history_query_service.query_spec(
+                    question, selection.history_query_spec, sender_identity_filter=caller_sender_identity_filter
+                )
             provenance = {
                 "timezone": getattr(history_query_service, "timezone_name", None),
                 "time_start": history_answer.time_start,
@@ -1258,7 +1230,9 @@ def answer_question_from_plan(
         agent = registry.get(agent_name)
         if isinstance(agent, HistoryAgent):
             try:
-                return agent_name, history_query_service.query(task_text).answer
+                return agent_name, history_query_service.query(
+                    task_text, sender_identity_filter=caller_sender_identity_filter
+                ).answer
             except HistoryQueryError as exc:
                 return agent_name, f"(no usable answer: {exc})"
         read_only_tools = [tool.name for tool in agent.exposed_tools() if not tool.side_effecting]
@@ -1308,14 +1282,25 @@ def answer_question(
     question: str,
     registry: "AgentRegistry",
     history_query_service: "HistoryQueryService",
+    *,
+    caller_sender_identity_filter: str | None = None,
+    conversation_messages: tuple[dict, ...] = (),
 ) -> str:
+    """`caller_sender_identity_filter` — see `answer_question_from_plan`'s docstring; the same ownership
+    scoping applies to this legacy routing path. `conversation_messages` lets this path resolve a
+    reference ("that event", "the first one") to a stable Event ID the same way the merged planner
+    already does (docs/Next_Plan.md §10) — conversation facts are references only, re-fetched fresh from
+    history once resolved, never trusted as the current record."""
+
     with stage_context("question_direct_lookup_classification"):
-        lookup_result = main_agent.process(_build_direct_lookup_prompt(question), [])
+        lookup_result = main_agent.process(_build_direct_lookup_prompt(question, conversation_messages), [])
 
     if lookup_result.status == "success" and _is_direct_most_recent_lookup(lookup_result.text):
         try:
             with stage_context("question_direct_lookup"):
-                return history_query_service.answer_most_recent_event(question).answer
+                return history_query_service.answer_most_recent_event(
+                    question, sender_identity_filter=caller_sender_identity_filter
+                ).answer
         except HistoryQueryError as exc:
             return _cant_answer_reply(str(exc))
 
@@ -1324,7 +1309,9 @@ def answer_question(
     history_context_factory = getattr(history_query_service, "planning_context", None)
     history_context = history_context_factory() if callable(history_context_factory) else {}
     with stage_context("question_routing"):
-        selection_result = main_agent.process(_build_agent_selection_prompt(question, descriptors, history_context), [])
+        selection_result = main_agent.process(
+            _build_agent_selection_prompt(question, descriptors, history_context, conversation_messages), []
+        )
 
     if selection_result.status != "success":
         raise OrchestrationParseError(f"question routing did not produce a usable response: {selection_result.text}")
@@ -1338,7 +1325,9 @@ def answer_question(
         assert selection.history_query_spec is not None
         try:
             with stage_context("question_history_query"):
-                return history_query_service.query_spec(question, selection.history_query_spec).answer
+                return history_query_service.query_spec(
+                    question, selection.history_query_spec, sender_identity_filter=caller_sender_identity_filter
+                ).answer
         except HistoryQueryError as exc:
             return _cant_answer_reply(str(exc))
 
@@ -1357,7 +1346,9 @@ def answer_question(
         if isinstance(agent, HistoryAgent):
             try:
                 with stage_context("question_history_query"):
-                    sub_answers[agent_name] = history_query_service.query(task_text).answer
+                    sub_answers[agent_name] = history_query_service.query(
+                        task_text, sender_identity_filter=caller_sender_identity_filter
+                    ).answer
             except HistoryQueryError as exc:
                 sub_answers[agent_name] = f"(no usable answer: {exc})"
             continue

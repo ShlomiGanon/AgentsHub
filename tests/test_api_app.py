@@ -71,9 +71,11 @@ def test_build_context_succeeds_against_a_real_profile(test_core_model, test_sub
 
 
 def test_get_system_succeeds_against_the_real_wiring(test_core_model, test_sub_model):
+    # protocols are commander-only (view_system_internals) — "u1" must be a
+    # commander to see them in the GET /SYSTEM payload.
     ctx = build_context("fixtures.profiles.minimal_profile", core_model=test_core_model, sub_model=test_sub_model)
     try:
-        ctx.deps.persistence.write_user("u1", "viewer")
+        ctx.deps.persistence.write_user("u1", "commander")
         client = build_app(ctx).test_client()
 
         resp = client.get("/SYSTEM", headers={"X-Identity": "u1"})
@@ -90,9 +92,10 @@ def test_get_system_succeeds_against_the_real_wiring(test_core_model, test_sub_m
 
 
 def test_get_protocol_succeeds_against_the_real_wiring(test_core_model, test_sub_model):
+    # list_protocols is commander-only — "u1" must be a commander.
     ctx = build_context("fixtures.profiles.minimal_profile", core_model=test_core_model, sub_model=test_sub_model)
     try:
-        ctx.deps.persistence.write_user("u1", "viewer")
+        ctx.deps.persistence.write_user("u1", "commander")
         client = build_app(ctx).test_client()
 
         resp = client.get("/Protocol", headers={"X-Identity": "u1"})
@@ -134,7 +137,7 @@ import pytest
 
 from api.auth import authenticate, require
 from api.errors import AuthenticationError, AuthorizationError
-from auth.permissions import PermissionLevel
+from auth.permissions import PermissionLevel, RequestedOperation
 from persistence.sqlite_store import SQLitePersistence
 
 
@@ -165,11 +168,34 @@ def test_authenticate_rejects_a_missing_identity(store):
         authenticate(store, "")
 
 
-def test_require_permits_an_action_at_or_above_its_level():
-    require(PermissionLevel.COMMANDER, "approve_run")  # does not raise
-    require(PermissionLevel.VIEWER, "send_message")  # does not raise
+def test_require_permits_an_operation_the_caller_is_authorized_for():
+    require(PermissionLevel.COMMANDER, RequestedOperation.APPROVE_RUN)  # does not raise
+    require(PermissionLevel.VIEWER, RequestedOperation.SUBMIT_MESSAGE)  # does not raise
 
 
-def test_require_rejects_an_action_below_its_level():
+def test_require_rejects_an_operation_the_caller_is_not_authorized_for():
     with pytest.raises(AuthorizationError):
-        require(PermissionLevel.VIEWER, "approve_run")
+        require(PermissionLevel.VIEWER, RequestedOperation.APPROVE_RUN)
+
+
+def test_require_permits_every_requested_operation_for_a_commander():
+    for operation in RequestedOperation:
+        require(PermissionLevel.COMMANDER, operation)  # does not raise
+
+
+def test_commander_never_denied_for_any_defined_operation_via_the_api_boundary():
+    # docs/Next_Plan.md §6 success criteria: exhaustive proof a commander is
+    # allowed for every RequestedOperation, exercised through require() itself
+    # rather than is_permitted() directly.
+    for operation in RequestedOperation:
+        try:
+            require(PermissionLevel.COMMANDER, operation)
+        except AuthorizationError:
+            pytest.fail(f"commander was denied {operation.value!r}, which docs/Next_Plan.md §2.1 forbids")
+
+
+def test_require_rejects_a_legacy_action_string():
+    # docs/Next_Plan.md Stage 2: every api/routes.py call site now passes
+    # RequestedOperation; the transitional string path from Stage 1 is gone.
+    with pytest.raises(TypeError):
+        require(PermissionLevel.COMMANDER, "approve_run")

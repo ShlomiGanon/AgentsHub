@@ -12,6 +12,36 @@ Every endpoint authenticates the caller first (§7.9) — see
 **Authentication** below — and every error response uses the one shape
 in **Errors** (§7.10), regardless of which endpoint produced it.
 
+## Authorization (docs/Next_Plan.md)
+
+After authentication, every endpoint checks one `auth.permissions.RequestedOperation`
+via `auth.permissions.is_permitted`/`api.request_boundary.require`. A commander
+is authorized for every operation unconditionally. A viewer is authorized
+exactly for the operations listed in `auth.permissions.ViewerAllowedAction` —
+currently `submit_event`, `submit_message`, `converse`, `ask_question`,
+`report_event`, `request_action`, `view_profile_overview`,
+`view_user_registration`, and `view_job_status`. A denied operation returns
+`403` (the errors shape, `invalid_input`, `message` naming the operation) with
+no partial effect — no event created, no queue reservation, no protected read.
+`docs/allowed_calls.md`'s "Operation matrix" is the authoritative mapping from
+every route below to its operation and viewer availability; this document
+notes the operation and any ownership scoping per endpoint but does not repeat
+that full matrix.
+
+Three operations carry ownership scoping beyond plain membership, for a
+viewer only: `ask_question` and `view_job_status` are restricted to events
+the viewer themselves submitted (an unrelated event answers as if it does not
+exist — `404` for `GET /Job/<event_id>`, an empty/negative result for a
+history question); `view_user_registration` is restricted to the viewer's
+own identity (`403` for any other). A commander is unrestricted in every
+case.
+
+`GET /SYSTEM`'s response is **role-filtered**, not a fixed shape: fields a
+viewer is not authorized for (`agents`, `protocols`, `queued_events`,
+`held_events`, `scheduler`, `settings`) are absent from the JSON body
+entirely, never present as an empty value — see **`GET /SYSTEM`** below for
+both shapes.
+
 ## Authentication
 
 Every request carries the caller's identity in an `X-Identity` header —
@@ -46,10 +76,10 @@ genuinely different identities depending on which:
   Without this row, every one of these calls fails authentication — the
   same "unregistered identity rejected outright" rule above applies to the
   bot itself, no exception. `get_profile_diff_status` stays here
-  deliberately: it carries no write, no protocol/settings content, and no
-  dedicated action key in `auth.permissions.ACTION_REQUIREMENTS`, only the
-  same "registered at all" baseline every interaction already requires —
-  it was never one of the methods the gap below applied to.
+  deliberately: it reads only `GET /SYSTEM`'s `profile_file_changed` field,
+  gated by `view_profile_overview` — viewer-eligible, the least-restrictive
+  of the operations this endpoint serves — it was never one of the methods
+  the gap below applied to.
 - **Calls that already carry a specific person's identity as a parameter**
   — `answer_clarification_hold`, `answer_approval_hold`, `submit_message`,
   and (since the server-side-enforcement gap noted below was closed)
@@ -116,7 +146,12 @@ equal to the receipt time server-side; nothing here can override it.
 ## `POST /Msg`
 
 Human ingestion (§7.4) — reports, requests, questions, and conversation all arrive
-here; intent classification (§6.13) decides which.
+here; intent classification (§6.13) decides which. `submit_message` gates entry;
+the resolved intent is then checked against its own operation
+(`converse`/`ask_question`/`report_event`/`request_action`) before that branch
+runs — all four are viewer-eligible today, but `ask_question` is further
+ownership-scoped to the viewer's own submitted events (see **Authorization**
+above).
 
 Request:
 ```json
@@ -163,7 +198,11 @@ Response, when the message became a **report** or **request** —
 
 ## `GET /Job/<event_id>`
 
-Result / status retrieval (§7.2).
+Result / status retrieval (§7.2). `view_job_status` — viewer-eligible, but
+ownership-scoped: a viewer may only check the status of an event they
+themselves submitted; `event_id` naming someone else's event responds
+`404 Not Found`, identical to an unknown ID — it does not confirm that
+event exists. A commander is unrestricted.
 
 Response `200 OK` while in progress:
 ```json
@@ -241,6 +280,8 @@ no event at all.
 
 ## `POST /Approve/<event_id>` and `POST /Clarify/<event_id>` (§7.11)
 
+`resolve_clarification` and `approve_run` respectively — both commander-only.
+
 `POST /Clarify/<event_id>`:
 ```json
 { "classification": "fire" }
@@ -286,6 +327,10 @@ when:
 
 ## `CRUD /Protocol` (§7.6)
 
+Every operation here — `list_protocols`, `create_protocol`,
+`update_protocol`, `delete_protocol` — is commander-only; a viewer receives
+`403` for all four, including the read.
+
 `GET /Protocol` — `200 OK`:
 ```json
 {
@@ -316,7 +361,14 @@ Never a body resembling a successful state change (§7.6's explicit rule)
 
 ## `GET /SYSTEM` (§7.7)
 
-`200 OK`:
+Gated by `view_profile_overview` (viewer-eligible — the entry check for
+this one endpoint). The response body is then built field-group by
+field-group, each behind its own operation, so a viewer's response is a
+**strict subset** with the protected fields absent, not a full body with
+some values blanked out.
+
+`200 OK` for a **commander** (authorized for `view_system_internals` and
+`view_settings` too):
 ```json
 {
   "profile": "fixtures.profiles.demo_profile",
@@ -347,7 +399,20 @@ Each entry in `protocols` uses the exact same shape `GET /Protocol` (§7.6)
 returns — one rendering, reused, so a caller never needs both endpoints
 just to get one protocol's full description and criticality (§7.12).
 
+`200 OK` for a **viewer** — `agents`, `protocols`, `queued_events`,
+`held_events`, `scheduler`, and `settings` are absent entirely:
+```json
+{
+  "profile": "fixtures.profiles.demo_profile",
+  "event_types": ["fire", "medical", "human_activation"],
+  "areas": ["north_sector", "south_sector"],
+  "profile_file_changed": false
+}
+```
+
 ## `PUT /SYSTEM` (§7.8)
+
+`change_settings` — commander-only.
 
 Request — only these three keys are ever accepted:
 ```json
@@ -374,8 +439,11 @@ or
 ```json
 { "registered": false, "permission_level": null }
 ```
-`view_history` level (VIEWER minimum) — the same low-privilege reasoning
-`GET /Protocol` already uses.
+`view_user_registration` — viewer-eligible, but ownership-scoped: a viewer
+may only look up their own identity (`403` for any other). A commander is
+unrestricted (this is how `bot-service`, at commander level, resolves every
+Telegram caller's registration on their behalf — see **Service identity**
+above).
 
 ## `GET /Commanders` (§8.13)
 

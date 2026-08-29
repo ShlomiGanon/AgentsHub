@@ -289,7 +289,7 @@ def test_viewer_cannot_resolve_a_hold():
 
     _run(handle_clarification_answer(deps, "chat-1", "v1", "event-1", "fire"))
 
-    assert "resolve_hold" in telegram.sent[-1].text
+    assert "resolve_clarification" in telegram.sent[-1].text
     assert not api.calls or api.calls[-1][0] != "answer_clarification_hold"
 
 

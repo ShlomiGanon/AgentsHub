@@ -12,6 +12,8 @@ from config import ModelTierError, TierModel, resolve_tier_model_from_env
 from profiles.loader import LoadedProfile, ProfileLoadError, ProfileValidationError, load_profile
 from tools import configure_logging
 
+from auth.permissions import RequestedOperation
+
 from bot import interactions
 from bot.transports import HttpApiClient, PTBTelegramClient
 from bot.contracts import ApiNotImplementedError, ApiRequestError, BotDeps, BotStartupError
@@ -216,11 +218,20 @@ async def _on_profile_command(update, context) -> None:
         caller = await _resolve_caller_or_refuse(deps, chat_id, telegram_identity)
         if caller is None:
             return
+        refusal = check_permission(caller, RequestedOperation.VIEW_PROFILE_OVERVIEW)
+        if refusal is not None:
+            await deps.telegram_client.send_text(chat_id, refusal)
+            return
         await deps.telegram_client.send_text(chat_id, await interactions.view_profile(deps, caller.telegram_identity))
         return
 
     if args[0] == "diff":
-        if await _resolve_caller_or_refuse(deps, chat_id, telegram_identity) is None:
+        caller = await _resolve_caller_or_refuse(deps, chat_id, telegram_identity)
+        if caller is None:
+            return
+        refusal = check_permission(caller, RequestedOperation.VIEW_PROFILE_OVERVIEW)
+        if refusal is not None:
+            await deps.telegram_client.send_text(chat_id, refusal)
             return
         await deps.telegram_client.send_text(chat_id, await interactions.profile_diff_status(deps))
         return
@@ -257,6 +268,10 @@ async def _on_settings_command(update, context) -> None:
     if not args or args[0] == "view":
         caller = await _resolve_caller_or_refuse(deps, chat_id, telegram_identity)
         if caller is None:
+            return
+        refusal = check_permission(caller, RequestedOperation.VIEW_SETTINGS)
+        if refusal is not None:
+            await deps.telegram_client.send_text(chat_id, refusal)
             return
         await deps.telegram_client.send_text(chat_id, await interactions.view_settings(deps, caller.telegram_identity))
         return

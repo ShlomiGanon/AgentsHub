@@ -24,6 +24,11 @@ class EventSearchCriteria:
     protocol_names: tuple[str, ...] = ()
     event_ids: tuple[str, ...] = ()
     risk_levels: tuple[str, ...] = ()
+    # Ownership scoping (docs/Next_Plan.md §5 decision record): when set, restricts
+    # the search to events submitted by exactly this identity. None (the default)
+    # applies no such restriction — existing callers are unaffected. No schema
+    # change: `sender_identity` is an existing `events` column (persistence/schema.py).
+    sender_identity: str | None = None
     order: Literal["newest", "oldest"] = "newest"
     limit: int = 50
 

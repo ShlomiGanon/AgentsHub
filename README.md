@@ -187,13 +187,33 @@ Start with `profiles/template.py` when creating a deployment. Every profile must
 
 Free-form messages are classified as questions, reports, requests, or conversation. A message whose action or referent cannot be determined safely receives a synchronous clarification question and creates no job. History questions remain in the read-only question path: the Main Agent emits a constrained query description, SQLite performs parameterized filtering/counting, and the History Agent sees only the bounded records needed for narrative answers.
 
-System self-description is generated naturally rather than returned from a fixed response. For questions about identity, capabilities, protocols, or sub-agents, the model is grounded with the active `PROFILE_NAME` and the currently loaded runtime catalog. Adding an agent, tool, or protocol changes that catalog after restart.
+System self-description is generated naturally rather than returned from a fixed response. For questions about identity, capabilities, protocols, or sub-agents, the model is grounded with the active `PROFILE_NAME` and a runtime catalog filtered to what the *asking caller* is authorized to see (see "Roles and capability disclosure" below). Adding an agent, tool, or protocol changes a commander's catalog after restart; a viewer's catalog only ever changes when `ViewerAllowedAction` itself changes.
 
 Most profile edits take effect after a restart. These three settings are different: they take effect immediately and are saved beside the deployment database:
 
 - `retry_count`
 - `risk_threshold`
 - `lookback_window_days`
+
+## Roles and capability disclosure
+
+Every registered user is either a `viewer` or a `commander` (`cli.user_admin`). A commander is unrestricted: every API route, bot command, and Main Agent capability is available. A viewer is authorized for exactly the operations listed in `auth.permissions.ViewerAllowedAction` — currently submitting events/messages, conversing, asking questions, reporting, and requesting an action, plus viewing the profile overview, their own user registration, and their own job status. An operation absent from that enum is denied to a viewer at every entry point (HTTP, Telegram, terminal client) with no separate allowlist to fall out of sync.
+
+Disclosure follows the same rule, not a second policy: a viewer's "what can you do for me?" answer, and the Main Agent's system context more generally, only ever contains the capabilities and runtime metadata (protocols, sub-agent names, tool names) a viewer is authorized for. Protocol and sub-agent data is commander-only — a viewer's `GET /SYSTEM` response and Main Agent prompt omit those fields entirely rather than returning them empty. `GET /Job/<event_id>` and history questions (`ask_question`) are scoped to events a viewer themselves submitted; asking about someone else's event answers as if it does not exist. `GET /User/<identity>` is scoped to a viewer's own identity. See `docs/allowed_calls.md`'s "Operation matrix" for the full entry-point-to-operation mapping, and `docs/vocabulary.md` for the `RequestedOperation`/`ViewerAllowedAction`/`CapabilityDescriptor` terms.
+
+## Conversation memory and event follow-ups
+
+When a profile sets `CONVERSATION_HISTORY_TURNS` above zero, `/Msg` (and the equivalent Telegram/terminal flows) remembers recent turns per `conversation_id` — a stable per-chat/thread key in Telegram, a stable per-session key in the terminal clients. A follow-up question can then refer back to something already discussed without repeating its Event ID:
+
+```text
+> smoke reported near gate 3
+Queued report. Job ID: evt-2f9a...
+
+> what's the status of that event now?
+Event evt-2f9a... is still queued.
+```
+
+The Main Agent resolves a reference like "that event" or "the first one" from the remembered turns to a stable Event ID, then always re-reads the current record from the database — a remembered assistant reply is never treated as current fact, and the caller's authorization is re-evaluated fresh on every turn (a role change between two turns of the same conversation takes effect starting on the very next one). An ambiguous reference (more than one plausible prior event) gets a short clarification question instead of a guess.
 
 ## Logging
 

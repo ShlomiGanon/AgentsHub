@@ -26,6 +26,19 @@ alongside this rather than expecting this document to reproduce it.
    same agent class run on different models in different profiles without
    the profile module itself ever touching `os.environ`.
 
+## `name`/`role`/tool `description` may reach a commander directly
+
+`orchestrator/capabilities.py`'s role-aware system context includes every
+registered sub-agent's `name`, `role`, and each tool's `name`/`description`/
+`side_effecting` flag for a **commander** caller — the Main Agent uses this
+verbatim when answering a commander's questions about registered sub-agents
+and tools (`docs/vocabulary.md`'s `CapabilityDescriptor`, `docs/Next_Plan.md`
+Stage 3). None of this ever reaches a viewer (`view_system_internals` is
+commander-only), but write every `name`, `role`, and tool `description` as
+safe, accurate, English technical text you would be comfortable a commander
+reading directly — not filler, not a placeholder, and nothing that assumes
+it will only ever be read by another engineer in this repository.
+
 ## What happens if a step is skipped
 
 - Omit `side_effecting` (or get the `idempotent` pairing wrong): the

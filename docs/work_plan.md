@@ -1358,3 +1358,20 @@ The module names below follow the skeleton defined in 1.1.
 Activation remains conditional on the live baselines, held-out evals, safety
 checks, and staged rollout gates in `IMPROVE.MD`; implementation presence is
 not permission to enable a mode that has not passed its gate.
+
+## Next_Plan.md — role-aware capabilities and natural event conversations (2026-08-29)
+
+`docs/Next_Plan.md` is a separate, self-contained follow-on plan approved by
+the user and implemented in full across its own Stage 0–7 sequence: an
+explicit `RequestedOperation`/`ViewerAllowedAction` authorization model
+replacing the threshold-based permission checks this document's own §1.9
+originally specified; role-aware, model-written identity and capability
+answers grounded in a filtered runtime catalog; natural, semantically
+explained event-history answers with a new English field catalog; event
+follow-ups through the conversation memory already built here; and an
+adversarial disclosure regression gate. See that document for its own
+per-stage implementation notes and `docs/progress.md` for the dated
+completion entry of each stage. No historical section above was rewritten —
+where a later detail in `docs/Next_Plan.md` supersedes something stated
+above (e.g. `auth`'s permission model, or "every caller" receiving the same
+system context), that later document is authoritative going forward.

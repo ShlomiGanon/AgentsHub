@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Literal
 
 from dataclasses import dataclass
 
-from auth.permissions import PermissionLevel, is_permitted
+from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
 
 from typing import TYPE_CHECKING
 
@@ -147,14 +147,14 @@ async def resolve_caller(api_client: "BotApiClient", telegram_identity: str) -> 
     return UserResolutionResult(status="ok", caller=CallerContext(telegram_identity=telegram_identity, level=level))
 
 
-def check_permission(caller: CallerContext, action: str) -> str | None:
-    """None when `caller` may perform `action`; otherwise a message naming the refused action — never a silent no-op (§8.2: "A silent no-op leaves a commander believing they approved s..."""
+def check_permission(caller: CallerContext, operation: RequestedOperation) -> str | None:
+    """None when `caller` may perform `operation`; otherwise a message naming the refused operation — never a silent no-op (§8.2: "A silent no-op leaves a commander believing they approved s..."""
 
-    if is_permitted(caller.level, action):
+    if is_permitted(caller.level, operation):
         return None
 
     return (
-        f"Refused: '{action}' requires commander level; your account "
+        f"Refused: '{operation.value}' requires commander level; your account "
         f"({caller.telegram_identity}) is registered as {caller.level.name.lower()}."
     )
 
@@ -165,18 +165,20 @@ NOTHING_CHANGED_NOTICE = "Nothing has changed in the running system — this edi
 
 
 def format_profile_view(view: "ProfileView") -> str:
-    lines = [
-        f"Profile: {view.profile_name}",
-        "",
-        "Agents:",
-        *[f"- {name}" for name in view.agent_names],
-        "",
-        "Protocols:",
-    ]
+    """Agents and protocols are commander-only (`view_system_internals`); a viewer's
+    `ProfileView` simply arrives with those fields empty, so their sections are
+    omitted entirely here rather than shown as an empty, misleading heading."""
 
-    for protocol in view.protocols:
-        flag = "requires approval" if protocol.approval_flag else "no approval required"
-        lines.append(f"- {protocol.name} (criticality: {protocol.criticality}, {flag}): {protocol.description}")
+    lines = [f"Profile: {view.profile_name}"]
+
+    if view.agent_names:
+        lines += ["", "Agents:", *[f"- {name}" for name in view.agent_names]]
+
+    if view.protocols:
+        lines += ["", "Protocols:"]
+        for protocol in view.protocols:
+            flag = "requires approval" if protocol.approval_flag else "no approval required"
+            lines.append(f"- {protocol.name} (criticality: {protocol.criticality}, {flag}): {protocol.description}")
 
     lines += ["", "Event types: " + ", ".join(view.event_types), "Areas: " + ", ".join(view.areas)]
 
@@ -209,10 +211,17 @@ def _validate_protocol_write_payload(action: Literal["add", "edit", "remove"], p
     return None
 
 
+_PROTOCOL_WRITE_OPERATIONS: dict[str, RequestedOperation] = {
+    "add": RequestedOperation.CREATE_PROTOCOL,
+    "edit": RequestedOperation.UPDATE_PROTOCOL,
+    "remove": RequestedOperation.DELETE_PROTOCOL,
+}
+
+
 async def write_protocol(
     deps: "BotDeps", caller: CallerContext, action: Literal["add", "edit", "remove"], protocol_payload: dict
 ) -> str:
-    refusal = check_permission(caller, "edit_profile")
+    refusal = check_permission(caller, _PROTOCOL_WRITE_OPERATIONS[action])
     if refusal is not None:
         return refusal
 
@@ -281,7 +290,7 @@ def _validate_value(field: SettingField, raw_value: str) -> tuple[object | None,
 
 
 async def change_setting(deps: "BotDeps", caller: CallerContext, field: str, raw_value: str) -> str:
-    refusal = check_permission(caller, "change_settings")
+    refusal = check_permission(caller, RequestedOperation.CHANGE_SETTINGS)
     if refusal is not None:
         return refusal
 
@@ -394,7 +403,7 @@ async def handle_approval_answer(deps: "BotDeps", chat_id: str, answering_identi
         await deps.telegram_client.send_text(chat_id, resolution.refusal_message)
         return
 
-    refusal = check_permission(resolution.caller, "approve_run")
+    refusal = check_permission(resolution.caller, RequestedOperation.APPROVE_RUN)
     if refusal is not None:
         await deps.telegram_client.send_text(chat_id, refusal)
         return
@@ -459,7 +468,7 @@ async def handle_clarification_answer(
         await deps.telegram_client.send_text(chat_id, resolution.refusal_message)
         return
 
-    refusal = check_permission(resolution.caller, "resolve_hold")
+    refusal = check_permission(resolution.caller, RequestedOperation.RESOLVE_CLARIFICATION)
     if refusal is not None:
         await deps.telegram_client.send_text(chat_id, refusal)
         return

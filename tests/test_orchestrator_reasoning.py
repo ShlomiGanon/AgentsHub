@@ -61,6 +61,68 @@ def test_parse_rejects_missing_score():
         _parse_risk_assessment_response("REASON: no score given")
 
 
+# --- Stage 6 (docs/Next_Plan.md §11): refusal of unknown model-generated
+# operations. A model never emits a `RequestedOperation` directly — it only
+# ever emits `primary_intent` (message-plan JSON) or `operation`
+# (history-query JSON), both closed vocabularies the application validates
+# before any operation-mapping or execution happens; RequestedOperation
+# itself is decided by application code (api/routes.py), never parsed from
+# model output. These two closed vocabularies are what "requested-operation
+# parsing" actually means in this architecture.
+
+
+def test_structured_intent_rejects_an_invented_primary_intent():
+    from orchestrator.main_agent import _parse_structured_intent_response
+
+    payload = '{"primary_intent": "delete_everything"}'
+
+    with pytest.raises(OrchestrationParseError, match="invalid primary_intent"):
+        _parse_structured_intent_response(payload, "some message", ())
+
+
+def test_structured_intent_accepts_every_valid_primary_intent_shape():
+    from orchestrator.main_agent import _parse_structured_intent_response
+
+    for intent in ("question", "report", "request", "conversational"):
+        flag_field = {
+            "question": "asks_for_information", "report": "reports_occurrence",
+            "request": "requests_action", "conversational": "social_only",
+        }[intent]
+        payload = {
+            "primary_intent": intent, "asks_for_information": False, "reports_occurrence": False,
+            "requests_action": False, "social_only": False, "is_quoted": False, "is_hypothetical": False,
+            "is_followup_without_context": False, "evidence": {intent: "gate 3"} if intent != "conversational" else {},
+            "matched_protocol_names": [], "reason": "matches", "ambiguity_reason": None, "clarification_question": None,
+        }
+        payload[flag_field] = True
+        result = _parse_structured_intent_response(
+            __import__("json").dumps(payload), "status at gate 3", ()
+        )
+        assert result.intent == intent
+
+
+def test_history_query_spec_rejects_an_invented_operation():
+    from orchestrator.main_agent import _history_query_spec_from_payload
+
+    with pytest.raises(OrchestrationParseError, match="invalid history operation"):
+        _history_query_spec_from_payload({"operation": "delete_all_events"})
+
+
+def test_history_query_spec_accepts_every_valid_operation():
+    from orchestrator.main_agent import _history_query_spec_from_payload
+
+    for operation in ("latest", "event_details", "list", "count", "aggregate", "compare", "similar_cases", "narrative"):
+        spec = _history_query_spec_from_payload({"operation": operation})
+        assert spec.operation == operation
+
+
+def test_history_query_spec_rejects_an_invented_time_basis():
+    from orchestrator.main_agent import _history_query_spec_from_payload
+
+    with pytest.raises(OrchestrationParseError):
+        _history_query_spec_from_payload({"operation": "latest", "time_basis": "invented_at"})
+
+
 def test_parse_rejects_missing_reason():
     with pytest.raises(OrchestrationParseError):
         _parse_risk_assessment_response("RISK_SCORE: 0.5")

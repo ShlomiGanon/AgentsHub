@@ -45,6 +45,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `docs/how_to_connect_telegram.md` | Documentation | Internal | Documents how to connect telegram. |
 | `docs/investigation_summary.md` | Documentation | Internal | Documents investigation summary. |
 | `docs/links.txt` | Documentation | Internal | Documents links. |
+| `docs/Next_Plan.md` | Documentation | Internal | Documents the next plan. |
 | `docs/operator_guide.md` | Documentation | Internal | Documents operator guide. |
 | `docs/profile_spec.md` | Documentation | Internal | Documents profile spec. |
 | `docs/progress.md` | Documentation | Internal | Documents progress. |
@@ -57,6 +58,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `docs/תיאור מבנה מערכת.pdf` | Documentation | Internal | Stores the תיאור מבנה מערכת reference artifact. |
 | `docs/תיאור משימות שבועיות.pdf` | Documentation | Internal | Stores the תיאור משימות שבועיות reference artifact. |
 | `fixtures/__init__.py` | Fixture | Internal | Marks reusable fixtures as a package. |
+| `fixtures/adversarial_disclosure_v1.jsonl` | Fixture | Internal | Provides a versioned Hebrew and English adversarial disclosure-safety corpus. |
 | `fixtures/profiles/__init__.py` | Fixture | Internal | Marks fixture deployment profiles as a package. |
 | `fixtures/profiles/minimal_profile.py` | Fixture | Internal | Defines the minimal valid profile used by loading and integration tests. |
 | `fixtures/response_eval_v1.jsonl` | Fixture | Internal | Provides a versioned Hebrew and English response-quality corpus. |
@@ -64,11 +66,13 @@ This English catalog describes every tracked or pending first-party file in the 
 | `history/__init__.py` | Production | Public facade | Exposes the history facade and compatibility module aliases. |
 | `history/contracts.py` | Production | Private implementation | Defines history extraction, query, summary, and persistence-transfer contracts. |
 | `history/event_pipeline.py` | Production | Private implementation | Extracts events, normalizes timestamps, and writes durable history state. |
+| `history/field_catalog.py` | Production | Private implementation | English meanings and narrative/internal category for every persisted event field. |
 | `history/query.py` | Production | Private implementation | Retrieves raw and summarized history and searches precedents. |
 | `history/summaries.py` | Production | Private implementation | Generates and reconciles daily, monthly, and yearly summaries. |
 | `instructions.md` | Project | Internal | Defines repository-specific development and architecture rules. |
 | `load-env.ps1` | Project | Internal | Loads local development environment variables into PowerShell. |
 | `orchestrator/__init__.py` | Production | Public facade | Exposes orchestration capabilities and compatibility module aliases. |
+| `orchestrator/capabilities.py` | Production | Private implementation | Builds the role-aware, per-caller Main Agent capability and system context. |
 | `orchestrator/event_queue.py` | Production | Private implementation | Serializes event processing on a dedicated worker. |
 | `orchestrator/flows.py` | Production | Private implementation | Coordinates report, request, hold-resume, protocol, and outcome workflows. |
 | `orchestrator/holds.py` | Production | Private implementation | Creates and resolves clarification and approval holds. |
@@ -138,6 +142,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_migrations.py` | Test | Internal | Verifies migrations behavior and edge cases. |
 | `tests/test_observability.py` | Test | Internal | Verifies tracing and structured logging behavior. |
 | `tests/test_orchestrator_flows.py` | Test | Internal | Verifies orchestrator flows behavior and edge cases. |
+| `tests/test_orchestrator_capabilities.py` | Test | Internal | Verifies role-aware capability descriptor and system-context behavior. |
 | `tests/test_orchestrator_holds.py` | Test | Internal | Verifies orchestrator holds behavior and edge cases. |
 | `tests/test_orchestrator_insights.py` | Test | Internal | Verifies orchestrator insights behavior and edge cases. |
 | `tests/test_orchestrator_judgment.py` | Test | Internal | Verifies orchestrator judgment behavior and edge cases. |

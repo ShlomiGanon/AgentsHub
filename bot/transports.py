@@ -207,14 +207,17 @@ class HttpApiClient(BotApiClient):
         return response_payload
 
     async def get_profile_view(self, caller_identity: str) -> ProfileView:
+        # `agents`/`protocols` are commander-only (view_system_internals) — GET
+        # /SYSTEM omits them entirely for a viewer rather than sending an empty
+        # hint, so they default to empty here rather than KeyError.
         response_payload = await self._get_system(caller_identity)
         protocols = tuple(
             ProtocolView(name=protocol["name"], description=protocol["description"], criticality=protocol["criticality"], approval_flag=protocol["approval_flag"])
-            for protocol in response_payload["protocols"]
+            for protocol in response_payload.get("protocols", ())
         )
         return ProfileView(
             profile_name=response_payload["profile"],
-            agent_names=tuple(response_payload["agents"]),
+            agent_names=tuple(response_payload.get("agents", ())),
             protocols=protocols,
             event_types=tuple(response_payload["event_types"]),
             areas=tuple(response_payload["areas"]),
@@ -241,6 +244,11 @@ class HttpApiClient(BotApiClient):
 
     async def get_settings_view(self, caller_identity: str) -> SettingsView:
         response_payload = await self._get_system(caller_identity)
+        # `settings` is commander-only (view_settings) — absent for a viewer.
+        # bot.app already refuses this client-side before ever calling here;
+        # this is a defensive fallback for a direct caller of this interface.
+        if "settings" not in response_payload:
+            raise ApiRequestError(403, "settings are not available at your permission level", error_class="authorization_error")
         settings = response_payload["settings"]
         return SettingsView(
             retry_count=settings["retry_count"],

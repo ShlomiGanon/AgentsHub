@@ -229,12 +229,12 @@ def test_retrieve_range_itself_is_unaffected_by_the_precedent_specific_widening(
         store.close()
 
 
-def _history_event(event_id, occurred_at, classification="fire", area="north", outcome="succeeded"):
+def _history_event(event_id, occurred_at, classification="fire", area="north", outcome="succeeded", sender_identity="sensor-1"):
     return {
         "event_id": event_id,
         "received_at": occurred_at,
         "source": "sensor",
-        "sender_identity": "sensor-1",
+        "sender_identity": sender_identity,
         "occurred_at": occurred_at,
         "raw_text": f"{classification} in {area}",
         "classification": classification,
@@ -279,7 +279,8 @@ def test_structured_latest_uses_the_filtered_database_result(tmp_path):
         store.append_event(_history_event("north-old", "2026-08-01T10:00:00"))
         store.append_event(_history_event("north-new", "2026-08-03T10:00:00"))
         store.append_event(_history_event("south-newer", "2026-08-04T10:00:00", area="south"))
-        service = HistoryQueryService(store, FakeHistoryAgent(), classifications=("fire",), areas=("north", "south"))
+        agent = FakeHistoryAgent()
+        service = HistoryQueryService(store, agent, classifications=("fire",), areas=("north", "south"))
 
         answer = service.query_spec(
             "What is the latest northern fire?",
@@ -287,7 +288,10 @@ def test_structured_latest_uses_the_filtered_database_result(tmp_path):
         )
 
         assert answer.sources_used[0].source_id == "north-new"
-        assert "north-new" in answer.answer
+        # `latest` now formulates its answer through the History Agent (Next_Plan.md
+        # Stage 4), fed only the correctly-filtered event — proven here by checking
+        # the prompt the (fake) agent actually received, not a templated answer string.
+        assert "north-new" in agent.last_prompt
     finally:
         store.close()
 
@@ -324,5 +328,126 @@ def test_structured_query_rejects_unknown_registry_values_before_search(tmp_path
 
         with pytest.raises(HistoryQueryError, match="unknown classification"):
             service.query_spec("Any floods?", HistoryQuerySpec(operation="count", classifications=("flood",)))
+    finally:
+        store.close()
+
+
+# --- Ownership scoping (docs/Next_Plan.md §5 decision record) --------------
+
+
+def test_query_spec_sender_identity_filter_restricts_count_and_search(tmp_path):
+    from history.contracts import HistoryQuerySpec
+
+    store = open_persistence(str(tmp_path / "ownership-count.db"))
+    try:
+        store.append_event(_history_event("mine-1", "2026-08-01T10:00:00", sender_identity="viewer-1"))
+        store.append_event(_history_event("theirs-1", "2026-08-02T10:00:00", sender_identity="someone-else"))
+        service = HistoryQueryService(store, FakeHistoryAgent())
+
+        answer = service.query_spec(
+            "How many fires?", HistoryQuerySpec(operation="count"), sender_identity_filter="viewer-1"
+        )
+
+        assert answer.answer == "1 matching event."
+        assert answer.total_events_matched == 1
+    finally:
+        store.close()
+
+
+def test_query_spec_sender_identity_filter_excludes_someone_elses_event_from_list(tmp_path):
+    from history.contracts import HistoryQuerySpec
+
+    store = open_persistence(str(tmp_path / "ownership-list.db"))
+    try:
+        store.append_event(_history_event("mine-1", "2026-08-01T10:00:00", sender_identity="viewer-1"))
+        store.append_event(_history_event("theirs-1", "2026-08-02T10:00:00", sender_identity="someone-else"))
+        agent = FakeHistoryAgent()
+        service = HistoryQueryService(store, agent)
+
+        answer = service.query_spec(
+            "List all fires", HistoryQuerySpec(operation="list"), sender_identity_filter="viewer-1"
+        )
+
+        assert [source.source_id for source in answer.sources_used] == ["mine-1"]
+        assert "mine-1" in agent.last_prompt
+        assert "theirs-1" not in agent.last_prompt
+    finally:
+        store.close()
+
+
+def test_query_spec_without_a_sender_identity_filter_sees_every_event(tmp_path):
+    from history.contracts import HistoryQuerySpec
+
+    store = open_persistence(str(tmp_path / "ownership-commander.db"))
+    try:
+        store.append_event(_history_event("mine-1", "2026-08-01T10:00:00", sender_identity="viewer-1"))
+        store.append_event(_history_event("theirs-1", "2026-08-02T10:00:00", sender_identity="someone-else"))
+        service = HistoryQueryService(store, FakeHistoryAgent())
+
+        # sender_identity_filter=None (the default, used for a commander caller)
+        # applies no ownership restriction at all.
+        answer = service.query_spec("How many fires?", HistoryQuerySpec(operation="count"))
+
+        assert answer.answer == "2 matching events."
+    finally:
+        store.close()
+
+
+def test_answer_most_recent_event_sender_identity_filter_restricts_lookup(tmp_path):
+    store = open_persistence(str(tmp_path / "ownership-most-recent.db"))
+    try:
+        store.append_event(_history_event("mine-1", "2026-08-01T10:00:00", sender_identity="viewer-1"))
+        store.append_event(_history_event("theirs-newer", "2026-08-02T10:00:00", sender_identity="someone-else"))
+        agent = FakeHistoryAgent()
+        service = HistoryQueryService(store, agent)
+
+        answer = service.answer_most_recent_event("What was the last event?", sender_identity_filter="viewer-1")
+
+        assert answer.sources_used[0].source_id == "mine-1"
+        assert "theirs-newer" not in agent.last_prompt
+    finally:
+        store.close()
+
+
+# --- Semantic view field filtering (docs/Next_Plan.md §4.6, §9) ------------
+
+
+def test_internal_fields_never_reach_the_history_agent_prompt(tmp_path):
+    from history.contracts import HistoryQuerySpec
+
+    store = open_persistence(str(tmp_path / "field-filtering.db"))
+    try:
+        store.append_event({
+            **_history_event("evt-1", "2026-08-01T10:00:00"),
+            "trace_id": "trace-secret-123",
+            "conversation_id": "conv-secret-456",
+            "deadline_at": "2026-08-01T11:00:00",
+            "source_message_id": "tg-msg-789",
+        })
+        agent = FakeHistoryAgent()
+        service = HistoryQueryService(store, agent)
+
+        service.query_spec("Tell me about evt-1", HistoryQuerySpec(operation="event_details", event_ids=("evt-1",)))
+
+        assert "evt-1" in agent.last_prompt
+        for internal_value in ("trace-secret-123", "conv-secret-456", "tg-msg-789"):
+            assert internal_value not in agent.last_prompt
+    finally:
+        store.close()
+
+
+def test_field_meanings_glossary_reaches_the_history_agent_prompt(tmp_path):
+    from history.contracts import HistoryQuerySpec
+
+    store = open_persistence(str(tmp_path / "field-glossary.db"))
+    try:
+        store.append_event(_history_event("evt-1", "2026-08-01T10:00:00"))
+        agent = FakeHistoryAgent()
+        service = HistoryQueryService(store, agent)
+
+        service.query_spec("What does occurred_at mean?", HistoryQuerySpec(operation="event_details", event_ids=("evt-1",)))
+
+        assert "Occurred at" in agent.last_prompt
+        assert "believed to have actually occurred" in agent.last_prompt
     finally:
         store.close()

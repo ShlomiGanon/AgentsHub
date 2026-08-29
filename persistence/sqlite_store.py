@@ -215,6 +215,10 @@ def _search_where(criteria: EventSearchCriteria) -> tuple[str, list[object], str
         clauses.append(f"{column_name} IN ({placeholders})")
         parameters.extend(values)
 
+    if criteria.sender_identity is not None:
+        clauses.append("sender_identity = ?")
+        parameters.append(criteria.sender_identity)
+
     return (" AND ".join(clauses) if clauses else "1 = 1"), parameters, time_column
 
 

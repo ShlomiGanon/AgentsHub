@@ -26,6 +26,7 @@ from orchestrator.holds import (
     determine_approval_hold,
     determine_clarification_hold,
 )
+from orchestrator.capabilities import CapabilityDescriptor, build_role_aware_system_context, visible_capabilities
 from orchestrator.reasoning import build_insight, construct_insights_agent
 from orchestrator.reasoning import (
     OrchestrationParseError,
@@ -34,7 +35,6 @@ from orchestrator.reasoning import (
     assess_final_once,
     assess_risk,
     classify_intent,
-    build_system_capability_context,
     construct_core_agents as construct_main_agent,
     formulate_tasks,
     judge_success,

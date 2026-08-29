@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from flask import Flask, jsonify
 from werkzeug.exceptions import HTTPException
 
-from auth.permissions import PermissionLevel, is_permitted
+from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
 from tools import get_trace_id
 
 if TYPE_CHECKING:
@@ -85,9 +85,9 @@ def authenticate(persistence: "PersistenceInterface", identity: str | None) -> P
     return PermissionLevel[user["permission_level"].upper()]
 
 
-def require(level: PermissionLevel, action: str) -> None:
-    if not is_permitted(level, action):
-        raise AuthorizationError(f"level {level.name} may not {action.replace('_', ' ')}")
+def require(level: PermissionLevel, operation: RequestedOperation) -> None:
+    if not is_permitted(level, operation):
+        raise AuthorizationError(f"level {level.name} may not {operation.value.replace('_', ' ')}")
 
 
 def register_error_handlers(app: Flask) -> None:

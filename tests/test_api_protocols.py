@@ -95,7 +95,7 @@ def test_get_protocol_lists_the_loaded_set(tmp_path, teardown_ctx):
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
 
-    resp = client.get("/Protocol", headers=auth_headers(VIEWER_IDENTITY))
+    resp = client.get("/Protocol", headers=auth_headers(COMMANDER_IDENTITY))
 
     assert resp.status_code == 200
     names = {p["name"] for p in resp.get_json()["protocols"]}
@@ -107,7 +107,7 @@ def test_get_protocol_includes_criticality_and_approval_flag(tmp_path, teardown_
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
 
-    resp = client.get("/Protocol", headers=auth_headers(VIEWER_IDENTITY))
+    resp = client.get("/Protocol", headers=auth_headers(COMMANDER_IDENTITY))
 
     by_name = {p["name"]: p for p in resp.get_json()["protocols"]}
     assert by_name["dispatch_response"]["approval_flag"] is True
@@ -123,6 +123,18 @@ def test_get_protocol_requires_authentication(tmp_path, teardown_ctx):
     resp = client.get("/Protocol")
 
     assert resp.status_code == 401
+
+
+def test_get_protocol_denies_a_viewer(tmp_path, teardown_ctx):
+    # docs/Next_Plan.md §5 decision record: list_protocols is commander-only —
+    # a viewer is no longer permitted to enumerate protocols at all.
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    resp = client.get("/Protocol", headers=auth_headers(VIEWER_IDENTITY))
+
+    assert resp.status_code == 403
 
 
 def test_post_protocol_writes_the_file_and_returns_the_fixed_message(tmp_path, teardown_ctx, writable_profile_module):
@@ -146,7 +158,7 @@ def test_post_protocol_does_not_change_the_running_loaded_set(tmp_path, teardown
     client = build_app(ctx).test_client()
 
     client.post("/Protocol", headers=auth_headers(COMMANDER_IDENTITY), json=_new_protocol_body("new_protocol"))
-    resp = client.get("/Protocol", headers=auth_headers(VIEWER_IDENTITY))
+    resp = client.get("/Protocol", headers=auth_headers(COMMANDER_IDENTITY))
 
     names = {p["name"] for p in resp.get_json()["protocols"]}
     assert names == {"status_check", "dispatch_response"}  # unchanged in this process

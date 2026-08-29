@@ -151,7 +151,11 @@ class _AlwaysSucceedsAgent:
         return FakeResult("success", "insight")
 
 
-def build_context(tmp_path, main_agent=None, insights_agent=None, module_path=None, users=((VIEWER_IDENTITY, "viewer"), (COMMANDER_IDENTITY, "commander"), (SENSOR_IDENTITY, "viewer"))) -> ApiContext:
+def build_context(
+    tmp_path, main_agent=None, insights_agent=None, module_path=None,
+    users=((VIEWER_IDENTITY, "viewer"), (COMMANDER_IDENTITY, "commander"), (SENSOR_IDENTITY, "viewer")),
+    conversation_history_turns=0,
+) -> ApiContext:
     persistence = SQLitePersistence(str(tmp_path / "api_test.db"))
     for identity, level in users:
         persistence.write_user(identity, level)
@@ -192,7 +196,7 @@ def build_context(tmp_path, main_agent=None, insights_agent=None, module_path=No
         deps=deps,
         main_agent=fake_main_agent,
         insights_agent=fake_insights_agent,
-        loaded_profile=_FakeLoadedProfile(module_path or "fixtures.profiles.minimal_profile"),
+        loaded_profile=_FakeLoadedProfile(module_path or "fixtures.profiles.minimal_profile", conversation_history_turns=conversation_history_turns),
         queue=queue,
         scheduler=scheduler,
     )
@@ -210,11 +214,16 @@ class _FakeLoadedProfile:
     never touch a shared fixture file.
     """
 
-    def __init__(self, module_path: str):
+    def __init__(self, module_path: str, conversation_history_turns: int = 0):
         from profiles.loader import hash_profile_file
 
         self.module_path = module_path
         self.profile_name = "For Tests"
+        # Defaults to 0 (conversation memory off) to match every existing
+        # test's assumptions unchanged; a test exercising follow-up
+        # behavior (docs/Next_Plan.md Stage 5) passes a positive value.
+        self.conversation_history_turns = conversation_history_turns
+        self.conversation_history_ttl_hours = 24
         # Captured once, here, at "load" time — like the real LoadedProfile
         # does — not recomputed live. A property recomputing it on every
         # access would always equal api/management.py's own fresh recompute,

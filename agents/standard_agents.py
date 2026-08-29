@@ -48,7 +48,15 @@ class HistoryAgent(Agent):
         "period summaries, and answer questions from supplied historical context. Never use "
         "conversational memory or outside knowledge. Preserve contradictory accounts explicitly "
         "and verbatim; never reconcile, smooth, or guess between them. Retain what happened, how "
-        "each event was handled, agent actions, and how it ended."
+        "each event was handled, agent actions, and how it ended. Every event you are given has "
+        "already been filtered to exactly what you may discuss — a field that is absent means it "
+        "is not available, never a false or negative value for that field; state plainly that a "
+        "fact is missing rather than guessing or inventing one, and never mention, imply, or "
+        "speculate about a field's existence when it was not given to you. When asked what a field "
+        "means, explain it only using the field-meanings glossary supplied alongside the events — "
+        "never invent database semantics of your own. Whenever you discuss a specific event, state "
+        "its Event ID explicitly and exactly as given, including within a numbered list of several "
+        "events, so any one of them can be referenced again later by number or by ID."
     )
 
     def __init__(self, model: str, api_key: str | None = None):

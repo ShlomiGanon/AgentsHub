@@ -188,13 +188,14 @@ def test_parse_protocol_write_command_builds_the_expected_payload():
 
 
 class _FakeMessage:
-    def __init__(self, text, message_id="777"):
+    def __init__(self, text, message_id="777", message_thread_id=None):
         self.text = text
         self.message_id = message_id
+        self.message_thread_id = message_thread_id
 
 
-def _fake_update(user_id="42", chat_id="99", text=None, callback_data=None, callback_query_id="cbq-1", message_id="777"):
-    message = _FakeMessage(text, message_id) if text is not None else None
+def _fake_update(user_id="42", chat_id="99", text=None, callback_data=None, callback_query_id="cbq-1", message_id="777", message_thread_id=None):
+    message = _FakeMessage(text, message_id, message_thread_id) if text is not None else None
     callback_query = None
     if callback_data is not None:
         callback_query = SimpleNamespace(data=callback_data, id=callback_query_id)
@@ -234,6 +235,24 @@ def test_on_text_message_forwards_the_real_incoming_message_id():
     _run(app._on_text_message(update, _fake_context(deps)))
 
     assert ("submit_message", "smoke seen", "42", "12345") in api.calls
+
+
+def test_on_text_message_uses_a_conversation_id_scoped_to_chat_and_thread():
+    # docs/Next_Plan.md §10 / Stage 5: distinct chats, and distinct threads
+    # within the same chat, must never share a conversation_id — otherwise
+    # one conversation could resolve another conversation's event
+    # reference (the follow-up mechanism's own isolation guarantee).
+    api = FakeBotApiClient(users={"42": "viewer"}, message_submission_result=MessageSubmissionResult(kind="question", answer_text="ok"))
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
+
+    _run(app._on_text_message(_fake_update(chat_id="chat-a", text="hello"), _fake_context(deps)))
+    _run(app._on_text_message(_fake_update(chat_id="chat-b", text="hello"), _fake_context(deps)))
+    _run(app._on_text_message(_fake_update(chat_id="chat-a", message_thread_id="thread-1", text="hello"), _fake_context(deps)))
+
+    conversation_ids = [call[1] for call in api.calls if call[0] == "submit_message_conversation"]
+    assert conversation_ids == ["telegram:chat-a:main", "telegram:chat-b:main", "telegram:chat-a:thread-1"]
+    assert len(set(conversation_ids)) == 3
 
 
 def test_on_profile_command_view_replies_with_the_profile():
@@ -301,7 +320,7 @@ def test_on_callback_query_refuses_a_viewer_answering_a_clarification():
     update = _fake_update(callback_data="clarify:event-1:fire")
     _run(app._on_callback_query(update, _fake_context(deps)))
 
-    assert "resolve_hold" in telegram.sent[-1].text
+    assert "resolve_clarification" in telegram.sent[-1].text
     assert not any(call[0] == "answer_clarification_hold" for call in api.calls)
 
 
@@ -449,8 +468,9 @@ def test_a_registered_viewer_can_read_the_profile_through_the_real_handler():
     assert "demo" in telegram.sent[-1].text
 
 
-def test_a_registered_viewer_can_read_settings_through_the_real_handler():
-    api = FakeBotApiClient(users={"42": "viewer"}, settings_view=SettingsView(retry_count=3, risk_threshold=0.5, lookback_window_days=30))
+def test_a_registered_commander_can_read_settings_through_the_real_handler():
+    # docs/Next_Plan.md §5 decision record: view_settings is commander-only.
+    api = FakeBotApiClient(users={"42": "commander"}, settings_view=SettingsView(retry_count=3, risk_threshold=0.5, lookback_window_days=30))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
 
@@ -458,6 +478,20 @@ def test_a_registered_viewer_can_read_settings_through_the_real_handler():
     _run(app._on_settings_command(update, _fake_context(deps, args=["view"])))
 
     assert "3" in telegram.sent[-1].text
+
+
+def test_a_registered_viewer_is_refused_reading_settings():
+    # docs/Next_Plan.md §5 decision record: view_settings is commander-only —
+    # bot/app.py refuses client-side before ever calling the API.
+    api = FakeBotApiClient(users={"42": "viewer"}, settings_view=SettingsView(retry_count=3, risk_threshold=0.5, lookback_window_days=30))
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
+
+    update = _fake_update()
+    _run(app._on_settings_command(update, _fake_context(deps, args=["view"])))
+
+    assert "view_settings" in telegram.sent[-1].text
+    assert ("get_settings_view", "42") not in api.calls
 
 
 # -- Problem 1 (post-Mission-8 audit): the real Telegram caller's own -------
@@ -479,7 +513,7 @@ def test_profile_view_through_the_real_handler_forwards_the_real_callers_identit
 
 
 def test_settings_view_through_the_real_handler_forwards_the_real_callers_identity():
-    api = FakeBotApiClient(users={"42": "viewer"}, settings_view=SettingsView(retry_count=3, risk_threshold=0.5, lookback_window_days=30))
+    api = FakeBotApiClient(users={"42": "commander"}, settings_view=SettingsView(retry_count=3, risk_threshold=0.5, lookback_window_days=30))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
 

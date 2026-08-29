@@ -216,6 +216,31 @@ def test_get_job_route_returns_the_status_body(ctx):
     assert body["status"] == "succeeded"
     assert body["insight_text"] == "all clear"
 
+
+def test_get_job_route_denies_a_viewer_for_someone_elses_job(ctx):
+    # docs/Next_Plan.md §5 decision record: view_job_status is ownership-
+    # scoped for a viewer to events they themselves submitted. 404 (not
+    # 403) is returned, matching the "unknown job" response — it does not
+    # confirm that a job belonging to another sender exists.
+    client = build_app(ctx).test_client()
+    envelope = InitialEventEnvelope(raw_text="text", source="telegram", received_at="2026-08-24T10:00:00", sender_identity="someone-else")
+    event_id = record_initial_event(ctx.deps.persistence, envelope)
+    record_event_outcome(ctx.deps.persistence, event_id, "succeeded", insight_text="all clear")
+
+    resp = client.get(f"/Job/{event_id}", headers=auth_headers(VIEWER_IDENTITY))
+
+    assert resp.status_code == 404
+
+
+def test_get_job_route_commander_sees_any_viewers_job(ctx):
+    client = build_app(ctx).test_client()
+    event_id = _new_event(ctx)  # sender_identity="viewer-1"
+    record_event_outcome(ctx.deps.persistence, event_id, "succeeded", insight_text="all clear")
+
+    resp = client.get(f"/Job/{event_id}", headers=auth_headers(COMMANDER_IDENTITY))
+
+    assert resp.status_code == 200
+
 """GET /User/<identity> and GET /Commanders (work_plan.md §8.14, §8.13)."""
 
 import pytest
@@ -241,10 +266,10 @@ def test_a_known_identity_reports_registered_and_its_level(tmp_path, teardown_ct
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
 
-    resp = client.get(f"/User/{COMMANDER_IDENTITY}", headers=auth_headers(VIEWER_IDENTITY))
+    resp = client.get(f"/User/{VIEWER_IDENTITY}", headers=auth_headers(COMMANDER_IDENTITY))
 
     assert resp.status_code == 200
-    assert resp.get_json() == {"registered": True, "permission_level": "commander"}
+    assert resp.get_json() == {"registered": True, "permission_level": "viewer"}
 
 
 def test_an_unknown_identity_reports_unregistered_not_an_error(tmp_path, teardown_ctx):
@@ -252,20 +277,34 @@ def test_an_unknown_identity_reports_unregistered_not_an_error(tmp_path, teardow
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
 
-    resp = client.get("/User/nobody", headers=auth_headers(VIEWER_IDENTITY))
+    resp = client.get("/User/nobody", headers=auth_headers(COMMANDER_IDENTITY))
 
     assert resp.status_code == 200
     assert resp.get_json() == {"registered": False, "permission_level": None}
 
 
-def test_viewer_level_is_sufficient_to_resolve_another_identity(tmp_path, teardown_ctx):
+def test_viewer_can_resolve_their_own_identity(tmp_path, teardown_ctx):
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    resp = client.get(f"/User/{VIEWER_IDENTITY}", headers=auth_headers(VIEWER_IDENTITY))
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"registered": True, "permission_level": "viewer"}
+
+
+def test_viewer_is_denied_resolving_another_identity(tmp_path, teardown_ctx):
+    # docs/Next_Plan.md §5 decision record: view_user_registration is
+    # ownership-scoped for a viewer to their own identity only. A commander
+    # (e.g. bot-service, resolving arbitrary callers) is unrestricted.
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
 
     resp = client.get(f"/User/{COMMANDER_IDENTITY}", headers=auth_headers(VIEWER_IDENTITY))
 
-    assert resp.status_code == 200
+    assert resp.status_code == 403
 
 
 def test_requires_authentication(tmp_path, teardown_ctx):

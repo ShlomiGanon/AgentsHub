@@ -54,12 +54,21 @@ tool outcomes, or approvals.
 
 Questions about the system itself, such as “who are you?”, “what can you do?”,
 or “which sub-agents do you have?”, use model-written conversational answers
-grounded in runtime metadata. The model receives `PROFILE_NAME`, event types,
-areas, loaded protocols, and the registered agents and their exposed tools. The
-wording is not stored in the profile or hard-coded as a final response. Adding a
-profile agent, tool, or protocol therefore changes what the Main Agent can
-describe after the next restart. The model is instructed to answer in the
-user's language and not claim names or capabilities absent from that metadata.
+grounded in runtime metadata — but that metadata is **role-filtered per
+caller**, not identical for everyone (`orchestrator/capabilities.py`,
+`auth.permissions.ViewerAllowedAction`). Every caller receives `PROFILE_NAME`,
+event types, and areas, plus exactly the `CapabilityDescriptor`s their
+authenticated `PermissionLevel` is authorized for. Loaded protocols and the
+registered agents and their exposed tools are commander-only: a viewer's
+runtime metadata omits those fields entirely rather than including them
+empty, and the model is instructed to say plainly that such a detail is not
+available to that caller rather than naming, counting, or hinting at what was
+withheld. The wording itself is not stored in the profile or hard-coded as a
+final response. Adding a profile agent, tool, or protocol changes what a
+*commander* can be told after the next restart; a viewer's available
+capabilities change only when `ViewerAllowedAction`'s membership changes. The
+model is instructed to answer in the user's language and not claim names or
+capabilities absent from the metadata it was actually given.
 
 ## Model tiers
 

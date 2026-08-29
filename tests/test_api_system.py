@@ -65,11 +65,15 @@ def teardown_ctx():
 
 
 def test_get_system_reports_profile_agents_protocols_types_areas(tmp_path, teardown_ctx):
+    # docs/Next_Plan.md §5 decision record: agents/protocols are part of
+    # view_system_internals, commander-only — a viewer's GET /SYSTEM no
+    # longer includes them (see test_get_system_viewer_response_omits_...
+    # below for the viewer-side assertion).
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
 
-    resp = client.get("/SYSTEM", headers=auth_headers(VIEWER_IDENTITY))
+    resp = client.get("/SYSTEM", headers=auth_headers(COMMANDER_IDENTITY))
 
     assert resp.status_code == 200
     body = resp.get_json()
@@ -89,8 +93,8 @@ def test_get_system_protocol_summary_matches_get_protocols_full_shape(tmp_path, 
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
 
-    system_resp = client.get("/SYSTEM", headers=auth_headers(VIEWER_IDENTITY))
-    protocol_resp = client.get("/Protocol", headers=auth_headers(VIEWER_IDENTITY))
+    system_resp = client.get("/SYSTEM", headers=auth_headers(COMMANDER_IDENTITY))
+    protocol_resp = client.get("/Protocol", headers=auth_headers(COMMANDER_IDENTITY))
 
     system_by_name = {p["name"]: p for p in system_resp.get_json()["protocols"]}
     protocol_by_name = {p["name"]: p for p in protocol_resp.get_json()["protocols"]}
@@ -109,7 +113,7 @@ def test_get_system_reports_queued_and_held_counts(tmp_path, teardown_ctx):
     ctx.queue.stop()  # nothing draining, so a submission stays counted
     ctx.queue.submit(("evt-x", lambda: None))
 
-    resp = client.get("/SYSTEM", headers=auth_headers(VIEWER_IDENTITY))
+    resp = client.get("/SYSTEM", headers=auth_headers(COMMANDER_IDENTITY))
 
     body = resp.get_json()
     assert body["queued_events"] == 1
@@ -121,7 +125,7 @@ def test_get_system_reports_the_scheduler_status(tmp_path, teardown_ctx):
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
 
-    resp = client.get("/SYSTEM", headers=auth_headers(VIEWER_IDENTITY))
+    resp = client.get("/SYSTEM", headers=auth_headers(COMMANDER_IDENTITY))
 
     assert resp.get_json()["scheduler"] == {"last_run_at": None, "last_run_ok": None, "last_run_error": None}
 
@@ -131,9 +135,30 @@ def test_get_system_reports_current_settings(tmp_path, teardown_ctx):
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
 
-    resp = client.get("/SYSTEM", headers=auth_headers(VIEWER_IDENTITY))
+    resp = client.get("/SYSTEM", headers=auth_headers(COMMANDER_IDENTITY))
 
     assert resp.get_json()["settings"] == {"retry_count": 3, "risk_threshold": 0.5, "lookback_window_days": 30}
+
+
+def test_get_system_viewer_response_omits_internals_and_settings(tmp_path, teardown_ctx):
+    # docs/Next_Plan.md §5 decision record: view_profile_overview (viewer)
+    # gets identity/event_types/areas/profile_file_changed only — agents,
+    # protocols, scheduler, queue/held counts, and settings are absent
+    # entirely, not present as empty hints.
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    resp = client.get("/SYSTEM", headers=auth_headers(VIEWER_IDENTITY))
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["profile"] == ctx.loaded_profile.module_path
+    assert body["event_types"] == ["fire", "medical", "human_activation"]
+    assert body["areas"] == ["north_sector", "south_sector"]
+    assert "profile_file_changed" in body
+    for protected_field in ("agents", "protocols", "queued_events", "held_events", "scheduler", "settings"):
+        assert protected_field not in body
 
 
 def test_get_system_reports_no_pending_profile_change_when_the_file_is_untouched(tmp_path, teardown_ctx, hashable_profile_module):

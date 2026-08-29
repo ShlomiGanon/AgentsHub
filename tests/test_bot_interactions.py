@@ -70,7 +70,7 @@ def test_diff_status_reports_no_pending_restart():
 def test_viewer_cannot_write_a_protocol():
     api = FakeBotApiClient()
     text = _run(write_protocol(_deps(api), VIEWER, "add", {"approval_flag": False}))
-    assert "edit_profile" in text
+    assert "create_protocol" in text
     assert not api.calls
 
 
@@ -255,7 +255,7 @@ def test_context_manager_releases_on_exit(tmp_path):
 
 import asyncio
 
-from auth.permissions import PermissionLevel
+from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
 
 from bot import app, users
 from bot.users import CallerContext, check_permission, resolve_caller
@@ -294,20 +294,37 @@ def test_registered_commander_resolves_with_commander_level():
     assert result.caller.level == PermissionLevel.COMMANDER
 
 
-def test_check_permission_allows_when_level_is_sufficient():
+def test_check_permission_allows_when_the_operation_is_authorized():
     caller = CallerContext(telegram_identity="c1", level=PermissionLevel.COMMANDER)
-    assert check_permission(caller, "approve_run") is None
+    assert check_permission(caller, RequestedOperation.APPROVE_RUN) is None
 
 
-def test_check_permission_refuses_and_names_the_action():
+def test_check_permission_refuses_and_names_the_operation():
     caller = CallerContext(telegram_identity="v1", level=PermissionLevel.VIEWER)
 
-    refusal = check_permission(caller, "approve_run")
+    refusal = check_permission(caller, RequestedOperation.APPROVE_RUN)
 
     assert refusal is not None
     assert "approve_run" in refusal
     assert "v1" in refusal
     assert "viewer" in refusal.lower()
+
+
+def test_check_permission_matches_is_permitted_for_every_operation_and_level():
+    # docs/Next_Plan.md §6 success criteria: bot permission checks must agree
+    # with the shared authorization function the API boundary also uses —
+    # no separate policy is duplicated in the bot.
+    for level in (PermissionLevel.VIEWER, PermissionLevel.COMMANDER):
+        caller = CallerContext(telegram_identity="x", level=level)
+        for operation in RequestedOperation:
+            refusal = check_permission(caller, operation)
+            assert (refusal is None) == is_permitted(level, operation)
+
+
+def test_check_permission_never_refuses_a_commander():
+    caller = CallerContext(telegram_identity="c1", level=PermissionLevel.COMMANDER)
+    for operation in RequestedOperation:
+        assert check_permission(caller, operation) is None
 
 
 def test_no_user_management_capability_exists_in_users_module():

@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from auth.permissions import PermissionLevel, is_permitted
+from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
 from persistence import NotFoundError, PersistenceInterface
 from protocols import Protocol
 
@@ -76,7 +76,7 @@ def answer_approval_hold(
 ) -> HoldAnswerResult:
     """Accept an answer only from a commander, validated *now* — at the moment they answer, not whatever level they held when the hold was created."""
 
-    if not is_permitted(answering_level, "approve_run"):
+    if not is_permitted(answering_level, RequestedOperation.APPROVE_RUN):
         return HoldAnswerResult(status="unauthorized", message=f"level {answering_level.name} may not approve a run")
 
     held = next(
@@ -154,7 +154,7 @@ def answer_clarification_hold(
 ) -> HoldAnswerResult:
     """Accept a resolution only from a commander, and only a classification drawn from the loaded registry — free text is rejected outright, since the registry is fixed for the run and..."""
 
-    if not is_permitted(answering_level, "resolve_hold"):
+    if not is_permitted(answering_level, RequestedOperation.RESOLVE_CLARIFICATION):
         return HoldAnswerResult(status="unauthorized", message=f"level {answering_level.name} may not resolve a hold")
 
     if not event_type_registry.is_valid(chosen_classification):

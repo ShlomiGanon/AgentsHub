@@ -221,3 +221,83 @@ came from a person requesting an action rather than from anything observed
 in the field. It is the only classification not drawn from the profile —
 the event-type registry (§2.1) adds it on every run and rejects a profile
 that tries to declare it itself as a duplicate.
+
+## RequestedOperation
+
+An enum naming every externally requestable operation (docs/Next_Plan.md
+§4.1). Not itself an allowlist — the complete operation vocabulary that API
+routes, bot commands/callbacks, and resolved message intents use as stable
+identifiers instead of ad hoc action strings. See docs/allowed_calls.md's
+"Operation matrix" for the full entry-point-to-member mapping.
+
+Members: `submit_event`, `submit_message`, `converse`, `ask_question`,
+`report_event`, `request_action`, `list_protocols`, `create_protocol`,
+`update_protocol`, `delete_protocol`, `view_profile_overview`,
+`view_system_internals`, `view_settings`, `change_settings`,
+`view_user_registration`, `view_commander_roster`, `view_job_status`,
+`resolve_clarification`, `approve_run`, `poll_notifications`.
+
+## ViewerAllowedAction
+
+An enum whose members are the complete viewer authorization policy
+(docs/Next_Plan.md §2.2). A commander is unrestricted by this enum. A
+viewer may perform an operation only if it is a member; an operation absent
+from this enum is denied to a viewer regardless of what any other code
+path permits.
+
+Approved initial members (docs/Next_Plan.md §5 decision record):
+`submit_event`, `submit_message`, `converse`, `ask_question`,
+`report_event`, `request_action`, `view_profile_overview`,
+`view_user_registration`, `view_job_status`. Every other
+`RequestedOperation` is commander-only.
+
+Two members carry ownership scoping beyond plain membership: `ask_question`
+and `view_job_status` are limited to events the viewer themselves
+submitted (matched by `sender_identity`); `view_user_registration` is
+limited to the viewer's own identity.
+
+## CallerAccessPolicy
+
+Named in the original Stage 0 design as a planned immutable value type
+(`allows(operation)`/`require(operation)`/`visible_capabilities()`). Stage 1
+and Stage 3 implemented the identical behavior as plain functions taking the
+authenticated `PermissionLevel` directly, rather than as a wrapping object —
+no separate type was introduced: `auth.permissions.is_permitted(level,
+operation)` ("allows"), `api.request_boundary.require(level, operation)`
+("require"), and `orchestrator.capabilities.visible_capabilities(level)`
+("visible_capabilities"). Each still answers only "is this operation
+allowed for this caller" / "what may this caller be told," contains no
+profile data and no model logic, and every disclosure flag is still
+derived from `is_permitted`, never set manually — the design's actual
+requirement, just without the extra type.
+
+## CapabilityDescriptor
+
+Defined in `orchestrator/capabilities.py`. Response-layer metadata
+describing one system capability in English: a stable `name`, a
+natural-language `description`, the `operation` (`RequestedOperation`) that
+authorizes it, and boolean flags for whether it uses event history
+(`uses_event_history`), current-state specialists (`uses_current_state`),
+protocols (`uses_protocols`), side effects (`has_side_effects`), or human
+review (`requires_human_review`). Descriptors supply facts to the model;
+they never contain a final answer sentence. A caller's capability response
+is exactly `orchestrator.capabilities.visible_capabilities(level)` — the
+descriptors whose operation `is_permitted` allows for that level; nothing
+is filtered out of a precomputed full list after the fact. Disclosure of
+non-capability runtime metadata (loaded protocols, registered sub-agents
+and their tools) is a coarser, single-gate decision in
+`build_role_aware_system_context`: both arrays are included together, or
+neither is, based on one check (`view_system_internals`) — there is no
+per-descriptor metadata-category field.
+
+## SemanticEventView
+
+A response-only representation of one stored event, built from a
+persistence record and the field catalog (`history/field_catalog.py`).
+Does not change the SQLite schema. Distinguishes stable event identity;
+received time versus occurred time; raw report text versus extracted
+description; classification/area/entities/severity; risk assessment and
+its reason; selected protocol and protocol reason; clarification and
+approval state; precedent relationships; executed steps and their
+results; and final outcome, failure reason, and insight. Only fields
+permitted for the caller and relevant to the question enter a prompt.

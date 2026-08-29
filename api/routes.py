@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from flask import Blueprint, Response, jsonify, make_response, request, stream_with_context
 
-from api.request_boundary import ConflictError, InvalidInputError, NotFoundError, RunFailureError, ServiceUnavailableError, authenticate, require
+from api.request_boundary import AuthorizationError, ConflictError, InvalidInputError, NotFoundError, RunFailureError, ServiceUnavailableError, authenticate, require
 from history import storage_timestamp
 
 from orchestrator.flows import begin_report, run_report_extraction
@@ -17,7 +17,7 @@ from tools import get_trace_id, new_trace_id, set_trace_id, stage_context, trace
 
 import logging
 
-from auth.permissions import PermissionLevel
+from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
 from agents import set_invocation_deadline
 
 from orchestrator.flows import (
@@ -25,7 +25,7 @@ from orchestrator.flows import (
     answer_conversationally,
     answer_question,
     answer_question_from_plan,
-    build_system_capability_context,
+    build_role_aware_system_context,
     begin_report,
     begin_request,
     classify_intent,
@@ -57,7 +57,7 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
     def post_event():
         optimization_policy = getattr(ctx.loaded_profile, "optimization_policy", OptimizationPolicy())
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
-        require(level, "send_message")
+        require(level, RequestedOperation.SUBMIT_EVENT)
 
         request_payload = request.get_json(silent=True) or {}
         text = request_payload.get("text")
@@ -111,22 +111,31 @@ def _now() -> str:
 
 def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
     blueprint = Blueprint("messages", __name__)
-    system_context = build_system_capability_context(
-        ctx.loaded_profile.profile_name,
-        ctx.deps.protocol_set.all(),
-        ctx.deps.registry,
-        tuple(
-            event_type
-            for event_type in ctx.deps.event_type_registry.types
-            if event_type != HUMAN_ACTIVATION_TYPE
-        ),
-        tuple(ctx.deps.area_registry.areas),
+    non_human_activation_event_types = tuple(
+        event_type
+        for event_type in ctx.deps.event_type_registry.types
+        if event_type != HUMAN_ACTIVATION_TYPE
     )
+    areas = tuple(ctx.deps.area_registry.areas)
 
     @blueprint.route("/Msg", methods=["POST"])
     def post_msg():
-        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
-        require(level, "send_message")
+        caller_identity = request.headers.get("X-Identity")
+        level = authenticate(ctx.deps.persistence, caller_identity)
+        require(level, RequestedOperation.SUBMIT_MESSAGE)
+
+        # Built fresh, per authenticated request — never once at blueprint
+        # creation, before a caller is known (docs/Next_Plan.md §4.5/Stage 3).
+        # A viewer's context has protected arrays absent entirely, not just
+        # filtered out of the final answer.
+        system_context = build_role_aware_system_context(
+            level,
+            ctx.loaded_profile.profile_name,
+            ctx.deps.protocol_set.all(),
+            ctx.deps.registry,
+            non_human_activation_event_types,
+            areas,
+        )
 
         request_payload = request.get_json(silent=True) or {}
         text = request_payload.get("text")
@@ -223,6 +232,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
             })
 
         if intent.intent == "conversational":
+            require(level, RequestedOperation.CONVERSE)
             try:
                 reply = (
                     message_plan.conversational_reply
@@ -235,7 +245,12 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
             return jsonify({"taken_as": "conversational", "answer": reply})
 
         if intent.intent == "question":
-            require(level, "view_history")
+            require(level, RequestedOperation.ASK_QUESTION)
+            # Ownership scoping (docs/Next_Plan.md §5 decision record): a viewer's
+            # ask_question is restricted to events they themselves submitted,
+            # matched by their own authenticated identity. A commander is
+            # unrestricted (filter stays None).
+            caller_sender_identity_filter = None if level is PermissionLevel.COMMANDER else caller_identity
             try:
                 if planner_mode == "merged" and message_plan is not None and message_plan.question_selection is not None:
                     question_answer = answer_question_from_plan(
@@ -245,11 +260,16 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
                         ctx.deps.registry,
                         ctx.deps.history_query_service,
                         max_fanout=optimization_policy.specialist_fanout,
+                        caller_sender_identity_filter=caller_sender_identity_filter,
                     )
                     answer = question_answer.text
                     provenance = question_answer.provenance
                 else:
-                    answer = answer_question(ctx.main_agent, text, ctx.deps.registry, ctx.deps.history_query_service)
+                    answer = answer_question(
+                        ctx.main_agent, text, ctx.deps.registry, ctx.deps.history_query_service,
+                        caller_sender_identity_filter=caller_sender_identity_filter,
+                        conversation_messages=prior_messages,
+                    )
                     provenance = None
             except OrchestrationParseError as exc:
                 raise RunFailureError(str(exc)) from exc
@@ -260,6 +280,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
             return jsonify(response_payload)
 
         if intent.intent == "report":
+            require(level, RequestedOperation.REPORT_EVENT)
             reservation = ctx.queue.reserve(False)
             if reservation is None:
                 raise ServiceUnavailableError("event queue is full; retry later")
@@ -291,6 +312,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
         if intent.intent != "request":
             raise RunFailureError(f"unsupported message intent: {intent.intent!r}")
 
+        require(level, RequestedOperation.REQUEST_ACTION)
         is_commander = level >= PermissionLevel.COMMANDER
         reservation = ctx.queue.reserve(False)
         if reservation is None:
@@ -388,14 +410,14 @@ def build_protocols_blueprint(ctx: "ApiContext") -> Blueprint:
     @blueprint.route("/Protocol", methods=["GET"])
     def list_protocols():
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
-        require(level, "view_history")
+        require(level, RequestedOperation.LIST_PROTOCOLS)
 
         return jsonify({"protocols": [protocol_to_dict(p) for p in ctx.deps.protocol_set.all()]})
 
     @blueprint.route("/Protocol", methods=["POST"])
     def create_protocol():
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
-        require(level, "edit_profile")
+        require(level, RequestedOperation.CREATE_PROTOCOL)
 
         request_payload = request.get_json(silent=True) or {}
         new_protocol = _protocol_from_body(request_payload)
@@ -410,7 +432,7 @@ def build_protocols_blueprint(ctx: "ApiContext") -> Blueprint:
     @blueprint.route("/Protocol/<name>", methods=["PUT"])
     def update_protocol(name):
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
-        require(level, "edit_profile")
+        require(level, RequestedOperation.UPDATE_PROTOCOL)
 
         request_payload = request.get_json(silent=True) or {}
         updated_protocol = _protocol_from_body(request_payload, name_override=name)
@@ -425,7 +447,7 @@ def build_protocols_blueprint(ctx: "ApiContext") -> Blueprint:
     @blueprint.route("/Protocol/<name>", methods=["DELETE"])
     def delete_protocol(name):
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
-        require(level, "edit_profile")
+        require(level, RequestedOperation.DELETE_PROTOCOL)
 
         try:
             protocol_edit_message = remove_protocol(ctx.loaded_profile.module_path, ctx.deps.protocol_set.all(), name)
@@ -449,35 +471,47 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
     @blueprint.route("/SYSTEM", methods=["GET"])
     def get_system():
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
-        require(level, "view_history")
+        # VIEW_PROFILE_OVERVIEW is the least-privileged of the three operations this
+        # single endpoint now serves — it is the entry gate. The response payload
+        # below is then built field-group by field-group, each gated by its own
+        # operation, so a viewer's response is a strict subset (protected arrays
+        # absent, never present-but-empty) rather than the full commander payload
+        # with fields simply omitted after the fact.
+        require(level, RequestedOperation.VIEW_PROFILE_OVERVIEW)
 
         loaded = ctx.loaded_profile
         current_hash = hash_profile_file(loaded.module_path)
 
-        return jsonify({
+        response_payload = {
             "profile": loaded.module_path,
-            "agents": [agent.name for agent in ctx.deps.registry.all()],
-            "protocols": [protocol_to_dict(p) for p in ctx.deps.protocol_set.all()],
             "event_types": list(ctx.deps.event_type_registry.types),
             "areas": list(ctx.deps.area_registry.areas),
-            "queued_events": ctx.queue.qsize(),
-            "held_events": {
+            "profile_file_changed": current_hash != loaded.profile_file_hash,
+        }
+
+        if is_permitted(level, RequestedOperation.VIEW_SYSTEM_INTERNALS):
+            response_payload["agents"] = [agent.name for agent in ctx.deps.registry.all()]
+            response_payload["protocols"] = [protocol_to_dict(p) for p in ctx.deps.protocol_set.all()]
+            response_payload["queued_events"] = ctx.queue.qsize()
+            response_payload["held_events"] = {
                 "clarification": len(ctx.deps.persistence.list_held_events("clarification")),
                 "approval": len(ctx.deps.persistence.list_held_events("approval")),
-            },
-            "scheduler": ctx.scheduler.last_run_status(),
-            "settings": {
+            }
+            response_payload["scheduler"] = ctx.scheduler.last_run_status()
+
+        if is_permitted(level, RequestedOperation.VIEW_SETTINGS):
+            response_payload["settings"] = {
                 "retry_count": ctx.deps.settings_store.get_retry_count(),
                 "risk_threshold": ctx.deps.settings_store.get_risk_threshold(),
                 "lookback_window_days": ctx.deps.settings_store.get_lookback_window_days(),
-            },
-            "profile_file_changed": current_hash != loaded.profile_file_hash,
-        })
+            }
+
+        return jsonify(response_payload)
 
     @blueprint.route("/SYSTEM", methods=["PUT"])
     def put_system():
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
-        require(level, "change_settings")
+        require(level, RequestedOperation.CHANGE_SETTINGS)
 
         request_payload = request.get_json(silent=True) or {}
 
@@ -522,8 +556,15 @@ def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/User/<identity>", methods=["GET"])
     def get_user(identity):
-        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
-        require(level, "view_history")
+        caller_identity = request.headers.get("X-Identity")
+        level = authenticate(ctx.deps.persistence, caller_identity)
+        require(level, RequestedOperation.VIEW_USER_REGISTRATION)
+
+        # Ownership scoping (docs/Next_Plan.md §5 decision record): a viewer may
+        # look up only their own identity. A commander (e.g. bot-service, which
+        # resolves every caller's registration) is unrestricted by this check.
+        if level is PermissionLevel.VIEWER and identity != caller_identity:
+            raise AuthorizationError("level VIEWER may not view another identity's registration")
 
         user = ctx.deps.persistence.read_user(identity)
         if user is None:
@@ -534,7 +575,7 @@ def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
     @blueprint.route("/Commanders", methods=["GET"])
     def get_commanders():
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
-        require(level, "view_commander_roster")
+        require(level, RequestedOperation.VIEW_COMMANDER_ROSTER)
 
         commanders = [u for u in ctx.deps.persistence.list_users() if u["permission_level"] == "commander"]
         return jsonify({"commanders": [{"telegram_identity": u["telegram_identity"]} for u in commanders]})
@@ -607,8 +648,19 @@ def build_jobs_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/Job/<event_id>", methods=["GET"])
     def get_job(event_id):
-        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
-        require(level, "view_history")
+        caller_identity = request.headers.get("X-Identity")
+        level = authenticate(ctx.deps.persistence, caller_identity)
+        require(level, RequestedOperation.VIEW_JOB_STATUS)
+
+        # Ownership scoping (docs/Next_Plan.md §5 decision record): a viewer may
+        # only check the status of an event they themselves submitted. A 404
+        # (not 403) is returned for someone else's job, matching the "no such
+        # job" response for a genuinely unknown ID — it does not confirm that a
+        # job belonging to another sender exists. A commander is unrestricted.
+        if level is PermissionLevel.VIEWER:
+            event = ctx.deps.persistence.fetch_event(event_id)
+            if event is None or event.get("sender_identity") != caller_identity:
+                raise NotFoundError(f"no such job '{event_id}'")
 
         status = job_status(ctx, event_id)
         if status is None:
@@ -638,7 +690,7 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
     @blueprint.route("/Clarify/<event_id>", methods=["POST"])
     def post_clarify(event_id):
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
-        require(level, "resolve_hold")
+        require(level, RequestedOperation.RESOLVE_CLARIFICATION)
         identity = request.headers.get("X-Identity")
 
         request_payload = request.get_json(silent=True) or {}
@@ -686,7 +738,7 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
     @blueprint.route("/Approve/<event_id>", methods=["POST"])
     def post_approve(event_id):
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
-        require(level, "approve_run")
+        require(level, RequestedOperation.APPROVE_RUN)
         identity = request.headers.get("X-Identity")
 
         request_payload = request.get_json(silent=True) or {}
@@ -855,7 +907,7 @@ def build_notifications_blueprint(ctx: "ApiContext") -> Blueprint:
     @blueprint.route("/Notifications", methods=["GET"])
     def get_notifications():
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
-        require(level, "poll_notifications")
+        require(level, RequestedOperation.POLL_NOTIFICATIONS)
 
         raw_since = request.args.get("since", "0")
         raw_wait_seconds = request.args.get("wait_seconds", "0")

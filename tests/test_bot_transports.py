@@ -324,13 +324,27 @@ def test_answer_approval_hold_approved_and_rejected(server):
 
 
 def test_get_profile_view_matches_the_loaded_profile(server):
+    # protocols are commander-only (view_system_internals) — a commander
+    # caller is required to see them via the profile view.
+    client = HttpApiClient(server.base_url)
+
+    view = _run(client.get_profile_view(COMMANDER_IDENTITY))
+
+    assert view.profile_name == server.ctx.loaded_profile.module_path
+    names = [p.name for p in view.protocols]
+    assert "status_check" in names
+
+
+def test_get_profile_view_omits_protocols_for_a_viewer(server):
+    # docs/Next_Plan.md §5 decision record: view_system_internals is
+    # commander-only — a viewer's ProfileView carries no protocols/agents.
     client = HttpApiClient(server.base_url)
 
     view = _run(client.get_profile_view(VIEWER_IDENTITY))
 
     assert view.profile_name == server.ctx.loaded_profile.module_path
-    names = [p.name for p in view.protocols]
-    assert "status_check" in names
+    assert view.protocols == ()
+    assert view.agent_names == ()
 
 
 def test_get_profile_diff_status_reports_false_when_unchanged(server):
@@ -342,15 +356,16 @@ def test_get_profile_diff_status_reports_false_when_unchanged(server):
 
 
 def test_get_and_write_settings_round_trip(server):
+    # settings are commander-only (view_settings) — use a commander caller.
     client = HttpApiClient(server.base_url)
 
-    before = _run(client.get_settings_view(VIEWER_IDENTITY))
+    before = _run(client.get_settings_view(COMMANDER_IDENTITY))
     assert before.retry_count == 3
 
     result = _run(client.write_setting("retry_count", 9, COMMANDER_IDENTITY))
     assert result.accepted is True
 
-    after = _run(client.get_settings_view(VIEWER_IDENTITY))
+    after = _run(client.get_settings_view(COMMANDER_IDENTITY))
     assert after.retry_count == 9
 
 
@@ -404,10 +419,20 @@ def test_get_profile_view_still_works_for_a_viewer_server_side(server):
     assert view is not None
 
 
-def test_get_settings_view_still_works_for_a_viewer_server_side(server):
+def test_get_settings_view_denied_for_a_viewer_server_side(server):
+    # docs/Next_Plan.md §5 decision record: view_settings is commander-only.
     client = HttpApiClient(server.base_url)
 
-    view = _run(client.get_settings_view(VIEWER_IDENTITY))
+    with pytest.raises(ApiRequestError) as excinfo:
+        _run(client.get_settings_view(VIEWER_IDENTITY))
+
+    assert excinfo.value.status_code == 403
+
+
+def test_get_settings_view_still_works_for_a_commander_server_side(server):
+    client = HttpApiClient(server.base_url)
+
+    view = _run(client.get_settings_view(COMMANDER_IDENTITY))
 
     assert view is not None
 

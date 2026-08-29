@@ -137,3 +137,28 @@ class HistoryAnswer:
 
 class SummaryGenerationError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class EventFieldDefinition:
+    """English meaning of one persisted event field, for response generation only —
+    never persistence schema (docs/Next_Plan.md §4.6, §9)."""
+
+    key: str
+    label: str
+    meaning: str
+    category: Literal["narrative", "internal"]
+
+
+@dataclass(frozen=True)
+class SemanticEventView:
+    """A response-only, English-labeled representation of one stored event, built
+    from a persistence record and the field catalog (history/field_catalog.py).
+    Does not change the SQLite schema. Only `category="narrative"` fields that
+    are actually present on the record ever appear in `fields` — internal
+    plumbing (trace_id, conversation_id, deadline_at, ingestion identity) never
+    enters this view for any caller, regardless of role."""
+
+    event_id: str
+    fields: tuple[tuple[str, object], ...] = ()
+    steps: tuple[dict, ...] = ()

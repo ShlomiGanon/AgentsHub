@@ -268,7 +268,7 @@ class _ScriptedHistoryQueryServiceWithDirectLookup(_ScriptedHistoryQueryService)
         self._most_recent_raises = most_recent_raises
         self.most_recent_calls = []
 
-    def answer_most_recent_event(self, question):
+    def answer_most_recent_event(self, question, **kwargs):
         self.most_recent_calls.append(question)
         if self._most_recent_raises is not None:
             raise self._most_recent_raises
@@ -354,7 +354,7 @@ def test_structured_history_route_executes_a_validated_history_query_spec():
         def planning_context(self):
             return {"current_time_utc": "2026-08-28T10:00:00", "classifications": ["fire"], "areas": ["north"]}
 
-        def query_spec(self, question, spec):
+        def query_spec(self, question, spec, **kwargs):
             self.spec = spec
             return SimpleNamespace(answer="2 matching events.")
 
@@ -385,6 +385,57 @@ def test_structured_history_route_executes_a_validated_history_query_spec():
     assert answer == "2 matching events."
     assert service.spec.operation == "count"
     assert service.spec.classifications == ("fire",)
+
+
+def test_conversation_reference_resolves_to_a_fresh_event_details_lookup():
+    # docs/Next_Plan.md §10: "that event" is resolved from conversation
+    # context to a stable Event ID, then re-fetched fresh from history —
+    # the remembered assistant text is never treated as current fact. The
+    # model (simulated here by the scripted response) is the one that
+    # reads conversation context and decides the event_id; this proves the
+    # conversation context actually reaches the prompt it needs to, and
+    # that the resolved reference flows through as a real, fresh query.
+    import json
+    from types import SimpleNamespace
+
+    class _StructuredHistoryService:
+        def __init__(self):
+            self.spec = None
+
+        def planning_context(self):
+            return {"current_time_utc": "2026-08-28T10:00:00"}
+
+        def query_spec(self, question, spec, **kwargs):
+            self.spec = spec
+            return SimpleNamespace(answer="Event evt-42 is currently still queued.")
+
+    route = json.dumps({
+        "route": "history",
+        "history_query": {
+            "operation": "event_details", "time_start": None, "time_end": None, "time_basis": "occurred_at",
+            "classifications": [], "areas": [], "outcomes": [], "protocol_names": [], "event_ids": ["evt-42"],
+            "risk_levels": [], "order": "newest", "group_by": "none", "limit": 50,
+        },
+        "reason": "resolved 'that event' to evt-42 from conversation context",
+    })
+    main_agent = _ScriptedMainAgent([_ROUTE_NORMAL, (route, "success")])
+    service = _StructuredHistoryService()
+    prior_messages = ({"role": "assistant", "content": "Recorded — Event ID evt-42, currently queued."},)
+
+    answer = answer_question(
+        main_agent, "what's the status of that event now?", build_agent_registry({}, []), service,
+        conversation_messages=prior_messages,
+    )
+
+    assert answer == "Event evt-42 is currently still queued."
+    assert service.spec.operation == "event_details"
+    assert service.spec.event_ids == ("evt-42",)
+    # Both prompts the model saw actually carried the conversation context —
+    # proof the reference could be resolved at all, not just that a
+    # scripted response happened to name the right ID.
+    direct_lookup_prompt, agent_selection_prompt = (call[0] for call in main_agent.calls)
+    assert "evt-42" in direct_lookup_prompt
+    assert "evt-42" in agent_selection_prompt
 
 
 def test_question_router_does_not_expose_decision_only_agents():
