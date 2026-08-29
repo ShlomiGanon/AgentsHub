@@ -137,6 +137,75 @@ def test_failed_dag_step_blocks_its_dependents_without_reordering_results():
     assert result.failed_step_index == 1
 
 
+def test_step_waits_for_required_event_data_and_resumes_without_an_attempt():
+    calls: list[str] = []
+
+    class _Settings:
+        @staticmethod
+        def get_retry_count():
+            return 1
+
+    class _Agent:
+        name = "worker"
+
+        @staticmethod
+        def exposed_tools():
+            return ()
+
+        @staticmethod
+        def process(text, _allowed_tools):
+            calls.append(text)
+            return AgentResult("success", "done")
+
+    step = Step("worker", "check the location", (), required_event_fields=("area",))
+    waiting = execute_steps([step], {"worker": _Agent()}, _Settings(), event_data={"area": None})
+
+    assert waiting.completed is False
+    assert waiting.waiting_for_event_data is True
+    assert waiting.missing_event_fields == ("area",)
+    assert waiting.step_outcomes[0].attempt_count == 0
+    assert waiting.step_outcomes[0].status == "waiting_for_event_data"
+    assert calls == []
+
+    resumed = execute_steps([step], {"worker": _Agent()}, _Settings(), event_data={"area": "south_sector"})
+
+    assert resumed.completed is True
+    assert calls == ["check the location"]
+
+
+def test_wait_request_collects_all_missing_fields_from_the_remaining_plan():
+    class _Settings:
+        @staticmethod
+        def get_retry_count():
+            return 1
+
+    class _Agent:
+        name = "worker"
+
+        @staticmethod
+        def exposed_tools():
+            return ()
+
+        @staticmethod
+        def process(_text, _allowed_tools):
+            raise AssertionError("no step should run while its required data is missing")
+
+    steps = [
+        Step("worker", "locate", (), required_event_fields=("area",)),
+        Step("worker", "assess", (), required_event_fields=("severity", "occurred_at")),
+    ]
+
+    result = execute_steps(
+        steps,
+        {"worker": _Agent()},
+        _Settings(),
+        event_data={"area": None, "severity": None, "occurred_at": None},
+    )
+
+    assert result.waiting_for_event_data is True
+    assert result.missing_event_fields == ("area", "severity", "occurred_at")
+
+
 def test_api_returns_and_accepts_trace_id(tmp_path):
     ctx = build_context(tmp_path)
     try:

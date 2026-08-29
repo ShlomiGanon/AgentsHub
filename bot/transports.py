@@ -17,6 +17,7 @@ from bot.contracts import (
     BOT_SERVICE_IDENTITY,
     BotApiClient,
     BotNotification,
+    EventDataNeededNotice,
     FailureNotice,
     HeldApprovalNotice,
     HeldClarificationNotice,
@@ -160,7 +161,12 @@ class HttpApiClient(BotApiClient):
                 provenance=response_payload.get("provenance"),
             )
 
-        return MessageSubmissionResult(kind=response_payload["taken_as"], job_id=response_payload.get("event_id"), awaiting_approval=False)
+        return MessageSubmissionResult(
+            kind=response_payload["taken_as"],
+            answer_text=response_payload.get("answer"),
+            job_id=response_payload.get("event_id"),
+            awaiting_approval=False,
+        )
 
     async def answer_clarification_hold(self, event_id: str, chosen_classification: str, answering_identity: str) -> HoldAnswerOutcome:
         status, response_payload = await self._call("POST", f"/Clarify/{event_id}", answering_identity, {"classification": chosen_classification})
@@ -326,6 +332,13 @@ class HttpApiClient(BotApiClient):
                 risk_reason=payload["risk_reason"],
                 selected_protocol_name=payload.get("selected_protocol_name"),
                 candidate_protocol_names=tuple(payload.get("candidate_protocol_names", ())),
+            )
+        if kind == "event_data_hold":
+            return EventDataNeededNotice(
+                hold_id=payload["hold_id"],
+                event_id=payload["event_id"],
+                question=payload["question"],
+                missing_fields=tuple(payload.get("missing_fields", ())),
             )
         if kind == "uncertain_verdict":
             return UncertainVerdictNotice(event_id=payload["event_id"], insight_text=payload["insight_text"])

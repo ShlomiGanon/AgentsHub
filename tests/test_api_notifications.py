@@ -4,7 +4,7 @@ import pytest
 
 from api.app import build_app
 from history.write import record_event_outcome
-from orchestrator.holds import create_approval_hold, create_clarification_hold
+from orchestrator.holds import create_approval_hold, create_clarification_hold, create_event_data_hold
 from orchestrator.main_agent import RiskAssessment
 from orchestrator.main_agent import ProtocolSelectionResult
 from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, auth_headers, build_context
@@ -94,6 +94,25 @@ def test_job_finished_and_job_failed_are_delivered_to_the_original_submitter(tmp
     assert by_event[finished_id]["target_chat_ids"] == ["alice"]
     assert by_event[failed_id]["kind"] == "job_failed"
     assert by_event[failed_id]["target_chat_ids"] == ["bob"]
+
+
+def test_event_data_question_is_delivered_to_the_original_reporter(tmp_path, teardown_ctx):
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    event_id = _minimal_event(
+        ctx.deps.persistence, source="telegram", sender_identity="alice", source_message_id="message-7"
+    )
+    create_event_data_hold(ctx.deps.persistence, event_id, ("area",), "Where did it happen?", ("check",))
+
+    resp = client.get("/Notifications", headers=auth_headers(COMMANDER_IDENTITY))
+    [notification] = resp.get_json()["notifications"]
+
+    assert notification["kind"] == "event_data_hold"
+    assert notification["target_chat_ids"] == ["alice"]
+    assert notification["reply_to_message_id"] == "message-7"
+    assert notification["payload"]["question"] == "Where did it happen?"
 
 
 def test_job_finished_and_job_failed_carry_the_real_originating_message_id(tmp_path, teardown_ctx):

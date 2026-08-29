@@ -73,7 +73,7 @@ class UserLookupResult:
 
 @dataclass(frozen=True)
 class MessageSubmissionResult:
-    kind: Literal["question", "report", "request", "conversational", "clarification"]
+    kind: Literal["question", "report", "request", "conversational", "clarification", "event_update"]
     answer_text: str | None = None
     job_id: str | None = None
     awaiting_approval: bool = False
@@ -108,6 +108,14 @@ class HeldApprovalNotice:
     risk_reason: str
     selected_protocol_name: str | None = None
     candidate_protocol_names: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class EventDataNeededNotice:
+    hold_id: str
+    event_id: str
+    question: str
+    missing_fields: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -182,6 +190,7 @@ BotNotificationKind = Literal[
     "no_match_notice",
     "job_finished",
     "job_failed",
+    "event_data_hold",
 ]
 
 
@@ -205,6 +214,7 @@ class BotNotification:
         | NoMatchNotice
         | JobResult
         | FailureNotice
+        | EventDataNeededNotice
     )
     reply_to_message_id: str | None = None
     trace_id: str | None = None

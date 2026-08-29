@@ -215,6 +215,14 @@ Event evt-2f9a... is still queued.
 
 The Main Agent resolves a reference like "that event" or "the first one" from the remembered turns to a stable Event ID, then always re-reads the current record from the database — a remembered assistant reply is never treated as current fact, and the caller's authorization is re-evaluated fresh on every turn (a role change between two turns of the same conversation takes effect starting on the very next one). An ambiguous reference (more than one plausible prior event) gets a short clarification question instead of a guess.
 
+Protocol steps may declare event fields they cannot execute without. If one of
+those fields is absent, the step is persisted as `waiting_for_event_data`
+without consuming an execution attempt, while the event remains non-terminal.
+The Main Agent asks the original reporter for all currently blocking details in
+the reporter's language. A reply in the same conversation updates the existing
+event and resumes the saved plan; completed steps are not repeated. Messages
+that do not answer the data request continue through normal intent routing.
+
 ## Logging
 
 Normal operation emits structured records with trace IDs and stores them in the deployment database. Human-readable log lines are written separately for terminal use.

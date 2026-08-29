@@ -1,3 +1,4 @@
+import json
 import types
 from types import SimpleNamespace
 
@@ -668,6 +669,23 @@ class _ScriptedMainAgent:
         return _Result()
 
 
+class _SequentialMainAgent:
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = []
+
+    def process(self, text, allowed_tools):
+        self.calls.append((text, allowed_tools))
+        response_text, status = self._responses.pop(0)
+
+        class _Result:
+            pass
+
+        _Result.status = status
+        _Result.text = response_text
+        return _Result()
+
+
 @pytest.fixture
 def registry():
     agent = ReferenceAgent(model="m")
@@ -719,6 +737,23 @@ def test_formulate_tasks_produces_a_step_per_participating_agent(registry):
     assert result.steps[0].task_text == "check status at gate 3"
 
 
+def test_formulation_preserves_valid_required_event_fields(registry):
+    agent = _ScriptedMainAgent(json.dumps({
+        "steps": [{
+            "step_id": "check-location",
+            "agent_name": "reference_agent",
+            "task": "Check the reported location.",
+            "depends_on": [],
+            "required_event_fields": ["area"],
+        }]
+    }))
+
+    result = formulate_tasks(agent, _protocol(), registry, "raw", "fire", None, "d")
+
+    assert result.success
+    assert result.steps[0].required_event_fields == ("area",)
+
+
 def test_allowed_tools_are_filtered_to_what_the_agent_actually_exposes(registry):
     agent = _ScriptedMainAgent("AGENT: reference_agent\nTASK: t")
     protocol = _protocol(approved_tools=("check_status", "record_action", "some_other_tool_no_agent_has"))
@@ -735,6 +770,28 @@ def test_missing_an_agents_block_fails_naming_that_agent(registry):
 
     assert not result.success
     assert result.failed_agent_name == "reference_agent"
+
+
+def test_formulation_repairs_one_invalid_response_with_the_parse_failure(registry):
+    repaired = json.dumps({
+        "steps": [{
+            "step_id": "check-south",
+            "agent_name": "reference_agent",
+            "task": "Check the reported fire in the south sector.",
+            "depends_on": [],
+        }]
+    })
+    agent = _SequentialMainAgent([
+        ("```json\n{}\n```", "success"),
+        (repaired, "success"),
+    ])
+
+    result = formulate_tasks(agent, _protocol(), registry, "raw", "fire", "south", "d")
+
+    assert result.success
+    assert len(agent.calls) == 2
+    assert "model did not produce a task" in agent.calls[1][0]
+    assert "without Markdown fences" in agent.calls[1][0]
 
 
 def test_unclear_task_status_fails_formulation(registry):

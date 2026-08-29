@@ -22,6 +22,7 @@ MessageKind = Literal[
     "result",
     "failed",
     "declined",
+    "event_data_needed",
 ]
 
 _HEADERS: dict[MessageKind, str] = {
@@ -33,6 +34,7 @@ _HEADERS: dict[MessageKind, str] = {
     "result": "[RESULT]",
     "failed": "[RUN FAILED]",
     "declined": "[DECLINED]",
+    "event_data_needed": "[MORE EVENT DETAILS NEEDED]",
 }
 
 
@@ -110,6 +112,10 @@ def format_failure_notice(notice: "FailureNotice") -> str:
         lines += ["", "Nothing completed before the failure."]
 
     return "\n".join(lines)
+
+
+def format_event_data_needed(notice) -> str:
+    return f"{format_header('event_data_needed')}\n\n{notice.question}"
 
 if TYPE_CHECKING:
     from bot.contracts import BotApiClient

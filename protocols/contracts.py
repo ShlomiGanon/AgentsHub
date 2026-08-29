@@ -4,6 +4,16 @@ from dataclasses import dataclass
 from enum import IntEnum
 
 
+EVENT_DATA_FIELDS = (
+    "classification",
+    "area",
+    "entities",
+    "description",
+    "severity",
+    "occurred_at",
+)
+
+
 class CriticalityLevel(IntEnum):
     """Ordered so `max()` picks the most critical of several tied candidates (§6.4, later) — the same pattern as auth.permissions' PermissionLevel."""
 
@@ -32,6 +42,7 @@ class Step:
     allowed_tools: tuple[str, ...]
     step_id: str = ""
     depends_on: tuple[str, ...] = ()
+    required_event_fields: tuple[str, ...] = ()
 
 
 class ProtocolEditError(Exception):
@@ -45,6 +56,8 @@ class StepOutcome:
     attempt_count: int
     succeeded: bool
     failure_reason: str | None = None
+    status: str = "succeeded"
+    missing_event_fields: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -54,3 +67,5 @@ class ProtocolRunResult:
     failed_step_index: int | None = None
     failed_step_agent: str | None = None
     failure_cause: str | None = None
+    waiting_for_event_data: bool = False
+    missing_event_fields: tuple[str, ...] = ()

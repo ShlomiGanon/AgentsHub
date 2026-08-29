@@ -115,7 +115,7 @@ async def handle_incoming_message(
         if exc.status_code == 403:
             return f"Refused: {exc.message}"
         raise
-    if submission_result.kind in {"question", "conversational", "clarification"}:
+    if submission_result.kind in {"question", "conversational", "clarification", "event_update"}:
         return submission_result.answer_text or "(no answer was returned)"
 
     lines = [f"Got it — taken as a {submission_result.kind}."]

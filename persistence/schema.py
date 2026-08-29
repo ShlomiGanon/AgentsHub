@@ -223,6 +223,15 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "ALTER TABLE event_steps ADD COLUMN step_id TEXT;"
         "ALTER TABLE event_steps ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]';",
     ),
+    (
+        15,
+        "add resumable event-data waits to protocol steps",
+        "ALTER TABLE event_steps ADD COLUMN required_event_fields TEXT NOT NULL DEFAULT '[]';"
+        "ALTER TABLE event_steps ADD COLUMN missing_event_fields TEXT NOT NULL DEFAULT '[]';"
+        "ALTER TABLE event_steps ADD COLUMN status TEXT NOT NULL DEFAULT 'pending';"
+        "ALTER TABLE event_steps ADD COLUMN failure_reason TEXT;"
+        "UPDATE event_steps SET status = CASE WHEN result_text IS NULL THEN 'failed' ELSE 'succeeded' END;",
+    ),
 ]
 
 

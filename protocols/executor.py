@@ -77,7 +77,10 @@ def execute_step_with_retry(
             )
 
             if attempts >= attempt_limit or not _can_retry(step, agent):
-                return StepOutcome(step=step, result_text=None, attempt_count=attempts, succeeded=False, failure_reason=last_failure_reason)
+                return StepOutcome(
+                    step=step, result_text=None, attempt_count=attempts, succeeded=False,
+                    failure_reason=last_failure_reason, status="failed",
+                )
 
             logger.info("retrying step", extra={"event": "step_retry", "agent": step.agent_name, "attempt": attempts + 1, "cause": last_failure_reason, "trace_id": get_trace_id()})
             sleep_fn(backoff_seconds)
@@ -91,10 +94,16 @@ def execute_step_with_retry(
             )
 
             if task_rewriter is None:
-                return StepOutcome(step=step, result_text=None, attempt_count=attempts, succeeded=False, failure_reason=f"{last_failure_reason} (no task rewriter available)")
+                return StepOutcome(
+                    step=step, result_text=None, attempt_count=attempts, succeeded=False,
+                    failure_reason=f"{last_failure_reason} (no task rewriter available)", status="failed",
+                )
 
             if attempts >= attempt_limit or not _can_retry(step, agent):
-                return StepOutcome(step=step, result_text=None, attempt_count=attempts, succeeded=False, failure_reason=last_failure_reason)
+                return StepOutcome(
+                    step=step, result_text=None, attempt_count=attempts, succeeded=False,
+                    failure_reason=last_failure_reason, status="failed",
+                )
 
             current_task_text = task_rewriter(step, agent_result.text)
             logger.info("retrying step with rewritten task", extra={"event": "step_retry", "agent": step.agent_name, "attempt": attempts + 1, "cause": last_failure_reason, "trace_id": get_trace_id()})
@@ -104,21 +113,66 @@ def execute_step_with_retry(
         return StepOutcome(step=step, result_text=agent_result.text, attempt_count=attempts, succeeded=True)
 
 
+def _missing_event_fields(step: Step, event_data: dict | None) -> tuple[str, ...]:
+    if not step.required_event_fields:
+        return ()
+    values = event_data or {}
+    return tuple(
+        name for name in step.required_event_fields
+        if values.get(name) is None or values.get(name) == "" or values.get(name) == []
+    )
+
+
+def _waiting_outcome(step: Step, missing_fields: tuple[str, ...]) -> StepOutcome:
+    return StepOutcome(
+        step=step,
+        result_text=None,
+        attempt_count=0,
+        succeeded=False,
+        status="waiting_for_event_data",
+        missing_event_fields=missing_fields,
+    )
+
+
 def execute_steps(
     steps: list[Step],
     agents_by_name: dict[str, Agent],
     settings_store,
     task_rewriter: Callable[[Step, str], str] | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
+    event_data: dict | None = None,
+    prior_outcomes: tuple[StepOutcome, ...] = (),
 ) -> ProtocolRunResult:
     if any(step.step_id or step.depends_on for step in steps):
         return _execute_dependency_steps(
-            steps, agents_by_name, settings_store, task_rewriter=task_rewriter, sleep_fn=sleep_fn
+            steps, agents_by_name, settings_store, task_rewriter=task_rewriter, sleep_fn=sleep_fn,
+            event_data=event_data, prior_outcomes=prior_outcomes,
         )
 
     outcomes: list[StepOutcome] = []
+    prior_by_index = {index: outcome for index, outcome in enumerate(prior_outcomes) if outcome.status == "succeeded"}
 
     for index, step in enumerate(steps):
+        if index in prior_by_index:
+            outcomes.append(prior_by_index[index])
+            continue
+
+        missing_fields = _missing_event_fields(step, event_data)
+        if missing_fields:
+            waiting = [
+                _waiting_outcome(candidate, candidate_missing)
+                for candidate in steps[index:]
+                if (candidate_missing := _missing_event_fields(candidate, event_data))
+            ]
+            outcomes.extend(waiting)
+            all_missing_fields = tuple(
+                dict.fromkeys(field for outcome in waiting for field in outcome.missing_event_fields)
+            )
+            return ProtocolRunResult(
+                step_outcomes=tuple(outcomes), completed=False, waiting_for_event_data=True,
+                missing_event_fields=all_missing_fields,
+            )
+
         agent = agents_by_name[step.agent_name]
 
         logger.info(
@@ -161,6 +215,8 @@ def _execute_dependency_steps(
     *,
     task_rewriter: Callable[[Step, str], str] | None,
     sleep_fn: Callable[[float], None],
+    event_data: dict | None,
+    prior_outcomes: tuple[StepOutcome, ...],
 ) -> ProtocolRunResult:
     step_ids = [step.step_id or str(index) for index, step in enumerate(steps)]
     if len(set(step_ids)) != len(step_ids):
@@ -169,8 +225,12 @@ def _execute_dependency_steps(
     if any(dependency not in known for step in steps for dependency in step.depends_on):
         return ProtocolRunResult(step_outcomes=(), completed=False, failure_cause="protocol step names an unknown dependency")
 
-    completed: dict[str, StepOutcome] = {}
-    pending = set(step_ids)
+    completed: dict[str, StepOutcome] = {
+        step_ids[index]: outcome
+        for index, outcome in enumerate(prior_outcomes[:len(step_ids)])
+        if outcome.status == "succeeded"
+    }
+    pending = set(step_ids) - set(completed)
     index_by_id = {step_id: index for index, step_id in enumerate(step_ids)}
 
     def _read_only(step: Step) -> bool:
@@ -186,8 +246,28 @@ def _execute_dependency_steps(
         if not ready:
             return ProtocolRunResult(step_outcomes=tuple(completed[step_id] for step_id in step_ids if step_id in completed), completed=False, failure_cause="protocol dependency cycle or failed dependency")
 
-        parallel_ready = [step_id for step_id in ready if _read_only(steps[index_by_id[step_id]])]
-        selected = parallel_ready[:4] if parallel_ready else [ready[0]]
+        ready_with_data = [
+            step_id for step_id in ready
+            if not _missing_event_fields(steps[index_by_id[step_id]], event_data)
+        ]
+        if not ready_with_data:
+            waiting = [
+                _waiting_outcome(
+                    steps[index_by_id[step_id]],
+                    _missing_event_fields(steps[index_by_id[step_id]], event_data),
+                )
+                for step_id in step_ids
+                if step_id in pending and _missing_event_fields(steps[index_by_id[step_id]], event_data)
+            ]
+            missing_fields = tuple(dict.fromkeys(field for outcome in waiting for field in outcome.missing_event_fields))
+            ordered = tuple(completed[step_id] for step_id in step_ids if step_id in completed) + tuple(waiting)
+            return ProtocolRunResult(
+                step_outcomes=ordered, completed=False, waiting_for_event_data=True,
+                missing_event_fields=missing_fields,
+            )
+
+        parallel_ready = [step_id for step_id in ready_with_data if _read_only(steps[index_by_id[step_id]])]
+        selected = parallel_ready[:4] if parallel_ready else [ready_with_data[0]]
 
         def _run(step_id: str) -> tuple[str, StepOutcome]:
             step = steps[index_by_id[step_id]]

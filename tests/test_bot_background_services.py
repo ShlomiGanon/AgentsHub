@@ -2,7 +2,7 @@
 
 import asyncio
 
-from bot.api_client import BotNotification, FailureNotice
+from bot.api_client import BotNotification, EventDataNeededNotice, FailureNotice
 from bot.deps import BotDeps
 from bot.notifications import deliver_failure_notification
 from tests.bot_fakes import FakeBotApiClient, FakeTelegramClient
@@ -229,6 +229,7 @@ def _deps(api, commander_chat_ids=("c1",)):
         ("no_match_notice", NoMatchNotice(event_id="e1", raw_text="x", reason="no match", risk_level="low", risk_reason="r"), ()),
         ("job_finished", JobResult(job_id="j1", outcome="succeeded"), ("chat-9",)),
         ("job_failed", FailureNotice(event_id="e1", failed_step_agent_name="a1", failure_reason="boom"), ("chat-9",)),
+        ("event_data_hold", EventDataNeededNotice(hold_id="h2", event_id="e2", question="Where?", missing_fields=("area",)), ("chat-9",)),
     ],
 )
 def test_dispatch_routes_every_kind_to_a_delivered_message(kind, payload, target_chat_ids):

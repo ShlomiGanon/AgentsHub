@@ -5,6 +5,7 @@ import sys
 from protocols import contracts
 from protocols.contracts import (
     CriticalityLevel,
+    EVENT_DATA_FIELDS,
     Protocol,
     ProtocolEditError,
     ProtocolRunResult,
@@ -36,6 +37,7 @@ sys.modules[f"{__name__}.editor"] = repository
 
 __all__ = [
     "CriticalityLevel",
+    "EVENT_DATA_FIELDS",
     "EDIT_SUCCESS_MESSAGE",
     "Protocol",
     "ProtocolEditError",

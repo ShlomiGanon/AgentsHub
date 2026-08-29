@@ -46,6 +46,10 @@ class StepExecutionEnvelope:
     attempt_count: int
     step_id: str = ""
     depends_on: tuple[str, ...] = ()
+    required_event_fields: tuple[str, ...] = ()
+    missing_event_fields: tuple[str, ...] = ()
+    status: str = "auto"
+    failure_reason: str | None = None
 
 
 @dataclass(frozen=True)

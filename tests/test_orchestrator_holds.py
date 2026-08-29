@@ -493,6 +493,15 @@ def test_identity_and_capability_questions_are_defined_as_conversational():
     assert "which sub-agents do you have?" in prompt
 
 
+def test_procedural_questions_about_visible_capabilities_are_defined_as_conversational():
+    agent = _ScriptedMainAgent("INTENT: conversational\nREASON: asks how a visible capability works")
+
+    result = classify_intent(agent, _protocols(), "What happens if I report an event?")
+
+    assert result.intent == "conversational"
+    assert "What happens if I report an event?" in agent.calls[0][0]
+
+
 def test_answer_conversationally_raises_on_an_unusable_response():
     agent = _ScriptedMainAgent("missing info", status="unclear_task")
 

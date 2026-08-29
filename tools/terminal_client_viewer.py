@@ -51,7 +51,7 @@ async def _wait_for_completion(deps: BotDeps, cursor: int, job_id: str, poll_int
 
         for note in notifications:
             await dispatch_notification(deps, note)
-            if note.kind in ("job_finished", "job_failed") and notification_subject_id(note) == job_id:
+            if note.kind in ("job_finished", "job_failed", "event_data_hold") and notification_subject_id(note) == job_id:
                 return cursor
 
 

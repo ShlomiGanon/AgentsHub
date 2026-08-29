@@ -141,6 +141,24 @@ def test_multiple_agents_are_composed_into_one_answer():
     assert "currently nominal" in compose_prompt
 
 
+def test_duplicate_agent_selection_gets_one_targeted_repair():
+    reference_agent = _ScriptedAgent("reference_agent", READ_ONLY_TOOL, response_text="both sectors are nominal")
+    registry = build_agent_registry({}, [reference_agent])
+    duplicate = (
+        "AGENT: reference_agent\nTASK: check the north sector\n"
+        "AGENT: reference_agent\nTASK: check the south sector"
+    )
+    repaired = "AGENT: reference_agent\nTASK: check both the north and south sectors"
+    main_agent = _ScriptedMainAgent([_ROUTE_NORMAL, (duplicate, "success"), (repaired, "success")])
+
+    answer = answer_question(main_agent, "what is the situation in the sector?", registry, NO_HISTORY_SERVICE)
+
+    assert answer == "both sectors are nominal"
+    assert len(main_agent.calls) == 3
+    assert "more than once" in main_agent.calls[2][0]
+    assert "each agent may appear at most once" in main_agent.calls[2][0].lower()
+
+
 def test_no_agent_chosen_raises():
     # Free text with neither an AGENT:/TASK: block nor a NONE: line —
     # a genuine parse failure, distinct from a clean NONE decline.

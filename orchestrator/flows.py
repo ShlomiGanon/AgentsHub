@@ -1,8 +1,9 @@
 """The new-event flow and the package's declared entry point (work_plan.md §6.11, §6.14)."""
 
 import functools
+import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal
 
@@ -11,11 +12,14 @@ from history import (
     InitialEventEnvelope,
     StepExecutionEnvelope,
     extract_event,
+    parse_timestamp,
+    record_event_data_update,
     record_event_outcome,
     record_event_state,
     record_extracted_fields,
     record_initial_event,
     record_step_execution,
+    storage_timestamp,
 )
 from orchestrator.holds import (
     UNRESOLVED_FIELD,
@@ -23,6 +27,7 @@ from orchestrator.holds import (
     answer_clarification_hold,
     create_approval_hold,
     create_clarification_hold,
+    create_event_data_hold,
     determine_approval_hold,
     determine_clarification_hold,
 )
@@ -37,15 +42,18 @@ from orchestrator.reasoning import (
     classify_intent,
     construct_core_agents as construct_main_agent,
     formulate_tasks,
+    formulate_event_data_question,
     judge_success,
     make_operational_decision,
     plan_message,
     rewrite_task,
+    extract_event_data_update,
     select_protocol,
 )
 from orchestrator.reasoning import answer_question, determine_closure, look_up_precedent
 from orchestrator.event_queue import PolicyAwareEventQueue, SerialEventQueue, WorkItem
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy
+from protocols import Step, StepOutcome
 from protocols.executor import execute_steps
 from tools import get_trace_id
 
@@ -85,7 +93,7 @@ def _deadline_failure(deps: "FlowDeps", event_id: str, next_stage: str) -> "Flow
 
 FlowOutcome = Literal[
     "closed_on_precedent", "declined", "succeeded", "failed", "uncertain", "no_match_protocol",
-    "held_for_clarification", "held_for_approval",
+    "held_for_clarification", "held_for_approval", "waiting_for_event_data",
 ]
 
 _VERDICT_TO_OUTCOME: dict[str, FlowOutcome] = {
@@ -115,6 +123,8 @@ class FlowDeps:
     area_registry: "AreaRegistry"
     history_query_service: "HistoryQueryService"
     optimization_policy: OptimizationPolicy = OptimizationPolicy()
+    conversation_history_turns: int = 0
+    conversation_history_ttl_hours: int = 24
 
 
 @dataclass(frozen=True)
@@ -122,6 +132,13 @@ class FlowResult:
     event_id: str
     outcome: FlowOutcome
     detail: str = ""
+
+
+@dataclass(frozen=True)
+class EventDataReplyResult:
+    event_id: str
+    updates: dict[str, object]
+    message: str
 
 
 def _model_invoker_for(main_agent: "MainAgent"):
@@ -589,50 +606,217 @@ def _run_protocol(
     deadline_failure = _deadline_failure(deps, event_id, "formulation")
     if deadline_failure is not None:
         return deadline_failure
-    formulation = formulate_tasks(main_agent, protocol, deps.registry, raw_text, classification, area, description, precedent_context=precedent_matches)
-    if not formulation.success:
-        formulation = formulate_tasks(main_agent, protocol, deps.registry, raw_text, classification, area, description, precedent_context=precedent_matches)
-
+    formulation = formulate_tasks(
+        main_agent, protocol, deps.registry, raw_text, classification, area, description,
+        precedent_context=precedent_matches, event_data=deps.persistence.fetch_event(event_id),
+    )
     if not formulation.success:
         record_event_outcome(deps.persistence, event_id, "failed", failure_reason=formulation.failure_reason)
         _log_event_outcome(event_id, "failed", failure_reason=formulation.failure_reason, stage="formulation")
         return FlowResult(event_id, "failed", formulation.failure_reason or "")
+    return _execute_protocol_plan(
+        deps, event_id, main_agent, insights_agent, protocol, formulation.steps, precedent_matches,
+    )
 
-    agents_by_name = {name: deps.registry.get(name) for name in protocol.participating_agents}
-    task_rewriter = functools.partial(rewrite_task, main_agent)
 
-    deadline_failure = _deadline_failure(deps, event_id, "execution")
-    if deadline_failure is not None:
-        return deadline_failure
-    run_result = execute_steps(list(formulation.steps), agents_by_name, deps.settings_store, task_rewriter=task_rewriter)
-
-    for index, outcome in enumerate(run_result.step_outcomes):
+def _persist_step_plan(deps: FlowDeps, event_id: str, steps: tuple[Step, ...]) -> None:
+    for index, step in enumerate(steps):
         record_step_execution(
-            deps.persistence, event_id,
+            deps.persistence,
+            event_id,
             StepExecutionEnvelope(
-                step_index=index, agent_name=outcome.step.agent_name, task_text=outcome.step.task_text,
-                allowed_tools=list(outcome.step.allowed_tools), result_text=outcome.result_text, attempt_count=outcome.attempt_count,
-                step_id=outcome.step.step_id, depends_on=outcome.step.depends_on,
+                step_index=index,
+                agent_name=step.agent_name,
+                task_text=step.task_text,
+                allowed_tools=list(step.allowed_tools),
+                result_text=None,
+                attempt_count=0,
+                step_id=step.step_id,
+                depends_on=step.depends_on,
+                required_event_fields=step.required_event_fields,
+                status="pending",
             ),
         )
 
+
+def _step_from_row(row: dict) -> Step:
+    return Step(
+        agent_name=row["agent_name"],
+        task_text=row["task_text"],
+        allowed_tools=tuple(row.get("allowed_tools") or ()),
+        step_id=row.get("step_id") or str(row["step_index"]),
+        depends_on=tuple(row.get("depends_on") or ()),
+        required_event_fields=tuple(row.get("required_event_fields") or ()),
+    )
+
+
+def _prior_outcomes(rows: list[dict], steps: tuple[Step, ...]) -> tuple[StepOutcome, ...]:
+    by_index = {row["step_index"]: row for row in rows}
+    outcomes: list[StepOutcome] = []
+    for index, step in enumerate(steps):
+        row = by_index.get(index, {})
+        outcomes.append(
+            StepOutcome(
+                step=step,
+                result_text=row.get("result_text"),
+                attempt_count=row.get("attempt_count", 0),
+                succeeded=row.get("status") == "succeeded",
+                failure_reason=row.get("failure_reason"),
+                status=row.get("status", "pending"),
+                missing_event_fields=tuple(row.get("missing_event_fields") or ()),
+            )
+        )
+    return tuple(outcomes)
+
+
+def _persist_step_outcomes(
+    deps: FlowDeps,
+    event_id: str,
+    steps: tuple[Step, ...],
+    outcomes: tuple[StepOutcome, ...],
+) -> None:
+    index_by_step_id = {(step.step_id or str(index)): index for index, step in enumerate(steps)}
+    for outcome in outcomes:
+        step_key = outcome.step.step_id
+        index = index_by_step_id.get(step_key)
+        if index is None:
+            index = next(i for i, step in enumerate(steps) if step == outcome.step)
+        persisted_step = steps[index]
+        record_step_execution(
+            deps.persistence,
+            event_id,
+            StepExecutionEnvelope(
+                step_index=index,
+                agent_name=persisted_step.agent_name,
+                task_text=persisted_step.task_text,
+                allowed_tools=list(persisted_step.allowed_tools),
+                result_text=outcome.result_text,
+                attempt_count=outcome.attempt_count,
+                step_id=persisted_step.step_id,
+                depends_on=persisted_step.depends_on,
+                required_event_fields=persisted_step.required_event_fields,
+                missing_event_fields=outcome.missing_event_fields,
+                status=outcome.status,
+                failure_reason=outcome.failure_reason,
+            ),
+        )
+
+
+def _execute_protocol_plan(
+    deps: FlowDeps,
+    event_id: str,
+    main_agent: "MainAgent",
+    insights_agent: "InsightsAgent",
+    protocol: "Protocol",
+    steps: tuple[Step, ...],
+    precedent_matches: tuple,
+    *,
+    resumed: bool = False,
+) -> FlowResult:
+    event = deps.persistence.fetch_event(event_id)
+    if not resumed:
+        deadline_failure = _deadline_failure(deps, event_id, "execution")
+        if deadline_failure is not None:
+            return deadline_failure
+
+    agents_by_name = {name: deps.registry.get(name) for name in protocol.participating_agents}
+    persisted_rows = event.get("steps", [])
+    prior = _prior_outcomes(persisted_rows, steps)
+    execution_steps = tuple(
+        replace(
+            step,
+            task_text=(
+                f"{step.task_text}\n\nCurrent validated event data JSON (use this as the source of truth): "
+                f"{json.dumps({name: event.get(name) for name in step.required_event_fields}, ensure_ascii=False, sort_keys=True)}"
+            ),
+        )
+        if step.required_event_fields
+        else step
+        for step in steps
+    )
+    run_result = execute_steps(
+        list(execution_steps),
+        agents_by_name,
+        deps.settings_store,
+        task_rewriter=functools.partial(rewrite_task, main_agent),
+        event_data=event,
+        prior_outcomes=prior,
+    )
+    if run_result.waiting_for_event_data and not persisted_rows:
+        _persist_step_plan(deps, event_id, steps)
+    _persist_step_outcomes(deps, event_id, steps, run_result.step_outcomes)
+
+    if run_result.waiting_for_event_data:
+        latest_event = deps.persistence.fetch_event(event_id)
+        conversation_messages: tuple[dict, ...] = ()
+        if latest_event.get("conversation_id"):
+            conversation_messages = tuple(
+                deps.persistence.fetch_conversation_messages(latest_event["conversation_id"], 12)
+            )
+        question = formulate_event_data_question(
+            main_agent, latest_event, run_result.missing_event_fields, conversation_messages
+        )
+        waiting_step_ids = tuple(
+            outcome.step.step_id for outcome in run_result.step_outcomes
+            if outcome.status == "waiting_for_event_data"
+        )
+        if latest_event.get("conversation_id") and deps.conversation_history_turns > 0:
+            deps.persistence.append_conversation_message(
+                latest_event["conversation_id"],
+                "assistant",
+                question,
+                ttl_hours=deps.conversation_history_ttl_hours,
+                max_turns=deps.conversation_history_turns,
+                event_id=event_id,
+            )
+        create_event_data_hold(
+            deps.persistence, event_id, run_result.missing_event_fields, question, waiting_step_ids
+        )
+        logger.info(
+            "protocol waiting for event data",
+            extra={
+                "event": "protocol_waiting_for_event_data",
+                "event_id": event_id,
+                "missing_event_fields": list(run_result.missing_event_fields),
+                "trace_id": get_trace_id(),
+            },
+        )
+        return FlowResult(event_id, "waiting_for_event_data", question)
+
     if not run_result.completed:
         record_event_outcome(deps.persistence, event_id, "failed", failure_reason=run_result.failure_cause)
-        _log_event_outcome(event_id, "failed", failure_reason=run_result.failure_cause, stage="execution", failed_step_agent=run_result.failed_step_agent)
+        _log_event_outcome(
+            event_id, "failed", failure_reason=run_result.failure_cause, stage="execution",
+            failed_step_agent=run_result.failed_step_agent,
+        )
         return FlowResult(event_id, "failed", run_result.failure_cause or "")
 
-    deadline_failure = _deadline_failure(deps, event_id, "final_assessment")
-    if deadline_failure is not None:
-        return deadline_failure
+    return _finish_protocol_assessment(
+        deps, event_id, main_agent, insights_agent, protocol, run_result.step_outcomes, precedent_matches,
+        enforce_deadline=not resumed,
+    )
+
+
+def _finish_protocol_assessment(
+    deps: FlowDeps,
+    event_id: str,
+    main_agent: "MainAgent",
+    insights_agent: "InsightsAgent",
+    protocol: "Protocol",
+    step_outcomes: tuple[StepOutcome, ...],
+    precedent_matches: tuple,
+    *,
+    enforce_deadline: bool,
+) -> FlowResult:
+    if enforce_deadline:
+        deadline_failure = _deadline_failure(deps, event_id, "final_assessment")
+        if deadline_failure is not None:
+            return deadline_failure
     final_assessment = None
     persisted_event = deps.persistence.fetch_event(event_id)
-    if (
-        deps.optimization_policy.final_assessment_mode == "low_risk_merged"
-        and persisted_event is not None
-        and persisted_event.get("risk_level") == "low"
-    ):
+    if deps.optimization_policy.final_assessment_mode == "low_risk_merged" and persisted_event.get("risk_level") == "low":
         try:
-            final_assessment = assess_final_once(main_agent, protocol, run_result.step_outcomes, precedent_matches)
+            final_assessment = assess_final_once(main_agent, protocol, step_outcomes, precedent_matches)
         except OrchestrationParseError as exc:
             logger.warning(
                 "merged final assessment failed; using separate verifiers",
@@ -642,26 +826,33 @@ def _run_protocol(
     insight_text = (
         final_assessment.insight
         if final_assessment is not None
-        else build_insight(insights_agent, protocol, run_result.step_outcomes, comparable_history=precedent_matches)
+        else build_insight(insights_agent, protocol, step_outcomes, comparable_history=precedent_matches)
     )
     logger.info(
         "insight generated",
-        extra={"event": "insight_generated", "event_id": event_id, "protocol": protocol.name, "insight_text": insight_text, "trace_id": get_trace_id()},
+        extra={
+            "event": "insight_generated", "event_id": event_id, "protocol": protocol.name,
+            "insight_text": insight_text, "trace_id": get_trace_id(),
+        },
     )
 
-    deadline_failure = _deadline_failure(deps, event_id, "judgment")
-    if deadline_failure is not None:
-        return deadline_failure
+    if enforce_deadline:
+        deadline_failure = _deadline_failure(deps, event_id, "judgment")
+        if deadline_failure is not None:
+            return deadline_failure
     if final_assessment is not None:
         verdict = final_assessment.verdict
     else:
         try:
-            verdict = judge_success(main_agent, protocol, run_result.step_outcomes, insight_text=insight_text)
+            verdict = judge_success(main_agent, protocol, step_outcomes, insight_text=insight_text)
         except OrchestrationParseError:
             try:
-                verdict = judge_success(main_agent, protocol, run_result.step_outcomes, insight_text=insight_text)
+                verdict = judge_success(main_agent, protocol, step_outcomes, insight_text=insight_text)
             except OrchestrationParseError as exc:
-                record_event_outcome(deps.persistence, event_id, "failed", failure_reason=f"success judgment failed: {exc}", insight_text=insight_text)
+                record_event_outcome(
+                    deps.persistence, event_id, "failed",
+                    failure_reason=f"success judgment failed: {exc}", insight_text=insight_text,
+                )
                 _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="judgment")
                 return FlowResult(event_id, "failed", str(exc))
 
@@ -676,3 +867,80 @@ def _run_protocol(
     )
     _log_event_outcome(event_id, outcome, reasoning=verdict.reasoning)
     return FlowResult(event_id, outcome, verdict.reasoning)
+
+
+def apply_event_data_reply(
+    deps: FlowDeps,
+    main_agent: "MainAgent",
+    reply_text: str,
+    sender_identity: str,
+    conversation_id: str | None,
+    conversation_messages: tuple[dict, ...] = (),
+) -> EventDataReplyResult | None:
+    """Apply a conversational answer to the newest matching reporter-facing data request."""
+
+    if not conversation_id:
+        return None
+    candidates: list[tuple[dict, dict]] = []
+    for hold in deps.persistence.list_held_events("event_data"):
+        event = deps.persistence.fetch_event(hold["event_id"])
+        if (
+            event is not None
+            and event.get("conversation_id") == conversation_id
+            and event.get("sender_identity") == sender_identity
+        ):
+            candidates.append((hold, event))
+    if not candidates:
+        return None
+
+    hold, event = candidates[-1]
+    requested_fields = tuple(hold.get("missing_fields") or ())
+    parsed = extract_event_data_update(
+        main_agent,
+        event,
+        reply_text,
+        requested_fields,
+        deps.event_type_registry.types,
+        deps.area_registry.areas,
+        conversation_messages,
+    )
+    if not parsed.addresses_request:
+        return None
+    if not parsed.updates:
+        return EventDataReplyResult(event["event_id"], {}, hold["question"])
+
+    updates = dict(parsed.updates)
+    if "occurred_at" in updates:
+        try:
+            updates["occurred_at"] = storage_timestamp(parse_timestamp(str(updates["occurred_at"])))
+        except (TypeError, ValueError) as exc:
+            raise OrchestrationParseError("event data update returned an invalid occurred_at timestamp") from exc
+        updates["occurred_at_is_fallback"] = False
+    record_event_data_update(deps.persistence, event["event_id"], updates)
+    deps.persistence.resolve_held_event(
+        "event_data", hold["hold_id"], {"resolved_by": sender_identity, "updated_fields": sorted(updates)}
+    )
+    return EventDataReplyResult(
+        event["event_id"], updates,
+        parsed.reply_text,
+    )
+
+
+def resume_after_event_data(
+    deps: FlowDeps,
+    event_id: str,
+    main_agent: "MainAgent",
+    insights_agent: "InsightsAgent",
+) -> FlowResult:
+    event = deps.persistence.fetch_event(event_id)
+    protocol = deps.protocol_set.get(event.get("selected_protocol"))
+    if protocol is None:
+        reason = "the selected protocol is no longer available"
+        record_event_outcome(deps.persistence, event_id, "failed", failure_reason=reason)
+        return FlowResult(event_id, "failed", reason)
+    rows = event.get("steps", [])
+    steps = tuple(_step_from_row(row) for row in rows)
+    precedent_matches = _look_up_precedent_if_possible(deps, event_id, event)
+    return _execute_protocol_plan(
+        deps, event_id, main_agent, insights_agent, protocol, steps, precedent_matches, resumed=True,
+    )

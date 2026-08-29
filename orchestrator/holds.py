@@ -144,6 +144,26 @@ def create_clarification_hold(persistence: PersistenceInterface, event_id: str, 
     return persistence.store_held_event("clarification", hold)
 
 
+def create_event_data_hold(
+    persistence: PersistenceInterface,
+    event_id: str,
+    missing_fields: tuple[str, ...],
+    question: str,
+    waiting_step_ids: tuple[str, ...],
+) -> str:
+    """Persist a reporter-facing request that keeps protocol execution non-terminal."""
+
+    return persistence.store_held_event(
+        "event_data",
+        {
+            "event_id": event_id,
+            "missing_fields": list(missing_fields),
+            "question": question,
+            "waiting_step_ids": list(waiting_step_ids),
+        },
+    )
+
+
 def answer_clarification_hold(
     persistence: PersistenceInterface,
     hold_id: str,

@@ -36,6 +36,19 @@ def test_user_version_reflects_the_latest_migration(tmp_path):
     assert version == MIGRATIONS[-1][0]
 
 
+def test_event_steps_include_resumable_event_data_wait_columns(tmp_path):
+    db_path = str(tmp_path / "event-data-waits.db")
+    run_migrations(db_path)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(event_steps)")}
+    finally:
+        connection.close()
+
+    assert {"required_event_fields", "missing_event_fields", "status", "failure_reason"} <= columns
+
+
 def test_history_query_indexes_are_present_on_a_fresh_database(tmp_path):
     import sqlite3
 

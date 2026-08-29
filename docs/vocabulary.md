@@ -121,17 +121,22 @@ record.
 
 ## Step
 
-The contract between the Main Agent and the executor. Precisely three
-fields, nothing else:
+The contract between the Main Agent and the executor:
 
 | Field | Type | Optional |
 |---|---|---|
 | `agent_name` | `str` | no |
 | `task_text` | `str` | no — exactly what the Main Agent produced, unmodified |
 | `allowed_tools` | `list[str]` | no |
+| `step_id` | `str` | yes for legacy serial plans; required for dependency plans |
+| `depends_on` | `list[str]` | yes — empty means no explicit dependency |
+| `required_event_fields` | `list[str]` | yes — empty means the step can run with the currently available event data |
 
 A **result** is attached to an executed step (not part of the Step contract
-itself, but stored alongside it): `result_text: str`, `attempt_count: int`.
+itself, but stored alongside it): `result_text: str`, `attempt_count: int`,
+`status`, `missing_event_fields`, and an optional `failure_reason`.
+`waiting_for_event_data` is non-terminal and records zero attempts; it becomes
+eligible again after the original reporter supplies the missing fields.
 
 ## Precedent
 

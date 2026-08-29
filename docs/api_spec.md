@@ -160,7 +160,7 @@ Request:
 `source_message_id` — the originating Telegram message's own ID — is
 optional in the request body (a caller with no message to reference, or
 testing directly against this endpoint, may omit it) but is what a much
-later `job_finished`/`job_failed` entry in `GET /Notifications` (§8.12)
+later `job_finished`/`job_failed` or `event_data_hold` entry in `GET /Notifications` (§8.12)
 needs to carry a real `reply_to_message_id`, per work_plan.md §2.3's
 `events.source_message_id` column: written once here, read back there.
 
@@ -194,7 +194,26 @@ Response, when the message became a **report** or **request** —
 { "taken_as": "report", "event_id": "e3f1...", "status": "queued" }
 ```
 
-`taken_as` is one of `"question" | "report" | "request" | "conversational" | "clarification"`. Only reports and requests create jobs.
+When an existing protocol step is waiting for event data, a message in the
+same `conversation_id` from the authenticated original reporter is first
+checked as a possible answer to that request. A validated answer updates the
+existing event and queues continuation of the same job:
+
+```json
+{
+  "taken_as": "event_update",
+  "event_id": "e3f1...",
+  "updated_fields": ["area"],
+  "answer": "The location was recorded and the waiting work will resume.",
+  "status": "queued"
+}
+```
+
+The Main Agent writes `answer` in the reporter's language. An unrelated
+message is not consumed as event data and continues through ordinary intent
+routing. `taken_as` is one of `"question" | "report" | "request" |
+"conversational" | "clarification" | "event_update"`. Reports and requests
+create jobs; `event_update` resumes an existing one.
 
 ## `GET /Job/<event_id>`
 
@@ -229,6 +248,23 @@ or
 `reason` is `"flagged_protocol" | "ambiguous_selection"` (§6.7). This is
 how a caller tells "still running" from "waiting on a commander" from
 each other — reading `status` alone is enough; the extra field says why.
+
+A protocol action that lacks data is neither failed nor complete. It persists
+with zero attempts and reports:
+
+```json
+{
+  "event_id": "e3f1...",
+  "status": "waiting_for_event_data",
+  "missing_fields": ["area"],
+  "question": "באיזה אזור האירוע התרחש?",
+  "steps_completed": []
+}
+```
+
+The question is model-written from validated field metadata. Supplying the
+data through `POST /Msg` updates this same event; completed steps are not run
+again.
 
 Response `200 OK` once finished — closed without running:
 ```json
@@ -485,18 +521,18 @@ integer cursor (omit or `0` for "everything ever recorded"). `200 OK`:
   "next_cursor": 7
 }
 ```
-`kind` is one of `bot.api_client.BotNotificationKind`'s six values;
+`kind` is one of `bot.api_client.BotNotificationKind`'s eight values;
 `payload`'s shape matches that kind's own DTO
 (`HeldClarificationNotice`/`HeldApprovalNotice`/`UncertainVerdictNotice`
-/`PrecedentClosureNotice`/`JobResult`-shaped for `job_finished`/
-`job_failed`) exactly, field for field. `target_chat_ids` is populated
+/`PrecedentClosureNotice`/`EventDataNeededNotice`/`JobResult`-shaped for
+`job_finished`/`job_failed`) exactly, field for field. `target_chat_ids` is populated
 (one entry, the original sender's own identity — a private chat's
-`chat_id` equals its user's identity) only for `job_finished`/
-`job_failed`, since those two are addressed to a specific person; the
-other four kinds are addressed to every commander, which a caller
+`chat_id` equals its user's identity) only for `job_finished`,
+`job_failed`, and `event_data_hold`, since those three are addressed to a
+specific person; the commander-facing kinds are addressed to every commander, which a caller
 resolves via `GET /Commanders` rather than this endpoint repeating that
 list on every row. `reply_to_message_id` (§8.9's "reference the original
-message") is likewise populated only for those same two kinds, read from
+message") is likewise populated only for those same three kinds, read from
 the originating event's own `source_message_id` column (work_plan.md
 §2.3) — `null` for a sensor-sourced event (no Telegram message to
 reference) and for every other notification kind (none of them are

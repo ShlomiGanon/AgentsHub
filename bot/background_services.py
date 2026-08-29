@@ -38,6 +38,12 @@ async def dispatch_notification(deps: "BotDeps", notification: "BotNotification"
         await interactions.push_approval_prompt(deps, notification.payload)
         return
 
+    if notification.kind == "event_data_hold":
+        text = interactions.format_event_data_needed(notification.payload)
+        for chat_id in notification.target_chat_ids:
+            await deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id)
+        return
+
     if notification.kind == "uncertain_verdict":
         await interactions.notify_uncertain_verdict(deps, notification.payload)
         return

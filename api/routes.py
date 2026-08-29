@@ -25,6 +25,7 @@ from orchestrator.flows import (
     answer_conversationally,
     answer_question,
     answer_question_from_plan,
+    apply_event_data_reply,
     build_role_aware_system_context,
     begin_report,
     begin_request,
@@ -33,6 +34,7 @@ from orchestrator.flows import (
     WorkItem,
     continue_from_risk_assessment,
     run_report_extraction,
+    resume_after_event_data,
 )
 
 from protocols import CriticalityLevel, Protocol, ProtocolEditError, add_protocol, remove_protocol, replace_protocol
@@ -185,6 +187,90 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
             prior_messages = tuple(ctx.deps.persistence.fetch_conversation_messages(conversation_id, history_turns * 2))
 
         _remember("user", text)
+
+        matching_event_data_hold = False
+        if conversation_id is not None:
+            for pending_hold in reversed(ctx.deps.persistence.list_held_events("event_data")):
+                pending_event = ctx.deps.persistence.fetch_event(pending_hold["event_id"])
+                if (
+                    pending_event is not None
+                    and pending_event.get("conversation_id") == conversation_id
+                    and pending_event.get("sender_identity") == caller_identity
+                ):
+                    matching_event_data_hold = True
+                    break
+
+        if matching_event_data_hold:
+            reservation = ctx.queue.reserve(True)
+            if reservation is None:
+                raise ServiceUnavailableError("event queue is full; retry the event detail later")
+            try:
+                event_data_reply = apply_event_data_reply(
+                    ctx.deps,
+                    ctx.main_agent,
+                    text,
+                    caller_identity,
+                    conversation_id,
+                    prior_messages,
+                )
+            except OrchestrationParseError as exc:
+                ctx.queue.release_reservation(reservation)
+                logger.warning(
+                    "event data reply failed validation",
+                    extra={"event": "event_data_reply_invalid", "reason": str(exc), "trace_id": trace_id},
+                )
+                question = pending_hold.get("question", "Please provide the missing event details again.")
+                _remember("assistant", question, pending_hold["event_id"])
+                return jsonify(
+                    {
+                        "taken_as": "clarification",
+                        "event_id": pending_hold["event_id"],
+                        "answer": question,
+                        "status": "waiting_for_event_data",
+                    }
+                )
+            except Exception:
+                ctx.queue.release_reservation(reservation)
+                raise
+            if event_data_reply is not None:
+                event_id = event_data_reply.event_id
+                if not event_data_reply.updates:
+                    ctx.queue.release_reservation(reservation)
+                    _remember("assistant", event_data_reply.message, event_id)
+                    return jsonify(
+                        {
+                            "taken_as": "clarification",
+                            "event_id": event_id,
+                            "answer": event_data_reply.message,
+                            "status": "waiting_for_event_data",
+                        }
+                    )
+
+                def _resume_waiting_work() -> None:
+                    with trace_context(trace_id):
+                        resume_after_event_data(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent)
+
+                ctx.queue.submit(
+                    WorkItem(
+                        (event_id, _resume_waiting_work),
+                        trace_id=trace_id,
+                        priority=0,
+                        deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
+                        concurrency_keys=(f"sender:{caller_identity}",),
+                    ),
+                    reservation,
+                )
+                _remember("assistant", event_data_reply.message, event_id)
+                return jsonify(
+                    {
+                        "taken_as": "event_update",
+                        "event_id": event_id,
+                        "updated_fields": sorted(event_data_reply.updates),
+                        "answer": event_data_reply.message,
+                        "status": "queued",
+                    }
+                ), 202
+            ctx.queue.release_reservation(reservation)
 
         message_plan = None
         planner_mode = optimization_policy.planner_mode
@@ -589,14 +675,18 @@ if TYPE_CHECKING:
 def _steps_completed(event: dict) -> list[str]:
     """Every step that actually produced a result, in order — derivable entirely from `event["steps"]` (§2.3's `event_steps` table, already attached by `fetch_event`): a step that fail..."""
 
-    return [f"{step['agent_name']}: {step['result_text']}" for step in event.get("steps", []) if step.get("result_text") is not None]
+    return [
+        f"{step['agent_name']}: {step['result_text']}"
+        for step in event.get("steps", [])
+        if step.get("status") == "succeeded" and step.get("result_text") is not None
+    ]
 
 
 def _failed_step_agent_name(event: dict) -> str | None:
     """The agent whose step has no result — execution stops at the first failing step (`protocols.executor.execute_steps`), so at most one persisted step ever has `result_text=None`, a..."""
 
     for step in event.get("steps", []):
-        if step.get("result_text") is None:
+        if step.get("status") == "failed":
             return step["agent_name"]
     return None
 
@@ -635,6 +725,16 @@ def job_status(ctx: "ApiContext", event_id: str) -> dict | None:
     clarification_hold = ctx.deps.persistence.fetch_held_event("clarification", event_id)
     if clarification_hold is not None and not clarification_hold["resolved"]:
         return {"event_id": event_id, "status": "held_for_clarification", "unresolved_field": clarification_hold["unresolved_field"]}
+
+    event_data_hold = ctx.deps.persistence.fetch_held_event("event_data", event_id)
+    if event_data_hold is not None and not event_data_hold["resolved"]:
+        return {
+            "event_id": event_id,
+            "status": "waiting_for_event_data",
+            "missing_fields": event_data_hold.get("missing_fields", []),
+            "question": event_data_hold.get("question", ""),
+            "steps_completed": _steps_completed(event),
+        }
 
     processing = ctx.queue.currently_processing()
     if processing is not None and processing[0] == event_id:
@@ -817,6 +917,16 @@ def _approval_hold_payload(ctx: "ApiContext", event_id: str) -> dict:
     }
 
 
+def _event_data_hold_payload(ctx: "ApiContext", event_id: str) -> dict:
+    hold = ctx.deps.persistence.fetch_held_event("event_data", event_id)
+    return {
+        "hold_id": hold["hold_id"],
+        "event_id": event_id,
+        "question": hold["question"],
+        "missing_fields": hold.get("missing_fields", []),
+    }
+
+
 def _uncertain_verdict_payload(ctx: "ApiContext", event_id: str) -> dict:
     event = ctx.deps.persistence.fetch_event(event_id)
     return {"event_id": event_id, "insight_text": event.get("insight_text") or ""}
@@ -860,6 +970,7 @@ def _job_payload(ctx: "ApiContext", event_id: str) -> dict:
 _PAYLOAD_BUILDERS = {
     "clarification_hold": _clarification_hold_payload,
     "approval_hold": _approval_hold_payload,
+    "event_data_hold": _event_data_hold_payload,
     "uncertain_verdict": _uncertain_verdict_payload,
     "precedent_closure": _precedent_closure_payload,
     "no_match_notice": _no_match_payload,
@@ -869,9 +980,9 @@ _PAYLOAD_BUILDERS = {
 
 
 def _target_chat_ids(ctx: "ApiContext", kind: str, event_id: str) -> list[str]:
-    """`job_finished`/`job_failed` are addressed to whoever submitted the original event (§8.9: "deliver to whoever submitted it") — its `sender_identity` doubles as the chat to reach..."""
+    """Reporter-facing job and event-data notifications target the original submitter."""
 
-    if kind not in ("job_finished", "job_failed"):
+    if kind not in ("job_finished", "job_failed", "event_data_hold"):
         return []
 
     event = ctx.deps.persistence.fetch_event(event_id)
@@ -879,9 +990,9 @@ def _target_chat_ids(ctx: "ApiContext", kind: str, event_id: str) -> list[str]:
 
 
 def _reply_to_message_id(ctx: "ApiContext", kind: str, event_id: str) -> str | None:
-    """The originating Telegram message's own ID (work_plan.md §2.3's `source_message_id` column), so `job_finished`/`job_failed` — the two kinds ever delivered via `TelegramClient.sen..."""
+    """Attach reporter-facing notifications to the originating Telegram message when available."""
 
-    if kind not in ("job_finished", "job_failed"):
+    if kind not in ("job_finished", "job_failed", "event_data_hold"):
         return None
 
     event = ctx.deps.persistence.fetch_event(event_id)

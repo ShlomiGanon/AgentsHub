@@ -228,6 +228,10 @@ STATE_UPDATE_FIELDS = frozenset(
     }
 )
 
+EVENT_DATA_UPDATE_FIELDS = frozenset(
+    {"classification", "area", "entities", "description", "severity", "occurred_at", "occurred_at_is_fallback"}
+)
+
 
 def record_initial_event(persistence, envelope: InitialEventEnvelope) -> str:
     if envelope.source not in {"sensor", "telegram"}:
@@ -297,4 +301,13 @@ def record_event_state(persistence, event_id: str, updates: dict) -> None:
     rejected = set(updates) - STATE_UPDATE_FIELDS
     if rejected:
         raise ValueError(f"event state update contains forbidden field(s): {', '.join(sorted(rejected))}")
+    persistence.update_event(event_id, dict(updates))
+
+
+def record_event_data_update(persistence, event_id: str, updates: dict) -> None:
+    """Merge validated reporter-supplied facts into an existing event."""
+
+    rejected = set(updates) - EVENT_DATA_UPDATE_FIELDS
+    if rejected:
+        raise ValueError(f"event data update contains forbidden field(s): {', '.join(sorted(rejected))}")
     persistence.update_event(event_id, dict(updates))
