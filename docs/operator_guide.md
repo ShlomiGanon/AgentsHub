@@ -112,6 +112,25 @@ same time you add the first human commander, not as an afterthought. See
 including exactly which calls use this identity versus the real caller's
 own.
 
+This registration alone is **not sufficient**, though: `bot-service` is a
+fixed, public string, so a **`BOT_SERVICE_KEY`** environment variable is
+also required — a shared secret, set identically for both the API and the
+bot process, checked (via the `X-Service-Key` header) on top of the
+identity above, never in place of it. Read directly from the process
+environment (no profile indirection, unlike `BOT_TOKEN_ENV`). Generate one
+with:
+
+```
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Missing it doesn't stop the bot from starting either — the same
+easy-to-miss shape as skipping the registration above — but it silently
+breaks notification delivery, the commander roster, and profile-change
+checks, while a human's own messages keep working (they authenticate as
+themselves, never as `bot-service`). See `docs/how_to_connect_telegram.md`
+§4.3 for the full walkthrough.
+
 ## The three things that arrive unprompted
 
 Three kinds of message reach a commander's chat without them asking for

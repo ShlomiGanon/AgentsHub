@@ -58,6 +58,7 @@ AgentsHub does not read `.env` automatically. Run `.\load-env.ps1` in every new 
 The important variables are:
 
 - `BOT_TOKEN`
+- `BOT_SERVICE_KEY` — the secret the bot sends alongside its `bot-service` identity; see step 2 below. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
 - `CORE_MODEL_PROVIDER`, `CORE_MODEL_NAME`, and `CORE_MODEL_API_KEY_ENV`
 - `SUB_MODEL_PROVIDER`, `SUB_MODEL_NAME`, and `SUB_MODEL_API_KEY_ENV`
 - The key variables named by `CORE_MODEL_API_KEY_ENV` and `SUB_MODEL_API_KEY_ENV`
@@ -75,6 +76,8 @@ python -m cli.user_admin --profile profiles.demo add --telegram-id bot-service -
 ```
 
 Use the human user's numeric Telegram ID for `<your-telegram-id>`. The `bot-service` row is an internal service identity and must remain at commander level. If you only use a terminal client, it provisions its own temporary test identity and ensures `bot-service` exists automatically.
+
+This registration is not sufficient by itself — `bot-service` is a fixed, public string, so `BOT_SERVICE_KEY` (see step 1) must also be set, identically, for both the API and the bot process. Without it, calls the bot makes as its own service identity (notifications, the commander roster, profile-change checks) are rejected; a human's own messages are unaffected either way.
 
 User administration is intentionally available only from the host CLI:
 

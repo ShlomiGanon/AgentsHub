@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from bot import ApiRequestError, BotDeps, BotError, HttpApiClient, dispatch_notification
 from bot.app import present_incoming_message
+from bot.contracts import resolve_bot_service_key
 from bot.interactions import message_catalog_for
 from messages import get_catalog
 from tools.terminal_support import (
@@ -160,7 +161,7 @@ def main(argv: list[str] | None = None) -> None:
         args.profile, args.identity, "viewer", profile_module, messages
     )
 
-    http_client = HttpApiClient(base_url)
+    http_client = HttpApiClient(base_url, bot_service_key=resolve_bot_service_key())
     observing_client = ObservingApiClient(http_client)
     deps = BotDeps(
         loaded_profile=SimpleNamespace(message_catalog=messages),

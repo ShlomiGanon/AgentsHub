@@ -33,7 +33,11 @@ def _mock_crewai_always_fails(monkeypatch):
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
 
-def test_retry_exhaustion_notifies_the_originator_and_the_next_event_still_proceeds(tmp_path):
+_TEST_BOT_SERVICE_KEY = "test-bot-service-key-0123456789abcdef"
+
+
+def test_retry_exhaustion_notifies_the_originator_and_the_next_event_still_proceeds(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOT_SERVICE_KEY", _TEST_BOT_SERVICE_KEY)
     agent = happy_path_agent(risk_score="0.1", selected="status_check")
     ctx = build_context(tmp_path, main_agent=agent)
     ctx.deps.persistence.write_user("bot-service", "commander")
@@ -70,6 +74,9 @@ def _get_notifications(base_url: str) -> dict:
     import json
     import urllib.request
 
-    request = urllib.request.Request(f"{base_url}/Notifications", headers={"X-Identity": "bot-service"})
+    request = urllib.request.Request(
+        f"{base_url}/Notifications",
+        headers={"X-Identity": "bot-service", "X-Service-Key": _TEST_BOT_SERVICE_KEY},
+    )
     with urllib.request.urlopen(request) as response:
         return json.loads(response.read())

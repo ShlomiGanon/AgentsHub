@@ -62,9 +62,10 @@ def _do_request(url: str, method: str, identity: str, request_payload: dict | No
 
 
 class HttpApiClient(BotApiClient):
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, bot_service_key: str | None = None):
         self._base_url = base_url.rstrip("/")
         self._client: httpx.AsyncClient | None = None
+        self._bot_service_key = bot_service_key
 
     async def start(self) -> None:
         if self._client is None:
@@ -97,6 +98,10 @@ class HttpApiClient(BotApiClient):
             "X-Trace-ID": trace_id_override or get_trace_id() or new_trace_id(),
             "X-Client-Request-ID": uuid.uuid4().hex,
         }
+        # Only the bot-service identity needs this — a human Telegram identity is
+        # authenticated purely by that identity string, unaffected either way.
+        if identity == BOT_SERVICE_IDENTITY and self._bot_service_key:
+            headers["X-Service-Key"] = self._bot_service_key
         attempts = 3 if method == "GET" else 1
 
         try:

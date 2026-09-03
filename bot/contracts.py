@@ -1,5 +1,6 @@
 """The bot's one gateway to the system (work_plan.md §8, docs/allowed_calls.md)."""
 
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
@@ -50,6 +51,21 @@ PermissionLevelName = Literal["viewer", "commander"]
 
 # Public deployment identity for service-level API calls; it is not a secret.
 BOT_SERVICE_IDENTITY = "bot-service"
+
+# The real secret paired with BOT_SERVICE_IDENTITY: since that identity string is public
+# (visible in source, docs, and the API response of any caller who tries it), the API
+# additionally requires this shared secret — sent as the X-Service-Key header — before
+# granting any caller BOT_SERVICE_IDENTITY's (commander-level) permissions. Read directly
+# from the process environment, never through a profile, so every process presenting this
+# identity (the real bot, the terminal test clients, the API that validates them) reads the
+# exact same value from the exact same place.
+BOT_SERVICE_KEY_ENV_VAR = "BOT_SERVICE_KEY"
+
+
+def resolve_bot_service_key() -> str | None:
+    """The configured BOT_SERVICE_KEY, or None if it isn't set."""
+
+    return os.environ.get(BOT_SERVICE_KEY_ENV_VAR)
 
 BotOutcome = Literal[
     "closed_on_precedent",

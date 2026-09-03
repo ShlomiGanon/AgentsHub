@@ -1,9 +1,11 @@
 """Authentication, authorization, and HTTP error translation."""
 
+import hmac
 import logging
+import os
 from typing import TYPE_CHECKING
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from werkzeug.exceptions import HTTPException
 
 from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
@@ -72,11 +74,40 @@ class ServiceUnavailableError(ApiError):
 
 
 IDENTITY_HEADER = "X-Identity"
+SERVICE_KEY_HEADER = "X-Service-Key"
+
+# Duplicated rather than imported from bot.contracts.BOT_SERVICE_IDENTITY: api may not import
+# bot (tests/test_architecture.py enforces the package boundary — bot calls api over HTTP, not
+# api importing bot's Python code), the same reason IDENTITY_HEADER's "X-Identity" string is
+# already independently duplicated on the bot side rather than shared. Keep this in sync with
+# bot.contracts.BOT_SERVICE_IDENTITY and BOT_SERVICE_KEY_ENV_VAR if either ever changes.
+BOT_SERVICE_IDENTITY = "bot-service"
+BOT_SERVICE_KEY_ENV_VAR = "BOT_SERVICE_KEY"
+
+
+def _bot_service_key_matches(provided: str | None) -> bool:
+    configured = os.environ.get(BOT_SERVICE_KEY_ENV_VAR)
+    if not configured or not provided:
+        return False
+    # Compare as bytes, not str: hmac.compare_digest raises TypeError on a non-ASCII str
+    # (a malformed/garbage header would then 500 instead of the intended 401).
+    return hmac.compare_digest(provided.encode("utf-8"), configured.encode("utf-8"))
 
 
 def authenticate(persistence: "PersistenceInterface", identity: str | None) -> PermissionLevel:
     if not identity:
         raise AuthenticationError(get_current_catalog().text("api.identity_required"))
+
+    # BOT_SERVICE_IDENTITY ("bot-service") is a fixed, public string — visible in source,
+    # docs, and this very error message — not a secret an unregistered-identity check alone
+    # can protect. A caller claiming it must also present the matching X-Service-Key. A
+    # missing/wrong key is rejected with the exact same message as a genuinely unregistered
+    # identity (below), so a caller can't tell "bot-service isn't registered" apart from
+    # "bot-service is registered but you don't have its key."
+    if identity == BOT_SERVICE_IDENTITY and not _bot_service_key_matches(request.headers.get(SERVICE_KEY_HEADER)):
+        raise AuthenticationError(
+            get_current_catalog().text("api.identity_unregistered", identity=identity)
+        )
 
     user = persistence.read_user(identity)
     if user is None:

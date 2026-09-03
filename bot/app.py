@@ -22,6 +22,7 @@ from bot.contracts import (
     BotDeps,
     BotStartupError,
     MessageSubmissionResult,
+    resolve_bot_service_key,
 )
 from bot.background_services import NotificationCursorStore, SingleInstanceLock, run_notification_poll_loop
 from bot.interactions import check_permission, resolve_caller
@@ -65,17 +66,38 @@ def build_deps(module_path: str, core_model: TierModel, sub_model: TierModel) ->
 
     telegram_client = PTBTelegramClient(bot_token)
 
-    api_client = HttpApiClient(f"http://localhost:{loaded_profile.api_port}")
+    bot_service_key = resolve_bot_service_key()
+    if not bot_service_key:
+        logger.warning(
+            "BOT_SERVICE_KEY is not set — every call this bot makes as its own service "
+            "identity (notification delivery, the commander roster, profile-change checks, "
+            "resolving a Telegram user) will be rejected by the API",
+            extra={"event": "bot_service_key_missing"},
+        )
+    api_client = HttpApiClient(f"http://localhost:{loaded_profile.api_port}", bot_service_key=bot_service_key)
 
     return BotDeps(loaded_profile=loaded_profile, telegram_client=telegram_client, api_client=api_client)
 
 
+_INVALID_TOKEN_MESSAGE = (
+    "Telegram rejected the configured bot token — check the value of the "
+    "environment variable named by BOT_TOKEN_ENV in the active profile"
+)
+
+
 async def _validate_bot_token(deps: BotDeps) -> None:
+    """Kept as a standalone check (and directly unit-tested) — no longer called from `main()`.
+
+    `main()` used to run this via its own `asyncio.run(...)` before `run_bot()`. That pre-check
+    built/used the Telegram client's async HTTP client on a loop `asyncio.run()` then closes;
+    `run_polling()` afterwards starts a *different* event loop, leaving that HTTP client bound to
+    an already-closed one — `RuntimeError: Event loop is closed` / `NetworkError`. `run_polling()`'s
+    own bootstrap (`Application.initialize()`) already calls `Bot.get_me()` and raises
+    `telegram.error.InvalidToken` immediately (never retried, regardless of `bootstrap_retries`) if
+    the token is bad, so `main()` now relies on that single event loop instead — see there.
+    """
     if not await deps.telegram_client.validate_token():
-        raise BotStartupError(
-            "Telegram rejected the configured bot token — check the value of the "
-            "environment variable named by BOT_TOKEN_ENV in the active profile"
-        )
+        raise BotStartupError(_INVALID_TOKEN_MESSAGE)
 
 
 def _identity_and_chat_id(update) -> tuple[str, str]:
@@ -509,14 +531,16 @@ def main(argv: list[str] | None = None) -> None:
     except BotStartupError as exc:
         raise SystemExit(str(exc)) from exc
 
-    try:
-        asyncio.run(_validate_bot_token(bot_dependencies))
-    except BotStartupError as exc:
-        lock.release()
-        raise SystemExit(str(exc)) from exc
+    # Token validity is verified by run_polling()'s own bootstrap (Application.initialize()
+    # calls Bot.get_me()) rather than by a separate asyncio.run(_validate_bot_token(...))
+    # pre-check here — see _validate_bot_token's docstring for why running that in its own
+    # event loop before run_polling() breaks the Telegram client's async HTTP client.
+    from telegram.error import InvalidToken
 
     try:
         run_bot(bot_dependencies)
+    except InvalidToken as exc:
+        raise SystemExit(_INVALID_TOKEN_MESSAGE) from exc
     finally:
         lock.release()
 

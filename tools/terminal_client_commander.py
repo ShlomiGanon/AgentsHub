@@ -21,6 +21,7 @@ from bot import (
     present_incoming_message,
     parse_approval_callback_data,
 )
+from bot.contracts import resolve_bot_service_key
 from bot.interactions import message_catalog_for
 from messages import get_catalog
 from tools.terminal_support import (
@@ -325,7 +326,7 @@ def main(argv: list[str] | None = None) -> None:
         args.profile, args.identity, "commander", profile_module, messages
     )
 
-    http_client = HttpApiClient(base_url)
+    http_client = HttpApiClient(base_url, bot_service_key=resolve_bot_service_key())
     observing_client = ObservingApiClient(http_client)
     bot_dependencies = BotDeps(
         loaded_profile=SimpleNamespace(message_catalog=messages),
