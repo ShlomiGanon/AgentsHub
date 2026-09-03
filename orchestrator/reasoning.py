@@ -130,6 +130,7 @@ _AMBIGUOUS_PATTERN = re.compile(
 )
 _NO_MATCH_PATTERN = re.compile(r"\A\s*NO_MATCH:\s*(\S(?:.*?\S)?)\s*\Z", re.IGNORECASE | re.DOTALL)
 _AGENT_TASK_PATTERN = re.compile(r"AGENT:\s*(\S+)\s*\n\s*TASK:\s*(.+?)(?=\nAGENT:|\Z)", re.IGNORECASE | re.DOTALL)
+_JSON_CODE_FENCE_PATTERN = re.compile(r"```(?:json)?\s*\n?(.*?)\n?```", re.IGNORECASE | re.DOTALL)
 _VERDICT_PATTERN = re.compile(r"VERDICT:\s*(success|failure|uncertain)", re.IGNORECASE)
 _REASONING_PATTERN = re.compile(r"REASONING:\s*(.+)", re.IGNORECASE | re.DOTALL)
 
@@ -688,6 +689,27 @@ def _parse_formulation_response(raw_text: str) -> dict[str, str]:
     return {match.group(1): match.group(2).strip() for match in _AGENT_TASK_PATTERN.finditer(raw_text)}
 
 
+def _formulation_json_candidate(raw_text: str) -> str | None:
+    """The JSON object text within a task-formulation response, or None if it isn't JSON at all.
+
+    A well-formed JSON plan is still JSON when the model wraps it in a Markdown code fence (a common
+    default for models not using a strict JSON mode) — unwrap that before falling back to the legacy
+    AGENT:/TASK: parser, so a fenced response doesn't silently lose required_event_fields (which only
+    the JSON shape carries) by being misrouted into a parser that never produced that field to begin
+    with. Genuine legacy-format text (no fence, doesn't start with '{') is left for that parser
+    exactly as before.
+    """
+    stripped = raw_text.strip()
+    if stripped.startswith("{"):
+        return stripped
+    fence_match = _JSON_CODE_FENCE_PATTERN.search(stripped)
+    if fence_match:
+        candidate = fence_match.group(1).strip()
+        if candidate.startswith("{"):
+            return candidate
+    return None
+
+
 def formulate_tasks(
     main_agent: MainAgent,
     protocol: Protocol,
@@ -709,9 +731,10 @@ def formulate_tasks(
             return FormulationResult(
                 failure_reason=f"formulation did not produce a usable response: {agent_result.text}"
             )
-        if agent_result.text.lstrip().startswith("{"):
+        json_candidate = _formulation_json_candidate(agent_result.text)
+        if json_candidate is not None:
             try:
-                payload = _load_unique_json_object(agent_result.text, "task formulation")
+                payload = _load_unique_json_object(json_candidate, "task formulation")
                 planned_steps = payload.get("steps")
                 if not isinstance(planned_steps, list) or len(planned_steps) != len(descriptors):
                     raise OrchestrationParseError("task formulation must contain one step per participating agent")

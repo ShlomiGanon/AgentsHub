@@ -754,6 +754,24 @@ def test_formulation_preserves_valid_required_event_fields(registry):
     assert result.steps[0].required_event_fields == ("area",)
 
 
+def test_formulation_preserves_required_event_fields_when_json_is_markdown_fenced(registry):
+    fenced = "```json\n" + json.dumps({
+        "steps": [{
+            "step_id": "check-location",
+            "agent_name": "reference_agent",
+            "task": "Check the reported location.",
+            "depends_on": [],
+            "required_event_fields": ["area"],
+        }]
+    }) + "\n```"
+    agent = _ScriptedMainAgent(fenced)
+
+    result = formulate_tasks(agent, _protocol(), registry, "raw", "fire", None, "d")
+
+    assert result.success
+    assert result.steps[0].required_event_fields == ("area",)
+
+
 def test_allowed_tools_are_filtered_to_what_the_agent_actually_exposes(registry):
     agent = _ScriptedMainAgent("AGENT: reference_agent\nTASK: t")
     protocol = _protocol(approved_tools=("check_status", "record_action", "some_other_tool_no_agent_has"))
@@ -790,7 +808,7 @@ def test_formulation_repairs_one_invalid_response_with_the_parse_failure(registr
 
     assert result.success
     assert len(agent.calls) == 2
-    assert "model did not produce a task" in agent.calls[1][0]
+    assert "task formulation must contain one step per participating agent" in agent.calls[1][0]
     assert "without Markdown fences" in agent.calls[1][0]
 
 
