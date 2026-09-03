@@ -1,7 +1,6 @@
 """The Friendly Forces profile: dispatch-coordination logging for ambulance, police,
 firefighter, and military response requests."""
 
-import tempfile
 from pathlib import Path
 
 from agents.friendly_forces_agent import FriendlyForcesAgent
@@ -71,7 +70,7 @@ PROTOCOLS = [
 EVENT_TYPES = ["fire", "medical", "crime", "military_threat"]
 AREAS = ["north_sector", "south_sector"]
 
-_FRIENDLY_FORCES_DATA_DIR = Path(tempfile.gettempdir()) / "agentshub_fixtures"
+_FRIENDLY_FORCES_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _FRIENDLY_FORCES_DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = str(_FRIENDLY_FORCES_DATA_DIR / "friendly_forces_profile.db")
 

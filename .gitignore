@@ -144,6 +144,9 @@ rabbitmq-data/
 # ActiveMQ
 activemq-data/
 
+# AgentsHub profile databases (profiles/*.py DB_PATH)
+/data/
+
 # SageMath parsed files
 *.sage.py
 

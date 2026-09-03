@@ -1,6 +1,5 @@
 """The demonstration profile (work_plan.md §4.7)."""
 
-import tempfile
 from pathlib import Path
 
 from agents import ReferenceAgent
@@ -68,7 +67,7 @@ PROTOCOLS = [
 EVENT_TYPES = ["fire", "medical"]
 AREAS = ["north_sector", "south_sector"]
 
-_DEMO_DATA_DIR = Path(tempfile.gettempdir()) / "agentshub_fixtures"
+_DEMO_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _DEMO_DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = str(_DEMO_DATA_DIR / "demo_profile.db")
 
