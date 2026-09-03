@@ -48,6 +48,7 @@ sys.modules[f"{__name__}.registry"] = runtime
 
 from agents import standard_agents
 from agents.standard_agents import HistoryAgent, ReferenceAgent
+from agents.team_status_agent import TeamStatusAgent
 
 history = standard_agents
 reference = standard_agents
@@ -79,6 +80,7 @@ __all__ = [
     "InvocationPolicy",
     "ProviderCapabilities",
     "ReferenceAgent",
+    "TeamStatusAgent",
     "ToolInfo",
     "build_agent_registry",
     "parse_agent_output",

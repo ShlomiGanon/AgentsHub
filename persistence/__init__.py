@@ -11,6 +11,12 @@ sys.modules[f"{__name__}.exceptions"] = contracts
 sys.modules[f"{__name__}.interface"] = contracts
 
 from persistence import sqlite_store
+from persistence.team_status_contracts import (
+    AttendanceCycle,
+    TeamStatusPersistenceInterface,
+    TeamStatusPersistenceError,
+    open_team_status_persistence,
+)
 
 sqlite = sqlite_store
 sqlite_backend = sqlite_store
@@ -23,4 +29,8 @@ __all__ = [
     "PersistenceError",
     "PersistenceInterface",
     "open_persistence",
+    "AttendanceCycle",
+    "TeamStatusPersistenceInterface",
+    "TeamStatusPersistenceError",
+    "open_team_status_persistence",
 ]
