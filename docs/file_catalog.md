@@ -19,6 +19,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `agents/runtime.py` | Production | Private implementation | Constructs and invokes agents, enforces tools, adapts CrewAI, and owns the runtime registry. |
 | `agents/standard_agents.py` | Production | Private implementation | Implements the standard History and Reference agents. |
 | `api/__init__.py` | Production | Public facade | Exposes the API facade and compatibility module aliases. |
+| `api/admin.py` | Production | Private implementation | Serves the login-gated admin web panel for user management under `/admin`. |
 | `api/app.py` | Production | Public entry point | Builds API dependencies, owns ApiContext, and starts Flask. |
 | `api/request_boundary.py` | Production | Private implementation | Authenticates requests and translates API and HTTP failures into responses. |
 | `api/routes.py` | Production | Private implementation | Defines ingestion, management, hold, job, system, and notification routes. |
@@ -111,6 +112,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_agent_permission_enforcement.py` | Test | Internal | Verifies agent permission enforcement behavior and edge cases. |
 | `tests/test_agent_registry.py` | Test | Internal | Verifies agent registry behavior and edge cases. |
 | `tests/test_agent_runtime.py` | Test | Internal | Verifies agent construction, invocation, CrewAI adaptation, and output handling. |
+| `tests/test_api_admin.py` | Test | Internal | Verifies the admin web panel's login, session, CSRF, rate limiting, and user-management behavior. |
 | `tests/test_api_app.py` | Test | Internal | Verifies api app behavior and edge cases. |
 | `tests/test_api_holds.py` | Test | Internal | Verifies api holds behavior and edge cases. |
 | `tests/test_api_jobs.py` | Test | Internal | Verifies api jobs behavior and edge cases. |

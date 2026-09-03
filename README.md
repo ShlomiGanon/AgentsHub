@@ -59,6 +59,7 @@ The important variables are:
 
 - `BOT_TOKEN`
 - `BOT_SERVICE_KEY` — the secret the bot sends alongside its `bot-service` identity; see step 2 below. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+- `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_SESSION_SECRET` — optional; enable the admin web panel. See "Admin web panel (optional)" below.
 - `CORE_MODEL_PROVIDER`, `CORE_MODEL_NAME`, and `CORE_MODEL_API_KEY_ENV`
 - `SUB_MODEL_PROVIDER`, `SUB_MODEL_NAME`, and `SUB_MODEL_API_KEY_ENV`
 - The key variables named by `CORE_MODEL_API_KEY_ENV` and `SUB_MODEL_API_KEY_ENV`
@@ -79,7 +80,7 @@ Use the human user's numeric Telegram ID for `<your-telegram-id>`. The `bot-serv
 
 This registration is not sufficient by itself — `bot-service` is a fixed, public string, so `BOT_SERVICE_KEY` (see step 1) must also be set, identically, for both the API and the bot process. Without it, calls the bot makes as its own service identity (notifications, the commander roster, profile-change checks) are rejected; a human's own messages are unaffected either way.
 
-User administration is intentionally available only from the host CLI:
+User administration is available from the host CLI (below), and, if configured, the admin web panel ("Admin web panel (optional)" further down):
 
 ```powershell
 python -m cli.user_admin --profile profiles.demo list
@@ -142,6 +143,18 @@ Task ID. Later asynchronous results remain separate notifications. With
 messages; viewer clients never request or display them.
 
 Stop any foreground process with `Ctrl+C`. The SQLite database remains on disk, so restarting the same profile resumes its existing deployment state; durable bot notification cursors also prevent already-delivered notifications from being replayed after a normal restart.
+
+### Admin web panel (optional)
+
+A browser-based, login-gated alternative to `cli.user_admin`, served by the same API process at `/admin` — disabled by default (no `/admin` route exists at all) unless both `ADMIN_USERNAME` and `ADMIN_PASSWORD` are set; once they are, `ADMIN_SESSION_SECRET` is also required (fails startup loudly if missing). See step 1's env var list and `.env.example` for all admin-related variables and how to generate `ADMIN_SESSION_SECRET`.
+
+```
+http://127.0.0.1:8902/admin/login
+```
+
+Sign in and you get a list of every registered user (add, change level, or remove), plus a button to register/re-register the bot's own `bot-service` identity — the same `persistence.write_user` call `cli.user_admin add`/`update` makes, not a separate mechanism. Sessions time out after `ADMIN_SESSION_TIMEOUT_MINUTES` (default 15) of inactivity; repeated failed logins from one source IP lock that IP out for `ADMIN_LOGIN_LOCKOUT_MINUTES` after `ADMIN_LOGIN_MAX_ATTEMPTS` attempts.
+
+**HTTPS is required before this is reachable from anywhere but localhost.** The login password, session cookie, and CSRF token all travel in the clear over plain HTTP — fine on localhost, not otherwise. This module implements no TLS itself; put a TLS-terminating reverse proxy (or equivalent) in front first, the same requirement `docs/PRODUCTION_READY.md`'s Task 7 already states for the rest of this API. See `api/admin.py`'s module docstring for the full reasoning.
 
 ### Common startup failures
 

@@ -192,6 +192,19 @@ def build_app(ctx: ApiContext) -> Flask:
     app.register_blueprint(build_users_blueprint(ctx))
     app.register_blueprint(build_notifications_blueprint(ctx))
 
+    from api.admin import build_admin_blueprint, resolve_admin_config
+
+    admin_config = resolve_admin_config()
+    if admin_config is not None:
+        # Enabled only when ADMIN_USERNAME/ADMIN_PASSWORD are both set (api/admin.py's own
+        # docstring) — when they aren't, no /admin route is registered at all, so an unconfigured
+        # deployment 404s here rather than exposing a locked-but-present panel.
+        app.secret_key = admin_config.session_secret
+        app.config["SESSION_COOKIE_HTTPONLY"] = True
+        app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+        app.config["PERMANENT_SESSION_LIFETIME"] = admin_config.session_timeout_minutes * 60
+        app.register_blueprint(build_admin_blueprint(ctx, admin_config))
+
     return app
 
 
@@ -224,6 +237,16 @@ def main(argv: list[str] | None = None) -> None:
         core_model = _tier_model_from_environ("CORE")
         sub_model = _tier_model_from_environ("SUB")
     except ModelTierError as exc:
+        raise SystemExit(f"failed to start API: {exc}") from exc
+
+    # Cheap fail-fast before the (slow, billed) model warmup below: build_app() re-derives and
+    # actually uses this, but checking it here too means a broken ADMIN_SESSION_SECRET is caught
+    # before, not after, paying for that warmup.
+    from api.admin import AdminConfigError, resolve_admin_config
+
+    try:
+        resolve_admin_config()
+    except AdminConfigError as exc:
         raise SystemExit(f"failed to start API: {exc}") from exc
 
     configure_telemetry()

@@ -198,6 +198,13 @@ does not.
   safe as the transport carrying it.
 - Verify the deployment can't accidentally bind to a public interface when
   a private one was intended.
+- If the admin web panel (`api/admin.py`, `/admin`) is enabled, this applies
+  to it at least as much as to the rest of the API: its login password,
+  session cookie, and CSRF token all travel in the clear without TLS. Unlike
+  `X-Identity`, this is a typed password a person enters in a browser, not a
+  value an existing client already sends over whatever transport is chosen
+  elsewhere — treat it as a hard blocker for enabling the panel outside
+  localhost, not just a "confirm TLS is on" checkbox.
 
 ---
 
