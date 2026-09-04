@@ -17,6 +17,14 @@ from persistence.team_status_contracts import (
     TeamStatusPersistenceError,
     open_team_status_persistence,
 )
+from persistence.surveillance_contracts import (
+    CameraInfo,
+    DroneInfo,
+    DroneMission,
+    SurveillancePersistenceError,
+    SurveillancePersistenceInterface,
+    open_surveillance_persistence,
+)
 
 sqlite = sqlite_store
 sqlite_backend = sqlite_store
@@ -33,4 +41,10 @@ __all__ = [
     "TeamStatusPersistenceInterface",
     "TeamStatusPersistenceError",
     "open_team_status_persistence",
+    "CameraInfo",
+    "DroneInfo",
+    "DroneMission",
+    "SurveillancePersistenceError",
+    "SurveillancePersistenceInterface",
+    "open_surveillance_persistence",
 ]
