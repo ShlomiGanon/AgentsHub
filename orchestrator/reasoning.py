@@ -737,7 +737,22 @@ def formulate_tasks(
     description: str | None,
     precedent_context: tuple = (),
     event_data: dict | None = None,
+    required_fields_floor: tuple[str, ...] = (),
 ) -> FormulationResult:
+    """... `required_fields_floor` is the event type's statically-declared
+    required fields (`profiles.EVENT_TYPE_REQUIRED_FIELDS`, looked up via
+    `EventTypeRegistry.required_fields_for` by the caller — passed as a
+    plain tuple here, not the registry itself, the same way `api/admin.py`
+    and `api/request_boundary.py` duplicate a small contract across a
+    package boundary rather than importing across it). On the JSON parse
+    path below, it is unioned into every formulated step's own
+    `required_event_fields` regardless of what the model does or doesn't
+    declare for that step — a deterministic floor the Main Agent LLM cannot
+    omit, layered under (never replacing) its own per-step declarations,
+    which may still require additional fields beyond it. It is deliberately
+    NOT merged on the legacy AGENT:/TASK: parse path below — see the NOTE
+    at that loop for why."""
+
     descriptors = [registry.descriptor_for(name) for name in protocol.participating_agents]
     base_prompt = _build_formulation_prompt(
         protocol, descriptors, raw_text, classification, area, description, precedent_context, event_data
@@ -785,7 +800,7 @@ def formulate_tasks(
                     steps.append(
                         Step(
                             agent_name, task_text.strip(), allowed_tools, step_id, tuple(dependencies),
-                            tuple(dict.fromkeys(required_fields)),
+                            tuple(dict.fromkeys((*required_fields, *required_fields_floor))),
                         )
                     )
                     seen_ids.add(step_id)
@@ -805,6 +820,21 @@ def formulate_tasks(
                 )
             exposed_names = {tool.name for tool in descriptor.tools}
             allowed_tools = tuple(name for name in protocol.approved_tools if name in exposed_names)
+            # Deliberately left with step_id == "" (the Step default), same as before. Assigning
+            # a real step_id here looks like free consistency at first — until you notice
+            # protocols.executor.execute_steps' own dispatch condition, `any(step.step_id or
+            # step.depends_on for step in steps)`: giving every step a truthy step_id would
+            # silently reroute every legacy-formatted plan from the plain, single-threaded,
+            # declared-order sequential path into _execute_dependency_steps' scheduler instead —
+            # which runs read-only steps concurrently (a thread pool, up to 4 at once) and orders
+            # by readiness, not declared order, since these steps have no depends_on to constrain
+            # them. That's a real change to protocol execution semantics, unrelated to and much
+            # larger than the step-identification problem an id would solve — not something to
+            # introduce as an incidental side effect of a persistence-layer bug fix. See
+            # _persist_step_outcomes' docstring for how that matching bug is fixed without this.
+            #
+            # required_fields_floor is also deliberately NOT merged in on this path — see
+            # formulate_tasks' docstring.
             steps.append(Step(agent_name=descriptor.name, task_text=task_text, allowed_tools=allowed_tools))
         return FormulationResult(steps=tuple(steps))
 

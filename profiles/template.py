@@ -50,6 +50,14 @@ PROTOCOLS = [
 EVENT_TYPES = ["example_type_a", "example_type_b"]
 AREAS = ["example_area_a", "example_area_b"]
 
+# Optional: declare fields (from the fixed event-data vocabulary) that must be
+# resolved before protocol selection/task formulation may proceed for a given
+# event type. Omit entirely, or leave empty, for a type with no such
+# requirement — the default. See docs/profile_spec.md.
+EVENT_TYPE_REQUIRED_FIELDS = {
+    "example_type_a": ["area"],
+}
+
 DB_PATH = str(Path(tempfile.gettempdir()) / "agentshub_reference_template.db")
 API_PORT = 9999
 
