@@ -64,20 +64,26 @@ def test_partial_day_falls_back_to_raw_events(tmp_path):
 # path, question-flow-repros follow-up) ------------------------------------
 
 
-def test_answer_most_recent_event_picks_the_latest_by_occurred_at_not_insertion_order(tmp_path):
+def test_answer_most_recent_event_orders_by_receipt_time_not_occurred_at(tmp_path):
+    """DIAGNOSTIC_FINDINGS.MD A.2 fix: "most recent" is now defined by
+    received_at, not occurred_at (a Telegram/human report's occurred_at is
+    model-extracted from the message text and can diverge from — or be
+    unresolvable relative to — when it was actually received). Deliberately
+    set up so the two bases disagree on which event is "more recent," to
+    prove which one actually governs, not just that ordering exists."""
     store = open_persistence(str(tmp_path / "query-recent.db"))
     try:
-        # Inserted out of chronological order on purpose — the pick must
-        # be by occurred_at, never by row/insertion order.
+        # Received first, but *claims* to have occurred later.
         store.append_event({
-            "event_id": "e-later", "received_at": "2026-08-02T09:00:00", "source": "sensor",
-            "sender_identity": "s", "occurred_at": "2026-08-02T09:00:00", "raw_text": "medical incident",
-            "classification": "medical", "area": "south",
-        })
-        store.append_event({
-            "event_id": "e-earlier", "received_at": "2026-08-01T10:00:00", "source": "sensor",
-            "sender_identity": "s", "occurred_at": "2026-08-01T10:00:00", "raw_text": "fire",
+            "event_id": "e-received-first", "received_at": "2026-08-01T10:00:00", "source": "sensor",
+            "sender_identity": "s", "occurred_at": "2026-08-05T00:00:00", "raw_text": "fire",
             "classification": "fire", "area": "north",
+        })
+        # Received second (i.e. more recently), but *claims* to have occurred earlier.
+        store.append_event({
+            "event_id": "e-received-second", "received_at": "2026-08-02T09:00:00", "source": "sensor",
+            "sender_identity": "s", "occurred_at": "2026-07-01T00:00:00", "raw_text": "medical incident",
+            "classification": "medical", "area": "south",
         })
 
         agent = FakeHistoryAgent()
@@ -87,12 +93,80 @@ def test_answer_most_recent_event_picks_the_latest_by_occurred_at_not_insertion_
 
         assert answer.answer == "answer from stored context"
         assert answer.total_events_matched == 1
-        assert answer.sources_used[0].source_id == "e-later"
-        assert answer.time_start == "2026-08-02T09:00:00"
+        # Picked by received_at (2026-08-02 > 2026-08-01) — the opposite of
+        # what an occurred_at-ordered pick would have returned.
+        assert answer.sources_used[0].source_id == "e-received-second"
+        # Display value: occurred_at is known here, so it's still shown.
+        assert answer.time_start == "2026-07-01T00:00:00"
         # The History Agent is still the one interpreting — it's handed
         # the retrieved event's real content, not a bare question (§5.7).
-        assert "e-later" in agent.last_prompt
+        assert "e-received-second" in agent.last_prompt
         assert "medical incident" in agent.last_prompt  # the real event content, not a stub or a bare question
+    finally:
+        store.close()
+
+
+def test_answer_most_recent_event_includes_an_event_with_unresolved_occurred_at(tmp_path):
+    """The original bug this whole investigation series was commissioned to
+    explain: a Telegram/human report whose message has no parseable time
+    reference gets occurred_at=None, and used to silently, permanently
+    vanish from every "most recent" answer (the old `occurred_at IS NOT
+    NULL` filter excluded it outright). It must now be found and correctly
+    identified as most recent when it is."""
+    store = open_persistence(str(tmp_path / "query-recent-unresolved.db"))
+    try:
+        store.append_event({
+            "event_id": "e-older", "received_at": "2026-08-01T10:00:00", "source": "sensor",
+            "sender_identity": "s", "occurred_at": "2026-08-01T10:00:00", "raw_text": "fire",
+            "classification": "fire", "area": "north",
+        })
+        store.append_event({
+            "event_id": "e-unresolved-time", "received_at": "2026-08-02T09:00:00", "source": "telegram",
+            "sender_identity": "s", "occurred_at": None, "raw_text": "smoke near the depot",
+            "classification": "fire", "area": "south",
+        })
+
+        agent = FakeHistoryAgent()
+        service = HistoryQueryService(store, agent)
+
+        answer = service.answer_most_recent_event("what is the last event?")
+
+        assert answer.sources_used[0].source_id == "e-unresolved-time"
+        # Display falls back to received_at when occurred_at is unknown.
+        assert answer.time_start == "2026-08-02T09:00:00"
+        assert "e-unresolved-time" in agent.last_prompt
+        assert "smoke near the depot" in agent.last_prompt
+    finally:
+        store.close()
+
+
+def test_answer_most_recent_event_includes_an_unresolved_event_for_a_hebrew_phrased_question(tmp_path):
+    """Bilingual check for the same fix — `answer_most_recent_event` takes the
+    question text verbatim and does no language-specific logic of its own
+    (classification of a question as a "most recent" lookup happens earlier,
+    in orchestrator.reasoning, and DIAGNOSTIC_FINDINGS.MD A.1 already found
+    that routing correctly language-agnostic); this proves the fixed
+    mechanism itself behaves identically for a Hebrew-phrased question."""
+    store = open_persistence(str(tmp_path / "query-recent-unresolved-he.db"))
+    try:
+        store.append_event({
+            "event_id": "e-older", "received_at": "2026-08-01T10:00:00", "source": "sensor",
+            "sender_identity": "s", "occurred_at": "2026-08-01T10:00:00", "raw_text": "fire",
+            "classification": "fire", "area": "north",
+        })
+        store.append_event({
+            "event_id": "e-unresolved-time", "received_at": "2026-08-02T09:00:00", "source": "telegram",
+            "sender_identity": "s", "occurred_at": None, "raw_text": "יש עשן ליד המחסן",
+            "classification": "fire", "area": "south",
+        })
+
+        agent = FakeHistoryAgent()
+        service = HistoryQueryService(store, agent)
+
+        answer = service.answer_most_recent_event("מה האירוע האחרון?")
+
+        assert answer.sources_used[0].source_id == "e-unresolved-time"
+        assert answer.time_start == "2026-08-02T09:00:00"
     finally:
         store.close()
 

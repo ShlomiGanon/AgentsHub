@@ -96,6 +96,27 @@ def test_job_finished_and_job_failed_are_delivered_to_the_original_submitter(tmp
     assert by_event[failed_id]["target_chat_ids"] == ["bob"]
 
 
+def test_job_finished_payload_carries_the_protocol_and_reason_already_computed_during_the_run(tmp_path, teardown_ctx):
+    """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 3 (item #9): sourced from
+    data already written during the run, no new model call."""
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    event_id = _minimal_event(ctx.deps.persistence)
+    ctx.deps.persistence.update_event(
+        event_id, {"selected_protocol": "fire_response", "risk_level": "high", "protocol_reason": "matches the reported situation"}
+    )
+    record_event_outcome(ctx.deps.persistence, event_id, "succeeded")
+
+    resp = client.get("/Notifications", headers=auth_headers(COMMANDER_IDENTITY))
+    [notification] = resp.get_json()["notifications"]
+
+    assert notification["payload"]["protocol_name"] == "fire_response"
+    assert notification["payload"]["risk_level"] == "high"
+    assert notification["payload"]["protocol_reason"] == "matches the reported situation"
+
+
 def test_event_data_question_is_delivered_to_the_original_reporter(tmp_path, teardown_ctx):
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
@@ -173,7 +194,34 @@ def test_uncertain_produces_both_a_job_finished_and_an_uncertain_verdict_entry(t
     resp = client.get("/Notifications", headers=auth_headers(COMMANDER_IDENTITY))
     kinds = {n["kind"] for n in resp.get_json()["notifications"]}
 
-    assert kinds == {"job_finished", "uncertain_verdict"}
+    # REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 2 (item #8): a third,
+    # reporter-facing notification now also fires alongside the two that
+    # already existed.
+    assert kinds == {"job_finished", "uncertain_verdict", "uncertain_verdict_reporter"}
+
+
+def test_uncertain_verdict_reporter_targets_the_original_sender_with_no_insight_text(tmp_path, teardown_ctx):
+    """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 2 (item #8): the original
+    reporter (any role) now gets a short, generic notice — distinct from the
+    commander-only detailed `uncertain_verdict` notice, which is unaffected."""
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    event_id = _minimal_event(ctx.deps.persistence, sender_identity=VIEWER_IDENTITY)
+    record_event_outcome(ctx.deps.persistence, event_id, "uncertain", insight_text="mixed signal, several hundred words of raw reasoning")
+
+    resp = client.get("/Notifications", headers=auth_headers(COMMANDER_IDENTITY))
+    notifications = resp.get_json()["notifications"]
+
+    reporter_notice = next(n for n in notifications if n["kind"] == "uncertain_verdict_reporter")
+    assert reporter_notice["target_chat_ids"] == [VIEWER_IDENTITY]
+    assert reporter_notice["payload"] == {"event_id": event_id}
+    assert "insight" not in reporter_notice["payload"]
+
+    detailed_notice = next(n for n in notifications if n["kind"] == "uncertain_verdict")
+    assert detailed_notice["target_chat_ids"] == []  # unaffected — still commander-broadcast only, not per-target
+    assert detailed_notice["payload"]["insight_text"] == "mixed signal, several hundred words of raw reasoning"
 
 
 def test_closed_on_precedent_produces_both_a_job_finished_and_a_precedent_closure_entry(tmp_path, teardown_ctx):

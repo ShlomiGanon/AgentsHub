@@ -120,15 +120,23 @@ _LEGACY_INTENT_PATTERN = re.compile(
     r"\A\s*INTENT:\s*(question|report|request|conversational)\s*\r?\nREASON:\s*(\S(?:[^\r\n]*\S)?)\s*\Z",
     re.IGNORECASE,
 )
+# Anchored on (?:\A|\n) rather than \A, and matched with .search() rather than .fullmatch()
+# (see _parse_selection_response): a real model response commonly reasons through the
+# candidates in prose before giving its decision, and requiring the *entire* response to be
+# exactly the two-line SELECTED:/REASON: block rejected that prose-then-answer shape outright —
+# confirmed live, 2 of 3 identical test runs (docs/IMPROVES/CRITICAL_FIXES_PLAN.MD item 3).
+# Leading reasoning is now tolerated; the matched block still must be the final content in the
+# response, so a stray, coincidental "SELECTED:"/"REASON:" pair embedded mid-reasoning (not as
+# the response's actual last lines) still won't match.
 _SELECTED_PATTERN = re.compile(
-    r"\A\s*SELECTED:\s*(\S+)\s*\r?\nREASON:\s*(\S(?:[^\r\n]*\S)?)\s*\Z",
+    r"(?:\A|\n)\s*SELECTED:\s*(\S+)\s*\r?\nREASON:\s*(\S(?:[^\r\n]*\S)?)\s*\Z",
     re.IGNORECASE,
 )
 _AMBIGUOUS_PATTERN = re.compile(
-    r"\A\s*AMBIGUOUS:\s*([^\r\n]+)\s*\r?\nREASON:\s*(\S(?:[^\r\n]*\S)?)\s*\Z",
+    r"(?:\A|\n)\s*AMBIGUOUS:\s*([^\r\n]+)\s*\r?\nREASON:\s*(\S(?:[^\r\n]*\S)?)\s*\Z",
     re.IGNORECASE,
 )
-_NO_MATCH_PATTERN = re.compile(r"\A\s*NO_MATCH:\s*(\S(?:.*?\S)?)\s*\Z", re.IGNORECASE | re.DOTALL)
+_NO_MATCH_PATTERN = re.compile(r"(?:\A|\n)\s*NO_MATCH:\s*(\S(?:.*?\S)?)\s*\Z", re.IGNORECASE | re.DOTALL)
 _AGENT_TASK_PATTERN = re.compile(r"AGENT:\s*(\S+)\s*\n\s*TASK:\s*(.+?)(?=\nAGENT:|\Z)", re.IGNORECASE | re.DOTALL)
 _JSON_CODE_FENCE_PATTERN = re.compile(r"```(?:json)?\s*\n?(.*?)\n?```", re.IGNORECASE | re.DOTALL)
 _VERDICT_PATTERN = re.compile(r"VERDICT:\s*(success|failure|uncertain)", re.IGNORECASE)
@@ -315,11 +323,13 @@ def _build_intent_prompt(
         f"Available protocols JSON: {json.dumps(protocol_data, ensure_ascii=False, sort_keys=True)}\n"
         f"Conversation context JSON: {json.dumps(conversation_messages, ensure_ascii=False, sort_keys=True)}\n"
         f"Message JSON: {json.dumps(message_text, ensure_ascii=False)}\n\n"
-        "Return exactly one JSON object and nothing else, with all fields present:\n"
+        "Return exactly one JSON object and nothing else, with all fields present. "
+        "'evidence' is keyed by primary_intent's own value — e.g. if primary_intent is "
+        "\"report\", evidence's key must be \"report\", not \"question\":\n"
         '{"primary_intent":"question|report|request|conversational|needs_clarification",'
         '"asks_for_information":true,"reports_occurrence":false,"requests_action":false,'
         '"social_only":false,"is_quoted":false,"is_hypothetical":false,'
-        '"is_followup_without_context":false,"evidence":{"question":"exact quote from message"},'
+        '"is_followup_without_context":false,"evidence":{"<primary_intent\'s own value>":"exact quote from message"},'
         '"matched_protocol_names":[],"reason":"short reason","ambiguity_reason":null,'
         '"clarification_question":null}'
     )
@@ -443,7 +453,14 @@ def _parse_structured_intent_response(raw_text: str, message_text: str, protocol
     }
     if analysis.primary_intent in flag_for_intent and not flag_for_intent[analysis.primary_intent]:
         raise OrchestrationParseError(f"primary intent {analysis.primary_intent!r} contradicts its semantic flag")
-    if analysis.primary_intent in {"question", "report", "request"} and analysis.primary_intent not in analysis.evidence:
+    # Deliberately not "analysis.primary_intent not in analysis.evidence": the evidence dict's
+    # *key* carries no information the parser needs — `evidence`'s values are already validated
+    # above (line ~400) to be exact quotes drawn from the real message — so what actually matters
+    # is that *some* real evidence was given for an operational intent, regardless of which key
+    # name the model filed it under (the prompt asks for a key matching primary_intent, but a
+    # model that doesn't — e.g. reusing the prompt's own example key — still supplied genuine
+    # evidence and shouldn't be rejected for a naming mismatch alone).
+    if analysis.primary_intent in {"question", "report", "request"} and not analysis.evidence:
         raise OrchestrationParseError(f"primary intent {analysis.primary_intent!r} requires exact evidence")
     if analysis.social_only and any((analysis.asks_for_information, analysis.reports_occurrence, analysis.requests_action)):
         raise OrchestrationParseError("social_only contradicts operational intent flags")
@@ -553,18 +570,18 @@ def _build_selection_prompt(raw_text: str, classification: str | None, area: str
 
 
 def _parse_selection_response(raw_text: str) -> ProtocolSelectionResult:
-    selected_match = _SELECTED_PATTERN.fullmatch(raw_text)
+    selected_match = _SELECTED_PATTERN.search(raw_text)
     if selected_match:
         return ProtocolSelectionResult(
             status="selected",
             protocol_name=selected_match.group(1),
             reason=selected_match.group(2).strip(),
         )
-    ambiguous_match = _AMBIGUOUS_PATTERN.fullmatch(raw_text)
+    ambiguous_match = _AMBIGUOUS_PATTERN.search(raw_text)
     if ambiguous_match:
         names = tuple(name.strip() for name in ambiguous_match.group(1).split(",") if name.strip())
         return ProtocolSelectionResult(status="ambiguous", candidate_names=names, reason=ambiguous_match.group(2).strip())
-    no_match_match = _NO_MATCH_PATTERN.fullmatch(raw_text)
+    no_match_match = _NO_MATCH_PATTERN.search(raw_text)
     if no_match_match:
         return ProtocolSelectionResult(status="no_match", reason=no_match_match.group(1).strip())
     raise OrchestrationParseError(f"could not parse protocol selection response: {raw_text!r}")

@@ -56,6 +56,55 @@ def test_parse_rejects_unrecognized_response():
         _parse_selection_response("I'm not sure what to pick")
 
 
+def test_parse_selected_response_tolerates_leading_reasoning_prose():
+    """Regression test: real model output commonly reasons through each candidate protocol in
+    prose before giving its final SELECTED:/REASON: answer — this shape was previously rejected
+    outright because the old pattern required the *entire* response to be exactly those two
+    lines (docs/IMPROVES/CRITICAL_FIXES_PLAN.MD item 3; reproduced live in 2 of 3 identical test
+    runs during investigation)."""
+
+    response = (
+        "The report describes smoke observed near gate 3 — this is a fire classification.\n\n"
+        "- status_check: only for confirming conditions with no action beyond checking.\n"
+        "- dispatch_response: applies when a physical response must be dispatched and recorded.\n\n"
+        "SELECTED: dispatch_response\n"
+        "REASON: an active fire report requires a physical response to be dispatched."
+    )
+
+    result = _parse_selection_response(response)
+
+    assert result == ProtocolSelectionResult(
+        status="selected",
+        protocol_name="dispatch_response",
+        reason="an active fire report requires a physical response to be dispatched.",
+    )
+
+
+def test_parse_ambiguous_response_tolerates_leading_reasoning_prose():
+    response = (
+        "Both status_check and routine_check plausibly fit this report.\n\n"
+        "AMBIGUOUS: status_check, routine_check\n"
+        "REASON: cannot discriminate between a status check and a routine check here."
+    )
+
+    result = _parse_selection_response(response)
+
+    assert result.status == "ambiguous"
+    assert result.candidate_names == ("status_check", "routine_check")
+
+
+def test_parse_no_match_response_tolerates_leading_reasoning_prose():
+    response = (
+        "None of the available protocols describe relaying a message between two people.\n\n"
+        "NO_MATCH: no protocol covers passing a message along without an operational event."
+    )
+
+    result = _parse_selection_response(response)
+
+    assert result.status == "no_match"
+    assert result.reason == "no protocol covers passing a message along without an operational event."
+
+
 # -- select_protocol ----------------------------------------------------
 
 

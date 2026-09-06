@@ -226,7 +226,9 @@ def test_storing_a_held_event_writes_a_matching_notification_row(persistence):
         ("succeeded", {"job_finished"}),
         ("declined", {"job_finished"}),
         ("failed", {"job_failed"}),
-        ("uncertain", {"job_finished", "uncertain_verdict"}),
+        # REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 2 (item #8): a third,
+        # reporter-facing kind fires alongside the two that already existed.
+        ("uncertain", {"job_finished", "uncertain_verdict", "uncertain_verdict_reporter"}),
         ("closed_on_precedent", {"job_finished", "precedent_closure"}),
         ("no_match_protocol", {"job_finished", "no_match_notice"}),
     ],

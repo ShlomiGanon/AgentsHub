@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from bot import app
-from bot.api_client import MessageSubmissionResult, ProfileView, SettingsView, TracePollResult, WriteResult
+from bot.api_client import ApiRequestError, MessageSubmissionResult, ProfileView, SettingsView, TracePollResult, WriteResult
 from bot.deps import BotDeps
 from bot.startup import ApiNotImplementedError, BotStartupError, SingleInstanceLock
 from tests.bot_fakes import FakeBotApiClient, FakeTelegramClient
@@ -155,6 +155,40 @@ def test_registered_commands_contain_no_user_management():
         assert "user" not in command
 
 
+def test_bot_commands_lists_start_profile_and_settings():
+    from messages import get_catalog
+
+    names = [name for name, _description in app._bot_commands(get_catalog("en"))]
+
+    assert names == ["start", "profile", "settings"]
+
+
+def test_on_start_command_greets_a_registered_caller_by_profile_name():
+    api = FakeBotApiClient(users={"42": "viewer"})
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=SimpleNamespace(profile_name="Test Deployment"), telegram_client=telegram, api_client=api)
+
+    update = _fake_update()
+    _run(app._on_start_command(update, _fake_context(deps)))
+
+    assert len(telegram.sent) == 1
+    assert "Test Deployment" in telegram.sent[0].text
+    assert telegram.sent[0].chat_id == "99"
+
+
+def test_on_start_command_refuses_an_unregistered_caller():
+    api = FakeBotApiClient()  # no users registered
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=SimpleNamespace(profile_name="Test Deployment"), telegram_client=telegram, api_client=api)
+
+    update = _fake_update()
+    _run(app._on_start_command(update, _fake_context(deps)))
+
+    assert len(telegram.sent) == 1
+    assert "not a registered user" in telegram.sent[0].text
+    assert "Test Deployment" not in telegram.sent[0].text
+
+
 @pytest.mark.parametrize(
     "rest,expect_error",
     [
@@ -255,6 +289,43 @@ def test_on_text_message_uses_a_conversation_id_scoped_to_chat_and_thread():
     conversation_ids = [call[1] for call in api.calls if call[0] == "submit_message_conversation"]
     assert conversation_ids == ["telegram:chat-a:main", "telegram:chat-b:main", "telegram:chat-a:thread-1"]
     assert len(set(conversation_ids)) == 3
+
+
+def test_run_failure_api_error_shows_a_generic_message_not_the_raw_internal_text():
+    """Regression test: RunFailureError (422) is the one ApiError class this codebase always
+    raises from a raw internal/model-produced string (api/routes.py wraps OrchestrationParseError
+    verbatim) rather than a deliberately-crafted, already-localized catalog message — a caller
+    must never see that raw text (docs/IMPROVES/CRITICAL_FIXES_PLAN.MD item 4)."""
+
+    class _RunFailureApiClient(FakeBotApiClient):
+        async def submit_message(self, *args, **kwargs):
+            raise ApiRequestError(422, "primary intent 'report' requires exact evidence", error_class="run_failure")
+
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=_RunFailureApiClient(users={"42": "viewer"}))
+
+    reply = _run(app.present_incoming_message(deps, "99", "42", "some report text", "1"))
+
+    assert "primary intent" not in reply
+    assert "exact evidence" not in reply
+    assert "Couldn't process that" in reply
+
+
+def test_other_api_errors_still_show_their_specific_catalog_message():
+    # Contrast with the run_failure case above: every other ApiError subclass is raised with
+    # deliberately-crafted, already-localized catalog text throughout this codebase (e.g.
+    # api.queue_full, api.field_required) — that detail stays visible, unlike run_failure's raw
+    # internal text.
+    class _ConflictApiClient(FakeBotApiClient):
+        async def submit_message(self, *args, **kwargs):
+            raise ApiRequestError(409, "Already resolved by 'commander-1' at 2026-01-01T00:00:00", error_class="conflict")
+
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=_ConflictApiClient(users={"42": "viewer"}))
+
+    reply = _run(app.present_incoming_message(deps, "99", "42", "some report text", "1"))
+
+    assert "Already resolved by 'commander-1'" in reply
 
 
 def test_deep_debug_commander_receives_separate_trace_messages(monkeypatch):
@@ -660,6 +731,24 @@ def test_report_acknowledges_with_job_id_and_kind():
 
     assert "queued" in reply
     assert "job-42" in reply
+
+
+def test_queued_ack_promises_a_follow_up_message():
+    """CRITICAL_FIXES_PLAN item 5: the only reachable queued-ack branch (job_id is
+    truthy) previously used `status.async_ack`, which never promised a follow-up —
+    the wording that did promise one (`bot.job_queued`, "You'll hear back here once
+    it's done.") lived in a dead `elif` branch that could never execute, since the
+    `if submission_result.job_id:` check above it always returns first. The
+    follow-up promise now lives in `status.async_ack` itself."""
+    api = FakeBotApiClient(
+        users={"v1": "viewer"},
+        message_submission_result=MessageSubmissionResult(kind="report", job_id="job-42"),
+    )
+
+    reply = _run(handle_incoming_message(_deps(api), "v1", "there is smoke near the depot", "m1"))
+
+    assert "job-42" in reply
+    assert "hear back" in reply.lower()
 
 
 def test_request_awaiting_approval_says_so():

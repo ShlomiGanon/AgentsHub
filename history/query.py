@@ -166,11 +166,12 @@ def retrieve_range(persistence, start: datetime, end: datetime, classification: 
                 continue
             if area is not None and event.get("area") != area:
                 continue
+            period = event.get("occurred_at") or event["received_at"]
             sources.append(
                 RetrievedSource(
                     level="raw_event",
-                    period_start=event["occurred_at"],
-                    period_end=event["occurred_at"],
+                    period_start=period,
+                    period_end=period,
                     source_id=event["event_id"],
                     content=event,
                     matched_event_ids=(event["event_id"],),
@@ -217,7 +218,13 @@ def find_precedents(
             outcome=event.get("outcome"),
             resolved=event.get("outcome") in {"succeeded", "closed_on_precedent"},
         )
-        for event in sorted(events_by_id.values(), key=lambda item: (item["occurred_at"], item["event_id"]), reverse=True)
+        # `item["occurred_at"] or item["received_at"]` — occurred_at is no
+        # longer guaranteed present on a matched candidate (see the
+        # `fetch_events_by_type_area_window` fix), so sorting on the bare
+        # column could mix `None` with real timestamps and raise.
+        for event in sorted(
+            events_by_id.values(), key=lambda item: (item["occurred_at"] or item["received_at"], item["event_id"]), reverse=True
+        )
     ]
 
     logger.debug(
@@ -322,7 +329,14 @@ class HistoryQueryService:
             operation=spec.operation,
             time_start=storage_timestamp(start) if start is not None else None,
             time_end=storage_timestamp(end),
-            time_basis=spec.time_basis,
+            # Same fix as `answer_most_recent_event` (DIAGNOSTIC_FINDINGS.MD
+            # A.2): the "latest" operation is a "most recent" question just
+            # like that direct-lookup path, so it must not silently exclude
+            # an event whose occurred_at is unresolved. Every other operation
+            # keeps whatever time_basis was requested — a genuine date-range
+            # question ("what happened last Tuesday") is legitimately about
+            # occurred_at, not receipt time.
+            time_basis="received_at" if spec.operation == "latest" else spec.time_basis,
             classifications=tuple(dict.fromkeys(spec.classifications)),
             areas=tuple(dict.fromkeys(spec.areas)),
             outcomes=tuple(dict.fromkeys(spec.outcomes)),
@@ -548,8 +562,17 @@ class HistoryQueryService:
         commander) applies no restriction."""
 
         now = self._clock()
+        # `time_basis="received_at"` (DIAGNOSTIC_FINDINGS.MD A.2, the original
+        # bug this investigation series was commissioned to explain): a
+        # Telegram/human report's `occurred_at` is model-extracted and can be
+        # unresolved (`NULL`) when the message has no parseable time
+        # reference. Ordering/filtering on `occurred_at` (the old default)
+        # meant such an event was unconditionally excluded — receipt time
+        # always exists, so a report can never again silently vanish from
+        # "most recent" just because its stated time couldn't be parsed.
         criteria = EventSearchCriteria(
-            time_end=storage_timestamp(now), sender_identity=sender_identity_filter, order="newest", limit=1
+            time_end=storage_timestamp(now), sender_identity=sender_identity_filter, order="newest", limit=1,
+            time_basis="received_at",
         )
         events = self._persistence.search_events(criteria)
         if not events:
@@ -568,17 +591,21 @@ class HistoryQueryService:
         if agent_result.status != "success":
             raise HistoryQueryError(f"history agent could not answer: {agent_result.text}")
 
+        # Display only: prefer occurred_at when known, fall back to received_at
+        # otherwise (same pattern as `_sources_for_events` below) — the search
+        # above no longer depends on occurred_at being present at all.
+        period = most_recent.get("occurred_at") or most_recent["received_at"]
         history_source = HistorySource(
             level="raw_event",
-            period_start=most_recent["occurred_at"],
-            period_end=most_recent["occurred_at"],
+            period_start=period,
+            period_end=period,
             source_id=most_recent["event_id"],
         )
         return HistoryAnswer(
             answer=agent_result.text,
             sources_used=(history_source,),
-            time_start=most_recent["occurred_at"],
-            time_end=most_recent["occurred_at"],
+            time_start=period,
+            time_end=period,
             total_events_matched=1,
         )
 

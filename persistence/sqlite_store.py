@@ -79,7 +79,7 @@ _OUTCOME_TO_NOTIFICATION_KINDS: dict[str, tuple[str, ...]] = {
     "succeeded": ("job_finished",),
     "declined": ("job_finished",),
     "failed": ("job_failed",),
-    "uncertain": ("job_finished", "uncertain_verdict"),
+    "uncertain": ("job_finished", "uncertain_verdict", "uncertain_verdict_reporter"),
     "closed_on_precedent": ("job_finished", "precedent_closure"),
     "no_match_protocol": ("job_finished", "no_match_notice"),
 }
@@ -431,11 +431,17 @@ class SQLitePersistence(PersistenceInterface):
             connection.close()
 
     def fetch_events_range(self, start, end) -> list[dict]:
+        # Same fix as `fetch_events_by_type_area_window` (DIAGNOSTIC_FINDINGS.MD
+        # A.2): this is `history.query.retrieve_range`'s raw-event fallback for
+        # a day/month/year with no rolled-up summary — used by both precedent
+        # lookback and the legacy narrative `query()` path, and by
+        # `history/summaries.py`'s own summary generation. An event with an
+        # unresolved occurred_at used to be silently excluded from all three.
         connection = self._read_connection()
         try:
             event_rows = connection.execute(
-                "SELECT * FROM events WHERE occurred_at IS NOT NULL AND occurred_at >= ? AND occurred_at < ? "
-                "ORDER BY occurred_at",
+                "SELECT * FROM events WHERE COALESCE(occurred_at, received_at) >= ? "
+                "AND COALESCE(occurred_at, received_at) < ? ORDER BY COALESCE(occurred_at, received_at)",
                 (start, end),
             ).fetchall()
             decoded_events = [_decode_event_row(event_row) for event_row in event_rows]
@@ -444,11 +450,17 @@ class SQLitePersistence(PersistenceInterface):
             connection.close()
 
     def fetch_events_by_type_area_window(self, event_type: str, area: str, window_start, window_end) -> list[dict]:
+        # Precedent-lookback fix, same root cause as the recency fix
+        # (DIAGNOSTIC_FINDINGS.MD A.2): a candidate event whose occurred_at is
+        # unresolved used to be silently excluded by the old
+        # `occurred_at IS NOT NULL` filter. COALESCE falls back to
+        # received_at (never null) instead of dropping such events.
         connection = self._read_connection()
         try:
             event_rows = connection.execute(
                 "SELECT * FROM events WHERE classification = ? AND area = ? "
-                "AND occurred_at IS NOT NULL AND occurred_at >= ? AND occurred_at < ? ORDER BY occurred_at",
+                "AND COALESCE(occurred_at, received_at) >= ? AND COALESCE(occurred_at, received_at) < ? "
+                "ORDER BY COALESCE(occurred_at, received_at)",
                 (event_type, area, window_start, window_end),
             ).fetchall()
             decoded_events = [_decode_event_row(event_row) for event_row in event_rows]

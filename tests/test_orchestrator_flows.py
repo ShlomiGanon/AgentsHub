@@ -1,5 +1,6 @@
 import json
 import types
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -11,8 +12,10 @@ from agents.runtime import build_agent_registry
 from auth.permissions import PermissionLevel
 from config.base import BaseConfig, TierModel
 from history.query import HistoryQueryService
+import orchestrator.flows as flows_module
 from orchestrator.flows import (
     FlowDeps,
+    apply_event_data_reply,
     assemble_core_agents,
     begin_report,
     begin_request,
@@ -25,8 +28,10 @@ from orchestrator.flows import (
     resolve_clarification,
     resume_after_approval,
     resume_after_clarification,
+    resume_after_event_data,
     run_report_extraction,
 )
+from orchestrator.holds import create_event_data_hold
 from orchestrator.insights import InsightsAgent
 from orchestrator.main_agent import MainAgent
 from persistence.sqlite_store import SQLitePersistence
@@ -198,18 +203,41 @@ def _happy_path_agent(risk_score="0.2", selected="status_check", verdict="succes
 
 
 def test_process_report_holds_for_clarification_when_classification_is_unresolved(deps):
-    agent = _ScriptedAgent({"Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}'})
+    """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 (item #6): an unresolved
+    classification now resolves to the built-in UNCLASSIFIED_TYPE, which
+    requires `area` — asked (via the event-data hold) before the clarification
+    hold that lets a commander pick a real classification exists at all."""
+    agent = _ScriptedAgent(
+        {
+            "Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}',
+            "Write one concise question": "Which area is this in?",
+        }
+    )
     insights_agent = _ScriptedAgent({})
 
     result = process_report(deps, agent, insights_agent, "something happened, unclear what", "telegram", "2026-08-20T10:00:00", "viewer-1")
 
-    assert result.outcome == "held_for_clarification"
+    assert result.outcome == "waiting_for_event_data"
+    assert deps.persistence.fetch_event(result.event_id)["classification"] == "unclassified"
+    [hold] = deps.persistence.list_held_events("event_data")
+    assert hold["missing_fields"] == ["area"]
+    assert deps.persistence.list_held_events("clarification") == []
+
+    deps.persistence.update_event(result.event_id, {"area": "north_sector"})
+    resumed = resume_after_event_data(deps, result.event_id, agent, insights_agent)
+
+    assert resumed.outcome == "held_for_clarification"
     [held] = deps.persistence.list_held_events("clarification")
     assert held["event_id"] == result.event_id
 
 
 def test_process_report_holds_for_clarification_logs_the_hold_kind(deps, caplog):
-    agent = _ScriptedAgent({"Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}'})
+    agent = _ScriptedAgent(
+        {
+            "Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}',
+            "Write one concise question": "Which area is this in?",
+        }
+    )
     insights_agent = _ScriptedAgent({})
 
     with caplog.at_level("INFO"):
@@ -217,13 +245,146 @@ def test_process_report_holds_for_clarification_logs_the_hold_kind(deps, caplog)
 
     holds = [r for r in caplog.records if getattr(r, "event", None) == "hold_created"]
     assert len(holds) == 1
-    assert holds[0].hold_kind == "clarification"
+    assert holds[0].hold_kind == "event_data"
     assert holds[0].event_id == result.event_id
 
     extraction = [r for r in caplog.records if getattr(r, "event", None) == "extraction_result"]
     assert len(extraction) == 1
     assert extraction[0].classification is None
     assert extraction[0].missing_fields  # unresolved classification is named as missing
+
+    caplog.clear()
+    deps.persistence.update_event(result.event_id, {"area": "north_sector"})
+    with caplog.at_level("INFO"):
+        resume_after_event_data(deps, result.event_id, agent, insights_agent)
+
+    resumed_holds = [r for r in caplog.records if getattr(r, "event", None) == "hold_created"]
+    assert len(resumed_holds) == 1
+    assert resumed_holds[0].hold_kind == "clarification"
+
+
+def test_required_fields_gate_asks_only_for_the_field_extraction_could_not_resolve(deps):
+    """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 (item #6): a profile-
+    defined event type's required fields are checked immediately after
+    extraction, before risk assessment or protocol selection ever run —
+    asking only for the one extraction couldn't resolve."""
+    gated_deps = replace(
+        deps,
+        event_type_registry=EventTypeRegistry(types=deps.event_type_registry.types, required_fields={"fire": ("area", "severity")}),
+    )
+    agent = _ScriptedAgent(
+        {
+            "Extract this operational event": '{"classification": "fire", "area": "north_sector", "entities": [], "description": "smoke", "severity": null, "occurred_at": "2026-08-20T09:00:00"}',
+            "Write one concise question": "How severe is it?",
+            "RISK_SCORE": "RISK_SCORE: 0.1\nREASON: r",  # must not be reached before the gate resolves
+        }
+    )
+    insights_agent = _ScriptedAgent({})
+
+    result = process_report(gated_deps, agent, insights_agent, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    assert result.outcome == "waiting_for_event_data"
+    [hold] = gated_deps.persistence.list_held_events("event_data")
+    assert hold["missing_fields"] == ["severity"]  # not "area" — already resolved by extraction
+    assert not any("RISK_SCORE" in call for call in agent.calls)  # risk assessment never ran
+
+
+def test_required_fields_gate_resumes_into_risk_assessment_once_resolved(deps):
+    """Once the gate's missing field is resolved, the event proceeds through
+    risk assessment and protocol selection exactly as it would have if the
+    field had been present from the start."""
+    gated_deps = replace(
+        deps,
+        event_type_registry=EventTypeRegistry(types=deps.event_type_registry.types, required_fields={"fire": ("area", "severity")}),
+    )
+    agent = _happy_path_agent(risk_score="0.1", selected="status_check")
+    agent._dispatch["Extract this operational event"] = (
+        '{"classification": "fire", "area": "north_sector", "entities": [], "description": "smoke", '
+        '"severity": null, "occurred_at": "2026-08-20T09:00:00"}'
+    )
+    agent._dispatch["Write one concise question"] = "How severe is it?"
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    result = process_report(gated_deps, agent, insights_agent, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    assert result.outcome == "waiting_for_event_data"
+
+    gated_deps.persistence.update_event(result.event_id, {"severity": "moderate"})
+    resumed = resume_after_event_data(gated_deps, result.event_id, agent, insights_agent)
+
+    assert resumed.outcome == "succeeded"
+    assert gated_deps.persistence.fetch_event(result.event_id)["selected_protocol"] == "status_check"
+
+
+def test_per_step_required_fields_still_work_alongside_the_new_event_type_gate(deps):
+    """The new, early, event-type-level gate (item #6) is additional to, not
+    a replacement for, the existing per-protocol-step required-field
+    mechanism (protocols/executor.py) — proves both fire correctly, end to
+    end, without interfering with each other."""
+    agent = _ScriptedAgent(
+        {
+            # classification="fire" has no event-type-level required fields
+            # declared in this fixture's plain registry — the new gate is a
+            # no-op here; the per-step mechanism below is what fires.
+            "Extract this operational event": (
+                '{"classification": "fire", "area": "north_sector", "entities": [], "description": "smoke", '
+                '"severity": "moderate", "occurred_at": "2026-08-20T09:00:00"}'
+            ),
+            "RISK_SCORE": "RISK_SCORE: 0.1\nREASON: r",
+            "Choose the protocol": "SELECTED: status_check\nREASON: fits",
+            "participating in the": json.dumps(
+                {
+                    "steps": [
+                        {
+                            "step_id": "s1",
+                            "agent_name": "reference_agent",
+                            "task": "check status",
+                            "depends_on": [],
+                            "required_event_fields": ["entities"],
+                        }
+                    ]
+                }
+            ),
+            "Write one concise question": "What entities are involved?",
+            "VERDICT:": "VERDICT: success\nREASONING: r",
+        }
+    )
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    result = process_report(deps, agent, insights_agent, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    assert result.outcome == "waiting_for_event_data"
+    [hold] = deps.persistence.list_held_events("event_data")
+    assert hold["missing_fields"] == ["entities"]
+    assert hold["waiting_step_ids"] == ["s1"]  # non-empty — this is a per-step hold, not the new gate's
+
+    deps.persistence.update_event(result.event_id, {"entities": ["gate-3"]})
+    resumed = resume_after_event_data(deps, result.event_id, agent, insights_agent)
+
+    assert resumed.outcome == "succeeded"
+
+
+def test_precedent_lookup_still_runs_when_the_target_events_occurred_at_is_unresolved(deps):
+    """DIAGNOSTIC_FINDINGS.MD A.2's related risk, fixed alongside the recency
+    bug: `_look_up_precedent_if_possible` used to skip precedent lookup
+    entirely whenever the *target* event's own occurred_at was unresolved
+    (`if event["occurred_at"] is None: return ()`), rather than falling back
+    to received_at as the lookback anchor. A real prior event is planted so
+    that a genuinely-skipped lookup (returns `()` unconditionally) is
+    distinguishable from one that ran and legitimately found nothing."""
+    prior_id = begin_report(deps, "fire near the north gate last week", "sensor", "2026-08-15T10:00:00", "sensor-1")
+    deps.persistence.update_event(
+        prior_id, {"classification": "fire", "area": "north_sector", "occurred_at": "2026-08-15T10:00:00", "outcome": "succeeded"}
+    )
+
+    event_id = begin_report(deps, "smoke near the north gate", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    deps.persistence.update_event(
+        event_id, {"classification": "fire", "area": "north_sector", "occurred_at": None}
+    )
+    event = deps.persistence.fetch_event(event_id)
+
+    matches = flows_module._look_up_precedent_if_possible(deps, event_id, event)
+
+    assert {match.event_id for match in matches} == {prior_id}
 
 
 def test_process_report_low_risk_unflagged_protocol_runs_to_success(deps, caplog):
@@ -319,10 +480,19 @@ def test_resume_after_clarification_continues_at_risk_assessment_not_extraction(
 
 
 def test_resume_after_clarification_rejects_free_text(deps):
-    agent = _ScriptedAgent({"Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}'})
+    agent = _ScriptedAgent(
+        {
+            "Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}',
+            "Write one concise question": "Which area is this in?",
+        }
+    )
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
 
-    process_report(deps, agent, insights_agent, "unclear text", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    result = process_report(deps, agent, insights_agent, "unclear text", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    # item #6's early gate asks for `area` (unclassified's required field)
+    # before the clarification hold this test actually exercises exists.
+    deps.persistence.update_event(result.event_id, {"area": "north_sector"})
+    resume_after_event_data(deps, result.event_id, agent, insights_agent)
     [hold] = deps.persistence.list_held_events("clarification")
 
     answer = resume_after_clarification(deps, agent, insights_agent, hold["hold_id"], "commander-1", PermissionLevel.COMMANDER, "not_a_real_type")
@@ -516,11 +686,53 @@ def test_begin_request_returns_immediately_with_no_model_call(deps):
     assert event["risk_level"] is None  # risk assessment hasn't run yet
 
 
+def test_apply_event_data_reply_refuses_to_guess_between_two_pending_holds_for_the_same_sender(deps):
+    """CRITICAL_FIXES_PLAN item 7: previously this silently picked the single
+    most-recently-created matching hold with no ambiguity check — a reply meant
+    for an earlier report could get misapplied to a different, newer one with no
+    indication it happened. Now it refuses to guess and reports every candidate.
+    """
+    older_event_id = begin_report(deps, "smoke near the north gate", "telegram", "2026-08-20T10:00:00", "viewer-1", conversation_id="c1")
+    newer_event_id = begin_report(deps, "smoke near the south gate", "telegram", "2026-08-20T10:05:00", "viewer-1", conversation_id="c1")
+    create_event_data_hold(deps.persistence, older_event_id, ("area",), "Which area?", ())
+    create_event_data_hold(deps.persistence, newer_event_id, ("area",), "Which area?", ())
+
+    result = apply_event_data_reply(deps, main_agent=None, reply_text="the north sector", sender_identity="viewer-1", conversation_id="c1")
+
+    assert result is not None
+    assert set(result.ambiguous_event_ids) == {older_event_id, newer_event_id}
+    assert result.updates == {}
+    assert result.event_id == ""
+
+
+def test_apply_event_data_reply_still_applies_normally_when_only_one_hold_is_pending(deps):
+    event_id = begin_report(deps, "smoke near the north gate", "telegram", "2026-08-20T10:00:00", "viewer-1", conversation_id="c1")
+    create_event_data_hold(deps.persistence, event_id, ("area",), "Which area?", ())
+    agent = _ScriptedAgent(
+        {"pending request for missing event details": '{"addresses_request": true, "updates": {"area": "north_sector"}, "reply_text": "Recorded."}'}
+    )
+
+    result = apply_event_data_reply(deps, main_agent=agent, reply_text="the north sector", sender_identity="viewer-1", conversation_id="c1")
+
+    assert result is not None
+    assert result.ambiguous_event_ids == ()
+    assert result.event_id == event_id
+
+
 def test_resolve_clarification_writes_the_answer_without_resuming(deps):
-    agent = _ScriptedAgent({"Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}'})
+    agent = _ScriptedAgent(
+        {
+            "Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}',
+            "Write one concise question": "Which area is this in?",
+        }
+    )
     insights_agent = _ScriptedAgent({})
 
     held = process_report(deps, agent, insights_agent, "unclear text", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    # item #6's early gate asks for `area` (unclassified's required field)
+    # before the clarification hold this test actually exercises exists.
+    deps.persistence.update_event(held.event_id, {"area": "north_sector"})
+    held = resume_after_event_data(deps, held.event_id, agent, insights_agent)
     [hold] = deps.persistence.list_held_events("clarification")
 
     answer = resolve_clarification(deps, hold["hold_id"], "commander-1", PermissionLevel.COMMANDER, "fire")

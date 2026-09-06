@@ -79,6 +79,10 @@ class LoadedProfile:
     conversation_history_turns: int = 0
     conversation_history_ttl_hours: int = 24
     optimization_policy: OptimizationPolicy = field(default_factory=OptimizationPolicy)
+    # Optional per-profile-event-type required-field declarations (item #6);
+    # defaults to no required fields for any type that doesn't declare any —
+    # backward compatible with every existing profile/fixture.
+    event_type_required_fields: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
 
 REQUIRED_PROFILE_ATTRS = (
     "PROFILE_NAME",
@@ -99,6 +103,16 @@ REQUIRED_PROFILE_ATTRS = (
 )
 
 HUMAN_ACTIVATION_TYPE = "human_activation"
+
+# `human_activation` is a source label (how a report arrived), not an event
+# type (what happened) — it carries no required fields of its own.
+# `UNCLASSIFIED_TYPE` is the actual built-in event type: the deterministic
+# fallback classification for a report that doesn't match any event type the
+# active profile declares. Its required fields are fixed in core code (not
+# profile-declared) so every deployment behaves the same way for this case.
+# (REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 / item #6.)
+UNCLASSIFIED_TYPE = "unclassified"
+UNCLASSIFIED_REQUIRED_FIELDS: tuple[str, ...] = ("area",)
 
 PROTOCOL_REQUIRED_ATTRS = (
     "name",
@@ -140,6 +154,24 @@ class AreaRegistry:
 @dataclass(frozen=True)
 class EventTypeRegistry:
     types: tuple[str, ...]
+    # Required-field declarations, keyed by event type — profile-defined types
+    # come from the profile's own EVENT_TYPE_REQUIRED_FIELDS; `UNCLASSIFIED_TYPE`
+    # is injected automatically by `profiles.loader.build_event_type_registry`,
+    # not profile-declared. Deliberately NOT keyed on `HUMAN_ACTIVATION_TYPE` —
+    # it is a source label, not a type with fields of its own.
+    required_fields: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
 
     def is_valid(self, event_type: str) -> bool:
         return event_type in self.types
+
+    def required_fields_for(self, event_type: str | None) -> tuple[str, ...]:
+        if event_type is None:
+            return ()
+        # UNCLASSIFIED_TYPE's required fields are fixed here, not read from
+        # `required_fields` — this way every EventTypeRegistry behaves
+        # identically regardless of whether it went through
+        # profiles.loader.build_event_type_registry or was constructed
+        # directly (as many test fixtures across this codebase do).
+        if event_type == UNCLASSIFIED_TYPE:
+            return UNCLASSIFIED_REQUIRED_FIELDS
+        return tuple(self.required_fields.get(event_type, ()))

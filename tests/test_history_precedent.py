@@ -40,6 +40,34 @@ def test_precedent_search_uses_summary_candidates_and_raw_gaps(tmp_path):
     finally:
         store.close()
 
+def test_precedent_search_includes_a_candidate_with_unresolved_occurred_at(tmp_path):
+    """DIAGNOSTIC_FINDINGS.MD A.2's related risk, now fixed alongside the
+    recency bug: a precedent candidate whose occurred_at is unresolved
+    (a Telegram/human report with no parseable time reference) used to be
+    silently excluded by `fetch_events_by_type_area_window`'s old
+    `occurred_at IS NOT NULL` filter — it must now be found via its
+    received_at instead. No summary is written for this day, so the search
+    falls through to the raw-event path this fix actually touches."""
+    db_path = str(tmp_path / "precedent_unresolved.db")
+    store = open_persistence(db_path)
+    try:
+        store.append_event({
+            "event_id": "unresolved-time", "received_at": "2026-08-19T09:00:00", "source": "telegram",
+            "sender_identity": "s", "occurred_at": None, "raw_text": "smoke reported, no time given",
+            "classification": "fire", "area": "north", "outcome": "succeeded",
+            "selected_protocol": "basic", "steps": [],
+        })
+        settings = SettingsStore(db_path, 1, 0.5, 30)
+        service = HistoryQueryService(store, UnusedAgent(), settings)
+
+        matches = service.search_precedents("target", "fire", "north", "2026-08-20T12:00:00")
+
+        assert {match.event_id for match in matches} == {"unresolved-time"}
+        assert next(match for match in matches if match.event_id == "unresolved-time").occurred_at is None
+    finally:
+        store.close()
+
+
 def test_precedent_search_logs_the_window_and_the_matches(tmp_path, caplog):
     db_path = str(tmp_path / "precedent_log.db")
     store = open_persistence(db_path)
@@ -106,6 +134,37 @@ def test_reconciliation_builds_bottom_up_and_is_idempotent(tmp_path):
         assert second == []
         scheduler.start()
         scheduler.stop()
+    finally:
+        store.close()
+
+
+def test_reconciliation_does_not_crash_on_an_event_with_unresolved_occurred_at(tmp_path):
+    """The real item #6 fix (DIAGNOSTIC_FINDINGS.MD A.2) made
+    `fetch_events_range` stop excluding events with `occurred_at=None` —
+    `reconcile()`'s per-period event filter must tolerate that instead of
+    crashing on `parse_timestamp(None)`."""
+    store = open_persistence(str(tmp_path / "scheduler-unresolved.db"))
+    try:
+        store.append_event({
+            "event_id": "e1", "received_at": "2025-08-15T10:00:00", "source": "sensor",
+            "sender_identity": "s", "occurred_at": "2025-08-15T10:00:00", "raw_text": "fire",
+            "classification": "fire", "area": "north", "outcome": "succeeded",
+        })
+        store.append_event({
+            "event_id": "e2-unresolved", "received_at": "2025-08-16T09:00:00", "source": "telegram",
+            "sender_identity": "s", "occurred_at": None, "raw_text": "smoke, no time given",
+            "classification": "fire", "area": "north",
+        })
+        scheduler = SummaryScheduler(
+            store,
+            FakeHistoryAgent(),
+            clock=lambda: datetime(2026, 2, 1, tzinfo=timezone.utc),
+            poll_interval_seconds=0.01,
+        )
+
+        actions = scheduler.reconcile()  # must not raise
+
+        assert [action.split(":")[0] for action in actions] == ["daily", "monthly", "yearly"]
     finally:
         store.close()
 

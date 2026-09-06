@@ -246,6 +246,22 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
             except Exception:
                 ctx.queue.release_reservation(reservation)
                 raise
+            if event_data_reply is not None and event_data_reply.ambiguous_event_ids:
+                ctx.queue.release_reservation(reservation)
+                answer = messages.text(
+                    "api.event_detail_ambiguous",
+                    count=str(len(event_data_reply.ambiguous_event_ids)),
+                )
+                _remember("assistant", answer)
+                return jsonify(
+                    {
+                        "taken_as": "clarification",
+                        "status": "ambiguous_event_data_hold",
+                        "pending_event_ids": list(event_data_reply.ambiguous_event_ids),
+                        "answer": answer,
+                    }
+                )
+
             if event_data_reply is not None:
                 event_id = event_data_reply.event_id
                 if not event_data_reply.updates:
@@ -989,6 +1005,12 @@ def _uncertain_verdict_payload(ctx: "ApiContext", event_id: str) -> dict:
     return {"event_id": event_id, "insight_text": event.get("insight_text") or ""}
 
 
+def _uncertain_verdict_reporter_payload(ctx: "ApiContext", event_id: str) -> dict:
+    # Deliberately carries no insight text — item #8's decision is a short,
+    # generic notice for the original reporter, not the commander-level detail.
+    return {"event_id": event_id}
+
+
 def _precedent_closure_payload(ctx: "ApiContext", event_id: str) -> dict:
     event = ctx.deps.persistence.fetch_event(event_id)
     matched_id = event["precedent_closed_by_event_id"]
@@ -1021,6 +1043,12 @@ def _job_payload(ctx: "ApiContext", event_id: str) -> dict:
         "steps_completed": _steps_completed(event),
         "failure_reason": event.get("outcome_failure_reason"),
         "failed_step_agent_name": _failed_step_agent_name(event),
+        # For the always-on protocol/reason suffix (item #9) — already computed
+        # during the run, no new model call. `protocol_name` is None whenever no
+        # protocol was ever selected (e.g. `no_match_protocol`).
+        "protocol_name": event.get("selected_protocol"),
+        "risk_level": event.get("risk_level"),
+        "protocol_reason": event.get("protocol_reason"),
     }
 
 
@@ -1029,6 +1057,7 @@ _PAYLOAD_BUILDERS = {
     "approval_hold": _approval_hold_payload,
     "event_data_hold": _event_data_hold_payload,
     "uncertain_verdict": _uncertain_verdict_payload,
+    "uncertain_verdict_reporter": _uncertain_verdict_reporter_payload,
     "precedent_closure": _precedent_closure_payload,
     "no_match_notice": _no_match_payload,
     "job_finished": _job_payload,
@@ -1039,7 +1068,7 @@ _PAYLOAD_BUILDERS = {
 def _target_chat_ids(ctx: "ApiContext", kind: str, event_id: str) -> list[str]:
     """Reporter-facing job and event-data notifications target the original submitter."""
 
-    if kind not in ("job_finished", "job_failed", "event_data_hold"):
+    if kind not in ("job_finished", "job_failed", "event_data_hold", "uncertain_verdict_reporter"):
         return []
 
     event = ctx.deps.persistence.fetch_event(event_id)
@@ -1049,7 +1078,7 @@ def _target_chat_ids(ctx: "ApiContext", kind: str, event_id: str) -> list[str]:
 def _reply_to_message_id(ctx: "ApiContext", kind: str, event_id: str) -> str | None:
     """Attach reporter-facing notifications to the originating Telegram message when available."""
 
-    if kind not in ("job_finished", "job_failed", "event_data_hold"):
+    if kind not in ("job_finished", "job_failed", "event_data_hold", "uncertain_verdict_reporter"):
         return None
 
     event = ctx.deps.persistence.fetch_event(event_id)

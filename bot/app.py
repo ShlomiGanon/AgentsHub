@@ -104,6 +104,32 @@ def _identity_and_chat_id(update) -> tuple[str, str]:
     return str(update.effective_user.id), str(update.effective_chat.id)
 
 
+def _bot_commands(catalog) -> list[tuple[str, str]]:
+    """The bot's command menu (Telegram's native "/" picker) — one (name, description) pair per
+    registered command, `/start` included even though it's also Telegram's own implicit first
+    action, so it's visible in the menu too rather than only working before any message exists."""
+
+    return [
+        ("start", catalog.text("command.menu_start")),
+        ("profile", catalog.text("command.menu_profile")),
+        ("settings", catalog.text("command.menu_settings")),
+    ]
+
+
+async def _on_start_command(update, context) -> None:
+    deps: BotDeps = context.bot_data["deps"]
+    telegram_identity, chat_id = _identity_and_chat_id(update)
+    messages = interactions.message_catalog_for(deps)
+
+    resolution = await resolve_caller(deps.api_client, telegram_identity, messages)
+    if resolution.status == "unregistered":
+        await deps.telegram_client.send_text(chat_id, resolution.refusal_message)
+        return
+
+    profile_name = getattr(deps.loaded_profile, "profile_name", None) or "AgentsHub"
+    await deps.telegram_client.send_text(chat_id, messages.text("bot.welcome", profile_name=profile_name))
+
+
 def _guarded(handler: Callable[..., Awaitable[None]]):
     """Wrap a handler so `ApiNotImplementedError` and any other unexpected exception become a clear chat reply rather than a crash — never a leaked stack trace, matching the spirit of..."""
 
@@ -181,11 +207,12 @@ async def _submit_and_format_message(
     if submission_result.job_id:
         return messages.text("status.async_ack", task_id=submission_result.job_id), submission_result
 
+    # Note: a truthy `submission_result.job_id` always returns above via the
+    # `status.async_ack` branch, so this fallback never has a job_id to report —
+    # only `awaiting_approval` (or neither) is reachable here.
     lines = [messages.text("bot.taken_as", kind=submission_result.kind)]
     if submission_result.awaiting_approval:
         lines.append(messages.text("bot.waiting_approval"))
-    elif submission_result.job_id:
-        lines.append(messages.text("bot.job_queued", job_id=submission_result.job_id))
     return "\n".join(lines), submission_result
 
 
@@ -270,7 +297,17 @@ async def present_incoming_message(
         )
         reply = messages.text("bot.not_available", reason=exc)
     except ApiRequestError as exc:
-        reply = messages.text("error.request_failed", reason=exc.message)
+        # "run_failure" (RunFailureError, 422) is the one API error class this codebase always
+        # raises from a raw internal/model-produced string (api/routes.py wraps
+        # OrchestrationParseError verbatim) rather than a deliberately-crafted, already-localized
+        # catalog message — the only class genuinely unsafe to show a caller directly. Every other
+        # ApiError subclass (InvalidInputError, NotFoundError, ConflictError,
+        # ServiceUnavailableError, ...) is raised with real catalog text throughout this codebase
+        # and stays exactly as informative as before (docs/IMPROVES/CRITICAL_FIXES_PLAN.MD item 4).
+        if exc.error_class == "run_failure":
+            reply = messages.text("error.run_failure_generic")
+        else:
+            reply = messages.text("error.request_failed", reason=exc.message)
     except Exception:
         logger.exception("unhandled error in message request", extra={"event": "bot_handler_failed"})
         reply = messages.text("bot.handler_error")
@@ -475,6 +512,7 @@ def register_handlers(application, deps: BotDeps) -> None:
     application.bot_data["deps"] = deps
 
     assert REGISTERED_COMMANDS == ("profile", "settings")
+    application.add_handler(CommandHandler("start", _guarded(_on_start_command)))
     application.add_handler(CommandHandler(REGISTERED_COMMANDS[0], _guarded(_on_profile_command)))
     application.add_handler(CommandHandler(REGISTERED_COMMANDS[1], _guarded(_on_settings_command)))
     application.add_handler(CallbackQueryHandler(_guarded(_on_callback_query)))
@@ -482,6 +520,12 @@ def register_handlers(application, deps: BotDeps) -> None:
 
     async def _post_init(started_application) -> None:
         await deps.api_client.start()
+        from telegram import BotCommand
+
+        messages = interactions.message_catalog_for(deps)
+        await started_application.bot.set_my_commands(
+            [BotCommand(name, description) for name, description in _bot_commands(messages)]
+        )
         cursor_store = NotificationCursorStore(Path(f"{deps.loaded_profile.db_path}.notification_cursor"))
         started_application.create_task(run_notification_poll_loop(deps, NOTIFICATION_POLL_INTERVAL_SECONDS, cursor_store=cursor_store))
 

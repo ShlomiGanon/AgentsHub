@@ -32,6 +32,7 @@ from bot.contracts import (
     SettingsView,
     TracePollResult,
     UncertainVerdictNotice,
+    UncertainVerdictReporterNotice,
     UserLookupResult,
 )
 
@@ -377,6 +378,8 @@ class HttpApiClient(BotApiClient):
             )
         if kind == "uncertain_verdict":
             return UncertainVerdictNotice(event_id=payload["event_id"], insight_text=payload["insight_text"])
+        if kind == "uncertain_verdict_reporter":
+            return UncertainVerdictReporterNotice(event_id=payload["event_id"])
         if kind == "precedent_closure":
             return PrecedentClosureNotice(
                 event_id=payload["event_id"],
@@ -400,6 +403,9 @@ class HttpApiClient(BotApiClient):
                 steps_completed=tuple(payload.get("steps_completed", ())),
                 failure_reason=payload.get("failure_reason"),
                 failed_step_agent_name=payload.get("failed_step_agent_name"),
+                protocol_name=payload.get("protocol_name"),
+                risk_level=payload.get("risk_level"),
+                protocol_reason=payload.get("protocol_reason"),
             )
         if kind == "job_failed":
             return FailureNotice(

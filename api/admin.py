@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING
 from flask import Blueprint, flash, get_flashed_messages, redirect, render_template_string, request, session, url_for
 
 from auth.permissions import PermissionLevel
+from messages import get_current_catalog
 from persistence import NotFoundError
 from tools import get_trace_id
 
@@ -124,52 +125,82 @@ def resolve_admin_config() -> AdminConfig | None:
 
 
 class LoginRateLimiter:
-    """In-memory, per-source-IP login lockout — reset on process restart, no shared store, which
-    is fine for the single-process deployment this whole panel already assumes (SingleInstanceLock
-    elsewhere in this codebase makes the same assumption).
+    """In-memory, GLOBAL login lockout for the whole `/admin/login` endpoint — one shared failure
+    count and one shared lockout state, deliberately not scoped per-IP or per-session.
 
-    Tracked per source IP, not per username: ADMIN_USERNAME is one shared credential for every
-    commander using this panel (there's no per-person admin account), so a per-username lockout
-    would let a single hostile — or even accidental — bad login from anywhere lock out every
-    legitimate commander at once. Per-IP contains a lockout to whoever is actually failing,
-    at the cost of not stopping a distributed attempt from many source IPs — an accepted
-    trade-off for a small deployment's admin panel, not a public-internet-scale defense.
+    Per-IP scoping was tried first and diagnosed
+    (docs/IMPROVES/ADMIN_LOGIN_LOCKOUT_DIAGNOSIS.MD): for this deployment's single shared
+    credential, it behaved identically to one global lock in every situation that actually
+    mattered — any two visitors sharing an observed source address (the common case behind a
+    reverse proxy, a NAT'd office network, or just testing from localhost) already shared one
+    lockout bucket. Global is now the intended design, not a bug to route around — do not
+    reintroduce IP (or session) scoping here, even as a fallback.
+
+    Reset on process restart, no shared store — fine for the single-process deployment this whole
+    panel already assumes (SingleInstanceLock elsewhere in this codebase makes the same
+    assumption).
+
+    Storage is deliberately minimal: one failure count, and one lockout timestamp. There is no
+    separate "locked" boolean and no separately-maintained "remaining time" value — whether the
+    endpoint is currently locked out, and for how much longer, is always computed fresh from
+    `_locked_at_monotonic` at the moment it's asked (`remaining_minutes`), never cached or updated
+    on a timer. `time.monotonic()` is used only because that's what Python's clock returns
+    seconds in; the lockout *duration* itself (`_lockout_minutes`) is defined in minutes from the
+    start and never derived from a seconds-based constant.
     """
 
     def __init__(self, max_attempts: int, lockout_minutes: int):
         self._max_attempts = max_attempts
-        self._lockout_seconds = lockout_minutes * 60
+        self._lockout_minutes = lockout_minutes
         self._lock = threading.Lock()
-        self._failure_counts: dict[str, int] = {}
-        self._locked_until: dict[str, float] = {}
+        self._failure_count = 0
+        self._locked_at_monotonic: float | None = None
 
-    def locked_out_for(self, source: str) -> float:
-        """Seconds remaining locked out, or 0.0 if not currently locked out."""
+    def _remaining_minutes_locked(self) -> float:
+        """Caller must hold self._lock. May be negative once the lockout has expired."""
+
+        elapsed_minutes = (time.monotonic() - self._locked_at_monotonic) / 60
+        return self._lockout_minutes - elapsed_minutes
+
+    def remaining_minutes(self) -> float:
+        """Minutes remaining locked out right now, or 0.0 if not locked out — always a live
+        computation from the one stored timestamp (see class docstring), never a stored value."""
 
         with self._lock:
-            locked_until = self._locked_until.get(source)
-            if locked_until is None:
+            if self._locked_at_monotonic is None:
                 return 0.0
-            remaining = locked_until - time.monotonic()
+            remaining = self._remaining_minutes_locked()
             if remaining <= 0:
-                self._locked_until.pop(source, None)
-                self._failure_counts.pop(source, None)
+                self._locked_at_monotonic = None
+                self._failure_count = 0
                 return 0.0
             return remaining
 
-    def record_failure(self, source: str) -> None:
-        with self._lock:
-            count = self._failure_counts.get(source, 0) + 1
-            if count >= self._max_attempts:
-                self._locked_until[source] = time.monotonic() + self._lockout_seconds
-                self._failure_counts.pop(source, None)
-            else:
-                self._failure_counts[source] = count
+    def record_failure(self) -> float:
+        """Record one failed attempt. Returns the minutes remaining locked out AFTER this
+        failure — 0.0 if this failure did not trigger a lockout, a positive value if it did (or
+        if the endpoint was already locked out), so the caller can tell whether THIS specific
+        attempt is the one that just crossed the threshold and show the right message for it."""
 
-    def record_success(self, source: str) -> None:
         with self._lock:
-            self._failure_counts.pop(source, None)
-            self._locked_until.pop(source, None)
+            if self._locked_at_monotonic is not None:
+                remaining = self._remaining_minutes_locked()
+                if remaining > 0:
+                    return remaining
+                self._locked_at_monotonic = None
+                self._failure_count = 0
+
+            self._failure_count += 1
+            if self._failure_count >= self._max_attempts:
+                self._locked_at_monotonic = time.monotonic()
+                self._failure_count = 0
+                return self._lockout_minutes
+            return 0.0
+
+    def record_success(self) -> None:
+        with self._lock:
+            self._failure_count = 0
+            self._locked_at_monotonic = None
 
 
 _BOOTSTRAP_CSS_LINK = (
@@ -424,6 +455,18 @@ _LOGIN_STYLE = """
     padding: 10px 14px;
     margin-bottom: 20px;
   }
+  .lockout-progress-track {
+    margin-top: 10px;
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(154, 48, 43, 0.18);
+    overflow: hidden;
+  }
+  .lockout-progress-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: var(--danger);
+  }
 
   .btn-console-primary {
     background: var(--commander);
@@ -471,9 +514,20 @@ _LOGIN_TEMPLATE = """<!DOCTYPE html>
     <h1>Admin sign in</h1>
     <p class="subtitle">Bot control panel</p>
 
-    {% for category, message in get_flashed_messages(with_categories=true) %}
-      <div class="alert-console-error">{{ message }}</div>
-    {% endfor %}
+    {% if lockout %}
+      <div class="alert-console-error">
+        {{ lockout.message }}
+        <div class="lockout-progress-track" role="progressbar"
+             aria-valuenow="{{ lockout.percent_elapsed }}" aria-valuemin="0" aria-valuemax="100"
+             aria-label="Lockout time elapsed">
+          <div class="lockout-progress-fill" style="width: {{ lockout.percent_elapsed }}%;"></div>
+        </div>
+      </div>
+    {% else %}
+      {% for category, message in get_flashed_messages(with_categories=true) %}
+        <div class="alert-console-error">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
 
     <form id="loginForm" method="post">
       <div class="field-group">
@@ -596,7 +650,32 @@ _DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 
 
 def _client_source() -> str:
+    """For audit logging only (who attempted/failed a login) — never used to scope the lockout
+    itself; see LoginRateLimiter's docstring for why lockout state is deliberately global."""
+
     return request.remote_addr or "unknown"
+
+
+def _format_duration_phrase(remaining_minutes: float) -> str:
+    """A coarse, human-friendly phrase for a remaining lockout duration — minutes and hours only,
+    never seconds, and never derived from a live-ticking value (the caller passes one snapshot of
+    `LoginRateLimiter.remaining_minutes()`, computed once for this page load/response)."""
+
+    catalog = get_current_catalog()
+    if remaining_minutes < 1:
+        return catalog.text("admin.lockout_less_than_a_minute")
+    if remaining_minutes < 60:
+        minutes = max(1, round(remaining_minutes))
+        if minutes == 1:
+            return catalog.text("admin.lockout_one_minute")
+        return catalog.text("admin.lockout_minutes", minutes=minutes)
+    # Nearest half hour reads more naturally for a coarse wait estimate than a raw minute count
+    # (e.g. "about 1.5 hours" rather than "about 90 minutes") — doesn't need to be exact.
+    hours = round(remaining_minutes / 30) / 2
+    if hours <= 1:
+        return catalog.text("admin.lockout_one_hour")
+    hours_value: float | int = int(hours) if hours == int(hours) else hours
+    return catalog.text("admin.lockout_hours", hours=hours_value)
 
 
 def _issue_session(config: AdminConfig) -> None:
@@ -631,6 +710,34 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         session["last_activity"] = time.time()
         return None
 
+    def _lockout_context(remaining_minutes: float) -> dict:
+        """Template values for the lockout banner + its static elapsed/remaining progress bar —
+        recomputed fresh from `remaining_minutes` every call (see LoginRateLimiter's docstring:
+        there is no stored "remaining time", only a live computation from one timestamp)."""
+
+        duration = config.login_lockout_minutes
+        elapsed = max(0.0, duration - remaining_minutes)
+        percent_elapsed = min(100, max(0, round(elapsed / duration * 100)))
+        return {
+            "message": get_current_catalog().text(
+                "admin.login_locked_out", duration=_format_duration_phrase(remaining_minutes)
+            ),
+            "percent_elapsed": percent_elapsed,
+        }
+
+    def _render_login():
+        """The single place that renders the login page — a plain GET and a failed POST both
+        redirect here (Post/Redirect/Get, so a browser refresh never resubmits credentials), and
+        this is the only place that decides what to show: a locked-out endpoint always shows the
+        lockout banner (recomputed live), taking precedence over any queued flash message; only
+        when not locked out does a queued flash (wrong credentials, session expired, ...) render."""
+
+        remaining = rate_limiter.remaining_minutes()
+        if remaining > 0:
+            get_flashed_messages()  # discard — the lockout banner takes precedence, never both
+            return render_template_string(_LOGIN_TEMPLATE, lockout=_lockout_context(remaining))
+        return render_template_string(_LOGIN_TEMPLATE, lockout=None)
+
     def _require_csrf():
         """None if the submitted csrf_token matches this session's; otherwise a redirect the
         route must return immediately. Checked as bytes (see api/request_boundary.py's identical
@@ -651,17 +758,16 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         if request.method == "GET":
             if session.get("admin_authenticated") and not _session_expired():
                 return redirect(url_for("admin.dashboard"))
-            return render_template_string(_LOGIN_TEMPLATE)
+            return _render_login()
 
-        source = _client_source()
-        remaining = rate_limiter.locked_out_for(source)
+        source = _client_source()  # audit logging only — the lockout itself is global, see above
+        remaining = rate_limiter.remaining_minutes()
         if remaining > 0:
             logger.info(
                 "admin login attempt while locked out",
                 extra={"event": "admin_login_locked_out", "source_ip": source, "trace_id": get_trace_id()},
             )
-            flash(f"Too many failed attempts — try again in {int(remaining // 60) + 1} minute(s).", "error")
-            return render_template_string(_LOGIN_TEMPLATE)
+            return redirect(url_for("admin.login"))
 
         submitted_username = request.form.get("username", "")
         submitted_password = request.form.get("password", "")
@@ -669,7 +775,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         password_ok = hmac.compare_digest(submitted_password.encode("utf-8"), config.password.encode("utf-8"))
 
         if username_ok and password_ok:
-            rate_limiter.record_success(source)
+            rate_limiter.record_success()
             _issue_session(config)
             logger.info(
                 "admin login succeeded",
@@ -677,7 +783,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             )
             return redirect(url_for("admin.dashboard"))
 
-        rate_limiter.record_failure(source)
+        remaining_after_failure = rate_limiter.record_failure()
         logger.warning(
             "admin login failed",
             extra={
@@ -685,9 +791,14 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
                 "attempted_username": submitted_username, "trace_id": get_trace_id(),
             },
         )
-        # Deliberately generic — never says which of username/password was wrong.
-        flash("Wrong username or password.", "error")
-        return render_template_string(_LOGIN_TEMPLATE)
+        if remaining_after_failure <= 0:
+            # Deliberately generic — never says which of username/password was wrong.
+            flash(get_current_catalog().text("admin.login_wrong_credentials"), "error")
+        # else: this failure just crossed the lockout threshold. Don't flash the generic message
+        # for it — the redirect below re-renders via _render_login(), which recomputes
+        # remaining_minutes() fresh and shows the lockout banner instead, so the one attempt that
+        # actually causes a lockout tells the user that, not "you mistyped your password."
+        return redirect(url_for("admin.login"))
 
     @blueprint.route("/logout", methods=["POST"])
     def logout():

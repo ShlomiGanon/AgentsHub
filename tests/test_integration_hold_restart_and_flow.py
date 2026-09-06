@@ -100,6 +100,11 @@ def test_events_behind_a_held_event_continue_processing_while_it_waits(tmp_path)
     agent._dispatch["Extract this operational event"] = (
         '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}'
     )
+    # An unresolved classification now resolves to the built-in "unclassified"
+    # event type, which requires `area` — asked (via the event-data gate,
+    # REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 / item #6) before this
+    # event would ever reach a clarification hold.
+    agent._dispatch["Write one concise question"] = "Which area is this in?"
 
     ctx = build_context(tmp_path, main_agent=agent)
     with RunningApiServer(ctx) as server:
@@ -110,7 +115,7 @@ def test_events_behind_a_held_event_continue_processing_while_it_waits(tmp_path)
         ctx.queue.wait_until_idle()
 
         held_event = ctx.deps.persistence.fetch_event(held_result["event_id"])
-        assert held_event["clarification_held"] is True
+        assert not ctx.deps.persistence.fetch_held_event("event_data", held_result["event_id"])["resolved"]
         assert held_event["outcome"] is None  # still pending, not abandoned
 
         # Now switch the scripted agent to a normal, non-holding response
