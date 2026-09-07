@@ -156,12 +156,36 @@ class Agent:
         return self.descriptor.tools
 
     def process(self, text: str, allowed_tools: list[str], *, invocation_policy: InvocationPolicy | None = None) -> AgentResult:
-        token = _current_allowed_tools.set(frozenset(allowed_tools))
+        allowed = frozenset(allowed_tools)
+        exposed_by_name = {tool_info.name: tool_info for tool_info in self.descriptor.tools}
+        unknown = sorted(allowed - exposed_by_name.keys())
+        if unknown:
+            raise AgentInvocationError(
+                self.name,
+                f"task allows tools not exposed by this agent: {', '.join(unknown)}",
+                trace_id=get_trace_id(),
+            )
+
+        # Build an invocation-scoped descriptor so disallowed tools are not sent
+        # to the model at all. The ContextVar remains the enforcement boundary
+        # for a tool call already in flight, while this removes irrelevant tool
+        # schemas from the prompt and prevents accidental tool selection.
+        invocation_descriptor = AgentDescriptor(
+            name=self.descriptor.name,
+            role=self.descriptor.role,
+            system_prompt=self.descriptor.system_prompt,
+            tools=tuple(tool_info for tool_info in self.descriptor.tools if tool_info.name in allowed),
+            model=self.descriptor.model,
+            api_key=self.descriptor.api_key,
+        )
+        invocation_tools = {name: wrapped for name, wrapped in self._wrapped_tools.items() if name in allowed}
+
+        token = _current_allowed_tools.set(allowed)
         try:
             if invocation_policy is None:
-                raw_text = invoke(self.descriptor, self._wrapped_tools, text, self.timeout_seconds)
+                raw_text = invoke(invocation_descriptor, invocation_tools, text, self.timeout_seconds)
             else:
-                raw_text = invoke(self.descriptor, self._wrapped_tools, text, self.timeout_seconds, invocation_policy)
+                raw_text = invoke(invocation_descriptor, invocation_tools, text, self.timeout_seconds, invocation_policy)
             return parse_agent_output(raw_text)
         finally:
             _current_allowed_tools.reset(token)
