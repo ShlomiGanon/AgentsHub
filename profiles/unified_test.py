@@ -545,6 +545,7 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
         unavailable_until = None
         if normalized == "unavailable":
             unavailable_until = (now_dt + timedelta(days=unavailable_days)).isoformat()
+        stored_reason = reason.strip() if normalized == "unavailable" else None
 
         try:
             stored_response = self.status_store.record_response(
@@ -553,7 +554,7 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
                 availability=normalized,
                 original_text=original_text,
                 received_at=now_dt.isoformat(),
-                reason=reason or None,
+                reason=stored_reason,
                 unavailable_until=unavailable_until,
             )
         except Exception as exc:

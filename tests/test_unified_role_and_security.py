@@ -548,6 +548,36 @@ def test_team_status_does_not_invent_a_name_for_legacy_placeholder(tmp_path, mon
     assert "דן" not in roster and "יוסי" not in roster and "מיכל" not in roster
 
 
+def test_available_attendance_discards_stale_unavailability_fields(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from agents import authenticated_request_identity
+    from profiles import unified_test
+
+    status_path = str(tmp_path / "team-status-available-normalization.db")
+    monkeypatch.setattr(unified_test.UnifiedTeamStatusAgent, "status_db_path", status_path)
+    agent = unified_test.UnifiedTeamStatusAgent(model="mock")
+    opened = datetime.now(timezone.utc)
+    agent.status_store.register_member("1001", "דן לוי", opened.isoformat())
+    agent.status_store.approve_roster("commander", opened.isoformat())
+    agent.status_store.open_cycle(
+        opened.date().isoformat(), opened.isoformat(), (opened + timedelta(hours=1)).isoformat()
+    )
+
+    with authenticated_request_identity("1001"):
+        result = agent.record_attendance_response(
+            source_message_id="available-with-stale-fields",
+            availability="available",
+            reason="שדה שאריתי שאסור לשמור",
+            unavailable_days=3,
+        )
+
+    assert result == "✅ הזמינות שלך עודכנה. אתה מסומן כזמין לכוננות."
+    [member] = agent.status_store.availability_snapshot((opened + timedelta(minutes=1)).isoformat())
+    assert member["availability"] == "available"
+    assert member["reason"] is None
+    assert member["unavailable_until"] is None
+
+
 def test_all_commander_and_viewer_buttons_mapped(unified_env):
     """Verifies that every single button across Commander and Viewer keyboards maps to expected behavior."""
     import asyncio
