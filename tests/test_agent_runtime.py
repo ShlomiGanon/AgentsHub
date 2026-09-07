@@ -8,9 +8,10 @@ import pytest
 
 from agents import adapter
 from agents.runtime import AgentDescriptor
-from agents import InvocationPolicy, ProviderCapabilities
+from agents import Agent, InvocationPolicy, ProviderCapabilities, tool
 from agents.errors import (
     AgentFrameworkNotReadyError,
+    AgentInvocationError,
     AgentModelError,
     AgentOutputParseError,
     AgentTimeoutError,
@@ -64,6 +65,42 @@ def _descriptor(**overrides):
 
 def _runtime_agent(**descriptor_overrides):
     return types.SimpleNamespace(descriptor=_descriptor(**descriptor_overrides))
+
+
+class _ScopedToolAgent(Agent):
+    name = "scoped"
+    role = "scoped test agent"
+    system_prompt = "Use only the tools provided for this invocation."
+
+    @tool("first", "First test tool.", side_effecting=False)
+    def first(self):
+        return "first"
+
+    @tool("second", "Second test tool.", side_effecting=False)
+    def second(self):
+        return "second"
+
+
+def test_process_exposes_only_tools_allowed_for_this_invocation(monkeypatch):
+    captured = {}
+
+    def fake_invoke(descriptor, wrapped_tools, text, timeout_seconds, invocation_policy=None):
+        captured["tool_descriptors"] = tuple(tool_info.name for tool_info in descriptor.tools)
+        captured["wrapped_tools"] = tuple(wrapped_tools)
+        return "ok"
+
+    monkeypatch.setattr(adapter, "invoke", fake_invoke)
+    result = _ScopedToolAgent("test-model").process("use first", ["first"])
+
+    assert result.text == "ok"
+    assert captured == {"tool_descriptors": ("first",), "wrapped_tools": ("first",)}
+
+
+def test_process_rejects_unknown_allowed_tool_before_model_call(monkeypatch):
+    monkeypatch.setattr(adapter, "invoke", lambda *args, **kwargs: pytest.fail("model must not be called"))
+
+    with pytest.raises(AgentInvocationError, match="not exposed"):
+        _ScopedToolAgent("test-model").process("x", ["missing"])
 
 
 # -- crewai not installed --------------------------------------------------

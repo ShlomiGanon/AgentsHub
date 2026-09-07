@@ -22,21 +22,29 @@ def test_surveillance_profile_loads_with_isolated_databases(monkeypatch, tmp_pat
 
 
 def test_surveillance_profile_protocols_and_attributes():
-    assert len(profile_module.PROTOCOLS) == 3
+    assert len(profile_module.PROTOCOLS) == 7
     protocol_map = {p.name: p for p in profile_module.PROTOCOLS}
 
-    assert "query_surveillance_status" in protocol_map
-    query_proto = protocol_map["query_surveillance_status"]
+    assert "query_camera_status" in protocol_map
+    query_proto = protocol_map["query_camera_status"]
     assert "get_camera_feeds" in query_proto.approved_tools
-    assert "get_drone_fleet_status" in query_proto.approved_tools
-    assert "get_active_missions" in query_proto.approved_tools
+    assert query_proto.approved_tools == ("get_camera_feeds",)
     assert query_proto.approval_flag is False
+
+    assert protocol_map["query_drone_fleet_status"].approved_tools == ("get_drone_fleet_status",)
+    assert protocol_map["query_active_drone_missions"].approved_tools == ("get_active_missions",)
+    assert protocol_map["query_surveillance_overview"].approved_tools == ("get_surveillance_overview",)
 
     assert "dispatch_drone_to_incident" in protocol_map
     dispatch_proto = protocol_map["dispatch_drone_to_incident"]
-    assert "dispatch_drone_to_area" in dispatch_proto.approved_tools
+    assert dispatch_proto.approved_tools == ("dispatch_drone_to_area",)
+    assert dispatch_proto.approval_flag is True
 
     assert "surveillance_area_scan" in protocol_map
+    assert protocol_map["surveillance_area_scan"].approved_tools == ("get_surveillance_overview",)
+    assert protocol_map["update_camera_observation"].approval_flag is True
+    assert profile_module.MAX_ITER == 2
+    assert profile_module.RETRY_COUNT == 1
 
     assert profile_module.BOT_TOKEN_ENV in ("SURVEILLANCE_BOT_TOKEN", "BOT_TOKEN")
     assert profile_module.SURVEILLANCE_CHAT_ID_ENV in ("SURVEILLANCE_CHAT_ID", "TEAM_STATUS_CHAT_ID")

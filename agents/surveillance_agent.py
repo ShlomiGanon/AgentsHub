@@ -20,7 +20,7 @@ class SurveillanceAgent(Agent):
 
     name = "surveillance_agent"
     role = (
-        "Maintains real-time visual situational awareness across all sectors. Monitors security "
+        "Maintains real-time visual surveillance and situational awareness across all sectors. Monitors security "
         "cameras, reports visual feeds, checks drone fleet availability, dispatches tactical drones "
         "to incident locations, and tracks active airborne missions."
     )
@@ -32,6 +32,10 @@ class SurveillanceAgent(Agent):
         "When asked about cameras: state general status, then list only relevant cameras in compact single-line bullets. "
         "If asked about a specific camera or area, report ONLY on that camera or area. "
         "When asked about drones or dispatch: give only essential tactical facts (Callsign, Status, Battery, Location/Target, ETA). "
+        "Call exactly one tool unless the task explicitly requests multiple distinct data sets. "
+        "Never broaden an area, camera, drone, or mission filter beyond the scope explicitly requested. "
+        "Never dispatch a drone or update an observation unless the task explicitly requests that exact state change. "
+        "Do not repeat a tool call with the same arguments; treat the first successful result as authoritative for this request. "
         "Highlight anomalies or security events first."
     )
 
