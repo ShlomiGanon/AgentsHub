@@ -783,12 +783,20 @@ def formulate_tasks(
                         planned.get("step_id"), planned.get("agent_name"), planned.get("task"), planned.get("depends_on"),
                         planned.get("required_event_fields", []),
                     )
+                    if isinstance(step_id, (int, float)):
+                        step_id = str(step_id)
+                    elif not step_id or not isinstance(step_id, str):
+                        step_id = f"step_{len(steps) + 1}"
                     if not isinstance(step_id, str) or not step_id or step_id in seen_ids:
                         raise OrchestrationParseError("formulated step_id values must be unique non-empty strings")
                     if agent_name not in descriptor_by_name or agent_name in seen_agents:
                         raise OrchestrationParseError("formulation must name each participating agent exactly once")
                     if not isinstance(task_text, str) or not task_text.strip():
                         raise OrchestrationParseError("formulated task must be non-empty")
+                    if isinstance(dependencies, list):
+                        dependencies = [str(d) if isinstance(d, (int, float)) else d for d in dependencies]
+                    elif dependencies is None:
+                        dependencies = []
                     if not isinstance(dependencies, list) or any(dependency not in seen_ids for dependency in dependencies):
                         raise OrchestrationParseError("step dependencies must name earlier formulated steps")
                     if (
@@ -1672,3 +1680,39 @@ def answer_question(
         raise OrchestrationParseError(f"answer composition did not produce a usable response: {compose_result.text}")
 
     return compose_result.text
+
+
+def _build_multi_agent_synthesis_prompt(protocol: Protocol, step_outcomes: tuple["StepOutcome", ...], raw_text: str = "") -> str:
+    sub_answers = "\n\n".join(f"[{outcome.step.agent_name}]:\n{outcome.result_text}" for outcome in step_outcomes if outcome.result_text)
+    return (
+        f"You are the CORE Commander Orchestrator. The following specialist agents completed their operational checks for '{protocol.name}':\n\n"
+        f"{sub_answers}\n\n"
+        f"User request: {raw_text or protocol.description}\n\n"
+        "Synthesize these specialist reports into a single, unified, concise operational situational picture in Hebrew (at most 4-5 lines).\n"
+        "Do NOT present a separate list of reports for each agent. Merge them into a single coherent picture for the commander in Hebrew.\n"
+        "Respond ONLY with the final Hebrew synthesized response."
+    )
+
+
+def synthesize_operational_picture(
+    main_agent: MainAgent,
+    protocol: Protocol,
+    step_outcomes: tuple["StepOutcome", ...],
+    raw_text: str = "",
+) -> str:
+    valid_outcomes = [o for o in step_outcomes if o.result_text and o.succeeded]
+    if not valid_outcomes:
+        return ""
+    if len(valid_outcomes) == 1:
+        return valid_outcomes[0].result_text or ""
+
+    with stage_context("multi_agent_synthesis"):
+        prompt = _build_multi_agent_synthesis_prompt(protocol, tuple(valid_outcomes), raw_text)
+        result = main_agent.process(
+            prompt,
+            [],
+            invocation_policy=InvocationPolicy(max_output_tokens=350, timeout_seconds=45.0, reasoning_effort="none"),
+        )
+    if result.status == "success" and result.text.strip():
+        return result.text.strip()
+    return ""

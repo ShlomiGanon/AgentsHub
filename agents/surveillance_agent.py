@@ -172,13 +172,17 @@ class SurveillanceAgent(Agent):
         if not incident_description.strip():
             return "Clarification required: incident_description is required for drone mission dispatch."
 
+        _SENTINEL_IDS = {"auto", "none", "null", "n/a", "-", "automatic", "any", "best", "default"}
+        cleaned_drone_id = specific_drone_id.strip()
+        if cleaned_drone_id.lower() in _SENTINEL_IDS:
+            cleaned_drone_id = ""
         try:
             mission = self.surveillance_store.dispatch_drone(
                 target_area=target_area.strip(),
                 incident_description=incident_description.strip(),
                 mission_type=mission_type.strip() or "recon",
                 dispatched_by=dispatched_by.strip() or "commander",
-                specific_drone_id=specific_drone_id.strip() or None,
+                specific_drone_id=cleaned_drone_id or None,
             )
         except SurveillancePersistenceError as exc:
             return f"Drone dispatch failed: {exc}"

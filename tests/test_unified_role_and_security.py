@@ -55,6 +55,12 @@ def test_unified_profile_structure_and_contracts(unified_env):
     # Read-only protocols must not require confirmation or commander only
     assert proto_map["query_surveillance_overview"].commander_only is False
     assert proto_map["query_surveillance_overview"].requires_confirmation is False
+    assert proto_map["overall_situational_picture"].commander_only is False
+    assert proto_map["overall_situational_picture"].requires_confirmation is False
+    assert set(proto_map["overall_situational_picture"].participating_agents) == {"surveillance_agent", "team_status_agent"}
+    assert set(proto_map["overall_situational_picture"].approved_tools) == {
+        "get_surveillance_overview", "get_team_status_roster", "report_team_availability"
+    }
     assert proto_map["query_drone_fleet_status"].commander_only is False
     assert proto_map["report_team_availability"].commander_only is False
 
@@ -503,6 +509,64 @@ def test_compact_formatting_for_unified_protocols():
     assert "הזנקת רחפן הושלמה בהצלחה" in formatted
     assert "Verbose insights" not in formatted
     assert "מה בוצע:" not in formatted
+
+
+def test_overall_situational_picture_format_job_result():
+    from bot.interactions import format_job_result
+    from bot.contracts import JobResult
+    from messages import get_catalog
+
+    catalog = get_catalog("he")
+    job = JobResult(
+        job_id="job-multi-1",
+        outcome="succeeded",
+        protocol_name="overall_situational_picture",
+        steps_completed=(
+            "surveillance_agent: 📊 תמונת מצב תצפיתית כוללת:\n• מצלמות אבטחה: 4/4 פעילות.\n• מערך רחפנים: 2 מוכנים לשיגור.",
+            "team_status_agent: 👥 סטטוס כיתת כוננות (סה\"כ 12 לוחמים):\n• זמינים לפעילות (8): ישראל, דוד, יוסי.",
+        ),
+    )
+    formatted = format_job_result(job, catalog)
+    assert "job-multi-1" in formatted
+    assert "מצלמות אבטחה: 4/4 פעילות" in formatted
+    assert "סטטוס כיתת כוננות" in formatted
+
+    # When insight_text contains the Orchestrator's synthesized Hebrew response,
+    # it must be displayed directly as the unified operational output.
+    job_with_synthesis = JobResult(
+        job_id="job-multi-2",
+        outcome="succeeded",
+        protocol_name="overall_situational_picture",
+        steps_completed=(
+            "surveillance_agent: raw surveillance debug data",
+            "team_status_agent: raw team status debug data",
+        ),
+        insight_text="תמונת מצב אחודה: 4 מצלמות פעילות בגזרה, 2 רחפנים בכוננות, ו-8 לוחמים זמינים בכיתת הכוננות.",
+    )
+    formatted_synth = format_job_result(job_with_synthesis, catalog)
+    assert "job-multi-2" in formatted_synth
+    assert "תמונת מצב אחודה" in formatted_synth
+    assert "raw surveillance debug data" not in formatted_synth
+    assert "raw team status debug data" not in formatted_synth
+
+
+def test_open_approval_holds_tracking():
+    from bot.interactions import register_open_approval_hold, unregister_open_approval_hold, get_open_approval_holds
+
+    register_open_approval_hold("evt-100")
+    register_open_approval_hold("evt-200")
+    holds = get_open_approval_holds()
+    assert "evt-100" in holds
+    assert "evt-200" in holds
+
+    unregister_open_approval_hold("evt-100")
+    holds_after = get_open_approval_holds()
+    assert "evt-100" not in holds_after
+    assert "evt-200" in holds_after
+
+    unregister_open_approval_hold("evt-200")
+    assert get_open_approval_holds() == []
+
 
 
 

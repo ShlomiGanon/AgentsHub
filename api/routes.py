@@ -792,7 +792,10 @@ def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.VIEW_COMMANDER_ROSTER)
 
-        commanders = [u for u in ctx.deps.persistence.list_users() if u["permission_level"] == "commander"]
+        commanders = [
+            u for u in ctx.deps.persistence.list_users()
+            if u["permission_level"] == "commander" and u["telegram_identity"] != "bot-service"
+        ]
         return jsonify({"commanders": [{"telegram_identity": u["telegram_identity"]} for u in commanders]})
 
     return blueprint
@@ -1138,13 +1141,16 @@ _PAYLOAD_BUILDERS = {
 
 
 def _target_chat_ids(ctx: "ApiContext", kind: str, event_id: str) -> list[str]:
-    """Reporter-facing job and event-data notifications target the original submitter."""
+    """Reporter-facing job, hold and event-data notifications target the original submitter."""
 
-    if kind not in ("job_finished", "job_failed", "event_data_hold", "uncertain_verdict_reporter"):
+    if kind not in ("job_finished", "job_failed", "event_data_hold", "uncertain_verdict_reporter", "approval_hold", "clarification_hold"):
         return []
 
     event = ctx.deps.persistence.fetch_event(event_id)
-    return [event["sender_identity"]]
+    if event is None or not event.get("sender_identity"):
+        return []
+    sender = event["sender_identity"]
+    return [sender] if sender != "bot-service" else []
 
 
 def _reply_to_message_id(ctx: "ApiContext", kind: str, event_id: str) -> str | None:

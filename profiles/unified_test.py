@@ -38,9 +38,12 @@ MODEL_CREDENTIAL_ENVS = []
 _surv_key: ContextVar[str | None] = ContextVar("unified_surv_key", default=None)
 _surv_results: dict[str, str] = {}
 _surv_lock = threading.Lock()
+_latest_surv_result: str | None = None
 
 
 def _capture_surv_result(output: str) -> None:
+    global _latest_surv_result
+    _latest_surv_result = output
     key = _surv_key.get() or get_trace_id()
     if key:
         with _surv_lock:
@@ -50,9 +53,12 @@ def _capture_surv_result(output: str) -> None:
 _team_key: ContextVar[str | None] = ContextVar("unified_team_key", default=None)
 _team_results: dict[str, str] = {}
 _team_lock = threading.Lock()
+_latest_team_result: str | None = None
 
 
 def _capture_team_result(output: str) -> None:
+    global _latest_team_result
+    _latest_team_result = output
     key = _team_key.get() or get_trace_id()
     if key:
         with _team_lock:
@@ -62,9 +68,12 @@ def _capture_team_result(output: str) -> None:
 _forces_key: ContextVar[str | None] = ContextVar("unified_forces_key", default=None)
 _forces_results: dict[str, str] = {}
 _forces_lock = threading.Lock()
+_latest_forces_result: str | None = None
 
 
 def _capture_forces_result(output: str) -> None:
+    global _latest_forces_result
+    _latest_forces_result = output
     key = _forces_key.get() or get_trace_id()
     if key:
         with _forces_lock:
@@ -88,7 +97,9 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
         "לשאלות על מצלמות קרא ל-get_camera_feeds. "
         "לתמונת מצב כוללת קרא ל-get_surveillance_overview. "
         "להחזרת רחפן קרא ל-return_drone_to_base. "
-        "לשיגור רחפן קרא ל-dispatch_drone_to_area. "
+        "לשיגור רחפן קרא מיד ל-dispatch_drone_to_area עם גזרת היעד (target_area) בלבד. "
+        "שדות specific_drone_id ו-dispatched_by הם אופציונליים לחלוטין ואסור בתכלית האיסור לבקש אותם - המערכת בוחרת אוטומטית רחפן מוכן מהצי. "
+        "לעולם אל תדווח שמשימה אינה ברורה או שחסרים פרטים כאשר גזרת היעד ידועה, אלא שגר את הרחפן מיד. "
         "היה תמציתי, ישיר ומבצעי."
     )
 
@@ -97,6 +108,8 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
     ) -> AgentResult:
         if invocation_policy is None:
             invocation_policy = InvocationPolicy(max_output_tokens=250, reasoning_effort="none")
+        global _latest_surv_result
+        _latest_surv_result = None
         key = get_trace_id() or uuid.uuid4().hex
         token = _surv_key.set(key)
         with _surv_lock:
@@ -107,11 +120,14 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
                 exact = _surv_results.pop(key, None)
             if exact is not None:
                 return AgentResult(status="success", text=exact)
+            if _latest_surv_result is not None:
+                return AgentResult(status="success", text=_latest_surv_result)
             return model_result
         finally:
             with _surv_lock:
                 _surv_results.pop(key, None)
             _surv_key.reset(token)
+            _latest_surv_result = None
 
     @tool(
         "get_drone_fleet_status",
@@ -239,8 +255,27 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
             res = f"פקודת החזרה התקבלה: כל הרחפנים הפעילים ({len(active)}) חוזרים כעת לבסיס לנחיתה ✅."
         else:
             try:
-                mission = self.surveillance_store.recall_drone(requested)
-                res = f"פקודת החזרה התקבלה: רחפן {mission['callsign']} ({mission['drone_id']}) חוזר כעת לבסיס לנחיתה ✅."
+                recall_data = self.surveillance_store.recall_drone(requested)
+                status = recall_data.get("status")
+                if status == "returned":
+                    d = recall_data["drone"]
+                    res = f"פקודת החזרה התקבלה: רחפן {d['callsign']} ({d['drone_id']}) חוזר כעת לבסיס לנחיתה ✅."
+                elif status == "no_active":
+                    res = "אין כרגע רחפנים פעילים באוויר להחזרה."
+                elif status == "not_found":
+                    if len(active) == 1:
+                        fallback_recall = self.surveillance_store.recall_drone("")
+                        if fallback_recall.get("status") == "returned":
+                            d = fallback_recall["drone"]
+                            res = f"פקודת החזרה התקבלה: רחפן {d['callsign']} ({d['drone_id']}) חוזר כעת לבסיס לנחיתה ✅."
+                        else:
+                            res = "לא נמצא רחפן פעיל תואם להחזרה."
+                    else:
+                        res = f"לא נמצא רחפן פעיל תואם ל-'{requested}' מתוך {len(active)} רחפנים באוויר."
+                elif status == "selection_required":
+                    res = f"קיימים {len(active)} רחפנים פעילים באוויר. אנא ציין איזה רחפן להחזיר או ציין 'החזר את כולם'."
+                else:
+                    res = "החזרת הרחפן לבסיס הושלמה בהצלחה ✅."
             except Exception as exc:
                 res = f"החזרת הרחפן נכשלה: {exc}"
         _capture_surv_result(res)
@@ -248,7 +283,7 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
 
     @tool(
         "dispatch_drone_to_area",
-        "שיגור רחפן טקטי לאירוע או גזרה לצורך תצפית או סיור.",
+        "שיגור רחפן טקטי לגזרה. פרמטר target_area בלבד הוא חובה. שאר הפרמטרים אופציונליים לחלוטין ואין לבקשם.",
         side_effecting=True,
         idempotent=False,
     )
@@ -266,13 +301,20 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
             return res
         if not incident_description.strip():
             incident_description = "סיור ותצפית מבצעית"
+        # Filter out LLM placeholder/sentinel values for specific_drone_id.
+        # The LLM sometimes passes "AUTO", "auto", "none", "null", "-" etc.
+        # when it means "let the system choose". In all such cases, use auto-select.
+        _SENTINEL_DRONE_IDS = {"auto", "none", "null", "n/a", "-", "automatic", "any", "best", "default"}
+        cleaned_drone_id = specific_drone_id.strip()
+        if cleaned_drone_id.lower() in _SENTINEL_DRONE_IDS:
+            cleaned_drone_id = ""
         try:
             mission = self.surveillance_store.dispatch_drone(
                 target_area=target_area.strip(),
                 incident_description=incident_description.strip(),
                 mission_type=mission_type.strip() or "recon",
                 dispatched_by=dispatched_by.strip() or "commander",
-                specific_drone_id=specific_drone_id.strip() or None,
+                specific_drone_id=cleaned_drone_id or None,
             )
         except Exception as exc:
             res = f"שיגור הרחפן נכשל: {exc}"
@@ -338,6 +380,8 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
     ) -> AgentResult:
         if invocation_policy is None:
             invocation_policy = InvocationPolicy(max_output_tokens=250, reasoning_effort="none")
+        global _latest_team_result
+        _latest_team_result = None
         key = get_trace_id() or uuid.uuid4().hex
         token = _team_key.set(key)
         with _team_lock:
@@ -348,11 +392,14 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
                 exact = _team_results.pop(key, None)
             if exact is not None:
                 return AgentResult(status="success", text=exact)
+            if _latest_team_result is not None:
+                return AgentResult(status="success", text=_latest_team_result)
             return model_result
         finally:
             with _team_lock:
                 _team_results.pop(key, None)
             _team_key.reset(token)
+            _latest_team_result = None
 
     @tool(
         "report_team_availability",
@@ -380,6 +427,14 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
         res = "\n".join(lines)
         _capture_team_result(res)
         return res
+
+    @tool(
+        "get_team_status_roster",
+        "מחזיר את תמונת מצבת כיתת הכוננות וזמינות הלוחמים בלבד (קריאה בלבד ללא שום תופעות לוואי) בעברית.",
+        side_effecting=False,
+    )
+    def get_team_status_roster(self, as_of_iso: str = "") -> str:
+        return self.report_team_availability(as_of_iso)
 
     @tool(
         "record_attendance_response",
@@ -469,6 +524,8 @@ class UnifiedFriendlyForcesAgent(FriendlyForcesAgent):
     ) -> AgentResult:
         if invocation_policy is None:
             invocation_policy = InvocationPolicy(max_output_tokens=250, reasoning_effort="none")
+        global _latest_forces_result
+        _latest_forces_result = None
         key = get_trace_id() or uuid.uuid4().hex
         token = _forces_key.set(key)
         with _forces_lock:
@@ -479,11 +536,14 @@ class UnifiedFriendlyForcesAgent(FriendlyForcesAgent):
                 exact = _forces_results.pop(key, None)
             if exact is not None:
                 return AgentResult(status="success", text=exact)
+            if _latest_forces_result is not None:
+                return AgentResult(status="success", text=_latest_forces_result)
             return model_result
         finally:
             with _forces_lock:
                 _forces_results.pop(key, None)
             _forces_key.reset(token)
+            _latest_forces_result = None
 
     @tool(
         "dispatch_ambulance",
@@ -578,6 +638,17 @@ AGENTS = [
 ]
 
 PROTOCOLS = [
+    Protocol(
+        name="overall_situational_picture",
+        description="תמונת מצב גזרתית כוללת (קריאה בלבד ללא שינוי נתונים): שילוב תצפית (מצלמות ורחפנים) ומצבת כיתת כוננות בגזרה.",
+        participating_agents=("surveillance_agent", "team_status_agent"),
+        approved_tools=("get_surveillance_overview", "get_team_status_roster", "report_team_availability"),
+        expected_success_output="תמונת מצב גזרתית מאוחדת ומבצעית המשלבת תצפית וכיתת כוננות ללא שינוי נתונים.",
+        criticality=CriticalityLevel.LOW,
+        approval_flag=False,
+        requires_confirmation=False,
+        commander_only=False,
+    ),
     Protocol(
         name="query_surveillance_overview",
         description="תמונת מצב תצפיתית כוללת: סטטוס מצלמות, רחפנים ומשימות אוויריות פעילות בכל הגזרות.",

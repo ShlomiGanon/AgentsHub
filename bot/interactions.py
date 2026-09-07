@@ -154,10 +154,10 @@ def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None
 
     surveillance_protocols = {
         "query_camera_status", "query_drone_fleet_status", "query_active_drone_missions",
-        "query_surveillance_overview", "dispatch_drone_to_incident", "return_drone_to_base",
-        "recall_drone_to_base", "surveillance_area_scan", "update_camera_observation",
-        "report_team_availability", "record_attendance_response", "dispatch_emergency_forces",
-        "query_historical_incidents",
+        "query_surveillance_overview", "overall_situational_picture", "dispatch_drone_to_incident",
+        "return_drone_to_base", "recall_drone_to_base", "surveillance_area_scan",
+        "update_camera_observation", "report_team_availability", "record_attendance_response",
+        "dispatch_emergency_forces", "query_historical_incidents",
     }
     if result.protocol_name in surveillance_protocols:
         lines = [
@@ -166,13 +166,18 @@ def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None
         ]
         if result.failure_reason:
             lines.append(_short_failure_reason(result.failure_reason))
+        elif result.protocol_name == "overall_situational_picture" and result.insight_text and any("\u0590" <= c <= "\u05ea" for c in result.insight_text):
+            lines.append(result.insight_text.strip())
         elif result.steps_completed:
             compact_lines: list[str] = []
-            for line in result.steps_completed[-1].splitlines():
-                cleaned = line.strip().replace("**", "")
-                if cleaned and cleaned not in compact_lines:
-                    compact_lines.append(cleaned[:240])
-                if len(compact_lines) == 5:
+            for step in result.steps_completed:
+                for line in step.splitlines():
+                    cleaned = line.strip().replace("**", "")
+                    if cleaned and cleaned not in compact_lines:
+                        compact_lines.append(cleaned[:240])
+                    if len(compact_lines) >= 8:
+                        break
+                if len(compact_lines) >= 8:
                     break
             lines.extend(compact_lines)
         else:
@@ -506,11 +511,32 @@ def format_approval_prompt(
     raise ValueError(f"unrecognized approval hold reason: {notice.reason!r}")
 
 
+_OPEN_APPROVAL_HOLDS: set[str] = set()
+
+
+def register_open_approval_hold(event_id: str) -> None:
+    _OPEN_APPROVAL_HOLDS.add(event_id)
+
+
+def unregister_open_approval_hold(event_id: str) -> None:
+    _OPEN_APPROVAL_HOLDS.discard(event_id)
+
+
+def get_open_approval_holds() -> list[str]:
+    return list(_OPEN_APPROVAL_HOLDS)
+
+
 async def push_approval_prompt(deps: "BotDeps", notice: "HeldApprovalNotice") -> None:
+    register_open_approval_hold(notice.event_id)
     text, buttons = format_approval_prompt(notice, message_catalog_for(deps))
 
     for chat_id in await deps.api_client.list_commander_chat_ids():
-        await deps.telegram_client.send_with_buttons(chat_id, text, buttons)
+        if not chat_id or chat_id == "bot-service":
+            continue
+        try:
+            await deps.telegram_client.send_with_buttons(chat_id, text, buttons)
+        except Exception as exc:
+            logger.warning("failed to send approval prompt to %s: %s", chat_id, exc)
 
 
 def format_uncertain_verdict_notice(
@@ -529,7 +555,12 @@ async def notify_uncertain_verdict(deps: "BotDeps", notice: "UncertainVerdictNot
     text = format_uncertain_verdict_notice(notice, message_catalog_for(deps))
 
     for chat_id in await deps.api_client.list_commander_chat_ids():
-        await deps.telegram_client.send_text(chat_id, text)
+        if not chat_id or chat_id == "bot-service":
+            continue
+        try:
+            await deps.telegram_client.send_text(chat_id, text)
+        except Exception as exc:
+            logger.warning("failed to send uncertain verdict notice to %s: %s", chat_id, exc)
 
 
 def format_uncertain_verdict_reporter_notice(catalog: MessageCatalog | None = None) -> str:
@@ -560,7 +591,12 @@ async def notify_no_match(deps: "BotDeps", notice: "NoMatchNotice") -> None:
     text = format_no_match_notice(notice, message_catalog_for(deps))
 
     for chat_id in await deps.api_client.list_commander_chat_ids():
-        await deps.telegram_client.send_text(chat_id, text)
+        if not chat_id or chat_id == "bot-service":
+            continue
+        try:
+            await deps.telegram_client.send_text(chat_id, text)
+        except Exception as exc:
+            logger.warning("failed to send no match notice to %s: %s", chat_id, exc)
 
 
 def _describe_outcome(outcome, catalog: MessageCatalog | None = None) -> str:
@@ -581,6 +617,7 @@ def _describe_outcome(outcome, catalog: MessageCatalog | None = None) -> str:
 async def handle_approval_answer(deps: "BotDeps", chat_id: str, answering_identity: str, event_id: str, choice: str) -> None:
     """`choice` is already "approved"/"rejected" for a flagged-protocol hold (the button's callback data), or the chosen candidate's protocol name for an ambiguous-selection hold — see..."""
 
+    unregister_open_approval_hold(event_id)
     messages = message_catalog_for(deps)
     resolution = await resolve_caller(deps.api_client, answering_identity, messages)
     if resolution.status == "unregistered":

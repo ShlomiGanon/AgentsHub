@@ -49,6 +49,7 @@ from orchestrator.reasoning import (
     rewrite_task,
     extract_event_data_update,
     select_protocol,
+    synthesize_operational_picture,
 )
 from orchestrator.reasoning import answer_question, determine_closure, look_up_precedent
 from orchestrator.event_queue import PolicyAwareEventQueue, SerialEventQueue, WorkItem
@@ -1001,6 +1002,19 @@ def _finish_protocol_assessment(
         if final_assessment is not None
         else build_insight(insights_agent, protocol, step_outcomes, comparable_history=precedent_matches)
     )
+    if protocol.name == "overall_situational_picture" or len(protocol.participating_agents) > 1:
+        valid_outcomes = tuple(o for o in step_outcomes if o.result_text and o.succeeded)
+        if len(valid_outcomes) > 1:
+            try:
+                synthesis = synthesize_operational_picture(
+                    main_agent, protocol, valid_outcomes, persisted_event.get("raw_text", "")
+                )
+                if synthesis:
+                    insight_text = synthesis
+            except Exception as exc:
+                logger.warning(
+                    "multi-agent synthesis failed: %s", exc, extra={"event": "synthesis_failed", "trace_id": get_trace_id()}
+                )
     logger.info(
         "insight generated",
         extra={
