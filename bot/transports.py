@@ -523,8 +523,21 @@ class PTBTelegramClient(TelegramClient):
         with stage_context("telegram_send"):
             chunks = split_message(text)
             first_message_id = None
+            numeric_reply_to = (
+                int(reply_to_message_id)
+                if reply_to_message_id is not None and str(reply_to_message_id).isdigit()
+                else None
+            )
             if chunks:
-                sent = await self._application.bot.send_message(chat_id=chat_id, text=chunks[0], reply_to_message_id=reply_to_message_id)
+                try:
+                    sent = await self._application.bot.send_message(
+                        chat_id=chat_id, text=chunks[0], reply_to_message_id=numeric_reply_to
+                    )
+                except Exception:
+                    if numeric_reply_to is not None:
+                        sent = await self._application.bot.send_message(chat_id=chat_id, text=chunks[0])
+                    else:
+                        raise
                 first_message_id = str(sent.message_id)
             for chunk in chunks[1:]:
                 await self._application.bot.send_message(chat_id=chat_id, text=chunk)

@@ -1584,6 +1584,7 @@ def answer_question(
     with stage_context("question_direct_lookup_classification"):
         lookup_result = main_agent.process(_build_direct_lookup_prompt(question, conversation_messages), [])
 
+    is_hebrew = any('\u0590' <= c <= '\u05ea' for c in question)
     if lookup_result.status == "success" and _is_direct_most_recent_lookup(lookup_result.text):
         try:
             with stage_context("question_direct_lookup"):
@@ -1591,7 +1592,7 @@ def answer_question(
                     question, sender_identity_filter=caller_sender_identity_filter
                 ).answer
         except HistoryQueryError as exc:
-            return _cant_answer_reply(str(exc))
+            return _cant_answer_reply(str(exc), is_hebrew=is_hebrew)
 
     selectable_agents = [agent for agent in registry.all() if agent.name not in {"main_agent", "insights_agent"}]
     descriptors = [agent.descriptor for agent in selectable_agents]
@@ -1625,8 +1626,10 @@ def answer_question(
             )
         selection = _parse_agent_selection_response(selection_result.text)
     if selection.status == "none":
-        return _cant_answer_reply(selection.reason)
+        return _cant_answer_reply(selection.reason, is_hebrew=is_hebrew)
     if selection.status == "clarification":
+        if is_hebrew or any('\u0590' <= c <= '\u05ea' for c in selection.reason):
+            return f"\u05e0\u05d3\u05e8\u05e9\u05d9\u05dd \u05e4\u05e8\u05d8\u05d9\u05dd \u05e0\u05d5\u05e1\u05e4\u05d9\u05dd \u05db\u05d3\u05d9 \u05e9\u05d0\u05d5\u05db\u05dc \u05dc\u05d4\u05e9\u05d9\u05d1: {selection.reason}"
         return f"I need a little more detail before I can answer. {selection.reason}"
     if selection.status == "history":
         assert selection.history_query_spec is not None
@@ -1636,11 +1639,13 @@ def answer_question(
                     question, selection.history_query_spec, sender_identity_filter=caller_sender_identity_filter
                 ).answer
         except HistoryQueryError as exc:
-            return _cant_answer_reply(str(exc))
+            return _cant_answer_reply(str(exc), is_hebrew=is_hebrew)
 
     selectable_names = {agent.name for agent in selectable_agents}
     unknown_names = sorted(set(selection.chosen_tasks) - selectable_names)
     if unknown_names:
+        if is_hebrew:
+            return _cant_answer_reply(f"\u05d4\u05e1\u05d5\u05db\u05df \u05e9\u05e0\u05d1\u05d7\u05e8 \u05d0\u05d9\u05e0\u05d5 \u05d6\u05de\u05d9\u05df: {', '.join(unknown_names)}.", is_hebrew=True)
         return _cant_answer_reply(f"The selected agent is not available: {', '.join(unknown_names)}.")
 
     sub_answers: dict[str, str] = {}

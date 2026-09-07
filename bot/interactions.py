@@ -537,7 +537,22 @@ def unregister_open_approval_hold(event_id: str) -> None:
     _OPEN_APPROVAL_HOLDS.discard(event_id)
 
 
-def get_open_approval_holds() -> list[str]:
+def get_open_approval_holds(db_path: str | None = None) -> list[str]:
+    if db_path:
+        try:
+            import sqlite3
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            try:
+                rows = conn.execute(
+                    "SELECT event_id FROM held_events WHERE kind = 'approval' AND resolved = 0 ORDER BY created_at"
+                ).fetchall()
+                db_holds = [r[0] for r in rows]
+                if db_holds:
+                    _OPEN_APPROVAL_HOLDS.update(db_holds)
+            finally:
+                conn.close()
+        except Exception:
+            pass
     return list(_OPEN_APPROVAL_HOLDS)
 
 

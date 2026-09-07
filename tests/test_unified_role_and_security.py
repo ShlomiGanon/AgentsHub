@@ -786,3 +786,70 @@ def test_open_approval_holds_tracking():
 
     unregister_open_approval_hold("evt-200")
     assert get_open_approval_holds() == []
+
+
+def test_approval_phrase_detection_distinguishes_conversational_hebrew():
+    exact_approval_words = {
+        "אישור", "אשר", "מאשר", "מאושר", "approve", "yes", "כן",
+    }
+    prefix_approval_words = (
+        "מאושר ", "מאשר ", "אשר ", "אישור ", "approve ",
+        "כן אשר", "כן תאשר", "כן, אשר", "כן, תאשר", "כן לשגר", "מאושר תשלח", "מאושר לשלוח",
+    )
+    exact_rejection_words = {
+        "ביטול", "בטל", "דחה", "דחייה", "reject", "no", "לא",
+    }
+    prefix_rejection_words = (
+        "בטל ", "ביטול ", "דחה ", "דחייה ", "reject ",
+        "לא בטל", "לא, בטל", "דחה שיגור", "בטל שיגור",
+    )
+
+    def is_appr(txt: str) -> bool:
+        norm = txt.strip().lower()
+        return norm in exact_approval_words or any(norm.startswith(p) for p in prefix_approval_words)
+
+    def is_rej(txt: str) -> bool:
+        norm = txt.strip().lower()
+        return norm in exact_rejection_words or any(norm.startswith(p) for p in prefix_rejection_words)
+
+    # Conversational phrases should NOT trigger approval/rejection
+    assert not is_appr("כן זה השאלה")
+    assert not is_rej("לא הבנתי מה קשור")
+    assert not is_appr("כן מה קורה")
+    assert not is_rej("לא כרגע תודה")
+
+    # Real approvals and rejections MUST trigger
+    assert is_appr("כן")
+    assert is_appr("מאושר")
+    assert is_appr("אשר")
+    assert is_appr("מאושר תשלח")
+    assert is_appr("כן אשר")
+    assert is_rej("לא")
+    assert is_rej("ביטול")
+    assert is_rej("בטל שיגור")
+
+
+def test_open_approval_holds_syncs_with_db(tmp_path):
+    import sqlite3
+    from bot.interactions import get_open_approval_holds, unregister_open_approval_hold
+
+    db_file = str(tmp_path / "test_holds.db")
+    conn = sqlite3.connect(db_file)
+    conn.execute(
+        "CREATE TABLE held_events (hold_id TEXT, kind TEXT, event_id TEXT, resolved INTEGER, created_at TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO held_events VALUES ('h1', 'approval', 'evt-from-db-1', 0, '2026-09-07T12:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO held_events VALUES ('h2', 'approval', 'evt-from-db-2', 1, '2026-09-07T12:01:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    holds = get_open_approval_holds(db_file)
+    assert "evt-from-db-1" in holds
+    assert "evt-from-db-2" not in holds  # resolved=1 should not be loaded
+
+    unregister_open_approval_hold("evt-from-db-1")
+

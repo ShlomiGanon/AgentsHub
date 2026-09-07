@@ -93,7 +93,13 @@ async def run_notification_poll_once(deps: "BotDeps", since: int = 0, wait_secon
         notifications, next_cursor = await deps.api_client.poll_pending_notifications(since)
 
     for notification in notifications:
-        await dispatch_notification(deps, notification)
+        try:
+            await dispatch_notification(deps, notification)
+        except Exception:
+            logger.exception(
+                "notification dispatch failed; continuing to next",
+                extra={"event": "notification_dispatch_failed", "kind": notification.kind},
+            )
 
     return len(notifications), next_cursor
 

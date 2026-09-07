@@ -404,7 +404,7 @@ BUTTON_PROMPTS = {
     "👥 \u05e1\u05d8\u05d8\u05d5\u05e1 \u05db\u05d9\u05ea\u05ea \u05db\u05d5\u05e0\u05e0\u05d5\u05ea": "\u05de\u05d4 \u05e1\u05d8\u05d8\u05d5\u05e1 \u05db\u05d9\u05ea\u05ea \u05d4\u05db\u05d5\u05e0\u05e0\u05d5\u05ea \u05d5\u05d4\u05e0\u05d5\u05db\u05d7\u05d5\u05ea \u05db\u05e8\u05d2\u05e2? \u05d4\u05e9\u05d1 \u05d1\u05e2\u05d1\u05e8\u05d9\u05ea \u05e7\u05e6\u05e8\u05d4 \u05d5\u05de\u05d1\u05e6\u05e2\u05d9\u05ea \u05d1\u05dc\u05d1\u05d3 (\u05e2\u05d3 3-4 \u05e9\u05d5\u05e8\u05d5\u05ea).",
     "📜 \u05d4\u05d9\u05e1\u05d8\u05d5\u05e8\u05d9\u05d9\u05ea \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd": "\u05de\u05d4\u05dd \u05d4\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05d4\u05d0\u05d7\u05e8\u05d5\u05e0\u05d9\u05dd \u05e9\u05e0\u05e8\u05e9\u05de\u05d5 \u05d1\u05d9\u05d5\u05de\u05df \u05d4\u05de\u05d1\u05e6\u05e2\u05d9? \u05d4\u05e9\u05d1 \u05d1\u05e2\u05d1\u05e8\u05d9\u05ea \u05e7\u05e6\u05e8\u05d4 \u05d5\u05de\u05d1\u05e6\u05e2\u05d9\u05ea \u05d1\u05dc\u05d1\u05d3 (\u05e2\u05d3 3-4 \u05e9\u05d5\u05e8\u05d5\u05ea).",
     "📋 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05d0\u05d7\u05e8\u05d5\u05e0\u05d9\u05dd": "\u05de\u05d4\u05dd \u05d4\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05d4\u05d0\u05d7\u05e8\u05d5\u05e0\u05d9\u05dd \u05e9\u05e0\u05e8\u05e9\u05de\u05d5 \u05d1\u05d9\u05d5\u05de\u05df \u05d4\u05de\u05d1\u05e6\u05e2\u05d9? \u05d4\u05e9\u05d1 \u05d1\u05e2\u05d1\u05e8\u05d9\u05ea \u05e7\u05e6\u05e8\u05d4 \u05d5\u05de\u05d1\u05e6\u05e2\u05d9\u05ea \u05d1\u05dc\u05d1\u05d3 (\u05e2\u05d3 3-4 \u05e9\u05d5\u05e8\u05d5\u05ea).",
-    "📋 \u05d9\u05d5\u05de\u05df \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05d5\u05ea\u05d7\u05e7\u05d5\u05e8": "\u05de\u05d4\u05dd \u05d4\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05d4\u05d0\u05d7\u05e8\u05d5\u05e0\u05d9\u05dd \u05e9\u05e0\u05e8\u05e9\u05de\u05d5 \u05d1\u05d9\u05d5\u05de\u05df \u05d4\u05de\u05d1\u05e6\u05e2\u05d9? \u05d4\u05e9\u05d1 \u05d1\u05e2\u05d1\u05e8\u05d9\u05ea \u05e7\u05e6\u05e8\u05d4 \u05d5\u05de\u05d1\u05e6\u05e2\u05d9\u05ea \u05d1\u05dc\u05d1\u05d3 (\u05e2\u05d3 3-4 \u05e9\u05d5\u05e8\u05d5\u05ea).",
+    "📋 \u05d9\u05d5\u05de\u05df \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05d5\u05ea\u05d7\u05e7\u05d5\u05e8": "\u05de\u05d4\u05dd \u05d4\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05d4\u05d0\u05d7\u05e8\u05d5\u05e0\u05d9\u05dd \u05e9\u05e0\u05e8\u05e9\u05de\u05d5 \u05d1\u05d9\u05d5\u05de\u05df \u05d4\u05de\u05d1\u05e6\u05e2\u05d9? \u05d4\u05e9\u05d1 \u05d1\u05e2\u05d1\u05e8\u05d9\u05ea \u05e7\u05e6\u05e8\u05d4 \u05d5\u05de\u05d1\u05e6\u05e2\u05d9\u05ea \u05d1\u05dc\u05d1\u05d35e2\u05d9\u05ea \u05d1\u05dc\u05d1\u05d3 (\u05e2\u05d3 3-4 \u05e9\u05d5\u05e8\u05d5\u05ea).",
 }
 
 
@@ -424,24 +424,42 @@ async def _on_text_message(update, context) -> None:
     unavailable_button = incoming_text == "\u274c \u05d0\u05d9\u05e0\u05d9 \u05d6\u05de\u05d9\u05df"
     is_attendance_submission = False
 
-    approval_words = {
+    exact_approval_words = {
         "\u05d0\u05d9\u05e9\u05d5\u05e8", "\u05d0\u05e9\u05e8", "\u05de\u05d0\u05e9\u05e8",
         "\u05de\u05d0\u05d5\u05e9\u05e8", "approve", "yes", "\u05db\u05df",
     }
-    rejection_words = {
+    prefix_approval_words = (
+        "\u05de\u05d0\u05d5\u05e9\u05e8 ", "\u05de\u05d0\u05e9\u05e8 ", "\u05d0\u05e9\u05e8 ",
+        "\u05d0\u05d9\u05e9\u05d5\u05e8 ", "approve ",
+        "\u05db\u05df \u05d0\u05e9\u05e8", "\u05db\u05df \u05ea\u05d0\u05e9\u05e8",
+        "\u05db\u05df, \u05d0\u05e9\u05e8", "\u05db\u05df, \u05ea\u05d0\u05e9\u05e8",
+        "\u05db\u05df \u05dc\u05e9\u05d2\u05e8", "\u05de\u05d0\u05d5\u05e9\u05e8 \u05ea\u05e9\u05dc\u05d7",
+        "\u05de\u05d0\u05d5\u05e9\u05e8 \u05dc\u05e9\u05dc\u05d5\u05d7",
+    )
+    exact_rejection_words = {
         "\u05d1\u05d9\u05d8\u05d5\u05dc", "\u05d1\u05d8\u05dc", "\u05d3\u05d7\u05d4",
         "\u05d3\u05d7\u05d9\u05d9\u05d4", "reject", "no", "\u05dc\u05d0",
     }
+    prefix_rejection_words = (
+        "\u05d1\u05d8\u05dc ", "\u05d1\u05d9\u05d8\u05d5\u05dc ", "\u05d3\u05d7\u05d4 ",
+        "\u05d3\u05d7\u05d9\u05d9\u05d4 ", "reject ",
+        "\u05dc\u05d0 \u05d1\u05d8\u05dc", "\u05dc\u05d0, \u05d1\u05d8\u05dc",
+        "\u05d3\u05d7\u05d4 \u05e9\u05d9\u05d2\u05d5\u05e8", "\u05d1\u05d8\u05dc \u05e9\u05d9\u05d2\u05d5\u05e8",
+    )
     norm_text = incoming_text.strip().lower()
-    # Match if text IS an approval/rejection word OR starts with one
-    # This also accepts a command word followed by free-form text.
+
     def _is_approval(txt: str) -> bool:
-        return txt in approval_words or any(txt.startswith(w) for w in approval_words)
+        return txt in exact_approval_words or any(txt.startswith(p) for p in prefix_approval_words)
+
     def _is_rejection(txt: str) -> bool:
-        return txt in rejection_words or any(txt.startswith(w) for w in rejection_words)
-    if resolution.caller and resolution.caller.level == PermissionLevel.COMMANDER and (_is_approval(norm_text) or _is_rejection(norm_text)):
-        open_holds = interactions.get_open_approval_holds()
-        choice = "approved" if _is_approval(norm_text) else "rejected"
+        return txt in exact_rejection_words or any(txt.startswith(p) for p in prefix_rejection_words)
+
+    is_appr = _is_approval(norm_text)
+    is_rej = _is_rejection(norm_text)
+    if resolution.caller and resolution.caller.level == PermissionLevel.COMMANDER and (is_appr or is_rej):
+        db_path = getattr(deps.loaded_profile, "db_path", None)
+        open_holds = interactions.get_open_approval_holds(db_path)
+        choice = "approved" if is_appr else "rejected"
         if len(open_holds) == 1:
             hold_event_id = open_holds[0]
             await interactions.handle_approval_answer(deps, chat_id, telegram_identity, hold_event_id, choice)
@@ -452,7 +470,7 @@ async def _on_text_message(update, context) -> None:
                 "\u05e7\u05d9\u05d9\u05de\u05d5\u05ea \u05de\u05e1\u05e4\u05e8 \u05d1\u05e7\u05e9\u05d5\u05ea \u05d4\u05de\u05de\u05ea\u05d9\u05e0\u05d5\u05ea \u05dc\u05d0\u05d9\u05e9\u05d5\u05e8\u05da. \u05d0\u05e0\u05d0 \u05d4\u05e9\u05ea\u05de\u05e9 \u05d1\u05db\u05e4\u05ea\u05d5\u05e8\u05d9 \u05d4\u05d0\u05d9\u05e9\u05d5\u05e8/\u05d3\u05d7\u05d9\u05d9\u05d4 \u05e9\u05d1\u05d4\u05d5\u05d3\u05e2\u05ea \u05d4\u05d1\u05e7\u05e9\u05d4 \u05d4\u05de\u05ea\u05d0\u05d9\u05de\u05d4.",
             )
             return
-        else:
+        elif norm_text in exact_approval_words or norm_text in exact_rejection_words:
             await deps.telegram_client.send_text(
                 chat_id,
                 "\u05d0\u05d9\u05df \u05db\u05e8\u05d2\u05e2 \u05e4\u05e2\u05d5\u05dc\u05d5\u05ea \u05d4\u05de\u05de\u05ea\u05d9\u05e0\u05d5\u05ea \u05dc\u05d0\u05d9\u05e9\u05d5\u05e8 \u05de\u05e4\u05e7\u05d3.",
