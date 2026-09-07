@@ -1,2 +1,0 @@
-# Development / test-only dependencies.
-pytest>=8.0
