@@ -113,10 +113,12 @@ This English catalog describes every tracked or pending first-party file in the 
 | `profiles/__init__.py` | Production | Public facade | Exposes profile contracts, loading, registries, and compatibility aliases. |
 | `profiles/contracts.py` | Production | Private implementation | Defines profile declarations, loaded-profile state, and area/event-type registries. |
 | `profiles/demo.py` | Production | Private implementation | Defines the runnable demonstration deployment profile. |
+| `profiles/friendly_forces.py` | Production | Private implementation | Defines the friendly forces profile. |
 | `profiles/loader.py` | Production | Private implementation | Imports, validates, hashes, and constructs deployment profiles and registries. |
 | `profiles/sub_agent_surveillance.py` | Production | Private implementation | Defines the dedicated visual-surveillance deployment and protocols. |
 | `profiles/sub_agent_team_status.py` | Production | Private implementation | Defines the dedicated readiness-team status deployment and reporting protocol. |
 | `profiles/template.py` | Production | Private implementation | Provides a reference template for authoring deployment profiles. |
+| `profiles/unified_test.py` | Production | Private implementation | Defines the unified test profile for surveillance, readiness team, and friendly forces. |
 | `protocols/__init__.py` | Production | Public facade | Exposes protocol contracts, execution, repository operations, and aliases. |
 | `protocols/contracts.py` | Production | Private implementation | Defines protocols, steps, criticality, results, and edit errors. |
 | `protocols/executor.py` | Production | Private implementation | Executes protocol steps with retry and idempotency enforcement. |
@@ -154,6 +156,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_demo_profile.py` | Test | Internal | Verifies demo profile behavior and edge cases. |
 | `tests/test_environment_config.py` | Test | Internal | Verifies environment-backed model and runtime configuration. |
 | `tests/test_file_catalog.py` | Test | Internal | Ensures this catalog exactly matches the first-party repository tree. |
+| `tests/test_friendly_forces_agent.py` | Test | Internal | Verifies friendly forces agent dispatch tools and coordination records. |
 | `tests/test_history_agent.py` | Test | Internal | Verifies history agent behavior and edge cases. |
 | `tests/test_history_event_pipeline.py` | Test | Internal | Verifies extraction, time normalization, and durable history writes. |
 | `tests/test_history_logging.py` | Test | Internal | Verifies history logging behavior and edge cases. |
@@ -201,6 +204,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_surveillance_persistence.py` | Test | Internal | Verifies surveillance database initialization, updates, dispatch, and mission state. |
 | `tests/test_team_status_agent.py` | Test | Internal | Verifies daily attendance, multi-day unavailability, late approval, and protocol execution. |
 | `tests/test_team_status_persistence.py` | Test | Internal | Verifies readiness-team roster approval, message idempotency, late-response isolation, and separate SQLite schemas. |
+| `tests/test_unified_role_and_security.py` | Test | Internal | Verifies unified role-based security, button workflows, and confirmation flows. |
 | `tests/test_user_admin.py` | Test | Internal | Verifies user admin behavior and edge cases. |
 | `tools/__init__.py` | Production | Public facade | Exposes shared observability helpers and lazy terminal compatibility aliases. |
 | `tools/observability.py` | Production | Private implementation | Provides trace contexts, structured logging, and human/JSON output. |

@@ -144,6 +144,22 @@ messages; viewer clients never request or display them.
 
 Stop any foreground process with `Ctrl+C`. The SQLite database remains on disk, so restarting the same profile resumes its existing deployment state; durable bot notification cursors also prevent already-delivered notifications from being replayed after a normal restart.
 
+### Unified Command Hub Profile (`profiles.unified_test`)
+
+For the integrated operational command-and-control deployment combining visual surveillance, tactical drone fleet management, readiness-team status, and friendly forces coordination with role-based Telegram keyboards (Commander vs Viewer) and brief operational Hebrew responses, consult the dedicated guide:
+- **[Unified Command Hub Operational Guide (מדריך הפעלה)](docs/unified_command_guide.md)**
+
+Quick run commands:
+```powershell
+# In terminal 1 (API server & Admin Dashboard on port 8905):
+.\load-env.ps1
+python -m api.app profiles.unified_test
+
+# In terminal 2 (Telegram Bot):
+.\load-env.ps1
+python -m bot.app profiles.unified_test
+```
+
 ### Admin web panel (optional)
 
 A browser-based, login-gated alternative to `cli.user_admin`, served by the same API process at `/admin` — disabled by default (no `/admin` route exists at all) unless both `ADMIN_USERNAME` and `ADMIN_PASSWORD` are set; once they are, `ADMIN_SESSION_SECRET` is also required (fails startup loudly if missing). See step 1's env var list and `.env.example` for all admin-related variables and how to generate `ADMIN_SESSION_SECRET`.
