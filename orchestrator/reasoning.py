@@ -120,16 +120,25 @@ _LEGACY_INTENT_PATTERN = re.compile(
     r"\A\s*INTENT:\s*(question|report|request|conversational)\s*\r?\nREASON:\s*(\S(?:[^\r\n]*\S)?)\s*\Z",
     re.IGNORECASE,
 )
+# Anchored on (?:\A|\n) rather than \A, and matched with .search() rather than .fullmatch()
+# (see _parse_selection_response): a real model response commonly reasons through the
+# candidates in prose before giving its decision, and requiring the *entire* response to be
+# exactly the two-line SELECTED:/REASON: block rejected that prose-then-answer shape outright —
+# confirmed live, 2 of 3 identical test runs (docs/IMPROVES/CRITICAL_FIXES_PLAN.MD item 3).
+# Leading reasoning is now tolerated; the matched block still must be the final content in the
+# response, so a stray, coincidental "SELECTED:"/"REASON:" pair embedded mid-reasoning (not as
+# the response's actual last lines) still won't match.
 _SELECTED_PATTERN = re.compile(
-    r"\A\s*SELECTED:\s*(\S+)\s*\r?\nREASON:\s*(\S(?:[^\r\n]*\S)?)\s*\Z",
+    r"(?:\A|\n)\s*SELECTED:\s*(\S+)\s*\r?\nREASON:\s*(\S(?:[^\r\n]*\S)?)\s*\Z",
     re.IGNORECASE,
 )
 _AMBIGUOUS_PATTERN = re.compile(
-    r"\A\s*AMBIGUOUS:\s*([^\r\n]+)\s*\r?\nREASON:\s*(\S(?:[^\r\n]*\S)?)\s*\Z",
+    r"(?:\A|\n)\s*AMBIGUOUS:\s*([^\r\n]+)\s*\r?\nREASON:\s*(\S(?:[^\r\n]*\S)?)\s*\Z",
     re.IGNORECASE,
 )
-_NO_MATCH_PATTERN = re.compile(r"\A\s*NO_MATCH:\s*(\S(?:.*?\S)?)\s*\Z", re.IGNORECASE | re.DOTALL)
+_NO_MATCH_PATTERN = re.compile(r"(?:\A|\n)\s*NO_MATCH:\s*(\S(?:.*?\S)?)\s*\Z", re.IGNORECASE | re.DOTALL)
 _AGENT_TASK_PATTERN = re.compile(r"AGENT:\s*(\S+)\s*\n\s*TASK:\s*(.+?)(?=\nAGENT:|\Z)", re.IGNORECASE | re.DOTALL)
+_JSON_CODE_FENCE_PATTERN = re.compile(r"```(?:json)?\s*\n?(.*?)\n?```", re.IGNORECASE | re.DOTALL)
 _VERDICT_PATTERN = re.compile(r"VERDICT:\s*(success|failure|uncertain)", re.IGNORECASE)
 _REASONING_PATTERN = re.compile(r"REASONING:\s*(.+)", re.IGNORECASE | re.DOTALL)
 
@@ -314,11 +323,13 @@ def _build_intent_prompt(
         f"Available protocols JSON: {json.dumps(protocol_data, ensure_ascii=False, sort_keys=True)}\n"
         f"Conversation context JSON: {json.dumps(conversation_messages, ensure_ascii=False, sort_keys=True)}\n"
         f"Message JSON: {json.dumps(message_text, ensure_ascii=False)}\n\n"
-        "Return exactly one JSON object and nothing else, with all fields present:\n"
+        "Return exactly one JSON object and nothing else, with all fields present. "
+        "'evidence' is keyed by primary_intent's own value — e.g. if primary_intent is "
+        "\"report\", evidence's key must be \"report\", not \"question\":\n"
         '{"primary_intent":"question|report|request|conversational|needs_clarification",'
         '"asks_for_information":true,"reports_occurrence":false,"requests_action":false,'
         '"social_only":false,"is_quoted":false,"is_hypothetical":false,'
-        '"is_followup_without_context":false,"evidence":{"question":"exact quote from message"},'
+        '"is_followup_without_context":false,"evidence":{"<primary_intent\'s own value>":"exact quote from message"},'
         '"matched_protocol_names":[],"reason":"short reason","ambiguity_reason":null,'
         '"clarification_question":null}'
     )
@@ -442,7 +453,14 @@ def _parse_structured_intent_response(raw_text: str, message_text: str, protocol
     }
     if analysis.primary_intent in flag_for_intent and not flag_for_intent[analysis.primary_intent]:
         raise OrchestrationParseError(f"primary intent {analysis.primary_intent!r} contradicts its semantic flag")
-    if analysis.primary_intent in {"question", "report", "request"} and analysis.primary_intent not in analysis.evidence:
+    # Deliberately not "analysis.primary_intent not in analysis.evidence": the evidence dict's
+    # *key* carries no information the parser needs — `evidence`'s values are already validated
+    # above (line ~400) to be exact quotes drawn from the real message — so what actually matters
+    # is that *some* real evidence was given for an operational intent, regardless of which key
+    # name the model filed it under (the prompt asks for a key matching primary_intent, but a
+    # model that doesn't — e.g. reusing the prompt's own example key — still supplied genuine
+    # evidence and shouldn't be rejected for a naming mismatch alone).
+    if analysis.primary_intent in {"question", "report", "request"} and not analysis.evidence:
         raise OrchestrationParseError(f"primary intent {analysis.primary_intent!r} requires exact evidence")
     if analysis.social_only and any((analysis.asks_for_information, analysis.reports_occurrence, analysis.requests_action)):
         raise OrchestrationParseError("social_only contradicts operational intent flags")
@@ -552,18 +570,18 @@ def _build_selection_prompt(raw_text: str, classification: str | None, area: str
 
 
 def _parse_selection_response(raw_text: str) -> ProtocolSelectionResult:
-    selected_match = _SELECTED_PATTERN.fullmatch(raw_text)
+    selected_match = _SELECTED_PATTERN.search(raw_text)
     if selected_match:
         return ProtocolSelectionResult(
             status="selected",
             protocol_name=selected_match.group(1),
             reason=selected_match.group(2).strip(),
         )
-    ambiguous_match = _AMBIGUOUS_PATTERN.fullmatch(raw_text)
+    ambiguous_match = _AMBIGUOUS_PATTERN.search(raw_text)
     if ambiguous_match:
         names = tuple(name.strip() for name in ambiguous_match.group(1).split(",") if name.strip())
         return ProtocolSelectionResult(status="ambiguous", candidate_names=names, reason=ambiguous_match.group(2).strip())
-    no_match_match = _NO_MATCH_PATTERN.fullmatch(raw_text)
+    no_match_match = _NO_MATCH_PATTERN.search(raw_text)
     if no_match_match:
         return ProtocolSelectionResult(status="no_match", reason=no_match_match.group(1).strip())
     raise OrchestrationParseError(f"could not parse protocol selection response: {raw_text!r}")
@@ -688,6 +706,27 @@ def _parse_formulation_response(raw_text: str) -> dict[str, str]:
     return {match.group(1): match.group(2).strip() for match in _AGENT_TASK_PATTERN.finditer(raw_text)}
 
 
+def _formulation_json_candidate(raw_text: str) -> str | None:
+    """The JSON object text within a task-formulation response, or None if it isn't JSON at all.
+
+    A well-formed JSON plan is still JSON when the model wraps it in a Markdown code fence (a common
+    default for models not using a strict JSON mode) — unwrap that before falling back to the legacy
+    AGENT:/TASK: parser, so a fenced response doesn't silently lose required_event_fields (which only
+    the JSON shape carries) by being misrouted into a parser that never produced that field to begin
+    with. Genuine legacy-format text (no fence, doesn't start with '{') is left for that parser
+    exactly as before.
+    """
+    stripped = raw_text.strip()
+    if stripped.startswith("{"):
+        return stripped
+    fence_match = _JSON_CODE_FENCE_PATTERN.search(stripped)
+    if fence_match:
+        candidate = fence_match.group(1).strip()
+        if candidate.startswith("{"):
+            return candidate
+    return None
+
+
 def formulate_tasks(
     main_agent: MainAgent,
     protocol: Protocol,
@@ -698,7 +737,22 @@ def formulate_tasks(
     description: str | None,
     precedent_context: tuple = (),
     event_data: dict | None = None,
+    required_fields_floor: tuple[str, ...] = (),
 ) -> FormulationResult:
+    """... `required_fields_floor` is the event type's statically-declared
+    required fields (`profiles.EVENT_TYPE_REQUIRED_FIELDS`, looked up via
+    `EventTypeRegistry.required_fields_for` by the caller — passed as a
+    plain tuple here, not the registry itself, the same way `api/admin.py`
+    and `api/request_boundary.py` duplicate a small contract across a
+    package boundary rather than importing across it). On the JSON parse
+    path below, it is unioned into every formulated step's own
+    `required_event_fields` regardless of what the model does or doesn't
+    declare for that step — a deterministic floor the Main Agent LLM cannot
+    omit, layered under (never replacing) its own per-step declarations,
+    which may still require additional fields beyond it. It is deliberately
+    NOT merged on the legacy AGENT:/TASK: parse path below — see the NOTE
+    at that loop for why."""
+
     descriptors = [registry.descriptor_for(name) for name in protocol.participating_agents]
     base_prompt = _build_formulation_prompt(
         protocol, descriptors, raw_text, classification, area, description, precedent_context, event_data
@@ -709,9 +763,10 @@ def formulate_tasks(
             return FormulationResult(
                 failure_reason=f"formulation did not produce a usable response: {agent_result.text}"
             )
-        if agent_result.text.lstrip().startswith("{"):
+        json_candidate = _formulation_json_candidate(agent_result.text)
+        if json_candidate is not None:
             try:
-                payload = _load_unique_json_object(agent_result.text, "task formulation")
+                payload = _load_unique_json_object(json_candidate, "task formulation")
                 planned_steps = payload.get("steps")
                 if not isinstance(planned_steps, list) or len(planned_steps) != len(descriptors):
                     raise OrchestrationParseError("task formulation must contain one step per participating agent")
@@ -745,7 +800,7 @@ def formulate_tasks(
                     steps.append(
                         Step(
                             agent_name, task_text.strip(), allowed_tools, step_id, tuple(dependencies),
-                            tuple(dict.fromkeys(required_fields)),
+                            tuple(dict.fromkeys((*required_fields, *required_fields_floor))),
                         )
                     )
                     seen_ids.add(step_id)
@@ -765,6 +820,21 @@ def formulate_tasks(
                 )
             exposed_names = {tool.name for tool in descriptor.tools}
             allowed_tools = tuple(name for name in protocol.approved_tools if name in exposed_names)
+            # Deliberately left with step_id == "" (the Step default), same as before. Assigning
+            # a real step_id here looks like free consistency at first — until you notice
+            # protocols.executor.execute_steps' own dispatch condition, `any(step.step_id or
+            # step.depends_on for step in steps)`: giving every step a truthy step_id would
+            # silently reroute every legacy-formatted plan from the plain, single-threaded,
+            # declared-order sequential path into _execute_dependency_steps' scheduler instead —
+            # which runs read-only steps concurrently (a thread pool, up to 4 at once) and orders
+            # by readiness, not declared order, since these steps have no depends_on to constrain
+            # them. That's a real change to protocol execution semantics, unrelated to and much
+            # larger than the step-identification problem an id would solve — not something to
+            # introduce as an incidental side effect of a persistence-layer bug fix. See
+            # _persist_step_outcomes' docstring for how that matching bug is fixed without this.
+            #
+            # required_fields_floor is also deliberately NOT merged in on this path — see
+            # formulate_tasks' docstring.
             steps.append(Step(agent_name=descriptor.name, task_text=task_text, allowed_tools=allowed_tools))
         return FormulationResult(steps=tuple(steps))
 

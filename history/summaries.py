@@ -162,10 +162,15 @@ class SummaryScheduler:
                 daily_periods[(start, end)] = True
 
         for start, end in sorted(daily_periods):
+            # `events` can now contain an event with occurred_at=None (the
+            # real item #6 fix, DIAGNOSTIC_FINDINGS.MD A.2 — fetch_events_range
+            # no longer excludes it) — skip it here exactly like the
+            # daily_periods loop above already does; parse_timestamp(None)
+            # would otherwise raise.
             period_events = [
                 event
                 for event in events
-                if start <= parse_timestamp(event["occurred_at"]) < end
+                if event.get("occurred_at") is not None and start <= parse_timestamp(event["occurred_at"]) < end
             ]
             existing_summary = _exact_summary(self._persistence, "daily", start, end)
             if existing_summary is None or self._daily_stale(existing_summary, period_events):

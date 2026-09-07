@@ -40,11 +40,15 @@ def test_append_event_respects_a_supplied_id(store):
 
 def test_telegram_event_may_be_appended_with_no_occurrence_timestamp_yet(store):
     # §6.11 writes the event before extraction runs — occurred_at is only
-    # known afterwards for a Telegram-originated event.
+    # known afterwards for a Telegram-originated event. Range-queryable by
+    # received_at in the meantime (the real item #6 fix,
+    # DIAGNOSTIC_FINDINGS.MD A.2): an event no longer has to wait for a
+    # resolved occurred_at, and never again silently vanishes from a range
+    # query just because one hasn't been resolved (or never will be).
     event_id = store.append_event(_minimal_event(source="telegram", occurred_at=None))
 
     events = store.fetch_events_range("0000-01-01", "9999-01-01")
-    assert event_id not in [e["event_id"] for e in events]  # not yet occurrence-dated, so not range-queryable
+    assert event_id in [e["event_id"] for e in events]
 
 
 def test_raw_text_is_preserved_exactly(store):

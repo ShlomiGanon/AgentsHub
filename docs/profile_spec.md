@@ -17,6 +17,7 @@ module-level names. All are required unless noted.
 | `PROTOCOLS` | `list` of protocol objects | Each fully populated: name, description, participating agent names, approved tool names, expected success output, criticality, approval flag. |
 | `EVENT_TYPES` | `list[str]` | Must not include `"human_activation"` — that type is added automatically and a profile declaring it is a validation error. |
 | `AREAS` | `list[str]` | |
+| `EVENT_TYPE_REQUIRED_FIELDS` | `dict[str, list[str]]` | Optional, defaults to `{}`. Fields (from `EVENT_TYPES` events, `EVENT_DATA_FIELDS` names) that must be resolved before an event of that type proceeds past intake. See "Event-type required fields", below. |
 | `DB_PATH` | `str` | No default — two profiles running at once must not collide. |
 | `API_PORT` | `int` | No default, same reason. |
 | `RETRY_COUNT` | `int` | Starting value only; the settings store owns it after first run. |
@@ -61,6 +62,51 @@ After profile and credentials load, API startup makes one real, minimal,
 tool-free verification call per unique Provider/Model. The configured timeout
 and disabled provider retry apply to warmup too. Any failure aborts startup;
 there is no degraded mode.
+
+## Event-type required fields
+
+`EVENT_TYPE_REQUIRED_FIELDS` is an optional module-level `dict[str, list[str]]`
+mapping an event type (one already listed in `EVENT_TYPES`) to field names
+that must be resolved before an event of that type may proceed past intake.
+It defaults to `{}` — no event type requires anything — which is fully
+backward compatible: a profile that doesn't declare it (every profile
+before this) behaves identically to today. Each field name must be one of
+the fixed event-data fields (`classification`, `area`, `entities`,
+`description`, `severity`, `occurred_at` — `protocols.EVENT_DATA_FIELDS`);
+an unknown field name, or a key naming an event type not in `EVENT_TYPES`,
+fails profile loading (`profiles.loader.validate_profile`). `unclassified`
+may not be declared here — its required fields are fixed in core code
+(`("area",)`, `profiles.UNCLASSIFIED_REQUIRED_FIELDS`) and apply to every
+profile identically, since it's the built-in fallback for a report that
+doesn't match any declared event type, not a profile-defined one.
+
+Declaring a field here is enforced in three places, together:
+
+1. **Pre-formulation gate.** Immediately after extraction resolves an
+   event's classification, before risk assessment or protocol selection
+   ever run, any declared field still missing pauses the event with an
+   `event_data` hold asking the reporter for it — exactly like the
+   built-in `unclassified` → `area` requirement, just profile-declared
+   instead of fixed.
+2. **Clarification re-check.** If an event started `unclassified` and a
+   commander later resolves a clarification hold into one of these event
+   types, the same check runs again for the newly chosen type before the
+   event proceeds to risk assessment — a type's required fields can't be
+   skipped just because the event initially satisfied `unclassified`'s
+   different, narrower requirement.
+3. **Formulation-time floor.** When the Main Agent LLM formulates each
+   protocol step's task, this event type's required fields are unioned
+   into that step's own `required_event_fields` — a deterministic floor
+   the model cannot omit, regardless of what it does or doesn't declare on
+   any given formulation call. The model may still declare additional
+   fields a specific step needs beyond this floor; the union only adds,
+   never removes, so per-step flexibility for anything beyond the static
+   floor is unaffected.
+
+None of this replaces the existing per-step mechanism (a step's own
+`required_event_fields`, checked by `protocols.executor` before that step
+runs) — it's a floor merged into it, not a separate gate with its own
+enforcement path.
 
 ## Main Agent identity and capability answers
 

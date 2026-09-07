@@ -2,8 +2,9 @@
 
 MESSAGES = {
     "status.thinking": "The model is thinking...",
-    "status.async_ack": "Got it — your request is queued.\nTask ID: {task_id}",
+    "status.async_ack": "Got it — your request is queued.\nTask ID: {task_id}\nYou'll hear back here once it's done.",
     "error.request_failed": "Request failed: {reason}",
+    "error.run_failure_generic": "Couldn't process that — try rephrasing, or contact a commander.",
     "debug.llm_call": (
         "LLM {provider}/{model} completed in {latency_ms} ms; "
         "tokens: {tokens}."
@@ -38,14 +39,24 @@ MESSAGES = {
     "header.approval_needed": "[APPROVAL NEEDED — please reply]",
     "header.precedent_closure": "[NOTICE — closed on precedent — no reply needed]",
     "header.uncertain_verdict": "[NOTICE — uncertain verdict — no reply needed]",
+    "header.uncertain_reporter": "[UPDATE]",
     "header.no_match": "[NOTICE — no protocol available — no reply needed]",
     "header.result": "[RESULT]",
     "header.failed": "[RUN FAILED]",
     "header.declined": "[DECLINED]",
     "header.event_data_needed": "[MORE EVENT DETAILS NEEDED]",
     "result.verdict": "Verdict: {outcome}",
+    "outcome.succeeded": "succeeded",
+    "outcome.failed": "failed",
+    "outcome.uncertain": "uncertain",
+    "outcome.closed_on_precedent": "closed on precedent",
+    "outcome.declined": "declined",
+    "outcome.no_match_protocol": "no matching protocol",
+    "risk.high": "high",
+    "risk.low": "low",
     "result.what_was_done": "What was done:",
     "result.insight": "Insight:",
+    "result.protocol_suffix": "Protocol: {protocol_name} ({risk_level}, {reason})",
     "failure.failed_step": "Failed step: {agent}",
     "failure.reason": "Reason: {reason}",
     "failure.completed_before": "Completed before the failure:",
@@ -127,6 +138,10 @@ MESSAGES = {
     "notice.uncertain": (
         "{header}\n\nEvent {event_id} finished with an uncertain verdict.\n\nInsight:\n{insight}"
     ),
+    "notice.uncertain_reporter": (
+        "{header}\n\nYour reported event is still being reviewed. "
+        "We'll update you if there's more to share."
+    ),
     "notice.no_match": (
         "{header}\n\nNo existing protocol can fulfill this request.\nRaw text: {raw_text}\n"
         "{reason}\nRisk: {risk_level} ({risk_reason})"
@@ -141,7 +156,13 @@ MESSAGES = {
     "bot.refused": "Refused: {message}",
     "bot.taken_as": "Got it — taken as a {kind}.",
     "bot.waiting_approval": "It is now waiting for a commander's approval.",
-    "bot.job_queued": "Job ID: {job_id}. You'll hear back here once it's done.",
+    "bot.welcome": (
+        "Hi — this is {profile_name}. Report something, ask a question, or "
+        "request an action — just type it."
+    ),
+    "command.menu_start": "Get started",
+    "command.menu_profile": "View or edit the active profile",
+    "command.menu_settings": "View or change live settings",
     "protocol.expected_fields": (
         "Refused: expected 7 pipe-separated fields — name | description | "
         "participating_agents (comma-separated) | approved_tools (comma-separated) | "
@@ -163,6 +184,11 @@ MESSAGES = {
     "api.queue_full": "The event queue is full; retry later.",
     "api.queue_full_event_detail": "The event queue is full; retry the event detail later.",
     "api.event_detail_again": "Please provide the missing event details again.",
+    "api.event_detail_ambiguous": (
+        "You have {count} reports waiting for missing details right now, so I "
+        "can't tell which one this reply is about. A commander should resolve "
+        "the older one first, then reply again."
+    ),
     "api.clarify_check_record_do": "Could you clarify what you want me to check, record, or do?",
     "api.clarify_action": "Could you clarify what you want me to do?",
     "api.queued_report": "Queued report. Task ID: {task_id}.",
@@ -237,4 +263,11 @@ MESSAGES = {
     "terminal.provision_service": (
         "Provisioning the bot's own service identity via `cli.user_admin`: {identity}"
     ),
+    "admin.login_wrong_credentials": "Wrong username or password.",
+    "admin.login_locked_out": "Too many failed attempts. Try again in {duration}.",
+    "admin.lockout_less_than_a_minute": "less than a minute",
+    "admin.lockout_one_minute": "about 1 minute",
+    "admin.lockout_minutes": "about {minutes} minutes",
+    "admin.lockout_one_hour": "about 1 hour",
+    "admin.lockout_hours": "about {hours} hours",
 }

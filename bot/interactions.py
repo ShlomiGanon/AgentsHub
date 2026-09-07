@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Literal
 from dataclasses import dataclass
 
 from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
-from messages import MessageCatalog, get_catalog
+from messages import MessageCatalog, MessageCatalogError, get_catalog
 
 from typing import TYPE_CHECKING
 
@@ -19,6 +19,7 @@ MessageKind = Literal[
     "approval_needed",
     "precedent_closure",
     "uncertain_verdict",
+    "uncertain_reporter",
     "no_match",
     "result",
     "failed",
@@ -31,6 +32,7 @@ _HEADER_KEYS: dict[MessageKind, str] = {
     "approval_needed": "header.approval_needed",
     "precedent_closure": "header.precedent_closure",
     "uncertain_verdict": "header.uncertain_verdict",
+    "uncertain_reporter": "header.uncertain_reporter",
     "no_match": "header.no_match",
     "result": "header.result",
     "failed": "header.failed",
@@ -95,13 +97,56 @@ def split_message(text: str, limit: int = TELEGRAM_MESSAGE_LIMIT) -> list[str]:
     return [text[i : i + limit] for i in range(0, len(text), limit)]
 
 
+# A `failure_reason` is meant to be a short explanation, but its actual source can be an entire
+# rejected model response (e.g. protocol selection's own raw chain-of-thought when the response
+# didn't parse) — cap what a Telegram message ever shows for it, regardless of how that text was
+# produced. Only the *displayed* copy is capped; the stored value (DB row, logs, DEEP_DEBUG) is
+# never touched here and stays full length (docs/IMPROVES/CRITICAL_FIXES_PLAN.MD item 3).
+_FAILURE_REASON_DISPLAY_LIMIT = 240
+
+
+def _short_failure_reason(failure_reason: str) -> str:
+    stripped = failure_reason.strip()
+    if len(stripped) <= _FAILURE_REASON_DISPLAY_LIMIT:
+        return stripped
+    return stripped[:_FAILURE_REASON_DISPLAY_LIMIT].rstrip() + "…"
+
+
+def _outcome_word(outcome: str, catalog: MessageCatalog) -> str:
+    """`outcome` (history.event_pipeline.VALID_OUTCOMES) is a fixed, internal English identifier
+    — interpolating it directly into a translated message left it as a raw English word inside an
+    otherwise-Hebrew sentence (docs/IMPROVES/CRITICAL_FIXES_PLAN.MD item 4). Every valid outcome
+    has a matching `outcome.<value>` catalog key in both languages; the fallback to the raw value
+    is defensive only — it should never actually trigger while the catalog stays in sync with
+    VALID_OUTCOMES."""
+
+    try:
+        return catalog.text(f"outcome.{outcome}")
+    except MessageCatalogError:
+        return outcome
+
+
+def _risk_level_word(risk_level: str, catalog: MessageCatalog) -> str:
+    """`risk_level` (`orchestrator.reasoning.RiskAssessment.level`, `Literal["high",
+    "low"]`) is a fixed, internal English identifier — same class of bug as
+    `_outcome_word` above, found while building item #9's protocol suffix
+    (REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md HARD RULE: don't introduce a third
+    untranslated-value instance). Also applied to the two pre-existing call sites
+    that already interpolated `risk_level` raw (`approval.risk`, `notice.no_match`)."""
+
+    try:
+        return catalog.text(f"risk.{risk_level}")
+    except MessageCatalogError:
+        return risk_level
+
+
 def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None) -> str:
     messages = _catalog(catalog)
     kind: MessageKind = "result" if result.outcome != "declined" else "declined"
-    lines = [format_header(kind, messages), "", messages.text("result.verdict", outcome=result.outcome)]
+    lines = [format_header(kind, messages), "", messages.text("result.verdict", outcome=_outcome_word(result.outcome, messages))]
 
     if result.failure_reason:
-        lines += ["", result.failure_reason]
+        lines += ["", _short_failure_reason(result.failure_reason)]
 
     if result.steps_completed:
         lines += ["", messages.text("result.what_was_done")]
@@ -109,6 +154,25 @@ def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None
 
     if result.insight_text:
         lines += ["", messages.text("result.insight"), result.insight_text]
+
+    if result.protocol_name:
+        # Always-on trailing protocol/reason line (REQUIRED_FIELDS_AND_CLOSED_
+        # DECISIONS.md Part 3 / item #9) — sourced entirely from data already
+        # computed during the run, no new model call. Omitted whenever no
+        # protocol was ever selected (e.g. a `no_match_protocol` outcome) —
+        # there is nothing to name in that case, same principle as the plain
+        # question/conversation replies this doesn't apply to at all (those
+        # never reach format_job_result). Uses the protocol *selection*
+        # reason, not the risk reason, as "the reason the protocol that ran
+        # was chosen."
+        risk_word = _risk_level_word(result.risk_level, messages) if result.risk_level else messages.text("common.none")
+        reason = result.protocol_reason or messages.text("common.no_reason")
+        lines += [
+            "",
+            messages.text(
+                "result.protocol_suffix", protocol_name=result.protocol_name, risk_level=risk_word, reason=reason
+            ),
+        ]
 
     return "\n".join(lines)
 
@@ -120,7 +184,7 @@ def format_failure_notice(notice: "FailureNotice", catalog: MessageCatalog | Non
         format_header("failed", messages),
         "",
         messages.text("failure.failed_step", agent=agent),
-        messages.text("failure.reason", reason=notice.failure_reason),
+        messages.text("failure.reason", reason=_short_failure_reason(notice.failure_reason)),
     ]
 
     if notice.steps_completed_before_failure:
@@ -378,7 +442,7 @@ def format_approval_prompt(
     messages = _catalog(catalog)
     header = format_header("approval_needed", messages)
     common = messages.text(
-        "approval.risk", risk_level=notice.risk_level, risk_reason=notice.risk_reason
+        "approval.risk", risk_level=_risk_level_word(notice.risk_level, messages), risk_reason=notice.risk_reason
     )
 
     if notice.reason == "flagged_protocol":
@@ -431,6 +495,17 @@ async def notify_uncertain_verdict(deps: "BotDeps", notice: "UncertainVerdictNot
         await deps.telegram_client.send_text(chat_id, text)
 
 
+def format_uncertain_verdict_reporter_notice(catalog: MessageCatalog | None = None) -> str:
+    """The short, generic counterpart to `format_uncertain_verdict_notice` —
+    delivered to the original reporter (any role), carries no insight text by
+    design (REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 2 / item #8)."""
+
+    messages = _catalog(catalog)
+    return messages.text(
+        "notice.uncertain_reporter", header=format_header("uncertain_reporter", messages)
+    )
+
+
 def format_no_match_notice(notice: "NoMatchNotice", catalog: MessageCatalog | None = None) -> str:
     messages = _catalog(catalog)
     why = notice.reason or messages.text("common.no_reason")
@@ -439,7 +514,7 @@ def format_no_match_notice(notice: "NoMatchNotice", catalog: MessageCatalog | No
         header=format_header("no_match", messages),
         raw_text=notice.raw_text,
         reason=why,
-        risk_level=notice.risk_level,
+        risk_level=_risk_level_word(notice.risk_level, messages),
         risk_reason=notice.risk_reason,
     )
 

@@ -8,6 +8,9 @@ from bot.api_client import HeldApprovalNotice, HoldAnswerOutcome, NoMatchNotice,
 from bot.holds import (
     build_callback_data,
     format_approval_prompt,
+    format_no_match_notice,
+    format_uncertain_verdict_notice,
+    format_uncertain_verdict_reporter_notice,
     handle_approval_answer,
     notify_no_match,
     notify_uncertain_verdict,
@@ -47,6 +50,19 @@ def test_ambiguous_selection_prompt_shows_candidates_as_buttons():
     assert "minor_incident_review" in text
     assert "routine_check" in text
     assert [label for label, _ in buttons] == ["minor_incident_review", "routine_check"]
+
+
+def test_approval_prompt_risk_level_is_translated_for_hebrew_not_left_as_raw_english():
+    """Found while building item #9's protocol suffix — `risk_level` is a fixed
+    internal English identifier (`Literal["high", "low"]`), the same class of bug
+    as CRITICAL_FIXES_PLAN.MD item 4's outcome-word leak. Fixed here too, per
+    REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md's HARD RULE against a third instance."""
+    from messages import get_catalog
+
+    text, _buttons = format_approval_prompt(FLAGGED_NOTICE, get_catalog("he"))
+
+    assert "high" not in text
+    assert "גבוה" in text
 
 
 def test_an_unrecognized_reason_raises_instead_of_rendering_as_ambiguous():
@@ -108,6 +124,18 @@ def test_uncertain_verdict_is_not_phrased_as_a_question_and_has_no_buttons():
     assert "no reply needed" in telegram.sent[-1].text.lower()
 
 
+def test_uncertain_verdict_reporter_notice_is_short_generic_and_carries_no_insight_text():
+    """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 2 (item #8): distinct from
+    the commander-only detailed notice above — no insight text, no event ID,
+    just a short fixed acknowledgement."""
+    text = format_uncertain_verdict_reporter_notice()
+
+    assert "mixed signal" not in text
+    assert "insight" not in text.lower()
+    assert "still being reviewed" in text.lower()
+    assert text != format_uncertain_verdict_notice(UncertainVerdictNotice(event_id="e1", insight_text="mixed signal"))
+
+
 def test_no_match_notice_is_not_phrased_as_a_question_and_has_no_buttons():
     # NO_MATCH is a real terminal outcome plus a one-way notification, not
     # a hold — same shape as notify_uncertain_verdict, never routed through
@@ -126,6 +154,16 @@ def test_no_match_notice_is_not_phrased_as_a_question_and_has_no_buttons():
     assert "?" not in telegram.sent[-1].text
     assert "no reply needed" in telegram.sent[-1].text.lower()
     assert notice.reason in telegram.sent[-1].text
+
+
+def test_no_match_notice_risk_level_is_translated_for_hebrew_not_left_as_raw_english():
+    from messages import get_catalog
+
+    notice = NoMatchNotice(event_id="e1", raw_text="raw", reason="no match", risk_level="low", risk_reason="informational")
+    text = format_no_match_notice(notice, get_catalog("he"))
+
+    assert "low" not in text
+    assert "נמוך" in text
 
 
 def test_no_match_notice_reaches_every_commander():

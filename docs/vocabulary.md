@@ -47,7 +47,7 @@ it).
 | `source` | `str` (`"sensor"` \| `"telegram"`) | no |
 | `sender_identity` | `str` | no |
 | `raw_text` | `str` | no |
-| `classification` | `str` | yes — empty is what a clarification hold resolves |
+| `classification` | `str` | yes — empty is what a clarification hold resolves; a report matching no profile event type resolves to the built-in `"unclassified"` (see **Unclassified** below) rather than staying empty |
 | `area` | `str` | yes |
 | `entities` | `list[str]` | yes |
 | `description` | `str` | yes |
@@ -221,11 +221,32 @@ precedes approval, so an event cannot be in both.
 
 ## Human activation
 
-A built-in event type, present in every deployment, marking an event that
-came from a person requesting an action rather than from anything observed
-in the field. It is the only classification not drawn from the profile —
-the event-type registry (§2.1) adds it on every run and rejects a profile
-that tries to declare it itself as a duplicate.
+Marks an event that came from a person requesting an action rather than
+from anything observed in the field. Correction (2026-09-04,
+`docs/IMPROVES/REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md` Part 1): despite
+living in the `classification` column, `human_activation` is best
+understood as a **source label** — how the report arrived — not an event
+type in the same sense as `"fire"` or `"unclassified"` below; it declares
+no required fields of its own. It remains the only classification value
+not drawn from the profile — the event-type registry (§2.1) adds it on
+every run and rejects a profile that tries to declare it itself as a
+duplicate.
+
+## Unclassified
+
+A built-in event type (`"unclassified"`), present in every deployment,
+that a report resolves to when it doesn't match any event type the active
+profile declares — the deterministic fallback for "nothing matched",
+replacing what used to just be an empty `classification`. Unlike a
+profile-defined event type, its required fields are fixed in core code,
+not declared by any profile: currently just `area` — the system still
+asks the original sender where the problem is before saving the event,
+even when it can't tell what kind of event it is. An unclassified event
+is deliberately left with no protocol, sitting until a commander decides
+what to do with it (see **Held for clarification** above, which is what
+an unresolved classification — now surfaced as `"unclassified"` rather
+than staying empty — still leads to, once its required field is
+resolved).
 
 ## RequestedOperation
 

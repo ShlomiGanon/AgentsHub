@@ -15,6 +15,7 @@ from messages import MessageCatalogError, get_catalog
 from profiles.contracts import (
     HUMAN_ACTIVATION_TYPE,
     REQUIRED_PROFILE_ATTRS,
+    UNCLASSIFIED_TYPE,
     AgentSpec,
     AreaRegistry,
     EventTypeRegistry,
@@ -25,7 +26,7 @@ from profiles.contracts import (
     StageModelPolicy,
     protocol_missing_attrs,
 )
-from protocols import CriticalityLevel
+from protocols import CriticalityLevel, EVENT_DATA_FIELDS
 
 
 def build_area_registry(loaded_profile: "LoadedProfile") -> AreaRegistry:
@@ -33,7 +34,11 @@ def build_area_registry(loaded_profile: "LoadedProfile") -> AreaRegistry:
 
 
 def build_event_type_registry(loaded_profile: "LoadedProfile") -> EventTypeRegistry:
-    return EventTypeRegistry(types=loaded_profile.event_types)
+    # UNCLASSIFIED_TYPE's required fields are fixed in EventTypeRegistry
+    # itself (item #6) — not read from the profile.
+    return EventTypeRegistry(
+        types=loaded_profile.event_types, required_fields=MappingProxyType(dict(loaded_profile.event_type_required_fields))
+    )
 
 def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> list[str]:
     failures: list[str] = []
@@ -73,6 +78,21 @@ def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> lis
             f"profile declares '{HUMAN_ACTIVATION_TYPE}' as an event type — "
             "it is built in and added automatically, declaring it is a duplicate"
         )
+
+    required_fields = getattr(loaded, "event_type_required_fields", {})
+    if UNCLASSIFIED_TYPE in required_fields:
+        failures.append(
+            f"profile declares EVENT_TYPE_REQUIRED_FIELDS['{UNCLASSIFIED_TYPE}'] — "
+            "its required fields are fixed in core code, declaring it here is not allowed"
+        )
+    for event_type, fields in required_fields.items():
+        if event_type != UNCLASSIFIED_TYPE and event_type not in declared_event_types:
+            failures.append(f"EVENT_TYPE_REQUIRED_FIELDS references undeclared event type '{event_type}'")
+        unknown_fields = sorted(set(fields) - set(EVENT_DATA_FIELDS))
+        if unknown_fields:
+            failures.append(
+                f"EVENT_TYPE_REQUIRED_FIELDS['{event_type}'] references unknown field(s): {', '.join(unknown_fields)}"
+            )
 
     if not loaded.areas:
         failures.append("profile declares no areas — extraction has nothing to resolve a location to")
@@ -317,6 +337,12 @@ def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) 
         conversation_history_turns=getattr(profile_module, "CONVERSATION_HISTORY_TURNS", 0),
         conversation_history_ttl_hours=getattr(profile_module, "CONVERSATION_HISTORY_TTL_HOURS", 24),
         optimization_policy=getattr(profile_module, "OPTIMIZATION_POLICY", OptimizationPolicy()),
+        event_type_required_fields=MappingProxyType(
+            {
+                event_type: tuple(fields)
+                for event_type, fields in getattr(profile_module, "EVENT_TYPE_REQUIRED_FIELDS", {}).items()
+            }
+        ),
     )
 
     failures = validate_profile(loaded, declared_event_types=profile_module.EVENT_TYPES)

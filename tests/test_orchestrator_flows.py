@@ -1,5 +1,6 @@
 import json
 import types
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -11,8 +12,10 @@ from agents.runtime import build_agent_registry
 from auth.permissions import PermissionLevel
 from config.base import BaseConfig, TierModel
 from history.query import HistoryQueryService
+import orchestrator.flows as flows_module
 from orchestrator.flows import (
     FlowDeps,
+    apply_event_data_reply,
     assemble_core_agents,
     begin_report,
     begin_request,
@@ -25,8 +28,10 @@ from orchestrator.flows import (
     resolve_clarification,
     resume_after_approval,
     resume_after_clarification,
+    resume_after_event_data,
     run_report_extraction,
 )
+from orchestrator.holds import create_clarification_hold, create_event_data_hold
 from orchestrator.insights import InsightsAgent
 from orchestrator.main_agent import MainAgent
 from persistence.sqlite_store import SQLitePersistence
@@ -198,18 +203,41 @@ def _happy_path_agent(risk_score="0.2", selected="status_check", verdict="succes
 
 
 def test_process_report_holds_for_clarification_when_classification_is_unresolved(deps):
-    agent = _ScriptedAgent({"Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}'})
+    """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 (item #6): an unresolved
+    classification now resolves to the built-in UNCLASSIFIED_TYPE, which
+    requires `area` — asked (via the event-data hold) before the clarification
+    hold that lets a commander pick a real classification exists at all."""
+    agent = _ScriptedAgent(
+        {
+            "Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}',
+            "Write one concise question": "Which area is this in?",
+        }
+    )
     insights_agent = _ScriptedAgent({})
 
     result = process_report(deps, agent, insights_agent, "something happened, unclear what", "telegram", "2026-08-20T10:00:00", "viewer-1")
 
-    assert result.outcome == "held_for_clarification"
+    assert result.outcome == "waiting_for_event_data"
+    assert deps.persistence.fetch_event(result.event_id)["classification"] == "unclassified"
+    [hold] = deps.persistence.list_held_events("event_data")
+    assert hold["missing_fields"] == ["area"]
+    assert deps.persistence.list_held_events("clarification") == []
+
+    deps.persistence.update_event(result.event_id, {"area": "north_sector"})
+    resumed = resume_after_event_data(deps, result.event_id, agent, insights_agent)
+
+    assert resumed.outcome == "held_for_clarification"
     [held] = deps.persistence.list_held_events("clarification")
     assert held["event_id"] == result.event_id
 
 
 def test_process_report_holds_for_clarification_logs_the_hold_kind(deps, caplog):
-    agent = _ScriptedAgent({"Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}'})
+    agent = _ScriptedAgent(
+        {
+            "Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}',
+            "Write one concise question": "Which area is this in?",
+        }
+    )
     insights_agent = _ScriptedAgent({})
 
     with caplog.at_level("INFO"):
@@ -217,13 +245,310 @@ def test_process_report_holds_for_clarification_logs_the_hold_kind(deps, caplog)
 
     holds = [r for r in caplog.records if getattr(r, "event", None) == "hold_created"]
     assert len(holds) == 1
-    assert holds[0].hold_kind == "clarification"
+    assert holds[0].hold_kind == "event_data"
     assert holds[0].event_id == result.event_id
 
     extraction = [r for r in caplog.records if getattr(r, "event", None) == "extraction_result"]
     assert len(extraction) == 1
     assert extraction[0].classification is None
     assert extraction[0].missing_fields  # unresolved classification is named as missing
+
+    caplog.clear()
+    deps.persistence.update_event(result.event_id, {"area": "north_sector"})
+    with caplog.at_level("INFO"):
+        resume_after_event_data(deps, result.event_id, agent, insights_agent)
+
+    resumed_holds = [r for r in caplog.records if getattr(r, "event", None) == "hold_created"]
+    assert len(resumed_holds) == 1
+    assert resumed_holds[0].hold_kind == "clarification"
+
+
+def test_required_fields_gate_asks_only_for_the_field_extraction_could_not_resolve(deps):
+    """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 (item #6): a profile-
+    defined event type's required fields are checked immediately after
+    extraction, before risk assessment or protocol selection ever run —
+    asking only for the one extraction couldn't resolve."""
+    gated_deps = replace(
+        deps,
+        event_type_registry=EventTypeRegistry(types=deps.event_type_registry.types, required_fields={"fire": ("area", "severity")}),
+    )
+    agent = _ScriptedAgent(
+        {
+            "Extract this operational event": '{"classification": "fire", "area": "north_sector", "entities": [], "description": "smoke", "severity": null, "occurred_at": "2026-08-20T09:00:00"}',
+            "Write one concise question": "How severe is it?",
+            "RISK_SCORE": "RISK_SCORE: 0.1\nREASON: r",  # must not be reached before the gate resolves
+        }
+    )
+    insights_agent = _ScriptedAgent({})
+
+    result = process_report(gated_deps, agent, insights_agent, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    assert result.outcome == "waiting_for_event_data"
+    [hold] = gated_deps.persistence.list_held_events("event_data")
+    assert hold["missing_fields"] == ["severity"]  # not "area" — already resolved by extraction
+    assert not any("RISK_SCORE" in call for call in agent.calls)  # risk assessment never ran
+
+
+def test_required_fields_gate_resumes_into_risk_assessment_once_resolved(deps):
+    """Once the gate's missing field is resolved, the event proceeds through
+    risk assessment and protocol selection exactly as it would have if the
+    field had been present from the start."""
+    gated_deps = replace(
+        deps,
+        event_type_registry=EventTypeRegistry(types=deps.event_type_registry.types, required_fields={"fire": ("area", "severity")}),
+    )
+    agent = _happy_path_agent(risk_score="0.1", selected="status_check")
+    agent._dispatch["Extract this operational event"] = (
+        '{"classification": "fire", "area": "north_sector", "entities": [], "description": "smoke", '
+        '"severity": null, "occurred_at": "2026-08-20T09:00:00"}'
+    )
+    agent._dispatch["Write one concise question"] = "How severe is it?"
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    result = process_report(gated_deps, agent, insights_agent, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    assert result.outcome == "waiting_for_event_data"
+
+    gated_deps.persistence.update_event(result.event_id, {"severity": "moderate"})
+    resumed = resume_after_event_data(gated_deps, result.event_id, agent, insights_agent)
+
+    assert resumed.outcome == "succeeded"
+    assert gated_deps.persistence.fetch_event(result.event_id)["selected_protocol"] == "status_check"
+
+
+def test_per_step_required_fields_still_work_alongside_the_new_event_type_gate(deps):
+    """The new, early, event-type-level gate (item #6) is additional to, not
+    a replacement for, the existing per-protocol-step required-field
+    mechanism (protocols/executor.py) — proves both fire correctly, end to
+    end, without interfering with each other."""
+    agent = _ScriptedAgent(
+        {
+            # classification="fire" has no event-type-level required fields
+            # declared in this fixture's plain registry — the new gate is a
+            # no-op here; the per-step mechanism below is what fires.
+            "Extract this operational event": (
+                '{"classification": "fire", "area": "north_sector", "entities": [], "description": "smoke", '
+                '"severity": "moderate", "occurred_at": "2026-08-20T09:00:00"}'
+            ),
+            "RISK_SCORE": "RISK_SCORE: 0.1\nREASON: r",
+            "Choose the protocol": "SELECTED: status_check\nREASON: fits",
+            "participating in the": json.dumps(
+                {
+                    "steps": [
+                        {
+                            "step_id": "s1",
+                            "agent_name": "reference_agent",
+                            "task": "check status",
+                            "depends_on": [],
+                            "required_event_fields": ["entities"],
+                        }
+                    ]
+                }
+            ),
+            "Write one concise question": "What entities are involved?",
+            "VERDICT:": "VERDICT: success\nREASONING: r",
+        }
+    )
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    result = process_report(deps, agent, insights_agent, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    assert result.outcome == "waiting_for_event_data"
+    [hold] = deps.persistence.list_held_events("event_data")
+    assert hold["missing_fields"] == ["entities"]
+    assert hold["waiting_step_ids"] == ["s1"]  # non-empty — this is a per-step hold, not the new gate's
+
+    deps.persistence.update_event(result.event_id, {"entities": ["gate-3"]})
+    resumed = resume_after_event_data(deps, result.event_id, agent, insights_agent)
+
+    assert resumed.outcome == "succeeded"
+
+
+def test_required_fields_floor_is_enforced_end_to_end_for_the_reported_fire_bug(deps):
+    """The original reported bug (docs/IMPROVES/AREA_FIELD_REGRESSION_CHECK.MD),
+    closed end to end: a "fire" report with no area (i) is held by the
+    pre-formulation gate before protocol selection ever runs, and (ii) once
+    area is supplied, every persisted step's required_event_fields includes
+    "area" even though the scripted formulation response below doesn't
+    declare it — the static floor, not the model, is what guarantees it."""
+    gated_deps = replace(
+        deps,
+        event_type_registry=EventTypeRegistry(types=deps.event_type_registry.types, required_fields={"fire": ("area",)}),
+    )
+    agent = _ScriptedAgent(
+        {
+            "Extract this operational event": (
+                '{"classification": "fire", "area": null, "entities": [], "description": "smoke", '
+                '"severity": "moderate", "occurred_at": "2026-08-20T09:00:00"}'
+            ),
+            "Write one concise question": "Which area is this in?",
+            "RISK_SCORE": "RISK_SCORE: 0.1\nREASON: never reached before area is supplied",
+            "Choose the protocol": "SELECTED: status_check\nREASON: fits",
+            "participating in the": json.dumps(
+                {
+                    "steps": [
+                        {
+                            "step_id": "s1",
+                            "agent_name": "reference_agent",
+                            "task": "check status",
+                            "depends_on": [],
+                            "required_event_fields": [],  # model doesn't declare it — the floor must
+                        }
+                    ]
+                }
+            ),
+            "VERDICT:": "VERDICT: success\nREASONING: r",
+        }
+    )
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    result = process_report(gated_deps, agent, insights_agent, "fire, no location given", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    assert result.outcome == "waiting_for_event_data"
+    [hold] = gated_deps.persistence.list_held_events("event_data")
+    assert hold["missing_fields"] == ["area"]
+    assert hold["waiting_step_ids"] == []  # the early gate, not a per-step hold
+    assert not any("RISK_SCORE" in call for call in agent.calls)  # protocol selection never ran
+
+    gated_deps.persistence.update_event(result.event_id, {"area": "north_sector"})
+    resumed = resume_after_event_data(gated_deps, result.event_id, agent, insights_agent)
+
+    assert resumed.outcome == "succeeded"
+    persisted_steps = gated_deps.persistence.fetch_event(result.event_id)["steps"]
+    assert persisted_steps and all("area" in step["required_event_fields"] for step in persisted_steps)
+
+
+def test_clarification_resolution_re_gates_for_the_newly_chosen_classifications_required_fields(deps):
+    """The clarification-resolution path (`continue_after_clarification`) now
+    re-runs the required-fields gate for the classification the commander
+    just chose. Reaching a clarification hold only ever validated
+    UNCLASSIFIED_TYPE's fixed `("area",)` floor — resolving into a real
+    type with its own required fields still missing must pause immediately,
+    the same way the fresh-extraction path would have, rather than letting
+    the event proceed into risk assessment with a required field unresolved."""
+    gated_deps = replace(
+        deps,
+        event_type_registry=EventTypeRegistry(types=deps.event_type_registry.types, required_fields={"fire": ("area",)}),
+    )
+    agent = _ScriptedAgent(
+        {
+            "Write one concise question": "Which area is this in?",
+            "RISK_SCORE": "RISK_SCORE: 0.1\nREASON: never reached — the re-gate must block first",
+        }
+    )
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    event_id = begin_report(gated_deps, "something happened, unclear what", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    hold_id = create_clarification_hold(gated_deps.persistence, event_id, "something happened, unclear what")
+
+    resumed = resume_after_clarification(gated_deps, agent, insights_agent, hold_id, "commander-1", PermissionLevel.COMMANDER, "fire")
+
+    assert resumed.outcome == "waiting_for_event_data"
+    assert gated_deps.persistence.fetch_event(event_id)["classification"] == "fire"
+    [hold] = gated_deps.persistence.list_held_events("event_data")
+    assert hold["missing_fields"] == ["area"]
+    assert hold["waiting_step_ids"] == []  # the early gate, not a per-step hold
+    assert not any("RISK_SCORE" in call for call in agent.calls)  # risk assessment never ran
+
+
+def test_clarification_resolution_does_not_re_gate_when_the_registry_declares_no_required_fields(deps):
+    """Regression: a profile that declares no EVENT_TYPE_REQUIRED_FIELDS (the
+    plain `deps` fixture) sees no behavior change on the clarification path
+    — this mirrors `test_resume_after_clarification_continues_at_risk_
+    assessment_not_extraction` and must keep proceeding straight to risk
+    assessment exactly as before."""
+    agent = _ScriptedAgent(
+        {
+            "RISK_SCORE": "RISK_SCORE: 0.1\nREASON: r",
+            "Choose the protocol": "SELECTED: status_check\nREASON: fits",
+            "participating in the": "AGENT: reference_agent\nTASK: check gate 3",
+            "VERDICT:": "VERDICT: success\nREASONING: r",
+        }
+    )
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    event_id = begin_report(deps, "something happened, unclear what", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    deps.persistence.update_event(event_id, {"area": "north_sector"})
+    hold_id = create_clarification_hold(deps.persistence, event_id, "something happened, unclear what")
+
+    resumed = resume_after_clarification(deps, agent, insights_agent, hold_id, "commander-1", PermissionLevel.COMMANDER, "fire")
+
+    assert resumed.outcome == "succeeded"
+    assert deps.persistence.list_held_events("event_data") == []
+
+
+def test_persist_step_outcomes_matches_a_step_id_less_step_whose_task_text_was_mutated(deps):
+    """Regression for the bug found while scoping the required-fields floor
+    merge: a step with step_id == "" (every step from the legacy AGENT:/
+    TASK: formulation fallback) and a non-empty required_event_fields gets
+    its task_text rewritten by _execute_protocol_plan's event-data
+    injection before it runs — the outcome that comes back therefore
+    carries a step that differs *by value* from the original. Matching
+    must land on the right position regardless (see _persist_step_outcomes'
+    own docstring for why position, not value equality, is now used)."""
+    event_id = begin_report(deps, "raw", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    original_step = Step(
+        agent_name="reference_agent", task_text="check status", allowed_tools=("check_status",),
+        required_event_fields=("area",),
+    )
+    mutated_step = replace(original_step, task_text="check status\n\nCurrent validated event data JSON: {}")
+    outcome = StepOutcome(step=mutated_step, result_text="done", attempt_count=1, succeeded=True, status="succeeded")
+
+    flows_module._persist_step_outcomes(deps, event_id, (original_step,), (outcome,))
+
+    [persisted] = deps.persistence.fetch_event(event_id)["steps"]
+    assert persisted["step_index"] == 0
+    assert persisted["agent_name"] == "reference_agent"
+    assert persisted["task_text"] == "check status"  # the original step's, not the mutated copy
+    assert persisted["required_event_fields"] == ["area"]
+    assert persisted["result_text"] == "done"
+    assert persisted["status"] == "succeeded"
+
+
+def test_persist_step_outcomes_matches_multiple_step_id_less_steps_by_position(deps):
+    """The same guarantee across more than one step_id == "" step in the same
+    plan — proves the position-based match isn't a single-step coincidence
+    (every legacy-formatted plan has every step id-less, not just one)."""
+    event_id = begin_report(deps, "raw", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    step_a = Step(agent_name="reference_agent", task_text="check gate 3", allowed_tools=(), required_event_fields=("area",))
+    step_b = Step(agent_name="history_agent", task_text="check history", allowed_tools=(), required_event_fields=("entities",))
+    outcome_a = StepOutcome(
+        step=replace(step_a, task_text="check gate 3\n\nCurrent validated event data JSON: {}"),
+        result_text="a done", attempt_count=1, succeeded=True, status="succeeded",
+    )
+    outcome_b = StepOutcome(
+        step=replace(step_b, task_text="check history\n\nCurrent validated event data JSON: {}"),
+        result_text="b done", attempt_count=1, succeeded=True, status="succeeded",
+    )
+
+    flows_module._persist_step_outcomes(deps, event_id, (step_a, step_b), (outcome_a, outcome_b))
+
+    persisted = sorted(deps.persistence.fetch_event(event_id)["steps"], key=lambda row: row["step_index"])
+    assert [row["agent_name"] for row in persisted] == ["reference_agent", "history_agent"]
+    assert [row["result_text"] for row in persisted] == ["a done", "b done"]
+
+
+def test_precedent_lookup_still_runs_when_the_target_events_occurred_at_is_unresolved(deps):
+    """DIAGNOSTIC_FINDINGS.MD A.2's related risk, fixed alongside the recency
+    bug: `_look_up_precedent_if_possible` used to skip precedent lookup
+    entirely whenever the *target* event's own occurred_at was unresolved
+    (`if event["occurred_at"] is None: return ()`), rather than falling back
+    to received_at as the lookback anchor. A real prior event is planted so
+    that a genuinely-skipped lookup (returns `()` unconditionally) is
+    distinguishable from one that ran and legitimately found nothing."""
+    prior_id = begin_report(deps, "fire near the north gate last week", "sensor", "2026-08-15T10:00:00", "sensor-1")
+    deps.persistence.update_event(
+        prior_id, {"classification": "fire", "area": "north_sector", "occurred_at": "2026-08-15T10:00:00", "outcome": "succeeded"}
+    )
+
+    event_id = begin_report(deps, "smoke near the north gate", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    deps.persistence.update_event(
+        event_id, {"classification": "fire", "area": "north_sector", "occurred_at": None}
+    )
+    event = deps.persistence.fetch_event(event_id)
+
+    matches = flows_module._look_up_precedent_if_possible(deps, event_id, event)
+
+    assert {match.event_id for match in matches} == {prior_id}
 
 
 def test_process_report_low_risk_unflagged_protocol_runs_to_success(deps, caplog):
@@ -319,10 +644,19 @@ def test_resume_after_clarification_continues_at_risk_assessment_not_extraction(
 
 
 def test_resume_after_clarification_rejects_free_text(deps):
-    agent = _ScriptedAgent({"Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}'})
+    agent = _ScriptedAgent(
+        {
+            "Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}',
+            "Write one concise question": "Which area is this in?",
+        }
+    )
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
 
-    process_report(deps, agent, insights_agent, "unclear text", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    result = process_report(deps, agent, insights_agent, "unclear text", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    # item #6's early gate asks for `area` (unclassified's required field)
+    # before the clarification hold this test actually exercises exists.
+    deps.persistence.update_event(result.event_id, {"area": "north_sector"})
+    resume_after_event_data(deps, result.event_id, agent, insights_agent)
     [hold] = deps.persistence.list_held_events("clarification")
 
     answer = resume_after_clarification(deps, agent, insights_agent, hold["hold_id"], "commander-1", PermissionLevel.COMMANDER, "not_a_real_type")
@@ -516,11 +850,53 @@ def test_begin_request_returns_immediately_with_no_model_call(deps):
     assert event["risk_level"] is None  # risk assessment hasn't run yet
 
 
+def test_apply_event_data_reply_refuses_to_guess_between_two_pending_holds_for_the_same_sender(deps):
+    """CRITICAL_FIXES_PLAN item 7: previously this silently picked the single
+    most-recently-created matching hold with no ambiguity check — a reply meant
+    for an earlier report could get misapplied to a different, newer one with no
+    indication it happened. Now it refuses to guess and reports every candidate.
+    """
+    older_event_id = begin_report(deps, "smoke near the north gate", "telegram", "2026-08-20T10:00:00", "viewer-1", conversation_id="c1")
+    newer_event_id = begin_report(deps, "smoke near the south gate", "telegram", "2026-08-20T10:05:00", "viewer-1", conversation_id="c1")
+    create_event_data_hold(deps.persistence, older_event_id, ("area",), "Which area?", ())
+    create_event_data_hold(deps.persistence, newer_event_id, ("area",), "Which area?", ())
+
+    result = apply_event_data_reply(deps, main_agent=None, reply_text="the north sector", sender_identity="viewer-1", conversation_id="c1")
+
+    assert result is not None
+    assert set(result.ambiguous_event_ids) == {older_event_id, newer_event_id}
+    assert result.updates == {}
+    assert result.event_id == ""
+
+
+def test_apply_event_data_reply_still_applies_normally_when_only_one_hold_is_pending(deps):
+    event_id = begin_report(deps, "smoke near the north gate", "telegram", "2026-08-20T10:00:00", "viewer-1", conversation_id="c1")
+    create_event_data_hold(deps.persistence, event_id, ("area",), "Which area?", ())
+    agent = _ScriptedAgent(
+        {"pending request for missing event details": '{"addresses_request": true, "updates": {"area": "north_sector"}, "reply_text": "Recorded."}'}
+    )
+
+    result = apply_event_data_reply(deps, main_agent=agent, reply_text="the north sector", sender_identity="viewer-1", conversation_id="c1")
+
+    assert result is not None
+    assert result.ambiguous_event_ids == ()
+    assert result.event_id == event_id
+
+
 def test_resolve_clarification_writes_the_answer_without_resuming(deps):
-    agent = _ScriptedAgent({"Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}'})
+    agent = _ScriptedAgent(
+        {
+            "Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}',
+            "Write one concise question": "Which area is this in?",
+        }
+    )
     insights_agent = _ScriptedAgent({})
 
     held = process_report(deps, agent, insights_agent, "unclear text", "telegram", "2026-08-20T10:00:00", "viewer-1")
+    # item #6's early gate asks for `area` (unclassified's required field)
+    # before the clarification hold this test actually exercises exists.
+    deps.persistence.update_event(held.event_id, {"area": "north_sector"})
+    held = resume_after_event_data(deps, held.event_id, agent, insights_agent)
     [hold] = deps.persistence.list_held_events("clarification")
 
     answer = resolve_clarification(deps, hold["hold_id"], "commander-1", PermissionLevel.COMMANDER, "fire")
@@ -650,7 +1026,7 @@ from agents import adapter
 from agents.reference import ReferenceAgent
 from agents.runtime import build_agent_registry
 from orchestrator.main_agent import OrchestrationParseError, _parse_formulation_response, formulate_tasks, rewrite_task
-from protocols.model import CriticalityLevel, Protocol, Step
+from protocols.model import CriticalityLevel, Protocol, Step, StepOutcome
 
 
 class _ScriptedMainAgent:
@@ -737,6 +1113,22 @@ def test_formulate_tasks_produces_a_step_per_participating_agent(registry):
     assert result.steps[0].task_text == "check status at gate 3"
 
 
+def test_legacy_formulated_steps_still_have_no_step_id(registry):
+    """Deliberately unchanged: giving legacy-parsed steps a real step_id was
+    considered and rejected (see the NOTE at this parse loop) — it would
+    silently reroute every legacy-formatted plan into protocols.executor's
+    dependency-graph/concurrent scheduler via that function's own dispatch
+    condition, a much larger change than fixing _persist_step_outcomes'
+    matching bug called for. This pins the current, intentional shape down
+    so a future change here has to touch this test, not just the fix."""
+    agent = _ScriptedMainAgent("AGENT: reference_agent\nTASK: check status at gate 3")
+
+    result = formulate_tasks(agent, _protocol(), registry, "raw", "fire", "north", "d")
+
+    assert result.steps[0].step_id == ""
+    assert result.steps[0].depends_on == ()
+
+
 def test_formulation_preserves_valid_required_event_fields(registry):
     agent = _ScriptedMainAgent(json.dumps({
         "steps": [{
@@ -749,6 +1141,131 @@ def test_formulation_preserves_valid_required_event_fields(registry):
     }))
 
     result = formulate_tasks(agent, _protocol(), registry, "raw", "fire", None, "d")
+
+    assert result.success
+    assert result.steps[0].required_event_fields == ("area",)
+
+
+def test_formulation_preserves_required_event_fields_when_json_is_markdown_fenced(registry):
+    fenced = "```json\n" + json.dumps({
+        "steps": [{
+            "step_id": "check-location",
+            "agent_name": "reference_agent",
+            "task": "Check the reported location.",
+            "depends_on": [],
+            "required_event_fields": ["area"],
+        }]
+    }) + "\n```"
+    agent = _ScriptedMainAgent(fenced)
+
+    result = formulate_tasks(agent, _protocol(), registry, "raw", "fire", None, "d")
+
+    assert result.success
+    assert result.steps[0].required_event_fields == ("area",)
+
+
+def test_formulation_merges_the_required_fields_floor_when_the_model_omits_it(registry):
+    """The event type's static required-fields floor (`EVENT_TYPE_REQUIRED_
+    FIELDS`, looked up by the caller and passed as `required_fields_floor`)
+    is unioned into the step's `required_event_fields` even when the model's
+    own JSON declares none at all — a deterministic guarantee, not left to
+    what the model happens to write."""
+    agent = _ScriptedMainAgent(json.dumps({
+        "steps": [{
+            "step_id": "check-location",
+            "agent_name": "reference_agent",
+            "task": "Check the reported location.",
+            "depends_on": [],
+            "required_event_fields": [],
+        }]
+    }))
+
+    result = formulate_tasks(agent, _protocol(), registry, "raw", "fire", None, "d", required_fields_floor=("area",))
+
+    assert result.success
+    assert result.steps[0].required_event_fields == ("area",)
+
+
+def test_formulation_merges_the_floor_alongside_the_models_own_additional_fields(registry):
+    """The merge is additive, not a replacement — a step that needs a field
+    beyond the static floor keeps it; per-step flexibility for anything
+    beyond the floor is preserved."""
+    agent = _ScriptedMainAgent(json.dumps({
+        "steps": [{
+            "step_id": "check-location",
+            "agent_name": "reference_agent",
+            "task": "Check the reported location and cross-reference entities.",
+            "depends_on": [],
+            "required_event_fields": ["entities"],
+        }]
+    }))
+
+    result = formulate_tasks(agent, _protocol(), registry, "raw", "fire", None, "d", required_fields_floor=("area",))
+
+    assert result.success
+    assert set(result.steps[0].required_event_fields) == {"area", "entities"}
+
+
+@pytest.fixture
+def two_agent_registry():
+    return build_agent_registry({}, [ReferenceAgent(model="m"), HistoryAgent(model="m")])
+
+
+def test_formulation_floor_applies_to_every_step_sequential_plan(two_agent_registry):
+    """The floor is unioned in per step, inside the same parse loop
+    regardless of topology — a sequential plan (no step_id dependencies)
+    gets it on every step, not just the first."""
+    protocol = _protocol(participating_agents=("reference_agent", "history_agent"))
+    agent = _ScriptedMainAgent(json.dumps({
+        "steps": [
+            {"step_id": "s1", "agent_name": "reference_agent", "task": "check status", "depends_on": [], "required_event_fields": []},
+            {"step_id": "s2", "agent_name": "history_agent", "task": "check history", "depends_on": [], "required_event_fields": []},
+        ]
+    }))
+
+    result = formulate_tasks(agent, protocol, two_agent_registry, "raw", "fire", None, "d", required_fields_floor=("area",))
+
+    assert result.success
+    assert all(step.required_event_fields == ("area",) for step in result.steps)
+
+
+def test_formulation_floor_applies_to_every_step_dependency_graph_plan(two_agent_registry):
+    """Same guarantee for a dependency-graph plan (non-empty depends_on,
+    the topology protocols.executor._execute_dependency_steps runs) — the
+    merge happens in formulate_tasks' parse loop, before any topology
+    decision is made, so no special-casing is needed for either shape."""
+    protocol = _protocol(participating_agents=("reference_agent", "history_agent"))
+    agent = _ScriptedMainAgent(json.dumps({
+        "steps": [
+            {"step_id": "s1", "agent_name": "reference_agent", "task": "check status", "depends_on": [], "required_event_fields": []},
+            {"step_id": "s2", "agent_name": "history_agent", "task": "check history", "depends_on": ["s1"], "required_event_fields": []},
+        ]
+    }))
+
+    result = formulate_tasks(agent, protocol, two_agent_registry, "raw", "fire", None, "d", required_fields_floor=("area",))
+
+    assert result.success
+    assert all(step.required_event_fields == ("area",) for step in result.steps)
+    assert result.steps[1].depends_on == ("s1",)  # the dependency-graph shape itself is untouched
+
+
+def test_formulation_floor_survives_the_markdown_fenced_json_path_when_the_model_omits_it(registry):
+    """Mirrors `test_formulation_preserves_required_event_fields_when_json_is_
+    markdown_fenced` (which proves the model's own declared fields survive
+    fencing) — this proves the floor survives it too, even when the model's
+    fenced JSON declares no required fields of its own."""
+    fenced = "```json\n" + json.dumps({
+        "steps": [{
+            "step_id": "check-location",
+            "agent_name": "reference_agent",
+            "task": "Check the reported location.",
+            "depends_on": [],
+            "required_event_fields": [],
+        }]
+    }) + "\n```"
+    agent = _ScriptedMainAgent(fenced)
+
+    result = formulate_tasks(agent, _protocol(), registry, "raw", "fire", None, "d", required_fields_floor=("area",))
 
     assert result.success
     assert result.steps[0].required_event_fields == ("area",)
@@ -790,7 +1307,7 @@ def test_formulation_repairs_one_invalid_response_with_the_parse_failure(registr
 
     assert result.success
     assert len(agent.calls) == 2
-    assert "model did not produce a task" in agent.calls[1][0]
+    assert "task formulation must contain one step per participating agent" in agent.calls[1][0]
     assert "without Markdown fences" in agent.calls[1][0]
 
 
