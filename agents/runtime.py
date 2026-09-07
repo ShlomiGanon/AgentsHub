@@ -7,6 +7,7 @@ import logging
 import threading
 import time
 from collections import OrderedDict
+from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import lru_cache, wraps
 from typing import Callable
@@ -37,6 +38,9 @@ logger = logging.getLogger(__name__)
 _REQUIRED_CLASS_ATTRS = ("name", "role", "system_prompt")
 _current_allowed_tools: ContextVar[frozenset | None] = ContextVar("current_allowed_tools", default=None)
 _invocation_deadline: ContextVar[float | None] = ContextVar("invocation_deadline", default=None)
+_authenticated_request_identity: ContextVar[str | None] = ContextVar(
+    "authenticated_request_identity", default=None
+)
 _tool_class_cache: dict[tuple[type, str, str, int], type] = {}
 _tool_class_cache_lock = threading.Lock()
 _llm_cache: "OrderedDict[tuple[str, str, str], object]" = OrderedDict()
@@ -46,6 +50,19 @@ _provider_semaphore = threading.BoundedSemaphore(8)
 _structured_output_mode = "off"
 _max_iter = 8
 _model_timeout_seconds = 30.0
+
+
+def get_authenticated_request_identity() -> str | None:
+    return _authenticated_request_identity.get()
+
+
+@contextmanager
+def authenticated_request_identity(identity: str):
+    token = _authenticated_request_identity.set(identity)
+    try:
+        yield
+    finally:
+        _authenticated_request_identity.reset(token)
 
 
 def configure_provider_concurrency(limit: int) -> None:

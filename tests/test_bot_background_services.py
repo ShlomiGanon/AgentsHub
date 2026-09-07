@@ -389,6 +389,25 @@ def test_poll_once_dispatches_every_pending_notification():
     assert len(deps.telegram_client.sent) == 2
 
 
+def test_event_data_notification_registers_the_exact_telegram_reply_target():
+    from bot import interactions
+
+    interactions._EVENT_DATA_REPLY_TARGETS.clear()
+    deps = _deps(FakeBotApiClient())
+    notification = BotNotification(
+        kind="event_data_hold",
+        target_chat_ids=("chat-9",),
+        payload=EventDataNeededNotice(
+            hold_id="hold-9", event_id="event-9", question="Where?", missing_fields=("area",)
+        ),
+        reply_to_message_id="original-message",
+    )
+
+    _run(dispatch_notification(deps, notification))
+
+    assert interactions.event_data_event_for_reply("chat-9", "1") == "event-9"
+
+
 def test_poll_loop_survives_an_unimplemented_api_and_stops_after_max_iterations():
     from bot.api_client import UnimplementedApiClient
 

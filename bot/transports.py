@@ -153,10 +153,13 @@ class HttpApiClient(BotApiClient):
         source_message_id: str,
         conversation_id: str | None = None,
         trace_id: str | None = None,
+        event_data_event_id: str | None = None,
     ) -> MessageSubmissionResult:
         body = {"text": text, "sender_identity": sender_identity, "source_message_id": source_message_id}
         if conversation_id is not None:
             body["conversation_id"] = conversation_id
+        if event_data_event_id is not None:
+            body["event_data_event_id"] = event_data_event_id
         status, response_payload = await self._call(
             "POST", "/Msg", sender_identity, body, trace_id_override=trace_id
         )
@@ -443,7 +446,7 @@ class TelegramClient(ABC):
         """`buttons` is a sequence of (label, callback_data) pairs, laid out one per row — used for clarification/approval choices (§8.4, §8.5), never for free text (§8.4's own "buttons ra..."""
 
     @abstractmethod
-    async def send_reply(self, chat_id: str, text: str, reply_to_message_id: str | None) -> None:
+    async def send_reply(self, chat_id: str, text: str, reply_to_message_id: str | None) -> str | None:
         """Like `send_text`, but referencing the original message when one is given — §8.9's "reference the original message when delivering" (minutes may have passed; the sender may have..."""
 
     @abstractmethod
@@ -516,13 +519,16 @@ class PTBTelegramClient(TelegramClient):
                 await self._application.bot.send_message(chat_id=chat_id, text=chunk)
             await self._application.bot.send_message(chat_id=chat_id, text=chunks[-1], reply_markup=markup)
 
-    async def send_reply(self, chat_id: str, text: str, reply_to_message_id: str | None) -> None:
+    async def send_reply(self, chat_id: str, text: str, reply_to_message_id: str | None) -> str | None:
         with stage_context("telegram_send"):
             chunks = split_message(text)
+            first_message_id = None
             if chunks:
-                await self._application.bot.send_message(chat_id=chat_id, text=chunks[0], reply_to_message_id=reply_to_message_id)
+                sent = await self._application.bot.send_message(chat_id=chat_id, text=chunks[0], reply_to_message_id=reply_to_message_id)
+                first_message_id = str(sent.message_id)
             for chunk in chunks[1:]:
                 await self._application.bot.send_message(chat_id=chat_id, text=chunk)
+            return first_message_id
 
     async def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> None:
         await self._application.bot.answer_callback_query(callback_query_id=callback_query_id, text=text)

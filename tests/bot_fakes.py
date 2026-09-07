@@ -54,8 +54,11 @@ class FakeTelegramClient(TelegramClient):
     async def send_with_buttons(self, chat_id: str, text: str, buttons: Sequence[tuple[str, str]]) -> None:
         self.sent.append(SentMessage(chat_id=chat_id, text=text, buttons=tuple(buttons)))
 
-    async def send_reply(self, chat_id: str, text: str, reply_to_message_id: str | None) -> None:
+    async def send_reply(self, chat_id: str, text: str, reply_to_message_id: str | None) -> str:
         self.sent.append(SentMessage(chat_id=chat_id, text=text, reply_to_message_id=reply_to_message_id))
+        message_id = str(self._next_status_id)
+        self._next_status_id += 1
+        return message_id
 
     async def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> None:
         self.answered_callback_query_ids.append(callback_query_id)
@@ -96,6 +99,7 @@ class FakeBotApiClient(BotApiClient):
     async def submit_message(
         self, text: str, sender_identity: str, source_message_id: str,
         conversation_id: str | None = None, trace_id: str | None = None,
+        event_data_event_id: str | None = None,
     ) -> MessageSubmissionResult:
         if sender_identity not in self.users:
             raise ApiRequestError(401, f"'{sender_identity}' is not a registered identity")
@@ -105,6 +109,8 @@ class FakeBotApiClient(BotApiClient):
             self.calls.append(("submit_message_conversation", conversation_id))
         if trace_id is not None:
             self.calls.append(("submit_message_trace", trace_id))
+        if event_data_event_id is not None:
+            self.calls.append(("submit_message_event_data", event_data_event_id))
         assert self.message_submission_result is not None, "test must set message_submission_result"
         return self.message_submission_result
 

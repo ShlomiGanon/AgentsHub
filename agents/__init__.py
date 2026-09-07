@@ -35,6 +35,8 @@ from agents.runtime import (
     configure_provider_concurrency,
     configure_structured_output_mode,
     configure_invocation_limits,
+    authenticated_request_identity,
+    get_authenticated_request_identity,
     initialize_agent_runtime,
     set_invocation_deadline,
 )
@@ -74,6 +76,8 @@ __all__ = [
     "configure_provider_concurrency",
     "configure_structured_output_mode",
     "configure_invocation_limits",
+    "authenticated_request_identity",
+    "get_authenticated_request_identity",
     "install_crewai_provider_telemetry",
     "initialize_agent_runtime",
     "set_invocation_deadline",

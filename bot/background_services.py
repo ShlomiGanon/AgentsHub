@@ -46,7 +46,11 @@ async def dispatch_notification(deps: "BotDeps", notification: "BotNotification"
     if notification.kind == "event_data_hold":
         text = interactions.format_event_data_needed(notification.payload, message_catalog_for(deps))
         for chat_id in notification.target_chat_ids:
-            await deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id)
+            prompt_message_id = await deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id)
+            if prompt_message_id is not None:
+                interactions.register_event_data_reply_target(
+                    chat_id, prompt_message_id, notification.payload.event_id
+                )
         return
 
     if notification.kind == "uncertain_verdict":
@@ -68,10 +72,12 @@ async def dispatch_notification(deps: "BotDeps", notification: "BotNotification"
         return
 
     if notification.kind == "job_finished":
+        interactions.unregister_event_data_reply_target(notification.payload.job_id)
         await deliver_job_result(deps, notification)
         return
 
     if notification.kind == "job_failed":
+        interactions.unregister_event_data_reply_target(notification.payload.event_id)
         await deliver_failure_notification(deps, notification)
         return
 

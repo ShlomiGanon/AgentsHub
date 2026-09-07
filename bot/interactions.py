@@ -13,6 +13,21 @@ if TYPE_CHECKING:
     from bot.contracts import FailureNotice, JobResult
 
 TELEGRAM_MESSAGE_LIMIT = 4096
+_EVENT_DATA_REPLY_TARGETS: dict[tuple[str, str], str] = {}
+
+
+def register_event_data_reply_target(chat_id: str, telegram_message_id: str, event_id: str) -> None:
+    _EVENT_DATA_REPLY_TARGETS[(str(chat_id), str(telegram_message_id))] = event_id
+
+
+def event_data_event_for_reply(chat_id: str, telegram_message_id: str) -> str | None:
+    return _EVENT_DATA_REPLY_TARGETS.get((str(chat_id), str(telegram_message_id)))
+
+
+def unregister_event_data_reply_target(event_id: str) -> None:
+    stale = [key for key, value in _EVENT_DATA_REPLY_TARGETS.items() if value == event_id]
+    for key in stale:
+        _EVENT_DATA_REPLY_TARGETS.pop(key, None)
 
 MessageKind = Literal[
     "clarification_needed",

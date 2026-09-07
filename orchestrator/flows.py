@@ -56,6 +56,7 @@ from orchestrator.event_queue import PolicyAwareEventQueue, SerialEventQueue, Wo
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
 from protocols import Step, StepOutcome
 from protocols.executor import execute_steps
+from agents import authenticated_request_identity
 from tools import get_trace_id
 
 if TYPE_CHECKING:
@@ -890,14 +891,15 @@ def _execute_protocol_plan(
         else step
         for step in steps
     )
-    run_result = execute_steps(
-        list(execution_steps),
-        agents_by_name,
-        deps.settings_store,
-        task_rewriter=functools.partial(rewrite_task, main_agent),
-        event_data=event,
-        prior_outcomes=prior,
-    )
+    with authenticated_request_identity(event["sender_identity"]):
+        run_result = execute_steps(
+            list(execution_steps),
+            agents_by_name,
+            deps.settings_store,
+            task_rewriter=functools.partial(rewrite_task, main_agent),
+            event_data=event,
+            prior_outcomes=prior,
+        )
     if run_result.waiting_for_event_data and not persisted_rows:
         _persist_step_plan(deps, event_id, steps)
     _persist_step_outcomes(deps, event_id, steps, run_result.step_outcomes)
@@ -1063,6 +1065,7 @@ def apply_event_data_reply(
     sender_identity: str,
     conversation_id: str | None,
     conversation_messages: tuple[dict, ...] = (),
+    target_event_id: str | None = None,
 ) -> EventDataReplyResult | None:
     """Apply a conversational answer to the newest matching reporter-facing data request."""
 
@@ -1070,6 +1073,8 @@ def apply_event_data_reply(
         return None
     candidates: list[tuple[dict, dict]] = []
     for hold in deps.persistence.list_held_events("event_data"):
+        if target_event_id is not None and hold["event_id"] != target_event_id:
+            continue
         event = deps.persistence.fetch_event(hold["event_id"])
         if (
             event is not None

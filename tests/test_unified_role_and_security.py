@@ -359,6 +359,104 @@ def test_viewer_attendance_reporting_shortcut(unified_env):
     assert "אנא ציין את סיבת אי-הזמינות" in last_sent.text
 
 
+def test_unavailability_follow_up_keeps_reason_until_days_and_uses_isolated_conversation(unified_env):
+    import asyncio
+    from bot import app
+    from bot.contracts import MessageSubmissionResult
+    from tests.bot_fakes import FakeBotApiClient, FakeTelegramClient
+
+    app._PENDING_UNAVAILABILITY.clear()
+    api_client = FakeBotApiClient()
+    api_client.users["viewer_123"] = "viewer"
+    api_client.message_submission_result = MessageSubmissionResult(kind="report", job_id="attendance-1")
+    telegram_client = FakeTelegramClient()
+    loaded = app.build_deps("profiles.unified_test", core_model=MagicMock(), sub_model=MagicMock())
+    deps = BotDeps(api_client=api_client, telegram_client=telegram_client, loaded_profile=loaded.loaded_profile)
+    context = MagicMock(bot_data={"deps": deps})
+
+    def send(text, message_id):
+        update = MagicMock()
+        update.effective_user.id = "viewer_123"
+        update.effective_chat.id = "333"
+        update.message.text = text
+        update.message.message_id = message_id
+        update.message.message_thread_id = None
+        asyncio.run(app._on_text_message(update, context))
+
+    send("❌ איני זמין", 401)
+    send("עקב מחלה", 402)
+
+    assert not any(call[0] == "submit_message" for call in api_client.calls)
+    assert "הסיבה נשמרה" in telegram_client.sent[-1].text
+
+    send("2", 403)
+
+    submission = next(call for call in api_client.calls if call[0] == "submit_message")
+    assert "עקב מחלה" in submission[1]
+    assert "2 ימים" in submission[1]
+    assert ("submit_message_conversation", "telegram:333:attendance:viewer_123") in api_client.calls
+    assert app._PENDING_UNAVAILABILITY == {}
+
+
+def test_available_button_cancels_pending_unavailability(unified_env):
+    import asyncio
+    from bot import app
+    from bot.contracts import MessageSubmissionResult
+    from tests.bot_fakes import FakeBotApiClient, FakeTelegramClient
+
+    app._PENDING_UNAVAILABILITY.clear()
+    api_client = FakeBotApiClient()
+    api_client.users["viewer_123"] = "viewer"
+    api_client.message_submission_result = MessageSubmissionResult(kind="report", job_id="attendance-2")
+    telegram_client = FakeTelegramClient()
+    loaded = app.build_deps("profiles.unified_test", core_model=MagicMock(), sub_model=MagicMock())
+    deps = BotDeps(api_client=api_client, telegram_client=telegram_client, loaded_profile=loaded.loaded_profile)
+    context = MagicMock(bot_data={"deps": deps})
+
+    def send(text, message_id):
+        update = MagicMock()
+        update.effective_user.id = "viewer_123"
+        update.effective_chat.id = "333"
+        update.message.text = text
+        update.message.message_id = message_id
+        update.message.message_thread_id = None
+        asyncio.run(app._on_text_message(update, context))
+
+    send("❌ איני זמין", 411)
+    send("✅ אני זמין לכוננות", 412)
+
+    assert app._PENDING_UNAVAILABILITY == {}
+    assert ("submit_message_conversation", "telegram:333:attendance:viewer_123") in api_client.calls
+
+
+def test_parallel_agent_requests_receive_only_their_own_captured_result(unified_env, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from agents import AgentResult, TeamStatusAgent
+    from profiles import unified_test
+
+    barrier = Barrier(2)
+
+    def fake_base_process(self, text, allowed_tools, *, invocation_policy=None):
+        barrier.wait()
+        unified_test._capture_team_result(f"tool-result:{text}")
+        barrier.wait()
+        return AgentResult(status="success", text=f"model-result:{text}")
+
+    monkeypatch.setattr(TeamStatusAgent, "process", fake_base_process)
+    agent = unified_test.UnifiedTeamStatusAgent(model="mock")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(agent.process, "request-a", ["report_team_availability"])
+        second = pool.submit(agent.process, "request-b", ["report_team_availability"])
+
+    assert first.result().text == "tool-result:request-a"
+    assert second.result().text == "tool-result:request-b"
+    assert not hasattr(unified_test, "_latest_team_result")
+    assert not hasattr(unified_test, "_latest_surv_result")
+    assert not hasattr(unified_test, "_latest_forces_result")
+
+
 def test_all_commander_and_viewer_buttons_mapped(unified_env):
     """Verifies that every single button across Commander and Viewer keyboards maps to expected behavior."""
     import asyncio
@@ -467,7 +565,9 @@ def test_hebrew_tools_return_concise_operational_hebrew(unified_env):
     assert "סטטוס כיתת כוננות" in team_avail
     assert "זמינים לפעילות" in team_avail
 
-    att_resp = team_agent.record_attendance_response("2077472944", availability="available")
+    from agents import authenticated_request_identity
+    with authenticated_request_identity("2077472944"):
+        att_resp = team_agent.record_attendance_response(availability="available")
     assert "דיווח הנוכחות נקלט בהצלחה" in att_resp
     assert "זמין לכוננות" in att_resp
 
@@ -566,7 +666,4 @@ def test_open_approval_holds_tracking():
 
     unregister_open_approval_hold("evt-200")
     assert get_open_approval_holds() == []
-
-
-
 

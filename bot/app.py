@@ -5,6 +5,7 @@ import asyncio
 import importlib
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -178,6 +179,7 @@ async def handle_incoming_message(
     text: str,
     message_id: str,
     conversation_id: str | None = None,
+    event_data_event_id: str | None = None,
 ) -> str:
     """Route free-form Telegram text through the single message endpoint."""
 
@@ -187,6 +189,7 @@ async def handle_incoming_message(
         text,
         message_id,
         conversation_id,
+        event_data_event_id=event_data_event_id,
     )
     return reply
 
@@ -198,6 +201,7 @@ async def _submit_and_format_message(
     message_id: str,
     conversation_id: str | None,
     trace_id: str | None = None,
+    event_data_event_id: str | None = None,
 ) -> tuple[str, MessageSubmissionResult | None]:
     """Submit one message and return both presentation text and semantic result."""
 
@@ -208,15 +212,20 @@ async def _submit_and_format_message(
             message_id,
             conversation_id,
             trace_id,
+            event_data_event_id,
         )
     except ApiRequestError as exc:
         messages = interactions.message_catalog_for(deps)
+        if event_data_event_id is not None:
+            interactions.unregister_event_data_reply_target(event_data_event_id)
         if exc.status_code == 401:
             return interactions._unregistered_message(telegram_identity, messages), None
         if exc.status_code == 403:
             return messages.text("bot.refused", message=exc.message), None
         raise
     messages = interactions.message_catalog_for(deps)
+    if event_data_event_id is not None:
+        interactions.unregister_event_data_reply_target(event_data_event_id)
     if submission_result.awaiting_approval and submission_result.job_id:
         interactions.register_open_approval_hold(submission_result.job_id)
     if submission_result.kind in {"question", "conversational", "clarification", "event_update"}:
@@ -279,6 +288,7 @@ async def present_incoming_message(
     text: str,
     message_id: str,
     conversation_id: str | None = None,
+    event_data_event_id: str | None = None,
 ) -> str | None:
     """Present one free-form message with the shared status/edit lifecycle."""
 
@@ -306,6 +316,7 @@ async def present_incoming_message(
             message_id,
             conversation_id,
             trace_id,
+            event_data_event_id,
         )
     except ApiNotImplementedError as exc:
         logger.info(
@@ -348,9 +359,39 @@ async def present_incoming_message(
     return reply
 
 
-# Tracks chat IDs that clicked "❌ איני זמין" and are waiting to supply a reason.
-# Value is the telegram_identity string so we can build the full report text.
-_PENDING_UNAVAILABILITY: dict[int, str] = {}
+# Pending attendance replies are scoped to both the chat and the authenticated
+# Telegram identity.  This matters in group chats, where a chat-only key lets
+# one member accidentally complete another member's report.
+_PENDING_UNAVAILABILITY: dict[tuple[str, str], dict[str, str | None]] = {}
+
+
+def _extract_unavailable_days(text: str) -> int | None:
+    """Extract a small, positive day count without involving the LLM."""
+
+    match = re.search(r"\b(\d{1,3})\b", text)
+    if match:
+        days = int(match.group(1))
+        return days if days > 0 else None
+
+    normalized = text.casefold()
+    word_values = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "\u05d9\u05d5\u05dd": 1,
+        "\u05dc\u05d9\u05d5\u05dd": 1,
+        "\u05d9\u05d5\u05de\u05d9\u05d9\u05dd": 2,
+        "\u05dc\u05d9\u05d5\u05de\u05d9\u05d9\u05dd": 2,
+        "\u05e9\u05dc\u05d5\u05e9\u05d4": 3,
+        "\u05d0\u05e8\u05d1\u05e2\u05d4": 4,
+        "\u05d7\u05de\u05d9\u05e9\u05d4": 5,
+    }
+    for word, value in word_values.items():
+        if word in normalized:
+            return value
+    return None
 
 BUTTON_PROMPTS = {
     "🛸 \u05de\u05e6\u05d1 \u05e6\u05d9 \u05e8\u05d7\u05e4\u05e0\u05d9\u05dd": "\u05de\u05d4 \u05de\u05e6\u05d1 \u05e6\u05d9 \u05d4\u05e8\u05d7\u05e4\u05e0\u05d9\u05dd \u05d5\u05d4\u05e1\u05d5\u05dc\u05dc\u05d5\u05ea \u05db\u05e8\u05d2\u05e2? \u05d4\u05e9\u05d1 \u05d1\u05e2\u05d1\u05e8\u05d9\u05ea \u05e7\u05e6\u05e8\u05d4 \u05d5\u05de\u05d1\u05e6\u05e2\u05d9\u05ea \u05d1\u05dc\u05d1\u05d3 (\u05e2\u05d3 3-4 \u05e9\u05d5\u05e8\u05d5\u05ea).",
@@ -378,12 +419,22 @@ async def _on_text_message(update, context) -> None:
         return
 
     incoming_text = (update.message.text or "").strip()
+    attendance_key = (chat_id, telegram_identity)
+    available_button = incoming_text == "\u2705 \u05d0\u05e0\u05d9 \u05d6\u05de\u05d9\u05df \u05dc\u05db\u05d5\u05e0\u05e0\u05d5\u05ea"
+    unavailable_button = incoming_text == "\u274c \u05d0\u05d9\u05e0\u05d9 \u05d6\u05de\u05d9\u05df"
+    is_attendance_submission = False
 
-    approval_words = {"אישור", "אשר", "מאשר", "מאושר", "approve", "yes", "כן"}
-    rejection_words = {"ביטול", "בטל", "דחה", "דחייה", "reject", "no", "לא"}
+    approval_words = {
+        "\u05d0\u05d9\u05e9\u05d5\u05e8", "\u05d0\u05e9\u05e8", "\u05de\u05d0\u05e9\u05e8",
+        "\u05de\u05d0\u05d5\u05e9\u05e8", "approve", "yes", "\u05db\u05df",
+    }
+    rejection_words = {
+        "\u05d1\u05d9\u05d8\u05d5\u05dc", "\u05d1\u05d8\u05dc", "\u05d3\u05d7\u05d4",
+        "\u05d3\u05d7\u05d9\u05d9\u05d4", "reject", "no", "\u05dc\u05d0",
+    }
     norm_text = incoming_text.strip().lower()
     # Match if text IS an approval/rejection word OR starts with one
-    # (handles e.g. "מאושר תשלח" → approved, "בטל את זה" → rejected)
+    # This also accepts a command word followed by free-form text.
     def _is_approval(txt: str) -> bool:
         return txt in approval_words or any(txt.startswith(w) for w in approval_words)
     def _is_rejection(txt: str) -> bool:
@@ -407,23 +458,34 @@ async def _on_text_message(update, context) -> None:
                 "\u05d0\u05d9\u05df \u05db\u05e8\u05d2\u05e2 \u05e4\u05e2\u05d5\u05dc\u05d5\u05ea \u05d4\u05de\u05de\u05ea\u05d9\u05e0\u05d5\u05ea \u05dc\u05d0\u05d9\u05e9\u05d5\u05e8 \u05de\u05e4\u05e7\u05d3.",
             )
             return
-    # ── Pending follow-up: user clicked "❌ איני זמין" and bot asked for reason ─────
-    if chat_id in _PENDING_UNAVAILABILITY:
-        pending_identity = _PENDING_UNAVAILABILITY.pop(chat_id)
-        reason_text = incoming_text.strip() or "סיבה לא צוינה"
-        # Build a self-contained report message and submit it as a regular request
-        incoming_text = (
-            f"דיווח כוננות: הלוחם {pending_identity} אינו זמין. "
-            f"סיבה: {reason_text}. "
-            f"אנא עדכן את מצב הזמינות שלו בהתאם."
-        )
-        # Fall through to the normal submission flow below
-    elif incoming_text.startswith("❌") and "זמין" in incoming_text:
-        _PENDING_UNAVAILABILITY[chat_id] = telegram_identity
-        await deps.telegram_client.send_text(
-            chat_id, "אנא ציין את סיבת אי-הזמינות ומספר ימים משוער (לדוגמה: 'איני זמין עקב מחלה ליומיים')"
-        )
+    # Attendance buttons are handled before a pending free-form reply.  A user
+    # can therefore correct/cancel an unfinished unavailability report simply
+    # by pressing one of the buttons again.
+    if available_button:
+        _PENDING_UNAVAILABILITY.pop(attendance_key, None)
+        incoming_text = messages.text("bot.availability_report_available", identity=telegram_identity)
+        is_attendance_submission = True
+    elif unavailable_button:
+        _PENDING_UNAVAILABILITY[attendance_key] = {"reason": None}
+        await deps.telegram_client.send_text(chat_id, messages.text("bot.unavailability_prompt"))
         return
+    elif attendance_key in _PENDING_UNAVAILABILITY:
+        pending = _PENDING_UNAVAILABILITY[attendance_key]
+        days = _extract_unavailable_days(incoming_text)
+        if pending["reason"] is None:
+            pending["reason"] = incoming_text
+        if days is None:
+            await deps.telegram_client.send_text(chat_id, messages.text("bot.unavailability_days_prompt"))
+            return
+        reason_text = pending["reason"] or incoming_text
+        incoming_text = messages.text(
+            "bot.availability_report_unavailable",
+            identity=telegram_identity,
+            reason=reason_text,
+            days=days,
+        )
+        _PENDING_UNAVAILABILITY.pop(attendance_key, None)
+        is_attendance_submission = True
 
     if incoming_text == "🚀 \u05d4\u05d6\u05e0\u05e7\u05ea \u05e8\u05d7\u05e4\u05df":
         if resolution.caller and resolution.caller.level != PermissionLevel.COMMANDER:
@@ -457,13 +519,21 @@ async def _on_text_message(update, context) -> None:
         )
         return
 
-    if incoming_text == "✅ \u05d0\u05e0\u05d9 \u05d6\u05de\u05d9\u05df \u05dc\u05db\u05d5\u05e0\u05e0\u05d5\u05ea":
-        incoming_text = f"\u05d3\u05d9\u05d5\u05d5\u05d7 \u05e0\u05d5\u05db\u05d7\u05d5\u05ea \u05db\u05d9\u05ea\u05ea \u05db\u05d5\u05e0\u05e0\u05d5\u05ea: \u05d4\u05de\u05e9\u05ea\u05de\u05e9 {telegram_identity} \u05d6\u05de\u05d9\u05df \u05dc\u05db\u05d5\u05e0\u05e0\u05d5\u05ea"
-    elif incoming_text in BUTTON_PROMPTS:
+    if incoming_text in BUTTON_PROMPTS:
         incoming_text = BUTTON_PROMPTS[incoming_text]
 
     thread_id = getattr(update.message, "message_thread_id", None)
     conversation_id = f"telegram:{chat_id}:{thread_id if thread_id is not None else 'main'}"
+    if is_attendance_submission:
+        # Attendance is an independent workflow.  It must never be consumed as
+        # the answer to an unrelated operational event-data hold in this chat.
+        conversation_id = f"telegram:{chat_id}:attendance:{telegram_identity}"
+
+    event_data_event_id = None
+    replied_to = getattr(update.message, "reply_to_message", None)
+    replied_to_message_id = getattr(replied_to, "message_id", None) if replied_to is not None else None
+    if isinstance(replied_to_message_id, (str, int)):
+        event_data_event_id = interactions.event_data_event_for_reply(chat_id, str(replied_to_message_id))
 
     async def _show_activity() -> None:
         while True:
@@ -479,6 +549,7 @@ async def _on_text_message(update, context) -> None:
             incoming_text,
             str(update.message.message_id),
             conversation_id,
+            event_data_event_id,
         )
     finally:
         activity_task.cancel()

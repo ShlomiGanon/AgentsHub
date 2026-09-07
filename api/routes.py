@@ -80,7 +80,6 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
             raise InvalidInputError(
                 messages.text("api.field_required", field="sender_identity"), field="sender_identity"
             )
-
         reservation = ctx.queue.reserve(False)
         if reservation is None:
             raise ServiceUnavailableError(messages.text("api.queue_full"))
@@ -156,6 +155,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
         sender_identity = request_payload.get("sender_identity")
         source_message_id = request_payload.get("source_message_id")
         conversation_id = request_payload.get("conversation_id")
+        event_data_event_id = request_payload.get("event_data_event_id")
 
         if not text:
             raise InvalidInputError(messages.text("api.field_required", field="text"), field="text")
@@ -163,8 +163,14 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
             raise InvalidInputError(
                 messages.text("api.field_required", field="sender_identity"), field="sender_identity"
             )
+        if sender_identity != caller_identity:
+            raise AuthorizationError(messages.text("api.sender_identity_mismatch"))
         if conversation_id is not None and (not isinstance(conversation_id, str) or not conversation_id.strip() or len(conversation_id) > 200):
             raise InvalidInputError(messages.text("api.conversation_id_invalid"), field="conversation_id")
+        if event_data_event_id is not None and (
+            not isinstance(event_data_event_id, str) or not event_data_event_id.strip()
+        ):
+            raise InvalidInputError(messages.text("api.event_data_event_id_invalid"), field="event_data_event_id")
 
         trace_id = get_trace_id() or new_trace_id()
         set_trace_id(trace_id)
@@ -202,21 +208,28 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
 
         _remember("user", text)
 
+        # Event-data replies are explicit. Sharing a sender/conversation with an
+        # old hold is insufficient because a new button or request must remain
+        # an independent message.
+        pending_hold = None
+        if event_data_event_id is not None:
+            candidate = ctx.deps.persistence.fetch_held_event("event_data", event_data_event_id)
+            pending_event = ctx.deps.persistence.fetch_event(event_data_event_id)
+            if (
+                candidate is None
+                or candidate.get("resolved")
+                or pending_event is None
+                or pending_event.get("conversation_id") != conversation_id
+                or pending_event.get("sender_identity") != caller_identity
+            ):
+                raise InvalidInputError(messages.text("api.event_data_reply_not_pending"))
+            pending_hold = candidate
+
         # A drone-choice reply is operational input, not free-form missing event
         # data. Resolve it deterministically before any planner/model call.
-        drone_selection_hold = None
-        if conversation_id is not None:
-            for candidate in reversed(ctx.deps.persistence.list_held_events("event_data")):
-                if candidate.get("missing_fields") != ["drone_selection"]:
-                    continue
-                pending_event = ctx.deps.persistence.fetch_event(candidate["event_id"])
-                if (
-                    pending_event is not None
-                    and pending_event.get("conversation_id") == conversation_id
-                    and pending_event.get("sender_identity") == caller_identity
-                ):
-                    drone_selection_hold = candidate
-                    break
+        drone_selection_hold = (
+            pending_hold if pending_hold is not None and pending_hold.get("missing_fields") == ["drone_selection"] else None
+        )
 
         if drone_selection_hold is not None:
             require(level, RequestedOperation.APPROVE_RUN)
@@ -274,17 +287,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
                 "status": "succeeded",
             })
 
-        matching_event_data_hold = False
-        if conversation_id is not None:
-            for pending_hold in reversed(ctx.deps.persistence.list_held_events("event_data")):
-                pending_event = ctx.deps.persistence.fetch_event(pending_hold["event_id"])
-                if (
-                    pending_event is not None
-                    and pending_event.get("conversation_id") == conversation_id
-                    and pending_event.get("sender_identity") == caller_identity
-                ):
-                    matching_event_data_hold = True
-                    break
+        matching_event_data_hold = pending_hold is not None
 
         if matching_event_data_hold:
             reservation = ctx.queue.reserve(True)
@@ -298,6 +301,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
                     caller_identity,
                     conversation_id,
                     prior_messages,
+                    event_data_event_id,
                 )
             except OrchestrationParseError as exc:
                 ctx.queue.release_reservation(reservation)

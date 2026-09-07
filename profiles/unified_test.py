@@ -9,6 +9,7 @@ import uuid
 from agents import (
     AgentResult,
     FriendlyForcesAgent,
+    get_authenticated_request_identity,
     InvocationPolicy,
     SurveillanceAgent,
     TeamStatusAgent,
@@ -38,12 +39,9 @@ MODEL_CREDENTIAL_ENVS = []
 _surv_key: ContextVar[str | None] = ContextVar("unified_surv_key", default=None)
 _surv_results: dict[str, str] = {}
 _surv_lock = threading.Lock()
-_latest_surv_result: str | None = None
 
 
 def _capture_surv_result(output: str) -> None:
-    global _latest_surv_result
-    _latest_surv_result = output
     key = _surv_key.get() or get_trace_id()
     if key:
         with _surv_lock:
@@ -53,12 +51,9 @@ def _capture_surv_result(output: str) -> None:
 _team_key: ContextVar[str | None] = ContextVar("unified_team_key", default=None)
 _team_results: dict[str, str] = {}
 _team_lock = threading.Lock()
-_latest_team_result: str | None = None
 
 
 def _capture_team_result(output: str) -> None:
-    global _latest_team_result
-    _latest_team_result = output
     key = _team_key.get() or get_trace_id()
     if key:
         with _team_lock:
@@ -68,12 +63,9 @@ def _capture_team_result(output: str) -> None:
 _forces_key: ContextVar[str | None] = ContextVar("unified_forces_key", default=None)
 _forces_results: dict[str, str] = {}
 _forces_lock = threading.Lock()
-_latest_forces_result: str | None = None
 
 
 def _capture_forces_result(output: str) -> None:
-    global _latest_forces_result
-    _latest_forces_result = output
     key = _forces_key.get() or get_trace_id()
     if key:
         with _forces_lock:
@@ -108,8 +100,6 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
     ) -> AgentResult:
         if invocation_policy is None:
             invocation_policy = InvocationPolicy(max_output_tokens=250, reasoning_effort="none")
-        global _latest_surv_result
-        _latest_surv_result = None
         key = get_trace_id() or uuid.uuid4().hex
         token = _surv_key.set(key)
         with _surv_lock:
@@ -120,14 +110,11 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
                 exact = _surv_results.pop(key, None)
             if exact is not None:
                 return AgentResult(status="success", text=exact)
-            if _latest_surv_result is not None:
-                return AgentResult(status="success", text=_latest_surv_result)
             return model_result
         finally:
             with _surv_lock:
                 _surv_results.pop(key, None)
             _surv_key.reset(token)
-            _latest_surv_result = None
 
     @tool(
         "get_drone_fleet_status",
@@ -380,8 +367,6 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
     ) -> AgentResult:
         if invocation_policy is None:
             invocation_policy = InvocationPolicy(max_output_tokens=250, reasoning_effort="none")
-        global _latest_team_result
-        _latest_team_result = None
         key = get_trace_id() or uuid.uuid4().hex
         token = _team_key.set(key)
         with _team_lock:
@@ -392,14 +377,11 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
                 exact = _team_results.pop(key, None)
             if exact is not None:
                 return AgentResult(status="success", text=exact)
-            if _latest_team_result is not None:
-                return AgentResult(status="success", text=_latest_team_result)
             return model_result
         finally:
             with _team_lock:
                 _team_results.pop(key, None)
             _team_key.reset(token)
-            _latest_team_result = None
 
     @tool(
         "report_team_availability",
@@ -444,7 +426,6 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
     )
     def record_attendance_response(
         self,
-        telegram_identity: str,
         source_message_id: str = "direct-response",
         availability: str = "available",
         original_text: str = "",
@@ -453,20 +434,22 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
         received_at: str = "",
     ) -> str:
         from datetime import datetime, timedelta, timezone
+        telegram_identity = get_authenticated_request_identity()
+        if not telegram_identity:
+            res = "רישום התגובה נכשל: זהות המשתמש המאומת אינה זמינה."
+            _capture_team_result(res)
+            return res
         now_dt = datetime.now(timezone.utc)
         if not source_message_id:
             source_message_id = f"msg-{int(now_dt.timestamp())}"
         if not original_text:
             original_text = f"דיווח זמינות: {availability}"
 
-        # Ensure member is registered and approved in roster
-        try:
-            members = self.status_store.list_members(approved_only=False)
-            if not any(m["telegram_identity"] == telegram_identity for m in members):
-                self.status_store.register_member(telegram_identity, f"חבר כיתת כוננות ({telegram_identity})", now_dt.isoformat())
-                self.status_store.approve_roster("system", now_dt.isoformat())
-        except Exception:
-            pass
+        approved_members = self.status_store.list_members(approved_only=True)
+        if not any(m["telegram_identity"] == telegram_identity for m in approved_members):
+            res = "רישום התגובה נכשל: המשתמש אינו חבר מאושר בכיתת הכוננות."
+            _capture_team_result(res)
+            return res
 
         normalized = availability.strip().lower()
         if normalized not in {"available", "unavailable"}:
@@ -524,8 +507,6 @@ class UnifiedFriendlyForcesAgent(FriendlyForcesAgent):
     ) -> AgentResult:
         if invocation_policy is None:
             invocation_policy = InvocationPolicy(max_output_tokens=250, reasoning_effort="none")
-        global _latest_forces_result
-        _latest_forces_result = None
         key = get_trace_id() or uuid.uuid4().hex
         token = _forces_key.set(key)
         with _forces_lock:
@@ -536,14 +517,11 @@ class UnifiedFriendlyForcesAgent(FriendlyForcesAgent):
                 exact = _forces_results.pop(key, None)
             if exact is not None:
                 return AgentResult(status="success", text=exact)
-            if _latest_forces_result is not None:
-                return AgentResult(status="success", text=_latest_forces_result)
             return model_result
         finally:
             with _forces_lock:
                 _forces_results.pop(key, None)
             _forces_key.reset(token)
-            _latest_forces_result = None
 
     @tool(
         "dispatch_ambulance",
@@ -802,4 +780,3 @@ VIEWER_KEYBOARD = (
     ("👥 סטטוס כיתת כוננות", "📊 תמונת מצב כללית"),
     ("📹 מצב מצלמות", "📜 היסטוריית אירועים"),
 )
-

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from agents.runtime import Agent, tool
+from agents.runtime import Agent, get_authenticated_request_identity, tool
 from persistence import TeamStatusPersistenceError, open_team_status_persistence
 
 
@@ -127,7 +127,6 @@ class TeamStatusAgent(Agent):
     )
     def record_attendance_response(
         self,
-        telegram_identity: str,
         source_message_id: str = "direct-response",
         availability: str = "available",
         original_text: str = "",
@@ -135,20 +134,18 @@ class TeamStatusAgent(Agent):
         unavailable_days: int = 0,
         received_at: str = "",
     ) -> str:
+        telegram_identity = get_authenticated_request_identity()
+        if not telegram_identity:
+            return "The attendance response was not stored: authenticated requester identity is unavailable."
         now = _aware_datetime(received_at or None)
         if not source_message_id:
             source_message_id = f"msg-{int(now.timestamp())}"
         if not original_text:
             original_text = f"availability report: {availability}"
 
-        # Ensure member is registered and approved in roster
-        try:
-            members = self.status_store.list_members(approved_only=False)
-            if not any(m["telegram_identity"] == telegram_identity for m in members):
-                self.status_store.register_member(telegram_identity, f"Member ({telegram_identity})", now.isoformat())
-                self.status_store.approve_roster("system", now.isoformat())
-        except Exception:
-            pass
+        approved_members = self.status_store.list_members(approved_only=True)
+        if not any(m["telegram_identity"] == telegram_identity for m in approved_members):
+            return "The attendance response was not stored: requester is not an approved roster member."
 
         normalized = availability.strip().lower()
         if normalized not in {"available", "unavailable"}:

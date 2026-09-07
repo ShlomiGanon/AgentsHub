@@ -5,6 +5,8 @@ import pytest
 from agents import adapter
 from api.app import build_app
 from api.operations import job_status
+from orchestrator.flows import begin_report
+from orchestrator.holds import create_event_data_hold
 from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, ScriptedAgent, auth_headers, build_context, happy_path_agent
 
 
@@ -107,10 +109,83 @@ def test_a_report_returns_202_with_a_job_id(tmp_path, teardown_ctx):
     body = resp.get_json()
     assert body["taken_as"] == "report"
     assert body["status"] == "queued"
-
     ctx.queue.wait_until_idle()
     assert job_status(ctx, body["event_id"])["status"] == "succeeded"
 
+
+def test_authenticated_identity_cannot_submit_as_another_sender(tmp_path, teardown_ctx):
+    ctx = _ctx_with(tmp_path, happy_path_agent(intent="conversational"))
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    response = client.post(
+        "/Msg",
+        headers=auth_headers(VIEWER_IDENTITY),
+        json={"text": "hello", "sender_identity": COMMANDER_IDENTITY},
+    )
+
+    assert response.status_code == 403
+    assert ctx.deps.persistence.fetch_events_range("2000-01-01", "2100-01-01") == []
+
+
+def test_unrelated_message_does_not_answer_an_old_event_data_hold(tmp_path, teardown_ctx):
+    agent = happy_path_agent(intent="conversational")
+    agent._dispatch["Reply naturally and directly"] = "This is a new conversation turn."
+    ctx = _ctx_with(tmp_path, agent)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+    event_id = begin_report(
+        ctx.deps, "old incomplete report", "telegram", "2026-09-07T10:00:00+00:00",
+        VIEWER_IDENTITY, source_message_id="old-1", conversation_id="conversation-1",
+    )
+    create_event_data_hold(ctx.deps.persistence, event_id, ("area",), "Which area?", ())
+
+    response = client.post(
+        "/Msg",
+        headers=auth_headers(VIEWER_IDENTITY),
+        json={
+            "text": "hello, this is a new message",
+            "sender_identity": VIEWER_IDENTITY,
+            "source_message_id": "new-1",
+            "conversation_id": "conversation-1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["taken_as"] == "conversational"
+    assert ctx.deps.persistence.fetch_held_event("event_data", event_id)["resolved"] is False
+
+
+def test_explicit_event_data_reply_resolves_only_its_target_hold(tmp_path, teardown_ctx):
+    agent = happy_path_agent(intent="conversational")
+    agent._dispatch["pending request for missing event details"] = (
+        '{"addresses_request": true, "updates": {"area": "north_sector"}, "reply_text": "Recorded."}'
+    )
+    ctx = _ctx_with(tmp_path, agent)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+    event_id = begin_report(
+        ctx.deps, "old incomplete report", "telegram", "2026-09-07T10:00:00+00:00",
+        VIEWER_IDENTITY, source_message_id="old-2", conversation_id="conversation-2",
+    )
+    create_event_data_hold(ctx.deps.persistence, event_id, ("area",), "Which area?", ())
+
+    response = client.post(
+        "/Msg",
+        headers=auth_headers(VIEWER_IDENTITY),
+        json={
+            "text": "north sector",
+            "sender_identity": VIEWER_IDENTITY,
+            "source_message_id": "reply-2",
+            "conversation_id": "conversation-2",
+            "event_data_event_id": event_id,
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.get_json()["event_id"] == event_id
+    assert ctx.deps.persistence.fetch_held_event("event_data", event_id)["resolved"] is True
+    assert ctx.deps.persistence.fetch_event(event_id)["area"] == "north_sector"
 
 def test_a_request_returns_202_and_is_classified_human_activation(tmp_path, teardown_ctx):
     agent = happy_path_agent(risk_score="0.1", selected="status_check", intent="request")

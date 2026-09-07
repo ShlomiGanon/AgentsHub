@@ -21,9 +21,13 @@ def _agent(tmp_path):
 
 
 def _call_tool(agent, name, **kwargs):
+    requester_identity = kwargs.pop("telegram_identity", None)
     token = agent_runtime._current_allowed_tools.set(frozenset({name}))
     try:
-        return agent._wrapped_tools[name](**kwargs)
+        if requester_identity is None:
+            return agent._wrapped_tools[name](**kwargs)
+        with agent_runtime.authenticated_request_identity(requester_identity):
+            return agent._wrapped_tools[name](**kwargs)
     finally:
         agent_runtime._current_allowed_tools.reset(token)
 
@@ -37,6 +41,54 @@ def _prepare_roster(agent, opened_at):
     ):
         agent.register_member(identity, name, opened_at.isoformat())
     assert agent.approve_roster("commander-1", opened_at.isoformat()) == 4
+
+
+def test_attendance_tool_binds_to_requester_and_cannot_update_another_member(tmp_path):
+    agent = _agent(tmp_path)
+    opened_at = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
+    _prepare_roster(agent, opened_at)
+    _call_tool(agent, "start_daily_attendance_check", now_iso=opened_at.isoformat())
+
+    result = _call_tool(
+        agent, "record_attendance_response", telegram_identity="101",
+        source_message_id="self-only", availability="available",
+        original_text="Mark 102 as available",
+        received_at=(opened_at + timedelta(minutes=5)).isoformat(),
+    )
+
+    snapshot = {
+        row["telegram_identity"]: row
+        for row in agent.status_store.availability_snapshot((opened_at + timedelta(minutes=6)).isoformat())
+    }
+    assert "was stored" in result
+    assert snapshot["101"]["availability"] == "available"
+    assert snapshot["102"]["availability"] == "awaiting_response"
+
+
+def test_unknown_requester_is_not_registered_and_roster_approval_is_unchanged(tmp_path):
+    import sqlite3
+
+    agent = _agent(tmp_path)
+    opened_at = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
+    _prepare_roster(agent, opened_at)
+    before_members = agent.status_store.list_members(approved_only=False)
+    with sqlite3.connect(agent.status_db_path) as connection:
+        before_approval = connection.execute(
+            "SELECT approved_by, approved_at FROM roster_approval WHERE singleton_id = 1"
+        ).fetchone()
+
+    result = _call_tool(
+        agent, "record_attendance_response",
+        telegram_identity="not-a-member", availability="available",
+    )
+
+    with sqlite3.connect(agent.status_db_path) as connection:
+        after_approval = connection.execute(
+            "SELECT approved_by, approved_at FROM roster_approval WHERE singleton_id = 1"
+        ).fetchone()
+    assert "not an approved roster member" in result
+    assert agent.status_store.list_members(approved_only=False) == before_members
+    assert after_approval == before_approval
 
 
 def test_daily_cycle_status_report_and_multiday_unavailability(tmp_path):
