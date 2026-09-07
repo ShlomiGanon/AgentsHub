@@ -67,15 +67,6 @@ PROTOCOLS = [
 EVENT_TYPES = ["fire", "medical"]
 AREAS = ["north_sector", "south_sector"]
 
-# Both event types imply a physical dispatch — never proceed to protocol
-# selection/task formulation without a resolved location. See
-# docs/profile_spec.md's EVENT_TYPE_REQUIRED_FIELDS entry and
-# docs/IMPROVES/AREA_FIELD_REGRESSION_CHECK.MD for the regression this closes.
-EVENT_TYPE_REQUIRED_FIELDS = {
-    "fire": ["area"],
-    "medical": ["area"],
-}
-
 _DEMO_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _DEMO_DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = str(_DEMO_DATA_DIR / "demo_profile.db")
