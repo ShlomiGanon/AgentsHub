@@ -612,6 +612,63 @@ def test_process_report_low_risk_unflagged_protocol_runs_to_success(deps, caplog
     assert outcome_records[-1].outcome == "succeeded"
 
 
+def test_attendance_protocol_is_never_closed_on_precedent(deps):
+    prior_id = begin_report(
+        deps, "availability report", "telegram", "2026-08-20T09:00:00", "viewer-1"
+    )
+    deps.persistence.update_event(
+        prior_id,
+        {
+            "classification": "fire",
+            "area": "north_sector",
+            "occurred_at": "2026-08-20T09:00:00",
+            "outcome": "succeeded",
+        },
+    )
+    event_id = begin_report(
+        deps, "I am available", "telegram", "2026-08-20T10:00:00", "viewer-1"
+    )
+    deps.persistence.update_event(
+        event_id,
+        {
+            "classification": "fire",
+            "area": "north_sector",
+            "occurred_at": "2026-08-20T10:00:00",
+        },
+    )
+    attendance_deps = replace(
+        deps,
+        protocol_set=ProtocolSet(protocols=(
+            Protocol(
+                name="record_attendance_response",
+                description="record attendance",
+                participating_agents=("reference_agent",),
+                approved_tools=("check_status",),
+                expected_success_output="attendance stored",
+                criticality=CriticalityLevel.LOW,
+                approval_flag=False,
+            ),
+        )),
+    )
+    agent = _happy_path_agent(
+        risk_score="0.1", selected="record_attendance_response", verdict="success",
+        agent_task="record this attendance response",
+    )
+    insights_agent = type(
+        "I", (), {"process": lambda self, text, tools: _FakeResult("success", "attendance stored")}
+    )()
+
+    result = flows_module.continue_from_risk_assessment(
+        attendance_deps, event_id, agent, insights_agent, originated_from_commander=False
+    )
+
+    assert result.outcome == "succeeded"
+    event = deps.persistence.fetch_event(event_id)
+    assert prior_id in event["precedent_matched_event_ids"]
+    assert event["precedent_closed_by_event_id"] is None
+    assert event["steps"][0]["result_text"] is not None
+
+
 def test_process_report_flagged_protocol_holds_for_approval_then_resumes_approved(deps, caplog):
     agent = _happy_path_agent(risk_score="0.9", selected="dispatch_response", verdict="success", agent_task="dispatch to gate 3")
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()

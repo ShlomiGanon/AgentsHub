@@ -49,6 +49,7 @@ def _capture_surv_result(output: str) -> None:
 
 
 _team_key: ContextVar[str | None] = ContextVar("unified_team_key", default=None)
+_team_query_text: ContextVar[str] = ContextVar("unified_team_query_text", default="")
 _team_results: dict[str, str] = {}
 _team_lock = threading.Lock()
 
@@ -358,6 +359,9 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
         "חובה לענות אך ורק בעברית קצרה, מדויקת ומבצעית (עד 4-5 שורות לכל היותר). "
         "אל תשתמש באנגלית כלל. "
         "לשאלות על סטטוס הנוכחות של כיתת הכוננות קרא ל-report_team_availability. "
+        "בחר view מתאים: summary למצב כללי, members לשמות חברי הכיתה, available למי זמין, "
+        "unavailable למי לא זמין, awaiting למי שטרם דיווח, count לכמות זמינים, ו-reason לסיבת אי-זמינות; "
+        "ב-view מסוג reason העבר גם member_query מתוך השאלה. אל תמציא שמות או סיבות. "
         "לרישום דיווח נוכחות קרא ל-record_attendance_response. "
         "היה תמציתי וברור."
     )
@@ -369,6 +373,7 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
             invocation_policy = InvocationPolicy(max_output_tokens=250, reasoning_effort="none")
         key = get_trace_id() or uuid.uuid4().hex
         token = _team_key.set(key)
+        query_token = _team_query_text.set(text)
         with _team_lock:
             _team_results.pop(key, None)
         try:
@@ -382,30 +387,100 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
             with _team_lock:
                 _team_results.pop(key, None)
             _team_key.reset(token)
+            _team_query_text.reset(query_token)
+
+    @staticmethod
+    def _requested_roster_view(view: str) -> str:
+        requested = view.strip().lower()
+        if requested and requested != "summary":
+            return requested
+
+        text = _team_query_text.get().lower()
+        if any(term in text for term in ("למה", "סיבת", "reason", "why")):
+            return "reason"
+        if any(term in text for term in ("לא דיווח", "טרם דיווח", "ממתין", "awaiting", "pending")):
+            return "awaiting"
+        if any(term in text for term in ("מי לא זמין", "אינם זמינים", "unavailable")):
+            return "unavailable"
+        if any(term in text for term in ("כמה", "כמות", "how many", "count")) and any(
+            term in text for term in ("זמין", "available")
+        ):
+            return "count"
+        if any(term in text for term in ("מי זמין", "זמינים בלבד", "who is available")):
+            return "available"
+        if any(term in text for term in ("מי חבר", "חברי הכיתה", "השמות", "מי הם", "members", "names")):
+            return "members"
+        return "summary"
+
+    @staticmethod
+    def _member_name(entry: dict) -> str:
+        name = entry["full_name"].strip()
+        identity = entry["telegram_identity"]
+        if name == f"חבר כיתת כוננות ({identity})":
+            return f"משתמש {identity} (שם לא הוגדר)"
+        return name
+
+    @classmethod
+    def _matching_member(cls, snapshot: list[dict], query: str) -> dict | None:
+        normalized = query.casefold()
+        matches = [
+            entry for entry in snapshot
+            if entry["telegram_identity"].casefold() in normalized
+            or cls._member_name(entry).casefold() in normalized
+        ]
+        return matches[0] if len(matches) == 1 else None
 
     @tool(
         "report_team_availability",
-        "מחזיר דו\"ח נוכחות מפורט ותמציתי של כיתת הכוננות למחזור הנוכחי בעברית.",
+        "מחזיר נתוני roster אמיתיים למחזור הנוכחי. view הוא summary, members, available, unavailable, awaiting, count או reason; עבור reason יש להעביר member_query.",
         side_effecting=False,
     )
-    def report_team_availability(self, as_of_iso: str = "") -> str:
+    def report_team_availability(
+        self, as_of_iso: str = "", view: str = "summary", member_query: str = ""
+    ) -> str:
         from datetime import datetime, timezone
         now_iso = as_of_iso or datetime.now(timezone.utc).isoformat()
         snapshot = self.status_store.availability_snapshot(now_iso)
         avail = [e for e in snapshot if e["availability"] == "available"]
         unavail = [e for e in snapshot if e["availability"] == "unavailable"]
-        pending = [e for e in snapshot if e["availability"] == "pending"]
-        lines = [
-            f"👥 סטטוס כיתת כוננות (סה\"כ {len(snapshot)} לוחמים):",
-            f"• זמינים לפעילות ({len(avail)}): {', '.join(e['full_name'] for e in avail) if avail else 'אין כרגע'}",
-        ]
-        if unavail:
-            lines.append(f"• אינם זמינים ({len(unavail)}):")
-            for e in unavail:
-                reason = f" ({e['reason']})" if e.get("reason") else ""
-                lines.append(f"  - {e['full_name']}{reason}")
-        if pending:
-            lines.append(f"• טרם דיווחו ({len(pending)}): {', '.join(e['full_name'] for e in pending)}")
+        awaiting = [e for e in snapshot if e["availability"] in {"awaiting_response", "pending"}]
+        requested_view = self._requested_roster_view(view)
+
+        names = lambda entries: ", ".join(self._member_name(entry) for entry in entries) or "אין כרגע"
+        if requested_view == "members":
+            lines = [f"👥 חברי כיתת הכוננות ({len(snapshot)}): {names(snapshot)}"]
+        elif requested_view == "available":
+            lines = [f"✅ זמינים לכוננות ({len(avail)}): {names(avail)}"]
+        elif requested_view == "unavailable":
+            lines = [f"❌ אינם זמינים ({len(unavail)}):"]
+            lines.extend(
+                f"• {self._member_name(entry)} — {entry['reason'] or 'לא נשמרה סיבה'}"
+                for entry in unavail
+            )
+            if not unavail:
+                lines = ["❌ אין כרגע חברי כיתה שמסומנים כלא זמינים."]
+        elif requested_view == "awaiting":
+            lines = [f"⏳ טרם דיווחו ({len(awaiting)}): {names(awaiting)}"]
+        elif requested_view == "count":
+            lines = [f"✅ זמינים כעת {len(avail)} מתוך {len(snapshot)} חברי כיתה."]
+        elif requested_view == "reason":
+            member = self._matching_member(snapshot, member_query or _team_query_text.get())
+            if member is None:
+                lines = ["לא ניתן לזהות בוודאות את חבר הכיתה המבוקש מתוך ה־roster."]
+            elif member["availability"] == "unavailable":
+                until = f" עד {member['unavailable_until']}" if member.get("unavailable_until") else ""
+                lines = [f"{self._member_name(member)} אינו זמין: {member['reason'] or 'לא נשמרה סיבה'}{until}."]
+            elif member["availability"] == "available":
+                lines = [f"{self._member_name(member)} מסומן כזמין; אין סיבת אי־זמינות פעילה."]
+            else:
+                lines = [f"{self._member_name(member)} טרם דיווח במחזור הנוכחי; לא נשמרה סיבת אי־זמינות."]
+        else:
+            lines = [
+                f"👥 סטטוס כיתת כוננות (סה\"כ {len(snapshot)} לוחמים):",
+                f"• זמינים לפעילות ({len(avail)}): {names(avail)}",
+                f"• אינם זמינים ({len(unavail)}): {names(unavail)}",
+                f"• טרם דיווחו ({len(awaiting)}): {names(awaiting)}",
+            ]
         res = "\n".join(lines)
         _capture_team_result(res)
         return res
@@ -415,8 +490,10 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
         "מחזיר את תמונת מצבת כיתת הכוננות וזמינות הלוחמים בלבד (קריאה בלבד ללא שום תופעות לוואי) בעברית.",
         side_effecting=False,
     )
-    def get_team_status_roster(self, as_of_iso: str = "") -> str:
-        return self.report_team_availability(as_of_iso)
+    def get_team_status_roster(
+        self, as_of_iso: str = "", view: str = "summary", member_query: str = ""
+    ) -> str:
+        return self.report_team_availability(as_of_iso, view, member_query)
 
     @tool(
         "record_attendance_response",
@@ -470,7 +547,7 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
             unavailable_until = (now_dt + timedelta(days=unavailable_days)).isoformat()
 
         try:
-            self.status_store.record_response(
+            stored_response = self.status_store.record_response(
                 telegram_identity=telegram_identity,
                 source_message_id=source_message_id,
                 availability=normalized,
@@ -484,8 +561,12 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
             _capture_team_result(res)
             return res
 
-        heb_status = "זמין לכוננות ✅" if normalized == "available" else f"אינו זמין ({reason}) ❌"
-        res = f"דיווח הנוכחות נקלט בהצלחה: {heb_status}."
+        if stored_response["approval_status"] == "pending":
+            res = "הדיווח התקבל וממתין לאישור מפקד לפני שינוי סטטוס הכוננות."
+        elif normalized == "available":
+            res = "✅ הזמינות שלך עודכנה. אתה מסומן כזמין לכוננות."
+        else:
+            res = f"❌ הזמינות שלך עודכנה. אתה מסומן כלא זמין ({reason})."
         _capture_team_result(res)
         return res
 
@@ -603,6 +684,17 @@ def _seed_mock_data() -> None:
         cycle_key = now_dt.date().isoformat()
         deadline = (now_dt + timedelta(hours=4)).isoformat()
         team_store.open_cycle(cycle_key, now_iso, deadline)
+
+    # Repair only the legacy placeholder produced by the removed Telegram
+    # auto-registration path.  This reuses the profile's already-authoritative
+    # approved name and leaves roster membership and approval untouched.
+    members_by_identity = {
+        member["telegram_identity"]: member
+        for member in team_store.list_members(approved_only=False)
+    }
+    primary = members_by_identity.get("2077472944")
+    if primary and primary["full_name"] == "חבר כיתת כוננות (2077472944)":
+        team_store.register_member("2077472944", "מפקד / משתמש ראשי", primary["registered_at"])
 
 
 

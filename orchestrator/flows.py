@@ -672,7 +672,18 @@ def continue_from_risk_assessment(deps: FlowDeps, event_id: str, main_agent: "Ma
             {"precedent_matched_event_ids": [precedent_match.event_id for precedent_match in precedent_matches]},
         )
 
-    closing_event_id = determine_closure(risk_assessment.level, classification, precedent_matches)
+    # A precedent can answer an informational report, but it cannot stand in for
+    # executing a fresh attendance write.  Repeated availability reports must
+    # still reach TeamStatusAgent so the authenticated member's current response
+    # is persisted and acknowledged.
+    precedent_closure_blocked = (
+        selection.status == "selected" and selection.protocol_name == "record_attendance_response"
+    )
+    closing_event_id = (
+        None
+        if precedent_closure_blocked
+        else determine_closure(risk_assessment.level, classification, precedent_matches)
+    )
     logger.info(
         "precedent closure decision",
         extra={

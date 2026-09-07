@@ -457,6 +457,97 @@ def test_parallel_agent_requests_receive_only_their_own_captured_result(unified_
     assert not hasattr(unified_test, "_latest_forces_result")
 
 
+def test_team_status_roster_views_are_complete_and_follow_up_specific(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from agents import AgentResult, TeamStatusAgent
+    from profiles import unified_test
+
+    status_path = str(tmp_path / "team-status-views.db")
+    monkeypatch.setattr(unified_test.UnifiedTeamStatusAgent, "status_db_path", status_path)
+    agent = unified_test.UnifiedTeamStatusAgent(model="mock")
+    opened = datetime(2026, 9, 7, 5, 0, tzinfo=timezone.utc)
+    for identity, name in (
+        ("1001", "דן לוי"),
+        ("1002", "יוסי כהן"),
+        ("1003", "מיכל אברהם"),
+    ):
+        agent.status_store.register_member(identity, name, opened.isoformat())
+    agent.status_store.approve_roster("commander", opened.isoformat())
+    agent.status_store.open_cycle(
+        "2026-09-07", opened.isoformat(), (opened + timedelta(hours=4)).isoformat()
+    )
+    agent.status_store.record_response(
+        telegram_identity="1001", source_message_id="available-1001",
+        availability="available", original_text="זמין",
+        received_at=(opened + timedelta(minutes=5)).isoformat(),
+    )
+    agent.status_store.record_response(
+        telegram_identity="1002", source_message_id="unavailable-1002",
+        availability="unavailable", reason="מחלה",
+        unavailable_until=(opened + timedelta(days=2)).isoformat(),
+        original_text="לא זמין עקב מחלה",
+        received_at=(opened + timedelta(minutes=6)).isoformat(),
+    )
+    as_of = (opened + timedelta(minutes=10)).isoformat()
+
+    summary = agent.report_team_availability(as_of)
+    assert "סה\"כ 3" in summary
+    assert "טרם דיווחו (1): מיכל אברהם" in summary
+    assert "זמינים לפעילות (1): דן לוי" in summary
+
+    assert agent.report_team_availability(as_of, "members") == (
+        "👥 חברי כיתת הכוננות (3): דן לוי, יוסי כהן, מיכל אברהם"
+    )
+    assert "דן לוי" in agent.report_team_availability(as_of, "available")
+    assert "יוסי כהן" not in agent.report_team_availability(as_of, "available")
+    assert "יוסי כהן — מחלה" in agent.report_team_availability(as_of, "unavailable")
+    assert "מיכל אברהם" in agent.report_team_availability(as_of, "awaiting")
+    assert agent.report_team_availability(as_of, "count") == "✅ זמינים כעת 1 מתוך 3 חברי כיתה."
+    assert "מחלה" in agent.report_team_availability(as_of, "reason", "למה יוסי כהן לא זמין?")
+
+    def fake_base_process(self, text, allowed_tools, *, invocation_policy=None):
+        self.report_team_availability(as_of)
+        return AgentResult(status="success", text="תשובת מודל שלא צריכה להחליף נתוני DB")
+
+    monkeypatch.setattr(TeamStatusAgent, "process", fake_base_process)
+    follow_up = agent.process("אפשר את השמות שלהם?", ["report_team_availability"])
+    assert follow_up.text.startswith("👥 חברי כיתת הכוננות (3):")
+    assert "סטטוס כיתת כוננות" not in follow_up.text
+
+    available_follow_up = agent.process("מי זמין?", ["report_team_availability"])
+    assert "דן לוי" in available_follow_up.text
+    assert "יוסי כהן" not in available_follow_up.text
+
+    awaiting_follow_up = agent.process("מי עדיין לא דיווח?", ["report_team_availability"])
+    assert "מיכל אברהם" in awaiting_follow_up.text
+    assert "דן לוי" not in awaiting_follow_up.text
+
+    # The viewer-visible profile contract intentionally exposes the approved
+    # roster's names, statuses and unavailability reasons, but not raw audit
+    # payloads or message timestamps.
+    assert "לא זמין עקב מחלה" not in summary
+    assert "2026-09-07T05:06" not in summary
+
+
+def test_team_status_does_not_invent_a_name_for_legacy_placeholder(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from profiles import unified_test
+
+    status_path = str(tmp_path / "team-status-placeholder.db")
+    monkeypatch.setattr(unified_test.UnifiedTeamStatusAgent, "status_db_path", status_path)
+    agent = unified_test.UnifiedTeamStatusAgent(model="mock")
+    opened = datetime(2026, 9, 7, 5, 0, tzinfo=timezone.utc)
+    agent.status_store.register_member("999", "חבר כיתת כוננות (999)", opened.isoformat())
+    agent.status_store.approve_roster("commander", opened.isoformat())
+    agent.status_store.open_cycle(
+        "2026-09-07", opened.isoformat(), (opened + timedelta(hours=1)).isoformat()
+    )
+
+    roster = agent.report_team_availability(opened.isoformat(), "members")
+    assert "משתמש 999 (שם לא הוגדר)" in roster
+    assert "דן" not in roster and "יוסי" not in roster and "מיכל" not in roster
+
+
 def test_all_commander_and_viewer_buttons_mapped(unified_env):
     """Verifies that every single button across Commander and Viewer keyboards maps to expected behavior."""
     import asyncio
@@ -568,8 +659,7 @@ def test_hebrew_tools_return_concise_operational_hebrew(unified_env):
     from agents import authenticated_request_identity
     with authenticated_request_identity("2077472944"):
         att_resp = team_agent.record_attendance_response(availability="available")
-    assert "דיווח הנוכחות נקלט בהצלחה" in att_resp
-    assert "זמין לכוננות" in att_resp
+    assert att_resp == "✅ הזמינות שלך עודכנה. אתה מסומן כזמין לכוננות."
 
     # Friendly forces agent tools
     forces_agent = unified_test.UnifiedFriendlyForcesAgent(model="mock")
@@ -666,4 +756,3 @@ def test_open_approval_holds_tracking():
 
     unregister_open_approval_hold("evt-200")
     assert get_open_approval_holds() == []
-
