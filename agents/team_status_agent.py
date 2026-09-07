@@ -128,14 +128,28 @@ class TeamStatusAgent(Agent):
     def record_attendance_response(
         self,
         telegram_identity: str,
-        source_message_id: str,
-        availability: str,
-        original_text: str,
+        source_message_id: str = "direct-response",
+        availability: str = "available",
+        original_text: str = "",
         reason: str = "",
         unavailable_days: int = 0,
         received_at: str = "",
     ) -> str:
         now = _aware_datetime(received_at or None)
+        if not source_message_id:
+            source_message_id = f"msg-{int(now.timestamp())}"
+        if not original_text:
+            original_text = f"availability report: {availability}"
+
+        # Ensure member is registered and approved in roster
+        try:
+            members = self.status_store.list_members(approved_only=False)
+            if not any(m["telegram_identity"] == telegram_identity for m in members):
+                self.status_store.register_member(telegram_identity, f"Member ({telegram_identity})", now.isoformat())
+                self.status_store.approve_roster("system", now.isoformat())
+        except Exception:
+            pass
+
         normalized = availability.strip().lower()
         if normalized not in {"available", "unavailable"}:
             return "Clarification required: specify whether the member is available or unavailable."

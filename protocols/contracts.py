@@ -31,6 +31,8 @@ class Protocol:
     expected_success_output: str
     criticality: CriticalityLevel
     approval_flag: bool
+    requires_confirmation: bool = False
+    commander_only: bool = False
 
 
 @dataclass(frozen=True)

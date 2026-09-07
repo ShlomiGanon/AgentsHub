@@ -15,6 +15,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `SPEED_PLAN.MD` | Documentation | Internal | Defines the approved sequential implementation and verification plan for current speed and operator-experience work. |
 | `agents/__init__.py` | Production | Public facade | Exposes the public agent facade and compatibility module aliases. |
 | `agents/contracts.py` | Production | Private implementation | Defines agent results, descriptors, tool metadata, parsing, and typed errors. |
+| `agents/friendly_forces_agent.py` | Production | Private implementation | Implements the tactical coordination and dispatch specialist for friendly forces. |
 | `agents/provider_telemetry.py` | Production | Private implementation | Correlates CrewAI provider-call events with AgentsHub traces, stages, latency, and usage. |
 | `agents/runtime.py` | Production | Private implementation | Constructs and invokes agents, enforces tools, adapts CrewAI, and owns the runtime registry. |
 | `agents/standard_agents.py` | Production | Private implementation | Implements the standard History and Reference agents. |
@@ -68,6 +69,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `docs/progress.md` | Documentation | Internal | Documents progress. |
 | `docs/questions.txt` | Documentation | Internal | Documents questions. |
 | `docs/server_report.md` | Documentation | Internal | Documents server report. |
+| `docs/unified_command_guide.md` | Documentation | Internal | Operational and architectural guide for Unified Command Hub profile (Hebrew). |
 | `docs/vocabulary.md` | Documentation | Internal | Documents vocabulary. |
 | `docs/work_plan.md` | Documentation | Internal | Documents work plan. |
 | `docs/ארכיטקטוררה.pptx` | Documentation | Internal | Stores the ארכיטקטוררה reference artifact. |

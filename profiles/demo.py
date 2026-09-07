@@ -65,6 +65,7 @@ PROTOCOLS = [
 ]
 
 EVENT_TYPES = ["fire", "medical"]
+EVENT_TYPE_REQUIRED_FIELDS = {"fire": ("area",), "medical": ("area",)}
 AREAS = ["north_sector", "south_sector"]
 
 _DEMO_DATA_DIR = Path(__file__).resolve().parent.parent / "data"

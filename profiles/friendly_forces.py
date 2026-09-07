@@ -3,7 +3,7 @@ firefighter, and military response requests."""
 
 from pathlib import Path
 
-from agents.friendly_forces_agent import FriendlyForcesAgent
+from agents import FriendlyForcesAgent
 from profiles.contracts import AgentSpec, OptimizationPolicy
 from protocols import CriticalityLevel, Protocol
 

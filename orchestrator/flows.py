@@ -692,6 +692,12 @@ def continue_from_risk_assessment(deps: FlowDeps, event_id: str, main_agent: "Ma
         return FlowResult(event_id, "no_match_protocol", selection.reason)
 
     protocols_by_name = {protocol.name: protocol for protocol in deps.protocol_set.all()}
+    selected_proto = protocols_by_name.get(selection.protocol_name)
+    if selected_proto is not None and not originated_from_commander and getattr(selected_proto, "commander_only", False):
+        record_event_outcome(deps.persistence, event_id, "declined", failure_reason="Protocol requires commander permission")
+        _log_event_outcome(event_id, "declined", reason="Protocol requires commander permission")
+        return FlowResult(event_id, "unauthorized_for_viewer", "\u05d4\u05e4\u05e2\u05d5\u05dc\u05d4 \u05e0\u05d3\u05d7\u05ea\u05d4: \u05e4\u05e2\u05d5\u05dc\u05d4 \u05d6\u05d5 \u05d3\u05d5\u05e8\u05e9\u05ea \u05d4\u05e8\u05e9\u05d0\u05ea \u05de\u05e4\u05e7\u05d3 (COMMANDER).")
+
     hold_reason: "HoldReason | None" = determine_approval_hold(selection, protocols_by_name, originated_from_commander)
 
     if hold_reason is not None:

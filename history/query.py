@@ -78,6 +78,8 @@ def _history_agent_prompt(instruction: str, question: str, views: list[SemanticE
     faithfully explain what a present field means without inventing semantics."""
 
     events_payload = [_semantic_view_payload(view) for view in views]
+    if any('\u0590' <= c <= '\u05ea' for c in question):
+        instruction = "\u05d7\u05d5\u05d1\u05d4 \u05dc\u05e2\u05e0\u05d5\u05ea \u05d0\u05da \u05d5\u05e8\u05e7 \u05d1\u05e2\u05d1\u05e8\u05d9\u05ea \u05e7\u05e6\u05e8\u05d4 \u05d5\u05de\u05d1\u05e6\u05e2\u05d9\u05ea (\u05e2\u05d3 3-4 \u05e9\u05d5\u05e8\u05d5\u05ea \u05dc\u05db\u05dc \u05d4\u05d9\u05d5\u05ea\u05e8). \u05d0\u05d9\u05df \u05dc\u05d4\u05e9\u05ea\u05de\u05e9 \u05d1\u05d0\u05e0\u05d2\u05dc\u05d9\u05ea \u05db\u05dc\u05dc.\n" + instruction
     return (
         f"{instruction}\n"
         "Every field below is already filtered to what you may discuss for this caller — treat any field not "
@@ -456,7 +458,10 @@ class HistoryQueryService:
                 raise HistoryQueryError(f"history agent could not answer: {agent_result.text}")
             answer = agent_result.text
             if truncated:
-                answer += f"\n\nShowing {len(events)} of {total_count} matching events."
+                if any('\u0590' <= c <= '\u05ea' for c in question):
+                    answer += f"\n\n(\u05de\u05d5\u05e6\u05d2\u05d9\u05dd {len(events)} \u05de\u05ea\u05d5\u05da {total_count} \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05ea\u05d5\u05d0\u05de\u05d9\u05dd)"
+                else:
+                    answer += f"\n\nShowing {len(events)} of {total_count} matching events."
             return _finish(HistoryAnswer(answer, sources, normalized.time_start, normalized.time_end, total_count, normalized, truncated))
         else:
             context_instruction = (

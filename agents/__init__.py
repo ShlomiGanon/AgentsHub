@@ -50,6 +50,7 @@ from agents import standard_agents
 from agents.standard_agents import HistoryAgent, ReferenceAgent
 from agents.team_status_agent import TeamStatusAgent
 from agents.surveillance_agent import SurveillanceAgent
+from agents.friendly_forces_agent import FriendlyForcesAgent
 
 history = standard_agents
 reference = standard_agents
@@ -83,6 +84,7 @@ __all__ = [
     "ReferenceAgent",
     "TeamStatusAgent",
     "SurveillanceAgent",
+    "FriendlyForcesAgent",
     "ToolInfo",
     "build_agent_registry",
     "parse_agent_output",

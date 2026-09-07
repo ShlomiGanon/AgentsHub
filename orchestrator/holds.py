@@ -38,8 +38,11 @@ def determine_approval_hold(
         return "ambiguous_selection"
 
     protocol = protocols_by_name.get(selection.protocol_name)
-    if protocol is not None and protocol.approval_flag and not originated_from_commander:
-        return "flagged_protocol"
+    if protocol is not None:
+        if getattr(protocol, "requires_confirmation", False):
+            return "flagged_protocol"
+        if protocol.approval_flag and not originated_from_commander:
+            return "flagged_protocol"
 
     return None
 

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Literal
 
 from agents import Agent, HistoryAgent, InvocationPolicy
 from config import BaseConfig
-from history import EVENT_FIELD_CATALOG, HistoryQuerySpec
+from history import EVENT_FIELD_CATALOG, HistoryQuerySpec, PrecedentMatch
 from history.query import HistoryQueryError
 from messages.model_messages import (
     CONVERSATIONAL_REPLY_INSTRUCTION,
@@ -54,7 +54,9 @@ class MainAgent(Agent):
         "You are the Main Agent, the orchestrator of a field-report multi-agent system. You are "
         "given one focused judgment to make at a time, with everything relevant already provided — "
         "never assume context from a different judgment. Follow the exact response format each "
-        "prompt requests precisely; your response is parsed programmatically, not read by a person."
+        "prompt requests precisely; your response is parsed programmatically, not read by a person. "
+        "When composing an answer or replying to messages in Hebrew, ALWAYS respond exclusively in "
+        "concise, direct Hebrew (at most 3-5 lines), with no English."
     )
 
 
@@ -1376,7 +1378,9 @@ def _build_message_plan_prompt(
         "sub-agents, including hypothetical procedural questions about what happens when the caller uses a visible "
         "capability, are conversational and conversational_reply must answer naturally from the supplied system JSON, "
         "provided the message does not actually report an event or request an action. "
-        "in the same language as the current message; set social_only=true and asks_for_information, "
+        "If the current message is in Hebrew, conversational_reply MUST be exclusively in concise Hebrew (at most 2-3 lines). "
+        "Also, if routing questions to agents, each task description in tasks MUST be formulated in Hebrew (not translated to English); "
+        "set social_only=true and asks_for_information, "
         "reports_occurrence, and requests_action to false for those questions. Required intent fields: "
         "primary_intent, asks_for_information, "
         "reports_occurrence, requests_action, social_only, is_quoted, is_hypothetical, is_followup_without_context, "
@@ -1451,9 +1455,12 @@ def answer_question_from_plan(
     themselves submitted — the ownership scoping a viewer's `ask_question` operation requires
     (docs/Next_Plan.md §5 decision record). `None` (a commander) applies no restriction."""
 
+    is_hebrew = any('\u0590' <= c <= '\u05ea' for c in question)
     if selection.status == "none":
-        return QuestionAnswer(_cant_answer_reply(selection.reason))
+        return QuestionAnswer(_cant_answer_reply(selection.reason, is_hebrew=is_hebrew))
     if selection.status == "clarification":
+        if is_hebrew:
+            return QuestionAnswer(f"\u05e0\u05d3\u05e8\u05e9\u05d9\u05dd \u05e4\u05e8\u05d8\u05d9\u05dd \u05e0\u05d5\u05e1\u05e4\u05d9\u05dd \u05db\u05d3\u05d9 \u05e9\u05d0\u05d5\u05db\u05dc \u05dc\u05d4\u05e9\u05d9\u05d1: {selection.reason}")
         return QuestionAnswer(f"I need a little more detail before I can answer. {selection.reason}")
     if selection.status == "history":
         assert selection.history_query_spec is not None
@@ -1480,16 +1487,23 @@ def answer_question_from_plan(
             }
             return QuestionAnswer(history_answer.answer, provenance)
         except HistoryQueryError as exc:
+            if is_hebrew:
+                msg = str(exc)
+                if "no stored events" in msg.lower():
+                    return QuestionAnswer("\u05dc\u05d0 \u05e0\u05de\u05e6\u05d0\u05d5 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05e7\u05d5\u05d3\u05de\u05d9\u05dd \u05d1\u05d9\u05d5\u05de\u05df \u05d4\u05de\u05d1\u05e6\u05e2\u05d9.")
+                return QuestionAnswer(f"\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05e9\u05dc\u05d5\u05e3 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05de\u05d4\u05d9\u05d5\u05de\u05df: {msg}")
             return QuestionAnswer(_cant_answer_reply(str(exc)))
 
     tasks = list(selection.chosen_tasks.items())[:max_fanout]
     selectable_names = {agent.name for agent in registry.all() if agent.name not in {"main_agent", "insights_agent"}}
     unknown_names = sorted(set(name for name, _task in tasks) - selectable_names)
     if unknown_names:
-        return QuestionAnswer(_cant_answer_reply(f"The selected agent is not available: {', '.join(unknown_names)}."))
+        return QuestionAnswer(_cant_answer_reply(f"The selected agent is not available: {', '.join(unknown_names)}.", is_hebrew=is_hebrew))
 
     def _run_task(agent_name: str, task_text: str) -> tuple[str, str]:
         agent = registry.get(agent_name)
+        if is_hebrew:
+            task_text = f"\u05d7\u05d5\u05d1\u05d4 \u05dc\u05e2\u05e0\u05d5\u05ea \u05d0\u05da \u05d5\u05e8\u05e7 \u05d1\u05e2\u05d1\u05e8\u05d9\u05ea \u05e7\u05e6\u05e8\u05d4 \u05d5\u05de\u05d1\u05e6\u05e2\u05d9\u05ea (\u05e2\u05d3 3-4 \u05e9\u05d5\u05e8\u05d5\u05ea):\n{task_text}"
         if isinstance(agent, HistoryAgent):
             try:
                 return agent_name, history_query_service.query(
@@ -1530,12 +1544,17 @@ def _build_compose_prompt(question: str, sub_answers: dict[str, str]) -> str:
     return (
         f"Compose a single, coherent answer to this question from what each agent found — not a list "
         f"of separate replies.\n\nQuestion: {question}\n\nWhat each agent found:\n{answers_block}\n\n"
-        "Respond with only the final composed answer, nothing else."
+        "Respond with only the final composed answer, nothing else. If the question was in Hebrew, "
+        "respond strictly in concise Hebrew (at most 4-5 lines)."
     )
 
 
-def _cant_answer_reply(reason: str) -> str:
+def _cant_answer_reply(reason: str, is_hebrew: bool = False) -> str:
     reason = reason.strip()
+    if is_hebrew or any('\u0590' <= c <= '\u05ea' for c in reason):
+        if "no stored events" in reason.lower() or "\u05dc\u05d0 \u05e0\u05de\u05e6\u05d0\u05d5" in reason:
+            return "\u05dc\u05d0 \u05e0\u05de\u05e6\u05d0\u05d5 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05de\u05ea\u05d0\u05d9\u05de\u05d9\u05dd \u05d1\u05d4\u05d9\u05e1\u05d8\u05d5\u05e8\u05d9\u05d4 \u05d0\u05d5 \u05d1\u05d9\u05d5\u05de\u05df \u05d4\u05de\u05d1\u05e6\u05e2\u05d9."
+        return f"\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05d4\u05e9\u05d9\u05d1 \u05e2\u05dc \u05db\u05da \u05db\u05e8\u05d2\u05e2. {reason}" if reason else "\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05d4\u05e9\u05d9\u05d1 \u05e2\u05dc \u05db\u05da \u05db\u05e8\u05d2\u05e2."
     return f"I don't have a way to answer that.{' ' + reason if reason else ''}"
 
 

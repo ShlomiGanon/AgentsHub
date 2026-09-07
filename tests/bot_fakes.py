@@ -22,6 +22,7 @@ class SentMessage:
     text: str
     buttons: tuple[tuple[str, str], ...] | None = None
     reply_to_message_id: str | None = None
+    keyboard: tuple[tuple[str, ...], ...] | None = None
 
 
 class FakeTelegramClient(TelegramClient):
@@ -35,8 +36,8 @@ class FakeTelegramClient(TelegramClient):
     async def validate_token(self) -> bool:
         return self.token_is_valid
 
-    async def send_text(self, chat_id: str, text: str) -> None:
-        self.sent.append(SentMessage(chat_id=chat_id, text=text))
+    async def send_text(self, chat_id: str, text: str, keyboard: Sequence[Sequence[str]] | None = None) -> None:
+        self.sent.append(SentMessage(chat_id=chat_id, text=text, keyboard=tuple(tuple(row) for row in keyboard) if keyboard else None))
 
     async def send_status(self, chat_id: str, text: str) -> str:
         message_id = str(self._next_status_id)

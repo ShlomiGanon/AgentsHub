@@ -43,6 +43,7 @@ def build_event_type_registry(loaded_profile: "LoadedProfile") -> EventTypeRegis
 def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> list[str]:
     failures: list[str] = []
     agents_by_name = {agent.name: agent for agent in loaded.agents}
+    agents_by_name.update(dict(getattr(loaded, "core_agents", {})))
 
     if not isinstance(loaded.profile_name, str) or not loaded.profile_name.strip():
         failures.append("PROFILE_NAME must be a non-empty string")

@@ -155,7 +155,9 @@ def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None
     surveillance_protocols = {
         "query_camera_status", "query_drone_fleet_status", "query_active_drone_missions",
         "query_surveillance_overview", "dispatch_drone_to_incident", "return_drone_to_base",
-        "surveillance_area_scan", "update_camera_observation",
+        "recall_drone_to_base", "surveillance_area_scan", "update_camera_observation",
+        "report_team_availability", "record_attendance_response", "dispatch_emergency_forces",
+        "query_historical_incidents",
     }
     if result.protocol_name in surveillance_protocols:
         lines = [

@@ -424,7 +424,7 @@ class TelegramClient(ABC):
         """True if Telegram accepts the configured token, False if it rejects it outright (§8.1's "fail at startup ..."""
 
     @abstractmethod
-    async def send_text(self, chat_id: str, text: str) -> None: ...
+    async def send_text(self, chat_id: str, text: str, keyboard: Sequence[Sequence[str]] | None = None) -> None: ...
 
     @abstractmethod
     async def send_status(self, chat_id: str, text: str) -> str:
@@ -470,10 +470,20 @@ class PTBTelegramClient(TelegramClient):
         except TelegramError:
             return False
 
-    async def send_text(self, chat_id: str, text: str) -> None:
+    async def send_text(self, chat_id: str, text: str, keyboard: Sequence[Sequence[str]] | None = None) -> None:
+        from telegram import ReplyKeyboardMarkup
+
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True) if keyboard is not None else None
         with stage_context("telegram_send"):
-            for chunk in split_message(text):
+            chunks = split_message(text)
+            if not chunks:
+                return
+            for chunk in chunks[:-1]:
                 await self._application.bot.send_message(chat_id=chat_id, text=chunk)
+            if reply_markup is not None:
+                await self._application.bot.send_message(chat_id=chat_id, text=chunks[-1], reply_markup=reply_markup)
+            else:
+                await self._application.bot.send_message(chat_id=chat_id, text=chunks[-1])
 
     async def send_status(self, chat_id: str, text: str) -> str:
         with stage_context("telegram_send"):
