@@ -85,11 +85,9 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
         "אתה סוכן מומחה לתצפית חזותית ורחפנים. "
         "חובה לענות אך ורק בעברית קצרה, מדויקת ומבצעית (עד 4-5 שורות לכל היותר). "
         "אל תשתמש באנגלית כלל, למעט מזהים מדויקים (כגון CAM-01, DRONE-01). "
-        "לשאלות סטטוס של צי רחפנים קרא ל-get_drone_fleet_status. "
-        "לשאלות על משימות רחפנים פעילות באוויר קרא ל-get_active_missions. "
-        "לשאלות על מצלמות קרא ל-get_camera_feeds. "
-        "לתמונת מצב כוללת קרא ל-get_surveillance_overview. "
-        "להחזרת רחפן קרא ל-return_drone_to_base. "
+        "להחזרת רחפן קרא תמיד מיד ל-return_drone_to_base(drone_or_mission_id=''). "
+        "כאשר לא צוין רחפן ספציפי העבר מחרוזת ריקה והכלי יבחר אוטומטית את הרחפן הפעיל לפי מצב הצי. "
+        "אל תנסה לבצע סריקות מקדימות, אל תמציא מזהים, ואסור לדווח שאין רחפנים או שהכלי אינו זמין מבלי שהפעלת את return_drone_to_base — הפעל תמיד את הכלי מיד! "
         "לשיגור רחפן קרא מיד ל-dispatch_drone_to_area עם גזרת היעד (target_area) בלבד. "
         "שדות specific_drone_id ו-dispatched_by הם אופציונליים לחלוטין ואסור בתכלית האיסור לבקש אותם - המערכת בוחרת אוטומטית רחפן מוכן מהצי. "
         "לעולם אל תדווח שמשימה אינה ברורה או שחסרים פרטים כאשר גזרת היעד ידועה, אלא שגר את הרחפן מיד. "
@@ -141,23 +139,24 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
             "maintenance": "בתחזוקה 🛠️",
         }
         lines = [f"🛸 מצב צי רחפנים ({len(drones)} רחפנים):"]
-        ready_count = sum(1 for d in drones if d["status"] == "ready")
-        flight_count = sum(1 for d in drones if d["status"] == "in_flight")
-        charging_count = sum(1 for d in drones if d["status"] == "charging")
+        counts = {"ready": 0, "in_flight": 0, "charging": 0, "maintenance": 0}
         for d in drones:
             st = status_map.get(d["status"], d["status"])
-            mission = f" (במשימה: {d['assigned_mission_id']})" if d.get("assigned_mission_id") else ""
+            counts[d["status"]] = counts.get(d["status"], 0) + 1
+            mission_info = f" (במשימה: {d['assigned_mission_id']})" if d.get("assigned_mission_id") else ""
             lines.append(
-                f"• [{d['drone_id']}] {d['callsign']} ({d['model']}): {st} | סוללה: {d['battery_percent']}% | גזרה: {d['current_area']}{mission}"
+                f"• [{d['drone_id']}] {d['callsign']} ({d['model']}): {st} | סוללה: {d['battery_percent']}% | גזרה: {d['current_area']}{mission_info}"
             )
-        lines.append(f"סיכום: {ready_count} מוכנים לשיגור | {flight_count} באוויר | {charging_count} בטעינה")
+        lines.append(
+            f"סיכום: {counts.get('ready', 0)} מוכנים לשיגור | {counts.get('in_flight', 0)} באוויר | {counts.get('charging', 0)} בטעינה"
+        )
         res = "\n".join(lines)
         _capture_surv_result(res)
         return res
 
     @tool(
         "get_active_missions",
-        "מחזיר את כל משימות הרחפנים הפעילות כרגע באוויר בעברית.",
+        "מחזיר את כל המשימות האוויריות הפעילות כרגע, כולל מזהה משימה, רחפן, גזרת יעד ו-ETA בעברית.",
         side_effecting=False,
     )
     def get_active_missions(self) -> str:
@@ -238,16 +237,20 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
             return res
         requested = drone_or_mission_id.strip()
         normalized = requested.casefold()
-        if not requested or normalized in {"all", "all drones", "כולם", "כולן", "כל הרחפנים"} or "כולם" in normalized or "כל הרחפ" in normalized:
+        if normalized in {"all", "all drones", "כולם", "כולן", "כל הרחפנים"} or "כולם" in normalized or "כל הרחפ" in normalized:
             self.surveillance_store.recall_all_drones()
-            res = f"פקודת החזרה התקבלה: כל הרחפנים הפעילים ({len(active)}) חוזרים כעת לבסיס לנחיתה ✅."
+            res = f"החזרת הרחפנים הושלמה בהצלחה ✅. כל הרחפנים הפעילים ({len(active)}) הוחזרו לבסיס ומוכנים לפעולה."
         else:
+            # Defensive sentinel normalization: if generic words were passed instead of an ID, treat as empty for auto-selection
+            _SENTINELS = {"auto", "none", "null", "n/a", "-", "רחפן", "החזר", "בסיס", "drone"}
+            if normalized in _SENTINELS:
+                requested = ""
             try:
                 recall_data = self.surveillance_store.recall_drone(requested)
                 status = recall_data.get("status")
                 if status == "returned":
                     d = recall_data["drone"]
-                    res = f"פקודת החזרה התקבלה: רחפן {d['callsign']} ({d['drone_id']}) חוזר כעת לבסיס לנחיתה ✅."
+                    res = f"החזרת הרחפן לבסיס הושלמה בהצלחה ✅. רחפן {d['callsign']} ({d['drone_id']}) חזר לבסיס ומוכן לפעולה (צי רחפנים)."
                 elif status == "no_active":
                     res = "אין כרגע רחפנים פעילים באוויר להחזרה."
                 elif status == "not_found":
@@ -777,10 +780,10 @@ PROTOCOLS = [
     ),
     Protocol(
         name="recall_drone_to_base",
-        description="החזרת רחפן פעיל לבסיס וסגירת משימה אווירית. פעולת מפקד בלבד הדורשת אישור.",
+        description="החזרת רחפן פעיל לבסיס וסגירת משימה אווירית. הפעלת return_drone_to_base מיד ללא סריקה מוקדמת. פעולת מפקד בלבד הדורשת אישור.",
         participating_agents=("surveillance_agent",),
         approved_tools=("return_drone_to_base",),
-        expected_success_output="אישור החזרת הרחפן לבסיס ועדכון סטטוס המשימה והצי.",
+        expected_success_output="אישור החזרת הרחפן לבסיס ועדכון סטטוס הרחפן למוכן לפעולה.",
         criticality=CriticalityLevel.HIGH,
         approval_flag=True,
         requires_confirmation=True,

@@ -968,7 +968,7 @@ def _execute_protocol_plan(
         ),
         None,
     )
-    if protocol.name == "return_drone_to_base" and recall_selection is not None:
+    if protocol.name in {"return_drone_to_base", "recall_drone_to_base"} and recall_selection is not None:
         create_event_data_hold(
             deps.persistence,
             event_id,
