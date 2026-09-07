@@ -302,19 +302,20 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
             except OrchestrationParseError as exc:
                 ctx.queue.release_reservation(reservation)
                 logger.warning(
-                    "event data reply failed validation",
+                    "event data reply failed validation — abandoning hold to prevent infinite loop",
                     extra={"event": "event_data_reply_invalid", "reason": str(exc), "trace_id": trace_id},
                 )
-                question = pending_hold.get("question", messages.text("api.event_detail_again"))
-                _remember("assistant", question, pending_hold["event_id"])
-                return jsonify(
-                    {
-                        "taken_as": "clarification",
-                        "event_id": pending_hold["event_id"],
-                        "answer": question,
-                        "status": "waiting_for_event_data",
-                    }
-                )
+                # Resolve the stuck hold so the user is not trapped in an infinite loop.
+                # Fall through: the message will be treated as a new request.
+                try:
+                    ctx.deps.persistence.resolve_held_event(
+                        "event_data",
+                        pending_hold["hold_id"],
+                        {"resolved_by": "system:abandoned_parse_error"},
+                    )
+                except Exception:
+                    pass  # best-effort; fall through regardless
+                matching_event_data_hold = False
             except Exception:
                 ctx.queue.release_reservation(reservation)
                 raise

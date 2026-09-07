@@ -348,6 +348,10 @@ async def present_incoming_message(
     return reply
 
 
+# Tracks chat IDs that clicked "❌ איני זמין" and are waiting to supply a reason.
+# Value is the telegram_identity string so we can build the full report text.
+_PENDING_UNAVAILABILITY: dict[int, str] = {}
+
 BUTTON_PROMPTS = {
     "🛸 \u05de\u05e6\u05d1 \u05e6\u05d9 \u05e8\u05d7\u05e4\u05e0\u05d9\u05dd": "\u05de\u05d4 \u05de\u05e6\u05d1 \u05e6\u05d9 \u05d4\u05e8\u05d7\u05e4\u05e0\u05d9\u05dd \u05d5\u05d4\u05e1\u05d5\u05dc\u05dc\u05d5\u05ea \u05db\u05e8\u05d2\u05e2? \u05d4\u05e9\u05d1 \u05d1\u05e2\u05d1\u05e8\u05d9\u05ea \u05e7\u05e6\u05e8\u05d4 \u05d5\u05de\u05d1\u05e6\u05e2\u05d9\u05ea \u05d1\u05dc\u05d1\u05d3 (\u05e2\u05d3 3-4 \u05e9\u05d5\u05e8\u05d5\u05ea).",
     "🔄 \u05d4\u05d7\u05d6\u05e8\u05ea \u05e8\u05d7\u05e4\u05df \u05dc\u05d1\u05e1\u05d9\u05e1": "\u05d4\u05d7\u05d6\u05e8 \u05d0\u05ea \u05db\u05dc \u05d4\u05e8\u05d7\u05e4\u05e0\u05d9\u05dd \u05e9\u05d1\u05d0\u05d5\u05d5\u05d9\u05e8 \u05d7\u05d6\u05e8\u05d4 \u05dc\u05d1\u05e1\u05d9\u05e1.",
@@ -403,9 +407,21 @@ async def _on_text_message(update, context) -> None:
                 "\u05d0\u05d9\u05df \u05db\u05e8\u05d2\u05e2 \u05e4\u05e2\u05d5\u05dc\u05d5\u05ea \u05d4\u05de\u05de\u05ea\u05d9\u05e0\u05d5\u05ea \u05dc\u05d0\u05d9\u05e9\u05d5\u05e8 \u05de\u05e4\u05e7\u05d3.",
             )
             return
-    if incoming_text == "❌ \u05d0\u05d9\u05e0\u05d9 \u05d6\u05de\u05d9\u05df":
+    # ── Pending follow-up: user clicked "❌ איני זמין" and bot asked for reason ─────
+    if chat_id in _PENDING_UNAVAILABILITY:
+        pending_identity = _PENDING_UNAVAILABILITY.pop(chat_id)
+        reason_text = incoming_text.strip() or "סיבה לא צוינה"
+        # Build a self-contained report message and submit it as a regular request
+        incoming_text = (
+            f"דיווח כוננות: הלוחם {pending_identity} אינו זמין. "
+            f"סיבה: {reason_text}. "
+            f"אנא עדכן את מצב הזמינות שלו בהתאם."
+        )
+        # Fall through to the normal submission flow below
+    elif incoming_text.startswith("❌") and "זמין" in incoming_text:
+        _PENDING_UNAVAILABILITY[chat_id] = telegram_identity
         await deps.telegram_client.send_text(
-            chat_id, "\u05d0\u05e0\u05d0 \u05e6\u05d9\u05d9\u05df \u05d0\u05ea \u05e1\u05d9\u05d1\u05ea \u05d0\u05d9-\u05d4\u05d6\u05de\u05d9\u05e0\u05d5\u05ea \u05d5\u05de\u05e1\u05e4\u05e8 \u05d9\u05de\u05d9\u05dd \u05de\u05e9\u05d5\u05e2\u05e8 (\u05dc\u05d3\u05d5\u05d2\u05de\u05d4: '\u05d0\u05d9\u05e0\u05d9 \u05d6\u05de\u05d9\u05df \u05e2\u05e7\u05d1 \u05de\u05d7\u05dc\u05d4 \u05dc\u05d9\u05d5\u05de\u05d9\u05d9\u05dd')"
+            chat_id, "אנא ציין את סיבת אי-הזמינות ומספר ימים משוער (לדוגמה: 'איני זמין עקב מחלה ליומיים')"
         )
         return
 
