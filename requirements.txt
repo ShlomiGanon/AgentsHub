@@ -1,0 +1,30 @@
+# Runtime dependencies for the Field-Report Multi-Agent System.
+#
+# Foundations (work_plan.md §1) and the Data Layer (§2) need nothing
+# beyond the Python standard library.
+#
+# Agent Framework (§3): crewai is now installed (1.15.17, confirmed with
+# `pip show crewai` and a live `agents.adapter._get_crewai()` import
+# check). The automated test suite still mocks it in every test (§3.5's
+# monkeypatched-fake approach, unchanged) — this only makes the real
+# package available for a manual, real, billed sanity check
+# (tests/sanity_check_real_model_call.py, not part of the automated
+# suite). See docs/progress.md's §3.5 entry for what was verified against
+# the real package before this and what's still pending a live-model run.
+crewai>=1.15
+
+# Telegram Frontend (§8): unlike crewai, this needs no model API key to
+# install or to exercise its non-network code paths, so it's a real,
+# uncommented dependency — installed and used directly by
+# bot/telegram_client.py. See docs/progress.md's Mission 8 entry for what
+# is, and isn't, verified against a live Telegram bot token.
+python-telegram-bot==22.8
+# API Layer (§7): Flask, confirmed with the user (synchronous/threaded —
+# matches orchestrator.queue.SerialEventQueue and the blocking crewai
+# calls already built, no asyncio impedance mismatch).
+flask>=3.1
+httpx>=0.28
+waitress>=3.0
+opentelemetry-api>=1.30
+opentelemetry-sdk>=1.30
+opentelemetry-exporter-otlp-proto-http>=1.30

@@ -1,0 +1,10 @@
+﻿{"timestamp": "2026-08-27T00:15:15+0300", "level": "INFO", "logger": "api.messages", "message": "intent classified", "profile_name": "smoke-test", "trace_id": "", "event": "intent_classified", "intent": "question", "reason": "greeting, no actionable content"}
+{"timestamp": "2026-08-27T00:15:15+0300", "level": "ERROR", "logger": "orchestrator.flows", "message": "event outcome", "profile_name": "smoke-test", "trace_id": "", "event": "event_outcome", "event_id": "abc123", "outcome": "failed", "failure_reason": "model invocation failed: [main_agent] the model call failed (trace=xyz)"}
+python : [00:15:15] INFO  --------  intent classified → question (greeting, no actionable content)
+At line:1 char:302
++ ...  { $PSStyle.OutputRendering = 'PlainText' } catch {} } }; python -c "
++                                                               ~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([00:15:15] INFO...onable content):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[00:15:15] ERROR --------  event outcome → failed (model invocation failed: [main_agent] the model call failed (trace=xy…)
