@@ -53,6 +53,12 @@ async def dispatch_notification(deps: "BotDeps", notification: "BotNotification"
         await interactions.notify_uncertain_verdict(deps, notification.payload)
         return
 
+    if notification.kind == "uncertain_verdict_reporter":
+        text = interactions.format_uncertain_verdict_reporter_notice(message_catalog_for(deps))
+        for chat_id in notification.target_chat_ids:
+            await deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id)
+        return
+
     if notification.kind == "precedent_closure":
         await notify_precedent_closure(deps, notification.payload)
         return
@@ -159,7 +165,7 @@ def format_precedent_closure_notice(notice: "PrecedentClosureNotice", catalog=No
         header=format_header("precedent_closure", messages),
         raw_text=notice.raw_text,
         precedent_id=notice.matched_precedent_event_id,
-        ending=notice.precedent_ending,
+        ending=interactions._outcome_word(notice.precedent_ending, messages),
     )
 
 

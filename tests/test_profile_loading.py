@@ -291,7 +291,7 @@ from protocols.model import CriticalityLevel, Protocol
 from tests.helpers import FakeAgent, FakeProtocol, ShapelessProtocol
 
 
-def _loaded(agents=(), protocols=(), areas=("x",), profile_name="For Tests"):
+def _loaded(agents=(), protocols=(), areas=("x",), profile_name="For Tests", event_type_required_fields=None):
     return SimpleNamespace(
         profile_name=profile_name,
         default_language="en",
@@ -300,6 +300,7 @@ def _loaded(agents=(), protocols=(), areas=("x",), profile_name="For Tests"):
         agents=agents,
         protocols=protocols,
         areas=areas,
+        event_type_required_fields=event_type_required_fields or {},
     )
 
 
@@ -376,6 +377,43 @@ def test_declaring_human_activation_is_a_duplicate_failure():
     failures = validate_profile(_loaded(), declared_event_types=["human_activation"])
 
     assert any("human_activation" in f for f in failures)
+
+
+def test_declaring_required_fields_for_unclassified_is_rejected():
+    """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 (item #6): unclassified's
+    required fields are fixed in core code, not profile-declarable."""
+    failures = validate_profile(
+        _loaded(event_type_required_fields={"unclassified": ["area"]}), declared_event_types=["fire"]
+    )
+
+    assert any("unclassified" in f for f in failures)
+
+
+def test_required_fields_for_an_undeclared_event_type_is_rejected():
+    failures = validate_profile(
+        _loaded(event_type_required_fields={"medical": ["area"]}), declared_event_types=["fire"]
+    )
+
+    assert any("medical" in f and "undeclared" in f for f in failures)
+
+
+def test_required_fields_naming_an_unknown_event_data_field_is_rejected():
+    failures = validate_profile(
+        _loaded(event_type_required_fields={"fire": ["area", "not_a_real_field"]}), declared_event_types=["fire"]
+    )
+
+    assert any("not_a_real_field" in f for f in failures)
+
+
+def test_valid_event_type_required_fields_declaration_reports_no_failures():
+    agent = FakeAgent(name="a1", tools=("t1",))
+    protocol = FakeProtocol(participating_agents=("a1",), approved_tools=("t1",))
+    failures = validate_profile(
+        _loaded(agents=(agent,), protocols=(protocol,), areas=("x",), event_type_required_fields={"fire": ["area"]}),
+        declared_event_types=["fire"],
+    )
+
+    assert failures == []
 
 
 def test_no_areas_is_a_failure():
@@ -514,3 +552,38 @@ def test_build_from_loaded_profile_carries_its_event_types(monkeypatch, test_cor
     assert registry.types == loaded.event_types
     assert registry.is_valid("fire")
     assert registry.is_valid("human_activation")
+
+
+def test_build_from_loaded_profile_defaults_to_no_required_fields_and_injects_unclassified(monkeypatch, test_core_model, test_sub_model):
+    """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 (item #6): a profile
+    that declares no EVENT_TYPE_REQUIRED_FIELDS (like this fixture) is fully
+    backward compatible — no required fields for any of its own types — while
+    the built-in `unclassified` fallback always has its fixed required field,
+    regardless of what the profile declares."""
+    monkeypatch.setenv("AGENTSHUB_FIXTURE_BOT_TOKEN", "token")
+    monkeypatch.setenv("AGENTSHUB_FIXTURE_MODEL_KEY", "key")
+
+    from profiles.loader import load_profile
+
+    loaded = load_profile("fixtures.profiles.minimal_profile", core_model=test_core_model, sub_model=test_sub_model)
+    registry = build_event_type_registry(loaded)
+
+    assert registry.required_fields_for("fire") == ()
+    assert registry.required_fields_for("unclassified") == ("area",)
+
+
+def test_demo_profile_declares_area_required_for_fire_and_medical(monkeypatch, test_core_model, test_sub_model):
+    """AREA_FIELD_REGRESSION_CHECK.MD's own root-cause finding: every prior
+    test of this mechanism built its own EventTypeRegistry or a hand-built
+    SimpleNamespace, never profiles.demo itself — so nothing asserted what
+    the actually-deployed profile declares. Assert directly against the
+    real, loaded profiles.demo module, not a test double."""
+    monkeypatch.setenv("BOT_TOKEN", "token")
+
+    from profiles.loader import load_profile
+
+    loaded = load_profile("profiles.demo", core_model=test_core_model, sub_model=test_sub_model)
+    registry = build_event_type_registry(loaded)
+
+    assert registry.required_fields_for("fire") == ("area",)
+    assert registry.required_fields_for("medical") == ("area",)

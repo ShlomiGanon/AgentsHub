@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from flask import Blueprint, jsonify, request
 
 from api.request_boundary import AuthorizationError, ConflictError, InvalidInputError, NotFoundError, RunFailureError, ServiceUnavailableError, authenticate, require
-from history import storage_timestamp
+from history import record_event_outcome, storage_timestamp
 
 from orchestrator.flows import begin_report, run_report_extraction
 
@@ -202,6 +202,78 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
 
         _remember("user", text)
 
+        # A drone-choice reply is operational input, not free-form missing event
+        # data. Resolve it deterministically before any planner/model call.
+        drone_selection_hold = None
+        if conversation_id is not None:
+            for candidate in reversed(ctx.deps.persistence.list_held_events("event_data")):
+                if candidate.get("missing_fields") != ["drone_selection"]:
+                    continue
+                pending_event = ctx.deps.persistence.fetch_event(candidate["event_id"])
+                if (
+                    pending_event is not None
+                    and pending_event.get("conversation_id") == conversation_id
+                    and pending_event.get("sender_identity") == caller_identity
+                ):
+                    drone_selection_hold = candidate
+                    break
+
+        if drone_selection_hold is not None:
+            require(level, RequestedOperation.APPROVE_RUN)
+            surveillance_agent = ctx.deps.registry.get("surveillance_agent")
+            store = getattr(surveillance_agent, "surveillance_store", None)
+            if store is None:
+                raise RunFailureError("surveillance persistence is unavailable")
+
+            normalized = str(text).strip().casefold()
+            recall_all = (
+                normalized in {
+                    "all", "all drones", "\u05db\u05d5\u05dc\u05dd", "\u05db\u05d5\u05dc\u05df",
+                    "\u05d0\u05ea \u05db\u05d5\u05dc\u05dd", "\u05d0\u05ea \u05db\u05d5\u05dc\u05df",
+                    "\u05e2\u05dc \u05db\u05d5\u05dc\u05dd", "\u05e2\u05dc \u05db\u05d5\u05dc\u05df",
+                }
+                or "\u05db\u05dc \u05d4\u05e8\u05d7\u05e4" in normalized
+            )
+            result = store.recall_all_drones() if recall_all else store.recall_drone(str(text).strip())
+            if result["status"] in {"selection_required", "not_found"}:
+                choices = "\n".join(
+                    f"- {mission['callsign']} ({mission['drone_id']}) — {mission['mission_id']}, {mission['target_area']}"
+                    for mission in result["missions"]
+                )
+                answer = messages.text("api.drone_selection_invalid", choices=choices)
+                _remember("assistant", answer, drone_selection_hold["event_id"])
+                return jsonify({
+                    "taken_as": "clarification",
+                    "event_id": drone_selection_hold["event_id"],
+                    "answer": answer,
+                    "status": "waiting_for_drone_selection",
+                })
+
+            ctx.deps.persistence.resolve_held_event(
+                "event_data",
+                drone_selection_hold["hold_id"],
+                {"resolved_by": caller_identity, "drone_selection": str(text).strip()},
+            )
+            record_event_outcome(ctx.deps.persistence, drone_selection_hold["event_id"], "succeeded")
+            if result["status"] == "no_active":
+                answer = messages.text("api.drone_recall_none")
+            elif result["status"] == "returned_all":
+                names = ", ".join(mission["callsign"] for mission in result["missions"])
+                answer = messages.text("api.drone_recall_all_done", names=names)
+            else:
+                drone = result["drone"]
+                mission = result["mission"]
+                answer = messages.text(
+                    "api.drone_recall_one_done", callsign=drone["callsign"], mission_id=mission["mission_id"]
+                )
+            _remember("assistant", answer, drone_selection_hold["event_id"])
+            return jsonify({
+                "taken_as": "event_update",
+                "event_id": drone_selection_hold["event_id"],
+                "answer": answer,
+                "status": "succeeded",
+            })
+
         matching_event_data_hold = False
         if conversation_id is not None:
             for pending_hold in reversed(ctx.deps.persistence.list_held_events("event_data")):
@@ -246,6 +318,22 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
             except Exception:
                 ctx.queue.release_reservation(reservation)
                 raise
+            if event_data_reply is not None and event_data_reply.ambiguous_event_ids:
+                ctx.queue.release_reservation(reservation)
+                answer = messages.text(
+                    "api.event_detail_ambiguous",
+                    count=str(len(event_data_reply.ambiguous_event_ids)),
+                )
+                _remember("assistant", answer)
+                return jsonify(
+                    {
+                        "taken_as": "clarification",
+                        "status": "ambiguous_event_data_hold",
+                        "pending_event_ids": list(event_data_reply.ambiguous_event_ids),
+                        "answer": answer,
+                    }
+                )
+
             if event_data_reply is not None:
                 event_id = event_data_reply.event_id
                 if not event_data_reply.updates:
@@ -989,6 +1077,12 @@ def _uncertain_verdict_payload(ctx: "ApiContext", event_id: str) -> dict:
     return {"event_id": event_id, "insight_text": event.get("insight_text") or ""}
 
 
+def _uncertain_verdict_reporter_payload(ctx: "ApiContext", event_id: str) -> dict:
+    # Deliberately carries no insight text — item #8's decision is a short,
+    # generic notice for the original reporter, not the commander-level detail.
+    return {"event_id": event_id}
+
+
 def _precedent_closure_payload(ctx: "ApiContext", event_id: str) -> dict:
     event = ctx.deps.persistence.fetch_event(event_id)
     matched_id = event["precedent_closed_by_event_id"]
@@ -1021,6 +1115,12 @@ def _job_payload(ctx: "ApiContext", event_id: str) -> dict:
         "steps_completed": _steps_completed(event),
         "failure_reason": event.get("outcome_failure_reason"),
         "failed_step_agent_name": _failed_step_agent_name(event),
+        # For the always-on protocol/reason suffix (item #9) — already computed
+        # during the run, no new model call. `protocol_name` is None whenever no
+        # protocol was ever selected (e.g. `no_match_protocol`).
+        "protocol_name": event.get("selected_protocol"),
+        "risk_level": event.get("risk_level"),
+        "protocol_reason": event.get("protocol_reason"),
     }
 
 
@@ -1029,6 +1129,7 @@ _PAYLOAD_BUILDERS = {
     "approval_hold": _approval_hold_payload,
     "event_data_hold": _event_data_hold_payload,
     "uncertain_verdict": _uncertain_verdict_payload,
+    "uncertain_verdict_reporter": _uncertain_verdict_reporter_payload,
     "precedent_closure": _precedent_closure_payload,
     "no_match_notice": _no_match_payload,
     "job_finished": _job_payload,
@@ -1039,7 +1140,7 @@ _PAYLOAD_BUILDERS = {
 def _target_chat_ids(ctx: "ApiContext", kind: str, event_id: str) -> list[str]:
     """Reporter-facing job and event-data notifications target the original submitter."""
 
-    if kind not in ("job_finished", "job_failed", "event_data_hold"):
+    if kind not in ("job_finished", "job_failed", "event_data_hold", "uncertain_verdict_reporter"):
         return []
 
     event = ctx.deps.persistence.fetch_event(event_id)
@@ -1049,7 +1150,7 @@ def _target_chat_ids(ctx: "ApiContext", kind: str, event_id: str) -> list[str]:
 def _reply_to_message_id(ctx: "ApiContext", kind: str, event_id: str) -> str | None:
     """Attach reporter-facing notifications to the originating Telegram message when available."""
 
-    if kind not in ("job_finished", "job_failed", "event_data_hold"):
+    if kind not in ("job_finished", "job_failed", "event_data_hold", "uncertain_verdict_reporter"):
         return None
 
     event = ctx.deps.persistence.fetch_event(event_id)

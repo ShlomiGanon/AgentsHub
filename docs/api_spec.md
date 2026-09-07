@@ -85,6 +85,23 @@ genuinely different identities depending on which:
   gated by `view_profile_overview` — viewer-eligible, the least-restrictive
   of the operations this endpoint serves — it was never one of the methods
   the gap below applied to.
+
+  Registration alone is not sufficient authentication for this identity,
+  unlike a real Telegram user's numeric ID: `bot-service` is a fixed,
+  public string (visible right here), so anyone who could reach this API
+  and send it as `X-Identity` would authenticate as it, at commander
+  level, with nothing else required. Each of the four calls above
+  additionally sends `X-Service-Key`, a shared secret configured via the
+  **`BOT_SERVICE_KEY`** environment variable (read directly by both the
+  bot and the API processes, never through a profile — there is no
+  `..._ENV`-style indirection for this one). `authenticate()` checks it
+  with `hmac.compare_digest` and, if it's missing or doesn't match,
+  rejects the request with the identical "not a registered identity"
+  response an actually-unregistered `bot-service` would get — so a caller
+  who guesses the identity string alone can't tell whether it's
+  unregistered or just missing the key. Every other call in this section
+  (the ones below, keyed on a real Telegram identity) is unaffected either
+  way.
 - **Calls that already carry a specific person's identity as a parameter**
   — `answer_clarification_hold`, `answer_approval_hold`, `submit_message`,
   and (since the server-side-enforcement gap noted below was closed)

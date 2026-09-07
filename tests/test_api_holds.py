@@ -5,6 +5,7 @@ import pytest
 from agents import adapter
 from api.app import build_app
 from api.operations import job_status
+from orchestrator.flows import resume_after_event_data
 from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, ScriptedAgent, auth_headers, build_context
 
 
@@ -48,15 +49,32 @@ def _submit_report(client, text="report text"):
 
 
 def _clarification_agent():
-    return _agent({"Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}'})
+    return _agent(
+        {
+            "Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}',
+            "Write one concise question": "Which area is this in?",
+        }
+    )
 
 
 def _make_clarification_hold(tmp_path, teardown_ctx):
+    # An unresolved classification now resolves to the built-in "unclassified"
+    # event type, which requires `area` — the required-fields gate
+    # (REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 / item #6) asks for it
+    # before the clarification hold these tests actually exercise exists.
+    # Resolved directly against persistence/orchestrator rather than another
+    # HTTP round trip — `/Event` submissions carry no conversation_id, so
+    # there's no conversational reply path to drive this through `/Msg`.
     ctx = build_context(tmp_path, main_agent=_clarification_agent())
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
     event_id = _submit_report(client, "something unclear happened")
     ctx.queue.wait_until_idle()
+    assert job_status(ctx, event_id)["status"] == "waiting_for_event_data"
+
+    ctx.deps.persistence.update_event(event_id, {"area": "north_sector"})
+    resume_after_event_data(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent)
+
     assert job_status(ctx, event_id)["status"] == "held_for_clarification"
     return ctx, client, event_id
 

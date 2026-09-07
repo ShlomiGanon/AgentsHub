@@ -13,6 +13,8 @@ from profiles.contracts import (
     ProfileLoadError,
     ProfileValidationError,
     StageModelPolicy,
+    UNCLASSIFIED_REQUIRED_FIELDS,
+    UNCLASSIFIED_TYPE,
 )
 
 spec = contracts
@@ -43,6 +45,8 @@ __all__ = [
     "ProfileLoadError",
     "ProfileValidationError",
     "StageModelPolicy",
+    "UNCLASSIFIED_REQUIRED_FIELDS",
+    "UNCLASSIFIED_TYPE",
     "build_area_registry",
     "build_event_type_registry",
     "hash_profile_file",

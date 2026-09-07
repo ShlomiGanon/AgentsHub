@@ -32,6 +32,7 @@ from bot.contracts import (
     SettingsView,
     TracePollResult,
     UncertainVerdictNotice,
+    UncertainVerdictReporterNotice,
     UserLookupResult,
 )
 
@@ -62,9 +63,10 @@ def _do_request(url: str, method: str, identity: str, request_payload: dict | No
 
 
 class HttpApiClient(BotApiClient):
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, bot_service_key: str | None = None):
         self._base_url = base_url.rstrip("/")
         self._client: httpx.AsyncClient | None = None
+        self._bot_service_key = bot_service_key
 
     async def start(self) -> None:
         if self._client is None:
@@ -97,6 +99,10 @@ class HttpApiClient(BotApiClient):
             "X-Trace-ID": trace_id_override or get_trace_id() or new_trace_id(),
             "X-Client-Request-ID": uuid.uuid4().hex,
         }
+        # Only the bot-service identity needs this — a human Telegram identity is
+        # authenticated purely by that identity string, unaffected either way.
+        if identity == BOT_SERVICE_IDENTITY and self._bot_service_key:
+            headers["X-Service-Key"] = self._bot_service_key
         attempts = 3 if method == "GET" else 1
 
         try:
@@ -372,6 +378,8 @@ class HttpApiClient(BotApiClient):
             )
         if kind == "uncertain_verdict":
             return UncertainVerdictNotice(event_id=payload["event_id"], insight_text=payload["insight_text"])
+        if kind == "uncertain_verdict_reporter":
+            return UncertainVerdictReporterNotice(event_id=payload["event_id"])
         if kind == "precedent_closure":
             return PrecedentClosureNotice(
                 event_id=payload["event_id"],
@@ -395,6 +403,9 @@ class HttpApiClient(BotApiClient):
                 steps_completed=tuple(payload.get("steps_completed", ())),
                 failure_reason=payload.get("failure_reason"),
                 failed_step_agent_name=payload.get("failed_step_agent_name"),
+                protocol_name=payload.get("protocol_name"),
+                risk_level=payload.get("risk_level"),
+                protocol_reason=payload.get("protocol_reason"),
             )
         if kind == "job_failed":
             return FailureNotice(

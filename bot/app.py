@@ -22,6 +22,7 @@ from bot.contracts import (
     BotDeps,
     BotStartupError,
     MessageSubmissionResult,
+    resolve_bot_service_key,
 )
 from bot.background_services import NotificationCursorStore, SingleInstanceLock, run_notification_poll_loop
 from bot.interactions import check_permission, resolve_caller
@@ -65,21 +66,68 @@ def build_deps(module_path: str, core_model: TierModel, sub_model: TierModel) ->
 
     telegram_client = PTBTelegramClient(bot_token)
 
-    api_client = HttpApiClient(f"http://localhost:{loaded_profile.api_port}")
+    bot_service_key = resolve_bot_service_key()
+    if not bot_service_key:
+        logger.warning(
+            "BOT_SERVICE_KEY is not set — every call this bot makes as its own service "
+            "identity (notification delivery, the commander roster, profile-change checks, "
+            "resolving a Telegram user) will be rejected by the API",
+            extra={"event": "bot_service_key_missing"},
+        )
+    api_client = HttpApiClient(f"http://localhost:{loaded_profile.api_port}", bot_service_key=bot_service_key)
 
     return BotDeps(loaded_profile=loaded_profile, telegram_client=telegram_client, api_client=api_client)
 
 
+_INVALID_TOKEN_MESSAGE = (
+    "Telegram rejected the configured bot token — check the value of the "
+    "environment variable named by BOT_TOKEN_ENV in the active profile"
+)
+
+
 async def _validate_bot_token(deps: BotDeps) -> None:
+    """Kept as a standalone check (and directly unit-tested) — no longer called from `main()`.
+
+    `main()` used to run this via its own `asyncio.run(...)` before `run_bot()`. That pre-check
+    built/used the Telegram client's async HTTP client on a loop `asyncio.run()` then closes;
+    `run_polling()` afterwards starts a *different* event loop, leaving that HTTP client bound to
+    an already-closed one — `RuntimeError: Event loop is closed` / `NetworkError`. `run_polling()`'s
+    own bootstrap (`Application.initialize()`) already calls `Bot.get_me()` and raises
+    `telegram.error.InvalidToken` immediately (never retried, regardless of `bootstrap_retries`) if
+    the token is bad, so `main()` now relies on that single event loop instead — see there.
+    """
     if not await deps.telegram_client.validate_token():
-        raise BotStartupError(
-            "Telegram rejected the configured bot token — check the value of the "
-            "environment variable named by BOT_TOKEN_ENV in the active profile"
-        )
+        raise BotStartupError(_INVALID_TOKEN_MESSAGE)
 
 
 def _identity_and_chat_id(update) -> tuple[str, str]:
     return str(update.effective_user.id), str(update.effective_chat.id)
+
+
+def _bot_commands(catalog) -> list[tuple[str, str]]:
+    """The bot's command menu (Telegram's native "/" picker) — one (name, description) pair per
+    registered command, `/start` included even though it's also Telegram's own implicit first
+    action, so it's visible in the menu too rather than only working before any message exists."""
+
+    return [
+        ("start", catalog.text("command.menu_start")),
+        ("profile", catalog.text("command.menu_profile")),
+        ("settings", catalog.text("command.menu_settings")),
+    ]
+
+
+async def _on_start_command(update, context) -> None:
+    deps: BotDeps = context.bot_data["deps"]
+    telegram_identity, chat_id = _identity_and_chat_id(update)
+    messages = interactions.message_catalog_for(deps)
+
+    resolution = await resolve_caller(deps.api_client, telegram_identity, messages)
+    if resolution.status == "unregistered":
+        await deps.telegram_client.send_text(chat_id, resolution.refusal_message)
+        return
+
+    profile_name = getattr(deps.loaded_profile, "profile_name", None) or "AgentsHub"
+    await deps.telegram_client.send_text(chat_id, messages.text("bot.welcome", profile_name=profile_name))
 
 
 def _guarded(handler: Callable[..., Awaitable[None]]):
@@ -159,11 +207,12 @@ async def _submit_and_format_message(
     if submission_result.job_id:
         return messages.text("status.async_ack", task_id=submission_result.job_id), submission_result
 
+    # Note: a truthy `submission_result.job_id` always returns above via the
+    # `status.async_ack` branch, so this fallback never has a job_id to report —
+    # only `awaiting_approval` (or neither) is reachable here.
     lines = [messages.text("bot.taken_as", kind=submission_result.kind)]
     if submission_result.awaiting_approval:
         lines.append(messages.text("bot.waiting_approval"))
-    elif submission_result.job_id:
-        lines.append(messages.text("bot.job_queued", job_id=submission_result.job_id))
     return "\n".join(lines), submission_result
 
 
@@ -248,7 +297,17 @@ async def present_incoming_message(
         )
         reply = messages.text("bot.not_available", reason=exc)
     except ApiRequestError as exc:
-        reply = messages.text("error.request_failed", reason=exc.message)
+        # "run_failure" (RunFailureError, 422) is the one API error class this codebase always
+        # raises from a raw internal/model-produced string (api/routes.py wraps
+        # OrchestrationParseError verbatim) rather than a deliberately-crafted, already-localized
+        # catalog message — the only class genuinely unsafe to show a caller directly. Every other
+        # ApiError subclass (InvalidInputError, NotFoundError, ConflictError,
+        # ServiceUnavailableError, ...) is raised with real catalog text throughout this codebase
+        # and stays exactly as informative as before (docs/IMPROVES/CRITICAL_FIXES_PLAN.MD item 4).
+        if exc.error_class == "run_failure":
+            reply = messages.text("error.run_failure_generic")
+        else:
+            reply = messages.text("error.request_failed", reason=exc.message)
     except Exception:
         logger.exception("unhandled error in message request", extra={"event": "bot_handler_failed"})
         reply = messages.text("bot.handler_error")
@@ -453,6 +512,7 @@ def register_handlers(application, deps: BotDeps) -> None:
     application.bot_data["deps"] = deps
 
     assert REGISTERED_COMMANDS == ("profile", "settings")
+    application.add_handler(CommandHandler("start", _guarded(_on_start_command)))
     application.add_handler(CommandHandler(REGISTERED_COMMANDS[0], _guarded(_on_profile_command)))
     application.add_handler(CommandHandler(REGISTERED_COMMANDS[1], _guarded(_on_settings_command)))
     application.add_handler(CallbackQueryHandler(_guarded(_on_callback_query)))
@@ -460,6 +520,12 @@ def register_handlers(application, deps: BotDeps) -> None:
 
     async def _post_init(started_application) -> None:
         await deps.api_client.start()
+        from telegram import BotCommand
+
+        messages = interactions.message_catalog_for(deps)
+        await started_application.bot.set_my_commands(
+            [BotCommand(name, description) for name, description in _bot_commands(messages)]
+        )
         cursor_store = NotificationCursorStore(Path(f"{deps.loaded_profile.db_path}.notification_cursor"))
         started_application.create_task(run_notification_poll_loop(deps, NOTIFICATION_POLL_INTERVAL_SECONDS, cursor_store=cursor_store))
 
@@ -509,14 +575,16 @@ def main(argv: list[str] | None = None) -> None:
     except BotStartupError as exc:
         raise SystemExit(str(exc)) from exc
 
-    try:
-        asyncio.run(_validate_bot_token(bot_dependencies))
-    except BotStartupError as exc:
-        lock.release()
-        raise SystemExit(str(exc)) from exc
+    # Token validity is verified by run_polling()'s own bootstrap (Application.initialize()
+    # calls Bot.get_me()) rather than by a separate asyncio.run(_validate_bot_token(...))
+    # pre-check here — see _validate_bot_token's docstring for why running that in its own
+    # event loop before run_polling() breaks the Telegram client's async HTTP client.
+    from telegram.error import InvalidToken
 
     try:
         run_bot(bot_dependencies)
+    except InvalidToken as exc:
+        raise SystemExit(_INVALID_TOKEN_MESSAGE) from exc
     finally:
         lock.release()
 

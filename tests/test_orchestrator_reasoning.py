@@ -101,6 +101,57 @@ def test_structured_intent_accepts_every_valid_primary_intent_shape():
         assert result.intent == intent
 
 
+def test_intent_prompt_no_longer_hardcodes_a_single_evidence_key_example():
+    from orchestrator.main_agent import _build_intent_prompt
+
+    prompt = _build_intent_prompt("smoke observed near gate 3", ())
+
+    assert '"evidence":{"question":"exact quote from message"}' not in prompt
+    assert "evidence" in prompt and "primary_intent" in prompt
+
+
+def test_structured_intent_accepts_evidence_keyed_differently_from_primary_intent():
+    """Regression test for the bug where the model copies the prompt's own example evidence
+    key ("question") verbatim regardless of the real primary_intent — a report/request
+    classification with genuine, message-quoted evidence must not be rejected just because the
+    evidence dict's key doesn't literally match primary_intent's value (docs/IMPROVES/
+    CRITICAL_FIXES_PLAN.MD item 2)."""
+
+    from orchestrator.main_agent import _parse_structured_intent_response
+
+    payload = {
+        "primary_intent": "report", "asks_for_information": False, "reports_occurrence": True,
+        "requests_action": False, "social_only": False, "is_quoted": False, "is_hypothetical": False,
+        "is_followup_without_context": False,
+        "evidence": {"question": "smoke observed near gate 3"},  # mismatched key, real quote
+        "matched_protocol_names": [], "reason": "reports smoke at gate 3",
+        "ambiguity_reason": None, "clarification_question": None,
+    }
+
+    result = _parse_structured_intent_response(
+        __import__("json").dumps(payload), "smoke observed near gate 3", ()
+    )
+
+    assert result.intent == "report"
+
+
+def test_structured_intent_still_rejects_an_operational_intent_with_no_evidence_at_all():
+    from orchestrator.main_agent import _parse_structured_intent_response
+
+    payload = {
+        "primary_intent": "report", "asks_for_information": False, "reports_occurrence": True,
+        "requests_action": False, "social_only": False, "is_quoted": False, "is_hypothetical": False,
+        "is_followup_without_context": False, "evidence": {},
+        "matched_protocol_names": [], "reason": "reports smoke at gate 3",
+        "ambiguity_reason": None, "clarification_question": None,
+    }
+
+    with pytest.raises(OrchestrationParseError, match="requires exact evidence"):
+        _parse_structured_intent_response(
+            __import__("json").dumps(payload), "smoke observed near gate 3", ()
+        )
+
+
 def test_history_query_spec_rejects_an_invented_operation():
     from orchestrator.main_agent import _history_query_spec_from_payload
 

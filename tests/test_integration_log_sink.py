@@ -36,7 +36,9 @@ def _fake_crewai(response_text="status nominal, no anomalies"):
     return types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
 
 
-def _fake_crewai_that_calls_a_tool(tool_name_to_call, response_text="status nominal, no anomalies"):
+def _fake_crewai_that_calls_a_tool(
+    tool_name_to_call, response_text="status nominal, no anomalies", exposed_tool_names=None
+):
     """Like `_fake_crewai`, but its `kickoff()` also simulates the model
     deciding to call one specific tool — by invoking the built tool's own
     `_run` directly (this fake's `BaseTool` is a bare `object`, not the
@@ -52,6 +54,8 @@ def _fake_crewai_that_calls_a_tool(tool_name_to_call, response_text="status nomi
     class _FakeCrewAgent:
         def __init__(self, **kwargs):
             self._tools = kwargs.get("tools") or []
+            if exposed_tool_names is not None:
+                exposed_tool_names.extend(tool.name for tool in self._tools)
 
         def kickoff(self, text):
             tool = next((t for t in self._tools if t.name == tool_name_to_call), None)
@@ -438,15 +442,20 @@ def test_precedent_lookup_and_closure_are_logged_with_the_window_and_the_match(t
     assert first_event_id in closure["matched_event_ids"]
 
 
-def test_a_blocked_tool_attempt_is_logged_through_a_real_protocol_run(tmp_path, monkeypatch):
-    """§1.8's own list: "every tool call blocked by the permission check."
-    Already correct at the unit level; this is the first test to drive it
-    through a real queued protocol run — the real executor, the real
-    agents.base permission-context check, a real reference_agent — rather
-    than a direct process() call.
+def test_a_disallowed_tool_is_not_exposed_through_a_real_protocol_run(tmp_path, monkeypatch):
+    """A real queued protocol run exposes only its invocation allowlist.
+
+    The lower permission boundary still logs a direct blocked attempt in its
+    unit test. At this integration boundary the stronger invariant is that an
+    unapproved tool schema never reaches the model, so no attempt is possible.
     """
 
-    monkeypatch.setattr(adapter, "_get_crewai", lambda: _fake_crewai_that_calls_a_tool("record_action"))
+    exposed_tool_names = []
+    monkeypatch.setattr(
+        adapter,
+        "_get_crewai",
+        lambda: _fake_crewai_that_calls_a_tool("record_action", exposed_tool_names=exposed_tool_names),
+    )
 
     # status_check only approves check_status (tests/api_fakes.py
     # ::protocols) — reference_agent's own record_action implementation
@@ -460,17 +469,15 @@ def test_a_blocked_tool_attempt_is_logged_through_a_real_protocol_run(tmp_path, 
         event_id = result["event_id"]
         ctx.queue.wait_until_idle()
 
-        # The fake's kickoff() always returns a fixed success text
-        # regardless of the blocked call underneath it — the run itself
-        # isn't derailed by the block, only the tool call is.
+        # The fake tries to call record_action if that schema is present.
+        # The run succeeds because only check_status reaches the model.
         assert ctx.deps.persistence.fetch_event(event_id)["outcome"] == "succeeded"
 
         trace_id = _extraction_trace_id(ctx, event_id)
         entries = ctx.deps.persistence.fetch_log_entries(trace_id)
 
-    [blocked] = [e for e in entries if e.get("event") == "tool_blocked"]
-    assert blocked["agent"] == "reference_agent"
-    assert blocked["tool"] == "record_action"
+    assert exposed_tool_names == ["check_status"]
+    assert not [e for e in entries if e.get("event") == "tool_blocked"]
 
 
 def test_a_transient_step_failure_is_retried_and_both_are_logged_with_cause(tmp_path, monkeypatch):

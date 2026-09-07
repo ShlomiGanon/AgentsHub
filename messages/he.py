@@ -2,8 +2,9 @@
 
 MESSAGES = {
     "status.thinking": "המודל חושב...",
-    "status.async_ack": "הבקשה התקבלה ונכנסה לתור.\nמזהה משימה: {task_id}",
+    "status.async_ack": "הבקשה התקבלה ונכנסה לתור.\nמזהה משימה: {task_id}\nהתוצאה תישלח כאן בסיום.",
     "error.request_failed": "הבקשה נכשלה: {reason}",
+    "error.run_failure_generic": "לא הצלחתי לעבד את זה — נסה לנסח מחדש או פנה למפקד.",
     "debug.llm_call": (
         "קריאת LLM אל {provider}/{model} הסתיימה בתוך {latency_ms} מילישניות; "
         "מספר tokens: {tokens}."
@@ -38,14 +39,25 @@ MESSAGES = {
     "header.approval_needed": "[נדרש אישור — נא להשיב]",
     "header.precedent_closure": "[הודעה — נסגר על סמך תקדים — אין צורך להשיב]",
     "header.uncertain_verdict": "[הודעה — תוצאה לא ודאית — אין צורך להשיב]",
+    "header.uncertain_reporter": "[עדכון]",
     "header.no_match": "[הודעה — אין פרוטוקול מתאים — אין צורך להשיב]",
     "header.result": "[תוצאה]",
     "header.failed": "[הריצה נכשלה]",
     "header.declined": "[נדחה]",
     "header.event_data_needed": "[נדרשים פרטים נוספים על האירוע]",
     "result.verdict": "תוצאה: {outcome}",
+    "result.job_id": "מזהה משימה: {job_id}",
+    "outcome.succeeded": "הצליח",
+    "outcome.failed": "נכשל",
+    "outcome.uncertain": "לא ודאי",
+    "outcome.closed_on_precedent": "נסגר על סמך תקדים",
+    "outcome.declined": "נדחה",
+    "outcome.no_match_protocol": "לא נמצא פרוטוקול מתאים",
+    "risk.high": "גבוה",
+    "risk.low": "נמוך",
     "result.what_was_done": "מה בוצע:",
     "result.insight": "תובנה:",
+    "result.protocol_suffix": "פרוטוקול: {protocol_name} ({risk_level}, {reason})",
     "failure.failed_step": "השלב שנכשל: {agent}",
     "failure.reason": "סיבה: {reason}",
     "failure.completed_before": "הושלם לפני הכשל:",
@@ -127,6 +139,9 @@ MESSAGES = {
     "notice.uncertain": (
         "{header}\n\nאירוע {event_id} הסתיים בתוצאה לא ודאית.\n\nתובנה:\n{insight}"
     ),
+    "notice.uncertain_reporter": (
+        "{header}\n\nהאירוע שדיווחת עליו עדיין נבדק.\nנעדכן אותך כשיהיה מידע נוסף."
+    ),
     "notice.no_match": (
         "{header}\n\nאין פרוטוקול קיים שיכול למלא בקשה זו.\nטקסט מקורי: {raw_text}\n"
         "{reason}\nסיכון: {risk_level} ({risk_reason})"
@@ -141,7 +156,13 @@ MESSAGES = {
     "bot.refused": "הבקשה נדחתה: {message}",
     "bot.taken_as": "הבקשה התקבלה וסווגה כ-{kind}.",
     "bot.waiting_approval": "הבקשה ממתינה כעת לאישור מפקד.",
-    "bot.job_queued": "מזהה משימה: {job_id}. התוצאה תישלח כאן בסיום.",
+    "bot.welcome": (
+        "שלום — זהו {profile_name}. דווח על משהו, שאל שאלה, "
+        "או בקש פעולה — פשוט הקלד."
+    ),
+    "command.menu_start": "התחלה",
+    "command.menu_profile": "צפייה בפרופיל הפעיל או עריכתו",
+    "command.menu_settings": "צפייה בהגדרות חיות או שינויין",
     "protocol.expected_fields": (
         "נדרשים 7 שדות המופרדים בקו אנכי — name | description | "
         "participating_agents (מופרדים בפסיקים) | approved_tools (מופרדים בפסיקים) | "
@@ -163,8 +184,17 @@ MESSAGES = {
     "api.queue_full": "תור האירועים מלא; יש לנסות שוב מאוחר יותר.",
     "api.queue_full_event_detail": "תור האירועים מלא; יש לנסות לשלוח את פרטי האירוע מאוחר יותר.",
     "api.event_detail_again": "נא לספק שוב את פרטי האירוע החסרים.",
+    "api.event_detail_ambiguous": (
+        "יש כרגע {count} דיווחים הממתינים לפרטים חסרים, ולכן אינני יכול לדעת "
+        "לאיזה מהם מתייחסת התגובה הזו. על מפקד לסגור קודם את הישן מביניהם, "
+        "ולאחר מכן ניתן להשיב שוב."
+    ),
     "api.clarify_check_record_do": "נא להבהיר מה ברצונך שאבדוק, אתעד או אבצע.",
     "api.clarify_action": "נא להבהיר מה ברצונך שאבצע.",
+    "api.drone_selection_invalid": "לא זיהיתי רחפן מתאים. בחר שם או מזהה מהרשימה:\n{choices}\nאפשר גם לכתוב: כולם",
+    "api.drone_recall_none": "אין כרגע רחפנים במשימה; לא בוצע שינוי.",
+    "api.drone_recall_all_done": "הוחזרו לבסיס: {names}. המשימות נסגרו.",
+    "api.drone_recall_one_done": "{callsign} הוחזר לבסיס. המשימה {mission_id} נסגרה.",
     "api.queued_report": "הדיווח נכנס לתור. מזהה משימה: {task_id}.",
     "api.queued_request": "הבקשה נכנסה לתור. מזהה משימה: {task_id}.",
     "api.missing_required_field": "חסר שדה חובה: {field}.",
@@ -235,4 +265,11 @@ MESSAGES = {
     "terminal.provision_service": (
         "מגדיר את זהות השירות של הבוט באמצעות `cli.user_admin`: {identity}"
     ),
+    "admin.login_wrong_credentials": "שם משתמש או סיסמה שגויים.",
+    "admin.login_locked_out": "יותר מדי ניסיונות כושלים. נסה שוב בעוד {duration}.",
+    "admin.lockout_less_than_a_minute": "פחות מדקה",
+    "admin.lockout_one_minute": "כדקה אחת",
+    "admin.lockout_minutes": "כ-{minutes} דקות",
+    "admin.lockout_one_hour": "כשעה אחת",
+    "admin.lockout_hours": "כ-{hours} שעות",
 }

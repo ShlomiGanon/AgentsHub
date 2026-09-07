@@ -82,6 +82,7 @@ jobs:
           tests/test_file_catalog.py
           tests/test_legacy_imports.py
           tests/test_messages.py
+          tests/test_hebrew_leakage.py
           tests/test_observability.py
           tests/test_permissions.py
           tests/test_profile_loading.py
@@ -94,6 +95,8 @@ jobs:
           tests/test_persistence_conformance.py
           tests/test_persistence_events.py
           tests/test_sqlite_store.py
+          tests/test_surveillance_persistence.py
+          tests/test_team_status_persistence.py
 
       - name: Mission 3 - Agent Framework
         run: >
@@ -103,6 +106,8 @@ jobs:
           tests/test_agent_runtime.py
           tests/test_provider_telemetry.py
           tests/test_reference_agent.py
+          tests/test_surveillance_agent.py
+          tests/test_team_status_agent.py
 
       - name: Mission 4 - Protocol Engine
         run: >
@@ -110,6 +115,8 @@ jobs:
           tests/test_demo_profile.py
           tests/test_protocol_repository.py
           tests/test_protocol_retry.py
+          tests/test_sub_agent_surveillance_profile.py
+          tests/test_sub_agent_team_status_profile.py
 
       - name: Mission 5 - History System
         run: >
@@ -135,6 +142,7 @@ jobs:
       - name: Mission 7 - API Layer
         run: >
           python -m pytest -v --color=yes
+          tests/test_api_admin.py
           tests/test_api_app.py
           tests/test_api_holds.py
           tests/test_api_jobs.py

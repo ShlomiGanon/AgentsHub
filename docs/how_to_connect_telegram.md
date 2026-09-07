@@ -82,6 +82,33 @@ to Telegram, the API serves — and then every single bot-to-API call fails
 authentication the moment anyone uses it. Nothing about startup itself will
 fail, which is exactly why it's easy to miss.
 
+### 4.3 Set the bot-service key
+
+Registering the `bot-service` identity above is not, by itself, enough:
+`bot-service` is a fixed, public string — visible in this very file — so
+without one more thing, anyone who can reach the API and sends that string
+as their identity would authenticate as it, at commander level. That one
+more thing is `BOT_SERVICE_KEY`: a secret only the bot process and the API
+process know, checked in addition to (not instead of) the identity above.
+
+Generate one and set it in the environment `python -m api.app` and
+`python -m bot.app` both run from — the same shell(s) `BOT_TOKEN` is
+already set in per Step 2 above:
+
+```
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+export BOT_SERVICE_KEY="<the value that just printed>"
+```
+
+Both processes read it directly from the environment, not from the profile
+— unlike `BOT_TOKEN_ENV`, there is no profile-level indirection for this
+one, so the variable name is always exactly `BOT_SERVICE_KEY`. If it's
+unset, the bot logs a startup warning and every call it makes as its own
+service identity (notification delivery, the commander roster,
+profile-change checks, resolving a Telegram user) is rejected — everything
+else (a human's own messages, questions, reports) is unaffected either way,
+since those authenticate as that human's own identity, not `bot-service`.
+
 ## 5. Step 4 — Run the API and the bot
 
 The bot talks to the API over real HTTP, so both processes must be running.

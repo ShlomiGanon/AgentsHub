@@ -76,6 +76,8 @@ from orchestrator.main_agent import RiskAssessment
 from orchestrator.main_agent import ProtocolSelectionResult
 from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, RunningApiServer, build_context, happy_path_agent
 
+_TEST_BOT_SERVICE_KEY = "test-bot-service-key-0123456789abcdef"
+
 _PROFILE_TEMPLATE = """
 from protocols.model import Protocol, CriticalityLevel
 
@@ -129,12 +131,16 @@ def _mock_crewai(monkeypatch):
 
 
 @pytest.fixture
-def server(tmp_path):
+def server(tmp_path, monkeypatch):
     """A running api/* server whose bot-service identity is already
     registered — the ordinary case every method except the dedicated
-    unregistered-service-identity test exercises.
+    unregistered-service-identity test exercises. BOT_SERVICE_KEY is set to
+    _TEST_BOT_SERVICE_KEY for every consumer of this fixture; it only matters
+    to the handful of tests that actually authenticate as bot-service — see
+    _TEST_BOT_SERVICE_KEY's uses below — and is harmless to the rest.
     """
 
+    monkeypatch.setenv("BOT_SERVICE_KEY", _TEST_BOT_SERVICE_KEY)
     ctx = build_context(tmp_path)
     ctx.deps.persistence.write_user(BOT_SERVICE_IDENTITY, "commander")
     with RunningApiServer(ctx) as running:
@@ -166,7 +172,7 @@ def _minimal_event(persistence, **overrides):
 
 
 def test_resolve_user_known_and_unknown(server):
-    client = HttpApiClient(server.base_url)
+    client = HttpApiClient(server.base_url, bot_service_key=_TEST_BOT_SERVICE_KEY)
 
     known = _run(client.resolve_user(COMMANDER_IDENTITY))
     assert known.registered is True
@@ -191,7 +197,7 @@ def test_an_unregistered_service_identity_raises(tmp_path):
 
 
 def test_list_commander_chat_ids_includes_every_registered_commander(server):
-    client = HttpApiClient(server.base_url)
+    client = HttpApiClient(server.base_url, bot_service_key=_TEST_BOT_SERVICE_KEY)
 
     identities = _run(client.list_commander_chat_ids())
 
@@ -380,7 +386,7 @@ def test_get_profile_view_omits_protocols_for_a_viewer(server):
 
 
 def test_get_profile_diff_status_reports_false_when_unchanged(server):
-    client = HttpApiClient(server.base_url)
+    client = HttpApiClient(server.base_url, bot_service_key=_TEST_BOT_SERVICE_KEY)
 
     status = _run(client.get_profile_diff_status())
 
@@ -520,7 +526,7 @@ def test_get_job_result_unknown_pending_and_finished(server):
 
 
 def test_poll_pending_notifications_full_round_trip(server):
-    client = HttpApiClient(server.base_url)
+    client = HttpApiClient(server.base_url, bot_service_key=_TEST_BOT_SERVICE_KEY)
 
     empty, cursor0 = _run(client.poll_pending_notifications(0))
     assert empty == ()
@@ -540,17 +546,18 @@ def test_poll_pending_notifications_full_round_trip(server):
     assert cursor2 == cursor1
 
 
-def test_reply_to_message_id_survives_the_full_real_path_from_submit_message_to_the_notification(tmp_path):
+def test_reply_to_message_id_survives_the_full_real_path_from_submit_message_to_the_notification(tmp_path, monkeypatch):
     # Problem 2's fix, exercised end to end through the real HTTP client on
     # both ends: submit_message (the one place the original Telegram
     # message ID is ever supplied) all the way through to
     # poll_pending_notifications (the one place it must reappear) — a
     # deliberately distinctive value, not a coincidental match, and
     # asserted on the exact value, not just "some ID was present."
+    monkeypatch.setenv("BOT_SERVICE_KEY", _TEST_BOT_SERVICE_KEY)
     ctx = build_context(tmp_path, main_agent=happy_path_agent(intent="report"))
     ctx.deps.persistence.write_user(BOT_SERVICE_IDENTITY, "commander")
     with RunningApiServer(ctx) as running:
-        client = HttpApiClient(running.base_url)
+        client = HttpApiClient(running.base_url, bot_service_key=_TEST_BOT_SERVICE_KEY)
 
         submission = _run(client.submit_message("smoke seen near gate 3", VIEWER_IDENTITY, "telegram-msg-77341"))
         event_id = submission.job_id

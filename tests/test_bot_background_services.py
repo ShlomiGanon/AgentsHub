@@ -110,6 +110,8 @@ def test_never_produces_a_chunk_over_the_limit_default():
         ("clarification_needed", "approval_needed"),
         ("approval_needed", "precedent_closure"),
         ("precedent_closure", "uncertain_verdict"),
+        ("uncertain_verdict", "uncertain_reporter"),
+        ("uncertain_reporter", "result"),
         ("uncertain_verdict", "result"),
         ("result", "failed"),
         ("failed", "declined"),
@@ -144,6 +146,45 @@ def test_job_result_orders_verdict_then_what_was_done_then_insight():
     assert "all clear" in text
 
 
+def test_drone_selection_is_rendered_as_required_input_not_completed_action():
+    result = JobResult(
+        job_id="j1",
+        outcome="succeeded",
+        steps_completed=(
+            "surveillance_agent: DRONE_SELECTION_REQUIRED:\n"
+            "Multiple drones are active:\n- Eagle-1 (DRONE-01)\n- Falcon-2 (DRONE-02)\n"
+            "No drone state was changed.",
+        ),
+    )
+
+    text = format_job_result(result)
+
+    assert format_header("event_data_needed") in text
+    assert "Verdict: succeeded" not in text
+    assert "Eagle-1" in text and "Falcon-2" in text
+    assert "No drone state was changed" in text
+    assert "Job ID: j1" in text
+
+
+def test_surveillance_job_result_is_compact_and_identifies_the_job():
+    result = JobResult(
+        job_id="dispatch-123",
+        outcome="succeeded",
+        protocol_name="dispatch_drone_to_incident",
+        protocol_reason="a very long model-generated protocol reason that should not be displayed",
+        insight_text="a very long generated insight that should not be displayed",
+        steps_completed=("surveillance_agent: dispatched Eagle-1\n- Mission: MSN-1\n- Target: north gate\n- ETA: 150s",),
+    )
+
+    text = format_job_result(result)
+
+    assert "Job ID: dispatch-123" in text
+    assert "dispatched Eagle-1" in text
+    assert "Insight:" not in text
+    assert "Protocol:" not in text
+    assert len(text.splitlines()) <= 7
+
+
 def test_declined_job_result_uses_the_declined_header():
     result = JobResult(job_id="j1", outcome="declined")
     text = format_job_result(result)
@@ -160,6 +201,72 @@ def test_job_result_with_no_failure_reason_adds_no_extra_line():
     result = JobResult(job_id="j1", outcome="succeeded")
     text = format_job_result(result)
     assert text == "\n".join([format_header("result"), "", "Verdict: succeeded"])
+
+
+def test_job_result_includes_protocol_suffix_when_a_protocol_ran():
+    """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 3 (item #9): always-on
+    trailing protocol/reason line for protocol-driven outcomes."""
+    result = JobResult(
+        job_id="j1", outcome="succeeded",
+        protocol_name="fire_response", risk_level="high", protocol_reason="matches the reported situation",
+    )
+    text = format_job_result(result)
+
+    assert text.splitlines()[-1] == "Protocol: fire_response (high, matches the reported situation)"
+
+
+def test_job_result_omits_protocol_suffix_when_no_protocol_was_selected():
+    """A `no_match_protocol` outcome never had a protocol to name — the suffix
+    must not appear (and must not crash on a None protocol_name)."""
+    result = JobResult(job_id="j1", outcome="no_match_protocol", failure_reason="no loaded protocol handles this")
+    text = format_job_result(result)
+
+    assert "Protocol:" not in text
+
+
+def test_job_result_protocol_suffix_risk_level_is_translated_for_hebrew_not_left_as_raw_english():
+    from messages import get_catalog
+
+    result = JobResult(
+        job_id="j1", outcome="succeeded",
+        protocol_name="fire_response", risk_level="high", protocol_reason="matches the reported situation",
+    )
+    text = format_job_result(result, get_catalog("he"))
+
+    assert "high" not in text
+    assert "גבוה" in text
+    assert "פרוטוקול: fire_response" in text
+
+
+def test_job_result_caps_a_very_long_failure_reason():
+    """Regression test: failure_reason's actual source can be an entire rejected model response
+    (e.g. protocol selection's raw reasoning when the reply didn't parse) rather than a short
+    explanation — the displayed copy must be capped regardless (docs/IMPROVES/
+    CRITICAL_FIXES_PLAN.MD item 3); the untruncated value is unaffected everywhere else."""
+
+    long_reason = "could not parse protocol selection response: " + ("reasoning through each candidate protocol. " * 30)
+    assert len(long_reason) > 500
+
+    result = JobResult(job_id="j1", outcome="no_match_protocol", failure_reason=long_reason)
+    text = format_job_result(result)
+
+    assert len(text) < len(long_reason)
+    assert text.endswith("…")
+    assert "could not parse protocol selection response:" in text
+
+
+def test_job_result_verdict_is_translated_for_hebrew_not_left_as_raw_english():
+    """Regression test: event["outcome"] (history.event_pipeline.VALID_OUTCOMES) is a fixed
+    internal English identifier — interpolating it directly into a Hebrew message left an English
+    word inside an otherwise-Hebrew sentence (docs/IMPROVES/CRITICAL_FIXES_PLAN.MD item 4)."""
+
+    from messages import get_catalog
+
+    result = JobResult(job_id="j1", outcome="succeeded")
+    text = format_job_result(result, get_catalog("he"))
+
+    assert "succeeded" not in text
+    assert "הצליח" in text
 
 
 def test_failure_notice_names_step_and_reason_and_prior_successes():
@@ -183,6 +290,18 @@ def test_failure_notice_with_nothing_completed_says_so():
     assert "Nothing completed before the failure." in text
 
 
+def test_failure_notice_caps_a_very_long_failure_reason():
+    long_reason = "reasoning through each candidate protocol before answering. " * 20
+    assert len(long_reason) > 500
+
+    notice = FailureNotice(event_id="e1", failed_step_agent_name="a1", failure_reason=long_reason)
+    text = format_failure_notice(notice)
+
+    assert len(text) < len(long_reason)
+    reason_line = next(line for line in text.splitlines() if line.startswith("Reason:"))
+    assert reason_line.endswith("…")
+
+
 import asyncio
 
 import pytest
@@ -196,6 +315,7 @@ from bot.api_client import (
     NoMatchNotice,
     PrecedentClosureNotice,
     UncertainVerdictNotice,
+    UncertainVerdictReporterNotice,
 )
 from bot.deps import BotDeps
 from bot.notifications import dispatch_notification, run_notification_poll_loop, run_notification_poll_once
@@ -225,6 +345,7 @@ def _deps(api, commander_chat_ids=("c1",)):
             (),
         ),
         ("uncertain_verdict", UncertainVerdictNotice(event_id="e1", insight_text="mixed"), ()),
+        ("uncertain_verdict_reporter", UncertainVerdictReporterNotice(event_id="e1"), ("chat-9",)),
         ("precedent_closure", PrecedentClosureNotice(event_id="e1", raw_text="x", matched_precedent_event_id="e0", precedent_ending="succeeded"), ()),
         ("no_match_notice", NoMatchNotice(event_id="e1", raw_text="x", reason="no match", risk_level="low", risk_reason="r"), ()),
         ("job_finished", JobResult(job_id="j1", outcome="succeeded"), ("chat-9",)),
@@ -353,6 +474,15 @@ def test_pushed_to_every_commander_individually():
 
     assert {m.chat_id for m in telegram.sent} == {"c1", "c2"}
     assert len(telegram.sent) == 2
+
+
+def test_precedent_ending_is_translated_for_hebrew_not_left_as_raw_english():
+    from messages import get_catalog
+
+    text = format_precedent_closure_notice(NOTICE, get_catalog("he"))
+
+    assert "succeeded" not in text
+    assert "הצליח" in text
 
 
 import asyncio

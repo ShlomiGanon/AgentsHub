@@ -21,6 +21,7 @@ from bot import (
     present_incoming_message,
     parse_approval_callback_data,
 )
+from bot.contracts import resolve_bot_service_key
 from bot.interactions import message_catalog_for
 from messages import get_catalog
 from tools.terminal_support import (
@@ -71,6 +72,7 @@ async def _background_poll_loop(
     poll_interval: float,
     state: _BackgroundState,
     stop_event: asyncio.Event,
+    pending_holds: list,
 ) -> None:
     """Mirrors `bot.notifications.run_notification_poll_loop`'s own shape — a standing loop, started once, running until told to stop — but never calls `dispatch_notification` itself:..."""
 
@@ -85,7 +87,24 @@ async def _background_poll_loop(
         else:
             state.poll_error = None
             cursor_store.write(cursor)
-            state.arrived.extend(notifications)
+            if notifications:
+                print(
+                    "\n" + message_catalog_for(deps).text(
+                        "terminal.new_notifications", count=len(notifications)
+                    )
+                )
+                hold_count = 0
+                for note in notifications:
+                    await dispatch_notification(deps, note)
+                    if note.kind in _HOLD_KINDS:
+                        pending_holds.append(note)
+                        hold_count += 1
+                if hold_count:
+                    print(
+                        "\n" + message_catalog_for(deps).text(
+                            "terminal.holds_need_answer", count=hold_count
+                        )
+                    )
             reconnect_delay = 0
             transport_backoff = 0.5
 
@@ -220,7 +239,7 @@ async def _run_repl(
     pending_holds: list = []
     stop_event = asyncio.Event()
     background_task = asyncio.create_task(
-        _background_poll_loop(deps, cursor_store, cursor, poll_interval, state, stop_event)
+        _background_poll_loop(deps, cursor_store, cursor, poll_interval, state, stop_event, pending_holds)
     )
 
     try:
@@ -325,7 +344,7 @@ def main(argv: list[str] | None = None) -> None:
         args.profile, args.identity, "commander", profile_module, messages
     )
 
-    http_client = HttpApiClient(base_url)
+    http_client = HttpApiClient(base_url, bot_service_key=resolve_bot_service_key())
     observing_client = ObservingApiClient(http_client)
     bot_dependencies = BotDeps(
         loaded_profile=SimpleNamespace(message_catalog=messages),

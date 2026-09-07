@@ -52,7 +52,7 @@ from orchestrator.reasoning import (
 )
 from orchestrator.reasoning import answer_question, determine_closure, look_up_precedent
 from orchestrator.event_queue import PolicyAwareEventQueue, SerialEventQueue, WorkItem
-from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy
+from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
 from protocols import Step, StepOutcome
 from protocols.executor import execute_steps
 from tools import get_trace_id
@@ -93,7 +93,7 @@ def _deadline_failure(deps: "FlowDeps", event_id: str, next_stage: str) -> "Flow
 
 FlowOutcome = Literal[
     "closed_on_precedent", "declined", "succeeded", "failed", "uncertain", "no_match_protocol",
-    "held_for_clarification", "held_for_approval", "waiting_for_event_data",
+    "held_for_clarification", "held_for_approval", "waiting_for_event_data", "waiting_for_drone_selection",
 ]
 
 _VERDICT_TO_OUTCOME: dict[str, FlowOutcome] = {
@@ -139,6 +139,10 @@ class EventDataReplyResult:
     event_id: str
     updates: dict[str, object]
     message: str
+    # Populated instead of the fields above when more than one pending
+    # event-data hold matches the same (conversation_id, sender_identity) —
+    # see the ambiguity check in `apply_event_data_reply`. Empty otherwise.
+    ambiguous_event_ids: tuple[str, ...] = ()
 
 
 def _model_invoker_for(main_agent: "MainAgent"):
@@ -231,7 +235,98 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
 
     record_extracted_fields(deps.persistence, event_id, extraction_result)
 
+    # A report that doesn't match any event type the active profile declares
+    # resolves to the built-in UNCLASSIFIED_TYPE fallback rather than staying
+    # `None` — a real, storable classification with its own (core-declared)
+    # required fields, distinct from `HUMAN_ACTIVATION_TYPE` (a source label,
+    # not an event type) (REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 /
+    # item #6). `determine_clarification_hold` still keys off the *original*
+    # extraction result, unchanged — this only affects what gets persisted.
     if determine_clarification_hold(extraction_result):
+        record_event_state(deps.persistence, event_id, {"classification": UNCLASSIFIED_TYPE})
+    resolved_classification = extraction_result.classification or UNCLASSIFIED_TYPE
+
+    gate_result = _apply_required_fields_gate(deps, event_id, main_agent, resolved_classification)
+    if gate_result is not None:
+        return gate_result
+
+    return _continue_after_required_fields(deps, event_id, main_agent, insights_agent, raw_text, resolved_classification)
+
+
+def _apply_required_fields_gate(
+    deps: "FlowDeps", event_id: str, main_agent: "MainAgent", classification: str
+) -> "FlowResult | None":
+    """Item #6's early, event-type-level required-field gate — checked
+    against whatever classification the event holds *right now*, before
+    risk assessment or protocol selection run against it. Protocol selection
+    itself reads whatever fields extraction produced, so a missing required
+    field at this point could otherwise silently commit to the wrong
+    protocol. Additional to, not a replacement for, the existing
+    per-protocol-step required-field check in `protocols/executor.py`
+    (`_execute_protocol_plan`), which still fires unchanged for a step that
+    needs a field of its own, and the formulation-time floor merged into
+    every step's own `required_event_fields` (`orchestrator.reasoning.
+    formulate_tasks`). Returns None when there is nothing to wait for (no
+    required fields declared, or every required field is already present).
+
+    Called from two places, not just one: `run_report_extraction` (the
+    fresh path, right after extraction resolves an event type — profile-
+    defined or the built-in UNCLASSIFIED_TYPE fallback), and
+    `continue_after_clarification` (the resumed path, right after a
+    clarification hold resolves a *different* classification than the
+    fixed UNCLASSIFIED_TYPE floor already checked). The second call site
+    exists because a classification chosen by clarification can carry its
+    own required fields that were never checked for this event — the fresh
+    path's single gate call only ever validated UNCLASSIFIED_TYPE's fixed
+    `("area",)` floor, not whatever the newly-chosen real type declares."""
+
+    required = deps.event_type_registry.required_fields_for(classification)
+    if not required:
+        return None
+
+    event = deps.persistence.fetch_event(event_id)
+    missing = tuple(name for name in required if not event.get(name))
+    if not missing:
+        return None
+
+    conversation_messages: tuple[dict, ...] = ()
+    if event.get("conversation_id") and deps.conversation_history_turns > 0:
+        conversation_messages = tuple(
+            deps.persistence.fetch_conversation_messages(event["conversation_id"], deps.conversation_history_turns * 2)
+        )
+
+    question = formulate_event_data_question(main_agent, event, missing, conversation_messages)
+
+    if event.get("conversation_id") and deps.conversation_history_turns > 0:
+        deps.persistence.append_conversation_message(
+            event["conversation_id"], "assistant", question,
+            ttl_hours=deps.conversation_history_ttl_hours, max_turns=deps.conversation_history_turns,
+            event_id=event_id,
+        )
+
+    # waiting_step_ids=() — no protocol has been selected yet. This is what
+    # lets resume_after_event_data tell this hold apart from a per-step one.
+    create_event_data_hold(deps.persistence, event_id, missing, question, ())
+    logger.info(
+        "hold created",
+        extra={
+            "event": "hold_created", "hold_kind": "event_data", "event_id": event_id,
+            "missing_fields": list(missing), "classification": classification, "trace_id": get_trace_id(),
+        },
+    )
+    return FlowResult(event_id, "waiting_for_event_data", question)
+
+
+def _continue_after_required_fields(
+    deps: "FlowDeps", event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent",
+    raw_text: str, classification: str,
+) -> "FlowResult":
+    """What extraction would have done next, had the event type's required
+    fields already been present — shared by the fresh path
+    (run_report_extraction) and the resumed path (resume_after_event_data),
+    so both stay in sync with exactly one copy of this branching logic."""
+
+    if classification == UNCLASSIFIED_TYPE:
         create_clarification_hold(deps.persistence, event_id, raw_text)
         record_event_state(deps.persistence, event_id, {"clarification_held": True, "clarification_unresolved_field": UNRESOLVED_FIELD})
         logger.info(
@@ -368,7 +463,22 @@ def resolve_clarification(
 
 
 def continue_after_clarification(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent") -> FlowResult:
-    """Resume at risk assessment, not extraction — the other extracted fields are still valid and re-running extraction would discard the commander's decision (§6.2's own rule)."""
+    """Resume at risk assessment, not extraction — the other extracted fields are still valid and re-running extraction would discard the commander's decision (§6.2's own rule).
+
+    First re-applies the required-fields gate for the classification the
+    commander just chose. `resolve_clarification` only ever validated
+    UNCLASSIFIED_TYPE's fixed `("area",)` floor before this hold existed —
+    resolving into a real, profile-declared type can introduce required
+    fields of its own that were never checked for this event. If any are
+    missing, this creates the same kind of event_data hold the fresh-
+    extraction path creates (`_apply_required_fields_gate`), asking
+    immediately rather than letting the event proceed into risk assessment
+    with a required field still unresolved."""
+
+    event = deps.persistence.fetch_event(event_id)
+    gate_result = _apply_required_fields_gate(deps, event_id, main_agent, event.get("classification"))
+    if gate_result is not None:
+        return gate_result
 
     return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent, originated_from_commander=False)
 
@@ -469,9 +579,15 @@ def resume_after_approval(
 
 
 def _look_up_precedent_if_possible(deps: FlowDeps, event_id: str, event: dict) -> tuple:
-    if event["occurred_at"] is None or event["classification"] is None or event["area"] is None:
+    # Precedent-lookback fix (same root cause as the recency fix,
+    # DIAGNOSTIC_FINDINGS.MD A.2): an unresolved occurred_at used to skip
+    # precedent lookup for this event entirely. Fall back to received_at as
+    # the lookback window's anchor instead — occurred_at is no longer
+    # required for this event to be checked against precedent.
+    if event["classification"] is None or event["area"] is None:
         return ()
-    return look_up_precedent(deps.history_query_service, event_id, event["classification"], event["area"], event["occurred_at"])
+    anchor_time = event["occurred_at"] or event["received_at"]
+    return look_up_precedent(deps.history_query_service, event_id, event["classification"], event["area"], anchor_time)
 
 
 def continue_from_risk_assessment(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent", originated_from_commander: bool) -> FlowResult:
@@ -609,6 +725,11 @@ def _run_protocol(
     formulation = formulate_tasks(
         main_agent, protocol, deps.registry, raw_text, classification, area, description,
         precedent_context=precedent_matches, event_data=deps.persistence.fetch_event(event_id),
+        # The event type's statically-declared required fields (item #6's
+        # EVENT_TYPE_REQUIRED_FIELDS), unioned into every formulated step's own
+        # required_event_fields regardless of what the model declares — see
+        # formulate_tasks' docstring.
+        required_fields_floor=deps.event_type_registry.required_fields_for(classification),
     )
     if not formulation.success:
         record_event_outcome(deps.persistence, event_id, "failed", failure_reason=formulation.failure_reason)
@@ -675,12 +796,40 @@ def _persist_step_outcomes(
     steps: tuple[Step, ...],
     outcomes: tuple[StepOutcome, ...],
 ) -> None:
-    index_by_step_id = {(step.step_id or str(index)): index for index, step in enumerate(steps)}
-    for outcome in outcomes:
+    """Match each outcome back to the step it belongs to, by `step_id` where
+    one exists. `outcome.step` is not necessarily `is`-identical to its
+    entry in `steps` — this function receives the *original* `steps`, but
+    `_execute_protocol_plan` runs a derived copy where any step with a
+    non-empty `required_event_fields` has its `task_text` rewritten first
+    (the "Current validated event data JSON" injection, above) — so an
+    outcome's step can differ from the original by value once that
+    injection applies.
+
+    A previous version of this function fell back to matching by full
+    value-equality (`step == outcome.step`) whenever a step's `step_id` was
+    empty, on the unstated assumption that a step_id-less step's fields
+    never get mutated after formulation — true only by accident, and it
+    broke the moment a step_id-less step also had a non-empty
+    `required_event_fields`.
+
+    Every step's `step_id` is empty only on one production path today: the
+    legacy AGENT:/TASK: fallback in `orchestrator.reasoning.formulate_tasks`
+    (the JSON formulation path always assigns each step a unique, non-empty
+    id, and reloading a persisted plan via `_step_from_row` always
+    substitutes `str(step_index)` for an absent one) — and a legacy-parsed
+    plan, having no step_id or depends_on on any step, can only ever run
+    through `protocols.executor.execute_steps`' plain sequential branch
+    (never the dependency-graph one), which is guaranteed to produce
+    `outcomes` in exactly the same order and position as `steps`, truncated
+    at most (a blocked or failed run stops partway through) but never
+    reordered or skipped over. So when `step_id` is empty, this outcome's
+    own position *is* its step's position — no value comparison needed, and
+    nothing about it changes if the step was mutated in the meantime."""
+
+    index_by_step_id = {step.step_id: index for index, step in enumerate(steps) if step.step_id}
+    for position, outcome in enumerate(outcomes):
         step_key = outcome.step.step_id
-        index = index_by_step_id.get(step_key)
-        if index is None:
-            index = next(i for i, step in enumerate(steps) if step == outcome.step)
+        index = index_by_step_id[step_key] if step_key else position
         persisted_step = steps[index]
         record_step_execution(
             deps.persistence,
@@ -791,6 +940,24 @@ def _execute_protocol_plan(
         )
         return FlowResult(event_id, "failed", run_result.failure_cause or "")
 
+    recall_selection = next(
+        (
+            outcome.result_text
+            for outcome in run_result.step_outcomes
+            if outcome.result_text and outcome.result_text.startswith("DRONE_SELECTION_REQUIRED:")
+        ),
+        None,
+    )
+    if protocol.name == "return_drone_to_base" and recall_selection is not None:
+        create_event_data_hold(
+            deps.persistence,
+            event_id,
+            ("drone_selection",),
+            recall_selection,
+            tuple(outcome.step.step_id for outcome in run_result.step_outcomes),
+        )
+        return FlowResult(event_id, "waiting_for_drone_selection", recall_selection)
+
     return _finish_protocol_assessment(
         deps, event_id, main_agent, insights_agent, protocol, run_result.step_outcomes, precedent_matches,
         enforce_deadline=not resumed,
@@ -892,6 +1059,20 @@ def apply_event_data_reply(
             candidates.append((hold, event))
     if not candidates:
         return None
+    if len(candidates) > 1:
+        # More than one report is waiting on this same sender/conversation for
+        # missing details. Previously this silently applied the reply to the
+        # single most-recently-created one, which could misapply a correction
+        # meant for an earlier report (CRITICAL_FIXES_PLAN.MD item 7). Fail
+        # loudly instead of guessing — the caller (api/routes.py) turns this
+        # into a clarification response rather than a model-parsed update, so
+        # no extraction call is made against an ambiguous target.
+        return EventDataReplyResult(
+            event_id="",
+            updates={},
+            message="",
+            ambiguous_event_ids=tuple(event["event_id"] for _hold, event in candidates),
+        )
 
     hold, event = candidates[-1]
     requested_fields = tuple(hold.get("missing_fields") or ())
@@ -933,6 +1114,17 @@ def resume_after_event_data(
     insights_agent: "InsightsAgent",
 ) -> FlowResult:
     event = deps.persistence.fetch_event(event_id)
+
+    if event.get("selected_protocol") is None:
+        # No protocol was ever selected — this hold came from item #6's
+        # early, event-type-level gate (`_apply_required_fields_gate`), not
+        # a per-protocol-step one (which always resumes with a protocol
+        # already selected). Continue exactly where extraction would have,
+        # had the required fields already been present.
+        return _continue_after_required_fields(
+            deps, event_id, main_agent, insights_agent, event.get("raw_text", ""), event.get("classification")
+        )
+
     protocol = deps.protocol_set.get(event.get("selected_protocol"))
     if protocol is None:
         reason = "the selected protocol is no longer available"
