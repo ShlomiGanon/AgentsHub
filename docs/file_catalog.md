@@ -18,6 +18,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `agents/provider_telemetry.py` | Production | Private implementation | Correlates CrewAI provider-call events with AgentsHub traces, stages, latency, and usage. |
 | `agents/runtime.py` | Production | Private implementation | Constructs and invokes agents, enforces tools, adapts CrewAI, and owns the runtime registry. |
 | `agents/standard_agents.py` | Production | Private implementation | Implements the standard History and Reference agents. |
+| `agents/surveillance_agent.py` | Production | Private implementation | Implements the visual-surveillance, camera-monitoring, and tactical-drone specialist. |
 | `agents/team_status_agent.py` | Production | Private implementation | Implements the readiness-team roster, attendance-cycle, response, and availability-report specialist. |
 | `api/__init__.py` | Production | Public facade | Exposes the API facade and compatibility module aliases. |
 | `api/admin.py` | Production | Private implementation | Serves the login-gated admin web panel for user management under `/admin`. |
@@ -41,7 +42,17 @@ This English catalog describes every tracked or pending first-party file in the 
 | `conftest.py` | Project | Internal | Defines repository-wide pytest fixtures, model-tier configuration, and trace isolation. |
 | `docs/DEMO_READY.md` | Documentation | Internal | Documents DEMO READY. |
 | `docs/GT critial agents.pptx.pdf` | Documentation | Internal | Stores the GT critial agents.pptx reference artifact. |
+| `docs/IMPROVES/ADMIN_LOGIN_LOCKOUT_DIAGNOSIS.MD` | Documentation | Internal | Records the admin-login lockout diagnosis. |
+| `docs/IMPROVES/AREA_FIELD_REGRESSION_CHECK.MD` | Documentation | Internal | Records the area-field regression investigation. |
+| `docs/IMPROVES/CRITICAL_FIXES_PLAN.MD` | Documentation | Internal | Defines the critical-fixes implementation plan. |
+| `docs/IMPROVES/DIAGNOSTIC_FINDINGS.MD` | Documentation | Internal | Records diagnostic findings from system review. |
+| `docs/IMPROVES/HELP_COMMAND_DESIGN_INPUTS.MD` | Documentation | Internal | Records design inputs for the help command. |
+| `docs/IMPROVES/REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md` | Documentation | Internal | Records required fields and closed implementation decisions. |
+| `docs/IMPROVES/TELEGRAM_UX_FINDINGS.MD` | Documentation | Internal | Records Telegram user-experience findings. |
+| `docs/IMPROVES/TEST_INTEGRITY_CHECK.MD` | Documentation | Internal | Records test-integrity review findings. |
+| `docs/IMPROVES/UX_PREDICTABILITY_PLAN.MD` | Documentation | Internal | Defines the user-experience predictability plan. |
 | `docs/PRODUCTION_READY.md` | Documentation | Internal | Documents PRODUCTION READY. |
+| `docs/SECURITY_AND_QA_AUDIT.md` | Documentation | Internal | Records the security and quality-assurance audit. |
 | `docs/agent_authoring.md` | Documentation | Internal | Documents agent authoring. |
 | `docs/allowed_calls.md` | Documentation | Internal | Documents allowed calls. |
 | `docs/api_spec.md` | Documentation | Internal | Documents api spec. |
@@ -82,6 +93,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `messages/en.py` | Production | Private implementation | Contains every fixed English user-interface string. |
 | `messages/he.py` | Production | Private implementation | Contains every fixed Hebrew user-interface string. |
 | `messages/model_messages.py` | Production | Private implementation | Centralizes prompts used only to formulate natural user-facing model text. |
+| `my_fake_bot_test.py` | Test | Internal | Provides a standalone fake-bot test harness outside pytest discovery. |
 | `orchestrator/__init__.py` | Production | Public facade | Exposes orchestration capabilities and compatibility module aliases. |
 | `orchestrator/capabilities.py` | Production | Private implementation | Builds the role-aware, per-caller Main Agent capability and system context. |
 | `orchestrator/event_queue.py` | Production | Private implementation | Serializes event processing on a dedicated worker. |
@@ -92,12 +104,15 @@ This English catalog describes every tracked or pending first-party file in the 
 | `persistence/contracts.py` | Production | Private implementation | Defines persistence interfaces and domain errors. |
 | `persistence/schema.py` | Production | Private implementation | Owns immutable migration DDL and the current SQLite schema. |
 | `persistence/sqlite_store.py` | Production | Private implementation | Implements serialized SQLite persistence, transactions, and row conversion. |
+| `persistence/surveillance_contracts.py` | Production | Private implementation | Defines camera, drone, and surveillance-mission persistence contracts. |
+| `persistence/surveillance_store.py` | Production | Private implementation | Implements the isolated SQLite surveillance store. |
 | `persistence/team_status_contracts.py` | Production | Private implementation | Defines the database-agnostic readiness-team status persistence contract and constructor. |
 | `persistence/team_status_store.py` | Production | Private implementation | Implements the isolated SQLite store for readiness-team roster and attendance state. |
 | `profiles/__init__.py` | Production | Public facade | Exposes profile contracts, loading, registries, and compatibility aliases. |
 | `profiles/contracts.py` | Production | Private implementation | Defines profile declarations, loaded-profile state, and area/event-type registries. |
 | `profiles/demo.py` | Production | Private implementation | Defines the runnable demonstration deployment profile. |
 | `profiles/loader.py` | Production | Private implementation | Imports, validates, hashes, and constructs deployment profiles and registries. |
+| `profiles/sub_agent_surveillance.py` | Production | Private implementation | Defines the dedicated visual-surveillance deployment and protocols. |
 | `profiles/sub_agent_team_status.py` | Production | Private implementation | Defines the dedicated readiness-team status deployment and reporting protocol. |
 | `profiles/template.py` | Production | Private implementation | Provides a reference template for authoring deployment profiles. |
 | `protocols/__init__.py` | Production | Public facade | Exposes protocol contracts, execution, repository operations, and aliases. |
@@ -142,6 +157,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_history_logging.py` | Test | Internal | Verifies history logging behavior and edge cases. |
 | `tests/test_history_precedent.py` | Test | Internal | Verifies history precedent behavior and edge cases. |
 | `tests/test_history_query.py` | Test | Internal | Verifies history query behavior and edge cases. |
+| `tests/test_hebrew_leakage.py` | Test | Internal | Verifies Hebrew responses do not leak unintended internal content. |
 | `tests/test_integration_cost_and_latency_review.py` | Test | Internal | Verifies the cost and latency review scenario across real subsystem boundaries. |
 | `tests/test_integration_deployment.py` | Test | Internal | Verifies the deployment scenario across real subsystem boundaries. |
 | `tests/test_integration_end_to_end_flow.py` | Test | Internal | Verifies the end to end flow scenario across real subsystem boundaries. |
@@ -177,7 +193,10 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_reference_agent.py` | Test | Internal | Verifies reference agent behavior and edge cases. |
 | `tests/test_response_improvements.py` | Test | Internal | Verifies conversation retention, long polling, trace propagation, queue ordering, idempotency, and removal of the obsolete stream route. |
 | `tests/test_sqlite_store.py` | Test | Internal | Verifies SQLite serialization, concurrency, and user persistence. |
+| `tests/test_sub_agent_surveillance_profile.py` | Test | Internal | Verifies the surveillance profile, isolated databases, agent, and protocol declarations. |
 | `tests/test_sub_agent_team_status_profile.py` | Test | Internal | Verifies the readiness-team profile, isolated database configuration, agent, and protocol declaration. |
+| `tests/test_surveillance_agent.py` | Test | Internal | Verifies camera, drone, dispatch, mission, and overview tools. |
+| `tests/test_surveillance_persistence.py` | Test | Internal | Verifies surveillance database initialization, updates, dispatch, and mission state. |
 | `tests/test_team_status_agent.py` | Test | Internal | Verifies daily attendance, multi-day unavailability, late approval, and protocol execution. |
 | `tests/test_team_status_persistence.py` | Test | Internal | Verifies readiness-team roster approval, message idempotency, late-response isolation, and separate SQLite schemas. |
 | `tests/test_user_admin.py` | Test | Internal | Verifies user admin behavior and edge cases. |

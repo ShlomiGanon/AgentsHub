@@ -298,6 +298,100 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
             rows = conn.execute(query).fetchall()
             return [dict(row) for row in rows]
 
+    def recall_drone(self, identifier: str | None = None, now_iso: str | None = None) -> dict:
+        """Recall exactly one active drone, never selecting arbitrarily among multiple missions."""
+
+        now = now_iso or _utc_now()
+        requested = (identifier or "").strip().casefold()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """
+                SELECT m.*, d.callsign, d.model, d.battery_percent
+                FROM drone_missions m
+                JOIN drones d ON m.drone_id = d.drone_id
+                WHERE m.status IN ('dispatched', 'en_route', 'on_station')
+                ORDER BY d.callsign ASC, m.dispatched_at ASC
+                """
+            ).fetchall()
+            missions = [dict(row) for row in rows]
+
+            if not missions:
+                return {"status": "no_active", "missions": []}
+
+            if requested:
+                matches = [
+                    mission
+                    for mission in missions
+                    if requested
+                    in {
+                        mission["mission_id"].casefold(),
+                        mission["drone_id"].casefold(),
+                        mission["callsign"].casefold(),
+                    }
+                ]
+                if len(matches) != 1:
+                    return {"status": "not_found", "requested": identifier, "missions": missions}
+                selected = matches[0]
+            elif len(missions) == 1:
+                selected = missions[0]
+            else:
+                return {"status": "selection_required", "missions": missions}
+
+            note = "Operator recall: returned to central_hub."
+            conn.execute(
+                "UPDATE drone_missions SET status = 'aborted', notes = ?, updated_at = ? WHERE mission_id = ?",
+                (note, now, selected["mission_id"]),
+            )
+            conn.execute(
+                """
+                UPDATE drones
+                SET status = 'ready', current_area = 'central_hub', assigned_mission_id = NULL, last_updated = ?
+                WHERE drone_id = ?
+                """,
+                (now, selected["drone_id"]),
+            )
+            updated_mission = dict(
+                conn.execute("SELECT * FROM drone_missions WHERE mission_id = ?", (selected["mission_id"],)).fetchone()
+            )
+            updated_drone = dict(conn.execute("SELECT * FROM drones WHERE drone_id = ?", (selected["drone_id"],)).fetchone())
+            return {"status": "returned", "mission": updated_mission, "drone": updated_drone}
+
+    def recall_all_drones(self, now_iso: str | None = None) -> dict:
+        """Recall every active drone in one atomic operation."""
+
+        now = now_iso or _utc_now()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """
+                SELECT m.*, d.callsign
+                FROM drone_missions m
+                JOIN drones d ON m.drone_id = d.drone_id
+                WHERE m.status IN ('dispatched', 'en_route', 'on_station')
+                ORDER BY d.callsign ASC, m.dispatched_at ASC
+                """
+            ).fetchall()
+            missions = [dict(row) for row in rows]
+            if not missions:
+                return {"status": "no_active", "missions": []}
+
+            note = "Operator recall: returned to central_hub."
+            for mission in missions:
+                conn.execute(
+                    "UPDATE drone_missions SET status = 'aborted', notes = ?, updated_at = ? WHERE mission_id = ?",
+                    (note, now, mission["mission_id"]),
+                )
+                conn.execute(
+                    """
+                    UPDATE drones
+                    SET status = 'ready', current_area = 'central_hub', assigned_mission_id = NULL, last_updated = ?
+                    WHERE drone_id = ?
+                    """,
+                    (now, mission["drone_id"]),
+                )
+            return {"status": "returned_all", "missions": missions}
+
     def update_mission_status(
         self,
         mission_id: str,

@@ -527,6 +527,41 @@ def test_persist_step_outcomes_matches_multiple_step_id_less_steps_by_position(d
     assert [row["result_text"] for row in persisted] == ["a done", "b done"]
 
 
+def test_drone_selection_result_creates_a_resumable_hold(deps, monkeypatch):
+    event_id = begin_report(deps, "return the drone", "telegram", "2026-08-20T10:00:00", "commander-1")
+    step = Step(
+        agent_name="reference_agent", task_text="recall", allowed_tools=("check_status",), step_id="recall-1"
+    )
+    outcome = StepOutcome(
+        step=step,
+        result_text="DRONE_SELECTION_REQUIRED:\n- Eagle-1\n- Falcon-2",
+        attempt_count=1,
+        succeeded=True,
+    )
+    monkeypatch.setattr(
+        flows_module,
+        "execute_steps",
+        lambda *args, **kwargs: ProtocolRunResult((outcome,), completed=True),
+    )
+    protocol = Protocol(
+        name="return_drone_to_base",
+        description="recall",
+        participating_agents=("reference_agent",),
+        approved_tools=("check_status",),
+        expected_success_output="selection or recall",
+        criticality=CriticalityLevel.MEDIUM,
+        approval_flag=True,
+    )
+
+    result = flows_module._execute_protocol_plan(deps, event_id, object(), object(), protocol, (step,), ())
+
+    assert result.outcome == "waiting_for_drone_selection"
+    [hold] = deps.persistence.list_held_events("event_data")
+    assert hold["missing_fields"] == ["drone_selection"]
+    assert hold["waiting_step_ids"] == ["recall-1"]
+    assert deps.persistence.fetch_event(event_id)["outcome"] is None
+
+
 def test_precedent_lookup_still_runs_when_the_target_events_occurred_at_is_unresolved(deps):
     """DIAGNOSTIC_FINDINGS.MD A.2's related risk, fixed alongside the recency
     bug: `_look_up_precedent_if_possible` used to skip precedent lookup
@@ -1026,7 +1061,7 @@ from agents import adapter
 from agents.reference import ReferenceAgent
 from agents.runtime import build_agent_registry
 from orchestrator.main_agent import OrchestrationParseError, _parse_formulation_response, formulate_tasks, rewrite_task
-from protocols.model import CriticalityLevel, Protocol, Step, StepOutcome
+from protocols.model import CriticalityLevel, Protocol, ProtocolRunResult, Step, StepOutcome
 
 
 class _ScriptedMainAgent:

@@ -142,6 +142,41 @@ def _risk_level_word(risk_level: str, catalog: MessageCatalog) -> str:
 
 def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None) -> str:
     messages = _catalog(catalog)
+    selection_marker = "DRONE_SELECTION_REQUIRED:"
+    for completed_step in result.steps_completed:
+        marker_at = completed_step.find(selection_marker)
+        if marker_at >= 0:
+            selection_text = completed_step[marker_at + len(selection_marker):].strip()
+            return (
+                f"{format_header('event_data_needed', messages)}\n"
+                f"{messages.text('result.job_id', job_id=result.job_id)}\n\n{selection_text}"
+            )
+
+    surveillance_protocols = {
+        "query_camera_status", "query_drone_fleet_status", "query_active_drone_missions",
+        "query_surveillance_overview", "dispatch_drone_to_incident", "return_drone_to_base",
+        "surveillance_area_scan", "update_camera_observation",
+    }
+    if result.protocol_name in surveillance_protocols:
+        lines = [
+            format_header("result", messages),
+            messages.text("result.job_id", job_id=result.job_id),
+        ]
+        if result.failure_reason:
+            lines.append(_short_failure_reason(result.failure_reason))
+        elif result.steps_completed:
+            compact_lines: list[str] = []
+            for line in result.steps_completed[-1].splitlines():
+                cleaned = line.strip().replace("**", "")
+                if cleaned and cleaned not in compact_lines:
+                    compact_lines.append(cleaned[:240])
+                if len(compact_lines) == 5:
+                    break
+            lines.extend(compact_lines)
+        else:
+            lines.append(messages.text("result.verdict", outcome=_outcome_word(result.outcome, messages)))
+        return "\n".join(lines)
+
     kind: MessageKind = "result" if result.outcome != "declined" else "declined"
     lines = [format_header(kind, messages), "", messages.text("result.verdict", outcome=_outcome_word(result.outcome, messages))]
 

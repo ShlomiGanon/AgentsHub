@@ -146,6 +146,45 @@ def test_job_result_orders_verdict_then_what_was_done_then_insight():
     assert "all clear" in text
 
 
+def test_drone_selection_is_rendered_as_required_input_not_completed_action():
+    result = JobResult(
+        job_id="j1",
+        outcome="succeeded",
+        steps_completed=(
+            "surveillance_agent: DRONE_SELECTION_REQUIRED:\n"
+            "Multiple drones are active:\n- Eagle-1 (DRONE-01)\n- Falcon-2 (DRONE-02)\n"
+            "No drone state was changed.",
+        ),
+    )
+
+    text = format_job_result(result)
+
+    assert format_header("event_data_needed") in text
+    assert "Verdict: succeeded" not in text
+    assert "Eagle-1" in text and "Falcon-2" in text
+    assert "No drone state was changed" in text
+    assert "Job ID: j1" in text
+
+
+def test_surveillance_job_result_is_compact_and_identifies_the_job():
+    result = JobResult(
+        job_id="dispatch-123",
+        outcome="succeeded",
+        protocol_name="dispatch_drone_to_incident",
+        protocol_reason="a very long model-generated protocol reason that should not be displayed",
+        insight_text="a very long generated insight that should not be displayed",
+        steps_completed=("surveillance_agent: dispatched Eagle-1\n- Mission: MSN-1\n- Target: north gate\n- ETA: 150s",),
+    )
+
+    text = format_job_result(result)
+
+    assert "Job ID: dispatch-123" in text
+    assert "dispatched Eagle-1" in text
+    assert "Insight:" not in text
+    assert "Protocol:" not in text
+    assert len(text.splitlines()) <= 7
+
+
 def test_declined_job_result_uses_the_declined_header():
     result = JobResult(job_id="j1", outcome="declined")
     text = format_job_result(result)

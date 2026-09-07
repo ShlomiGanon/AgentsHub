@@ -82,6 +82,7 @@ jobs:
           tests/test_file_catalog.py
           tests/test_legacy_imports.py
           tests/test_messages.py
+          tests/test_hebrew_leakage.py
           tests/test_observability.py
           tests/test_permissions.py
           tests/test_profile_loading.py
@@ -141,6 +142,7 @@ jobs:
       - name: Mission 7 - API Layer
         run: >
           python -m pytest -v --color=yes
+          tests/test_api_admin.py
           tests/test_api_app.py
           tests/test_api_holds.py
           tests/test_api_jobs.py

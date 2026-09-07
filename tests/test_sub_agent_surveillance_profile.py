@@ -22,7 +22,7 @@ def test_surveillance_profile_loads_with_isolated_databases(monkeypatch, tmp_pat
 
 
 def test_surveillance_profile_protocols_and_attributes():
-    assert len(profile_module.PROTOCOLS) == 7
+    assert len(profile_module.PROTOCOLS) == 8
     protocol_map = {p.name: p for p in profile_module.PROTOCOLS}
 
     assert "query_camera_status" in protocol_map
@@ -40,13 +40,18 @@ def test_surveillance_profile_protocols_and_attributes():
     assert dispatch_proto.approved_tools == ("dispatch_drone_to_area",)
     assert dispatch_proto.approval_flag is True
 
+    recall_proto = protocol_map["return_drone_to_base"]
+    assert recall_proto.approved_tools == ("return_drone_to_base",)
+    assert recall_proto.approval_flag is True
+
     assert "surveillance_area_scan" in protocol_map
     assert protocol_map["surveillance_area_scan"].approved_tools == ("get_surveillance_overview",)
     assert protocol_map["update_camera_observation"].approval_flag is True
     assert profile_module.MAX_ITER == 2
     assert profile_module.RETRY_COUNT == 1
 
-    assert profile_module.BOT_TOKEN_ENV in ("SURVEILLANCE_BOT_TOKEN", "BOT_TOKEN")
-    assert profile_module.SURVEILLANCE_CHAT_ID_ENV in ("SURVEILLANCE_CHAT_ID", "TEAM_STATUS_CHAT_ID")
+    assert profile_module.BOT_TOKEN_ENV == "SURVEILLANCE_BOT_TOKEN"
+    assert profile_module.SURVEILLANCE_CHAT_ID_ENV == "SURVEILLANCE_CHAT_ID"
     assert "north_gate" in profile_module.AREAS
     assert "surveillance_report" in profile_module.EVENT_TYPES
+    assert "drone_recall" in profile_module.EVENT_TYPES

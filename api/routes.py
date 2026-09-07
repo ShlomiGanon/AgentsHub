@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from flask import Blueprint, jsonify, request
 
 from api.request_boundary import AuthorizationError, ConflictError, InvalidInputError, NotFoundError, RunFailureError, ServiceUnavailableError, authenticate, require
-from history import storage_timestamp
+from history import record_event_outcome, storage_timestamp
 
 from orchestrator.flows import begin_report, run_report_extraction
 
@@ -201,6 +201,78 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
             prior_messages = tuple(ctx.deps.persistence.fetch_conversation_messages(conversation_id, history_turns * 2))
 
         _remember("user", text)
+
+        # A drone-choice reply is operational input, not free-form missing event
+        # data. Resolve it deterministically before any planner/model call.
+        drone_selection_hold = None
+        if conversation_id is not None:
+            for candidate in reversed(ctx.deps.persistence.list_held_events("event_data")):
+                if candidate.get("missing_fields") != ["drone_selection"]:
+                    continue
+                pending_event = ctx.deps.persistence.fetch_event(candidate["event_id"])
+                if (
+                    pending_event is not None
+                    and pending_event.get("conversation_id") == conversation_id
+                    and pending_event.get("sender_identity") == caller_identity
+                ):
+                    drone_selection_hold = candidate
+                    break
+
+        if drone_selection_hold is not None:
+            require(level, RequestedOperation.APPROVE_RUN)
+            surveillance_agent = ctx.deps.registry.get("surveillance_agent")
+            store = getattr(surveillance_agent, "surveillance_store", None)
+            if store is None:
+                raise RunFailureError("surveillance persistence is unavailable")
+
+            normalized = str(text).strip().casefold()
+            recall_all = (
+                normalized in {
+                    "all", "all drones", "\u05db\u05d5\u05dc\u05dd", "\u05db\u05d5\u05dc\u05df",
+                    "\u05d0\u05ea \u05db\u05d5\u05dc\u05dd", "\u05d0\u05ea \u05db\u05d5\u05dc\u05df",
+                    "\u05e2\u05dc \u05db\u05d5\u05dc\u05dd", "\u05e2\u05dc \u05db\u05d5\u05dc\u05df",
+                }
+                or "\u05db\u05dc \u05d4\u05e8\u05d7\u05e4" in normalized
+            )
+            result = store.recall_all_drones() if recall_all else store.recall_drone(str(text).strip())
+            if result["status"] in {"selection_required", "not_found"}:
+                choices = "\n".join(
+                    f"- {mission['callsign']} ({mission['drone_id']}) — {mission['mission_id']}, {mission['target_area']}"
+                    for mission in result["missions"]
+                )
+                answer = messages.text("api.drone_selection_invalid", choices=choices)
+                _remember("assistant", answer, drone_selection_hold["event_id"])
+                return jsonify({
+                    "taken_as": "clarification",
+                    "event_id": drone_selection_hold["event_id"],
+                    "answer": answer,
+                    "status": "waiting_for_drone_selection",
+                })
+
+            ctx.deps.persistence.resolve_held_event(
+                "event_data",
+                drone_selection_hold["hold_id"],
+                {"resolved_by": caller_identity, "drone_selection": str(text).strip()},
+            )
+            record_event_outcome(ctx.deps.persistence, drone_selection_hold["event_id"], "succeeded")
+            if result["status"] == "no_active":
+                answer = messages.text("api.drone_recall_none")
+            elif result["status"] == "returned_all":
+                names = ", ".join(mission["callsign"] for mission in result["missions"])
+                answer = messages.text("api.drone_recall_all_done", names=names)
+            else:
+                drone = result["drone"]
+                mission = result["mission"]
+                answer = messages.text(
+                    "api.drone_recall_one_done", callsign=drone["callsign"], mission_id=mission["mission_id"]
+                )
+            _remember("assistant", answer, drone_selection_hold["event_id"])
+            return jsonify({
+                "taken_as": "event_update",
+                "event_id": drone_selection_hold["event_id"],
+                "answer": answer,
+                "status": "succeeded",
+            })
 
         matching_event_data_hold = False
         if conversation_id is not None:

@@ -1,5 +1,7 @@
 from agents import SurveillanceAgent
 from agents import runtime as agent_runtime
+from contextvars import copy_context
+from concurrent.futures import ThreadPoolExecutor
 
 
 class _TestSurveillanceAgent(SurveillanceAgent):
@@ -30,10 +32,17 @@ def test_surveillance_agent_descriptor_and_tools_exposed(tmp_path):
         "get_drone_fleet_status",
         "dispatch_drone_to_area",
         "get_active_missions",
+        "return_drone_to_base",
         "get_surveillance_overview",
         "update_camera_observation",
     }
     assert expected_tools.issubset(tool_names)
+
+    dispatch_info = next(tool for tool in agent.exposed_tools() if tool.name == "dispatch_drone_to_area")
+    assert "specific_drone_id is optional" in dispatch_info.description
+    assert "Never ask for a drone ID" in agent.system_prompt
+    assert "Use at most 6 lines total" in agent.system_prompt
+    assert "Never use Markdown tables" in agent.system_prompt
 
 
 def test_get_camera_feeds_tool(tmp_path):
@@ -117,3 +126,107 @@ def test_update_camera_observation_and_overview(tmp_path):
     overview = _call_tool(agent, "get_surveillance_overview", area="east_fence")
     assert "Tactical Surveillance Overview" in overview
     assert "Fence vibration sensor" in overview
+
+
+def test_return_single_active_drone_without_identifier(tmp_path):
+    agent = _agent(tmp_path)
+    _call_tool(
+        agent,
+        "dispatch_drone_to_area",
+        target_area="north_gate",
+        incident_description="Check fence movement",
+    )
+    [active_before_return] = agent.surveillance_store.get_active_missions()
+
+    result = _call_tool(agent, "return_drone_to_base")
+
+    assert "Drone returned to base successfully" in result
+    assert active_before_return["callsign"] in result
+    assert agent.surveillance_store.get_active_missions() == []
+    assert agent.surveillance_store.get_drone(active_before_return["drone_id"])["status"] == "ready"
+
+
+def test_return_requires_selection_when_multiple_drones_are_active(tmp_path):
+    agent = _agent(tmp_path)
+    first = _call_tool(
+        agent,
+        "dispatch_drone_to_area",
+        target_area="north_gate",
+        incident_description="First mission",
+    )
+    second = _call_tool(
+        agent,
+        "dispatch_drone_to_area",
+        target_area="south_sector",
+        incident_description="Second mission",
+    )
+    assert "Drone dispatched successfully" in first
+    assert "Drone dispatched successfully" in second
+
+    choices = _call_tool(agent, "return_drone_to_base")
+    assert choices.startswith("DRONE_SELECTION_REQUIRED:")
+    assert "Multiple drones" in choices
+    assert "Eagle-1" in choices
+    assert "Falcon-2" in choices
+    assert "No drone state was changed" in choices
+    active_before_selection = agent.surveillance_store.get_active_missions()
+    assert len(active_before_selection) == 2
+
+    selected = active_before_selection[1]
+    returned = _call_tool(agent, "return_drone_to_base", drone_or_mission_id=selected["callsign"])
+    assert selected["callsign"] in returned
+    remaining = agent.surveillance_store.get_active_missions()
+    assert len(remaining) == 1
+    assert remaining[0]["drone_id"] != selected["drone_id"]
+
+
+def test_return_all_recalls_every_active_drone_atomically(tmp_path):
+    agent = _agent(tmp_path)
+    _call_tool(agent, "dispatch_drone_to_area", target_area="north_gate", incident_description="First mission")
+    _call_tool(agent, "dispatch_drone_to_area", target_area="south_sector", incident_description="Second mission")
+
+    result = _call_tool(agent, "return_drone_to_base", drone_or_mission_id="כולם")
+
+    assert "All active drones returned to base" in result
+    assert "Eagle-1" in result
+    assert "Falcon-2" in result
+    assert agent.surveillance_store.get_active_missions() == []
+    drones = {drone["callsign"]: drone for drone in agent.surveillance_store.list_drones()}
+    assert drones["Eagle-1"]["status"] == "ready"
+    assert drones["Falcon-2"]["status"] == "ready"
+
+
+def test_process_preserves_exact_recall_selection_across_tool_thread(tmp_path, monkeypatch):
+    agent = _agent(tmp_path)
+    _call_tool(agent, "dispatch_drone_to_area", target_area="north_gate", incident_description="First")
+    _call_tool(agent, "dispatch_drone_to_area", target_area="south_sector", incident_description="Second")
+
+    def fake_invoke(descriptor, wrapped_tools, text, timeout_seconds, invocation_policy=None):
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            tool_output = executor.submit(copy_context().run, wrapped_tools["return_drone_to_base"]).result()
+        assert tool_output.startswith("DRONE_SELECTION_REQUIRED:")
+        return "model rewrote and hid the selection marker"
+
+    monkeypatch.setattr(agent_runtime, "invoke", fake_invoke)
+    result = agent.process("return the drone", ["return_drone_to_base"])
+
+    assert result.text.startswith("DRONE_SELECTION_REQUIRED:")
+    assert "Eagle-1" in result.text
+    assert "Falcon-2" in result.text
+    assert len(agent.surveillance_store.get_active_missions()) == 2
+
+
+def test_surveillance_process_applies_a_small_default_output_budget(tmp_path, monkeypatch):
+    agent = _agent(tmp_path)
+    captured = {}
+
+    def fake_invoke(descriptor, wrapped_tools, text, timeout_seconds, invocation_policy=None):
+        captured["policy"] = invocation_policy
+        return "concise"
+
+    monkeypatch.setattr(agent_runtime, "invoke", fake_invoke)
+    result = agent.process("מה מצב הרחפנים?", ["get_drone_fleet_status"])
+
+    assert result.text == "concise"
+    assert captured["policy"].max_output_tokens == 220
+    assert captured["policy"].reasoning_effort == "none"

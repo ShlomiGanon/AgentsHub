@@ -2,17 +2,34 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from datetime import datetime, timezone
+import threading
+import uuid
 
+from agents.contracts import AgentResult, InvocationPolicy
 from agents.runtime import Agent, tool
 from persistence import (
     SurveillancePersistenceError,
     open_surveillance_persistence,
 )
+from tools import get_trace_id
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+_recall_invocation_key: ContextVar[str | None] = ContextVar("surveillance_recall_invocation_key", default=None)
+_recall_results: dict[str, str] = {}
+_recall_results_lock = threading.Lock()
+
+
+def _capture_recall_result(output: str) -> None:
+    key = _recall_invocation_key.get() or get_trace_id()
+    if key:
+        with _recall_results_lock:
+            _recall_results[key] = output
 
 
 class SurveillanceAgent(Agent):
@@ -26,12 +43,20 @@ class SurveillanceAgent(Agent):
     )
     system_prompt = (
         "You are the tactical visual surveillance and drone operations specialist. "
-        "Keep all responses strictly concise, direct, and operational (BLUF - Bottom Line Up Front). "
+        "Keep every response strictly concise, direct, and operational (BLUF - Bottom Line Up Front). "
+        "For status questions, output one short summary line followed by at most one short line per relevant drone, mission, or camera. "
+        "Use at most 6 lines total. Never use Markdown tables, report sections, decorative headings, repeated summaries, conclusions, "
+        "recommendations, future-action lists, or narrative analysis unless the user explicitly asks for detail. "
+        "Answer in Hebrew when the request is in Hebrew. Preserve IDs and operational status values exactly. "
         "The drone statuses in the fleet are: 'ready' (available for immediate dispatch), 'in_flight' (airborne on mission), 'charging', and 'maintenance'. "
         "When asked for drone fleet status or availability, call get_drone_fleet_status with an empty status_filter to see the full fleet and available ready units. "
         "When asked about cameras: state general status, then list only relevant cameras in compact single-line bullets. "
         "If asked about a specific camera or area, report ONLY on that camera or area. "
         "When asked about drones or dispatch: give only essential tactical facts (Callsign, Status, Battery, Location/Target, ETA). "
+        "A specific drone ID or callsign is OPTIONAL for dispatch. If none was explicitly requested, leave specific_drone_id empty; "
+        "dispatch_drone_to_area will deterministically select the best ready drone. Never ask for a drone ID merely because it was omitted. "
+        "For a recall, call return_drone_to_base exactly once. If it reports multiple active drones, reproduce its list and ask the user "
+        "to choose one; never choose a drone yourself. If exactly one drone is active, the tool returns it automatically. "
         "Call exactly one tool unless the task explicitly requests multiple distinct data sets. "
         "Never broaden an area, camera, drone, or mission filter beyond the scope explicitly requested. "
         "Never dispatch a drone or update an observation unless the task explicitly requests that exact state change. "
@@ -46,6 +71,27 @@ class SurveillanceAgent(Agent):
             raise TypeError("SurveillanceAgent requires a class-level surveillance_db_path")
         self.surveillance_store = open_surveillance_persistence(self.surveillance_db_path)
         super().__init__(model, api_key)
+
+    def process(
+        self, text: str, allowed_tools: list[str], *, invocation_policy: InvocationPolicy | None = None
+    ) -> AgentResult:
+        if invocation_policy is None:
+            invocation_policy = InvocationPolicy(max_output_tokens=220, reasoning_effort="none")
+        key = get_trace_id() or uuid.uuid4().hex
+        token = _recall_invocation_key.set(key)
+        with _recall_results_lock:
+            _recall_results.pop(key, None)
+        try:
+            model_result = super().process(text, allowed_tools, invocation_policy=invocation_policy)
+            with _recall_results_lock:
+                exact_recall_result = _recall_results.pop(key, None)
+            if exact_recall_result is not None:
+                return AgentResult(status="success", text=exact_recall_result)
+            return model_result
+        finally:
+            with _recall_results_lock:
+                _recall_results.pop(key, None)
+            _recall_invocation_key.reset(token)
 
     @tool(
         "get_camera_feeds",
@@ -107,7 +153,9 @@ class SurveillanceAgent(Agent):
 
     @tool(
         "dispatch_drone_to_area",
-        "Dispatches an available tactical drone to an incident area for visual coverage/recon, calculating ETA and tracking mission status.",
+        "Dispatches an available tactical drone to an incident area for visual coverage/recon, calculating ETA and tracking mission status. "
+        "specific_drone_id is optional: when omitted or empty, the system deterministically selects a ready drone by target-area proximity "
+        "and then highest battery. Do not request a drone ID unless the user explicitly asked for a particular drone.",
         side_effecting=True,
         idempotent=False,
     )
@@ -171,6 +219,65 @@ class SurveillanceAgent(Agent):
                 f"\n  Task: {m['incident_description']}"
             )
         return "\n".join(lines)
+
+    @tool(
+        "return_drone_to_base",
+        "Safely recalls a drone from an active mission. drone_or_mission_id is optional only when exactly one mission is active. "
+        "If multiple drones are active and no identifier is supplied, no state changes and the tool returns the exact choices. "
+        "Accepts a Drone ID, callsign, or Mission ID.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def return_drone_to_base(self, drone_or_mission_id: str = "") -> str:
+        requested = drone_or_mission_id.strip()
+        normalized = requested.casefold()
+        if normalized in {
+            "all", "all drones", "\u05db\u05d5\u05dc\u05dd", "\u05db\u05d5\u05dc\u05df",
+            "\u05db\u05dc \u05d4\u05e8\u05d7\u05e4\u05e0\u05d9\u05dd",
+        } or "\u05db\u05d5\u05dc\u05dd" in normalized or "\u05db\u05dc \u05d4\u05e8\u05d7\u05e4" in normalized:
+            result = self.surveillance_store.recall_all_drones()
+        else:
+            result = self.surveillance_store.recall_drone(requested or None)
+        status = result["status"]
+        if status == "no_active":
+            output = "No active drone missions; no drone was returned."
+            _capture_recall_result(output)
+            return output
+        if status == "returned_all":
+            names = ", ".join(mission["callsign"] for mission in result["missions"])
+            output = f"All active drones returned to base: {names}. Missions closed as operator recall."
+            _capture_recall_result(output)
+            return output
+        if status in {"selection_required", "not_found"}:
+            heading = (
+                "DRONE_SELECTION_REQUIRED:\nMultiple drones are currently on active missions. "
+                "Specify one Drone ID, callsign, or Mission ID:"
+                if status == "selection_required"
+                else f"DRONE_SELECTION_REQUIRED:\nNo active drone matched '{result.get('requested', '')}'. "
+                "Choose one of these active drones:"
+            )
+            lines = [heading]
+            for mission in result["missions"]:
+                lines.append(
+                    f"- {mission['callsign']} ({mission['drone_id']}) | Mission {mission['mission_id']} | "
+                    f"Target {mission['target_area']} | Status {mission['status'].upper()}"
+                )
+            lines.append("No drone state was changed.")
+            output = "\n".join(lines)
+            _capture_recall_result(output)
+            return output
+
+        mission = result["mission"]
+        drone = result["drone"]
+        output = (
+            "Drone returned to base successfully:\n"
+            f"- Drone: {drone['callsign']} ({drone['drone_id']})\n"
+            f"- Mission: {mission['mission_id']} closed as operator recall\n"
+            f"- Current Area: {drone['current_area']}\n"
+            f"- Fleet Status: {drone['status'].upper()}"
+        )
+        _capture_recall_result(output)
+        return output
 
     @tool(
         "get_surveillance_overview",

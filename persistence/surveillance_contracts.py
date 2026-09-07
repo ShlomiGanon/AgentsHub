@@ -87,6 +87,12 @@ class SurveillancePersistenceInterface(ABC):
     def get_active_missions(self) -> list[dict]: ...
 
     @abstractmethod
+    def recall_drone(self, identifier: str | None = None, now_iso: str | None = None) -> dict: ...
+
+    @abstractmethod
+    def recall_all_drones(self, now_iso: str | None = None) -> dict: ...
+
+    @abstractmethod
     def update_mission_status(
         self,
         mission_id: str,

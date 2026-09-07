@@ -93,7 +93,7 @@ def _deadline_failure(deps: "FlowDeps", event_id: str, next_stage: str) -> "Flow
 
 FlowOutcome = Literal[
     "closed_on_precedent", "declined", "succeeded", "failed", "uncertain", "no_match_protocol",
-    "held_for_clarification", "held_for_approval", "waiting_for_event_data",
+    "held_for_clarification", "held_for_approval", "waiting_for_event_data", "waiting_for_drone_selection",
 ]
 
 _VERDICT_TO_OUTCOME: dict[str, FlowOutcome] = {
@@ -939,6 +939,24 @@ def _execute_protocol_plan(
             failed_step_agent=run_result.failed_step_agent,
         )
         return FlowResult(event_id, "failed", run_result.failure_cause or "")
+
+    recall_selection = next(
+        (
+            outcome.result_text
+            for outcome in run_result.step_outcomes
+            if outcome.result_text and outcome.result_text.startswith("DRONE_SELECTION_REQUIRED:")
+        ),
+        None,
+    )
+    if protocol.name == "return_drone_to_base" and recall_selection is not None:
+        create_event_data_hold(
+            deps.persistence,
+            event_id,
+            ("drone_selection",),
+            recall_selection,
+            tuple(outcome.step.step_id for outcome in run_result.step_outcomes),
+        )
+        return FlowResult(event_id, "waiting_for_drone_selection", recall_selection)
 
     return _finish_protocol_assessment(
         deps, event_id, main_agent, insights_agent, protocol, run_result.step_outcomes, precedent_matches,

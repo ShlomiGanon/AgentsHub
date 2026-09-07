@@ -18,10 +18,8 @@ _PROFILE_DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = str(_PROFILE_DATA_DIR / "operational_history.db")
 SURVEILLANCE_DB_PATH = str(_PROFILE_DATA_DIR / "surveillance.db")
 
-import os
-
-BOT_TOKEN_ENV = "SURVEILLANCE_BOT_TOKEN" if os.environ.get("SURVEILLANCE_BOT_TOKEN") else "BOT_TOKEN"
-SURVEILLANCE_CHAT_ID_ENV = "SURVEILLANCE_CHAT_ID" if os.environ.get("SURVEILLANCE_CHAT_ID") else "TEAM_STATUS_CHAT_ID"
+BOT_TOKEN_ENV = "SURVEILLANCE_BOT_TOKEN"
+SURVEILLANCE_CHAT_ID_ENV = "SURVEILLANCE_CHAT_ID"
 
 
 class SubAgentSurveillanceAgent(SurveillanceAgent):
@@ -89,6 +87,20 @@ PROTOCOLS = [
         approval_flag=True,
     ),
     Protocol(
+        name="return_drone_to_base",
+        description=(
+            "Applies only when a commander asks to recall, return, bring back, or cancel an active drone mission. "
+            "If multiple drones are active and none is identified, it lists them and asks which one to return without changing state."
+        ),
+        participating_agents=("surveillance_agent",),
+        approved_tools=("return_drone_to_base",),
+        expected_success_output=(
+            "Confirmation of the single recalled drone, or an exact list of active drones requiring the commander to choose one."
+        ),
+        criticality=CriticalityLevel.MEDIUM,
+        approval_flag=True,
+    ),
+    Protocol(
         name="surveillance_area_scan",
         description=(
             "Applies when a read-only comprehensive visual scan of a sector is requested. It never dispatches or repositions a drone."
@@ -112,7 +124,7 @@ PROTOCOLS = [
     ),
 ]
 
-EVENT_TYPES = ["surveillance_report", "drone_dispatch"]
+EVENT_TYPES = ["surveillance_report", "drone_dispatch", "drone_recall"]
 AREAS = ["north_gate", "south_sector", "east_fence", "west_hill", "central_hub"]
 
 API_PORT = 8904
