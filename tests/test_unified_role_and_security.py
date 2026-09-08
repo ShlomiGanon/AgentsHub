@@ -395,6 +395,7 @@ def test_unavailability_follow_up_keeps_reason_until_days_and_uses_isolated_conv
     assert "עקב מחלה" in submission[1]
     assert "2 ימים" in submission[1]
     assert ("submit_message_conversation", "telegram:333:attendance:viewer_123") in api_client.calls
+    assert ("submit_message_protocol_hint", "record_attendance_response") in api_client.calls
     assert app._PENDING_UNAVAILABILITY == {}
 
 
@@ -852,4 +853,3 @@ def test_open_approval_holds_syncs_with_db(tmp_path):
     assert "evt-from-db-2" not in holds  # resolved=1 should not be loaded
 
     unregister_open_approval_hold("evt-from-db-1")
-

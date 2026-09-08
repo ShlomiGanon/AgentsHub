@@ -583,6 +583,11 @@ async def _on_text_message(update, context) -> None:
         return
 
     protocol_hint = BUTTON_PROTOCOL_HINTS.get(incoming_text)
+    if is_attendance_submission:
+        # The multi-turn workflow already collected every required field.
+        # Pin it to the attendance protocol so the model cannot misroute the
+        # write as a generic event that waits for commander approval.
+        protocol_hint = "record_attendance_response"
     if incoming_text in BUTTON_PROMPTS:
         incoming_text = BUTTON_PROMPTS[incoming_text]
 
