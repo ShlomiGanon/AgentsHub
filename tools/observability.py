@@ -603,6 +603,19 @@ def _ensure_utf8_stream(stream: Any) -> None:
         pass
 
 
+class _RecoveringStreamHandler(logging.StreamHandler):
+    """Rebind capture streams that pytest (or an embedding host) has closed."""
+
+    def __init__(self, stream: Any, fallback: Any) -> None:
+        super().__init__(stream)
+        self._fallback = fallback
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if getattr(self.stream, "closed", False):
+            self.stream = self._fallback
+        super().emit(record)
+
+
 def configure_logging(profile_name: str, level: int | None = None, persistence: "PersistenceInterface | None" = None) -> None:
     """Configure the root logger to emit one JSON object per record."""
 
@@ -619,11 +632,11 @@ def configure_logging(profile_name: str, level: int | None = None, persistence: 
         root.addFilter(_RedundantCrewAIErrorFilter())
 
     if base_config.LOG_CONSOLE_JSON_ENABLED:
-        json_handler = logging.StreamHandler(stream=sys.stdout)
+        json_handler = _RecoveringStreamHandler(stream=sys.stdout, fallback=sys.__stdout__)
         json_handler.setFormatter(_JsonFormatter())
         root.addHandler(json_handler)
 
-    console_handler = logging.StreamHandler(stream=sys.stderr)
+    console_handler = _RecoveringStreamHandler(stream=sys.stderr, fallback=sys.__stderr__)
     console_handler.setFormatter(_HumanReadableFormatter())
     root.addHandler(console_handler)
 

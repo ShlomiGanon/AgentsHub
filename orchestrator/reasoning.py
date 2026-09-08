@@ -1532,7 +1532,7 @@ def run_parallel_specialists(
             results[name] = ans
         except Exception as exc:
             logger.warning("specialist '%s' failed: %s", name, exc, extra={"agent": name, "event": "specialist_failed"})
-            results[name] = f"(לא התקבל מענה תקין מ-{name})"
+            results[name] = f"(\u05dc\u05d0 \u05d4\u05ea\u05e7\u05d1\u05dc \u05de\u05e2\u05e0\u05d4 \u05ea\u05e7\u05d9\u05df \u05de-{name})"
         return results
 
     with ThreadPoolExecutor(max_workers=min(max_workers, len(task_runners))) as executor:
@@ -1550,14 +1550,14 @@ def run_parallel_specialists(
                     name, timeout_per_specialist,
                     extra={"agent": name, "event": "specialist_timeout"},
                 )
-                results[name] = f"(חריגת זמן: לא התקבל מענה מ-{name})"
+                results[name] = f"(\u05d7\u05e8\u05d9\u05d2\u05ea \u05d6\u05de\u05df: \u05dc\u05d0 \u05d4\u05ea\u05e7\u05d1\u05dc \u05de\u05e2\u05e0\u05d4 \u05de-{name})"
             except Exception as exc:
                 logger.warning(
                     "specialist '%s' failed: %s",
                     name, exc,
                     extra={"agent": name, "event": "specialist_failed"},
                 )
-                results[name] = f"(שגיאה בקבלת נתונים מ-{name})"
+                results[name] = f"(\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05e7\u05d1\u05dc\u05ea \u05e0\u05ea\u05d5\u05e0\u05d9\u05dd \u05de-{name})"
 
     return results
 
@@ -1651,14 +1651,14 @@ def answer_question_from_plan(
             invocation_policy=InvocationPolicy(max_output_tokens=700, timeout_seconds=75.0),
         )
     if composed.status != "success":
-        valid_items = [txt for txt in sub_answers.values() if not txt.startswith("(חריגת זמן") and not txt.startswith("(שגיאה")]
+        valid_items = [txt for txt in sub_answers.values() if not txt.startswith("(\u05d7\u05e8\u05d9\u05d2\u05ea \u05d6\u05de\u05df") and not txt.startswith("(\u05e9\u05d2\u05d9\u05d0\u05d4")]
         if valid_items:
             return QuestionAnswer("\n".join(f"• {item}" for item in valid_items))
         raise OrchestrationParseError(f"answer composition did not produce a usable response: {composed.text}")
 
-    failed_agents = [name for name, txt in sub_answers.items() if txt.startswith("(חריגת זמן") or txt.startswith("(שגיאה")]
+    failed_agents = [name for name, txt in sub_answers.items() if txt.startswith("(\u05d7\u05e8\u05d9\u05d2\u05ea \u05d6\u05de\u05df") or txt.startswith("(\u05e9\u05d2\u05d9\u05d0\u05d4")]
     if failed_agents:
-        return QuestionAnswer(f"{composed.text.strip()}\n(הערה: לא התקבל דיווח מ-{', '.join(failed_agents)})")
+        return QuestionAnswer(f"{composed.text.strip()}\n(\u05d4\u05e2\u05e8\u05d4: \u05dc\u05d0 \u05d4\u05ea\u05e7\u05d1\u05dc \u05d3\u05d9\u05d5\u05d5\u05d7 \u05de-{', '.join(failed_agents)})")
 
     return QuestionAnswer(composed.text)
 
@@ -1798,20 +1798,23 @@ def answer_question(
     if len(sub_answers) == 1:
         single_ans = next(iter(sub_answers.values()))
         if single_ans.startswith("(no usable answer") and len(selection.chosen_tasks) == 1:
-            return _cant_answer_reply(f"{next(iter(sub_answers.keys()))} doesn't have a way to help with this question.")
+            agent_name = next(iter(sub_answers.keys()))
+            if agent_name == "history_agent":
+                return _cant_answer_reply(single_ans)
+            return _cant_answer_reply(f"{agent_name} doesn't have a way to help with this question.")
         return single_ans
 
     with stage_context("question_composition"):
         compose_result = main_agent.process(_build_compose_prompt(question, sub_answers), [])
     if compose_result.status != "success":
-        valid_items = [txt for txt in sub_answers.values() if not txt.startswith("(חריגת זמן") and not txt.startswith("(שגיאה")]
+        valid_items = [txt for txt in sub_answers.values() if not txt.startswith("(\u05d7\u05e8\u05d9\u05d2\u05ea \u05d6\u05de\u05df") and not txt.startswith("(\u05e9\u05d2\u05d9\u05d0\u05d4")]
         if valid_items:
             return "\n".join(f"• {item}" for item in valid_items)
         raise OrchestrationParseError(f"answer composition did not produce a usable response: {compose_result.text}")
 
-    failed_agents = [name for name, txt in sub_answers.items() if txt.startswith("(חריגת זמן") or txt.startswith("(שגיאה")]
+    failed_agents = [name for name, txt in sub_answers.items() if txt.startswith("(\u05d7\u05e8\u05d9\u05d2\u05ea \u05d6\u05de\u05df") or txt.startswith("(\u05e9\u05d2\u05d9\u05d0\u05d4")]
     if failed_agents:
-        return f"{compose_result.text.strip()}\n(הערה: לא התקבל דיווח מ-{', '.join(failed_agents)})"
+        return f"{compose_result.text.strip()}\n(\u05d4\u05e2\u05e8\u05d4: \u05dc\u05d0 \u05d4\u05ea\u05e7\u05d1\u05dc \u05d3\u05d9\u05d5\u05d5\u05d7 \u05de-{', '.join(failed_agents)})"
 
     return compose_result.text
 
@@ -1844,7 +1847,7 @@ def synthesize_operational_picture(
     missing_note = ""
     if failed_outcomes:
         missing_names = ", ".join(o.step.agent_name for o in failed_outcomes)
-        missing_note = f"\n(הערה מבצעית: לא התקבל דיווח מ-{missing_names})"
+        missing_note = f"\n(\u05d4\u05e2\u05e8\u05d4 \u05de\u05d1\u05e6\u05e2\u05d9\u05ea: \u05dc\u05d0 \u05d4\u05ea\u05e7\u05d1\u05dc \u05d3\u05d9\u05d5\u05d5\u05d7 \u05de-{missing_names})"
 
     with stage_context("multi_agent_synthesis"):
         prompt = _build_multi_agent_synthesis_prompt(protocol, tuple(valid_outcomes), raw_text)

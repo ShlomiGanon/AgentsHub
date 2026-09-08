@@ -38,6 +38,8 @@ from orchestrator.flows import (
     begin_report,
     begin_request,
     classify_intent,
+    run_parallel_specialists,
+    synthesize_operational_picture,
     plan_message,
     WorkItem,
     continue_from_risk_assessment,
@@ -46,8 +48,6 @@ from orchestrator.flows import (
 )
 
 from protocols import CriticalityLevel, Protocol, ProtocolEditError, Step, StepOutcome, add_protocol, remove_protocol, replace_protocol
-from orchestrator.reasoning import run_parallel_specialists, synthesize_operational_picture
-
 from profiles.loader import hash_profile_file
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy
 
@@ -123,16 +123,16 @@ def _now() -> str:
 
 
 KNOWN_BUTTON_PROTOCOLS: dict[str, str] = {
-    "📊 תמונת מצב כללית": "overall_situational_picture",
-    "📹 מצב מצלמות": "query_camera_status",
-    "🛸 מצב צי רחפנים": "query_drone_fleet_status",
-    "🚀 הזנקת רחפן": "dispatch_drone_to_incident",
-    "🔄 החזרת רחפן לבסיס": "recall_drone_to_base",
-    "👥 סטטוס כיתת כוננות": "report_team_availability",
-    "🚨 הזנקת כוחות": "dispatch_emergency_forces",
-    "📜 היסטוריית אירועים": "query_historical_incidents",
-    "✅ אני זמין לכוננות": "record_attendance_response",
-    "❌ איני זמין": "record_attendance_response",
+    "📊 \u05ea\u05de\u05d5\u05e0\u05ea \u05de\u05e6\u05d1 \u05db\u05dc\u05dc\u05d9\u05ea": "overall_situational_picture",
+    "📹 \u05de\u05e6\u05d1 \u05de\u05e6\u05dc\u05de\u05d5\u05ea": "query_camera_status",
+    "🛸 \u05de\u05e6\u05d1 \u05e6\u05d9 \u05e8\u05d7\u05e4\u05e0\u05d9\u05dd": "query_drone_fleet_status",
+    "🚀 \u05d4\u05d6\u05e0\u05e7\u05ea \u05e8\u05d7\u05e4\u05df": "dispatch_drone_to_incident",
+    "🔄 \u05d4\u05d7\u05d6\u05e8\u05ea \u05e8\u05d7\u05e4\u05df \u05dc\u05d1\u05e1\u05d9\u05e1": "recall_drone_to_base",
+    "👥 \u05e1\u05d8\u05d8\u05d5\u05e1 \u05db\u05d9\u05ea\u05ea \u05db\u05d5\u05e0\u05e0\u05d5\u05ea": "report_team_availability",
+    "🚨 \u05d4\u05d6\u05e0\u05e7\u05ea \u05db\u05d5\u05d7\u05d5\u05ea": "dispatch_emergency_forces",
+    "📜 \u05d4\u05d9\u05e1\u05d8\u05d5\u05e8\u05d9\u05d9\u05ea \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd": "query_historical_incidents",
+    "✅ \u05d0\u05e0\u05d9 \u05d6\u05de\u05d9\u05df \u05dc\u05db\u05d5\u05e0\u05e0\u05d5\u05ea": "record_attendance_response",
+    "❌ \u05d0\u05d9\u05e0\u05d9 \u05d6\u05de\u05d9\u05df": "record_attendance_response",
 }
 
 
@@ -140,12 +140,12 @@ def _is_team_roster_query(text: str, prior_messages: tuple[dict, ...]) -> bool:
     """Recognize roster questions that should not depend on general LLM routing."""
     normalized = text.strip().casefold()
     explicit_terms = (
-        "כיתת כוננות", "כיתת הכוננות", "חברי כיתה", "חברי הכיתה",
-        "החברי כיתת", "מצבת כיתה", "מצבת הכיתה",
+        "\u05db\u05d9\u05ea\u05ea \u05db\u05d5\u05e0\u05e0\u05d5\u05ea", "\u05db\u05d9\u05ea\u05ea \u05d4\u05db\u05d5\u05e0\u05e0\u05d5\u05ea", "\u05d7\u05d1\u05e8\u05d9 \u05db\u05d9\u05ea\u05d4", "\u05d7\u05d1\u05e8\u05d9 \u05d4\u05db\u05d9\u05ea\u05d4",
+        "\u05d4\u05d7\u05d1\u05e8\u05d9 \u05db\u05d9\u05ea\u05ea", "\u05de\u05e6\u05d1\u05ea \u05db\u05d9\u05ea\u05d4", "\u05de\u05e6\u05d1\u05ea \u05d4\u05db\u05d9\u05ea\u05d4",
     )
     if any(term in normalized for term in explicit_terms):
         return True
-    if normalized.rstrip(" ?!") not in {"מי הם", "מי אלה", "מה השמות", "אפשר את השמות שלהם"}:
+    if normalized.rstrip(" ?!") not in {"\u05de\u05d9 \u05d4\u05dd", "\u05de\u05d9 \u05d0\u05dc\u05d4", "\u05de\u05d4 \u05d4\u05e9\u05de\u05d5\u05ea", "\u05d0\u05e4\u05e9\u05e8 \u05d0\u05ea \u05d4\u05e9\u05de\u05d5\u05ea \u05e9\u05dc\u05d4\u05dd"}:
         return False
     recent_context = " ".join(str(item.get("content", "")) for item in prior_messages[-4:]).casefold()
     return any(term in recent_context for term in explicit_terms)
@@ -153,21 +153,21 @@ def _is_team_roster_query(text: str, prior_messages: tuple[dict, ...]) -> bool:
 
 def _team_roster_view(text: str) -> str:
     normalized = text.strip().casefold()
-    if any(term in normalized for term in ("טרם דיווח", "לא דיווח", "ממתין", "ממתינים")):
+    if any(term in normalized for term in ("\u05d8\u05e8\u05dd \u05d3\u05d9\u05d5\u05d5\u05d7", "\u05dc\u05d0 \u05d3\u05d9\u05d5\u05d5\u05d7", "\u05de\u05de\u05ea\u05d9\u05df", "\u05de\u05de\u05ea\u05d9\u05e0\u05d9\u05dd")):
         return "awaiting"
-    if any(term in normalized for term in ("מי לא זמין", "אינם זמינים", "לא זמינים")):
+    if any(term in normalized for term in ("\u05de\u05d9 \u05dc\u05d0 \u05d6\u05de\u05d9\u05df", "\u05d0\u05d9\u05e0\u05dd \u05d6\u05de\u05d9\u05e0\u05d9\u05dd", "\u05dc\u05d0 \u05d6\u05de\u05d9\u05e0\u05d9\u05dd")):
         return "unavailable"
-    if any(term in normalized for term in ("מי זמין", "זמינים בלבד")):
+    if any(term in normalized for term in ("\u05de\u05d9 \u05d6\u05de\u05d9\u05df", "\u05d6\u05de\u05d9\u05e0\u05d9\u05dd \u05d1\u05dc\u05d1\u05d3")):
         return "available"
-    if any(term in normalized for term in ("מי הם", "מי אלה", "מי חבר", "חברי כיתה", "חברי הכיתה", "מה השמות", "השמות שלהם")):
+    if any(term in normalized for term in ("\u05de\u05d9 \u05d4\u05dd", "\u05de\u05d9 \u05d0\u05dc\u05d4", "\u05de\u05d9 \u05d7\u05d1\u05e8", "\u05d7\u05d1\u05e8\u05d9 \u05db\u05d9\u05ea\u05d4", "\u05d7\u05d1\u05e8\u05d9 \u05d4\u05db\u05d9\u05ea\u05d4", "\u05de\u05d4 \u05d4\u05e9\u05de\u05d5\u05ea", "\u05d4\u05e9\u05de\u05d5\u05ea \u05e9\u05dc\u05d4\u05dd")):
         return "members"
     return "summary"
 
 
 def _is_approval_policy_question(text: str) -> bool:
     normalized = text.strip().casefold()
-    return any(word in normalized for word in ("אישור", "לאשר", "מאשר")) and any(
-        term in normalized for term in ("מי", "איפה", "אמור", "צריך", "מאשר")
+    return any(word in normalized for word in ("\u05d0\u05d9\u05e9\u05d5\u05e8", "\u05dc\u05d0\u05e9\u05e8", "\u05de\u05d0\u05e9\u05e8")) and any(
+        term in normalized for term in ("\u05de\u05d9", "\u05d0\u05d9\u05e4\u05d4", "\u05d0\u05de\u05d5\u05e8", "\u05e6\u05e8\u05d9\u05da", "\u05de\u05d0\u05e9\u05e8")
     )
 
 
@@ -175,7 +175,7 @@ def _is_pending_report_cancellation(text: str) -> bool:
     normalized = text.strip().casefold()
     return any(
         phrase in normalized
-        for phrase in ("עזוב", "תבטל", "בטל", "אין יותר", "אין כלום", "בטעות", "לא שמעתי טוב")
+        for phrase in ("\u05e2\u05d6\u05d5\u05d1", "\u05ea\u05d1\u05d8\u05dc", "\u05d1\u05d8\u05dc", "\u05d0\u05d9\u05df \u05d9\u05d5\u05ea\u05e8", "\u05d0\u05d9\u05df \u05db\u05dc\u05d5\u05dd", "\u05d1\u05d8\u05e2\u05d5\u05ea", "\u05dc\u05d0 \u05e9\u05de\u05e2\u05ea\u05d9 \u05d8\u05d5\u05d1")
     )
 
 
@@ -268,7 +268,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
 
         # A correction/cancellation of an incomplete report is conversation
         # control, not a fresh operational request (and especially not a drone
-        # recall merely because the text contains "תבטל"). Resolve only the
+        # recall merely because the text contains "\u05ea\u05d1\u05d8\u05dc"). Resolve only the
         # newest unresolved hold owned by this sender in this conversation.
         if _is_pending_report_cancellation(str(text)):
             owned_pending: list[tuple[dict, dict]] = []
@@ -291,9 +291,9 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
                     ctx.deps.persistence,
                     held_event["event_id"],
                     "declined",
-                    failure_reason="המדווח ביטל או תיקן את הדיווח לפני השלמת הפרטים.",
+                    failure_reason="\u05d4\u05de\u05d3\u05d5\u05d5\u05d7 \u05d1\u05d9\u05d8\u05dc \u05d0\u05d5 \u05ea\u05d9\u05e7\u05df \u05d0\u05ea \u05d4\u05d3\u05d9\u05d5\u05d5\u05d7 \u05dc\u05e4\u05e0\u05d9 \u05d4\u05e9\u05dc\u05de\u05ea \u05d4\u05e4\u05e8\u05d8\u05d9\u05dd.",
                 )
-                answer = "הדיווח הממתין בוטל. לא תופעל פעולה ולא נדרש למסור מיקום."
+                answer = "\u05d4\u05d3\u05d9\u05d5\u05d5\u05d7 \u05d4\u05de\u05de\u05ea\u05d9\u05df \u05d1\u05d5\u05d8\u05dc. \u05dc\u05d0 \u05ea\u05d5\u05e4\u05e2\u05dc \u05e4\u05e2\u05d5\u05dc\u05d4 \u05d5\u05dc\u05d0 \u05e0\u05d3\u05e8\u05e9 \u05dc\u05de\u05e1\u05d5\u05e8 \u05de\u05d9\u05e7\u05d5\u05dd."
                 _remember("assistant", answer, held_event["event_id"])
                 return jsonify({
                     "taken_as": "event_update",
@@ -484,7 +484,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
             received_at = _now()
             is_commander = level >= PermissionLevel.COMMANDER
             if getattr(matched_protocol, "commander_only", False) and not is_commander:
-                raise AuthorizationError("הפעולה נדחתה: פעולה זו דורשת הרשאת מפקד (COMMANDER).")
+                raise AuthorizationError("\u05d4\u05e4\u05e2\u05d5\u05dc\u05d4 \u05e0\u05d3\u05d7\u05ea\u05d4: \u05e4\u05e2\u05d5\u05dc\u05d4 \u05d6\u05d5 \u05d3\u05d5\u05e8\u05e9\u05ea \u05d4\u05e8\u05e9\u05d0\u05ea \u05de\u05e4\u05e7\u05d3 (COMMANDER).")
 
             needs_approval = bool(
                 getattr(matched_protocol, "requires_confirmation", False)
@@ -538,7 +538,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
                     history_ans = ctx.deps.history_query_service.query(text, sender_identity_filter=caller_filter)
                     answer = history_ans.answer
                 except Exception as exc:
-                    answer = f"שגיאה בשליפת היסטוריה: {exc}"
+                    answer = f"\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05e9\u05dc\u05d9\u05e4\u05ea \u05d4\u05d9\u05e1\u05d8\u05d5\u05e8\u05d9\u05d4: {exc}"
                 _remember("assistant", answer)
                 return jsonify({"taken_as": "question", "answer": answer, "protocol": matched_protocol.name})
 
@@ -553,7 +553,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
                     if not agent_tools:
                         agent_tools = [t for t in matched_protocol.approved_tools if t in [tool.name for tool in ag.exposed_tools()]]
                     with authenticated_request_identity(caller_identity):
-                        res = ag.process(f"דוח מבצעי עבור {matched_protocol.description}", agent_tools)
+                        res = ag.process(f"\u05d3\u05d5\u05d7 \u05de\u05d1\u05e6\u05e2\u05d9 \u05e2\u05d1\u05d5\u05e8 {matched_protocol.description}", agent_tools)
                     if res.status != "success":
                         return ag_name, f"({res.text})"
                     return ag_name, res.text
@@ -567,7 +567,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
                     is_failed = not res_text or res_text.startswith("(")
                     step = Step(
                         agent_name=ag_name,
-                        task_text=f"דוח מבצעי עבור {matched_protocol.description}",
+                        task_text=f"\u05d3\u05d5\u05d7 \u05de\u05d1\u05e6\u05e2\u05d9 \u05e2\u05d1\u05d5\u05e8 {matched_protocol.description}",
                         allowed_tools=tuple(matched_protocol.approved_tools),
                         step_id=ag_name,
                     )
@@ -612,7 +612,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
                 })
             with authenticated_request_identity(caller_identity):
                 res = ag.process(text, allowed_tools)
-            answer = res.text if res.status == "success" else f"שגיאה בהפעלת סוכן: {res.text}"
+            answer = res.text if res.status == "success" else f"\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05d4\u05e4\u05e2\u05dc\u05ea \u05e1\u05d5\u05db\u05df: {res.text}"
             _remember("assistant", answer)
             return jsonify({
                 "taken_as": "question" if require_op == RequestedOperation.ASK_QUESTION else "event_update",
@@ -623,9 +623,9 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
         if _is_approval_policy_question(str(text)):
             require(level, RequestedOperation.CONVERSE)
             answer = (
-                "בקשה שמחייבת אישור נשלחת למפקדים הרשומים במערכת. "
-                "רק משתמש בעל הרשאת מפקד יכול לאשר או לדחות אותה באמצעות כפתורי האישור. "
-                "אם חסרים פרטים מבצעיים, למשל מיקום האירוע, המערכת תשאל עליהם לפני יצירת בקשת האישור."
+                "\u05d1\u05e7\u05e9\u05d4 \u05e9\u05de\u05d7\u05d9\u05d9\u05d1\u05ea \u05d0\u05d9\u05e9\u05d5\u05e8 \u05e0\u05e9\u05dc\u05d7\u05ea \u05dc\u05de\u05e4\u05e7\u05d3\u05d9\u05dd \u05d4\u05e8\u05e9\u05d5\u05de\u05d9\u05dd \u05d1\u05de\u05e2\u05e8\u05db\u05ea. "
+                "\u05e8\u05e7 \u05de\u05e9\u05ea\u05de\u05e9 \u05d1\u05e2\u05dc \u05d4\u05e8\u05e9\u05d0\u05ea \u05de\u05e4\u05e7\u05d3 \u05d9\u05db\u05d5\u05dc \u05dc\u05d0\u05e9\u05e8 \u05d0\u05d5 \u05dc\u05d3\u05d7\u05d5\u05ea \u05d0\u05d5\u05ea\u05d4 \u05d1\u05d0\u05de\u05e6\u05e2\u05d5\u05ea \u05db\u05e4\u05ea\u05d5\u05e8\u05d9 \u05d4\u05d0\u05d9\u05e9\u05d5\u05e8. "
+                "\u05d0\u05dd \u05d7\u05e1\u05e8\u05d9\u05dd \u05e4\u05e8\u05d8\u05d9\u05dd \u05de\u05d1\u05e6\u05e2\u05d9\u05d9\u05dd, \u05dc\u05de\u05e9\u05dc \u05de\u05d9\u05e7\u05d5\u05dd \u05d4\u05d0\u05d9\u05e8\u05d5\u05e2, \u05d4\u05de\u05e2\u05e8\u05db\u05ea \u05ea\u05e9\u05d0\u05dc \u05e2\u05dc\u05d9\u05d4\u05dd \u05dc\u05e4\u05e0\u05d9 \u05d9\u05e6\u05d9\u05e8\u05ea \u05d1\u05e7\u05e9\u05ea \u05d4\u05d0\u05d9\u05e9\u05d5\u05e8."
             )
             _remember("assistant", answer)
             return jsonify({"taken_as": "conversational", "answer": answer})

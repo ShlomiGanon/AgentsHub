@@ -439,17 +439,17 @@ BUTTON_PROMPTS = {
 }
 
 BUTTON_PROTOCOL_HINTS = {
-    "🛸 מצב צי רחפנים": "query_drone_fleet_status",
-    "🔄 החזרת רחפן לבסיס": "recall_drone_to_base",
-    "📹 מצב מצלמות": "query_camera_status",
-    "📹 תצפית ומצלמות": "query_camera_status",
-    "📊 תמונת מצב כללית": "overall_situational_picture",
-    "🌐 תמונת מצב גזרתית כוללת": "overall_situational_picture",
-    "ℹ️ סטטוס גזרה": "overall_situational_picture",
-    "👥 סטטוס כיתת כוננות": "report_team_availability",
-    "📜 היסטוריית אירועים": "query_historical_incidents",
-    "📋 אירועים אחרונים": "query_historical_incidents",
-    "📋 יומן אירועים ותחקור": "query_historical_incidents",
+    "🛸 \u05de\u05e6\u05d1 \u05e6\u05d9 \u05e8\u05d7\u05e4\u05e0\u05d9\u05dd": "query_drone_fleet_status",
+    "🔄 \u05d4\u05d7\u05d6\u05e8\u05ea \u05e8\u05d7\u05e4\u05df \u05dc\u05d1\u05e1\u05d9\u05e1": "recall_drone_to_base",
+    "📹 \u05de\u05e6\u05d1 \u05de\u05e6\u05dc\u05de\u05d5\u05ea": "query_camera_status",
+    "📹 \u05ea\u05e6\u05e4\u05d9\u05ea \u05d5\u05de\u05e6\u05dc\u05de\u05d5\u05ea": "query_camera_status",
+    "📊 \u05ea\u05de\u05d5\u05e0\u05ea \u05de\u05e6\u05d1 \u05db\u05dc\u05dc\u05d9\u05ea": "overall_situational_picture",
+    "🌐 \u05ea\u05de\u05d5\u05e0\u05ea \u05de\u05e6\u05d1 \u05d2\u05d6\u05e8\u05ea\u05d9\u05ea \u05db\u05d5\u05dc\u05dc\u05ea": "overall_situational_picture",
+    "ℹ️ \u05e1\u05d8\u05d8\u05d5\u05e1 \u05d2\u05d6\u05e8\u05d4": "overall_situational_picture",
+    "👥 \u05e1\u05d8\u05d8\u05d5\u05e1 \u05db\u05d9\u05ea\u05ea \u05db\u05d5\u05e0\u05e0\u05d5\u05ea": "report_team_availability",
+    "📜 \u05d4\u05d9\u05e1\u05d8\u05d5\u05e8\u05d9\u05d9\u05ea \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd": "query_historical_incidents",
+    "📋 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05d0\u05d7\u05e8\u05d5\u05e0\u05d9\u05dd": "query_historical_incidents",
+    "📋 \u05d9\u05d5\u05de\u05df \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05d5\u05ea\u05d7\u05e7\u05d5\u05e8": "query_historical_incidents",
 }
 
 

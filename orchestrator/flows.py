@@ -52,6 +52,7 @@ from orchestrator.reasoning import (
     synthesize_operational_picture,
     ProtocolSelectionResult,
     RiskAssessment,
+    run_parallel_specialists,
 )
 from orchestrator.reasoning import answer_question, determine_closure, look_up_precedent
 from orchestrator.event_queue import PolicyAwareEventQueue, SerialEventQueue, WorkItem
@@ -735,7 +736,7 @@ def continue_from_risk_assessment(
     normalized_report = str(raw_text).strip().casefold()
     observational_report = any(
         marker in normalized_report
-        for marker in ("אני רואה", "ראיתי", "זיהיתי", "אני מדווח", "יש אש", "יש עשן")
+        for marker in ("\u05d0\u05e0\u05d9 \u05e8\u05d5\u05d0\u05d4", "\u05e8\u05d0\u05d9\u05ea\u05d9", "\u05d6\u05d9\u05d4\u05d9\u05ea\u05d9", "\u05d0\u05e0\u05d9 \u05de\u05d3\u05d5\u05d5\u05d7", "\u05d9\u05e9 \u05d0\u05e9", "\u05d9\u05e9 \u05e2\u05e9\u05df")
     )
     if (
         selected_proto is not None
@@ -747,13 +748,13 @@ def continue_from_risk_assessment(
             deps.persistence,
             event_id,
             "declined",
-            failure_reason="הבקשה נדחתה: הפעלת הפרוטוקול דורשת הרשאת מפקד.",
+            failure_reason="\u05d4\u05d1\u05e7\u05e9\u05d4 \u05e0\u05d3\u05d7\u05ea\u05d4: \u05d4\u05e4\u05e2\u05dc\u05ea \u05d4\u05e4\u05e8\u05d5\u05d8\u05d5\u05e7\u05d5\u05dc \u05d3\u05d5\u05e8\u05e9\u05ea \u05d4\u05e8\u05e9\u05d0\u05ea \u05de\u05e4\u05e7\u05d3.",
         )
         _log_event_outcome(event_id, "declined", reason="commander permission required")
         return FlowResult(
             event_id,
             "unauthorized_for_viewer",
-            "הבקשה נדחתה: הפעלת הפרוטוקול דורשת הרשאת מפקד.",
+            "\u05d4\u05d1\u05e7\u05e9\u05d4 \u05e0\u05d3\u05d7\u05ea\u05d4: \u05d4\u05e4\u05e2\u05dc\u05ea \u05d4\u05e4\u05e8\u05d5\u05d8\u05d5\u05e7\u05d5\u05dc \u05d3\u05d5\u05e8\u05e9\u05ea \u05d4\u05e8\u05e9\u05d0\u05ea \u05de\u05e4\u05e7\u05d3.",
         )
 
     hold_reason: "HoldReason | None" = determine_approval_hold(selection, protocols_by_name, originated_from_commander)

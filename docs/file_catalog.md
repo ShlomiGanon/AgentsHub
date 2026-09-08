@@ -9,8 +9,11 @@ This English catalog describes every tracked or pending first-party file in the 
 | `.github/workflows/ci.yml` | Automation | Internal | Runs the repository's continuous-integration checks. |
 | `.gitignore` | Project | Internal | Excludes generated, local, secret, and runtime artifacts. |
 | `.vscode/extensions.json` | Project | Internal | Recommends editor extensions for this workspace. |
+| `benchmark_baseline.json` | Evaluation | Internal | Stores baseline response-pipeline benchmark measurements. |
+| `benchmark_optimized.json` | Evaluation | Internal | Stores optimized response-pipeline benchmark measurements. |
 | `IMPROVE.MD` | Documentation | Internal | Reports evidence-backed improvements for Main Agent response latency and quality. |
 | `README.md` | Project | Internal | Introduces the system and its primary startup commands. |
+| `run_stack.py` | Production | Public entry point | Starts and supervises the unified API and Telegram bot processes together. |
 | `SPEED.MD` | Documentation | Internal | Records the measured response-latency investigation and evidence. |
 | `SPEED_PLAN.MD` | Documentation | Internal | Defines the approved sequential implementation and verification plan for current speed and operator-experience work. |
 | `agents/__init__.py` | Production | Public facade | Exposes the public agent facade and compatibility module aliases. |
@@ -60,6 +63,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `docs/code_example.py` | Documentation | Internal | Documents code example. |
 | `docs/cost_latency_review.md` | Documentation | Internal | Documents cost latency review. |
 | `docs/file_catalog.md` | Documentation | Internal | Documents file catalog. |
+| `docs/BOT_EVALUATION_REPORT_2026-09-08.md` | Documentation | Internal | Records the 2026-09-08 bot evaluation results and coverage gaps. |
 | `docs/how_to_connect_telegram.md` | Documentation | Internal | Documents how to connect telegram. |
 | `docs/investigation_summary.md` | Documentation | Internal | Documents investigation summary. |
 | `docs/links.txt` | Documentation | Internal | Documents links. |
