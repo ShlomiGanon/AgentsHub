@@ -64,6 +64,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `docs/cost_latency_review.md` | Documentation | Internal | Documents cost latency review. |
 | `docs/file_catalog.md` | Documentation | Internal | Documents file catalog. |
 | `docs/BOT_EVALUATION_REPORT_2026-09-08.md` | Documentation | Internal | Records the 2026-09-08 bot evaluation results and coverage gaps. |
+| `docs/TELEGRAM_E2E_REPORT_2026-09-08.md` | Documentation | Internal | Records the 2026-09-08 live Telegram end-to-end test results. |
 | `docs/how_to_connect_telegram.md` | Documentation | Internal | Documents how to connect telegram. |
 | `docs/investigation_summary.md` | Documentation | Internal | Documents investigation summary. |
 | `docs/links.txt` | Documentation | Internal | Documents links. |

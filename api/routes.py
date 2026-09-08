@@ -705,6 +705,7 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
                         ctx.deps.history_query_service,
                         max_fanout=optimization_policy.specialist_fanout,
                         caller_sender_identity_filter=caller_sender_identity_filter,
+                        conversation_messages=prior_messages,
                     )
                     answer = question_answer.text
                     provenance = question_answer.provenance

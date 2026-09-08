@@ -50,7 +50,10 @@ class SurveillanceAgent(Agent):
         "Answer in Hebrew when the request is in Hebrew. Preserve IDs and operational status values exactly. "
         "The drone statuses in the fleet are: 'ready' (available for immediate dispatch), 'in_flight' (airborne on mission), 'charging', and 'maintenance'. "
         "When asked for drone fleet status or availability, call get_drone_fleet_status with an empty status_filter to see the full fleet and available ready units. "
-        "When asked about cameras: state general status, then list only relevant cameras in compact single-line bullets. "
+        "When the user names a drone ID or callsign, pass it as drone_id_or_callsign and report only that exact drone. "
+        "If the tool says that named drone was not found, state that plainly and never replace it with the full fleet. "
+        "When asked about cameras generally, leave both area and camera_id empty; words such as general, current, requested, or overall are not area names. "
+        "State general status, then list only relevant cameras in compact single-line bullets. "
         "If asked about a specific camera or area, report ONLY on that camera or area. "
         "When asked about drones or dispatch: give only essential tactical facts (Callsign, Status, Battery, Location/Target, ETA). "
         "A specific drone ID or callsign is OPTIONAL for dispatch. If none was explicitly requested, leave specific_drone_id empty; "
@@ -123,13 +126,26 @@ class SurveillanceAgent(Agent):
         "Returns current operational status, battery levels, locations, and mission assignments for the tactical drone fleet. Leave status_filter empty to return all drones. Valid status filters: 'ready' (available for dispatch), 'in_flight', 'charging', 'maintenance'.",
         side_effecting=False,
     )
-    def get_drone_fleet_status(self, status_filter: str = "") -> str:
+    def get_drone_fleet_status(self, status_filter: str = "", drone_id_or_callsign: str = "") -> str:
+        requested = drone_id_or_callsign.strip()
+        if requested:
+            normalized = requested.casefold()
+            drones = [
+                drone for drone in self.surveillance_store.list_drones()
+                if str(drone["drone_id"]).casefold() == normalized
+                or str(drone["callsign"]).casefold() == normalized
+            ]
+            if not drones:
+                return f"Drone '{requested}' was not found in the tactical fleet registry."
+        else:
+            drones = []
         cleaned = status_filter.strip().lower()
         if cleaned in {"all", "*"}:
             cleaned = ""
-        drones = self.surveillance_store.list_drones(status=cleaned or None)
+        if not requested:
+            drones = self.surveillance_store.list_drones(status=cleaned or None)
         if not drones:
-            # Fallback to all drones so a restrictive or unexpected filter never hides the fleet
+            # An unsupported status filter should not make the real fleet disappear.
             all_drones = self.surveillance_store.list_drones()
             if all_drones:
                 drones = all_drones

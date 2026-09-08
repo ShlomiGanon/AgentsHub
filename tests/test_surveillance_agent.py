@@ -80,6 +80,16 @@ def test_get_drone_fleet_status_tool(tmp_path):
     ready_only = _call_tool(agent, "get_drone_fleet_status", status_filter="ready")
     assert "Eagle-1" in ready_only
 
+    eagle_only = _call_tool(agent, "get_drone_fleet_status", drone_id_or_callsign="Eagle-1")
+    assert "Eagle-1" in eagle_only
+    assert "DRONE-01" in eagle_only
+    assert "Batt: 96%" in eagle_only
+    assert "Falcon-2" not in eagle_only
+
+    missing = _call_tool(agent, "get_drone_fleet_status", drone_id_or_callsign="Drone-99")
+    assert "not found" in missing
+    assert "Eagle-1" not in missing
+
 
 def test_dispatch_drone_to_area_tool_and_active_missions(tmp_path):
     agent = _agent(tmp_path)
