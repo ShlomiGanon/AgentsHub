@@ -1,0 +1,132 @@
+[
+  {
+    "name": "1. Simple Read-Only Button (Camera Status)",
+    "status_code": 200,
+    "total_latency_ms": 16.0,
+    "llm_call_count": 2,
+    "llm_calls": [
+      {
+        "stage": "agent_kickoff",
+        "agent": "אחראי על תצפית חזותי"
+      },
+      {
+        "stage": "",
+        "agent": "surveillance_agent"
+      }
+    ],
+    "tool_call_count": 1,
+    "tool_calls": [
+      {
+        "tool": "get_camera_feeds",
+        "duration_ms": 0.0
+      }
+    ],
+    "api_round_trips": 1,
+    "answer_preview": "📹 מצב מצלמות אבטחה (5 מצלמות):\n• [CAM-01] Gate North Optical PTZ (north_gate, 15°): תנועה חשודה נבדקה ונשללה [תקין ופעיל..."
+  },
+  {
+    "name": "2. Tactical Dispatch Drone",
+    "status_code": 202,
+    "total_latency_ms": 16.0,
+    "llm_call_count": 4,
+    "llm_calls": [
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "task_formulation",
+        "agent": "main_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "task_formulation_repair",
+        "agent": "main_agent"
+      }
+    ],
+    "tool_call_count": 0,
+    "tool_calls": [],
+    "api_round_trips": 2,
+    "answer_preview": "queued"
+  },
+  {
+    "name": "3. Tactical Recall Drone",
+    "status_code": 202,
+    "total_latency_ms": 31.0,
+    "llm_call_count": 4,
+    "llm_calls": [
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "task_formulation",
+        "agent": "main_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "task_formulation_repair",
+        "agent": "main_agent"
+      }
+    ],
+    "tool_call_count": 0,
+    "tool_calls": [],
+    "api_round_trips": 2,
+    "answer_preview": "queued"
+  },
+  {
+    "name": "4. Multi-Agent Situational Picture",
+    "status_code": 200,
+    "total_latency_ms": 78.0,
+    "llm_call_count": 6,
+    "llm_calls": [
+      {
+        "stage": "agent_kickoff",
+        "agent": "אחראי על תצפית חזותי"
+      },
+      {
+        "stage": "",
+        "agent": "surveillance_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "אחראי על ניהול מצבת "
+      },
+      {
+        "stage": "",
+        "agent": "team_status_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "multi_agent_synthesis",
+        "agent": "main_agent"
+      }
+    ],
+    "tool_call_count": 3,
+    "tool_calls": [
+      {
+        "tool": "get_surveillance_overview",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "get_team_status_roster",
+        "duration_ms": 15.0
+      },
+      {
+        "tool": "report_team_availability",
+        "duration_ms": 0.0
+      }
+    ],
+    "api_round_trips": 1,
+    "answer_preview": "מבצעי: הפעולה בוצעה בהצלחה."
+  }
+]

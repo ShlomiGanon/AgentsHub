@@ -24,7 +24,7 @@ from bot.interactions import (
 )
 
 from pathlib import Path
-
+import random
 import os
 
 if TYPE_CHECKING:
@@ -116,28 +116,34 @@ async def run_notification_poll_loop(
     iterations = 0
     policy = getattr(deps.loaded_profile, "optimization_policy", None)
     wait_seconds = getattr(policy, "notification_wait_seconds", 0)
-    transport_backoff = 0.5
+    current_backoff = 1.0
 
     while max_iterations is None or iterations < max_iterations:
-        failed_transport = False
+        had_error = False
         try:
             _count, cursor = await run_notification_poll_once(deps, cursor, wait_seconds)
-            transport_backoff = 0.5
+            current_backoff = 1.0
             if cursor_store is not None:
                 cursor_store.write(cursor)
+        except asyncio.CancelledError:
+            logger.info("notification poll loop cancelled; stopping gracefully", extra={"event": "notification_poll_cancelled"})
+            break
         except ApiNotImplementedError as exc:
             logger.info("notification poll skipped: %s", exc, extra={"event": "notification_poll_not_implemented"})
         except ApiRequestError:
-            failed_transport = True
-            logger.exception("notification transport failed; reconnecting", extra={"event": "notification_transport_failed"})
+            had_error = True
+            logger.exception("notification transport failed; reconnecting with backoff", extra={"event": "notification_transport_failed"})
         except Exception:
-            logger.exception("notification poll failed; continuing", extra={"event": "notification_poll_failed"})
+            had_error = True
+            logger.exception("notification poll failed; continuing with backoff", extra={"event": "notification_poll_failed"})
 
         iterations += 1
         if max_iterations is None or iterations < max_iterations:
-            if failed_transport:
-                await asyncio.sleep(transport_backoff)
-                transport_backoff = min(30.0, transport_backoff * 2)
+            if had_error:
+                jitter = random.uniform(0.8, 1.2)
+                sleep_duration = min(30.0, current_backoff * jitter)
+                await asyncio.sleep(sleep_duration)
+                current_backoff = min(30.0, current_backoff * 2.0)
             elif wait_seconds == 0:
                 await asyncio.sleep(poll_interval_seconds)
 

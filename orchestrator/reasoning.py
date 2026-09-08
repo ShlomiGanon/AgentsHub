@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Callable, Literal
+
+logger = logging.getLogger(__name__)
 
 from agents import Agent, HistoryAgent, InvocationPolicy
 from config import BaseConfig
@@ -1508,6 +1511,116 @@ def answer_question_from_plan(
     if unknown_names:
         return QuestionAnswer(_cant_answer_reply(f"The selected agent is not available: {', '.join(unknown_names)}.", is_hebrew=is_hebrew))
 
+def run_parallel_specialists(
+    task_runners: list[tuple[str, Callable[[], tuple[str, str]]]],
+    *,
+    max_workers: int = 4,
+    timeout_per_specialist: float = 25.0,
+) -> dict[str, str]:
+    """Execute specialist tasks concurrently with isolated timeouts.
+    If a specialist fails or times out, it does not drop the entire response.
+    Instead, it records a missing-data indicator so partial synthesis can proceed.
+    """
+    results: dict[str, str] = {}
+    if not task_runners:
+        return results
+
+    if len(task_runners) == 1:
+        name, runner = task_runners[0]
+        try:
+            _, ans = runner()
+            results[name] = ans
+        except Exception as exc:
+            logger.warning("specialist '%s' failed: %s", name, exc, extra={"agent": name, "event": "specialist_failed"})
+            results[name] = f"(לא התקבל מענה תקין מ-{name})"
+        return results
+
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(task_runners))) as executor:
+        future_to_name = {
+            executor.submit(copy_context().run, runner): name
+            for name, runner in task_runners
+        }
+        for future, name in list(future_to_name.items()):
+            try:
+                _, ans = future.result(timeout=timeout_per_specialist)
+                results[name] = ans
+            except TimeoutError:
+                logger.warning(
+                    "specialist '%s' timed out after %ss",
+                    name, timeout_per_specialist,
+                    extra={"agent": name, "event": "specialist_timeout"},
+                )
+                results[name] = f"(חריגת זמן: לא התקבל מענה מ-{name})"
+            except Exception as exc:
+                logger.warning(
+                    "specialist '%s' failed: %s",
+                    name, exc,
+                    extra={"agent": name, "event": "specialist_failed"},
+                )
+                results[name] = f"(שגיאה בקבלת נתונים מ-{name})"
+
+    return results
+
+
+def answer_question_from_plan(
+    main_agent: MainAgent,
+    question: str,
+    selection: AgentSelectionResult,
+    registry: "AgentRegistry",
+    history_query_service: "HistoryQueryService",
+    *,
+    max_fanout: int = 4,
+    caller_sender_identity_filter: str | None = None,
+) -> QuestionAnswer:
+    """`caller_sender_identity_filter` restricts every history lookup this call performs to events the caller
+    themselves submitted — the ownership scoping a viewer's `ask_question` operation requires
+    (docs/Next_Plan.md §5 decision record). `None` (a commander) applies no restriction."""
+
+    is_hebrew = any('\u0590' <= c <= '\u05ea' for c in question)
+    if selection.status == "none":
+        return QuestionAnswer(_cant_answer_reply(selection.reason, is_hebrew=is_hebrew))
+    if selection.status == "clarification":
+        if is_hebrew:
+            return QuestionAnswer(f"\u05e0\u05d3\u05e8\u05e9\u05d9\u05dd \u05e4\u05e8\u05d8\u05d9\u05dd \u05e0\u05d5\u05e1\u05e4\u05d9\u05dd \u05db\u05d3\u05d9 \u05e9\u05d0\u05d5\u05db\u05dc \u05dc\u05d4\u05e9\u05d9\u05d1: {selection.reason}")
+        return QuestionAnswer(f"I need a little more detail before I can answer. {selection.reason}")
+    if selection.status == "history":
+        assert selection.history_query_spec is not None
+        try:
+            with stage_context("question_history_query"):
+                history_answer = history_query_service.query_spec(
+                    question, selection.history_query_spec, sender_identity_filter=caller_sender_identity_filter
+                )
+            provenance = {
+                "timezone": getattr(history_query_service, "timezone_name", None),
+                "time_start": history_answer.time_start,
+                "time_end": history_answer.time_end,
+                "filters": {
+                    "classifications": list(selection.history_query_spec.classifications),
+                    "areas": list(selection.history_query_spec.areas),
+                    "outcomes": list(selection.history_query_spec.outcomes),
+                    "protocol_names": list(selection.history_query_spec.protocol_names),
+                    "event_ids": list(selection.history_query_spec.event_ids),
+                    "risk_levels": list(selection.history_query_spec.risk_levels),
+                },
+                "matched_count": history_answer.total_events_matched,
+                "truncated": history_answer.truncated,
+                "source_ids": [source.source_id for source in history_answer.sources_used],
+            }
+            return QuestionAnswer(history_answer.answer, provenance)
+        except HistoryQueryError as exc:
+            if is_hebrew:
+                msg = str(exc)
+                if "no stored events" in msg.lower():
+                    return QuestionAnswer("\u05dc\u05d0 \u05e0\u05de\u05e6\u05d0\u05d5 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05e7\u05d5\u05d3\u05de\u05d9\u05dd \u05d1\u05d9\u05d5\u05de\u05df \u05d4\u05de\u05d1\u05e6\u05e2\u05d9.")
+                return QuestionAnswer(f"\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05e9\u05dc\u05d5\u05e3 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05de\u05d4\u05d9\u05d5\u05de\u05df: {msg}")
+            return QuestionAnswer(_cant_answer_reply(str(exc)))
+
+    tasks = list(selection.chosen_tasks.items())[:max_fanout]
+    selectable_names = {agent.name for agent in registry.all() if agent.name not in {"main_agent", "insights_agent"}}
+    unknown_names = sorted(set(name for name, _task in tasks) - selectable_names)
+    if unknown_names:
+        return QuestionAnswer(_cant_answer_reply(f"The selected agent is not available: {', '.join(unknown_names)}.", is_hebrew=is_hebrew))
+
     def _run_task(agent_name: str, task_text: str) -> tuple[str, str]:
         agent = registry.get(agent_name)
         if is_hebrew:
@@ -1526,13 +1639,8 @@ def answer_question_from_plan(
             return agent_name, f"(no usable answer: {result.text})"
         return agent_name, result.text
 
-    if len(tasks) > 1:
-        with ThreadPoolExecutor(max_workers=min(max_fanout, len(tasks))) as executor:
-            futures = [executor.submit(copy_context().run, _run_task, name, task) for name, task in tasks]
-            resolved = [future.result() for future in futures]
-    else:
-        resolved = [_run_task(*tasks[0])] if tasks else []
-    sub_answers = dict(resolved)
+    task_runners = [(name, lambda n=name, t=task: _run_task(n, t)) for name, task in tasks]
+    sub_answers = run_parallel_specialists(task_runners, max_workers=max_fanout, timeout_per_specialist=25.0)
 
     if len(sub_answers) == 1:
         return QuestionAnswer(next(iter(sub_answers.values())))
@@ -1543,7 +1651,15 @@ def answer_question_from_plan(
             invocation_policy=InvocationPolicy(max_output_tokens=700, timeout_seconds=75.0),
         )
     if composed.status != "success":
+        valid_items = [txt for txt in sub_answers.values() if not txt.startswith("(חריגת זמן") and not txt.startswith("(שגיאה")]
+        if valid_items:
+            return QuestionAnswer("\n".join(f"• {item}" for item in valid_items))
         raise OrchestrationParseError(f"answer composition did not produce a usable response: {composed.text}")
+
+    failed_agents = [name for name, txt in sub_answers.items() if txt.startswith("(חריגת זמן") or txt.startswith("(שגיאה")]
+    if failed_agents:
+        return QuestionAnswer(f"{composed.text.strip()}\n(הערה: לא התקבל דיווח מ-{', '.join(failed_agents)})")
+
     return QuestionAnswer(composed.text)
 
 
@@ -1648,41 +1764,54 @@ def answer_question(
             return _cant_answer_reply(f"\u05d4\u05e1\u05d5\u05db\u05df \u05e9\u05e0\u05d1\u05d7\u05e8 \u05d0\u05d9\u05e0\u05d5 \u05d6\u05de\u05d9\u05df: {', '.join(unknown_names)}.", is_hebrew=True)
         return _cant_answer_reply(f"The selected agent is not available: {', '.join(unknown_names)}.")
 
-    sub_answers: dict[str, str] = {}
+    task_runners = []
     for agent_name, task_text in selection.chosen_tasks.items():
         try:
             agent = registry.get(agent_name)
         except KeyError:
             return _cant_answer_reply(f"The selected agent is not available: {agent_name}.")
 
-        if isinstance(agent, HistoryAgent):
-            try:
-                with stage_context("question_history_query"):
-                    sub_answers[agent_name] = history_query_service.query(
-                        task_text, sender_identity_filter=caller_sender_identity_filter
-                    ).answer
-            except HistoryQueryError as exc:
-                sub_answers[agent_name] = f"(no usable answer: {exc})"
-            continue
+        def _make_runner(ag, txt, name):
+            if isinstance(ag, HistoryAgent):
+                def _hist_runner():
+                    try:
+                        with stage_context("question_history_query"):
+                            return name, history_query_service.query(
+                                txt, sender_identity_filter=caller_sender_identity_filter
+                            ).answer
+                    except HistoryQueryError as exc:
+                        return name, f"(no usable answer: {exc})"
+                return _hist_runner
+            else:
+                def _agent_runner():
+                    read_only_tools = [tool.name for tool in ag.exposed_tools() if not tool.side_effecting]
+                    with stage_context("question_subagent"):
+                        agent_result = ag.process(txt, read_only_tools)
+                    ans = agent_result.text if agent_result.status == "success" else f"(no usable answer: {agent_result.text})"
+                    return name, ans
+                return _agent_runner
 
-        read_only_tools = [tool.name for tool in agent.exposed_tools() if not tool.side_effecting]
-        with stage_context("question_subagent"):
-            agent_result = agent.process(task_text, read_only_tools)
+        task_runners.append((agent_name, _make_runner(agent, task_text, agent_name)))
 
-        if agent_result.status == "unclear_task" and len(selection.chosen_tasks) == 1:
-            return _cant_answer_reply(f"{agent_name} doesn't have a way to help with this question.")
-
-        sub_answers[agent_name] = (
-            agent_result.text if agent_result.status == "success" else f"(no usable answer: {agent_result.text})"
-        )
+    sub_answers = run_parallel_specialists(task_runners, max_workers=len(task_runners), timeout_per_specialist=25.0)
 
     if len(sub_answers) == 1:
-        return next(iter(sub_answers.values()))
+        single_ans = next(iter(sub_answers.values()))
+        if single_ans.startswith("(no usable answer") and len(selection.chosen_tasks) == 1:
+            return _cant_answer_reply(f"{next(iter(sub_answers.keys()))} doesn't have a way to help with this question.")
+        return single_ans
 
     with stage_context("question_composition"):
         compose_result = main_agent.process(_build_compose_prompt(question, sub_answers), [])
     if compose_result.status != "success":
+        valid_items = [txt for txt in sub_answers.values() if not txt.startswith("(חריגת זמן") and not txt.startswith("(שגיאה")]
+        if valid_items:
+            return "\n".join(f"• {item}" for item in valid_items)
         raise OrchestrationParseError(f"answer composition did not produce a usable response: {compose_result.text}")
+
+    failed_agents = [name for name, txt in sub_answers.items() if txt.startswith("(חריגת זמן") or txt.startswith("(שגיאה")]
+    if failed_agents:
+        return f"{compose_result.text.strip()}\n(הערה: לא התקבל דיווח מ-{', '.join(failed_agents)})"
 
     return compose_result.text
 
@@ -1706,10 +1835,16 @@ def synthesize_operational_picture(
     raw_text: str = "",
 ) -> str:
     valid_outcomes = [o for o in step_outcomes if o.result_text and o.succeeded]
+    failed_outcomes = [o for o in step_outcomes if not o.succeeded or not o.result_text]
     if not valid_outcomes:
         return ""
-    if len(valid_outcomes) == 1:
+    if len(valid_outcomes) == 1 and not failed_outcomes:
         return valid_outcomes[0].result_text or ""
+
+    missing_note = ""
+    if failed_outcomes:
+        missing_names = ", ".join(o.step.agent_name for o in failed_outcomes)
+        missing_note = f"\n(הערה מבצעית: לא התקבל דיווח מ-{missing_names})"
 
     with stage_context("multi_agent_synthesis"):
         prompt = _build_multi_agent_synthesis_prompt(protocol, tuple(valid_outcomes), raw_text)
@@ -1719,5 +1854,6 @@ def synthesize_operational_picture(
             invocation_policy=InvocationPolicy(max_output_tokens=350, timeout_seconds=45.0, reasoning_effort="none"),
         )
     if result.status == "success" and result.text.strip():
-        return result.text.strip()
-    return ""
+        return result.text.strip() + missing_note
+    combined = "\n".join(o.result_text.strip() for o in valid_outcomes if o.result_text)
+    return combined + missing_note

@@ -24,7 +24,7 @@ Message JSON: {message_json}
 
 Do not invent facts, data, names, tools, or capabilities absent from the system context. If the context does not support the requested detail, say so plainly. Respond with only the natural-language reply."""
 
-EVENT_DATA_QUESTION_INSTRUCTION = """Write one concise question to the event reporter asking for all missing details listed below. Make clear that the report was accepted and protocol work has started, but one or more actions are waiting for these details. Use the reporter's language. Do not mention database fields, schemas, internal agents, or implementation details. Do not claim that the whole protocol is stopped. Return only the message to send.
+EVENT_DATA_QUESTION_INSTRUCTION = """Write one concise question to the event reporter asking for all missing details listed below. Make clear only that the report was accepted and is waiting for these details. Explicitly do not claim that emergency actions, dispatch, or protocol execution have started; no operational action starts before required details and approvals are complete. Use the reporter's language. Do not mention database fields, schemas, internal agents, or implementation details. Return only the message to send.
 
 Original report JSON: {original_report_json}
 Known event data JSON: {known_event_data_json}

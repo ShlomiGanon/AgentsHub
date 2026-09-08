@@ -1,0 +1,342 @@
+[
+  {
+    "name": "1. Simple Read-Only Button (Camera Status)",
+    "status_code": 200,
+    "total_latency_ms": 47.0,
+    "llm_call_count": 12,
+    "llm_calls": [
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "intent_classification",
+        "agent": "main_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "question_direct_lookup_classification",
+        "agent": "main_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "question_routing",
+        "agent": "main_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "אחראי על תצפית חזותי"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "אחראי על ניהול מצבת "
+      },
+      {
+        "stage": "question_subagent",
+        "agent": "team_status_agent"
+      },
+      {
+        "stage": "question_subagent",
+        "agent": "surveillance_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "question_composition",
+        "agent": "main_agent"
+      }
+    ],
+    "tool_call_count": 6,
+    "tool_calls": [
+      {
+        "tool": "get_active_missions",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "get_camera_feeds",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "get_team_status_roster",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "get_drone_fleet_status",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "report_team_availability",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "get_surveillance_overview",
+        "duration_ms": 0.0
+      }
+    ],
+    "api_round_trips": 1,
+    "answer_preview": "מבצעי: הפעולה בוצעה בהצלחה."
+  },
+  {
+    "name": "2. Tactical Dispatch Drone",
+    "status_code": 200,
+    "total_latency_ms": 31.0,
+    "llm_call_count": 12,
+    "llm_calls": [
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "intent_classification",
+        "agent": "main_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "question_direct_lookup_classification",
+        "agent": "main_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "question_routing",
+        "agent": "main_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "אחראי על תצפית חזותי"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "אחראי על ניהול מצבת "
+      },
+      {
+        "stage": "question_subagent",
+        "agent": "team_status_agent"
+      },
+      {
+        "stage": "question_subagent",
+        "agent": "surveillance_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "question_composition",
+        "agent": "main_agent"
+      }
+    ],
+    "tool_call_count": 6,
+    "tool_calls": [
+      {
+        "tool": "get_active_missions",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "get_camera_feeds",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "get_team_status_roster",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "get_drone_fleet_status",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "report_team_availability",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "get_surveillance_overview",
+        "duration_ms": 0.0
+      }
+    ],
+    "api_round_trips": 1,
+    "answer_preview": "מבצעי: הפעולה בוצעה בהצלחה."
+  },
+  {
+    "name": "3. Tactical Recall Drone",
+    "status_code": 200,
+    "total_latency_ms": 47.0,
+    "llm_call_count": 12,
+    "llm_calls": [
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "intent_classification",
+        "agent": "main_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "question_direct_lookup_classification",
+        "agent": "main_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "question_routing",
+        "agent": "main_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "אחראי על תצפית חזותי"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "אחראי על ניהול מצבת "
+      },
+      {
+        "stage": "question_subagent",
+        "agent": "team_status_agent"
+      },
+      {
+        "stage": "question_subagent",
+        "agent": "surveillance_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "question_composition",
+        "agent": "main_agent"
+      }
+    ],
+    "tool_call_count": 6,
+    "tool_calls": [
+      {
+        "tool": "get_active_missions",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "get_camera_feeds",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "get_team_status_roster",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "get_drone_fleet_status",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "report_team_availability",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "get_surveillance_overview",
+        "duration_ms": 0.0
+      }
+    ],
+    "api_round_trips": 1,
+    "answer_preview": "מבצעי: הפעולה בוצעה בהצלחה."
+  },
+  {
+    "name": "4. Multi-Agent Situational Picture",
+    "status_code": 200,
+    "total_latency_ms": 31.0,
+    "llm_call_count": 12,
+    "llm_calls": [
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "intent_classification",
+        "agent": "main_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "question_direct_lookup_classification",
+        "agent": "main_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "question_routing",
+        "agent": "main_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "אחראי על תצפית חזותי"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "אחראי על ניהול מצבת "
+      },
+      {
+        "stage": "question_subagent",
+        "agent": "team_status_agent"
+      },
+      {
+        "stage": "question_subagent",
+        "agent": "surveillance_agent"
+      },
+      {
+        "stage": "agent_kickoff",
+        "agent": "The orchestrator, an"
+      },
+      {
+        "stage": "question_composition",
+        "agent": "main_agent"
+      }
+    ],
+    "tool_call_count": 6,
+    "tool_calls": [
+      {
+        "tool": "get_active_missions",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "get_camera_feeds",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "get_team_status_roster",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "get_drone_fleet_status",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "report_team_availability",
+        "duration_ms": 0.0
+      },
+      {
+        "tool": "get_surveillance_overview",
+        "duration_ms": 0.0
+      }
+    ],
+    "api_round_trips": 1,
+    "answer_preview": "מבצעי: הפעולה בוצעה בהצלחה."
+  }
+]

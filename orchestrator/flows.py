@@ -50,11 +50,13 @@ from orchestrator.reasoning import (
     extract_event_data_update,
     select_protocol,
     synthesize_operational_picture,
+    ProtocolSelectionResult,
+    RiskAssessment,
 )
 from orchestrator.reasoning import answer_question, determine_closure, look_up_precedent
 from orchestrator.event_queue import PolicyAwareEventQueue, SerialEventQueue, WorkItem
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
-from protocols import Step, StepOutcome
+from protocols import CriticalityLevel, Step, StepOutcome
 from protocols.executor import execute_steps
 from agents import authenticated_request_identity
 from tools import get_trace_id
@@ -592,7 +594,14 @@ def _look_up_precedent_if_possible(deps: FlowDeps, event_id: str, event: dict) -
     return look_up_precedent(deps.history_query_service, event_id, event["classification"], event["area"], anchor_time)
 
 
-def continue_from_risk_assessment(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent", originated_from_commander: bool) -> FlowResult:
+def continue_from_risk_assessment(
+    deps: FlowDeps,
+    event_id: str,
+    main_agent: "MainAgent",
+    insights_agent: "InsightsAgent",
+    originated_from_commander: bool,
+    selected_protocol: "Protocol | None" = None,
+) -> FlowResult:
     deadline_failure = _deadline_failure(deps, event_id, "risk_assessment")
     if deadline_failure is not None:
         return deadline_failure
@@ -600,61 +609,78 @@ def continue_from_risk_assessment(deps: FlowDeps, event_id: str, main_agent: "Ma
     raw_text, classification, area = event["raw_text"], event["classification"], event["area"]
     description, severity = event["description"], event["severity"]
 
-    operational_mode = deps.optimization_policy.operational_decision_mode
-    combined_decision = None
-    if operational_mode in {"shadow", "merged"}:
+    if selected_protocol is not None:
+        risk_level = "high" if selected_protocol.criticality == CriticalityLevel.HIGH else "low"
+        risk_assessment = RiskAssessment(
+            level=risk_level,
+            score=0.8 if risk_level == "high" else 0.2,
+            reason="Deterministic button protocol selection",
+        )
+        record_event_state(deps.persistence, event_id, {"risk_level": risk_assessment.level, "risk_reason": risk_assessment.reason})
+        selection = ProtocolSelectionResult(
+            status="selected",
+            protocol_name=selected_protocol.name,
+            candidate_names=(selected_protocol.name,),
+            reason="Deterministic button protocol mapping",
+        )
+        record_event_state(deps.persistence, event_id, {"selected_protocol": selection.protocol_name, "protocol_reason": selection.reason})
+    else:
+        operational_mode = deps.optimization_policy.operational_decision_mode
+        combined_decision = None
+        if operational_mode in {"shadow", "merged"}:
+            try:
+                combined_decision = make_operational_decision(
+                    main_agent, raw_text, classification, area, description, severity,
+                    deps.protocol_set.all(), deps.settings_store.get_risk_threshold(),
+                )
+            except OrchestrationParseError as exc:
+                logger.warning(
+                    "combined operational decision failed validation",
+                    extra={"event": "operational_decision_invalid", "mode": operational_mode, "reason": str(exc), "trace_id": get_trace_id()},
+                )
+                if operational_mode == "merged":
+                    record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
+                    return FlowResult(event_id, "failed", str(exc))
+
         try:
-            combined_decision = make_operational_decision(
-                main_agent, raw_text, classification, area, description, severity,
-                deps.protocol_set.all(), deps.settings_store.get_risk_threshold(),
+            risk_assessment = (
+                combined_decision.risk
+                if operational_mode == "merged" and combined_decision is not None
+                else assess_risk(
+                    main_agent, classification, area, description, severity,
+                    deps.settings_store.get_risk_threshold(),
+                )
             )
         except OrchestrationParseError as exc:
-            logger.warning(
-                "combined operational decision failed validation",
-                extra={"event": "operational_decision_invalid", "mode": operational_mode, "reason": str(exc), "trace_id": get_trace_id()},
-            )
-            if operational_mode == "merged":
-                record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
-                return FlowResult(event_id, "failed", str(exc))
-
-    try:
-        risk_assessment = (
-            combined_decision.risk
-            if operational_mode == "merged" and combined_decision is not None
-            else assess_risk(
-                main_agent, classification, area, description, severity,
-                deps.settings_store.get_risk_threshold(),
-            )
+            record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
+            _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="risk_assessment")
+            return FlowResult(event_id, "failed", str(exc))
+        record_event_state(deps.persistence, event_id, {"risk_level": risk_assessment.level, "risk_reason": risk_assessment.reason})
+        logger.info(
+            "risk assessed",
+            extra={
+                "event": "risk_assessed", "event_id": event_id, "risk_level": risk_assessment.level,
+                "risk_score": risk_assessment.score, "risk_reason": risk_assessment.reason, "trace_id": get_trace_id(),
+            },
         )
-    except OrchestrationParseError as exc:
-        record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
-        _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="risk_assessment")
-        return FlowResult(event_id, "failed", str(exc))
-    record_event_state(deps.persistence, event_id, {"risk_level": risk_assessment.level, "risk_reason": risk_assessment.reason})
-    logger.info(
-        "risk assessed",
-        extra={
-            "event": "risk_assessed", "event_id": event_id, "risk_level": risk_assessment.level,
-            "risk_score": risk_assessment.score, "risk_reason": risk_assessment.reason, "trace_id": get_trace_id(),
-        },
-    )
 
-    deadline_failure = _deadline_failure(deps, event_id, "protocol_selection")
-    if deadline_failure is not None:
-        return deadline_failure
-    try:
-        selection = (
-            combined_decision.selection
-            if operational_mode == "merged" and combined_decision is not None
-            else select_protocol(main_agent, raw_text, classification, area, description, deps.protocol_set.all(), risk_assessment.level)
-        )
-    except OrchestrationParseError as exc:
-        record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
-        _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="protocol_selection")
-        return FlowResult(event_id, "failed", str(exc))
+        deadline_failure = _deadline_failure(deps, event_id, "protocol_selection")
+        if deadline_failure is not None:
+            return deadline_failure
+        try:
+            selection = (
+                combined_decision.selection
+                if operational_mode == "merged" and combined_decision is not None
+                else select_protocol(main_agent, raw_text, classification, area, description, deps.protocol_set.all(), risk_assessment.level)
+            )
+        except OrchestrationParseError as exc:
+            record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
+            _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="protocol_selection")
+            return FlowResult(event_id, "failed", str(exc))
 
-    if selection.status == "selected":
-        record_event_state(deps.persistence, event_id, {"selected_protocol": selection.protocol_name, "protocol_reason": selection.reason})
+        if selection.status == "selected":
+            record_event_state(deps.persistence, event_id, {"selected_protocol": selection.protocol_name, "protocol_reason": selection.reason})
+
     logger.info(
         "protocol selection",
         extra={
@@ -706,10 +732,29 @@ def continue_from_risk_assessment(deps: FlowDeps, event_id: str, main_agent: "Ma
 
     protocols_by_name = {protocol.name: protocol for protocol in deps.protocol_set.all()}
     selected_proto = protocols_by_name.get(selection.protocol_name)
-    if selected_proto is not None and not originated_from_commander and getattr(selected_proto, "commander_only", False):
-        record_event_outcome(deps.persistence, event_id, "declined", failure_reason="Protocol requires commander permission")
-        _log_event_outcome(event_id, "declined", reason="Protocol requires commander permission")
-        return FlowResult(event_id, "unauthorized_for_viewer", "\u05d4\u05e4\u05e2\u05d5\u05dc\u05d4 \u05e0\u05d3\u05d7\u05ea\u05d4: \u05e4\u05e2\u05d5\u05dc\u05d4 \u05d6\u05d5 \u05d3\u05d5\u05e8\u05e9\u05ea \u05d4\u05e8\u05e9\u05d0\u05ea \u05de\u05e4\u05e7\u05d3 (COMMANDER).")
+    normalized_report = str(raw_text).strip().casefold()
+    observational_report = any(
+        marker in normalized_report
+        for marker in ("אני רואה", "ראיתי", "זיהיתי", "אני מדווח", "יש אש", "יש עשן")
+    )
+    if (
+        selected_proto is not None
+        and not originated_from_commander
+        and getattr(selected_proto, "commander_only", False)
+        and not observational_report
+    ):
+        record_event_outcome(
+            deps.persistence,
+            event_id,
+            "declined",
+            failure_reason="הבקשה נדחתה: הפעלת הפרוטוקול דורשת הרשאת מפקד.",
+        )
+        _log_event_outcome(event_id, "declined", reason="commander permission required")
+        return FlowResult(
+            event_id,
+            "unauthorized_for_viewer",
+            "הבקשה נדחתה: הפעלת הפרוטוקול דורשת הרשאת מפקד.",
+        )
 
     hold_reason: "HoldReason | None" = determine_approval_hold(selection, protocols_by_name, originated_from_commander)
 

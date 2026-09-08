@@ -154,12 +154,15 @@ class HttpApiClient(BotApiClient):
         conversation_id: str | None = None,
         trace_id: str | None = None,
         event_data_event_id: str | None = None,
+        protocol_hint: str | None = None,
     ) -> MessageSubmissionResult:
         body = {"text": text, "sender_identity": sender_identity, "source_message_id": source_message_id}
         if conversation_id is not None:
             body["conversation_id"] = conversation_id
         if event_data_event_id is not None:
             body["event_data_event_id"] = event_data_event_id
+        if protocol_hint is not None:
+            body["protocol_hint"] = protocol_hint
         status, response_payload = await self._call(
             "POST", "/Msg", sender_identity, body, trace_id_override=trace_id
         )
@@ -523,18 +526,13 @@ class PTBTelegramClient(TelegramClient):
         with stage_context("telegram_send"):
             chunks = split_message(text)
             first_message_id = None
-            numeric_reply_to = (
-                int(reply_to_message_id)
-                if reply_to_message_id is not None and str(reply_to_message_id).isdigit()
-                else None
-            )
             if chunks:
                 try:
                     sent = await self._application.bot.send_message(
-                        chat_id=chat_id, text=chunks[0], reply_to_message_id=numeric_reply_to
+                        chat_id=chat_id, text=chunks[0], reply_to_message_id=reply_to_message_id
                     )
                 except Exception:
-                    if numeric_reply_to is not None:
+                    if reply_to_message_id is not None:
                         sent = await self._application.bot.send_message(chat_id=chat_id, text=chunks[0])
                     else:
                         raise

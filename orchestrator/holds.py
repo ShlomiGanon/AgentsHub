@@ -41,6 +41,8 @@ def determine_approval_hold(
     if protocol is not None:
         if getattr(protocol, "requires_confirmation", False):
             return "flagged_protocol"
+        if getattr(protocol, "commander_only", False) and not originated_from_commander:
+            return "flagged_protocol"
         if protocol.approval_flag and not originated_from_commander:
             return "flagged_protocol"
 

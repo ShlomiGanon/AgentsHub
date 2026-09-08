@@ -846,6 +846,12 @@ EVENT_TYPES = [
     "historical_query",
 ]
 
+EVENT_TYPE_REQUIRED_FIELDS = {
+    "emergency_dispatch": ("area",),
+    "drone_dispatch": ("area",),
+    "surveillance_report": ("area",),
+}
+
 AREAS = [
     "north_gate",
     "south_sector",

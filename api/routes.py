@@ -26,7 +26,7 @@ from config import environment as base_config
 import logging
 
 from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
-from agents import set_invocation_deadline
+from agents import authenticated_request_identity, set_invocation_deadline
 
 from orchestrator.flows import (
     OrchestrationParseError,
@@ -45,7 +45,8 @@ from orchestrator.flows import (
     resume_after_event_data,
 )
 
-from protocols import CriticalityLevel, Protocol, ProtocolEditError, add_protocol, remove_protocol, replace_protocol
+from protocols import CriticalityLevel, Protocol, ProtocolEditError, Step, StepOutcome, add_protocol, remove_protocol, replace_protocol
+from orchestrator.reasoning import run_parallel_specialists, synthesize_operational_picture
 
 from profiles.loader import hash_profile_file
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy
@@ -119,6 +120,63 @@ logger = logging.getLogger(__name__)
 
 def _now() -> str:
     return storage_timestamp(datetime.now(timezone.utc))
+
+
+KNOWN_BUTTON_PROTOCOLS: dict[str, str] = {
+    "📊 תמונת מצב כללית": "overall_situational_picture",
+    "📹 מצב מצלמות": "query_camera_status",
+    "🛸 מצב צי רחפנים": "query_drone_fleet_status",
+    "🚀 הזנקת רחפן": "dispatch_drone_to_incident",
+    "🔄 החזרת רחפן לבסיס": "recall_drone_to_base",
+    "👥 סטטוס כיתת כוננות": "report_team_availability",
+    "🚨 הזנקת כוחות": "dispatch_emergency_forces",
+    "📜 היסטוריית אירועים": "query_historical_incidents",
+    "✅ אני זמין לכוננות": "record_attendance_response",
+    "❌ איני זמין": "record_attendance_response",
+}
+
+
+def _is_team_roster_query(text: str, prior_messages: tuple[dict, ...]) -> bool:
+    """Recognize roster questions that should not depend on general LLM routing."""
+    normalized = text.strip().casefold()
+    explicit_terms = (
+        "כיתת כוננות", "כיתת הכוננות", "חברי כיתה", "חברי הכיתה",
+        "החברי כיתת", "מצבת כיתה", "מצבת הכיתה",
+    )
+    if any(term in normalized for term in explicit_terms):
+        return True
+    if normalized.rstrip(" ?!") not in {"מי הם", "מי אלה", "מה השמות", "אפשר את השמות שלהם"}:
+        return False
+    recent_context = " ".join(str(item.get("content", "")) for item in prior_messages[-4:]).casefold()
+    return any(term in recent_context for term in explicit_terms)
+
+
+def _team_roster_view(text: str) -> str:
+    normalized = text.strip().casefold()
+    if any(term in normalized for term in ("טרם דיווח", "לא דיווח", "ממתין", "ממתינים")):
+        return "awaiting"
+    if any(term in normalized for term in ("מי לא זמין", "אינם זמינים", "לא זמינים")):
+        return "unavailable"
+    if any(term in normalized for term in ("מי זמין", "זמינים בלבד")):
+        return "available"
+    if any(term in normalized for term in ("מי הם", "מי אלה", "מי חבר", "חברי כיתה", "חברי הכיתה", "מה השמות", "השמות שלהם")):
+        return "members"
+    return "summary"
+
+
+def _is_approval_policy_question(text: str) -> bool:
+    normalized = text.strip().casefold()
+    return any(word in normalized for word in ("אישור", "לאשר", "מאשר")) and any(
+        term in normalized for term in ("מי", "איפה", "אמור", "צריך", "מאשר")
+    )
+
+
+def _is_pending_report_cancellation(text: str) -> bool:
+    normalized = text.strip().casefold()
+    return any(
+        phrase in normalized
+        for phrase in ("עזוב", "תבטל", "בטל", "אין יותר", "אין כלום", "בטעות", "לא שמעתי טוב")
+    )
 
 
 def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
@@ -207,6 +265,42 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
             prior_messages = tuple(ctx.deps.persistence.fetch_conversation_messages(conversation_id, history_turns * 2))
 
         _remember("user", text)
+
+        # A correction/cancellation of an incomplete report is conversation
+        # control, not a fresh operational request (and especially not a drone
+        # recall merely because the text contains "תבטל"). Resolve only the
+        # newest unresolved hold owned by this sender in this conversation.
+        if _is_pending_report_cancellation(str(text)):
+            owned_pending: list[tuple[dict, dict]] = []
+            for hold in ctx.deps.persistence.list_held_events("event_data"):
+                held_event = ctx.deps.persistence.fetch_event(hold["event_id"])
+                if (
+                    held_event is not None
+                    and held_event.get("conversation_id") == conversation_id
+                    and held_event.get("sender_identity") == caller_identity
+                ):
+                    owned_pending.append((hold, held_event))
+            if owned_pending:
+                hold, held_event = owned_pending[-1]
+                ctx.deps.persistence.resolve_held_event(
+                    "event_data",
+                    hold["hold_id"],
+                    {"resolved_by": caller_identity, "decision": "cancelled_by_reporter"},
+                )
+                record_event_outcome(
+                    ctx.deps.persistence,
+                    held_event["event_id"],
+                    "declined",
+                    failure_reason="המדווח ביטל או תיקן את הדיווח לפני השלמת הפרטים.",
+                )
+                answer = "הדיווח הממתין בוטל. לא תופעל פעולה ולא נדרש למסור מיקום."
+                _remember("assistant", answer, held_event["event_id"])
+                return jsonify({
+                    "taken_as": "event_update",
+                    "event_id": held_event["event_id"],
+                    "answer": answer,
+                    "status": "declined",
+                })
 
         # Event-data replies are explicit. Sharing a sender/conversation with an
         # old hold is insufficient because a new button or request must remain
@@ -378,6 +472,163 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
                     }
                 ), 202
             ctx.queue.release_reservation(reservation)
+
+        # Fast Path for known buttons / deterministic protocol selection
+        # button -> known protocol -> RBAC -> approval if required -> agent -> approved tool
+        matched_protocol_name = request_payload.get("protocol_hint") or KNOWN_BUTTON_PROTOCOLS.get(str(text).strip())
+        if matched_protocol_name is None and _is_team_roster_query(str(text), prior_messages):
+            matched_protocol_name = "report_team_availability"
+        matched_protocol = ctx.deps.protocol_set.get(matched_protocol_name) if matched_protocol_name else None
+
+        if matched_protocol is not None:
+            received_at = _now()
+            is_commander = level >= PermissionLevel.COMMANDER
+            if getattr(matched_protocol, "commander_only", False) and not is_commander:
+                raise AuthorizationError("הפעולה נדחתה: פעולה זו דורשת הרשאת מפקד (COMMANDER).")
+
+            needs_approval = bool(
+                getattr(matched_protocol, "requires_confirmation", False)
+                or (getattr(matched_protocol, "approval_flag", False) and not is_commander)
+            )
+
+            if needs_approval:
+                require(level, RequestedOperation.REQUEST_ACTION)
+                reservation = ctx.queue.reserve(False)
+                if reservation is None:
+                    raise ServiceUnavailableError(messages.text("api.queue_full"))
+                deadline_at = storage_timestamp(
+                    datetime.now(timezone.utc) + timedelta(seconds=optimization_policy.job_deadline_seconds)
+                )
+                try:
+                    event_id = begin_request(
+                        ctx.deps, text, received_at, sender_identity, source_message_id,
+                        conversation_id=conversation_id, deadline_at=deadline_at,
+                    )
+                except Exception:
+                    ctx.queue.release_reservation(reservation)
+                    raise
+
+                def _work_fast_path() -> None:
+                    with trace_context(trace_id):
+                        continue_from_risk_assessment(
+                            ctx.deps,
+                            event_id,
+                            ctx.main_agent,
+                            ctx.insights_agent,
+                            is_commander,
+                            selected_protocol=matched_protocol,
+                        )
+
+                ctx.queue.submit(
+                    WorkItem(
+                        (event_id, _work_fast_path),
+                        trace_id=trace_id,
+                        deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
+                        concurrency_keys=(f"sender:{sender_identity}",),
+                    ),
+                    reservation,
+                )
+                _remember("assistant", messages.text("api.queued_request", task_id=event_id), event_id)
+                return jsonify({"taken_as": "request", "event_id": event_id, "status": "queued"}), 202
+
+            if matched_protocol.name == "query_historical_incidents":
+                require(level, RequestedOperation.ASK_QUESTION)
+                caller_filter = None if is_commander else caller_identity
+                try:
+                    history_ans = ctx.deps.history_query_service.query(text, sender_identity_filter=caller_filter)
+                    answer = history_ans.answer
+                except Exception as exc:
+                    answer = f"שגיאה בשליפת היסטוריה: {exc}"
+                _remember("assistant", answer)
+                return jsonify({"taken_as": "question", "answer": answer, "protocol": matched_protocol.name})
+
+            if len(matched_protocol.participating_agents) > 1:
+                require(level, RequestedOperation.ASK_QUESTION)
+                participating = matched_protocol.participating_agents
+                approved_tools_set = set(matched_protocol.approved_tools)
+
+                def _run_subagent_task(ag_name: str) -> tuple[str, str]:
+                    ag = ctx.deps.registry.get(ag_name)
+                    agent_tools = [t.name for t in ag.exposed_tools() if t.name in approved_tools_set and not t.side_effecting]
+                    if not agent_tools:
+                        agent_tools = [t for t in matched_protocol.approved_tools if t in [tool.name for tool in ag.exposed_tools()]]
+                    with authenticated_request_identity(caller_identity):
+                        res = ag.process(f"דוח מבצעי עבור {matched_protocol.description}", agent_tools)
+                    if res.status != "success":
+                        return ag_name, f"({res.text})"
+                    return ag_name, res.text
+
+                task_runners = [(ag_name, (lambda n=ag_name: _run_subagent_task(n))) for ag_name in participating]
+                sub_answers = run_parallel_specialists(task_runners, max_workers=len(participating), timeout_per_specialist=25.0)
+
+                step_outcomes = []
+                for ag_name in participating:
+                    res_text = sub_answers.get(ag_name, "")
+                    is_failed = not res_text or res_text.startswith("(")
+                    step = Step(
+                        agent_name=ag_name,
+                        task_text=f"דוח מבצעי עבור {matched_protocol.description}",
+                        allowed_tools=tuple(matched_protocol.approved_tools),
+                        step_id=ag_name,
+                    )
+                    step_outcomes.append(
+                        StepOutcome(
+                            step=step,
+                            result_text=res_text,
+                            attempt_count=1,
+                            succeeded=not is_failed,
+                            status="succeeded" if not is_failed else "failed",
+                            failure_reason=res_text if is_failed else None,
+                        )
+                    )
+
+                synthesized = synthesize_operational_picture(
+                    ctx.main_agent,
+                    matched_protocol,
+                    tuple(step_outcomes),
+                    raw_text=text,
+                )
+                answer = synthesized or "\n".join(f"• {txt}" for txt in sub_answers.values() if txt and not txt.startswith("("))
+                _remember("assistant", answer)
+                return jsonify({"taken_as": "question", "answer": answer, "protocol": matched_protocol.name})
+
+            ag_name = matched_protocol.participating_agents[0]
+            ag = ctx.deps.registry.get(ag_name)
+            allowed_tools = list(matched_protocol.approved_tools)
+            require_op = (
+                RequestedOperation.REQUEST_ACTION
+                if any(getattr(t, "side_effecting", False) for t in ag.exposed_tools() if t.name in allowed_tools)
+                else RequestedOperation.ASK_QUESTION
+            )
+            require(level, require_op)
+            if matched_protocol.name == "report_team_availability" and hasattr(ag, "report_team_availability"):
+                with authenticated_request_identity(caller_identity):
+                    answer = ag.report_team_availability(view=_team_roster_view(str(text)))
+                _remember("assistant", answer)
+                return jsonify({
+                    "taken_as": "question",
+                    "answer": answer,
+                    "protocol": matched_protocol.name,
+                })
+            with authenticated_request_identity(caller_identity):
+                res = ag.process(text, allowed_tools)
+            answer = res.text if res.status == "success" else f"שגיאה בהפעלת סוכן: {res.text}"
+            _remember("assistant", answer)
+            return jsonify({
+                "taken_as": "question" if require_op == RequestedOperation.ASK_QUESTION else "event_update",
+                "answer": answer,
+                "protocol": matched_protocol.name,
+            })
+
+        if _is_approval_policy_question(str(text)):
+            require(level, RequestedOperation.CONVERSE)
+            answer = (
+                "בקשה שמחייבת אישור נשלחת למפקדים הרשומים במערכת. "
+                "רק משתמש בעל הרשאת מפקד יכול לאשר או לדחות אותה באמצעות כפתורי האישור. "
+                "אם חסרים פרטים מבצעיים, למשל מיקום האירוע, המערכת תשאל עליהם לפני יצירת בקשת האישור."
+            )
+            _remember("assistant", answer)
+            return jsonify({"taken_as": "conversational", "answer": answer})
 
         message_plan = None
         planner_mode = optimization_policy.planner_mode

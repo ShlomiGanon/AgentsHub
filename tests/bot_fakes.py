@@ -100,6 +100,7 @@ class FakeBotApiClient(BotApiClient):
         self, text: str, sender_identity: str, source_message_id: str,
         conversation_id: str | None = None, trace_id: str | None = None,
         event_data_event_id: str | None = None,
+        protocol_hint: str | None = None,
     ) -> MessageSubmissionResult:
         if sender_identity not in self.users:
             raise ApiRequestError(401, f"'{sender_identity}' is not a registered identity")
@@ -111,6 +112,8 @@ class FakeBotApiClient(BotApiClient):
             self.calls.append(("submit_message_trace", trace_id))
         if event_data_event_id is not None:
             self.calls.append(("submit_message_event_data", event_data_event_id))
+        if protocol_hint is not None:
+            self.calls.append(("submit_message_protocol_hint", protocol_hint))
         assert self.message_submission_result is not None, "test must set message_submission_result"
         return self.message_submission_result
 

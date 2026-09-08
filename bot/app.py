@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -36,6 +37,32 @@ NOTIFICATION_POLL_INTERVAL_SECONDS = 5.0
 
 REGISTERED_COMMANDS = ("profile", "settings")
 _background_trace_tasks: set[asyncio.Task] = set()
+
+_USER_ROLE_CACHE: dict[tuple[int, str], tuple[interactions.UserResolutionResult, float]] = {}
+_USER_ROLE_CACHE_TTL_SECONDS = 60.0
+
+
+def clear_caller_cache() -> None:
+    """Clear in-memory caller resolution cache (for test isolation or admin resets)."""
+    _USER_ROLE_CACHE.clear()
+
+
+async def _resolve_caller_cached(
+    api_client, telegram_identity: str, messages
+) -> interactions.UserResolutionResult:
+    """Resolve caller role with in-memory TTL caching to eliminate redundant GET /User round-trips."""
+    now = time.monotonic()
+    key = (id(api_client), telegram_identity)
+    cached = _USER_ROLE_CACHE.get(key)
+    if cached is not None:
+        resolution, expires_at = cached
+        if now < expires_at:
+            return resolution
+
+    resolution = await resolve_caller(api_client, telegram_identity, messages)
+    ttl = _USER_ROLE_CACHE_TTL_SECONDS if resolution.status == "ok" else 5.0
+    _USER_ROLE_CACHE[key] = (resolution, now + ttl)
+    return resolution
 
 
 def _resolve_bot_token(module_path: str, loaded_profile: LoadedProfile) -> str | None:
@@ -123,7 +150,7 @@ async def _on_start_command(update, context) -> None:
     telegram_identity, chat_id = _identity_and_chat_id(update)
     messages = interactions.message_catalog_for(deps)
 
-    resolution = await resolve_caller(deps.api_client, telegram_identity, messages)
+    resolution = await _resolve_caller_cached(deps.api_client, telegram_identity, messages)
     if resolution.status == "unregistered":
         await deps.telegram_client.send_text(chat_id, resolution.refusal_message)
         return
@@ -202,6 +229,7 @@ async def _submit_and_format_message(
     conversation_id: str | None,
     trace_id: str | None = None,
     event_data_event_id: str | None = None,
+    protocol_hint: str | None = None,
 ) -> tuple[str, MessageSubmissionResult | None]:
     """Submit one message and return both presentation text and semantic result."""
 
@@ -213,6 +241,7 @@ async def _submit_and_format_message(
             conversation_id,
             trace_id,
             event_data_event_id,
+            protocol_hint,
         )
     except ApiRequestError as exc:
         messages = interactions.message_catalog_for(deps)
@@ -289,6 +318,7 @@ async def present_incoming_message(
     message_id: str,
     conversation_id: str | None = None,
     event_data_event_id: str | None = None,
+    protocol_hint: str | None = None,
 ) -> str | None:
     """Present one free-form message with the shared status/edit lifecycle."""
 
@@ -303,8 +333,8 @@ async def present_incoming_message(
     submission: MessageSubmissionResult | None = None
     try:
         if deep_debug_enabled():
-            caller = await deps.api_client.resolve_user(telegram_identity)
-            if caller.registered and caller.permission_level == "commander":
+            caller_res = await _resolve_caller_cached(deps.api_client, telegram_identity, messages)
+            if caller_res.caller and caller_res.caller.level == PermissionLevel.COMMANDER:
                 trace_task = asyncio.create_task(
                     _poll_live_trace(deps, chat_id, telegram_identity, trace_id, trace_stop)
                 )
@@ -317,6 +347,7 @@ async def present_incoming_message(
             conversation_id,
             trace_id,
             event_data_event_id,
+            protocol_hint,
         )
     except ApiNotImplementedError as exc:
         logger.info(
@@ -407,13 +438,27 @@ BUTTON_PROMPTS = {
     "📋 \u05d9\u05d5\u05de\u05df \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05d5\u05ea\u05d7\u05e7\u05d5\u05e8": "\u05de\u05d4\u05dd \u05d4\u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05d4\u05d0\u05d7\u05e8\u05d5\u05e0\u05d9\u05dd \u05e9\u05e0\u05e8\u05e9\u05de\u05d5 \u05d1\u05d9\u05d5\u05de\u05df \u05d4\u05de\u05d1\u05e6\u05e2\u05d9? \u05d4\u05e9\u05d1 \u05d1\u05e2\u05d1\u05e8\u05d9\u05ea \u05e7\u05e6\u05e8\u05d4 \u05d5\u05de\u05d1\u05e6\u05e2\u05d9\u05ea \u05d1\u05dc\u05d1\u05d35e2\u05d9\u05ea \u05d1\u05dc\u05d1\u05d3 (\u05e2\u05d3 3-4 \u05e9\u05d5\u05e8\u05d5\u05ea).",
 }
 
+BUTTON_PROTOCOL_HINTS = {
+    "🛸 מצב צי רחפנים": "query_drone_fleet_status",
+    "🔄 החזרת רחפן לבסיס": "recall_drone_to_base",
+    "📹 מצב מצלמות": "query_camera_status",
+    "📹 תצפית ומצלמות": "query_camera_status",
+    "📊 תמונת מצב כללית": "overall_situational_picture",
+    "🌐 תמונת מצב גזרתית כוללת": "overall_situational_picture",
+    "ℹ️ סטטוס גזרה": "overall_situational_picture",
+    "👥 סטטוס כיתת כוננות": "report_team_availability",
+    "📜 היסטוריית אירועים": "query_historical_incidents",
+    "📋 אירועים אחרונים": "query_historical_incidents",
+    "📋 יומן אירועים ותחקור": "query_historical_incidents",
+}
+
 
 async def _on_text_message(update, context) -> None:
     deps: BotDeps = context.bot_data["deps"]
     telegram_identity, chat_id = _identity_and_chat_id(update)
     messages = interactions.message_catalog_for(deps)
 
-    resolution = await resolve_caller(deps.api_client, telegram_identity, messages)
+    resolution = await _resolve_caller_cached(deps.api_client, telegram_identity, messages)
     if resolution.status == "unregistered":
         await deps.telegram_client.send_text(chat_id, resolution.refusal_message)
         return
@@ -537,6 +582,7 @@ async def _on_text_message(update, context) -> None:
         )
         return
 
+    protocol_hint = BUTTON_PROTOCOL_HINTS.get(incoming_text)
     if incoming_text in BUTTON_PROMPTS:
         incoming_text = BUTTON_PROMPTS[incoming_text]
 
@@ -568,6 +614,7 @@ async def _on_text_message(update, context) -> None:
             str(update.message.message_id),
             conversation_id,
             event_data_event_id,
+            protocol_hint=protocol_hint,
         )
     finally:
         activity_task.cancel()
@@ -576,23 +623,37 @@ async def _on_text_message(update, context) -> None:
 async def _on_callback_query(update, context) -> None:
     deps: BotDeps = context.bot_data["deps"]
     query = update.callback_query
+    if query is None:
+        return
     telegram_identity, chat_id = _identity_and_chat_id(update)
 
-    await deps.telegram_client.answer_callback_query(query.id)
+    try:
+        await deps.telegram_client.answer_callback_query(query.id)
+    except Exception as exc:
+        logger.warning("could not acknowledge callback query: %s", exc, extra={"event": "bot_callback_ack_failed"})
+
+    if not query.data:
+        return
 
     namespace = query.data.split(":", 1)[0]
+    try:
+        if namespace == interactions.CLARIFICATION_CALLBACK_PREFIX:
+            event_id, choice = interactions.parse_clarification_callback_data(query.data)
+            await interactions.handle_clarification_answer(deps, chat_id, telegram_identity, event_id, choice)
+            return
 
-    if namespace == interactions.CLARIFICATION_CALLBACK_PREFIX:
-        event_id, choice = interactions.parse_clarification_callback_data(query.data)
-        await interactions.handle_clarification_answer(deps, chat_id, telegram_identity, event_id, choice)
-        return
+        if namespace == interactions.CALLBACK_PREFIX:
+            event_id, choice = interactions.parse_callback_data(query.data)
+            await interactions.handle_approval_answer(deps, chat_id, telegram_identity, event_id, choice)
+            return
 
-    if namespace == interactions.CALLBACK_PREFIX:
-        event_id, choice = interactions.parse_callback_data(query.data)
-        await interactions.handle_approval_answer(deps, chat_id, telegram_identity, event_id, choice)
-        return
-
-    logger.warning("unrecognized callback namespace: %s", namespace, extra={"event": "bot_unknown_callback"})
+        logger.warning("unrecognized callback namespace: %s", namespace, extra={"event": "bot_unknown_callback"})
+    except ApiRequestError as exc:
+        messages = interactions.message_catalog_for(deps)
+        if exc.status_code == 403:
+            await deps.telegram_client.send_text(chat_id, messages.text("bot.refused", message=exc.message))
+        else:
+            await deps.telegram_client.send_text(chat_id, messages.text("error.request_failed", reason=exc.message))
 
 
 def _parse_protocol_write_command(rest: str, catalog=None) -> tuple[str, dict] | str:
@@ -761,11 +822,21 @@ def register_handlers(application, deps: BotDeps) -> None:
                     )
             except Exception as exc:
                 logger.warning("could not initialize notification cursor: %s", exc)
-        started_application.create_task(run_notification_poll_loop(deps, NOTIFICATION_POLL_INTERVAL_SECONDS, cursor_store=cursor_store))
+        poll_task = asyncio.create_task(
+            run_notification_poll_loop(deps, NOTIFICATION_POLL_INTERVAL_SECONDS, cursor_store=cursor_store)
+        )
+        started_application.bot_data["notification_task"] = poll_task
 
     application.post_init = _post_init
 
     async def _post_shutdown(_stopped_application) -> None:
+        poll_task = _stopped_application.bot_data.get("notification_task")
+        if poll_task is not None and not poll_task.done():
+            poll_task.cancel()
+            try:
+                await poll_task
+            except (asyncio.CancelledError, Exception):
+                pass
         await deps.api_client.close()
 
     application.post_shutdown = _post_shutdown
