@@ -151,6 +151,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_api_system.py` | Test | Internal | Verifies api system behavior and edge cases. |
 | `tests/test_api_trace.py` | Test | Internal | Verifies commander-only Deep Debug trace polling, authorization, ordering, and rendering. |
 | `tests/test_api_unified_ingestion.py` | Test | Internal | Verifies api unified ingestion behavior and edge cases. |
+| `tests/test_approvals_queue.py` | Test | Internal | Verifies commander approvals queue API and Telegram interactions. |
 | `tests/test_architecture.py` | Test | Internal | Enforces package boundaries and prevents recreation of the registries package. |
 | `tests/test_bot_app.py` | Test | Internal | Verifies bot dependency wiring, entry-point behavior, and update routing. |
 | `tests/test_bot_background_services.py` | Test | Internal | Verifies notification polling, delivery, failures, results, and startup services. |
