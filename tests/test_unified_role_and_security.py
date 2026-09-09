@@ -15,11 +15,22 @@ from protocols.contracts import CriticalityLevel, Protocol
 
 @pytest.fixture
 def unified_env(monkeypatch):
-    """Set up environment variables for unified test profile."""
+    """Set up environment variables for unified test profile.
+
+    Also ensures profiles.unified_test's mock/demo data is seeded. That
+    profile no longer seeds it as an `import profiles.unified_test` side
+    effect (see profiles.unified_test.ensure_seed_data) — every test below
+    that exercises this profile against its real (non-tmp_path) databases
+    calls this fixture instead of relying on some earlier test having
+    imported the module first.
+    """
     monkeypatch.setenv("BOT_TOKEN", "123456789:AAFakeTokenForUnifiedTesting000")
     monkeypatch.setenv("CORE_MODEL_KEY", "mock-core-key")
     monkeypatch.setenv("SUB_MODEL_KEY", "mock-sub-key")
     monkeypatch.setenv("BOT_SERVICE_KEY", "mock-service-key")
+
+    from profiles import unified_test
+    unified_test.ensure_seed_data()
 
 
 def test_unified_profile_structure_and_contracts(unified_env):

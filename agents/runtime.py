@@ -6,6 +6,7 @@ import json
 import logging
 import threading
 import time
+import uuid
 from collections import OrderedDict
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -63,6 +64,78 @@ def authenticated_request_identity(identity: str):
         yield
     finally:
         _authenticated_request_identity.reset(token)
+
+
+class ExactResultCapture:
+    """Makes one tool's exact return value reach the caller unparaphrased.
+
+    Some tool outputs (drone callsigns, mission IDs, ETAs, exact roster
+    names) must never be replaced by the model's own paraphrase of them on
+    the way back out. A tool method that computed one of these calls
+    `.capture(text)` right before returning it; an agent's `process()`
+    override runs the real work through `.run(...)` instead of calling
+    `super().process(...)` directly. `.run(...)` returns the captured text
+    verbatim (wrapped as a successful `AgentResult`) when `.capture(...)`
+    was called during that invocation, and the model's own result
+    otherwise — this is what lets a tool's formatted string reach the
+    caller byte-for-byte even though the model is technically free to
+    reword whatever text it was given.
+
+    One instance is one namespace: construct one instance per agent (or
+    per profile-defined agent subclass) that needs this, matching the
+    convention `agents.surveillance_agent.SurveillanceAgent` established.
+    Instances never share state — each owns its own `ContextVar`, results
+    dict, and lock — so unrelated agents' captures can never collide even
+    when they run concurrently in the same process.
+    """
+
+    def __init__(self, namespace: str):
+        self._context_var: ContextVar[str | None] = ContextVar(f"exact_result_capture[{namespace}]", default=None)
+        self._results: dict[str, str] = {}
+        self._lock = threading.Lock()
+
+    def capture(self, output: str) -> None:
+        """Call from inside a tool method, with the exact text that method is about to return."""
+
+        key = self._context_var.get() or get_trace_id()
+        if key:
+            with self._lock:
+                self._results[key] = output
+
+    def run(
+        self,
+        base_process: Callable[..., "AgentResult"],
+        text: str,
+        allowed_tools: list[str],
+        *,
+        invocation_policy: "InvocationPolicy | None" = None,
+    ) -> "AgentResult":
+        """Call from a `process()` override in place of calling `base_process` (typically
+        `super().process`) directly — returns whatever a `.capture(...)` call recorded during
+        this invocation instead of `base_process`'s own result, when one was recorded."""
+
+        key = get_trace_id() or uuid.uuid4().hex
+        token = self._context_var.set(key)
+        with self._lock:
+            self._results.pop(key, None)
+        try:
+            model_result = base_process(text, allowed_tools, invocation_policy=invocation_policy)
+            with self._lock:
+                exact = self._results.pop(key, None)
+            if exact is not None:
+                return AgentResult(status="success", text=exact)
+            return model_result
+        finally:
+            with self._lock:
+                self._results.pop(key, None)
+            self._context_var.reset(token)
+
+
+def make_exact_result_capture(namespace: str) -> ExactResultCapture:
+    """Build one `ExactResultCapture`, namespaced so its internal `ContextVar` name is unique
+    and identifiable in a debugger/traceback even though every instance's shape is identical."""
+
+    return ExactResultCapture(namespace)
 
 
 def configure_provider_concurrency(limit: int) -> None:

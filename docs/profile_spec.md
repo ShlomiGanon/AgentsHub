@@ -347,6 +347,70 @@ kind of exception `.approval_flag` already is — most fields here stay
 duck-typed, but not the ones a wrong value could get dangerously wrong
 without raising anything.
 
+## Role-gating a protocol: `commander_only` and `requires_confirmation`
+
+`protocols.contracts.Protocol` carries two optional boolean fields beyond
+the required `approval_flag`, both defaulting to `False`:
+
+| Field | What it does at runtime |
+|---|---|
+| `commander_only` | Refuses the protocol outright for a caller whose permission level is `VIEWER` — a viewer typing free text that would otherwise select this protocol gets rejected server-side, before any agent or tool runs. Checked in `orchestrator/flows.py` (`continue_from_risk_assessment`, which returns `outcome="unauthorized_for_viewer"`) and, independently, in `api/routes.py` for the direct-submission path (`AuthorizationError`, HTTP 403) — both consult `getattr(protocol, "commander_only", False)`, so an object that doesn't define the attribute at all is treated as `False`, never as a hidden failure. |
+| `requires_confirmation` | Forces an approval hold even for a **commander** — normally a commander's own action runs immediately unless `approval_flag` is set; `requires_confirmation=True` means this specific protocol always pauses for an explicit approve/reject first, regardless of who triggered it. Checked in `orchestrator/holds.py`'s `determine_approval_hold`, which returns `"flagged_protocol"` when either `requires_confirmation` or (for a non-commander origin) `commander_only` is set. |
+
+These are a finer-grained pair layered on top of the required
+`approval_flag` (which governs whether *any* run of this protocol needs a
+human's approve/reject at all), not a replacement for it:
+
+- `approval_flag=True` — the protocol always needs a commander's
+  approve/reject before it runs, for anyone.
+- `commander_only=True` — a viewer can never trigger this protocol at
+  all, approved or not; a commander can.
+- `requires_confirmation=True` — even a commander, who would otherwise
+  skip straight to execution, still has to confirm first.
+
+A profile with only one caller role (every profile in this repo except
+`profiles/unified_test.py`) generally has no reason to set either field —
+`approval_flag` alone already covers "does this need a human to say yes."
+`profiles/unified_test.py` is the one profile that actually exercises
+viewer/commander role separation (a Telegram deployment with both kinds
+of user), and sets both fields on its three side-effecting, HIGH-criticality
+protocols (`dispatch_drone_to_incident`, `recall_drone_to_base`,
+`dispatch_emergency_forces`) — see `tests/test_unified_role_and_security.py`
+for the enforced behavior end to end (server-side viewer rejection, and a
+commander still being held for confirmation).
+
+## The `action.{protocol_name}` catalog-key convention
+
+When a protocol is presented for a commander's approve/reject decision
+(`bot/interactions.py`'s `_friendly_action_type`), the bot looks up a
+human-readable label for it by building the message-catalog key
+`f"action.{protocol_name}"` and calling `messages.text(key)`. This is
+**optional** — a profile is never required to add these keys. If no
+`action.<protocol_name>` key exists in the active language's catalog, the
+lookup raises `MessageCatalogError`, which `_friendly_action_type` catches
+and falls back to the generic `"action.generic"` label (e.g. "Operational
+action" / `"פעולה מבצעית"`) instead.
+
+To give one of your profile's protocols a specific label instead of the
+generic fallback, add a matching key — the protocol's exact `name` — to
+**both** `messages/en.py` and `messages/he.py` (required by
+`messages.catalog.validate_catalogs`, which enforces that every key exists
+in both languages with matching placeholders):
+
+```python
+# messages/en.py
+"action.dispatch_drone_to_incident": "Tactical drone dispatch",
+
+# messages/he.py
+"action.dispatch_drone_to_incident": "שיגור רחפן טקטי",
+```
+
+Only protocols with `approval_flag=True` (or `requires_confirmation=True`)
+ever reach this lookup — a protocol nobody is ever asked to approve never
+needs a label. `profiles/unified_test.py` adds one for each of its three
+approval-gated protocols; most other shipped profiles rely on the generic
+fallback today.
+
 ## Failure behavior
 
 - Missing module / bad launch argument: the loader fails immediately,

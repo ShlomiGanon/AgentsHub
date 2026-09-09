@@ -300,5 +300,255 @@ MESSAGES = {
     "time.seconds_ago": "לפני {seconds} שנ'",
     "time.minutes_ago": "לפני {minutes} דק'",
     "time.hours_ago": "לפני {hours} שע'",
-    "time.unknown": "זמן לא ידוע"
+    "time.unknown": "זמן לא ידוע",
+
+    # --- profiles/unified_test.py — mechanically relocated from source so no
+    # first-party module holds a Hebrew literal outside this catalog
+    # (tests/test_hebrew_leakage.py). Keys namespaced "unified.*"/"seed.*".
+    "unified.profile_name": "חמ''ל מבצעי אחוד (Unified Command Hub)",
+
+    "unified.surveillance.role": (
+        "אחראי על תצפית חזותית, מערך מצלמות אבטחה, וצי רחפנים טקטיים. "
+        "מספק סטטוס רחפנים וסוללות, תמונת מצב מצלמות, ושיגור או החזרת רחפנים."
+    ),
+    "unified.surveillance.system_prompt": (
+        "אתה סוכן מומחה לתצפית חזותית ורחפנים. "
+        "חובה לענות אך ורק בעברית קצרה, מדויקת ומבצעית (עד 4-5 שורות לכל היותר). "
+        "אל תשתמש באנגלית כלל, למעט מזהים מדויקים (כגון CAM-01, DRONE-01). "
+        "להחזרת רחפן קרא תמיד מיד ל-return_drone_to_base(drone_or_mission_id=''). "
+        "כאשר לא צוין רחפן ספציפי העבר מחרוזת ריקה והכלי יבחר אוטומטית את הרחפן הפעיל לפי מצב הצי. "
+        "אל תנסה לבצע סריקות מקדימות, אל תמציא מזהים, ואסור לדווח שאין רחפנים או שהכלי אינו זמין מבלי שהפעלת את return_drone_to_base — הפעל תמיד את הכלי מיד! "
+        "לשיגור רחפן קרא מיד ל-dispatch_drone_to_area עם גזרת היעד (target_area) בלבד. "
+        "שדות specific_drone_id ו-dispatched_by הם אופציונליים לחלוטין ואסור בתכלית האיסור לבקש אותם - המערכת בוחרת אוטומטית רחפן מוכן מהצי. "
+        "לעולם אל תדווח שמשימה אינה ברורה או שחסרים פרטים כאשר גזרת היעד ידועה, אלא שגר את הרחפן מיד. "
+        "היה תמציתי, ישיר ומבצעי."
+    ),
+    "unified.surveillance.tool.fleet_status": "מחזיר סטטוס תפעולי, רמות סוללה ומיקומים של צי הרחפנים בעברית.",
+    "unified.surveillance.tool.active_missions": (
+        "מחזיר את כל המשימות האוויריות הפעילות כרגע, כולל מזהה משימה, רחפן, גזרת יעד ו-ETA בעברית."
+    ),
+    "unified.surveillance.tool.camera_feeds": "מחזיר תמונת מצב וסטטוס של מצלמות האבטחה לפי גזרה או זיהוי מצלמה בעברית.",
+    "unified.surveillance.tool.overview": "תמונת מצב תצפיתית ואווירית משולבת: מצלמות, רחפנים ומשימות פעילות בעברית.",
+    "unified.surveillance.tool.return_drone": "החזרת רחפן פעיל לבסיס בצורה מבוקרת ובטוחה בעברית.",
+    "unified.surveillance.tool.dispatch_drone": (
+        "שיגור רחפן טקטי לגזרה. פרמטר target_area בלבד הוא חובה. שאר הפרמטרים אופציונליים לחלוטין ואין לבקשם."
+    ),
+    "unified.surveillance.tool.update_camera": "עדכון תצפית ידנית או סטטוס של מצלמת אבטחה בעברית.",
+
+    "unified.surveillance.no_drones": "לא נמצאו רחפנים במערך.",
+    "unified.surveillance.status.ready": "מוכן לפעולה {icon}",
+    "unified.surveillance.status.in_flight": "באוויר במשימה {icon}",
+    "unified.surveillance.status.charging": "בטעינה {icon}",
+    "unified.surveillance.status.maintenance": "בתחזוקה {icon}",
+    "unified.surveillance.fleet_header": "{icon} מצב צי רחפנים ({count} רחפנים):",
+    "unified.surveillance.fleet_line": (
+        "• [{drone_id}] {callsign} ({model}): {status} | סוללה: {battery}% | גזרה: {area}{mission_info}"
+    ),
+    "unified.surveillance.fleet_mission_info": " (במשימה: {mission_id})",
+    "unified.surveillance.fleet_summary": "סיכום: {ready} מוכנים לשיגור | {in_flight} באוויר | {charging} בטעינה",
+
+    "unified.surveillance.no_missions": "אין כרגע משימות רחפנים פעילות באוויר.",
+    "unified.surveillance.missions_header": "{icon} משימות רחפנים פעילות באוויר ({count}):",
+    "unified.surveillance.mission_line": (
+        "• [{mission_id}] רחפן {callsign} ({drone_id}) -> גזרה: {target_area} "
+        "| סוללה: {battery}% | ETA: {eta} שנ' | משימה: {description}"
+    ),
+
+    "unified.surveillance.no_cameras": "לא נמצאו מצלמות פעילות בגזרה המבוקשת.",
+    "unified.surveillance.camera_status.active": "תקין ופעיל {icon}",
+    "unified.surveillance.camera_status.offline": "לא מקוון {icon}",
+    "unified.surveillance.camera_status.maintenance": "בתחזוקה {icon}",
+    "unified.surveillance.cameras_header": "{icon} מצב מצלמות אבטחה ({count} מצלמות):",
+    "unified.surveillance.camera_line": "• [{camera_id}] {name} ({area}, {azimuth}°): {feed_summary} [{status}]",
+
+    "unified.surveillance.overview_header": "{icon} תמונת מצב תצפיתית כוללת:",
+    "unified.surveillance.overview_cameras_line": "• מצלמות אבטחה: {active}/{total} פעילות ותקינות בגזרה.",
+    "unified.surveillance.overview_drones_line": "• מערך רחפנים: {ready} מוכנים לשיגור, {in_flight} באוויר במשימה.",
+    "unified.surveillance.overview_missions_header": "• משימות באוויר ({count}):",
+    "unified.surveillance.overview_mission_line": "  - רחפן {callsign} לעבר {target_area} (זמן משוער: {eta} שנ')",
+    "unified.surveillance.overview_no_missions": "• משימות באוויר: אין משימות אוויריות פעילות כרגע.",
+
+    "unified.surveillance.recall_none_active": "אין כרגע רחפנים פעילים באוויר להחזרה.",
+    "unified.surveillance.recall_all_done": (
+        "החזרת הרחפנים הושלמה בהצלחה {icon}. כל הרחפנים הפעילים ({count}) הוחזרו לבסיס ומוכנים לפעולה."
+    ),
+    "unified.surveillance.recall_done": (
+        "החזרת הרחפן לבסיס הושלמה בהצלחה {icon}. רחפן {callsign} ({drone_id}) חזר לבסיס ומוכן לפעולה (צי רחפנים)."
+    ),
+    "unified.surveillance.recall_fallback_done": (
+        "פקודת החזרה התקבלה: רחפן {callsign} ({drone_id}) חוזר כעת לבסיס לנחיתה {icon}."
+    ),
+    "unified.surveillance.recall_no_match_single": "לא נמצא רחפן פעיל תואם להחזרה.",
+    "unified.surveillance.recall_no_match_multi": "לא נמצא רחפן פעיל תואם ל-'{requested}' מתוך {count} רחפנים באוויר.",
+    "unified.surveillance.recall_selection_required": (
+        "קיימים {count} רחפנים פעילים באוויר. אנא ציין איזה רחפן להחזיר או ציין 'החזר את כולם'."
+    ),
+    "unified.surveillance.recall_done_generic": "החזרת הרחפן לבסיס הושלמה בהצלחה {icon}.",
+    "unified.surveillance.recall_failed": "החזרת הרחפן נכשלה: {error}",
+
+    "unified.surveillance.default_incident_description": "סיור ותצפית מבצעית",
+    "unified.surveillance.dispatch_area_required": "נדרש לציין גזרת יעד לשיגור הרחפן.",
+    "unified.surveillance.dispatch_done": (
+        "הזנקת רחפן הושלמה בהצלחה {icon}\n"
+        "• רחפן: {callsign} ({drone_id})\n"
+        "• גזרת יעד: {target_area}\n"
+        "• זמן הגעה משוער (ETA): כ-{eta} שניות\n"
+        "• סוללה: {battery}% | מזהה משימה: {mission_id}"
+    ),
+    "unified.surveillance.dispatch_failed": "שיגור הרחפן נכשל: {error}",
+
+    "unified.surveillance.camera_id_required": "נדרש מזהה מצלמה לעדכון תצפית.",
+    "unified.surveillance.camera_update_done": "תצפית מצלמה {camera_id} ({name}) עודכנה בהצלחה {icon}: {feed_summary}",
+    "unified.surveillance.camera_update_failed": "עדכון תצפית המצלמה נכשל: {error}",
+
+    "unified.team_status.role": (
+        "אחראי על ניהול מצבת ונוכחות כיתת כוננות. "
+        "מספק דוחות זמינות (מי זמין/לא זמין), וקולט דיווחי נוכחות של חברי הכיתה."
+    ),
+    "unified.team_status.system_prompt": (
+        "אתה סוכן מומחה לניהול וסטטוס כיתת כוננות. "
+        "חובה לענות אך ורק בעברית קצרה, מדויקת ומבצעית (עד 4-5 שורות לכל היותר). "
+        "אל תשתמש באנגלית כלל. "
+        "לשאלות על סטטוס הנוכחות של כיתת הכוננות קרא ל-report_team_availability. "
+        "בחר view מתאים: summary למצב כללי, members לשמות חברי הכיתה, available למי זמין, "
+        "unavailable למי לא זמין, awaiting למי שטרם דיווח, count לכמות זמינים, ו-reason לסיבת אי-זמינות; "
+        "ב-view מסוג reason העבר גם member_query מתוך השאלה. אל תמציא שמות או סיבות. "
+        "לרישום דיווח נוכחות קרא ל-record_attendance_response. "
+        "היה תמציתי וברור."
+    ),
+    "unified.team_status.tool.report_availability": (
+        "מחזיר נתוני roster אמיתיים למחזור הנוכחי. view הוא summary, members, available, unavailable, "
+        "awaiting, count או reason; עבור reason יש להעביר member_query."
+    ),
+    "unified.team_status.tool.get_roster": (
+        "מחזיר את תמונת מצבת כיתת הכוננות וזמינות הלוחמים בלבד (קריאה בלבד ללא שום תופעות לוואי) בעברית."
+    ),
+    "unified.team_status.tool.record_attendance": "רישום תגובת נוכחות של לוחם כיתת כוננות בעברית.",
+
+    "unified.team_status.legacy_placeholder_name": "חבר כיתת כוננות ({identity})",
+    "unified.team_status.unnamed_member": "משתמש {identity} (שם לא הוגדר)",
+
+    # "|"-delimited keyword groups `_requested_roster_view` matches against
+    # a free-text question to infer which roster view was meant — not
+    # rendered to anyone, so the same bilingual keyword list is kept in
+    # both catalogs rather than translated.
+    "unified.team_status.keywords.reason": "למה|סיבת|reason|why",
+    "unified.team_status.keywords.awaiting": "לא דיווח|טרם דיווח|ממתין|awaiting|pending",
+    "unified.team_status.keywords.unavailable": "מי לא זמין|אינם זמינים|unavailable",
+    "unified.team_status.keywords.count_number": "כמה|כמות|how many|count",
+    "unified.team_status.keywords.count_available": "זמין|available",
+    "unified.team_status.keywords.available": "מי זמין|זמינים בלבד|who is available",
+    "unified.team_status.keywords.members": "מי חבר|חברי הכיתה|השמות|מי הם|members|names",
+
+    "unified.team_status.none_now": "אין כרגע",
+    "unified.team_status.members_header": "{icon} חברי כיתת הכוננות ({count}): {names}",
+    "unified.team_status.available_header": "{icon} זמינים לכוננות ({count}): {names}",
+    "unified.team_status.unavailable_header": "{icon} אינם זמינים ({count}):",
+    "unified.team_status.unavailable_line": "• {name} — {reason}",
+    "unified.team_status.no_reason_saved": "לא נשמרה סיבה",
+    "unified.team_status.none_unavailable": "{icon} אין כרגע חברי כיתה שמסומנים כלא זמינים.",
+    "unified.team_status.awaiting_header": "{icon} טרם דיווחו ({count}): {names}",
+    "unified.team_status.count_summary": "{icon} זמינים כעת {available} מתוך {total} חברי כיתה.",
+    "unified.team_status.reason_unknown_member": "לא ניתן לזהות בוודאות את חבר הכיתה המבוקש מתוך ה־roster.",
+    "unified.team_status.reason_unavailable": "{name} אינו זמין: {reason}{until}.",
+    "unified.team_status.reason_until_suffix": " עד {until}",
+    "unified.team_status.reason_available": "{name} מסומן כזמין; אין סיבת אי־זמינות פעילה.",
+    "unified.team_status.reason_awaiting": "{name} טרם דיווח במחזור הנוכחי; לא נשמרה סיבת אי־זמינות.",
+    "unified.team_status.summary_header": "{icon} סטטוס כיתת כוננות (סה\"כ {count} לוחמים):",
+    "unified.team_status.summary_available_line": "• זמינים לפעילות ({count}): {names}",
+    "unified.team_status.summary_unavailable_line": "• אינם זמינים ({count}): {names}",
+    "unified.team_status.summary_awaiting_line": "• טרם דיווחו ({count}): {names}",
+
+    "unified.team_status.identity_unavailable": "רישום התגובה נכשל: זהות המשתמש המאומת אינה זמינה.",
+    "unified.team_status.default_original_text": "דיווח זמינות: {availability}",
+    "unified.team_status.not_approved": "רישום התגובה נכשל: המשתמש אינו חבר מאושר בכיתת הכוננות.",
+    "unified.team_status.clarify_availability": "הבהרה נדרשת: ציין האם אתה זמין או לא זמין.",
+    "unified.team_status.clarify_reason": "הבהרה נדרשת: לוחם שאינו זמין נדרש לספק סיבה.",
+    "unified.team_status.clarify_days": "הבהרה נדרשת: ציין לכמה ימים אינך זמין.",
+    "unified.team_status.record_failed": "רישום התגובה נכשל: {error}",
+    "unified.team_status.pending_commander_approval": "הדיווח התקבל וממתין לאישור מפקד לפני שינוי סטטוס הכוננות.",
+    "unified.team_status.marked_available": "{icon} הזמינות שלך עודכנה. אתה מסומן כזמין לכוננות.",
+    "unified.team_status.marked_unavailable": "{icon} הזמינות שלך עודכנה. אתה מסומן כלא זמין ({reason}).",
+
+    "unified.friendly_forces.role": "אחראי על תיאום והזנקת כוחות ביטחון וחירום (משטרה, מד\"א, כיבוי אש, צבא).",
+    "unified.friendly_forces.system_prompt": (
+        "אתה סוכן מומחה לתיאום והזנקת כוחות ביטחון וחירום (משטרה, מד\"א, כיבוי אש, צבא). "
+        "חובה לענות אך ורק בעברית קצרה ומדויקת (עד 3 שורות). "
+        "אל תשתמש באנגלית כלל. דווח תמיד איזה כוח הוזנק ולאיזה יעד בדיוק."
+    ),
+    "unified.friendly_forces.tool.ambulance": "רישום הזנקת כוחות רפואה / מד\"א ליעד מבוקש.",
+    "unified.friendly_forces.tool.police": "רישום הזנקת כוחות משטרה ליעד מבוקש.",
+    "unified.friendly_forces.tool.firefighters": "רישום הזנקת כוחות כיבוי והצלה ליעד מבוקש.",
+    "unified.friendly_forces.tool.military": "רישום הזנקת כוחות צבא וביטחון ליעד מבוקש.",
+    "unified.friendly_forces.log_ambulance": "הוזנק מד\"א ל-'{location}': נפגעים={count}",
+    "unified.friendly_forces.confirm_ambulance": "נרשמה בהצלחה הזנקת צוות רפואה/מד\"א ליעד '{location}'.",
+    "unified.friendly_forces.log_police": "הוזנקה משטרה ל-'{location}': כוחות={count}",
+    "unified.friendly_forces.confirm_police": "נרשמה בהצלחה הזנקת כוחות משטרה ליעד '{location}'.",
+    "unified.friendly_forces.log_firefighters": "הוזנק כיבוי אש ל-'{location}': רכבים={count}",
+    "unified.friendly_forces.confirm_firefighters": "נרשמה בהצלחה הזנקת כוחות כיבוי והצלה ליעד '{location}'.",
+    "unified.friendly_forces.log_military": "הוזנק כוח צבאי ל-'{location}': כוחות={count}",
+    "unified.friendly_forces.confirm_military": "נרשמה בהצלחה הזנקת כוחות צבא וביטחון ליעד '{location}'.",
+
+    "unified.seed.primary_name": "מפקד / משתמש ראשי",
+    "unified.seed.commander_user_name": "מפקד כיתת כוננות",
+    "unified.seed.viewer_user_name": "לוחם כיתת כוננות",
+    "unified.seed.member_1001": "דן לוי",
+    "unified.seed.member_1002": "יוסי כהן",
+    "unified.seed.member_1003": "מיכל אברהם",
+
+    "unified.protocol.overall_situational_picture.description": (
+        "תמונת מצב גזרתית כוללת (קריאה בלבד ללא שינוי נתונים): שילוב תצפית (מצלמות ורחפנים) ומצבת כיתת כוננות בגזרה."
+    ),
+    "unified.protocol.overall_situational_picture.expected_output": (
+        "תמונת מצב גזרתית מאוחדת ומבצעית המשלבת תצפית וכיתת כוננות ללא שינוי נתונים."
+    ),
+    "unified.protocol.query_surveillance_overview.description": (
+        "תמונת מצב תצפיתית כוללת: סטטוס מצלמות, רחפנים ומשימות אוויריות פעילות בכל הגזרות."
+    ),
+    "unified.protocol.query_surveillance_overview.expected_output": "תמונת מצב טקטית מרוכזת של מערך התצפית והרחפנים.",
+    "unified.protocol.query_drone_fleet_status.description": (
+        "בירור מצב צי הרחפנים: זמינות, רמות סוללה, מיקומים וסטטוס מבצעי של כל הרחפנים."
+    ),
+    "unified.protocol.query_drone_fleet_status.expected_output": "דוח מפורט של מצב הרחפנים, סוללות וזמינות לשיגור.",
+    "unified.protocol.query_active_drone_missions.description": (
+        "בירור משימות רחפנים פעילות באוויר: יעדים, זמני הגעה משוערים, רמות סוללה ומשימות."
+    ),
+    "unified.protocol.query_active_drone_missions.expected_output": "דוח משימות רחפנים פעילות באוויר בעברית.",
+    "unified.protocol.query_camera_status.description": "בדיקת סטטוס ותמונת מצב של מצלמות אבטחה לפי גזרה או מצלמה ספציפית.",
+    "unified.protocol.query_camera_status.expected_output": "דוח תצפית של מצלמות האבטחה בגזרה המבוקשת.",
+    "unified.protocol.dispatch_drone_to_incident.description": (
+        "שיגור רחפן טקטי לאירוע או גזרה לצורך תצפית או סיור. פעולת מפקד בלבד הדורשת אישור."
+    ),
+    "unified.protocol.dispatch_drone_to_incident.expected_output": "אישור שיגור רחפן לגזרה כולל אות קריאה וזמן הגעה משוער.",
+    "unified.protocol.recall_drone_to_base.description": (
+        "החזרת רחפן פעיל לבסיס וסגירת משימה אווירית. הפעלת return_drone_to_base מיד ללא סריקה מוקדמת. "
+        "פעולת מפקד בלבד הדורשת אישור."
+    ),
+    "unified.protocol.recall_drone_to_base.expected_output": "אישור החזרת הרחפן לבסיס ועדכון סטטוס הרחפן למוכן לפעולה.",
+    "unified.protocol.report_team_availability.description": (
+        "דוח מצבת נוכחות וזמינות כיתת כוננות: מי זמין, מי לא זמין, סיבות, ומי שטרם דיווח."
+    ),
+    "unified.protocol.report_team_availability.expected_output": "תמונת מצב שמית מפורטת של כיתת הכוננות.",
+    "unified.protocol.record_attendance_response.description": (
+        "הזנת דיווח נוכחות של חבר כיתת כוננות: סטטוס זמין או לא זמין עם סיבה."
+    ),
+    "unified.protocol.record_attendance_response.expected_output": "אישור קליטת דיווח הנוכחות של חבר הכיתה.",
+    "unified.protocol.dispatch_emergency_forces.description": (
+        "הזנקת ותיאום כוחות חירום וביטחון: אמבולנס, משטרה, כיבוי אש, צבא. פעולת מפקד בלבד הדורשת אישור."
+    ),
+    "unified.protocol.dispatch_emergency_forces.expected_output": "אישור רישום ותיאום הזנקת כוחות החירום ליעד.",
+    "unified.protocol.query_historical_incidents.description": "תחקור אירועים ומשימות קודמות מתוך יומן המבצעים וההיסטוריה.",
+    "unified.protocol.query_historical_incidents.expected_output": "סיכום תמציתי ומדויק של אירועי עבר ביומן המבצעי.",
+
+    "unified.keyboard.approvals_queue": "{icon} תור אישורים",
+    "unified.keyboard.overall_picture": "{icon} תמונת מצב כללית",
+    "unified.keyboard.camera_status": "{icon} מצב מצלמות",
+    "unified.keyboard.drone_fleet_status": "{icon} מצב צי רחפנים",
+    "unified.keyboard.dispatch_drone": "{icon} הזנקת רחפן",
+    "unified.keyboard.recall_drone": "{icon} החזרת רחפן לבסיס",
+    "unified.keyboard.team_status": "{icon} סטטוס כיתת כוננות",
+    "unified.keyboard.dispatch_forces": "{icon} הזנקת כוחות",
+    "unified.keyboard.event_history": "{icon} היסטוריית אירועים",
+    "unified.keyboard.available": "{icon} אני זמין לכוננות",
+    "unified.keyboard.unavailable": "{icon} איני זמין",
 }

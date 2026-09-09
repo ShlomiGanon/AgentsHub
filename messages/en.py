@@ -324,4 +324,257 @@ MESSAGES = {
     "time.minutes_ago": "{minutes}m ago",
     "time.hours_ago": "{hours}h ago",
     "time.unknown": "unknown time",
+
+    # --- profiles/unified_test.py — mechanically relocated from source so no
+    # first-party module holds a Hebrew literal outside this catalog
+    # (tests/test_hebrew_leakage.py). Keys namespaced "unified.*"/"seed.*".
+    # This profile's DEFAULT_LANGUAGE is "he"; these English strings exist
+    # only for catalog parity (messages/catalog.py's validate_catalogs) and
+    # so the profile keeps working if DEFAULT_LANGUAGE is ever set to "en".
+    "unified.profile_name": "Unified Command Hub",
+
+    "unified.surveillance.role": (
+        "Responsible for visual surveillance, the security camera network, and the tactical drone "
+        "fleet. Provides drone and battery status, camera status, and drone dispatch or recall."
+    ),
+    "unified.surveillance.system_prompt": (
+        "You are a specialist agent for visual surveillance and drones. "
+        "You must answer only in short, precise, operational Hebrew (at most 4-5 lines). "
+        "Never use English at all, except for exact identifiers (such as CAM-01, DRONE-01). "
+        "To return a drone, always call return_drone_to_base(drone_or_mission_id='') immediately. "
+        "When no specific drone is named, pass an empty string and the tool will automatically select the active drone based on fleet state. "
+        "Do not attempt preliminary scans, do not invent identifiers, and never report that there are no drones or that the tool is unavailable without having called return_drone_to_base — always call the tool immediately! "
+        "To dispatch a drone, call dispatch_drone_to_area immediately with only the target area (target_area). "
+        "The specific_drone_id and dispatched_by fields are entirely optional and must never be requested - the system automatically selects a ready drone from the fleet. "
+        "Never report that a mission is unclear or that details are missing when the target area is known — dispatch the drone immediately instead. "
+        "Be concise, direct, and operational."
+    ),
+    "unified.surveillance.tool.fleet_status": "Returns operational status, battery levels, and locations for the drone fleet, in Hebrew.",
+    "unified.surveillance.tool.active_missions": (
+        "Returns every currently active airborne mission, including mission ID, drone, target area, and ETA, in Hebrew."
+    ),
+    "unified.surveillance.tool.camera_feeds": "Returns the status and picture of security cameras by area or camera ID, in Hebrew.",
+    "unified.surveillance.tool.overview": "Combined surveillance and airborne picture: cameras, drones, and active missions, in Hebrew.",
+    "unified.surveillance.tool.return_drone": "Returns an active drone to base in a controlled, safe manner, in Hebrew.",
+    "unified.surveillance.tool.dispatch_drone": (
+        "Dispatches a tactical drone to an area. Only the target_area parameter is required. Every other parameter is entirely optional and must not be requested."
+    ),
+    "unified.surveillance.tool.update_camera": "Updates a manual observation or status for a security camera, in Hebrew.",
+
+    "unified.surveillance.no_drones": "No drones were found in the fleet.",
+    "unified.surveillance.status.ready": "Ready {icon}",
+    "unified.surveillance.status.in_flight": "Airborne on mission {icon}",
+    "unified.surveillance.status.charging": "Charging {icon}",
+    "unified.surveillance.status.maintenance": "In maintenance {icon}",
+    "unified.surveillance.fleet_header": "{icon} Drone fleet status ({count} drones):",
+    "unified.surveillance.fleet_line": (
+        "• [{drone_id}] {callsign} ({model}): {status} | Battery: {battery}% | Area: {area}{mission_info}"
+    ),
+    "unified.surveillance.fleet_mission_info": " (on mission: {mission_id})",
+    "unified.surveillance.fleet_summary": "Summary: {ready} ready | {in_flight} airborne | {charging} charging",
+
+    "unified.surveillance.no_missions": "No active drone missions currently in flight.",
+    "unified.surveillance.missions_header": "{icon} Active airborne drone missions ({count}):",
+    "unified.surveillance.mission_line": (
+        "• [{mission_id}] Drone {callsign} ({drone_id}) -> Area: {target_area} "
+        "| Battery: {battery}% | ETA: {eta}s | Mission: {description}"
+    ),
+
+    "unified.surveillance.no_cameras": "No active cameras were found in the requested area.",
+    "unified.surveillance.camera_status.active": "OK and active {icon}",
+    "unified.surveillance.camera_status.offline": "Offline {icon}",
+    "unified.surveillance.camera_status.maintenance": "In maintenance {icon}",
+    "unified.surveillance.cameras_header": "{icon} Security camera status ({count} cameras):",
+    "unified.surveillance.camera_line": "• [{camera_id}] {name} ({area}, {azimuth}°): {feed_summary} [{status}]",
+
+    "unified.surveillance.overview_header": "{icon} Overall surveillance picture:",
+    "unified.surveillance.overview_cameras_line": "• Security cameras: {active}/{total} active and healthy in the area.",
+    "unified.surveillance.overview_drones_line": "• Drone fleet: {ready} ready for dispatch, {in_flight} airborne on mission.",
+    "unified.surveillance.overview_missions_header": "• Airborne missions ({count}):",
+    "unified.surveillance.overview_mission_line": "  - Drone {callsign} heading to {target_area} (estimated: {eta}s)",
+    "unified.surveillance.overview_no_missions": "• Airborne missions: no active airborne missions right now.",
+
+    "unified.surveillance.recall_none_active": "There are no active drones in flight to recall right now.",
+    "unified.surveillance.recall_all_done": (
+        "All drones returned successfully {icon}. All active drones ({count}) returned to base and are ready for duty."
+    ),
+    "unified.surveillance.recall_done": (
+        "Drone returned to base successfully {icon}. Drone {callsign} ({drone_id}) returned to base and is ready for duty (drone fleet)."
+    ),
+    "unified.surveillance.recall_fallback_done": (
+        "Recall command received: drone {callsign} ({drone_id}) is now returning to base to land {icon}."
+    ),
+    "unified.surveillance.recall_no_match_single": "No matching active drone was found to recall.",
+    "unified.surveillance.recall_no_match_multi": "No matching active drone was found for '{requested}' out of {count} drones in flight.",
+    "unified.surveillance.recall_selection_required": (
+        "There are {count} active drones in flight. Please specify which drone to recall, or say 'recall all'."
+    ),
+    "unified.surveillance.recall_done_generic": "Drone returned to base successfully {icon}.",
+    "unified.surveillance.recall_failed": "The drone recall failed: {error}",
+
+    "unified.surveillance.default_incident_description": "Operational patrol and surveillance",
+    "unified.surveillance.dispatch_area_required": "A target area must be specified to dispatch the drone.",
+    "unified.surveillance.dispatch_done": (
+        "Drone dispatch completed successfully {icon}\n"
+        "• Drone: {callsign} ({drone_id})\n"
+        "• Target area: {target_area}\n"
+        "• Estimated arrival (ETA): ~{eta} seconds\n"
+        "• Battery: {battery}% | Mission ID: {mission_id}"
+    ),
+    "unified.surveillance.dispatch_failed": "The drone dispatch failed: {error}",
+
+    "unified.surveillance.camera_id_required": "A camera ID is required to update the observation.",
+    "unified.surveillance.camera_update_done": "Camera observation {camera_id} ({name}) updated successfully {icon}: {feed_summary}",
+    "unified.surveillance.camera_update_failed": "The camera observation update failed: {error}",
+
+    "unified.team_status.role": (
+        "Responsible for managing the readiness team's roster and attendance. Provides availability "
+        "reports (who is available/unavailable), and records attendance reports from team members."
+    ),
+    "unified.team_status.system_prompt": (
+        "You are a specialist agent for readiness-team status management. "
+        "You must answer only in short, precise, operational Hebrew (at most 4-5 lines). "
+        "Never use English at all. "
+        "For questions about the readiness team's attendance status, call report_team_availability. "
+        "Choose the right view: summary for the general picture, members for the team members' names, available for who is available, "
+        "unavailable for who is unavailable, awaiting for who has not yet reported, count for the number available, and reason for the reason someone is unavailable; "
+        "for a reason view, also pass member_query taken from the question. Do not invent names or reasons. "
+        "To record an attendance report, call record_attendance_response. "
+        "Be concise and clear."
+    ),
+    "unified.team_status.tool.report_availability": (
+        "Returns the real roster data for the current cycle. view is summary, members, available, unavailable, "
+        "awaiting, count, or reason; for reason, member_query must also be passed."
+    ),
+    "unified.team_status.tool.get_roster": (
+        "Returns only the readiness team's roster picture and members' availability (read-only, no side effects), in Hebrew."
+    ),
+    "unified.team_status.tool.record_attendance": "Records a readiness-team member's attendance response, in Hebrew.",
+
+    "unified.team_status.legacy_placeholder_name": "Readiness team member ({identity})",
+    "unified.team_status.unnamed_member": "User {identity} (name not set)",
+
+    # "|"-delimited keyword groups `_requested_roster_view` matches against
+    # a free-text question to infer which roster view was meant — not
+    # rendered to anyone, so the same bilingual keyword list is kept in
+    # both catalogs rather than translated.
+    "unified.team_status.keywords.reason": "למה|סיבת|reason|why",
+    "unified.team_status.keywords.awaiting": "לא דיווח|טרם דיווח|ממתין|awaiting|pending",
+    "unified.team_status.keywords.unavailable": "מי לא זמין|אינם זמינים|unavailable",
+    "unified.team_status.keywords.count_number": "כמה|כמות|how many|count",
+    "unified.team_status.keywords.count_available": "זמין|available",
+    "unified.team_status.keywords.available": "מי זמין|זמינים בלבד|who is available",
+    "unified.team_status.keywords.members": "מי חבר|חברי הכיתה|השמות|מי הם|members|names",
+
+    "unified.team_status.none_now": "none right now",
+    "unified.team_status.members_header": "{icon} Readiness team members ({count}): {names}",
+    "unified.team_status.available_header": "{icon} Available for duty ({count}): {names}",
+    "unified.team_status.unavailable_header": "{icon} Unavailable ({count}):",
+    "unified.team_status.unavailable_line": "• {name} — {reason}",
+    "unified.team_status.no_reason_saved": "no reason was saved",
+    "unified.team_status.none_unavailable": "{icon} No team members are currently marked unavailable.",
+    "unified.team_status.awaiting_header": "{icon} Not yet reported ({count}): {names}",
+    "unified.team_status.count_summary": "{icon} {available} of {total} team members are currently available.",
+    "unified.team_status.reason_unknown_member": "Could not confidently identify the requested team member from the roster.",
+    "unified.team_status.reason_unavailable": "{name} is unavailable: {reason}{until}.",
+    "unified.team_status.reason_until_suffix": " until {until}",
+    "unified.team_status.reason_available": "{name} is marked available; there is no active unavailability reason.",
+    "unified.team_status.reason_awaiting": "{name} has not yet reported this cycle; no unavailability reason was saved.",
+    "unified.team_status.summary_header": "{icon} Readiness team status (total {count} members):",
+    "unified.team_status.summary_available_line": "• Available for duty ({count}): {names}",
+    "unified.team_status.summary_unavailable_line": "• Unavailable ({count}): {names}",
+    "unified.team_status.summary_awaiting_line": "• Not yet reported ({count}): {names}",
+
+    "unified.team_status.identity_unavailable": "The response was not recorded: the authenticated user identity is unavailable.",
+    "unified.team_status.default_original_text": "Availability report: {availability}",
+    "unified.team_status.not_approved": "The response was not recorded: the user is not an approved readiness-team member.",
+    "unified.team_status.clarify_availability": "Clarification required: state whether you are available or unavailable.",
+    "unified.team_status.clarify_reason": "Clarification required: a member who is unavailable must provide a reason.",
+    "unified.team_status.clarify_days": "Clarification required: state how many days you will be unavailable.",
+    "unified.team_status.record_failed": "The response was not recorded: {error}",
+    "unified.team_status.pending_commander_approval": "The report was received and is awaiting commander approval before the readiness status changes.",
+    "unified.team_status.marked_available": "{icon} Your availability was updated. You are marked as available for duty.",
+    "unified.team_status.marked_unavailable": "{icon} Your availability was updated. You are marked as unavailable ({reason}).",
+
+    "unified.friendly_forces.role": "Responsible for coordinating and dispatching security and emergency forces (police, EMS, firefighters, military).",
+    "unified.friendly_forces.system_prompt": (
+        "You are a specialist agent for coordinating and dispatching security and emergency forces (police, EMS, firefighters, military). "
+        "You must answer only in short, precise Hebrew (at most 3 lines). "
+        "Never use English at all. Always report exactly which force was dispatched and to which target."
+    ),
+    "unified.friendly_forces.tool.ambulance": "Records an EMS/medical force dispatch to the requested target.",
+    "unified.friendly_forces.tool.police": "Records a police force dispatch to the requested target.",
+    "unified.friendly_forces.tool.firefighters": "Records a firefighting/rescue force dispatch to the requested target.",
+    "unified.friendly_forces.tool.military": "Records a military and security force dispatch to the requested target.",
+    "unified.friendly_forces.log_ambulance": "EMS dispatched to '{location}': casualties={count}",
+    "unified.friendly_forces.confirm_ambulance": "Medical/EMS team dispatch to '{location}' recorded successfully.",
+    "unified.friendly_forces.log_police": "Police dispatched to '{location}': units={count}",
+    "unified.friendly_forces.confirm_police": "Police force dispatch to '{location}' recorded successfully.",
+    "unified.friendly_forces.log_firefighters": "Firefighters dispatched to '{location}': vehicles={count}",
+    "unified.friendly_forces.confirm_firefighters": "Firefighting and rescue force dispatch to '{location}' recorded successfully.",
+    "unified.friendly_forces.log_military": "Military force dispatched to '{location}': units={count}",
+    "unified.friendly_forces.confirm_military": "Military and security force dispatch to '{location}' recorded successfully.",
+
+    "unified.seed.primary_name": "Commander / Primary User",
+    "unified.seed.commander_user_name": "Readiness Team Commander",
+    "unified.seed.viewer_user_name": "Readiness Team Member",
+    "unified.seed.member_1001": "Dan Levi",
+    "unified.seed.member_1002": "Yossi Cohen",
+    "unified.seed.member_1003": "Michal Avraham",
+
+    "unified.protocol.overall_situational_picture.description": (
+        "Overall sector situational picture (read-only, no data changes): combines surveillance (cameras and drones) with the readiness team's roster in the sector."
+    ),
+    "unified.protocol.overall_situational_picture.expected_output": (
+        "A unified, operational sector picture combining surveillance and the readiness team, with no data changes."
+    ),
+    "unified.protocol.query_surveillance_overview.description": (
+        "Overall surveillance picture: camera status, drones, and active airborne missions across all sectors."
+    ),
+    "unified.protocol.query_surveillance_overview.expected_output": "A consolidated tactical picture of the surveillance and drone assets.",
+    "unified.protocol.query_drone_fleet_status.description": (
+        "Checking drone fleet status: availability, battery levels, locations, and operational status of every drone."
+    ),
+    "unified.protocol.query_drone_fleet_status.expected_output": "A detailed report of drone status, batteries, and dispatch readiness.",
+    "unified.protocol.query_active_drone_missions.description": (
+        "Checking active airborne drone missions: targets, estimated arrival times, battery levels, and missions."
+    ),
+    "unified.protocol.query_active_drone_missions.expected_output": "A report of active airborne drone missions.",
+    "unified.protocol.query_camera_status.description": "Checking the status and picture of security cameras by sector or a specific camera.",
+    "unified.protocol.query_camera_status.expected_output": "A surveillance report of the security cameras in the requested sector.",
+    "unified.protocol.dispatch_drone_to_incident.description": (
+        "Dispatching a tactical drone to an incident or sector for surveillance or patrol. Commander-only action requiring approval."
+    ),
+    "unified.protocol.dispatch_drone_to_incident.expected_output": "Confirmation of a drone dispatch to the sector, including callsign and estimated arrival time.",
+    "unified.protocol.recall_drone_to_base.description": (
+        "Returning an active drone to base and closing an airborne mission. Calls return_drone_to_base immediately with no preliminary scan. "
+        "Commander-only action requiring approval."
+    ),
+    "unified.protocol.recall_drone_to_base.expected_output": "Confirmation that the drone returned to base and its status was updated to ready.",
+    "unified.protocol.report_team_availability.description": (
+        "A readiness-team attendance and availability report: who is available, who is unavailable, reasons, and who has not yet reported."
+    ),
+    "unified.protocol.report_team_availability.expected_output": "A detailed, name-by-name picture of the readiness team.",
+    "unified.protocol.record_attendance_response.description": (
+        "Recording a readiness-team member's attendance report: available or unavailable status, with a reason."
+    ),
+    "unified.protocol.record_attendance_response.expected_output": "Confirmation that the team member's attendance report was recorded.",
+    "unified.protocol.dispatch_emergency_forces.description": (
+        "Dispatching and coordinating emergency and security forces: ambulance, police, firefighters, military. Commander-only action requiring approval."
+    ),
+    "unified.protocol.dispatch_emergency_forces.expected_output": "Confirmation that the emergency-forces dispatch to the target was recorded and coordinated.",
+    "unified.protocol.query_historical_incidents.description": "Investigating past incidents and missions from the operational log and history.",
+    "unified.protocol.query_historical_incidents.expected_output": "A concise, accurate summary of past events in the operational log.",
+
+    "unified.keyboard.approvals_queue": "{icon} תור אישורים",
+    "unified.keyboard.overall_picture": "{icon} תמונת מצב כללית",
+    "unified.keyboard.camera_status": "{icon} מצב מצלמות",
+    "unified.keyboard.drone_fleet_status": "{icon} מצב צי רחפנים",
+    "unified.keyboard.dispatch_drone": "{icon} הזנקת רחפן",
+    "unified.keyboard.recall_drone": "{icon} החזרת רחפן לבסיס",
+    "unified.keyboard.team_status": "{icon} סטטוס כיתת כוננות",
+    "unified.keyboard.dispatch_forces": "{icon} הזנקת כוחות",
+    "unified.keyboard.event_history": "{icon} היסטוריית אירועים",
+    "unified.keyboard.available": "{icon} אני זמין לכוננות",
+    "unified.keyboard.unavailable": "{icon} איני זמין",
 }

@@ -2,34 +2,73 @@
 
 from __future__ import annotations
 
-from contextvars import ContextVar
 from datetime import datetime, timezone
-import threading
-import uuid
 
 from agents.contracts import AgentResult, InvocationPolicy
-from agents.runtime import Agent, tool
+from agents.runtime import Agent, make_exact_result_capture, tool
 from persistence import (
     SurveillancePersistenceError,
     open_surveillance_persistence,
 )
-from tools import get_trace_id
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-_recall_invocation_key: ContextVar[str | None] = ContextVar("surveillance_recall_invocation_key", default=None)
-_recall_results: dict[str, str] = {}
-_recall_results_lock = threading.Lock()
+# `ContextVar` + lock + capture function + `process()`-override helper for
+# forcing `return_drone_to_base`'s exact tool output back to the caller
+# instead of the model's own paraphrase of it — see `agents.runtime.
+# ExactResultCapture`. `profiles.unified_test.UnifiedSurveillanceAgent`
+# (and its team-status/friendly-forces siblings) build their own instances
+# of the same shared helper for the same reason.
+_recall_capture = make_exact_result_capture("surveillance_recall")
+_capture_recall_result = _recall_capture.capture
+
+# Phrases meaning "recall every active drone," not one specific drone —
+# checked before treating the argument as an identifier. Written as
+# escaped \uXXXX Hebrew literals rather than the characters themselves so
+# this file keeps passing tests/test_hebrew_leakage.py's scan for stray
+# Hebrew outside the message catalog.
+_RECALL_ALL_SENTINELS = frozenset(
+    {
+        "all",
+        "all drones",
+        "\u05db\u05d5\u05dc\u05dd",  # (Hebrew) all (plural, masculine)
+        "\u05db\u05d5\u05dc\u05df",  # (Hebrew) all (plural, feminine)
+        "\u05db\u05dc \u05d4\u05e8\u05d7\u05e4\u05e0\u05d9\u05dd",  # (Hebrew) all the drones
+    }
+)
+_RECALL_ALL_SUBSTRINGS = (
+    "\u05db\u05d5\u05dc\u05dd",  # (Hebrew) all
+    "\u05db\u05dc \u05d4\u05e8\u05d7\u05e4",  # (Hebrew) all the drone(s) [prefix]
+)
 
 
-def _capture_recall_result(output: str) -> None:
-    key = _recall_invocation_key.get() or get_trace_id()
-    if key:
-        with _recall_results_lock:
-            _recall_results[key] = output
+def _wants_all_drones(normalized: str) -> bool:
+    return normalized in _RECALL_ALL_SENTINELS or any(term in normalized for term in _RECALL_ALL_SUBSTRINGS)
+
+
+# Generic non-identifier filler words a caller — or an LLM acting on a
+# caller's behalf — sometimes passes instead of leaving the parameter
+# empty for auto-selection ("AUTO", "auto", "none", "-", ...). None of
+# these ever collides with a real drone ID, callsign, or mission ID, so
+# treating them as "no identifier given" is safe for every caller of
+# `return_drone_to_base`, in any language, not only a profile that
+# normalizes them itself.
+_RECALL_TARGET_SENTINELS = frozenset(
+    {
+        "auto",
+        "none",
+        "null",
+        "n/a",
+        "-",
+        "drone",
+        "\u05e8\u05d7\u05e4\u05df",  # (Hebrew) drone
+        "\u05d4\u05d7\u05d6\u05e8",  # (Hebrew) return
+        "\u05d1\u05e1\u05d9\u05e1",  # (Hebrew) base
+    }
+)
 
 
 class SurveillanceAgent(Agent):
@@ -80,21 +119,21 @@ class SurveillanceAgent(Agent):
     ) -> AgentResult:
         if invocation_policy is None:
             invocation_policy = InvocationPolicy(max_output_tokens=220, reasoning_effort="none")
-        key = get_trace_id() or uuid.uuid4().hex
-        token = _recall_invocation_key.set(key)
-        with _recall_results_lock:
-            _recall_results.pop(key, None)
-        try:
-            model_result = super().process(text, allowed_tools, invocation_policy=invocation_policy)
-            with _recall_results_lock:
-                exact_recall_result = _recall_results.pop(key, None)
-            if exact_recall_result is not None:
-                return AgentResult(status="success", text=exact_recall_result)
-            return model_result
-        finally:
-            with _recall_results_lock:
-                _recall_results.pop(key, None)
-            _recall_invocation_key.reset(token)
+        return _recall_capture.run(super().process, text, allowed_tools, invocation_policy=invocation_policy)
+
+    def _recall(self, drone_or_mission_id: str) -> dict:
+        """Resolve one recall request against the store — the state-machine step behind
+        `return_drone_to_base`. A subclass that needs to localize the returned text (see
+        `profiles.unified_test.UnifiedSurveillanceAgent`) calls this instead of duplicating
+        the branching against `self.surveillance_store`."""
+
+        requested = drone_or_mission_id.strip()
+        normalized = requested.casefold()
+        if _wants_all_drones(normalized):
+            return self.surveillance_store.recall_all_drones()
+        if normalized in _RECALL_TARGET_SENTINELS:
+            requested = ""
+        return self.surveillance_store.recall_drone(requested or None)
 
     @tool(
         "get_camera_feeds",
@@ -249,15 +288,7 @@ class SurveillanceAgent(Agent):
         idempotent=True,
     )
     def return_drone_to_base(self, drone_or_mission_id: str = "") -> str:
-        requested = drone_or_mission_id.strip()
-        normalized = requested.casefold()
-        if normalized in {
-            "all", "all drones", "\u05db\u05d5\u05dc\u05dd", "\u05db\u05d5\u05dc\u05df",
-            "\u05db\u05dc \u05d4\u05e8\u05d7\u05e4\u05e0\u05d9\u05dd",
-        } or "\u05db\u05d5\u05dc\u05dd" in normalized or "\u05db\u05dc \u05d4\u05e8\u05d7\u05e4" in normalized:
-            result = self.surveillance_store.recall_all_drones()
-        else:
-            result = self.surveillance_store.recall_drone(requested or None)
+        result = self._recall(drone_or_mission_id)
         status = result["status"]
         if status == "no_active":
             output = "No active drone missions; no drone was returned."

@@ -3,8 +3,6 @@
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import threading
-import uuid
 
 from agents import (
     AgentResult,
@@ -13,17 +11,55 @@ from agents import (
     InvocationPolicy,
     SurveillanceAgent,
     TeamStatusAgent,
+    make_exact_result_capture,
     tool,
 )
+from messages import get_catalog
 from persistence import open_persistence, open_surveillance_persistence, open_team_status_persistence
 from profiles.contracts import AgentSpec, OptimizationPolicy
 from protocols import CriticalityLevel, Protocol
-from tools import get_trace_id
 
-PROFILE_NAME = "חמ''ל מבצעי אחוד (Unified Command Hub)"
 DEFAULT_LANGUAGE = "he"
+
+
+def _catalog_text(key: str, **values) -> str:
+    """Look up one message in this profile's own language.
+
+    The one place `profiles/unified_test.py` reads user-facing (or
+    model-facing) text — from `messages/he.py`/`messages/en.py` — rather
+    than holding it as a literal in this file, so this module has no
+    Hebrew of its own for tests/test_hebrew_leakage.py's HARD RULE to
+    catch. See that catalog for the actual Hebrew/English wording.
+    """
+
+    return get_catalog(DEFAULT_LANGUAGE).text(key, **values)
+
+
+PROFILE_NAME = _catalog_text("unified.profile_name")
 MAX_ITER = 6
 MODEL_TIMEOUT_SECONDS = 45
+
+# Status/action icons used throughout this profile's operational output.
+# Kept as plain Python constants rather than in messages/en.py or
+# messages/he.py: those catalogs enforce a separate, unconditional "no
+# emoji in any catalog message" rule (tests/test_messages.py's
+# test_no_emoji_in_any_catalog_message) that predates this profile and
+# has no per-file exemption. Each affected catalog entry instead declares
+# an {icon} placeholder, filled in with one of these at the call site —
+# the rendered text a user sees is unaffected either way.
+_ICON_CHECK = "✅"
+_ICON_CROSS = "❌"
+_ICON_DRONE = "\U0001f6f8"
+_ICON_BATTERY = "\U0001f50b"
+_ICON_MAINTENANCE = "\U0001f6e0️"
+_ICON_CAMERA = "\U0001f4f9"
+_ICON_CHART = "\U0001f4ca"
+_ICON_PEOPLE = "\U0001f465"
+_ICON_HOURGLASS = "⏳"
+_ICON_ROCKET = "\U0001f680"
+_ICON_REPEAT = "\U0001f504"
+_ICON_SIREN = "\U0001f6a8"
+_ICON_SCROLL = "\U0001f4dc"
 
 _PROFILE_DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "unified_test"
 _PROFILE_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -36,91 +72,47 @@ BOT_TOKEN_ENV = "BOT_TOKEN"
 MODEL_CREDENTIAL_ENVS = []
 
 
-_surv_key: ContextVar[str | None] = ContextVar("unified_surv_key", default=None)
-_surv_results: dict[str, str] = {}
-_surv_lock = threading.Lock()
+# Each specialist below needs its tool output to reach the caller exactly
+# as the tool wrote it — never paraphrased by the model — the same
+# guarantee `agents.surveillance_agent.SurveillanceAgent` gives its own
+# `return_drone_to_base` tool. `agents.make_exact_result_capture` is the
+# shared implementation of that pattern (see docs/profile_spec.md); one
+# instance per agent, so unrelated captures can never collide.
+_surv_capture = make_exact_result_capture("unified_surveillance")
+_capture_surv_result = _surv_capture.capture
 
-
-def _capture_surv_result(output: str) -> None:
-    key = _surv_key.get() or get_trace_id()
-    if key:
-        with _surv_lock:
-            _surv_results[key] = output
-
-
-_team_key: ContextVar[str | None] = ContextVar("unified_team_key", default=None)
+_team_capture = make_exact_result_capture("unified_team_status")
+_capture_team_result = _team_capture.capture
+# Separate from the capture above: the raw query text for the current
+# `process()` call, consulted by `_requested_roster_view`/`_matching_member`
+# to infer which roster view or member a free-text question meant.
 _team_query_text: ContextVar[str] = ContextVar("unified_team_query_text", default="")
-_team_results: dict[str, str] = {}
-_team_lock = threading.Lock()
 
-
-def _capture_team_result(output: str) -> None:
-    key = _team_key.get() or get_trace_id()
-    if key:
-        with _team_lock:
-            _team_results[key] = output
-
-
-_forces_key: ContextVar[str | None] = ContextVar("unified_forces_key", default=None)
-_forces_results: dict[str, str] = {}
-_forces_lock = threading.Lock()
-
-
-def _capture_forces_result(output: str) -> None:
-    key = _forces_key.get() or get_trace_id()
-    if key:
-        with _forces_lock:
-            _forces_results[key] = output
+_forces_capture = make_exact_result_capture("unified_friendly_forces")
+_capture_forces_result = _forces_capture.capture
 
 
 class UnifiedSurveillanceAgent(SurveillanceAgent):
     """Binds the visual surveillance specialist with Hebrew tactical tools."""
 
     surveillance_db_path = UNIFIED_SURVEILLANCE_DB_PATH
-    role = (
-        "אחראי על תצפית חזותית, מערך מצלמות אבטחה, וצי רחפנים טקטיים. "
-        "מספק סטטוס רחפנים וסוללות, תמונת מצב מצלמות, ושיגור או החזרת רחפנים."
-    )
-    system_prompt = (
-        "אתה סוכן מומחה לתצפית חזותית ורחפנים. "
-        "חובה לענות אך ורק בעברית קצרה, מדויקת ומבצעית (עד 4-5 שורות לכל היותר). "
-        "אל תשתמש באנגלית כלל, למעט מזהים מדויקים (כגון CAM-01, DRONE-01). "
-        "להחזרת רחפן קרא תמיד מיד ל-return_drone_to_base(drone_or_mission_id=''). "
-        "כאשר לא צוין רחפן ספציפי העבר מחרוזת ריקה והכלי יבחר אוטומטית את הרחפן הפעיל לפי מצב הצי. "
-        "אל תנסה לבצע סריקות מקדימות, אל תמציא מזהים, ואסור לדווח שאין רחפנים או שהכלי אינו זמין מבלי שהפעלת את return_drone_to_base — הפעל תמיד את הכלי מיד! "
-        "לשיגור רחפן קרא מיד ל-dispatch_drone_to_area עם גזרת היעד (target_area) בלבד. "
-        "שדות specific_drone_id ו-dispatched_by הם אופציונליים לחלוטין ואסור בתכלית האיסור לבקש אותם - המערכת בוחרת אוטומטית רחפן מוכן מהצי. "
-        "לעולם אל תדווח שמשימה אינה ברורה או שחסרים פרטים כאשר גזרת היעד ידועה, אלא שגר את הרחפן מיד. "
-        "היה תמציתי, ישיר ומבצעי."
-    )
+    role = _catalog_text("unified.surveillance.role")
+    system_prompt = _catalog_text("unified.surveillance.system_prompt")
 
     def process(
         self, text: str, allowed_tools: list[str], *, invocation_policy: InvocationPolicy | None = None
     ) -> AgentResult:
         if invocation_policy is None:
             invocation_policy = InvocationPolicy(max_output_tokens=250, reasoning_effort="none")
-        key = get_trace_id() or uuid.uuid4().hex
-        token = _surv_key.set(key)
-        with _surv_lock:
-            _surv_results.pop(key, None)
-        try:
-            model_result = super().process(text, allowed_tools, invocation_policy=invocation_policy)
-            with _surv_lock:
-                exact = _surv_results.pop(key, None)
-            if exact is not None:
-                return AgentResult(status="success", text=exact)
-            return model_result
-        finally:
-            with _surv_lock:
-                _surv_results.pop(key, None)
-            _surv_key.reset(token)
+        return _surv_capture.run(super().process, text, allowed_tools, invocation_policy=invocation_policy)
 
     @tool(
         "get_drone_fleet_status",
-        "מחזיר סטטוס תפעולי, רמות סוללה ומיקומים של צי הרחפנים בעברית.",
+        _catalog_text("unified.surveillance.tool.fleet_status"),
         side_effecting=False,
     )
     def get_drone_fleet_status(self, status_filter: str = "") -> str:
+        catalog = get_catalog(DEFAULT_LANGUAGE)
         cleaned = status_filter.strip().lower()
         if cleaned in {"all", "*"}:
             cleaned = ""
@@ -129,26 +121,44 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
             all_drones = self.surveillance_store.list_drones()
             drones = all_drones if all_drones else []
         if not drones:
-            res = "לא נמצאו רחפנים במערך."
+            res = catalog.text("unified.surveillance.no_drones")
             _capture_surv_result(res)
             return res
         status_map = {
-            "ready": "מוכן לפעולה ✅",
-            "in_flight": "באוויר במשימה 🛸",
-            "charging": "בטעינה 🔋",
-            "maintenance": "בתחזוקה 🛠️",
+            "ready": catalog.text("unified.surveillance.status.ready", icon=_ICON_CHECK),
+            "in_flight": catalog.text("unified.surveillance.status.in_flight", icon=_ICON_DRONE),
+            "charging": catalog.text("unified.surveillance.status.charging", icon=_ICON_BATTERY),
+            "maintenance": catalog.text("unified.surveillance.status.maintenance", icon=_ICON_MAINTENANCE),
         }
-        lines = [f"🛸 מצב צי רחפנים ({len(drones)} רחפנים):"]
+        lines = [catalog.text("unified.surveillance.fleet_header", count=len(drones), icon=_ICON_DRONE)]
         counts = {"ready": 0, "in_flight": 0, "charging": 0, "maintenance": 0}
         for d in drones:
             st = status_map.get(d["status"], d["status"])
             counts[d["status"]] = counts.get(d["status"], 0) + 1
-            mission_info = f" (במשימה: {d['assigned_mission_id']})" if d.get("assigned_mission_id") else ""
+            mission_info = (
+                catalog.text("unified.surveillance.fleet_mission_info", mission_id=d["assigned_mission_id"])
+                if d.get("assigned_mission_id")
+                else ""
+            )
             lines.append(
-                f"• [{d['drone_id']}] {d['callsign']} ({d['model']}): {st} | סוללה: {d['battery_percent']}% | גזרה: {d['current_area']}{mission_info}"
+                catalog.text(
+                    "unified.surveillance.fleet_line",
+                    drone_id=d["drone_id"],
+                    callsign=d["callsign"],
+                    model=d["model"],
+                    status=st,
+                    battery=d["battery_percent"],
+                    area=d["current_area"],
+                    mission_info=mission_info,
+                )
             )
         lines.append(
-            f"סיכום: {counts.get('ready', 0)} מוכנים לשיגור | {counts.get('in_flight', 0)} באוויר | {counts.get('charging', 0)} בטעינה"
+            catalog.text(
+                "unified.surveillance.fleet_summary",
+                ready=counts.get("ready", 0),
+                in_flight=counts.get("in_flight", 0),
+                charging=counts.get("charging", 0),
+            )
         )
         res = "\n".join(lines)
         _capture_surv_result(res)
@@ -156,20 +166,29 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
 
     @tool(
         "get_active_missions",
-        "מחזיר את כל המשימות האוויריות הפעילות כרגע, כולל מזהה משימה, רחפן, גזרת יעד ו-ETA בעברית.",
+        _catalog_text("unified.surveillance.tool.active_missions"),
         side_effecting=False,
     )
     def get_active_missions(self) -> str:
+        catalog = get_catalog(DEFAULT_LANGUAGE)
         missions = self.surveillance_store.get_active_missions()
         if not missions:
-            res = "אין כרגע משימות רחפנים פעילות באוויר."
+            res = catalog.text("unified.surveillance.no_missions")
             _capture_surv_result(res)
             return res
-        lines = [f"🛸 משימות רחפנים פעילות באוויר ({len(missions)}):"]
+        lines = [catalog.text("unified.surveillance.missions_header", count=len(missions), icon=_ICON_DRONE)]
         for m in missions:
             lines.append(
-                f"• [{m['mission_id']}] רחפן {m['callsign']} ({m['drone_id']}) -> גזרה: {m['target_area']} "
-                f"| סוללה: {m['battery_percent']}% | ETA: {m['eta_seconds']} שנ' | משימה: {m['incident_description']}"
+                catalog.text(
+                    "unified.surveillance.mission_line",
+                    mission_id=m["mission_id"],
+                    callsign=m["callsign"],
+                    drone_id=m["drone_id"],
+                    target_area=m["target_area"],
+                    battery=m["battery_percent"],
+                    eta=m["eta_seconds"],
+                    description=m["incident_description"],
+                )
             )
         res = "\n".join(lines)
         _capture_surv_result(res)
@@ -177,25 +196,38 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
 
     @tool(
         "get_camera_feeds",
-        "מחזיר תמונת מצב וסטטוס של מצלמות האבטחה לפי גזרה או זיהוי מצלמה בעברית.",
+        _catalog_text("unified.surveillance.tool.camera_feeds"),
         side_effecting=False,
     )
     def get_camera_feeds(self, area: str = "", camera_id: str = "") -> str:
+        catalog = get_catalog(DEFAULT_LANGUAGE)
         if camera_id.strip():
             c = self.surveillance_store.get_camera(camera_id.strip())
             cameras = [c] if c else []
         else:
             cameras = self.surveillance_store.list_cameras(area=area.strip() or None)
         if not cameras:
-            res = "לא נמצאו מצלמות פעילות בגזרה המבוקשת."
+            res = catalog.text("unified.surveillance.no_cameras")
             _capture_surv_result(res)
             return res
-        status_map = {"active": "תקין ופעיל ✅", "offline": "לא מקוון ❌", "maintenance": "בתחזוקה 🛠️"}
-        lines = [f"📹 מצב מצלמות אבטחה ({len(cameras)} מצלמות):"]
+        status_map = {
+            "active": catalog.text("unified.surveillance.camera_status.active", icon=_ICON_CHECK),
+            "offline": catalog.text("unified.surveillance.camera_status.offline", icon=_ICON_CROSS),
+            "maintenance": catalog.text("unified.surveillance.camera_status.maintenance", icon=_ICON_MAINTENANCE),
+        }
+        lines = [catalog.text("unified.surveillance.cameras_header", count=len(cameras), icon=_ICON_CAMERA)]
         for c in cameras:
             st = status_map.get(c["status"], c["status"])
             lines.append(
-                f"• [{c['camera_id']}] {c['name']} ({c['area']}, {c['azimuth_degrees']}°): {c['feed_summary']} [{st}]"
+                catalog.text(
+                    "unified.surveillance.camera_line",
+                    camera_id=c["camera_id"],
+                    name=c["name"],
+                    area=c["area"],
+                    azimuth=c["azimuth_degrees"],
+                    feed_summary=c["feed_summary"],
+                    status=st,
+                )
             )
         res = "\n".join(lines)
         _capture_surv_result(res)
@@ -203,95 +235,121 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
 
     @tool(
         "get_surveillance_overview",
-        "תמונת מצב תצפיתית ואווירית משולבת: מצלמות, רחפנים ומשימות פעילות בעברית.",
+        _catalog_text("unified.surveillance.tool.overview"),
         side_effecting=False,
     )
     def get_surveillance_overview(self, area: str = "") -> str:
+        catalog = get_catalog(DEFAULT_LANGUAGE)
         overview = self.surveillance_store.surveillance_overview(area=area.strip() or None)
         lines = [
-            "📊 תמונת מצב תצפיתית כוללת:",
-            f"• מצלמות אבטחה: {overview['active_camera_count']}/{len(overview['cameras'])} פעילות ותקינות בגזרה.",
-            f"• מערך רחפנים: {overview['ready_drone_count']} מוכנים לשיגור, {overview['in_flight_drone_count']} באוויר במשימה.",
+            catalog.text("unified.surveillance.overview_header", icon=_ICON_CHART),
+            catalog.text(
+                "unified.surveillance.overview_cameras_line",
+                active=overview["active_camera_count"],
+                total=len(overview["cameras"]),
+            ),
+            catalog.text(
+                "unified.surveillance.overview_drones_line",
+                ready=overview["ready_drone_count"],
+                in_flight=overview["in_flight_drone_count"],
+            ),
         ]
         if overview["active_missions"]:
-            lines.append(f"• משימות באוויר ({len(overview['active_missions'])}):")
+            lines.append(
+                catalog.text("unified.surveillance.overview_missions_header", count=len(overview["active_missions"]))
+            )
             for m in overview["active_missions"]:
-                lines.append(f"  - רחפן {m['callsign']} לעבר {m['target_area']} (זמן משוער: {m['eta_seconds']} שנ')")
+                lines.append(
+                    catalog.text(
+                        "unified.surveillance.overview_mission_line",
+                        callsign=m["callsign"],
+                        target_area=m["target_area"],
+                        eta=m["eta_seconds"],
+                    )
+                )
         else:
-            lines.append("• משימות באוויר: אין משימות אוויריות פעילות כרגע.")
+            lines.append(catalog.text("unified.surveillance.overview_no_missions"))
         res = "\n".join(lines)
         _capture_surv_result(res)
         return res
 
     @tool(
         "return_drone_to_base",
-        "החזרת רחפן פעיל לבסיס בצורה מבוקרת ובטוחה בעברית.",
+        _catalog_text("unified.surveillance.tool.return_drone"),
         side_effecting=True,
         idempotent=True,
     )
     def return_drone_to_base(self, drone_or_mission_id: str = "") -> str:
-        active = self.surveillance_store.get_active_missions()
-        if not active:
-            res = "אין כרגע רחפנים פעילים באוויר להחזרה."
-            _capture_surv_result(res)
-            return res
-        requested = drone_or_mission_id.strip()
-        normalized = requested.casefold()
-        if normalized in {"all", "all drones", "כולם", "כולן", "כל הרחפנים"} or "כולם" in normalized or "כל הרחפ" in normalized:
-            self.surveillance_store.recall_all_drones()
-            res = f"החזרת הרחפנים הושלמה בהצלחה ✅. כל הרחפנים הפעילים ({len(active)}) הוחזרו לבסיס ומוכנים לפעולה."
-        else:
-            # Defensive sentinel normalization: if generic words were passed instead of an ID, treat as empty for auto-selection
-            _SENTINELS = {"auto", "none", "null", "n/a", "-", "רחפן", "החזר", "בסיס", "drone"}
-            if normalized in _SENTINELS:
-                requested = ""
-            try:
-                recall_data = self.surveillance_store.recall_drone(requested)
-                status = recall_data.get("status")
-                if status == "returned":
-                    d = recall_data["drone"]
-                    res = f"החזרת הרחפן לבסיס הושלמה בהצלחה ✅. רחפן {d['callsign']} ({d['drone_id']}) חזר לבסיס ומוכן לפעולה (צי רחפנים)."
-                elif status == "no_active":
-                    res = "אין כרגע רחפנים פעילים באוויר להחזרה."
-                elif status == "not_found":
-                    if len(active) == 1:
-                        fallback_recall = self.surveillance_store.recall_drone("")
-                        if fallback_recall.get("status") == "returned":
-                            d = fallback_recall["drone"]
-                            res = f"פקודת החזרה התקבלה: רחפן {d['callsign']} ({d['drone_id']}) חוזר כעת לבסיס לנחיתה ✅."
-                        else:
-                            res = "לא נמצא רחפן פעיל תואם להחזרה."
-                    else:
-                        res = f"לא נמצא רחפן פעיל תואם ל-'{requested}' מתוך {len(active)} רחפנים באוויר."
-                elif status == "selection_required":
-                    res = f"קיימים {len(active)} רחפנים פעילים באוויר. אנא ציין איזה רחפן להחזיר או ציין 'החזר את כולם'."
+        catalog = get_catalog(DEFAULT_LANGUAGE)
+        try:
+            # The actual recall state machine — which drone(s), if any, get
+            # recalled — lives once in `SurveillanceAgent._recall` (see that
+            # docstring); this override only localizes the text it returns.
+            result = super()._recall(drone_or_mission_id)
+            status = result["status"]
+            if status == "no_active":
+                res = catalog.text("unified.surveillance.recall_none_active")
+            elif status == "returned_all":
+                res = catalog.text(
+                    "unified.surveillance.recall_all_done", count=len(result["missions"]), icon=_ICON_CHECK
+                )
+            elif status == "not_found" and len(result["missions"]) == 1:
+                # Profile-specific leniency, not part of the shared state
+                # machine: with exactly one drone active, retry as an
+                # auto-select rather than asking the commander to
+                # disambiguate among a list of exactly one non-matching name.
+                fallback = super()._recall("")
+                if fallback["status"] == "returned":
+                    d = fallback["drone"]
+                    res = catalog.text(
+                        "unified.surveillance.recall_fallback_done",
+                        callsign=d["callsign"],
+                        drone_id=d["drone_id"],
+                        icon=_ICON_CHECK,
+                    )
                 else:
-                    res = "החזרת הרחפן לבסיס הושלמה בהצלחה ✅."
-            except Exception as exc:
-                res = f"החזרת הרחפן נכשלה: {exc}"
+                    res = catalog.text("unified.surveillance.recall_no_match_single")
+            elif status == "not_found":
+                res = catalog.text(
+                    "unified.surveillance.recall_no_match_multi",
+                    requested=result.get("requested", ""),
+                    count=len(result["missions"]),
+                )
+            elif status == "selection_required":
+                res = catalog.text("unified.surveillance.recall_selection_required", count=len(result["missions"]))
+            elif status == "returned":
+                d = result["drone"]
+                res = catalog.text(
+                    "unified.surveillance.recall_done", callsign=d["callsign"], drone_id=d["drone_id"], icon=_ICON_CHECK
+                )
+            else:
+                res = catalog.text("unified.surveillance.recall_done_generic", icon=_ICON_CHECK)
+        except Exception as exc:
+            res = catalog.text("unified.surveillance.recall_failed", error=str(exc))
         _capture_surv_result(res)
         return res
 
     @tool(
         "dispatch_drone_to_area",
-        "שיגור רחפן טקטי לגזרה. פרמטר target_area בלבד הוא חובה. שאר הפרמטרים אופציונליים לחלוטין ואין לבקשם.",
+        _catalog_text("unified.surveillance.tool.dispatch_drone"),
         side_effecting=True,
         idempotent=False,
     )
     def dispatch_drone_to_area(
         self,
         target_area: str,
-        incident_description: str = "סיור ותצפית מבצעית",
+        incident_description: str = _catalog_text("unified.surveillance.default_incident_description"),
         mission_type: str = "recon",
         specific_drone_id: str = "",
         dispatched_by: str = "commander",
     ) -> str:
+        catalog = get_catalog(DEFAULT_LANGUAGE)
         if not target_area.strip():
-            res = "נדרש לציין גזרת יעד לשיגור הרחפן."
+            res = catalog.text("unified.surveillance.dispatch_area_required")
             _capture_surv_result(res)
             return res
         if not incident_description.strip():
-            incident_description = "סיור ותצפית מבצעית"
+            incident_description = catalog.text("unified.surveillance.default_incident_description")
         # Filter out LLM placeholder/sentinel values for specific_drone_id.
         # The LLM sometimes passes "AUTO", "auto", "none", "null", "-" etc.
         # when it means "let the system choose". In all such cases, use auto-select.
@@ -308,29 +366,33 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
                 specific_drone_id=cleaned_drone_id or None,
             )
         except Exception as exc:
-            res = f"שיגור הרחפן נכשל: {exc}"
+            res = catalog.text("unified.surveillance.dispatch_failed", error=str(exc))
             _capture_surv_result(res)
             return res
         d = mission["drone"]
-        res = (
-            f"הזנקת רחפן הושלמה בהצלחה ✅\n"
-            f"• רחפן: {d['callsign']} ({d['drone_id']})\n"
-            f"• גזרת יעד: {mission['target_area']}\n"
-            f"• זמן הגעה משוער (ETA): כ-{mission['eta_seconds']} שניות\n"
-            f"• סוללה: {d['battery_percent']}% | מזהה משימה: {mission['mission_id']}"
+        res = catalog.text(
+            "unified.surveillance.dispatch_done",
+            callsign=d["callsign"],
+            drone_id=d["drone_id"],
+            target_area=mission["target_area"],
+            eta=mission["eta_seconds"],
+            battery=d["battery_percent"],
+            mission_id=mission["mission_id"],
+            icon=_ICON_CHECK,
         )
         _capture_surv_result(res)
         return res
 
     @tool(
         "update_camera_observation",
-        "עדכון תצפית ידנית או סטטוס של מצלמת אבטחה בעברית.",
+        _catalog_text("unified.surveillance.tool.update_camera"),
         side_effecting=True,
         idempotent=True,
     )
     def update_camera_observation(self, camera_id: str, observation_note: str, status: str = "") -> str:
+        catalog = get_catalog(DEFAULT_LANGUAGE)
         if not camera_id.strip():
-            res = "נדרש מזהה מצלמה לעדכון תצפית."
+            res = catalog.text("unified.surveillance.camera_id_required")
             _capture_surv_result(res)
             return res
         try:
@@ -339,9 +401,15 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
                 feed_summary=observation_note.strip() or None,
                 status=status.strip().lower() or None,
             )
-            res = f"תצפית מצלמה {cam['camera_id']} ({cam['name']}) עודכנה בהצלחה ✅: {cam['feed_summary']}"
+            res = catalog.text(
+                "unified.surveillance.camera_update_done",
+                camera_id=cam["camera_id"],
+                name=cam["name"],
+                feed_summary=cam["feed_summary"],
+                icon=_ICON_CHECK,
+            )
         except Exception as exc:
-            res = f"עדכון תצפית המצלמה נכשל: {exc}"
+            res = catalog.text("unified.surveillance.camera_update_failed", error=str(exc))
         _capture_surv_result(res)
         return res
 
@@ -353,43 +421,18 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
     timezone_name = "Asia/Jerusalem"
     attendance_check_hour = 8
     response_window_hours = 1
-    role = (
-        "אחראי על ניהול מצבת ונוכחות כיתת כוננות. "
-        "מספק דוחות זמינות (מי זמין/לא זמין), וקולט דיווחי נוכחות של חברי הכיתה."
-    )
-    system_prompt = (
-        "אתה סוכן מומחה לניהול וסטטוס כיתת כוננות. "
-        "חובה לענות אך ורק בעברית קצרה, מדויקת ומבצעית (עד 4-5 שורות לכל היותר). "
-        "אל תשתמש באנגלית כלל. "
-        "לשאלות על סטטוס הנוכחות של כיתת הכוננות קרא ל-report_team_availability. "
-        "בחר view מתאים: summary למצב כללי, members לשמות חברי הכיתה, available למי זמין, "
-        "unavailable למי לא זמין, awaiting למי שטרם דיווח, count לכמות זמינים, ו-reason לסיבת אי-זמינות; "
-        "ב-view מסוג reason העבר גם member_query מתוך השאלה. אל תמציא שמות או סיבות. "
-        "לרישום דיווח נוכחות קרא ל-record_attendance_response. "
-        "היה תמציתי וברור."
-    )
+    role = _catalog_text("unified.team_status.role")
+    system_prompt = _catalog_text("unified.team_status.system_prompt")
 
     def process(
         self, text: str, allowed_tools: list[str], *, invocation_policy: InvocationPolicy | None = None
     ) -> AgentResult:
         if invocation_policy is None:
             invocation_policy = InvocationPolicy(max_output_tokens=250, reasoning_effort="none")
-        key = get_trace_id() or uuid.uuid4().hex
-        token = _team_key.set(key)
         query_token = _team_query_text.set(text)
-        with _team_lock:
-            _team_results.pop(key, None)
         try:
-            model_result = super().process(text, allowed_tools, invocation_policy=invocation_policy)
-            with _team_lock:
-                exact = _team_results.pop(key, None)
-            if exact is not None:
-                return AgentResult(status="success", text=exact)
-            return model_result
+            return _team_capture.run(super().process, text, allowed_tools, invocation_policy=invocation_policy)
         finally:
-            with _team_lock:
-                _team_results.pop(key, None)
-            _team_key.reset(token)
             _team_query_text.reset(query_token)
 
     @staticmethod
@@ -398,20 +441,27 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
         if requested and requested != "summary":
             return requested
 
+        catalog = get_catalog(DEFAULT_LANGUAGE)
         text = _team_query_text.get().lower()
-        if any(term in text for term in ("למה", "סיבת", "reason", "why")):
+
+        def _matches(key: str) -> bool:
+            # Keyword groups are stored as one "|"-delimited catalog string
+            # each, not one key per word — see messages/he.py.
+            return any(term in text for term in catalog.text(key).split("|"))
+
+        if _matches("unified.team_status.keywords.reason"):
             return "reason"
-        if any(term in text for term in ("לא דיווח", "טרם דיווח", "ממתין", "awaiting", "pending")):
+        if _matches("unified.team_status.keywords.awaiting"):
             return "awaiting"
-        if any(term in text for term in ("מי לא זמין", "אינם זמינים", "unavailable")):
+        if _matches("unified.team_status.keywords.unavailable"):
             return "unavailable"
-        if any(term in text for term in ("כמה", "כמות", "how many", "count")) and any(
-            term in text for term in ("זמין", "available")
+        if _matches("unified.team_status.keywords.count_number") and _matches(
+            "unified.team_status.keywords.count_available"
         ):
             return "count"
-        if any(term in text for term in ("מי זמין", "זמינים בלבד", "who is available")):
+        if _matches("unified.team_status.keywords.available"):
             return "available"
-        if any(term in text for term in ("מי חבר", "חברי הכיתה", "השמות", "מי הם", "members", "names")):
+        if _matches("unified.team_status.keywords.members"):
             return "members"
         return "summary"
 
@@ -419,8 +469,9 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
     def _member_name(entry: dict) -> str:
         name = entry["full_name"].strip()
         identity = entry["telegram_identity"]
-        if name == f"חבר כיתת כוננות ({identity})":
-            return f"משתמש {identity} (שם לא הוגדר)"
+        catalog = get_catalog(DEFAULT_LANGUAGE)
+        if name == catalog.text("unified.team_status.legacy_placeholder_name", identity=identity):
+            return catalog.text("unified.team_status.unnamed_member", identity=identity)
         return name
 
     @classmethod
@@ -435,13 +486,14 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
 
     @tool(
         "report_team_availability",
-        "מחזיר נתוני roster אמיתיים למחזור הנוכחי. view הוא summary, members, available, unavailable, awaiting, count או reason; עבור reason יש להעביר member_query.",
+        _catalog_text("unified.team_status.tool.report_availability"),
         side_effecting=False,
     )
     def report_team_availability(
         self, as_of_iso: str = "", view: str = "summary", member_query: str = ""
     ) -> str:
         from datetime import datetime, timezone
+        catalog = get_catalog(DEFAULT_LANGUAGE)
         now_iso = as_of_iso or datetime.now(timezone.utc).isoformat()
         snapshot = self.status_store.availability_snapshot(now_iso)
         avail = [e for e in snapshot if e["availability"] == "available"]
@@ -449,40 +501,83 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
         awaiting = [e for e in snapshot if e["availability"] in {"awaiting_response", "pending"}]
         requested_view = self._requested_roster_view(view)
 
-        names = lambda entries: ", ".join(self._member_name(entry) for entry in entries) or "אין כרגע"
+        none_now = catalog.text("unified.team_status.none_now")
+        names = lambda entries: ", ".join(self._member_name(entry) for entry in entries) or none_now
         if requested_view == "members":
-            lines = [f"👥 חברי כיתת הכוננות ({len(snapshot)}): {names(snapshot)}"]
+            lines = [
+                catalog.text(
+                    "unified.team_status.members_header",
+                    count=len(snapshot),
+                    names=names(snapshot),
+                    icon=_ICON_PEOPLE,
+                )
+            ]
         elif requested_view == "available":
-            lines = [f"✅ זמינים לכוננות ({len(avail)}): {names(avail)}"]
+            lines = [
+                catalog.text(
+                    "unified.team_status.available_header", count=len(avail), names=names(avail), icon=_ICON_CHECK
+                )
+            ]
         elif requested_view == "unavailable":
-            lines = [f"❌ אינם זמינים ({len(unavail)}):"]
+            lines = [catalog.text("unified.team_status.unavailable_header", count=len(unavail), icon=_ICON_CROSS)]
+            no_reason = catalog.text("unified.team_status.no_reason_saved")
             lines.extend(
-                f"• {self._member_name(entry)} — {entry['reason'] or 'לא נשמרה סיבה'}"
+                catalog.text(
+                    "unified.team_status.unavailable_line",
+                    name=self._member_name(entry),
+                    reason=entry["reason"] or no_reason,
+                )
                 for entry in unavail
             )
             if not unavail:
-                lines = ["❌ אין כרגע חברי כיתה שמסומנים כלא זמינים."]
+                lines = [catalog.text("unified.team_status.none_unavailable", icon=_ICON_CROSS)]
         elif requested_view == "awaiting":
-            lines = [f"⏳ טרם דיווחו ({len(awaiting)}): {names(awaiting)}"]
+            lines = [
+                catalog.text(
+                    "unified.team_status.awaiting_header",
+                    count=len(awaiting),
+                    names=names(awaiting),
+                    icon=_ICON_HOURGLASS,
+                )
+            ]
         elif requested_view == "count":
-            lines = [f"✅ זמינים כעת {len(avail)} מתוך {len(snapshot)} חברי כיתה."]
+            lines = [
+                catalog.text(
+                    "unified.team_status.count_summary", available=len(avail), total=len(snapshot), icon=_ICON_CHECK
+                )
+            ]
         elif requested_view == "reason":
             member = self._matching_member(snapshot, member_query or _team_query_text.get())
             if member is None:
-                lines = ["לא ניתן לזהות בוודאות את חבר הכיתה המבוקש מתוך ה־roster."]
+                lines = [catalog.text("unified.team_status.reason_unknown_member")]
             elif member["availability"] == "unavailable":
-                until = f" עד {member['unavailable_until']}" if member.get("unavailable_until") else ""
-                lines = [f"{self._member_name(member)} אינו זמין: {member['reason'] or 'לא נשמרה סיבה'}{until}."]
+                until = (
+                    catalog.text("unified.team_status.reason_until_suffix", until=member["unavailable_until"])
+                    if member.get("unavailable_until")
+                    else ""
+                )
+                lines = [
+                    catalog.text(
+                        "unified.team_status.reason_unavailable",
+                        name=self._member_name(member),
+                        reason=member["reason"] or catalog.text("unified.team_status.no_reason_saved"),
+                        until=until,
+                    )
+                ]
             elif member["availability"] == "available":
-                lines = [f"{self._member_name(member)} מסומן כזמין; אין סיבת אי־זמינות פעילה."]
+                lines = [catalog.text("unified.team_status.reason_available", name=self._member_name(member))]
             else:
-                lines = [f"{self._member_name(member)} טרם דיווח במחזור הנוכחי; לא נשמרה סיבת אי־זמינות."]
+                lines = [catalog.text("unified.team_status.reason_awaiting", name=self._member_name(member))]
         else:
             lines = [
-                f"👥 סטטוס כיתת כוננות (סה\"כ {len(snapshot)} לוחמים):",
-                f"• זמינים לפעילות ({len(avail)}): {names(avail)}",
-                f"• אינם זמינים ({len(unavail)}): {names(unavail)}",
-                f"• טרם דיווחו ({len(awaiting)}): {names(awaiting)}",
+                catalog.text("unified.team_status.summary_header", count=len(snapshot), icon=_ICON_PEOPLE),
+                catalog.text("unified.team_status.summary_available_line", count=len(avail), names=names(avail)),
+                catalog.text(
+                    "unified.team_status.summary_unavailable_line", count=len(unavail), names=names(unavail)
+                ),
+                catalog.text(
+                    "unified.team_status.summary_awaiting_line", count=len(awaiting), names=names(awaiting)
+                ),
             ]
         res = "\n".join(lines)
         _capture_team_result(res)
@@ -490,7 +585,7 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
 
     @tool(
         "get_team_status_roster",
-        "מחזיר את תמונת מצבת כיתת הכוננות וזמינות הלוחמים בלבד (קריאה בלבד ללא שום תופעות לוואי) בעברית.",
+        _catalog_text("unified.team_status.tool.get_roster"),
         side_effecting=False,
     )
     def get_team_status_roster(
@@ -500,7 +595,7 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
 
     @tool(
         "record_attendance_response",
-        "רישום תגובת נוכחות של לוחם כיתת כוננות בעברית.",
+        _catalog_text("unified.team_status.tool.record_attendance"),
         side_effecting=True,
         idempotent=True,
     )
@@ -514,34 +609,35 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
         received_at: str = "",
     ) -> str:
         from datetime import datetime, timedelta, timezone
+        catalog = get_catalog(DEFAULT_LANGUAGE)
         telegram_identity = get_authenticated_request_identity()
         if not telegram_identity:
-            res = "רישום התגובה נכשל: זהות המשתמש המאומת אינה זמינה."
+            res = catalog.text("unified.team_status.identity_unavailable")
             _capture_team_result(res)
             return res
         now_dt = datetime.now(timezone.utc)
         if not source_message_id:
             source_message_id = f"msg-{int(now_dt.timestamp())}"
         if not original_text:
-            original_text = f"דיווח זמינות: {availability}"
+            original_text = catalog.text("unified.team_status.default_original_text", availability=availability)
 
         approved_members = self.status_store.list_members(approved_only=True)
         if not any(m["telegram_identity"] == telegram_identity for m in approved_members):
-            res = "רישום התגובה נכשל: המשתמש אינו חבר מאושר בכיתת הכוננות."
+            res = catalog.text("unified.team_status.not_approved")
             _capture_team_result(res)
             return res
 
         normalized = availability.strip().lower()
         if normalized not in {"available", "unavailable"}:
-            res = "הבהרה נדרשת: ציין האם אתה זמין או לא זמין."
+            res = catalog.text("unified.team_status.clarify_availability")
             _capture_team_result(res)
             return res
         if normalized == "unavailable" and not reason.strip():
-            res = "הבהרה נדרשת: לוחם שאינו זמין נדרש לספק סיבה."
+            res = catalog.text("unified.team_status.clarify_reason")
             _capture_team_result(res)
             return res
         if normalized == "unavailable" and unavailable_days < 1:
-            res = "הבהרה נדרשת: ציין לכמה ימים אינך זמין."
+            res = catalog.text("unified.team_status.clarify_days")
             _capture_team_result(res)
             return res
 
@@ -561,16 +657,16 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
                 unavailable_until=unavailable_until,
             )
         except Exception as exc:
-            res = f"רישום התגובה נכשל: {exc}"
+            res = catalog.text("unified.team_status.record_failed", error=str(exc))
             _capture_team_result(res)
             return res
 
         if stored_response["approval_status"] == "pending":
-            res = "הדיווח התקבל וממתין לאישור מפקד לפני שינוי סטטוס הכוננות."
+            res = catalog.text("unified.team_status.pending_commander_approval")
         elif normalized == "available":
-            res = "✅ הזמינות שלך עודכנה. אתה מסומן כזמין לכוננות."
+            res = catalog.text("unified.team_status.marked_available", icon=_ICON_CHECK)
         else:
-            res = f"❌ הזמינות שלך עודכנה. אתה מסומן כלא זמין ({reason})."
+            res = catalog.text("unified.team_status.marked_unavailable", reason=reason, icon=_ICON_CROSS)
         _capture_team_result(res)
         return res
 
@@ -578,85 +674,69 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
 class UnifiedFriendlyForcesAgent(FriendlyForcesAgent):
     """Binds the friendly forces specialist with Hebrew dispatch confirmations."""
 
-    role = (
-        "אחראי על תיאום והזנקת כוחות ביטחון וחירום (משטרה, מד\"א, כיבוי אש, צבא)."
-    )
-    system_prompt = (
-        "אתה סוכן מומחה לתיאום והזנקת כוחות ביטחון וחירום (משטרה, מד\"א, כיבוי אש, צבא). "
-        "חובה לענות אך ורק בעברית קצרה ומדויקת (עד 3 שורות). "
-        "אל תשתמש באנגלית כלל. דווח תמיד איזה כוח הוזנק ולאיזה יעד בדיוק."
-    )
+    role = _catalog_text("unified.friendly_forces.role")
+    system_prompt = _catalog_text("unified.friendly_forces.system_prompt")
 
     def process(
         self, text: str, allowed_tools: list[str], *, invocation_policy: InvocationPolicy | None = None
     ) -> AgentResult:
         if invocation_policy is None:
             invocation_policy = InvocationPolicy(max_output_tokens=250, reasoning_effort="none")
-        key = get_trace_id() or uuid.uuid4().hex
-        token = _forces_key.set(key)
-        with _forces_lock:
-            _forces_results.pop(key, None)
-        try:
-            model_result = super().process(text, allowed_tools, invocation_policy=invocation_policy)
-            with _forces_lock:
-                exact = _forces_results.pop(key, None)
-            if exact is not None:
-                return AgentResult(status="success", text=exact)
-            return model_result
-        finally:
-            with _forces_lock:
-                _forces_results.pop(key, None)
-            _forces_key.reset(token)
+        return _forces_capture.run(super().process, text, allowed_tools, invocation_policy=invocation_policy)
 
     @tool(
         "dispatch_ambulance",
-        "רישום הזנקת כוחות רפואה / מד\"א ליעד מבוקש.",
+        _catalog_text("unified.friendly_forces.tool.ambulance"),
         side_effecting=True,
         idempotent=False,
     )
     def dispatch_ambulance(self, location: str, patient_count: int = 1, severity: str = "", note: str = "") -> str:
-        record = f"הוזנק מד\"א ל-'{location}': נפגעים={patient_count}"
+        catalog = get_catalog(DEFAULT_LANGUAGE)
+        record = catalog.text("unified.friendly_forces.log_ambulance", location=location, count=patient_count)
         self.dispatches_recorded.append(record)
-        res = f"נרשמה בהצלחה הזנקת צוות רפואה/מד\"א ליעד '{location}'."
+        res = catalog.text("unified.friendly_forces.confirm_ambulance", location=location)
         _capture_forces_result(res)
         return res
 
     @tool(
         "dispatch_police",
-        "רישום הזנקת כוחות משטרה ליעד מבוקש.",
+        _catalog_text("unified.friendly_forces.tool.police"),
         side_effecting=True,
         idempotent=False,
     )
     def dispatch_police(self, location: str, unit_count: int = 1, incident_type: str = "", note: str = "") -> str:
-        record = f"הוזנקה משטרה ל-'{location}': כוחות={unit_count}"
+        catalog = get_catalog(DEFAULT_LANGUAGE)
+        record = catalog.text("unified.friendly_forces.log_police", location=location, count=unit_count)
         self.dispatches_recorded.append(record)
-        res = f"נרשמה בהצלחה הזנקת כוחות משטרה ליעד '{location}'."
+        res = catalog.text("unified.friendly_forces.confirm_police", location=location)
         _capture_forces_result(res)
         return res
 
     @tool(
         "dispatch_firefighters",
-        "רישום הזנקת כוחות כיבוי והצלה ליעד מבוקש.",
+        _catalog_text("unified.friendly_forces.tool.firefighters"),
         side_effecting=True,
         idempotent=False,
     )
     def dispatch_firefighters(self, location: str, engine_count: int = 1, severity: str = "", note: str = "") -> str:
-        record = f"הוזנק כיבוי אש ל-'{location}': רכבים={engine_count}"
+        catalog = get_catalog(DEFAULT_LANGUAGE)
+        record = catalog.text("unified.friendly_forces.log_firefighters", location=location, count=engine_count)
         self.dispatches_recorded.append(record)
-        res = f"נרשמה בהצלחה הזנקת כוחות כיבוי והצלה ליעד '{location}'."
+        res = catalog.text("unified.friendly_forces.confirm_firefighters", location=location)
         _capture_forces_result(res)
         return res
 
     @tool(
         "dispatch_military",
-        "רישום הזנקת כוחות צבא וביטחון ליעד מבוקש.",
+        _catalog_text("unified.friendly_forces.tool.military"),
         side_effecting=True,
         idempotent=False,
     )
     def dispatch_military(self, location: str, unit_count: int = 1, mission_type: str = "", note: str = "") -> str:
-        record = f"הוזנק כוח צבאי ל-'{location}': כוחות={unit_count}"
+        catalog = get_catalog(DEFAULT_LANGUAGE)
+        record = catalog.text("unified.friendly_forces.log_military", location=location, count=unit_count)
         self.dispatches_recorded.append(record)
-        res = f"נרשמה בהצלחה הזנקת כוחות צבא וביטחון ליעד '{location}'."
+        res = catalog.text("unified.friendly_forces.confirm_military", location=location)
         _capture_forces_result(res)
         return res
 
@@ -664,6 +744,7 @@ class UnifiedFriendlyForcesAgent(FriendlyForcesAgent):
 
 def _seed_mock_data() -> None:
     """Initialize mock readiness-team members and bot-service if DB is empty."""
+    catalog = get_catalog(DEFAULT_LANGUAGE)
     hist_store = open_persistence(DB_PATH)
     try:
         if hist_store.read_user("bot-service") is None:
@@ -677,12 +758,12 @@ def _seed_mock_data() -> None:
     now_dt = datetime.now(timezone.utc)
     now_iso = now_dt.isoformat()
     if not team_store.roster_is_approved():
-        team_store.register_member("2077472944", "מפקד / משתמש ראשי", now_iso)
-        team_store.register_member("commander_user", "מפקד כיתת כוננות", now_iso)
-        team_store.register_member("viewer_user", "לוחם כיתת כוננות", now_iso)
-        team_store.register_member("1001", "דן לוי", now_iso)
-        team_store.register_member("1002", "יוסי כהן", now_iso)
-        team_store.register_member("1003", "מיכל אברהם", now_iso)
+        team_store.register_member("2077472944", catalog.text("unified.seed.primary_name"), now_iso)
+        team_store.register_member("commander_user", catalog.text("unified.seed.commander_user_name"), now_iso)
+        team_store.register_member("viewer_user", catalog.text("unified.seed.viewer_user_name"), now_iso)
+        team_store.register_member("1001", catalog.text("unified.seed.member_1001"), now_iso)
+        team_store.register_member("1002", catalog.text("unified.seed.member_1002"), now_iso)
+        team_store.register_member("1003", catalog.text("unified.seed.member_1003"), now_iso)
         team_store.approve_roster("commander_user", now_iso)
 
         cycle_key = now_dt.date().isoformat()
@@ -697,13 +778,28 @@ def _seed_mock_data() -> None:
         for member in team_store.list_members(approved_only=False)
     }
     primary = members_by_identity.get("2077472944")
-    if primary and primary["full_name"] == "חבר כיתת כוננות (2077472944)":
-        team_store.register_member("2077472944", "מפקד / משתמש ראשי", primary["registered_at"])
+    legacy_placeholder = catalog.text("unified.team_status.legacy_placeholder_name", identity="2077472944")
+    if primary and primary["full_name"] == legacy_placeholder:
+        team_store.register_member("2077472944", catalog.text("unified.seed.primary_name"), primary["registered_at"])
 
 
+def ensure_seed_data() -> None:
+    """Explicit, idempotent entry point for this profile's mock/demo data.
 
-# Run initial seed
-_seed_mock_data()
+    Call this once, before starting a real deployment of this profile (see
+    `run_stack.py`) — deliberately *not* called automatically at import
+    time. It used to run as a side effect of `import profiles.unified_test`
+    itself, which fired for any reason the module got imported (a test
+    reading a module-level constant, tooling that imports every profile,
+    ...), not only when this profile was actually being started — the
+    same reason every other profile in this repo leaves data seeding, and
+    provisioning the `bot-service` identity in particular, to an explicit,
+    operator-run step (`cli.user_admin`; see docs/operator_guide.md)
+    rather than a module-import side effect.
+    """
+
+    _seed_mock_data()
+
 
 AGENTS = [
     AgentSpec(cls=UnifiedSurveillanceAgent, tier="sub"),
@@ -714,10 +810,10 @@ AGENTS = [
 PROTOCOLS = [
     Protocol(
         name="overall_situational_picture",
-        description="תמונת מצב גזרתית כוללת (קריאה בלבד ללא שינוי נתונים): שילוב תצפית (מצלמות ורחפנים) ומצבת כיתת כוננות בגזרה.",
+        description=_catalog_text("unified.protocol.overall_situational_picture.description"),
         participating_agents=("surveillance_agent", "team_status_agent"),
         approved_tools=("get_surveillance_overview", "get_team_status_roster", "report_team_availability"),
-        expected_success_output="תמונת מצב גזרתית מאוחדת ומבצעית המשלבת תצפית וכיתת כוננות ללא שינוי נתונים.",
+        expected_success_output=_catalog_text("unified.protocol.overall_situational_picture.expected_output"),
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
         requires_confirmation=False,
@@ -725,10 +821,10 @@ PROTOCOLS = [
     ),
     Protocol(
         name="query_surveillance_overview",
-        description="תמונת מצב תצפיתית כוללת: סטטוס מצלמות, רחפנים ומשימות אוויריות פעילות בכל הגזרות.",
+        description=_catalog_text("unified.protocol.query_surveillance_overview.description"),
         participating_agents=("surveillance_agent",),
         approved_tools=("get_surveillance_overview",),
-        expected_success_output="תמונת מצב טקטית מרוכזת של מערך התצפית והרחפנים.",
+        expected_success_output=_catalog_text("unified.protocol.query_surveillance_overview.expected_output"),
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
         requires_confirmation=False,
@@ -736,10 +832,10 @@ PROTOCOLS = [
     ),
     Protocol(
         name="query_drone_fleet_status",
-        description="בירור מצב צי הרחפנים: זמינות, רמות סוללה, מיקומים וסטטוס מבצעי של כל הרחפנים.",
+        description=_catalog_text("unified.protocol.query_drone_fleet_status.description"),
         participating_agents=("surveillance_agent",),
         approved_tools=("get_drone_fleet_status",),
-        expected_success_output="דוח מפורט של מצב הרחפנים, סוללות וזמינות לשיגור.",
+        expected_success_output=_catalog_text("unified.protocol.query_drone_fleet_status.expected_output"),
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
         requires_confirmation=False,
@@ -747,10 +843,10 @@ PROTOCOLS = [
     ),
     Protocol(
         name="query_active_drone_missions",
-        description="בירור משימות רחפנים פעילות באוויר: יעדים, זמני הגעה משוערים, רמות סוללה ומשימות.",
+        description=_catalog_text("unified.protocol.query_active_drone_missions.description"),
         participating_agents=("surveillance_agent",),
         approved_tools=("get_active_missions",),
-        expected_success_output="דוח משימות רחפנים פעילות באוויר בעברית.",
+        expected_success_output=_catalog_text("unified.protocol.query_active_drone_missions.expected_output"),
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
         requires_confirmation=False,
@@ -758,10 +854,10 @@ PROTOCOLS = [
     ),
     Protocol(
         name="query_camera_status",
-        description="בדיקת סטטוס ותמונת מצב של מצלמות אבטחה לפי גזרה או מצלמה ספציפית.",
+        description=_catalog_text("unified.protocol.query_camera_status.description"),
         participating_agents=("surveillance_agent",),
         approved_tools=("get_camera_feeds",),
-        expected_success_output="דוח תצפית של מצלמות האבטחה בגזרה המבוקשת.",
+        expected_success_output=_catalog_text("unified.protocol.query_camera_status.expected_output"),
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
         requires_confirmation=False,
@@ -769,10 +865,10 @@ PROTOCOLS = [
     ),
     Protocol(
         name="dispatch_drone_to_incident",
-        description="שיגור רחפן טקטי לאירוע או גזרה לצורך תצפית או סיור. פעולת מפקד בלבד הדורשת אישור.",
+        description=_catalog_text("unified.protocol.dispatch_drone_to_incident.description"),
         participating_agents=("surveillance_agent",),
         approved_tools=("dispatch_drone_to_area",),
-        expected_success_output="אישור שיגור רחפן לגזרה כולל אות קריאה וזמן הגעה משוער.",
+        expected_success_output=_catalog_text("unified.protocol.dispatch_drone_to_incident.expected_output"),
         criticality=CriticalityLevel.HIGH,
         approval_flag=True,
         requires_confirmation=True,
@@ -780,10 +876,10 @@ PROTOCOLS = [
     ),
     Protocol(
         name="recall_drone_to_base",
-        description="החזרת רחפן פעיל לבסיס וסגירת משימה אווירית. הפעלת return_drone_to_base מיד ללא סריקה מוקדמת. פעולת מפקד בלבד הדורשת אישור.",
+        description=_catalog_text("unified.protocol.recall_drone_to_base.description"),
         participating_agents=("surveillance_agent",),
         approved_tools=("return_drone_to_base",),
-        expected_success_output="אישור החזרת הרחפן לבסיס ועדכון סטטוס הרחפן למוכן לפעולה.",
+        expected_success_output=_catalog_text("unified.protocol.recall_drone_to_base.expected_output"),
         criticality=CriticalityLevel.HIGH,
         approval_flag=True,
         requires_confirmation=True,
@@ -791,10 +887,10 @@ PROTOCOLS = [
     ),
     Protocol(
         name="report_team_availability",
-        description="דוח מצבת נוכחות וזמינות כיתת כוננות: מי זמין, מי לא זמין, סיבות, ומי שטרם דיווח.",
+        description=_catalog_text("unified.protocol.report_team_availability.description"),
         participating_agents=("team_status_agent",),
         approved_tools=("report_team_availability",),
-        expected_success_output="תמונת מצב שמית מפורטת של כיתת הכוננות.",
+        expected_success_output=_catalog_text("unified.protocol.report_team_availability.expected_output"),
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
         requires_confirmation=False,
@@ -802,10 +898,10 @@ PROTOCOLS = [
     ),
     Protocol(
         name="record_attendance_response",
-        description="הזנת דיווח נוכחות של חבר כיתת כוננות: סטטוס זמין או לא זמין עם סיבה.",
+        description=_catalog_text("unified.protocol.record_attendance_response.description"),
         participating_agents=("team_status_agent",),
         approved_tools=("record_attendance_response",),
-        expected_success_output="אישור קליטת דיווח הנוכחות של חבר הכיתה.",
+        expected_success_output=_catalog_text("unified.protocol.record_attendance_response.expected_output"),
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
         requires_confirmation=False,
@@ -813,10 +909,10 @@ PROTOCOLS = [
     ),
     Protocol(
         name="dispatch_emergency_forces",
-        description="הזנקת ותיאום כוחות חירום וביטחון: אמבולנס, משטרה, כיבוי אש, צבא. פעולת מפקד בלבד הדורשת אישור.",
+        description=_catalog_text("unified.protocol.dispatch_emergency_forces.description"),
         participating_agents=("friendly_forces_agent",),
         approved_tools=("dispatch_ambulance", "dispatch_police", "dispatch_firefighters", "dispatch_military"),
-        expected_success_output="אישור רישום ותיאום הזנקת כוחות החירום ליעד.",
+        expected_success_output=_catalog_text("unified.protocol.dispatch_emergency_forces.expected_output"),
         criticality=CriticalityLevel.HIGH,
         approval_flag=True,
         requires_confirmation=True,
@@ -824,10 +920,10 @@ PROTOCOLS = [
     ),
     Protocol(
         name="query_historical_incidents",
-        description="תחקור אירועים ומשימות קודמות מתוך יומן המבצעים וההיסטוריה.",
+        description=_catalog_text("unified.protocol.query_historical_incidents.description"),
         participating_agents=("history_agent",),
         approved_tools=(),
-        expected_success_output="סיכום תמציתי ומדויק של אירועי עבר ביומן המבצעי.",
+        expected_success_output=_catalog_text("unified.protocol.query_historical_incidents.expected_output"),
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
         requires_confirmation=False,
@@ -871,15 +967,36 @@ CONVERSATION_HISTORY_TTL_HOURS = 24
 OPTIMIZATION_POLICY = OptimizationPolicy()
 
 COMMANDER_KEYBOARD = (
-    ("⏳ תור אישורים", "📊 תמונת מצב כללית"),
-    ("📹 מצב מצלמות", "🛸 מצב צי רחפנים"),
-    ("🚀 הזנקת רחפן", "🔄 החזרת רחפן לבסיס"),
-    ("👥 סטטוס כיתת כוננות", "🚨 הזנקת כוחות"),
-    ("📜 היסטוריית אירועים",),
+    (
+        _catalog_text("unified.keyboard.approvals_queue", icon=_ICON_HOURGLASS),
+        _catalog_text("unified.keyboard.overall_picture", icon=_ICON_CHART),
+    ),
+    (
+        _catalog_text("unified.keyboard.camera_status", icon=_ICON_CAMERA),
+        _catalog_text("unified.keyboard.drone_fleet_status", icon=_ICON_DRONE),
+    ),
+    (
+        _catalog_text("unified.keyboard.dispatch_drone", icon=_ICON_ROCKET),
+        _catalog_text("unified.keyboard.recall_drone", icon=_ICON_REPEAT),
+    ),
+    (
+        _catalog_text("unified.keyboard.team_status", icon=_ICON_PEOPLE),
+        _catalog_text("unified.keyboard.dispatch_forces", icon=_ICON_SIREN),
+    ),
+    (_catalog_text("unified.keyboard.event_history", icon=_ICON_SCROLL),),
 )
 
 VIEWER_KEYBOARD = (
-    ("✅ אני זמין לכוננות", "❌ איני זמין"),
-    ("👥 סטטוס כיתת כוננות", "📊 תמונת מצב כללית"),
-    ("📹 מצב מצלמות", "📜 היסטוריית אירועים"),
+    (
+        _catalog_text("unified.keyboard.available", icon=_ICON_CHECK),
+        _catalog_text("unified.keyboard.unavailable", icon=_ICON_CROSS),
+    ),
+    (
+        _catalog_text("unified.keyboard.team_status", icon=_ICON_PEOPLE),
+        _catalog_text("unified.keyboard.overall_picture", icon=_ICON_CHART),
+    ),
+    (
+        _catalog_text("unified.keyboard.camera_status", icon=_ICON_CAMERA),
+        _catalog_text("unified.keyboard.event_history", icon=_ICON_SCROLL),
+    ),
 )

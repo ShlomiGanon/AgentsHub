@@ -20,6 +20,15 @@ def main():
 
     logger.info("Starting AgentsHub Stack for %s...", profile_name)
 
+    # profiles.unified_test no longer seeds its mock/demo data (and
+    # provisions the bot-service identity) as an import side effect — this
+    # is the one explicit call site for that, run once from this parent
+    # process before either the API or bot subprocess starts, so both
+    # inherit an already-seeded deployment instead of racing to seed it
+    # themselves. See profiles.unified_test.ensure_seed_data.
+    from profiles import unified_test
+    unified_test.ensure_seed_data()
+
     # Clean stale locks
     lock_file = Path("data/unified_test/unified_history.db.bot.lock")
     if lock_file.exists():

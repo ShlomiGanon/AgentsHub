@@ -31,6 +31,7 @@ from agents.runtime import (
     Agent,
     AgentRegistry,
     DuplicateAgentNameError,
+    ExactResultCapture,
     build_agent_registry,
     configure_provider_concurrency,
     configure_structured_output_mode,
@@ -38,6 +39,7 @@ from agents.runtime import (
     authenticated_request_identity,
     get_authenticated_request_identity,
     initialize_agent_runtime,
+    make_exact_result_capture,
     set_invocation_deadline,
 )
 from agents.provider_telemetry import install_crewai_provider_telemetry
@@ -82,6 +84,7 @@ __all__ = [
     "initialize_agent_runtime",
     "set_invocation_deadline",
     "DuplicateAgentNameError",
+    "ExactResultCapture",
     "HistoryAgent",
     "InvocationPolicy",
     "ProviderCapabilities",
@@ -91,6 +94,7 @@ __all__ = [
     "FriendlyForcesAgent",
     "ToolInfo",
     "build_agent_registry",
+    "make_exact_result_capture",
     "parse_agent_output",
     "provider_capabilities",
     "tool",

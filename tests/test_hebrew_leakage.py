@@ -25,7 +25,6 @@ _HEBREW_PATTERN = re.compile("[֐-׿]")
 _ALLOWED_HEBREW_FILES = {
     "messages/en.py",  # imported for parity assertions elsewhere; holds none, but harmless to allow
     "messages/he.py",
-    "profiles/unified_test.py",
 }
 
 
