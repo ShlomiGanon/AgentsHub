@@ -104,6 +104,7 @@ jobs:
           tests/test_agent_permission_enforcement.py
           tests/test_agent_registry.py
           tests/test_agent_runtime.py
+          tests/test_friendly_forces_agent.py
           tests/test_provider_telemetry.py
           tests/test_reference_agent.py
           tests/test_surveillance_agent.py
@@ -157,6 +158,7 @@ jobs:
       - name: Mission 8 - Telegram Frontend
         run: >
           python -m pytest -v --color=yes
+          tests/test_approvals_queue.py
           tests/test_bot_app.py
           tests/test_bot_background_services.py
           tests/test_bot_holds.py
@@ -181,6 +183,7 @@ jobs:
           tests/test_integration_serial_processing_under_load.py
           tests/test_integration_user_administration.py
           tests/test_response_improvements.py
+          tests/test_unified_role_and_security.py
 
       - name: Confirm tests did not modify tracked files
         run: git diff --exit-code
