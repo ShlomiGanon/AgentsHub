@@ -20,6 +20,7 @@ _DUMMY_ARGS = {
     "submit_message": ("text", "u1", "m1"),
     "answer_clarification_hold": ("h1", "fire", "u1"),
     "answer_approval_hold": ("h1", "approved", "u1"),
+    "fetch_pending_holds": ("u1",),
     "get_profile_view": ("u1",),
     "get_profile_diff_status": (),
     "write_protocol": ("add", {}, "u1"),

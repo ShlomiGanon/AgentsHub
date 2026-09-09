@@ -197,6 +197,12 @@ class HttpApiClient(BotApiClient):
 
         return self._hold_answer_outcome(status, response_payload, invalid_field_status="invalid_candidate", resolved_status="approved")
 
+    async def fetch_pending_holds(self, caller_identity: str) -> dict:
+        status, response_payload = await self._call("GET", "/Holds/Pending", caller_identity)
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+        return response_payload
+
     def _hold_answer_outcome(self, status: int, response_payload: dict, invalid_field_status: str, resolved_status: str) -> HoldAnswerOutcome:
         if status in (401, 403):
             return HoldAnswerOutcome(status="unauthorized", message=response_payload.get("message", ""))

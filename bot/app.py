@@ -452,6 +452,16 @@ BUTTON_PROTOCOL_HINTS = {
     "📋 \u05d9\u05d5\u05de\u05df \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05d5\u05ea\u05d7\u05e7\u05d5\u05e8": "query_historical_incidents",
 }
 
+QUEUE_SHORTCUT_PHRASES = {
+    "\u23f3 \u05ea\u05d5\u05e8 \u05d0\u05d9\u05e9\u05d5\u05e8\u05d9\u05dd",  # Approvals queue with hourglass
+    "\u05ea\u05d5\u05e8 \u05d0\u05d9\u05e9\u05d5\u05e8\u05d9\u05dd",          # Approvals queue
+    "\u05d0\u05d9\u05e9\u05d5\u05e8\u05d9\u05dd",                              # Approvals
+    "\u05de\u05d4 \u05de\u05de\u05ea\u05d9\u05df \u05dc\u05d0\u05d9\u05e9\u05d5\u05e8",  # What is awaiting approval
+    "approvals queue",
+    "approvals",
+    "pending approvals",
+}
+
 
 async def _on_text_message(update, context) -> None:
     deps: BotDeps = context.bot_data["deps"]
@@ -464,6 +474,18 @@ async def _on_text_message(update, context) -> None:
         return
 
     incoming_text = (update.message.text or "").strip()
+    if (
+        incoming_text in QUEUE_SHORTCUT_PHRASES
+        or incoming_text.casefold() in QUEUE_SHORTCUT_PHRASES
+    ):
+        if resolution.caller and resolution.caller.level != PermissionLevel.COMMANDER:
+            await deps.telegram_client.send_text(
+                chat_id, messages.text("bot.commander_only")
+            )
+            return
+        await interactions.present_pending_approvals_queue(deps, chat_id, telegram_identity)
+        return
+
     attendance_key = (chat_id, telegram_identity)
     available_button = incoming_text == "\u2705 \u05d0\u05e0\u05d9 \u05d6\u05de\u05d9\u05df \u05dc\u05db\u05d5\u05e0\u05e0\u05d5\u05ea"
     unavailable_button = incoming_text == "\u274c \u05d0\u05d9\u05e0\u05d9 \u05d6\u05de\u05d9\u05df"
@@ -644,12 +666,34 @@ async def _on_callback_query(update, context) -> None:
     try:
         if namespace == interactions.CLARIFICATION_CALLBACK_PREFIX:
             event_id, choice = interactions.parse_clarification_callback_data(query.data)
-            await interactions.handle_clarification_answer(deps, chat_id, telegram_identity, event_id, choice)
+            outcome = await interactions.handle_clarification_answer(deps, chat_id, telegram_identity, event_id, choice)
+            if outcome and outcome.status == "resolved" and getattr(query, "message", None):
+                messages = interactions.message_catalog_for(deps)
+                status_text = f"\u2705 {messages.text('bot.queue_resolved')}"
+                try:
+                    await deps.telegram_client.edit_status(
+                        chat_id, str(query.message.message_id), status_text
+                    )
+                except Exception as exc:
+                    logger.warning("could not edit clarification card: %s", exc)
             return
 
         if namespace == interactions.CALLBACK_PREFIX:
             event_id, choice = interactions.parse_callback_data(query.data)
-            await interactions.handle_approval_answer(deps, chat_id, telegram_identity, event_id, choice)
+            outcome = await interactions.handle_approval_answer(deps, chat_id, telegram_identity, event_id, choice)
+            if outcome and outcome.status in ("approved", "rejected") and getattr(query, "message", None):
+                messages = interactions.message_catalog_for(deps)
+                status_text = (
+                    f"\u2705 {messages.text('bot.queue_approved')}"
+                    if outcome.status == "approved"
+                    else f"\u274c {messages.text('bot.queue_rejected')}"
+                )
+                try:
+                    await deps.telegram_client.edit_status(
+                        chat_id, str(query.message.message_id), status_text
+                    )
+                except Exception as exc:
+                    logger.warning("could not edit approval card: %s", exc)
             return
 
         logger.warning("unrecognized callback namespace: %s", namespace, extra={"event": "bot_unknown_callback"})

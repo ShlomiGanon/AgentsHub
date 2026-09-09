@@ -1190,6 +1190,48 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
     blueprint = Blueprint("holds", __name__)
     messages = ctx.loaded_profile.message_catalog
 
+    @blueprint.route("/Holds/Pending", methods=["GET"])
+    def get_pending_holds():
+        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
+        require(level, RequestedOperation.APPROVE_RUN)
+
+        approval_holds = ctx.deps.persistence.list_held_events("approval")
+        clarification_holds = ctx.deps.persistence.list_held_events("clarification")
+
+        items = []
+        for h in approval_holds:
+            event = ctx.deps.persistence.fetch_event(h["event_id"]) or {}
+            items.append({
+                "hold_id": h["hold_id"],
+                "event_id": h["event_id"],
+                "kind": "approval",
+                "protocol_name": h.get("selected_protocol_name") or (h.get("candidate_protocol_names") or [""])[0],
+                "reason": h.get("reason") or "flagged_protocol",
+                "risk_level": h.get("risk_level") or "high",
+                "risk_reason": h.get("risk_reason") or "",
+                "created_at": h.get("created_at") or "",
+                "raw_text": event.get("raw_text") or h.get("selection_reason") or "",
+                "sender_identity": event.get("sender_identity") or "",
+                "area": event.get("area") or "",
+            })
+
+        for h in clarification_holds:
+            event = ctx.deps.persistence.fetch_event(h["event_id"]) or {}
+            avail_classifications = list(getattr(ctx.deps.event_type_registry, "types", []))
+            items.append({
+                "hold_id": h["hold_id"],
+                "event_id": h["event_id"],
+                "kind": "clarification",
+                "unresolved_field": h.get("unresolved_field") or "classification",
+                "created_at": h.get("created_at") or "",
+                "raw_text": h.get("raw_text") or event.get("raw_text") or "",
+                "sender_identity": event.get("sender_identity") or "",
+                "area": event.get("area") or "",
+                "available_classifications": avail_classifications,
+            })
+
+        return jsonify({"holds": items, "count": len(items)}), 200
+
     @blueprint.route("/Clarify/<event_id>", methods=["POST"])
     def post_clarify(event_id):
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))

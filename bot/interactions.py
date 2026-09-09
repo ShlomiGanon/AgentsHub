@@ -644,7 +644,7 @@ def _describe_outcome(outcome, catalog: MessageCatalog | None = None) -> str:
     return messages.text("approval.already_answered", who=who, message=outcome.message).strip()
 
 
-async def handle_approval_answer(deps: "BotDeps", chat_id: str, answering_identity: str, event_id: str, choice: str) -> None:
+async def handle_approval_answer(deps: "BotDeps", chat_id: str, answering_identity: str, event_id: str, choice: str) -> "HoldAnswerOutcome | None":
     """`choice` is already "approved"/"rejected" for a flagged-protocol hold (the button's callback data), or the chosen candidate's protocol name for an ambiguous-selection hold — see..."""
 
     unregister_open_approval_hold(event_id)
@@ -652,19 +652,20 @@ async def handle_approval_answer(deps: "BotDeps", chat_id: str, answering_identi
     resolution = await resolve_caller(deps.api_client, answering_identity, messages)
     if resolution.status == "unregistered":
         await deps.telegram_client.send_text(chat_id, resolution.refusal_message)
-        return
+        return None
 
     refusal = check_permission(resolution.caller, RequestedOperation.APPROVE_RUN, messages)
     if refusal is not None:
         await deps.telegram_client.send_text(chat_id, refusal)
-        return
+        return None
 
     outcome = await deps.api_client.answer_approval_hold(event_id, choice, answering_identity)
     await deps.telegram_client.send_text(chat_id, _describe_outcome(outcome, messages))
+    return outcome
 
 
 if TYPE_CHECKING:
-    from bot.contracts import BotDeps, HeldClarificationNotice
+    from bot.contracts import BotDeps, HeldClarificationNotice, HoldAnswerOutcome
 
 CLARIFICATION_CALLBACK_PREFIX = "clarify"
 
@@ -717,17 +718,135 @@ def _describe_clarification_outcome(outcome, catalog: MessageCatalog | None = No
 
 async def handle_clarification_answer(
     deps: "BotDeps", chat_id: str, answering_identity: str, event_id: str, chosen_classification: str
+) -> "HoldAnswerOutcome | None":
+    messages = message_catalog_for(deps)
+    resolution = await resolve_caller(deps.api_client, answering_identity, messages)
+    if resolution.status == "unregistered":
+        await deps.telegram_client.send_text(chat_id, resolution.refusal_message)
+        return None
+
+    refusal = check_permission(resolution.caller, RequestedOperation.RESOLVE_CLARIFICATION, messages)
+    if refusal is not None:
+        await deps.telegram_client.send_text(chat_id, refusal)
+        return None
+
+    outcome = await deps.api_client.answer_clarification_hold(event_id, chosen_classification, answering_identity)
+    await deps.telegram_client.send_text(chat_id, _describe_clarification_outcome(outcome, messages))
+    return outcome
+
+
+def _format_waiting_time(created_at_iso: str | None, messages: MessageCatalog) -> str:
+    if not created_at_iso:
+        return messages.text("time.unknown")
+    try:
+        from datetime import datetime, timezone
+        clean_iso = created_at_iso.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(clean_iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        diff = (now - dt).total_seconds()
+        if diff < 0:
+            diff = 0
+        if diff < 60:
+            return messages.text("time.seconds_ago", seconds=int(diff))
+        if diff < 3600:
+            return messages.text("time.minutes_ago", minutes=int(diff // 60))
+        return messages.text("time.hours_ago", hours=int(diff // 3600))
+    except Exception:
+        return messages.text("time.unknown")
+
+
+def _friendly_action_type(protocol_name: str, messages: MessageCatalog) -> str:
+    key = f"action.{protocol_name}"
+    try:
+        return messages.text(key)
+    except MessageCatalogError:
+        return messages.text("action.generic")
+
+
+async def present_pending_approvals_queue(
+    deps: "BotDeps", chat_id: str, answering_identity: str
 ) -> None:
+    from bot.contracts import ApiRequestError
+
     messages = message_catalog_for(deps)
     resolution = await resolve_caller(deps.api_client, answering_identity, messages)
     if resolution.status == "unregistered":
         await deps.telegram_client.send_text(chat_id, resolution.refusal_message)
         return
 
-    refusal = check_permission(resolution.caller, RequestedOperation.RESOLVE_CLARIFICATION, messages)
+    refusal = check_permission(resolution.caller, RequestedOperation.APPROVE_RUN, messages)
     if refusal is not None:
         await deps.telegram_client.send_text(chat_id, refusal)
         return
 
-    outcome = await deps.api_client.answer_clarification_hold(event_id, chosen_classification, answering_identity)
-    await deps.telegram_client.send_text(chat_id, _describe_clarification_outcome(outcome, messages))
+    try:
+        data = await deps.api_client.fetch_pending_holds(answering_identity)
+    except ApiRequestError as exc:
+        if exc.status_code == 403:
+            await deps.telegram_client.send_text(chat_id, messages.text("bot.commander_only"))
+            return
+        await deps.telegram_client.send_text(chat_id, messages.text("error.request_failed", reason=exc.message))
+        return
+
+    holds = data.get("holds", [])
+    if not holds:
+        await deps.telegram_client.send_text(chat_id, f"\u2705 {messages.text('bot.queue_empty')}")
+        return
+
+    header_text = f"\u23f3 {messages.text('bot.queue_header', count=len(holds))}"
+    await deps.telegram_client.send_text(chat_id, header_text)
+
+    for hold in holds:
+        kind = hold.get("kind")
+        event_id = hold.get("event_id", "")
+        created_at = hold.get("created_at")
+        waiting_time = _format_waiting_time(created_at, messages)
+        requester = hold.get("sender_identity") or messages.text("common.unknown")
+
+        if kind == "approval":
+            protocol_name = hold.get("protocol_name") or ""
+            action_type = _friendly_action_type(protocol_name, messages)
+            description = hold.get("raw_text") or messages.text("action.generic")
+            risk_level = _risk_level_word(hold.get("risk_level", "low"), messages)
+            risk_reason_val = hold.get("risk_reason")
+            risk_reason = f" ({risk_reason_val})" if risk_reason_val else ""
+
+            card_text = messages.text(
+                "bot.queue_card_approval",
+                action_type=action_type,
+                description=description,
+                waiting_time=waiting_time,
+                requester=requester,
+                risk_level=risk_level,
+                risk_reason=risk_reason,
+            )
+            buttons = [
+                (f"\u2705 {messages.text('bot.btn_approve')}", build_callback_data(event_id, "approved")),
+                (f"\u274c {messages.text('bot.btn_reject')}", build_callback_data(event_id, "rejected")),
+            ]
+            await deps.telegram_client.send_with_buttons(chat_id, card_text, buttons)
+
+        elif kind == "clarification":
+            action_type = messages.text("action.clarification")
+            description = hold.get("raw_text") or messages.text("common.unknown")
+            unresolved_info = messages.text("action.unresolved_classification")
+
+            card_text = messages.text(
+                "bot.queue_card_clarification",
+                action_type=action_type,
+                description=description,
+                waiting_time=waiting_time,
+                requester=requester,
+                unresolved_info=unresolved_info,
+            )
+            avail = hold.get("available_classifications") or ()
+            buttons = [
+                (choice, build_clarification_callback_data(event_id, choice))
+                for choice in avail
+            ]
+            if buttons:
+                await deps.telegram_client.send_with_buttons(chat_id, card_text, buttons)
+            else:
+                await deps.telegram_client.send_text(chat_id, card_text)

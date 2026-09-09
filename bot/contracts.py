@@ -307,6 +307,11 @@ class BotApiClient(ABC):
 
 
     @abstractmethod
+    async def fetch_pending_holds(self, caller_identity: str) -> dict:
+        """Fetch all pending approval and clarification holds for a commander."""
+
+
+    @abstractmethod
     async def get_profile_view(self, caller_identity: str) -> ProfileView:
         """`caller_identity` — the real Telegram identity asking, already resolved and permission-checked by `bot.users.resolve_caller` before this is ever called — is what the API's own §..."""
 
@@ -372,6 +377,9 @@ class UnimplementedApiClient(BotApiClient):
 
     async def answer_approval_hold(self, event_id: str, decision: str, answering_identity: str) -> HoldAnswerOutcome:
         raise ApiNotImplementedError("answer_approval_hold", "§7.9 (authentication/authorization enforcement)")
+
+    async def fetch_pending_holds(self, caller_identity: str) -> dict:
+        raise ApiNotImplementedError("fetch_pending_holds", "§7.9 (GET /Holds/Pending)")
 
     async def get_profile_view(self, caller_identity: str) -> ProfileView:
         raise ApiNotImplementedError("get_profile_view", "§7.7 (GET /SYSTEM)")

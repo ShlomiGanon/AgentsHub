@@ -74,6 +74,7 @@ class FakeBotApiClient(BotApiClient):
     message_submission_result: MessageSubmissionResult | None = None
     clarification_answer_outcome: HoldAnswerOutcome | None = None
     approval_answer_outcome: HoldAnswerOutcome | None = None
+    pending_holds: dict | None = None
     profile_view: ProfileView | None = None
     profile_diff_status: bool | None = None
     protocol_write_result: WriteResult | None = None
@@ -126,6 +127,16 @@ class FakeBotApiClient(BotApiClient):
         self.calls.append(("answer_approval_hold", event_id, decision, answering_identity))
         assert self.approval_answer_outcome is not None
         return self.approval_answer_outcome
+
+    async def fetch_pending_holds(self, caller_identity: str) -> dict:
+        self.calls.append(("fetch_pending_holds", caller_identity))
+        if caller_identity not in self.users:
+            raise ApiRequestError(401, f"'{caller_identity}' is not a registered identity")
+        if self.users[caller_identity] != "commander":
+            raise ApiRequestError(403, "Forbidden")
+        if self.pending_holds is None:
+            return {"holds": [], "count": 0}
+        return self.pending_holds
 
     async def get_profile_view(self, caller_identity: str) -> ProfileView:
         self.calls.append(("get_profile_view", caller_identity))
