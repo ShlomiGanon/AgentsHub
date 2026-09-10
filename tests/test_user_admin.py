@@ -42,7 +42,7 @@ def test_add_first_commander_against_an_empty_database(profile_module, capsys, r
 
     store = SQLitePersistence(str(db_path))
     try:
-        assert store.read_user("1001") == {"telegram_identity": "1001", "permission_level": "commander"}
+        assert store.read_user("1001") == {"telegram_identity": "1001", "permission_level": "commander", "full_name": ""}
     finally:
         store.close()
 
@@ -56,6 +56,17 @@ def test_update_changes_an_existing_users_level(profile_module, real_tier_env):
     store = SQLitePersistence(str(db_path))
     try:
         assert store.read_user("2002")["permission_level"] == "commander"
+    finally:
+        store.close()
+
+
+def test_cli_accepts_one_full_name_field_and_preserves_it_on_level_change(profile_module, real_tier_env):
+    module_name, db_path = profile_module
+    main(["--profile", module_name, "add", "--telegram-id", "2003", "--level", "viewer", "--full-name", "Dana Levi"])
+    main(["--profile", module_name, "update", "--telegram-id", "2003", "--level", "commander"])
+    store = SQLitePersistence(str(db_path))
+    try:
+        assert store.read_user("2003")["full_name"] == "Dana Levi"
     finally:
         store.close()
 

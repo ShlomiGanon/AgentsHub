@@ -139,7 +139,20 @@ class HttpApiClient(BotApiClient):
         status, response_payload = await self._call("GET", f"/User/{quote(telegram_identity, safe='')}", BOT_SERVICE_IDENTITY)
         if status >= 400:
             self._raise_for_error(status, response_payload)
-        return UserLookupResult(registered=response_payload["registered"], permission_level=response_payload["permission_level"])
+        return UserLookupResult(
+            registered=response_payload["registered"],
+            permission_level=response_payload["permission_level"],
+            full_name=response_payload.get("full_name"),
+        )
+
+    async def update_own_full_name(self, telegram_identity: str, full_name: str) -> str:
+        status, response_payload = await self._call(
+            "PUT", f"/User/{quote(telegram_identity, safe='')}/name", telegram_identity,
+            {"full_name": full_name},
+        )
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+        return response_payload["full_name"]
 
 
     async def list_commander_chat_ids(self) -> tuple[str, ...]:

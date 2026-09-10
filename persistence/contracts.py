@@ -137,8 +137,12 @@ class PersistenceInterface(ABC):
         """Return the user's record, or None if unregistered."""
 
     @abstractmethod
-    def write_user(self, telegram_identity: str, permission_level: str) -> None:
-        """Create or update a user's permission level."""
+    def write_user(self, telegram_identity: str, permission_level: str, full_name: str | None = None) -> None:
+        """Create/update a user; None preserves an existing full name."""
+
+    @abstractmethod
+    def update_user_full_name(self, telegram_identity: str, full_name: str) -> None:
+        """Update an existing user's full name; raise NotFoundError when absent."""
 
     @abstractmethod
     def delete_user(self, telegram_identity: str) -> None:

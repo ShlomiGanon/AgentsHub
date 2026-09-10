@@ -85,6 +85,7 @@ HoldAnswerStatus = Literal[
 class UserLookupResult:
     registered: bool
     permission_level: PermissionLevelName | None = None
+    full_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -297,6 +298,9 @@ class BotApiClient(ABC):
     async def resolve_user(self, telegram_identity: str) -> UserLookupResult: ...
 
     @abstractmethod
+    async def update_own_full_name(self, telegram_identity: str, full_name: str) -> str: ...
+
+    @abstractmethod
     async def list_commander_chat_ids(self) -> tuple[str, ...]:
         """Every commander's Telegram identity, for pushing §8.4/§8.5/§8.6 notifications to."""
 
@@ -393,6 +397,9 @@ class UnimplementedApiClient(BotApiClient):
 
     async def resolve_user(self, telegram_identity: str) -> UserLookupResult:
         raise ApiNotImplementedError("resolve_user", "§7.9 (authentication/authorization enforcement)")
+
+    async def update_own_full_name(self, telegram_identity: str, full_name: str) -> str:
+        raise ApiNotImplementedError("update_own_full_name", "work_plan.md §7 — API Layer (PUT /User/<identity>/name)")
 
     async def list_commander_chat_ids(self) -> tuple[str, ...]:
         raise ApiNotImplementedError("list_commander_chat_ids", "§7.9 (authentication/authorization enforcement)")

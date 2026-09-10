@@ -269,6 +269,48 @@ def test_on_text_message_replies_in_the_same_chat():
     ]
 
 
+def test_missing_name_is_collected_then_original_message_resumes_once():
+    api = FakeBotApiClient(
+        users={"42": {"permission_level": "viewer", "full_name": ""}},
+        message_submission_result=MessageSubmissionResult(kind="question", answer_text="done"),
+    )
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
+    handler = app._guarded(app._on_text_message)
+
+    _run(handler(_fake_update(text="original request"), _fake_context(deps)))
+    assert not any(call[0] == "submit_message" for call in api.calls)
+    assert "full name" in telegram.sent[-1].text.lower()
+
+    _run(handler(_fake_update(text="Dana"), _fake_context(deps)))
+    assert not any(call[0] == "submit_message" for call in api.calls)
+
+    _run(handler(_fake_update(text="  Dana   Levi  "), _fake_context(deps)))
+    assert ("update_own_full_name", "42", "Dana Levi") in api.calls
+    submissions = [call for call in api.calls if call[0] == "submit_message"]
+    assert len(submissions) == 1
+    assert submissions[0][1] == "original request"
+    assert all(call[1] != "Dana Levi" for call in submissions)
+
+
+def test_missing_name_resumes_a_callback_after_the_name_reply():
+    from bot.api_client import HoldAnswerOutcome
+
+    api = FakeBotApiClient(
+        users={"42": {"permission_level": "commander", "full_name": ""}},
+        approval_answer_outcome=HoldAnswerOutcome(status="approved"),
+    )
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
+
+    _run(app._guarded(app._on_callback_query)(_fake_update(callback_data="approve:event-1:approved"), _fake_context(deps)))
+    assert not any(call[0] == "answer_approval_hold" for call in api.calls)
+    _run(app._guarded(app._on_text_message)(_fake_update(text="Dana Levi"), _fake_context(deps)))
+    assert [call for call in api.calls if call[0] == "answer_approval_hold"] == [
+        ("answer_approval_hold", "event-1", "approved", "42")
+    ]
+
+
 def test_on_text_message_forwards_the_real_incoming_message_id():
     # Problem 2's fix: this is the one place the original Telegram
     # message's ID is available at all — lost here means lost for good,

@@ -1,0 +1,115 @@
+{
+  "scenario_metadata": {
+    "scenario_id": "FIRE_002_PHASE_3",
+    "domain": "FIRE_AND_RESCUE",
+    "phase": "3_EXTREME_CRISIS",
+    "title": "אירוע כיבוי והצלה - שלב קיצון: איום חומ\"ס, פינוי תושבים ועומס קריטי",
+    "description": "הגעה לקצה המבצעי. השריפה מתקרבת למפעל חומרים מסוכנים בפארק התעשייה, הוראה על פינוי קו בתים ראשון, דיווחי שווא על לכודים וניהול סד\"כ ארצי/מחוזי."
+  },
+  "event_stream": [
+    {
+      "step": 1,
+      "timestamp": "2026-09-09T13:00:00Z",
+      "target_agent": "personnel_agent",
+      "source_chat": "TELEGRAM_GROUP_RESPONSE_TEAM",
+      "payload": {
+        "sender": "רס\"ל יובל - מפקד צוות אשד 3",
+        "message": "חירום! הלהבות בחזית הצפונית עברו את כביש הגישה והגיעו לגדר של מפעל 'כימי-קל'. יש שם צובר גז ומיכלי אמוניה בחצר!"
+      }
+    },
+    {
+      "step": 2,
+      "timestamp": "2026-09-09T13:03:00Z",
+      "target_agent": "external_comm_agent",
+      "source_chat": "TELEGRAM_GROUP_EXTERNAL_FORCES",
+      "payload": {
+        "sender": "מוקד משטרה - אג\"מ",
+        "message": "מתחילים פינוי מיידי של קו הבתים הראשון ברחוב אורנים עקב עשן רעיל וסמיך! מבקשים הנחיות לגבי חסימות צירים נוספות."
+      }
+    },
+    {
+      "step": 3,
+      "timestamp": "2026-09-09T13:07:00Z",
+      "target_agent": "personnel_agent",
+      "source_chat": "TELEGRAM_GROUP_RESPONSE_TEAM",
+      "payload": {
+        "sender": "אזרח - קבוצת דיווחים",
+        "message": "יש שני ילדים לכודים על גג המבנה ברחוב אורנים 14! סורגים סגורים, העשן נכנס פנימה!"
+      }
+    },
+    {
+      "step": 4,
+      "timestamp": "2026-09-09T13:10:00Z",
+      "target_agent": "main_orchestrator",
+      "source_chat": "TELEGRAM_DIRECT_COMMANDER",
+      "payload": {
+        "sender": "מפקד התחנה",
+        "message": "יש לנו שני מוקדי חרום קריטיים: חומ\"ס במפעל מול לכודים בבתים! הסד\"כ שלנו עדיין בחסר. תתעדף לי מיד תגובה והקצאת מים/צוותים!"
+      }
+    },
+    {
+      "step": 5,
+      "timestamp": "2026-09-09T13:14:00Z",
+      "target_agent": "external_comm_agent",
+      "source_chat": "TELEGRAM_GROUP_EXTERNAL_FORCES",
+      "payload": {
+        "sender": "סיור משטרתי",
+        "message": "בדיקה ברחוב אורנים 14: הבית ריק! הילדים פונו מוקדם יותר על ידי ההורים. הדיווח על לכודים - סרק!"
+      }
+    },
+    {
+      "step": 6,
+      "timestamp": "2026-09-09T13:18:00Z",
+      "target_agent": "vision_agent",
+      "source_chat": "TELEGRAM_GROUP_CAMERAS",
+      "payload": {
+        "sender": "רוני - מפעיל תצפיות",
+        "message": "מצלמה טקטית מרחפן מראה שהאש נושקת למכל הגז החיצוני של המפעל. נדרש מסך מים מקורר באופן מיידי!"
+      }
+    },
+    {
+      "step": 7,
+      "timestamp": "2026-09-09T13:25:00Z",
+      "target_agent": "external_comm_agent",
+      "source_chat": "TELEGRAM_GROUP_EXTERNAL_FORCES",
+      "payload": {
+        "sender": "מפקד מחוז - כב\"ה",
+        "message": "משגרים אליכם 4 רכבי אלון (מיכליות מים) מתחנה שכנה + 2 טייסת כיבוי. שמיים נקיים לריסוס."
+      }
+    },
+    {
+      "step": 8,
+      "timestamp": "2026-09-09T13:45:00Z",
+      "target_agent": "personnel_agent",
+      "source_chat": "TELEGRAM_GROUP_RESPONSE_TEAM",
+      "payload": {
+        "sender": "להב אבי - מפקד משמרת",
+        "message": "הסיוע המחוזי הגיע! הקמנו מסך מים סביב צוברי הגז והלהבות במפעל נבלמו. אין דליפת חומ\"ס."
+      }
+    },
+    {
+      "step": 9,
+      "timestamp": "2026-09-09T14:15:00Z",
+      "target_agent": "main_orchestrator",
+      "source_chat": "TELEGRAM_DIRECT_COMMANDER",
+      "payload": {
+        "sender": "מפקד התחנה",
+        "message": "האירוע בהכלה. תפיק לי תחקירי ראשוני: לוח זמנים, ניהול המשאבים, זיהוי דיווחי השווא והנחיות להחזרת תושבים לבתים."
+      }
+    }
+  ],
+  "expected_agent_actions": [
+    {
+      "trigger_step": 4,
+      "responsible_agent": "main_orchestrator",
+      "action_type": "CRITICAL_RESOURCE_TRIAGE",
+      "description": "הסוכן הראשי מצליב נתונים מול סוכן חוץ (משטרה ומד\"א) וסוכן תובנות. ממליץ להפנות את מירב סד\"כ הכיבוי לקירור צוברי החומ\"ס למניעת אסון הומניטרי, תוך הנחיית המשטרה לאמת פיזית את הדיווח על הלכודים בטרם הסטת צוות כיבוי."
+    },
+    {
+      "trigger_step": 9,
+      "responsible_agent": "main_orchestrator",
+      "action_type": "FINAL_INCIDENT_SUMMARY",
+      "description": "הסוכן הראשי שולף מסוכן ההיסטוריה את כל נתוני 3 השלבים ומפיק דוח סיווג אירוע: ציר זמן מתחילת השריפה, ניתוח דיווח הסרק על הלכודים, היקף כוחות מחוזיים שהשתתפו, וטיוטת אישור חזרה לשגרה עבור המשטרה והרשות המקומית."
+    }
+  ]
+}

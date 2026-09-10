@@ -273,6 +273,7 @@ class UserResolutionResult:
     status: Literal["ok", "unregistered"]
     caller: CallerContext | None = None
     refusal_message: str = ""
+    full_name: str = ""
 
 
 def _unregistered_message(telegram_identity: str, catalog: MessageCatalog | None = None) -> str:
@@ -291,7 +292,11 @@ async def resolve_caller(
         )
 
     level = _LEVEL_BY_NAME[lookup.permission_level]
-    return UserResolutionResult(status="ok", caller=CallerContext(telegram_identity=telegram_identity, level=level))
+    return UserResolutionResult(
+        status="ok",
+        caller=CallerContext(telegram_identity=telegram_identity, level=level),
+        full_name=(lookup.full_name or "").strip(),
+    )
 
 
 def check_permission(

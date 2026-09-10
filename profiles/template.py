@@ -59,6 +59,7 @@ EVENT_TYPE_REQUIRED_FIELDS = {
 }
 
 DB_PATH = str(Path(tempfile.gettempdir()) / "agentshub_reference_template.db")
+RESETTABLE_DATABASES = (DB_PATH,)
 API_PORT = 9999
 
 RETRY_COUNT = 3

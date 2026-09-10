@@ -71,6 +71,7 @@ AREAS = ["north_sector", "south_sector"]
 _DEMO_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _DEMO_DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = str(_DEMO_DATA_DIR / "demo_profile.db")
+RESETTABLE_DATABASES = (DB_PATH,)
 
 API_PORT = 8902
 RETRY_COUNT = 3

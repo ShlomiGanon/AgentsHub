@@ -1,0 +1,115 @@
+{
+  "scenario_metadata": {
+    "scenario_id": "SEC_001_PHASE_2",
+    "domain": "FIRST_RESPONDERS_TEAM",
+    "phase": "2_MAIN_ESCALATION",
+    "title": "אירוע כיתת כוננות - שלב עיקרי: התחממות והצטברות אירועים",
+    "description": "מעבר משגרה לחירום. סדרת תקלות תצפית חריגות, אינדיקציות משטרתיות על רכב חשוד, וזיהוי נזק פיזי לגדר המערכת המצריכים הקפצה תחת חסר בסד\"כ."
+  },
+  "event_stream": [
+    {
+      "step": 1,
+      "timestamp": "2026-09-08T07:15:00Z",
+      "target_agent": "vision_agent",
+      "source_chat": "TELEGRAM_GROUP_CAMERAS",
+      "payload": {
+        "sender": "יוסי - טכנאי חוזי",
+        "message": "בוקר טוב. מוזר, מצלמה 03 שהורדנו אתמול לעדכון עדיין לא חזרה. עכשיו גם מצלמה 04 לידה תקועה על תמונה קפואה."
+      }
+    },
+    {
+      "step": 2,
+      "timestamp": "2026-09-08T07:45:00Z",
+      "target_agent": "external_comm_agent",
+      "source_chat": "TELEGRAM_GROUP_EXTERNAL_FORCES",
+      "payload": {
+        "sender": "יומנאי תחנת משטרה",
+        "message": "לכל המרחב: התקבל דיווח על רכב מסחרי לבן ללא לחיות זיהוי שנראה נע באיטיות באזור המטעים המזרחיים שלכם."
+      }
+    },
+    {
+      "step": 3,
+      "timestamp": "2026-09-08T08:00:00Z",
+      "target_agent": "personnel_agent",
+      "source_chat": "TELEGRAM_GROUP_RESPONSE_TEAM",
+      "payload": {
+        "sender": "יובל - כיתת כוננות",
+        "message": "היי חברים, שומע פריקה של ציוד כבד באזור השער המערבי. יש שם עבודות מתוכננות היום?"
+      }
+    },
+    {
+      "step": 4,
+      "timestamp": "2026-09-08T08:10:00Z",
+      "target_agent": "main_orchestrator",
+      "source_chat": "TELEGRAM_DIRECT_COMMANDER",
+      "payload": {
+        "sender": "רבש\"ץ",
+        "message": "תציף לי תמונה מהירה: יש לנו משהו חשוד בגזרה המזרחית? ומה הדיבור על השער המערבי?"
+      }
+    },
+    {
+      "step": 5,
+      "timestamp": "2026-09-08T08:25:00Z",
+      "target_agent": "vision_agent",
+      "source_chat": "TELEGRAM_GROUP_CAMERAS",
+      "payload": {
+        "sender": "יוסי - טכנאי חוזי",
+        "message": "חבר'ה, הגעתי פיזית למצלמה 03 בגדר המזרחית. יש כבל תקשורת חתוך פיזית! זה חבלה יזומות, לא תקלת רשת!"
+      }
+    },
+    {
+      "step": 6,
+      "timestamp": "2026-09-08T08:30:00Z",
+      "target_agent": "external_comm_agent",
+      "source_chat": "TELEGRAM_GROUP_EXTERNAL_FORCES",
+      "payload": {
+        "sender": "ניידת סיור 40",
+        "message": "מזהים את המסחרית הלבנה נטושה במטע הזיתים המזרחי, כ-150 מטר מגדר היישוב. דלתות פתוחות, הרכב ריק. מקפיצים יחידת כלבנים."
+      }
+    },
+    {
+      "step": 7,
+      "timestamp": "2026-09-08T08:32:00Z",
+      "target_agent": "main_orchestrator",
+      "source_chat": "TELEGRAM_DIRECT_COMMANDER",
+      "payload": {
+        "sender": "רבש\"ץ",
+        "message": "אירוע חם! תצליב לי מיד את כל המידע מהסוכנים, תקפיץ כיתת הכוננות ותמליץ על פריסת כוחות!"
+      }
+    },
+    {
+      "step": 8,
+      "timestamp": "2026-09-08T08:40:00Z",
+      "target_agent": "personnel_agent",
+      "source_chat": "TELEGRAM_GROUP_RESPONSE_TEAM",
+      "payload": {
+        "sender": "גיל - כיתת כוננות",
+        "message": "קיבלתי את ההקפצה, יוצא מהבית לכיוון גזרה מזרחית. מגיע תוך 4 דקות. מי עוד איתי בצוות?"
+      }
+    },
+    {
+      "step": 9,
+      "timestamp": "2026-09-08T08:45:00Z",
+      "target_agent": "personnel_agent",
+      "source_chat": "TELEGRAM_GROUP_RESPONSE_TEAM",
+      "payload": {
+        "sender": "גיל - כיתת כוננות",
+        "message": "געתי למקטע 4 מזרח. מזהה פריצה טרייה בגדר המערכת! עקבות רגליים מובילות פנימה לכיוון שכונת ההרחבה!"
+      }
+    }
+  ],
+  "expected_agent_actions": [
+    {
+      "trigger_step": 4,
+      "responsible_agent": "main_orchestrator",
+      "action_type": "PRELIMINARY_CROSS_REFERENCE",
+      "description": "הסוכן הראשי פונה לסוכן היסטוריה/תובנות. מזהה שהעבודות במערב מתוכננות (אירוע שגרה), אך מציף אזהרה על הצטברות תקלות במזרח בצמוד לדיווח המשטרה."
+    },
+    {
+      "trigger_step": 7,
+      "responsible_agent": "main_orchestrator",
+      "action_type": "EMERGENCY_ESCALATION_PLAN",
+      "description": "הסוכן הראשי מצליב: כבל חתוך + מסחרית נטושה + חסר בסד\"כ (אלי במילואים, מיכאל חולה). מייצר לרבש\"ץ נוסח הקפצה מיידית והמלצה למיקוד כוחות במזרח."
+    }
+  ]
+}

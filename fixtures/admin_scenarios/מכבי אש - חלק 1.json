@@ -1,0 +1,89 @@
+{
+  "scenario_metadata": {
+    "scenario_id": "FIRE_002_PHASE_1",
+    "domain": "FIRE_AND_RESCUE",
+    "phase": "1_PREPARATION_ROUTINE",
+    "title": "אירוע כיבוי והצלה - שלב מכין: שגרה, עומס חום ותחזוקת ציוד",
+    "description": "היערכות ליום שרבי. ניהול סד\"כ משמרת, תקלות רכב/ציוד קלות, ודיווחי שריפות פתוחות קטנות בשגרה."
+  },
+  "event_stream": [
+    {
+      "step": 1,
+      "timestamp": "2026-09-09T07:00:00Z",
+      "target_agent": "personnel_agent",
+      "source_chat": "TELEGRAM_GROUP_RESPONSE_TEAM",
+      "payload": {
+        "sender": "להב אבי - מפקד משמרת",
+        "message": "בוקר טוב. מעדכן סד\"כ פותח: 6 כבאים בצוות א', רכב אשד 3 וכרמל 1 במבצעיות מלאה."
+      }
+    },
+    {
+      "step": 2,
+      "timestamp": "2026-09-09T07:45:00Z",
+      "target_agent": "personnel_agent",
+      "source_chat": "TELEGRAM_GROUP_RESPONSE_TEAM",
+      "payload": {
+        "sender": "רס\"ל עמרי - כבאי",
+        "message": "מעדכן שאני צריך לצאת ב-12:00 לבדיקה רפואית תקופתית, חוזר למשמרת ב-15:00."
+      }
+    },
+    {
+      "step": 3,
+      "timestamp": "2026-09-09T08:30:00Z",
+      "target_agent": "vision_agent",
+      "source_chat": "TELEGRAM_GROUP_CAMERAS",
+      "payload": {
+        "sender": "רוני - מפעיל תצפיות",
+        "message": "חיישן טמפרטורה ומצלמה תרמית במגדל תצפית אורנים מציגים התראת חום נמוכה עקב שרב כבד ורוחות מזרחיות."
+      }
+    },
+    {
+      "step": 4,
+      "timestamp": "2026-09-09T09:15:00Z",
+      "target_agent": "external_comm_agent",
+      "source_chat": "TELEGRAM_GROUP_EXTERNAL_FORCES",
+      "payload": {
+        "sender": "מוקד קק\"ל - גזרת הרים",
+        "message": "לכל הגורמים: עקב השרב, הוצאנו הנחיה לאיסור הדלקת אש בכל היערות באזור. יערנים בסריקות."
+      }
+    },
+    {
+      "step": 5,
+      "timestamp": "2026-09-09T10:00:00Z",
+      "target_agent": "vision_agent",
+      "source_chat": "TELEGRAM_GROUP_CAMERAS",
+      "payload": {
+        "sender": "רוני - מפעיל תצפיות",
+        "message": "מצלמה 02 (צומת המחצבה) הופסקה יזומית לטובת ניקוי עדשה עקב אבק כבד."
+      }
+    },
+    {
+      "step": 6,
+      "timestamp": "2026-09-09T11:00:00Z",
+      "target_agent": "external_comm_agent",
+      "source_chat": "TELEGRAM_GROUP_EXTERNAL_FORCES",
+      "payload": {
+        "sender": "מוקד משטרה - אגמ",
+        "message": "דיווח על שריפת קוצים קטנה בצד כביש 444, כנראה מסיגריה. ניידת במקום, אין סיכון למבנים."
+      }
+    },
+    {
+      "step": 7,
+      "timestamp": "2026-09-09T11:30:00Z",
+      "target_agent": "main_orchestrator",
+      "source_chat": "TELEGRAM_DIRECT_COMMANDER",
+      "payload": {
+        "sender": "מפקד התחנה",
+        "message": "תפיק לי תמונת מצב לתחילת הצהריים: מה זמינות הכוחות והרכבים שלנו תחת תנאי השרב?"
+      }
+    }
+  ],
+  "expected_agent_actions": [
+    {
+      "trigger_step": 7,
+      "responsible_agent": "main_orchestrator",
+      "action_type": "ROUTINE_SITREP",
+      "description": "הסוכן הראשי פונה לסוכן כ\"א וסוכן חוזי ומציג דוח: עמרי בבדיקה מ-12:00 (סד\"כ יורד ל-5), רכבים מבצעיים, ואזהרת שרב פעילה מול קק\"ל."
+    }
+  ]
+}

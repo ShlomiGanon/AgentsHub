@@ -83,7 +83,7 @@ class FakeTelegramClient(TelegramClient):
 
 @dataclass
 class FakeBotApiClient(BotApiClient):
-    users: dict = field(default_factory=dict)  # telegram_identity -> "viewer" | "commander"
+    users: dict = field(default_factory=dict)  # identity -> level or {permission_level, full_name}
     commander_chat_ids: tuple[str, ...] = ()
     message_submission_result: MessageSubmissionResult | None = None
     clarification_answer_outcome: HoldAnswerOutcome | None = None
@@ -104,10 +104,25 @@ class FakeBotApiClient(BotApiClient):
 
     async def resolve_user(self, telegram_identity: str) -> UserLookupResult:
         self.calls.append(("resolve_user", telegram_identity))
-        level = self.users.get(telegram_identity)
-        if level is None:
+        record = self.users.get(telegram_identity)
+        if record is None:
             return UserLookupResult(registered=False)
-        return UserLookupResult(registered=True, permission_level=level)
+        if isinstance(record, dict):
+            return UserLookupResult(
+                registered=True,
+                permission_level=record["permission_level"],
+                full_name=record.get("full_name", ""),
+            )
+        return UserLookupResult(registered=True, permission_level=record, full_name="Test User")
+
+    async def update_own_full_name(self, telegram_identity: str, full_name: str) -> str:
+        self.calls.append(("update_own_full_name", telegram_identity, full_name))
+        record = self.users.get(telegram_identity)
+        if record is None:
+            raise ApiRequestError(401, f"'{telegram_identity}' is not a registered identity")
+        level = record["permission_level"] if isinstance(record, dict) else record
+        self.users[telegram_identity] = {"permission_level": level, "full_name": full_name}
+        return full_name
 
     async def list_commander_chat_ids(self) -> tuple[str, ...]:
         self.calls.append(("list_commander_chat_ids",))

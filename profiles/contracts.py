@@ -64,6 +64,7 @@ class LoadedProfile:
     event_types: tuple[str, ...]
     areas: tuple[str, ...]
     db_path: str
+    resettable_databases: tuple[str, ...]
     api_port: int
     retry_count: int
     risk_threshold: float

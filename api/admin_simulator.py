@@ -46,6 +46,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from api.admin_scenarios import scenario_catalog
 from messages import MessageCatalog
 
 if TYPE_CHECKING:
@@ -65,7 +66,11 @@ def simulator_page_context(ctx: "ApiContext", catalog: MessageCatalog, bot_servi
         for binding in ctx.group_routing.all()
     ]
     users = [
-        {"telegram_identity": user["telegram_identity"], "permission_level": user["permission_level"]}
+        {
+            "telegram_identity": user["telegram_identity"],
+            "permission_level": user["permission_level"],
+            "full_name": user.get("full_name", ""),
+        }
         for user in sorted(ctx.deps.persistence.list_users(), key=lambda user: user["telegram_identity"])
     ]
     strings = {
@@ -78,6 +83,7 @@ def simulator_page_context(ctx: "ApiContext", catalog: MessageCatalog, bot_servi
         "users": users,
         "routable_agents": list(ctx.group_routing.routable_targets),
         "bot_service_identity": bot_service_identity,
+        "examples": scenario_catalog(),
         "strings": strings,
     }
 
@@ -190,6 +196,11 @@ SIMULATOR_STYLE = """
   .preview-warn { color: var(--danger); font-size: 12px; margin-top: 4px; }
   .send-btn { width: 100%; }
   .sim-empty { color: var(--text-dim); font-size: 15px; padding: 24px 0; text-align: center; }
+  .mapping-panel { display:none; margin-bottom:20px; }
+  .mapping-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
+  .mapping-field label { display:block; color:var(--text-dim); font-size:12px; margin-bottom:4px; }
+  .expected-actions { margin-top:14px; color:var(--text-dim); font-size:13px; }
+  .expected-actions li { margin-bottom:4px; }
 </style>
 """
 
@@ -223,10 +234,18 @@ SIMULATOR_BODY = """
       <button type="button" class="btn btn-console btn-sm" id="load-pasted">{{ t('admin.simulator.load_pasted') }}</button>
     </div>
     <div class="sim-actions">
-      <button type="button" class="btn btn-console" id="load-example">{{ t('admin.simulator.load_example') }}</button>
+      <label class="form-label-console" for="example-select">{{ t('admin.simulator.examples') }}</label>
+      <select id="example-select" class="form-select form-select-console"><option value="">{{ t('admin.simulator.choose_example') }}</option></select>
       <button type="button" class="btn btn-console-primary" id="send-next" disabled>{{ t('admin.simulator.send_next') }}</button>
       <button type="button" class="btn btn-console-danger" id="reset-view" disabled>{{ t('admin.simulator.reset_view') }}</button>
     </div>
+  </div>
+
+  <div class="block-console mapping-panel" id="mapping-panel">
+    <span class="block-label">{{ t('admin.simulator.mapping_title') }}</span>
+    <p class="subtitle">{{ t('admin.simulator.mapping_help') }}</p>
+    <div class="mapping-grid" id="mapping-fields"></div>
+    <button type="button" class="btn btn-console-primary mt-3" id="apply-example">{{ t('admin.simulator.apply_mapping') }}</button>
   </div>
 
   <div id="sim-alert"></div>
@@ -235,6 +254,7 @@ SIMULATOR_BODY = """
     <h2 id="scenario-title">{{ t('admin.simulator.no_scenario') }}</h2>
     <p id="scenario-desc" class="description"></p>
     <div class="sim-badges" id="scenario-badges"></div>
+    <div class="expected-actions" id="expected-actions"></div>
   </div>
 
   <div class="sim-grid" id="chats-container"></div>
@@ -247,6 +267,7 @@ SIMULATOR_BODY = """
   'use strict';
 
   const DATA = JSON.parse(document.getElementById('sim-data').textContent);
+  const CSRF_TOKEN = {{ csrf_token|tojson }};
   const STRINGS = DATA.strings || {};
   const POLL_INTERVAL_MS = 2000;
   const POLL_TIMEOUT_MS = 5 * 60 * 1000;
@@ -258,6 +279,8 @@ SIMULATOR_BODY = """
   const groupsByChatId = {};
   (DATA.groups || []).forEach(function (group) { groupsByChatId[String(group.chat_id)] = group; });
   const registeredIdentities = new Set((DATA.users || []).map(function (user) { return String(user.telegram_identity); }));
+  const usersByIdentity = {};
+  (DATA.users || []).forEach(function (user) { usersByIdentity[String(user.telegram_identity)] = user; });
 
   // Catalog-style formatting: the same "{name}" placeholders messages/en.py and messages/he.py use.
   function t(key, values) {
@@ -293,7 +316,7 @@ SIMULATOR_BODY = """
 
   // ---- scenario model -------------------------------------------------------------------
 
-  const state = { scenario: null, chats: [], chatsByKey: {}, queues: {}, runId: null };
+  const state = { scenario: null, chats: [], chatsByKey: {}, queues: {}, runId: null, busy: false };
 
   function validateScenario(raw) {
     if (!raw || typeof raw !== 'object') throw new Error(t('err_chats_required'));
@@ -315,6 +338,7 @@ SIMULATOR_BODY = """
         if (!CHAT_TYPES.has(chatType)) throw new Error(t('err_chat_type', { key: key, type: chatType }));
         chatId = chat.telegram_chat_id === undefined || chat.telegram_chat_id === null ? null : String(chat.telegram_chat_id);
         if (chatType !== 'private' && !chatId) throw new Error(t('err_chat_id_required', { key: key }));
+        if (chatType !== 'private' && (!/^-\\d+$/.test(chatId) || Number(chatId) >= 0)) throw new Error(t('err_chat_id_negative', { key: key }));
       }
       const normalized = {
         key: key,
@@ -335,7 +359,7 @@ SIMULATOR_BODY = """
       const chatKey = typeof step.chat === 'string' ? step.chat.trim() : '';
       if (!chatsByKey[chatKey]) throw new Error(t('err_step_chat', { step: number, chat: chatKey }));
       const sender = step.sender_identity === undefined || step.sender_identity === null ? '' : String(step.sender_identity).trim();
-      if (!sender) throw new Error(t('err_step_sender', { step: number }));
+      if (!/^\\d+$/.test(sender) || Number(sender) <= 0) throw new Error(t('err_step_sender', { step: number }));
       const text = typeof step.text === 'string' ? step.text : '';
       if (!text.trim()) throw new Error(t('err_step_text', { step: number }));
       return {
@@ -358,6 +382,7 @@ SIMULATOR_BODY = """
         title: meta.title ? String(meta.title) : t('untitled'),
         description: meta.description ? String(meta.description) : '',
         tags: Array.isArray(meta.tags) ? meta.tags.map(String) : [],
+        expected_agent_actions: Array.isArray(meta.expected_agent_actions) ? meta.expected_agent_actions : [],
       },
       chats: chats,
       chatsByKey: chatsByKey,
@@ -371,6 +396,7 @@ SIMULATOR_BODY = """
     state.chats = parsed.chats;
     state.chatsByKey = parsed.chatsByKey;
     state.queues = {};
+    state.busy = false;
     state.runId = Date.now().toString(36);
     parsed.chats.forEach(function (chat) { state.queues[chat.key] = []; });
     parsed.steps.forEach(function (step) { state.queues[step.chat].push(step); });
@@ -382,7 +408,18 @@ SIMULATOR_BODY = """
     if (parsed.scenario.id) badges.appendChild(el('span', 'sim-badge', t('badge_id', { id: parsed.scenario.id })));
     badges.appendChild(el('span', 'sim-badge', t('badge_chats', { count: parsed.chats.length })));
     badges.appendChild(el('span', 'sim-badge', t('badge_steps', { count: parsed.steps.length })));
+    if (parsed.scenario.expected_agent_actions.length) badges.appendChild(el('span', 'sim-badge', t('badge_expected', { count: parsed.scenario.expected_agent_actions.length })));
     parsed.scenario.tags.forEach(function (tag) { badges.appendChild(el('span', 'sim-badge', tag)); });
+    const expectedBox = document.getElementById('expected-actions');
+    expectedBox.innerHTML = '';
+    if (parsed.scenario.expected_agent_actions.length) {
+      expectedBox.appendChild(el('strong', null, t('expected_actions_title')));
+      const list = el('ul');
+      parsed.scenario.expected_agent_actions.forEach(function (action) {
+        list.appendChild(el('li', null, t('expected_action', { step: action.trigger_step || '?', description: action.description || action.action_type || '' })));
+      });
+      expectedBox.appendChild(list);
+    }
 
     renderCards();
     document.getElementById('reset-view').disabled = false;
@@ -444,6 +481,7 @@ SIMULATOR_BODY = """
   }
 
   function nextChatKey() {
+    if (state.busy) return null;
     let best = null;
     let bestStep = Infinity;
     Object.keys(state.queues).forEach(function (key) {
@@ -496,7 +534,7 @@ SIMULATOR_BODY = """
       if (warning) preview.appendChild(el('div', 'preview-warn', warning));
 
       button.textContent = isNext ? t('send_this', { step: step.step }) : t('wait_turn', { step: step.step });
-      button.disabled = false;
+      button.disabled = !isNext || state.busy;
     });
   }
 
@@ -609,25 +647,27 @@ SIMULATOR_BODY = """
         result = await apiCall('GET', '/Job/' + encodeURIComponent(eventId), identity);
       } catch (error) {
         setBubbleText(bubble, header, t('network_error', { message: error.message }), true);
-        return;
+        return false;
       }
       if (result.status !== 200 || !result.payload) {
         setBubbleText(bubble, header, errorMessage(result), true);
-        return;
+        return true;
       }
       const job = result.payload;
       const body = jobBodyText(job);
       setBubbleText(bubble, body ? header + '\\n\\n' + body : header, jobStatusText(job), job.status === 'failed');
-      if (TERMINAL_STATUSES.has(job.status)) return;
+      if (TERMINAL_STATUSES.has(job.status) || job.status === 'held_for_clarification' || job.status === 'held_for_approval' || job.status === 'waiting_for_event_data') return true;
     }
     setBubbleText(bubble, header, t('poll_timeout', { minutes: POLL_TIMEOUT_MS / 60000 }), true);
+    return false;
   }
 
   async function sendNext(chatKey) {
     const queue = state.queues[chatKey];
-    if (!queue || queue.length === 0) return;
+    if (!queue || queue.length === 0 || state.busy || nextChatKey() !== chatKey) return;
     const chat = state.chatsByKey[chatKey];
-    const step = queue.shift();
+    const step = queue[0];
+    state.busy = true;
     updateGlobalState();
 
     appendBubble(chatKey, null, step.sender_name, step.text, step.step);
@@ -639,10 +679,15 @@ SIMULATOR_BODY = """
       result = await apiCall('POST', request.url, step.sender_identity, request.body);
     } catch (error) {
       setBubbleText(reply, t('network_error', { message: error.message }), null, true);
+      state.busy = false;
+      updateGlobalState();
       return;
     }
     if (result.status >= 400 || !result.payload) {
       setBubbleText(reply, errorMessage(result), null, true);
+      queue.shift();
+      state.busy = false;
+      updateGlobalState();
       return;
     }
 
@@ -650,7 +695,10 @@ SIMULATOR_BODY = """
     if (chat.kind === 'event') {
       const header = t('event_id', { event_id: payload.event_id });
       setBubbleText(reply, header, jobStatusText({ status: payload.status }), false);
-      pollJob(payload.event_id, step.sender_identity, reply, header);
+      const completed = await pollJob(payload.event_id, step.sender_identity, reply, header);
+      if (completed) queue.shift();
+      state.busy = false;
+      updateGlobalState();
       return;
     }
 
@@ -658,6 +706,9 @@ SIMULATOR_BODY = """
     if (payload.duplicate) header += ' - ' + t('duplicate');
     if (INLINE_KINDS.has(payload.taken_as) && !payload.event_id) {
       setBubbleText(reply, payload.answer ? header + '\\n\\n' + payload.answer : header, null, false);
+      queue.shift();
+      state.busy = false;
+      updateGlobalState();
       return;
     }
     if (payload.event_id) header += ' - ' + t('event_id', { event_id: payload.event_id });
@@ -668,40 +719,67 @@ SIMULATOR_BODY = """
     // progress; a duplicate carries its final outcome, and a clarification that still names
     // an event is waiting on the operator, not on the job.
     if (payload.event_id && payload.status === 'queued') {
-      pollJob(payload.event_id, step.sender_identity, reply, answer);
+      const completed = await pollJob(payload.event_id, step.sender_identity, reply, answer);
+      if (completed) queue.shift();
+      state.busy = false;
+      updateGlobalState();
+      return;
     }
+    queue.shift();
+    state.busy = false;
+    updateGlobalState();
   }
 
-  // ---- example built from the live registrations ------------------------------------------
+  // ---- bundled examples: mappings are intentionally rebuilt on every load -----------------
 
-  function buildExample() {
-    const humans = (DATA.users || []).filter(function (user) { return String(user.telegram_identity) !== DATA.bot_service_identity; });
-    if (humans.length === 0) return null;
-    const commander = humans.find(function (user) { return user.permission_level === 'commander'; }) || humans[0];
-    const identity = String(commander.telegram_identity);
-    const group = (DATA.groups || [])[0];
+  const exampleSelect = document.getElementById('example-select');
+  (DATA.examples || []).forEach(function (example, index) {
+    const option = el('option', null, example.filename + ' (' + example.step_count + ')');
+    option.value = String(index);
+    exampleSelect.appendChild(option);
+  });
 
-    const chats = [
-      { key: 'commander_dm', kind: 'message', label: t('example_private_label'), telegram_chat_type: 'private', telegram_chat_id: identity },
-    ];
-    const steps = [];
-    let stepNumber = 1;
-    if (group) {
-      chats.push({
-        key: 'registered_group', kind: 'message', label: group.label || t('example_group_label'),
-        telegram_chat_id: String(group.chat_id), telegram_chat_type: 'supergroup',
-      });
-      steps.push({ step: stepNumber++, chat: 'registered_group', sender_identity: identity, sender_name: identity, text: t('example_text_group') });
-    }
-    chats.push({ key: 'fence_sensors', kind: 'event', label: t('example_sensor_label') });
-    steps.push({ step: stepNumber++, chat: 'fence_sensors', sender_identity: identity, text: t('example_text_event') });
-    steps.push({ step: stepNumber++, chat: 'commander_dm', sender_identity: identity, sender_name: identity, text: t('example_text_private') });
+  function mappingInput(kind, key, label, listId) {
+    const wrapper = el('div', 'mapping-field');
+    const caption = el('label', null, label);
+    const input = el('input', 'form-control form-control-console');
+    input.type = 'number'; input.dataset.kind = kind; input.dataset.key = key; input.setAttribute('list', listId);
+    input.placeholder = kind === 'person' ? t('telegram_id_placeholder') : t('chat_id_placeholder');
+    wrapper.appendChild(caption); wrapper.appendChild(input);
+    return wrapper;
+  }
 
-    return {
-      scenario: { id: 'EXAMPLE', title: t('example_title'), description: t('example_description'), tags: [] },
-      chats: chats,
-      steps: steps,
-    };
+  function showExampleMapping(index) {
+    const panel = document.getElementById('mapping-panel');
+    const fields = document.getElementById('mapping-fields');
+    fields.innerHTML = '';
+    if (!Number.isInteger(index) || !DATA.examples[index]) { panel.style.display = 'none'; return; }
+    const example = DATA.examples[index];
+    const usersList = el('datalist'); usersList.id = 'registered-user-ids';
+    (DATA.users || []).filter(function (user) { return String(user.telegram_identity) !== DATA.bot_service_identity; }).forEach(function (user) {
+      const option = el('option'); option.value = String(user.telegram_identity); option.label = user.full_name || t('missing_name'); usersList.appendChild(option);
+    });
+    const groupsList = el('datalist'); groupsList.id = 'registered-group-ids';
+    (DATA.groups || []).forEach(function (group) { const option = el('option'); option.value = String(group.chat_id); option.label = group.label || group.agent_name; groupsList.appendChild(option); });
+    fields.appendChild(usersList); fields.appendChild(groupsList);
+    example.personas.forEach(function (persona) { fields.appendChild(mappingInput('person', persona, t('map_person', { persona: persona }), usersList.id)); });
+    example.group_sources.forEach(function (source) { fields.appendChild(mappingInput('group', source, t('map_group', { group: source }), groupsList.id)); });
+    panel.style.display = 'block';
+  }
+
+  function collectBundledMapping(example) {
+    const personaIds = {}, groupIds = {};
+    document.querySelectorAll('#mapping-fields input').forEach(function (input) {
+      if (input.dataset.kind === 'person') personaIds[input.dataset.key] = input.value.trim();
+      else groupIds[input.dataset.key] = input.value.trim();
+    });
+    example.personas.forEach(function (persona) {
+      if (!/^\\d+$/.test(personaIds[persona] || '') || Number(personaIds[persona]) <= 0) throw new Error(t('err_positive_identity', { persona: persona }));
+    });
+    example.group_sources.forEach(function (source) {
+      if (!/^-\\d+$/.test(groupIds[source] || '') || Number(groupIds[source]) >= 0) throw new Error(t('err_negative_group', { group: source }));
+    });
+    return { persona_ids: personaIds, group_ids: groupIds };
   }
 
   // ---- wiring --------------------------------------------------------------------------------
@@ -746,11 +824,30 @@ SIMULATOR_BODY = """
   document.getElementById('load-pasted').addEventListener('click', function () {
     loadFromText(document.getElementById('paste-input').value);
   });
-  document.getElementById('load-example').addEventListener('click', function () {
-    const example = buildExample();
-    if (!example) { showAlert(t('example_needs_user'), true); return; }
-    document.getElementById('paste-input').value = JSON.stringify(example, null, 2);
-    try { loadScenario(example); } catch (error) { showAlert(error.message, true); }
+  exampleSelect.addEventListener('change', function () {
+    showExampleMapping(exampleSelect.value === '' ? NaN : Number(exampleSelect.value));
+  });
+  document.getElementById('apply-example').addEventListener('click', async function () {
+    const index = exampleSelect.value === '' ? NaN : Number(exampleSelect.value);
+    const button = document.getElementById('apply-example');
+    try {
+      const selected = DATA.examples[index];
+      if (!selected) throw new Error(t('example_invalid'));
+      const mapping = collectBundledMapping(selected);
+      const form = new FormData();
+      form.set('csrf_token', CSRF_TOKEN); form.set('example_key', selected.key);
+      form.set('persona_ids', JSON.stringify(mapping.persona_ids)); form.set('group_ids', JSON.stringify(mapping.group_ids));
+      button.disabled = true;
+      const response = await fetch('/admin/simulator/example', { method: 'POST', body: form, credentials: 'same-origin' });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || t('request_failed', { status: response.status, message: '' }));
+      document.getElementById('paste-input').value = JSON.stringify(payload, null, 2);
+      loadScenario(payload);
+      document.getElementById('mapping-panel').style.display = 'none';
+      exampleSelect.value = '';
+      document.getElementById('mapping-fields').innerHTML = '';
+    } catch (error) { showAlert(error.message, true); }
+    finally { button.disabled = false; }
   });
   document.getElementById('send-next').addEventListener('click', function () {
     const key = nextChatKey();
@@ -758,13 +855,17 @@ SIMULATOR_BODY = """
   });
   document.getElementById('reset-view').addEventListener('click', function () {
     // View only: clears the cards and the queues. Nothing already sent is undone on the server.
-    state.scenario = null; state.chats = []; state.chatsByKey = {}; state.queues = {}; state.runId = null;
+    state.scenario = null; state.chats = []; state.chatsByKey = {}; state.queues = {}; state.runId = null; state.busy = false;
     document.getElementById('chats-container').innerHTML = '';
     document.getElementById('scenario-title').textContent = t('no_scenario');
     document.getElementById('scenario-desc').textContent = '';
     document.getElementById('scenario-badges').innerHTML = '';
+    document.getElementById('expected-actions').innerHTML = '';
     document.getElementById('send-next').disabled = true;
     document.getElementById('reset-view').disabled = true;
+    exampleSelect.value = '';
+    document.getElementById('mapping-panel').style.display = 'none';
+    document.getElementById('mapping-fields').innerHTML = '';
     showAlert('', false);
   });
 })();

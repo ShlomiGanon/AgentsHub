@@ -180,7 +180,13 @@ def test_fresh_database_has_no_users(store):
 def test_write_then_read_user(store):
     store.write_user("12345", "commander")
 
-    assert store.read_user("12345") == {"telegram_identity": "12345", "permission_level": "commander"}
+    assert store.read_user("12345") == {"telegram_identity": "12345", "permission_level": "commander", "full_name": ""}
+
+
+def test_permission_update_preserves_existing_full_name(store):
+    store.write_user("12345", "viewer", "Dana Levi")
+    store.write_user("12345", "commander")
+    assert store.read_user("12345")["full_name"] == "Dana Levi"
 
 
 def test_write_user_twice_updates_rather_than_duplicates(store):

@@ -120,8 +120,8 @@ def test_writing_a_summary_for_a_period_that_already_has_one_does_not_duplicate(
 def test_user_crud_round_trip(persistence):
     persistence.write_user("100", "commander")
 
-    assert persistence.read_user("100") == {"telegram_identity": "100", "permission_level": "commander"}
-    assert persistence.list_users() == [{"telegram_identity": "100", "permission_level": "commander"}]
+    assert persistence.read_user("100") == {"telegram_identity": "100", "permission_level": "commander", "full_name": ""}
+    assert persistence.list_users() == [{"telegram_identity": "100", "permission_level": "commander", "full_name": ""}]
 
     persistence.delete_user("100")
     assert persistence.read_user("100") is None

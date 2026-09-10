@@ -1,0 +1,125 @@
+{
+  "scenario_metadata": {
+    "scenario_id": "SEC_001_PHASE_3",
+    "domain": "FIRST_RESPONDERS_TEAM",
+    "phase": "3_EXTREME_CRISIS",
+    "title": "אירוע כיתת כוננות - שלב קיצון: חדירה פעילה, בלבול וסגר מלא",
+    "description": "הגעה לקצה המבצעי. חדירת חשודים ליישוב, דיווי שווא המייצרים דילול כוחות, תיאום אירוע נפגעים מורכב, סריקות מבית לבית וסגירת אירוע תחת עומס מידע."
+  },
+  "event_stream": [
+    {
+      "step": 1,
+      "timestamp": "2026-09-08T08:50:00Z",
+      "target_agent": "personnel_agent",
+      "source_chat": "TELEGRAM_GROUP_RESPONSE_TEAM",
+      "payload": {
+        "sender": "תושב - אברם (שכונת ההרחבה)",
+        "message": "סירנות בשער מזרח! ראיתי דמות חשודה בתוך החצר של משפחת לוי ברחוב הזית 12! יש לו משהו ארוך ביד!"
+      }
+    },
+    {
+      "step": 2,
+      "timestamp": "2026-09-08T08:52:00Z",
+      "target_agent": "personnel_agent",
+      "source_chat": "TELEGRAM_GROUP_RESPONSE_TEAM",
+      "payload": {
+        "sender": "דן - כיתת כוננות",
+        "message": "רגע! תושבים מדווחים עכשיו על ירי בלתי פוסק באזור השער המערבי! אני רץ לשם!"
+      }
+    },
+    {
+      "step": 3,
+      "timestamp": "2026-09-08T08:53:00Z",
+      "target_agent": "external_comm_agent",
+      "source_chat": "TELEGRAM_GROUP_EXTERNAL_FORCES",
+      "payload": {
+        "sender": "מוקד מד\"א",
+        "message": "קיבלנו דיווח על פצוע ירי בכניסה לשכונת ההרחבה! אמבולנס בדרך, דורשים אבטחה של כיתת כוננות לצוות הרפואי."
+      }
+    },
+    {
+      "step": 4,
+      "timestamp": "2026-09-08T08:55:00Z",
+      "target_agent": "main_orchestrator",
+      "source_chat": "TELEGRAM_DIRECT_COMMANDER",
+      "payload": {
+        "sender": "רבש\"ץ",
+        "message": "יש לי פה בלבול מטורף! דן רץ למערב בגלל דיווח על ירי, מד\"א מדברים על פצוע במזרח, ותושב מדווח על חמוש בהרחבה. תעשה לי סדר מיד! לאן לשלוח את הכוח הזמין?!"
+      }
+    },
+    {
+      "step": 5,
+      "timestamp": "2026-09-08T09:00:00Z",
+      "target_agent": "external_comm_agent",
+      "source_chat": "TELEGRAM_GROUP_EXTERNAL_FORCES",
+      "payload": {
+        "sender": "סיור משטרתי",
+        "message": "הבהרה: אין ירי בשער המערבי! הירי שדווח הוא ירי אזהרה של הניידת שלנו באזור המטעים המזרחיים. אל תפצלו כוחות למערב!"
+      }
+    },
+    {
+      "step": 6,
+      "timestamp": "2026-09-08T09:05:00Z",
+      "target_agent": "personnel_agent",
+      "source_chat": "TELEGRAM_GROUP_RESPONSE_TEAM",
+      "payload": {
+        "sender": "גיל - כיתת כוננות",
+        "message": "הגעתי לרחוב הזית 12 בהרחבה! חברתי למד\"א, מטפלים בפצוע (תושב שנפצע מזכוכיות בזמן בריחה). זיהיתי את החשוד נמלט לכיוון המבנה הציבורי הישן!"
+      }
+    },
+    {
+      "step": 7,
+      "timestamp": "2026-09-08T09:12:00Z",
+      "target_agent": "vision_agent",
+      "source_chat": "TELEGRAM_GROUP_CAMERAS",
+      "payload": {
+        "sender": "יוסי - טכנאי חוזי",
+        "message": "הצלחתי להרים מצלמה טקטית ניידת על תורן המזכירות! רואים חשוד אחד מתחבא על גג המבנה הציבורי הישן, מוחזק עצם כהה ביד."
+      }
+    },
+    {
+      "step": 8,
+      "timestamp": "2026-09-08T09:15:00Z",
+      "target_agent": "external_comm_agent",
+      "source_chat": "TELEGRAM_GROUP_EXTERNAL_FORCES",
+      "payload": {
+        "sender": "מפקד יס\"מ - משטרה",
+        "message": "כוח יס\"מ ויחידת ימ\"ג נכנסים כעת לשטח היישוב. מעבירים אלינו את פיקוד אירוע השתלטות ברגע שנגיע למבנה."
+      }
+    },
+    {
+      "step": 9,
+      "timestamp": "2026-09-08T09:25:00Z",
+      "target_agent": "external_comm_agent",
+      "source_chat": "TELEGRAM_GROUP_EXTERNAL_FORCES",
+      "payload": {
+        "sender": "מפקד יס\"מ - משטרה",
+        "message": "אירוע בשליטה! החשוד נעצר על הגג ללא ירי. מדובר בפורץ שנסה להימלט לאחר שחתך את הגדר. מועבר לחקירות."
+      }
+    },
+    {
+      "step": 10,
+      "timestamp": "2026-09-08T09:40:00Z",
+      "target_agent": "main_orchestrator",
+      "source_chat": "TELEGRAM_DIRECT_COMMANDER",
+      "payload": {
+        "sender": "רבש\"ץ",
+        "message": "מעולה, האירוע הסתיים. תריץ לי סיכום אירוע מלא מקצה לקצה: ציר זמן, כשלים/דיווי שווא שהיו, סטטוס פצועים וסד\"כ, והודעה להפצה לתושבי היישוב לרגיעה."
+      }
+    }
+  ],
+  "expected_agent_actions": [
+    {
+      "trigger_step": 4,
+      "responsible_agent": "main_orchestrator",
+      "action_type": "CRISIS_DISAMBIGUATION",
+      "description": "הסוכן הראשי מסנן את דיווחי השווא (ירי במערב) מול דיווחי האמת (פצוע בהרחבה במזרח), מנחה את הרבש\"ץ להחזיר את דן מגזרת המערב ולרכז את כל הכוחות בשכונת ההרחבה לאבטחת מד\"א."
+    },
+    {
+      "trigger_step": 10,
+      "responsible_agent": "main_orchestrator",
+      "action_type": "FINAL_AFTER_ACTION_REPORT",
+      "description": "הסוכן הראשי מושך מסוכן ההיסטוריה את כל נתוני 3 השלבים ומפיק לרבש\"ץ דוח מסכם: כרונולוגיית האירוע, ניתוח אירוע השווא במערב, סטטוס טיפול בפצוע, וטיוטת הודעת הרגעה לתושבים."
+    }
+  ]
+}

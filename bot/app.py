@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -16,6 +17,7 @@ from profiles.loader import LoadedProfile, ProfileLoadError, ProfileValidationEr
 from tools import configure_logging, deep_debug_enabled, new_trace_id
 
 from auth.permissions import PermissionLevel, RequestedOperation
+from auth.permissions import InvalidFullNameError, normalize_full_name
 
 from bot import interactions
 from bot.transports import HttpApiClient, PTBTelegramClient
@@ -49,6 +51,16 @@ _background_trace_tasks: set[asyncio.Task] = set()
 _USER_ROLE_CACHE: dict[tuple[int, str], tuple[interactions.UserResolutionResult, float]] = {}
 _USER_ROLE_CACHE_TTL_SECONDS = 60.0
 
+
+@dataclass
+class _PendingNameAction:
+    handler: Callable[..., Awaitable[None]]
+    update: object
+    context: object
+
+
+_PENDING_NAME_ACTIONS: dict[str, _PendingNameAction] = {}
+
 # Telegram's own chat.type values for multi-member chats. Mirrors
 # orchestrator.group_routing.GROUP_CHAT_TYPES (bot may not import orchestrator).
 GROUP_CHAT_TYPES = frozenset({"group", "supergroup"})
@@ -64,6 +76,7 @@ def clear_caller_cache() -> None:
     """Clear in-memory caller resolution cache (for test isolation or admin resets)."""
     _USER_ROLE_CACHE.clear()
     _GROUP_BINDINGS_CACHE.clear()
+    _PENDING_NAME_ACTIONS.clear()
 
 
 async def _group_binding_cached(api_client, chat_id: str) -> GroupBindingView | None:
@@ -231,13 +244,54 @@ async def _on_start_command(update, context) -> None:
     await deps.telegram_client.send_text(chat_id, welcome_text, keyboard=keyboard)
 
 
-def _guarded(handler: Callable[..., Awaitable[None]]):
+async def _gate_on_full_name(handler, update, context) -> bool:
+    """Return True after handling a missing-name interaction, so the handler must stop."""
+
+    deps: BotDeps = context.bot_data["deps"]
+    messages = interactions.message_catalog_for(deps)
+    if not await _group_is_handled(deps, update):
+        return True
+    telegram_identity, chat_id = _identity_and_chat_id(update)
+    resolution = await _resolve_caller_cached(deps.api_client, telegram_identity, messages)
+    if resolution.status != "ok" or resolution.full_name:
+        return False
+
+    pending = _PENDING_NAME_ACTIONS.get(telegram_identity)
+    candidate = getattr(getattr(update, "message", None), "text", None)
+    if pending is not None and isinstance(candidate, str):
+        try:
+            full_name = normalize_full_name(candidate)
+        except InvalidFullNameError:
+            await deps.telegram_client.send_text(chat_id, messages.text("bot.full_name_invalid"))
+            return True
+        await deps.api_client.update_own_full_name(telegram_identity, full_name)
+        _PENDING_NAME_ACTIONS.pop(telegram_identity, None)
+        _USER_ROLE_CACHE.pop((id(deps.api_client), telegram_identity), None)
+        await deps.telegram_client.send_text(chat_id, messages.text("bot.full_name_saved", name=full_name))
+        await pending.handler(pending.update, pending.context)
+        return True
+
+    if pending is None:
+        _PENDING_NAME_ACTIONS[telegram_identity] = _PendingNameAction(handler, update, context)
+    query = getattr(update, "callback_query", None)
+    if query is not None:
+        try:
+            await deps.telegram_client.answer_callback_query(query.id)
+        except Exception:
+            logger.warning("could not acknowledge callback while collecting name", exc_info=True)
+    await deps.telegram_client.send_text(chat_id, messages.text("bot.full_name_prompt"))
+    return True
+
+
+def _guarded(handler: Callable[..., Awaitable[None]], *, require_full_name: bool = True):
     """Wrap a handler so `ApiNotImplementedError` and any other unexpected exception become a clear chat reply rather than a crash — never a leaked stack trace, matching the spirit of..."""
 
     async def _wrapped(update, context):
         deps = context.bot_data["deps"]
         messages = interactions.message_catalog_for(deps)
         try:
+            if require_full_name and await _gate_on_full_name(handler, update, context):
+                return
             await handler(update, context)
         except ApiNotImplementedError as exc:
             logger.info("handler blocked on unimplemented API: %s", exc, extra={"event": "bot_api_not_implemented"})
@@ -991,7 +1045,9 @@ def register_handlers(application, deps: BotDeps) -> None:
     application.add_handler(CommandHandler(REGISTERED_COMMANDS[1], _guarded(_on_settings_command)))
     application.add_handler(CallbackQueryHandler(_guarded(_on_callback_query)))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _guarded(_on_text_message)))
-    application.add_handler(ChatMemberHandler(_guarded(_on_my_chat_member), ChatMemberHandler.MY_CHAT_MEMBER))
+    application.add_handler(
+        ChatMemberHandler(_guarded(_on_my_chat_member, require_full_name=False), ChatMemberHandler.MY_CHAT_MEMBER)
+    )
 
     async def _post_init(started_application) -> None:
         await deps.api_client.start()

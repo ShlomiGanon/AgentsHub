@@ -85,6 +85,26 @@ def test_migration_seventeen_adds_safe_sender_permission_snapshot_to_legacy_even
     assert snapshot == "viewer"
 
 
+def test_migration_eighteen_adds_empty_full_name_without_losing_users(tmp_path):
+    db_path = str(tmp_path / "version-seventeen.db")
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("CREATE TABLE users (telegram_identity TEXT PRIMARY KEY, permission_level TEXT NOT NULL)")
+        connection.execute("INSERT INTO users VALUES ('42', 'viewer')")
+        connection.execute("PRAGMA user_version = 17")
+        connection.commit()
+    finally:
+        connection.close()
+
+    run_migrations(db_path)
+    connection = sqlite3.connect(db_path)
+    try:
+        row = connection.execute("SELECT telegram_identity, permission_level, full_name FROM users").fetchone()
+    finally:
+        connection.close()
+    assert row == ("42", "viewer", "")
+
+
 def test_history_query_indexes_are_present_on_a_fresh_database(tmp_path):
     import sqlite3
 

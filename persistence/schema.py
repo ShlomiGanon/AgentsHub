@@ -5,7 +5,8 @@ import sqlite3
 USERS_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS users (
     telegram_identity TEXT PRIMARY KEY,
-    permission_level TEXT NOT NULL
+    permission_level TEXT NOT NULL,
+    full_name TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -252,6 +253,7 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "snapshot event sender permission level",
         "ALTER TABLE events ADD COLUMN sender_permission_level TEXT NOT NULL DEFAULT 'viewer';",
     ),
+    (18, "add full name to users", "ALTER TABLE users ADD COLUMN full_name TEXT NOT NULL DEFAULT '';"),
 ]
 
 
@@ -281,6 +283,10 @@ def run_migrations(db_path: str) -> None:
                     connection.execute(
                         "ALTER TABLE events ADD COLUMN sender_permission_level TEXT NOT NULL DEFAULT 'viewer'"
                     )
+            elif version == 18:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(users)").fetchall()}
+                if columns and "full_name" not in columns:
+                    connection.execute("ALTER TABLE users ADD COLUMN full_name TEXT NOT NULL DEFAULT ''")
             else:
                 connection.executescript(sql)
 

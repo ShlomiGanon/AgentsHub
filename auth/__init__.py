@@ -6,5 +6,14 @@ contract.
 """
 
 from auth.permissions import PermissionLevel, RequestedOperation, ViewerAllowedAction, is_permitted
+from auth.user_names import InvalidFullNameError, MAX_FULL_NAME_LENGTH, normalize_full_name
 
-__all__ = ["PermissionLevel", "RequestedOperation", "ViewerAllowedAction", "is_permitted"]
+__all__ = [
+    "InvalidFullNameError",
+    "MAX_FULL_NAME_LENGTH",
+    "PermissionLevel",
+    "RequestedOperation",
+    "ViewerAllowedAction",
+    "is_permitted",
+    "normalize_full_name",
+]

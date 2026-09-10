@@ -19,6 +19,7 @@ module-level names. All are required unless noted.
 | `AREAS` | `list[str]` | |
 | `EVENT_TYPE_REQUIRED_FIELDS` | `dict[str, list[str]]` | Optional, defaults to `{}`. Fields (from `EVENT_TYPES` events, `EVENT_DATA_FIELDS` names) that must be resolved before an event of that type proceeds past intake. See "Event-type required fields", below. |
 | `DB_PATH` | `str` | No default — two profiles running at once must not collide. |
+| `RESETTABLE_DATABASES` | non-empty tuple of database paths | Every database owned by the profile. New profiles must declare it and include `DB_PATH`; the loader retains a `DB_PATH`-only fallback for legacy external profiles. The stack supervisor exposes a profile only when the declaration is explicit and deletes only these exact files and their known SQLite/application sidecars. |
 | `API_PORT` | `int` | No default, same reason. |
 | `RETRY_COUNT` | `int` | Starting value only; the settings store owns it after first run. |
 | `RISK_THRESHOLD` | `float` | Starting value only. |

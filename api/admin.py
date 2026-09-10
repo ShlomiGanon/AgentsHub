@@ -41,6 +41,7 @@ reachable from anywhere but localhost, and only then consider also setting
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 import os
 import secrets
@@ -49,10 +50,12 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from flask import Blueprint, flash, get_flashed_messages, redirect, render_template_string, request, session, url_for
+from flask import Blueprint, flash, get_flashed_messages, jsonify, redirect, render_template_string, request, session, url_for
 
+from api.admin_scenarios import ScenarioMappingError, map_legacy_scenario, scenario_catalog
 from api.admin_simulator import SIMULATOR_BODY, SIMULATOR_STYLE, simulator_page_context
-from auth.permissions import PermissionLevel
+from auth.permissions import InvalidFullNameError, PermissionLevel, normalize_full_name
+from config import discover_profiles, read_server_status, submit_server_command, supervisor_available
 from messages import get_current_catalog
 from orchestrator.flows import InvalidRoutingTargetError
 from persistence import NotFoundError
@@ -741,6 +744,83 @@ _DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 """
 
 
+_MENU_TEMPLATE = """<!DOCTYPE html>
+<html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ t('admin.menu_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """
+</head><body><div class="container container-narrow">
+  <div class="d-flex justify-content-between align-items-baseline mb-1">
+    <h1>{{ t('admin.menu_title') }}</h1>
+    <form method="post" action="{{ url_for('admin.logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn btn-console-danger btn-sm">{{ t('admin.log_out') }}</button></form>
+  </div>
+  <p class="subtitle mb-4">{{ t('admin.menu_subtitle') }}</p>
+  {% for category, message in get_flashed_messages(with_categories=true) %}
+    <div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>
+  {% endfor %}
+  <div class="row g-3">
+    <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.users') }}"><h2 class="h5">{{ t('admin.menu_users') }}</h2><span class="subtitle">{{ t('admin.users_subtitle') }}</span></a></div>
+    <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.groups') }}"><h2 class="h5">{{ t('admin.menu_groups') }}</h2><span class="subtitle">{{ t('admin.groups_page_subtitle') }}</span></a></div>
+    <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.simulator') }}"><h2 class="h5">{{ t('admin.menu_simulator') }}</h2><span class="subtitle">{{ t('admin.simulator.subtitle') }}</span></a></div>
+    <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.server') }}"><h2 class="h5">{{ t('admin.menu_server') }}</h2><span class="subtitle">{{ t('admin.server_subtitle') }}</span></a></div>
+  </div>
+</div></body></html>"""
+
+
+_USERS_TEMPLATE = """<!DOCTYPE html>
+<html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ t('admin.users_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """
+</head><body><div class="container container-narrow">
+  <div class="d-flex justify-content-between align-items-baseline mb-1"><h1>{{ t('admin.users_title') }}</h1>
+    <a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div>
+  <p class="subtitle mb-4">{{ t('admin.users_subtitle') }}</p>
+  {% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>{% endfor %}
+  <table class="table table-console mb-5"><thead><tr><th>{{ t('admin.col_identity') }}</th><th>{{ t('admin.col_full_name') }}</th><th>{{ t('admin.col_level') }}</th><th></th></tr></thead><tbody>
+  {% for user in users %}<tr><td class="identity">{{ user.telegram_identity }}{% if user.telegram_identity == bot_service_identity %} <span class="tag">{{ t('admin.tag_bot_service') }}</span>{% endif %}</td>
+    <td colspan="2"><form class="d-flex gap-2" method="post" action="{{ url_for('admin.write_user') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="telegram_identity" value="{{ user.telegram_identity }}">
+      <input type="text" name="full_name" value="{{ user.full_name }}" class="form-control form-control-console" maxlength="120" placeholder="{{ t('admin.col_full_name') }}">
+      <select name="permission_level" class="form-select form-select-console form-select-sm w-auto">{% for level in levels %}<option value="{{ level }}" {% if level == user.permission_level %}selected{% endif %}>{{ level }}</option>{% endfor %}</select>
+      <button class="btn btn-console btn-sm">{{ t('admin.save') }}</button></form></td>
+    <td><form method="post" action="{{ url_for('admin.remove_user', identity=user.telegram_identity) }}" onsubmit="return confirm({{ t('admin.confirm_remove_user', identity=user.telegram_identity)|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-danger btn-sm">{{ t('admin.remove') }}</button></form></td></tr>{% endfor %}
+  </tbody></table>
+  <div class="block-console mb-4"><span class="block-label">{{ t('admin.add_user') }}</span><form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.write_user') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="col"><div class="form-label-console">{{ t('admin.col_identity') }}</div><input name="telegram_identity" class="form-control form-control-console" required></div>
+    <div class="col"><div class="form-label-console">{{ t('admin.col_full_name') }}</div><input name="full_name" class="form-control form-control-console" maxlength="120"></div>
+    <div class="col-auto"><div class="form-label-console">{{ t('admin.col_level') }}</div><select name="permission_level" class="form-select form-select-console">{% for level in levels %}<option value="{{ level }}">{{ level }}</option>{% endfor %}</select></div>
+    <div class="col-auto"><button class="btn btn-console-primary">{{ t('admin.add') }}</button></div></form></div>
+  <div class="block-console"><span class="block-label">{{ t('admin.bot_service_title') }}</span><p class="subtitle">{{ t('admin.bot_service_help', identity=bot_service_identity) }}</p><form method="post" action="{{ url_for('admin.provision_bot_service') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console">{{ t('admin.bot_service_button') }}</button></form></div>
+</div></body></html>"""
+
+
+_GROUPS_TEMPLATE = """<!DOCTYPE html>
+<html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.groups_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """</head>
+<body><div class="container container-narrow"><div class="d-flex justify-content-between align-items-baseline"><h1>{{ t('admin.groups_title') }}</h1><a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div><p class="subtitle mb-4">{{ t('admin.groups_page_subtitle') }}</p>
+{% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>{% endfor %}
+<table class="table table-console mb-4"><thead><tr><th>{{ t('admin.col_chat_id') }}</th><th>{{ t('admin.col_label') }}</th><th>{{ t('admin.col_routed_to') }}</th><th></th></tr></thead><tbody>
+{% for group in groups %}<tr><td class="identity">{{ group.chat_id }}</td><td>{{ group.label }}</td><td><form class="d-flex gap-2" method="post" action="{{ url_for('admin.write_group') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="chat_id" value="{{ group.chat_id }}"><input type="hidden" name="label" value="{{ group.label }}"><select name="agent_name" class="form-select form-select-console">{% for agent_name in routable_agents %}<option value="{{ agent_name }}" {% if agent_name == group.agent_name %}selected{% endif %}>{{ agent_name }}</option>{% endfor %}</select><button class="btn btn-console">{{ t('admin.save') }}</button></form></td><td><form method="post" action="{{ url_for('admin.remove_group', chat_id=group.chat_id) }}" onsubmit="return confirm({{ t('admin.confirm_remove_group', chat_id=group.chat_id)|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-danger">{{ t('admin.remove') }}</button></form></td></tr>{% else %}<tr><td colspan="4">{{ t('admin.no_groups') }}</td></tr>{% endfor %}</tbody></table>
+<div class="block-console"><span class="block-label">{{ t('admin.add_group') }}</span><p class="subtitle">{{ t('admin.add_group_help', main_agent='main_agent') }}</p><form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.write_group') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="col"><div class="form-label-console">{{ t('admin.col_chat_id') }}</div><input name="chat_id" class="form-control form-control-console" placeholder="-1001234567890" required></div><div class="col"><div class="form-label-console">{{ t('admin.col_label') }}</div><input name="label" class="form-control form-control-console" maxlength="200"></div><div class="col-auto"><select name="agent_name" class="form-select form-select-console">{% for agent_name in routable_agents %}<option value="{{ agent_name }}">{{ agent_name }}</option>{% endfor %}</select></div><div class="col-auto"><button class="btn btn-console-primary">{{ t('admin.add') }}</button></div></form></div>
+</div></body></html>"""
+
+
+_SERVER_TEMPLATE = """<!DOCTYPE html>
+<html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.server_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """</head>
+<body><div class="container container-narrow"><div class="d-flex justify-content-between align-items-baseline"><h1>{{ t('admin.server_title') }}</h1><a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div>
+<p class="subtitle mb-4">{{ t('admin.server_subtitle') }}</p>
+{% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>{% endfor %}
+{% if status.get('last_error') %}<div class="alert-console-error px-3 py-2 mb-4">{{ status.get('last_error') }}</div>{% endif %}
+{% if not supervisor %}<div class="alert-console-error px-3 py-2 mb-4">{{ t('admin.server_unavailable') }}</div>{% endif %}
+<div class="block-console mb-4"><span class="block-label">{{ t('admin.server_profile') }}</span><p class="subtitle">{{ t('admin.server_active_profile', profile=active_profile) }}</p>
+<form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.switch_profile') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="col"><select class="form-select form-select-console" name="profile_module" {% if not supervisor %}disabled{% endif %}>{% for profile in profiles %}<option value="{{ profile.module_path }}" {% if profile.module_path == active_module %}selected{% endif %}>{{ profile.profile_name }} — {{ profile.module_path }} ({{ profile.api_port }})</option>{% endfor %}</select></div><div class="col-auto"><button class="btn btn-console-primary" {% if not supervisor %}disabled{% endif %}>{{ t('admin.server_load_profile') }}</button></div></form>
+<p class="subtitle mt-3 mb-0">{{ t('admin.server_restart_required') }}</p></div>
+<div class="block-console"><span class="block-label">{{ t('admin.server_reset') }}</span><p class="subtitle">{{ t('admin.server_reset_help') }}</p><form method="post" action="{{ url_for('admin.reset_server') }}" onsubmit="return confirm({{ t('admin.server_reset_confirm')|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="confirm" value="yes"><button class="btn btn-console-danger" {% if not supervisor %}disabled{% endif %}>{{ t('admin.server_reset_button') }}</button></form></div>
+</div></body></html>"""
+
+
+_SERVER_WAIT_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.server_restarting') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """</head><body><div class="container container-narrow"><div class="block-console"><h1>{{ t('admin.server_restarting') }}</h1><p class="subtitle">{{ t('admin.server_restarting_help') }}</p><p><a id="retry-link" href="{{ target_url }}">{{ t('admin.server_retry_link') }}</a></p></div></div><script>
+(function(){ const candidates={{ candidate_urls|tojson }}; async function probe(){ for(const url of candidates){ try{ await fetch(url, {mode:'no-cors', credentials:'include', cache:'no-store'}); window.location.href=url; return; }catch(error){} } setTimeout(probe, 1500); } setTimeout(probe, 3000); })();
+</script></body></html>"""
+
+
 # The simulator page shares the dashboard's chrome (Bootstrap build, palette, header) and adds
 # its own style + body from api/admin_simulator.py; assembled here so one module decides how
 # admin pages are put together.
@@ -951,16 +1031,97 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         if redirect_response is not None:
             return redirect_response
 
-        users = sorted(ctx.deps.persistence.list_users(), key=lambda user: user["telegram_identity"])
+        return _render(_MENU_TEMPLATE, csrf_token=session["csrf_token"])
+
+    @blueprint.route("/users", methods=["GET"])
+    def users():
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        registered_users = sorted(
+            ctx.deps.persistence.list_users(), key=lambda user: user["telegram_identity"]
+        )
         return _render(
-            _DASHBOARD_TEMPLATE,
-            users=users,
+            _USERS_TEMPLATE,
+            users=registered_users,
             levels=levels,
-            groups=ctx.group_routing.all(),
-            routable_agents=ctx.group_routing.routable_targets,
             csrf_token=session["csrf_token"],
             bot_service_identity=BOT_SERVICE_IDENTITY,
         )
+
+    @blueprint.route("/groups", methods=["GET"])
+    def groups():
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        return _render(
+            _GROUPS_TEMPLATE,
+            groups=ctx.group_routing.all(),
+            routable_agents=ctx.group_routing.routable_targets,
+            csrf_token=session["csrf_token"],
+        )
+
+    @blueprint.route("/server", methods=["GET"])
+    def server():
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        return _render(
+            _SERVER_TEMPLATE,
+            active_module=ctx.loaded_profile.module_path,
+            active_profile=ctx.loaded_profile.profile_name,
+            profiles=discover_profiles(),
+            supervisor=supervisor_available(),
+            status=read_server_status(),
+            csrf_token=session["csrf_token"],
+        )
+
+    def _restart_page(port: int):
+        host = request.host.split(":", 1)[0]
+        target_url = f"{request.scheme}://{host}:{port}/admin/server"
+        fallback_url = f"{request.scheme}://{host}:{ctx.loaded_profile.api_port}/admin/server"
+        candidates = list(dict.fromkeys((target_url, fallback_url)))
+        return _render(_SERVER_WAIT_TEMPLATE, target_url=target_url, candidate_urls=candidates)
+
+    @blueprint.route("/server/profile", methods=["POST"])
+    def switch_profile():
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        csrf_response = _require_csrf()
+        if csrf_response is not None:
+            return csrf_response
+        module_path = request.form.get("profile_module", "").strip()
+        selected = next((profile for profile in discover_profiles() if profile.module_path == module_path), None)
+        if selected is None:
+            flash(_t("admin.server_profile_invalid"), "error")
+            return redirect(url_for("admin.server"))
+        try:
+            submit_server_command("switch_profile", profile_module=module_path)
+        except RuntimeError:
+            flash(_t("admin.server_unavailable"), "error")
+            return redirect(url_for("admin.server"))
+        logger.info("admin requested profile switch", extra={"event": "admin_profile_switch", "profile_module": module_path, "trace_id": get_trace_id()})
+        return _restart_page(selected.api_port)
+
+    @blueprint.route("/server/reset", methods=["POST"])
+    def reset_server():
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        csrf_response = _require_csrf()
+        if csrf_response is not None:
+            return csrf_response
+        if request.form.get("confirm") != "yes":
+            flash(_t("admin.server_reset_confirmation_missing"), "error")
+            return redirect(url_for("admin.server"))
+        try:
+            submit_server_command("reset")
+        except RuntimeError:
+            flash(_t("admin.server_unavailable"), "error")
+            return redirect(url_for("admin.server"))
+        logger.warning("admin requested database reset", extra={"event": "admin_database_reset", "profile_module": ctx.loaded_profile.module_path, "trace_id": get_trace_id()})
+        return _restart_page(ctx.loaded_profile.api_port)
 
     @blueprint.route("/simulator", methods=["GET"])
     def simulator():
@@ -978,6 +1139,33 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             csrf_token=session["csrf_token"],
         )
 
+    @blueprint.route("/simulator/example", methods=["POST"])
+    def load_simulator_example():
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        csrf_response = _require_csrf()
+        if csrf_response is not None:
+            return csrf_response
+        example_key = request.form.get("example_key", "")
+        example = next((item for item in scenario_catalog() if item["key"] == example_key), None)
+        if example is None:
+            return jsonify({"error": _t("admin.simulator.example_invalid")}), 400
+        try:
+            persona_ids = json.loads(request.form.get("persona_ids", "{}"))
+            group_ids = json.loads(request.form.get("group_ids", "{}"))
+            registered = {
+                str(user["telegram_identity"]): user for user in ctx.deps.persistence.list_users()
+            }
+            mapped = map_legacy_scenario(
+                example["raw"], persona_ids, group_ids, registered,
+                unregistered_label=_t("admin.simulator.unregistered_name"),
+                missing_name_label=_t("admin.simulator.missing_name"),
+            )
+        except (ValueError, TypeError, ScenarioMappingError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify(mapped)
+
     @blueprint.route("/groups", methods=["POST"])
     def write_group():
         redirect_response = _require_session()
@@ -992,7 +1180,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         label = request.form.get("label", "").strip()
         if not chat_id:
             flash(_t("admin.chat_id_required"), "error")
-            return redirect(url_for("admin.dashboard"))
+            return redirect(url_for("admin.groups"))
 
         existed = ctx.group_routing.get(chat_id) is not None
         try:
@@ -1001,7 +1189,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             ctx.group_routing.upsert(chat_id, agent_name, label)
         except InvalidRoutingTargetError:
             flash(_t("admin.group_agent_invalid", agent=agent_name), "error")
-            return redirect(url_for("admin.dashboard"))
+            return redirect(url_for("admin.groups"))
         logger.info(
             "admin wrote a telegram group binding",
             extra={
@@ -1010,7 +1198,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             },
         )
         flash(_t("admin.group_routed", chat_id=chat_id, agent=agent_name), "ok")
-        return redirect(url_for("admin.dashboard"))
+        return redirect(url_for("admin.groups"))
 
     @blueprint.route("/groups/<chat_id>/remove", methods=["POST"])
     def remove_group(chat_id):
@@ -1025,14 +1213,14 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             ctx.group_routing.remove(chat_id)
         except NotFoundError:
             flash(_t("admin.group_not_found", chat_id=chat_id), "error")
-            return redirect(url_for("admin.dashboard"))
+            return redirect(url_for("admin.groups"))
 
         logger.info(
             "admin removed a telegram group binding",
             extra={"event": "admin_group_removed", "chat_id": chat_id, "trace_id": get_trace_id()},
         )
         flash(_t("admin.group_removed", chat_id=chat_id), "ok")
-        return redirect(url_for("admin.dashboard"))
+        return redirect(url_for("admin.groups"))
 
     @blueprint.route("/users", methods=["POST"])
     def write_user():
@@ -1045,15 +1233,26 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
 
         identity = request.form.get("telegram_identity", "").strip()
         level = request.form.get("permission_level", "")
+        raw_full_name = request.form.get("full_name")
         if not identity:
             flash(_t("admin.identity_required"), "error")
-            return redirect(url_for("admin.dashboard"))
+            return redirect(url_for("admin.users"))
         if level not in levels:
             flash(_t("admin.level_invalid", level=level), "error")
-            return redirect(url_for("admin.dashboard"))
+            return redirect(url_for("admin.users"))
 
         existed = ctx.deps.persistence.read_user(identity) is not None
-        ctx.deps.persistence.write_user(identity, level)
+        try:
+            full_name = (
+                None
+                if raw_full_name is None and existed
+                else normalize_full_name(raw_full_name or "", allow_empty=True)
+            )
+        except InvalidFullNameError:
+            flash(_t("admin.full_name_invalid"), "error")
+            return redirect(url_for("admin.users"))
+
+        ctx.deps.persistence.write_user(identity, level, full_name)
         logger.info(
             "admin wrote a user",
             extra={
@@ -1062,7 +1261,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             },
         )
         flash(_t("admin.user_written", identity=identity, level=level), "ok")
-        return redirect(url_for("admin.dashboard"))
+        return redirect(url_for("admin.users"))
 
     @blueprint.route("/users/<identity>/remove", methods=["POST"])
     def remove_user(identity):
@@ -1077,14 +1276,14 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             ctx.deps.persistence.delete_user(identity)
         except NotFoundError:
             flash(_t("admin.user_not_found", identity=identity), "error")
-            return redirect(url_for("admin.dashboard"))
+            return redirect(url_for("admin.users"))
 
         logger.info(
             "admin removed a user",
             extra={"event": "admin_user_removed", "telegram_identity": identity, "trace_id": get_trace_id()},
         )
         flash(_t("admin.user_removed", identity=identity), "ok")
-        return redirect(url_for("admin.dashboard"))
+        return redirect(url_for("admin.users"))
 
     @blueprint.route("/bot-service/provision", methods=["POST"])
     def provision_bot_service():
@@ -1103,7 +1302,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             extra={"event": "admin_bot_service_provisioned", "trace_id": get_trace_id()},
         )
         flash(_t("admin.bot_service_provisioned", identity=BOT_SERVICE_IDENTITY), "ok")
-        return redirect(url_for("admin.dashboard"))
+        return redirect(url_for("admin.users"))
 
     @blueprint.errorhandler(Exception)
     def _admin_unexpected_error(error: Exception):

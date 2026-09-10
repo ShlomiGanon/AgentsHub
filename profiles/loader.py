@@ -98,6 +98,18 @@ def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> lis
     if not loaded.areas:
         failures.append("profile declares no areas — extraction has nothing to resolve a location to")
 
+    db_path = getattr(loaded, "db_path", None)
+    resettable_databases = getattr(loaded, "resettable_databases", (db_path,) if db_path else None)
+    if resettable_databases is not None:
+        if (
+            not isinstance(resettable_databases, tuple)
+            or not resettable_databases
+            or any(not isinstance(path, str) or not path.strip() for path in resettable_databases)
+        ):
+            failures.append("RESETTABLE_DATABASES must be a non-empty tuple of database paths")
+        elif db_path not in resettable_databases:
+            failures.append("RESETTABLE_DATABASES must include DB_PATH")
+
     timezone_name = getattr(loaded, "timezone_name", "UTC")
     try:
         ZoneInfo(timezone_name)
@@ -323,6 +335,7 @@ def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) 
         event_types=event_types,
         areas=tuple(profile_module.AREAS),
         db_path=profile_module.DB_PATH,
+        resettable_databases=tuple(getattr(profile_module, "RESETTABLE_DATABASES", (profile_module.DB_PATH,))),
         api_port=profile_module.API_PORT,
         retry_count=profile_module.RETRY_COUNT,
         risk_threshold=profile_module.RISK_THRESHOLD,

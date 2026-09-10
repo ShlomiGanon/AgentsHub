@@ -1,0 +1,89 @@
+{
+  "scenario_metadata": {
+    "scenario_id": "FIRE_002_PHASE_2",
+    "domain": "FIRE_AND_RESCUE",
+    "phase": "2_MAIN_ESCALATION",
+    "title": "אירוע כיבוי והצלה - שלב עיקרי: התפשטות שריפה ועומס מוקד",
+    "description": "הסלמה בתנאי קיצון. שריפת קוצים בשטח פתוח מתפשטת בחסות הרוח לכיוון יער ומבני תעשייה, במקביל לדיווחי שווא ותקלה במצלמה תרמית."
+  },
+  "event_stream": [
+    {
+      "step": 1,
+      "timestamp": "2026-09-09T12:15:00Z",
+      "target_agent": "vision_agent",
+      "source_chat": "TELEGRAM_GROUP_CAMERAS",
+      "payload": {
+        "sender": "רוני - מפעיל תצפיות",
+        "message": "זיהוי עשן ראשוני במצלמה 05 (רכס אורנים)! נראה כמו מוקד אש קטן בשטח פתוח, מתפשט מזרחה בחסות הרוח."
+      }
+    },
+    {
+      "step": 2,
+      "timestamp": "2026-09-09T12:22:00Z",
+      "target_agent": "external_comm_agent",
+      "source_chat": "TELEGRAM_GROUP_EXTERNAL_FORCES",
+      "payload": {
+        "sender": "מוקד משטרה - אג\"מ",
+        "message": "מתקבלים עשרות דיווחים מאזרחים על עשן סמיך שנראה מכביש 444. עומסי תנועה מתפתחים באזור."
+      }
+    },
+    {
+      "step": 3,
+      "timestamp": "2026-09-09T12:30:00Z",
+      "target_agent": "personnel_agent",
+      "source_chat": "TELEGRAM_GROUP_RESPONSE_TEAM",
+      "payload": {
+        "sender": "להב אבי - מפקד משמרת",
+        "message": "רכב אשד 3 יצא לנקודה. מגיעים עוד 4 דקות. נזכיר שעמרי בבדיקה רפואית, סד\"כ בתחנה צמצום."
+      }
+    },
+    {
+      "step": 4,
+      "timestamp": "2026-09-09T12:38:00Z",
+      "target_agent": "vision_agent",
+      "source_chat": "TELEGRAM_GROUP_CAMERAS",
+      "payload": {
+        "sender": "רוני - מפעיל תצפיות",
+        "message": "מצלמה 05 נכנסה לבלבול תרמי עקב עשן כבד וסנוור. העדשה קפאה ולא ניתן להזחיז אותה מרחוק."
+      }
+    },
+    {
+      "step": 5,
+      "timestamp": "2026-09-09T12:42:00Z",
+      "target_agent": "personnel_agent",
+      "source_chat": "TELEGRAM_GROUP_RESPONSE_TEAM",
+      "payload": {
+        "sender": "רס\"ל יובל - מפקד צוות אשד 3",
+        "message": "דיווח מהשטח: האש דילגה מעל שביל עפר ונכנסה לקו החורש! יש סיכון ממשי להתפשטות לכיוון פארק התעשייה."
+      }
+    },
+    {
+      "step": 6,
+      "timestamp": "2026-09-09T12:45:00Z",
+      "target_agent": "external_comm_agent",
+      "source_chat": "TELEGRAM_GROUP_EXTERNAL_FORCES",
+      "payload": {
+        "sender": "מוקד קק\"ל - גזרת הרים",
+        "message": "מזהים התפשטות מהירה בתוך היער. מקפיצים 2 טרקטורי כיבוי שלנו, דורשים תיאום גזרות מולכם."
+      }
+    },
+    {
+      "step": 7,
+      "timestamp": "2026-09-09T12:50:00Z",
+      "target_agent": "main_orchestrator",
+      "source_chat": "TELEGRAM_DIRECT_COMMANDER",
+      "payload": {
+        "sender": "מפקד התחנה",
+        "message": "תציג לי תמונת מצב דחופה: מה מיקום השריפה המדויק, מה הסטטוס של הצוותים בשטח, ומה המלצת הסוכנים לגבי הקפצת כוננות?"
+      }
+    }
+  ],
+  "expected_agent_actions": [
+    {
+      "trigger_step": 7,
+      "responsible_agent": "main_orchestrator",
+      "action_type": "CROSS_AGENT_ESCALATION",
+      "description": "הסוכן הראשי הצולב נתונים מסוכן חוזי (מצלמה קפואה אך זיהוי חורש), סוכן כ\"א (חסר של עמרי + צוות יחיד בשטח), וסוכן חוץ (קק\"ל ומשטרה) וממליץ למפקד התחנה להקפיץ מיד צוותי כוננות מהבית ולבקש סיוע מטוסים/תחנות שכנות."
+    }
+  ]
+}

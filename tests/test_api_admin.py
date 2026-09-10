@@ -122,6 +122,24 @@ def test_dashboard_redirects_to_login_when_not_authenticated(tmp_path, teardown_
     assert "/admin/login" in resp.headers["Location"]
 
 
+def test_admin_menu_links_to_all_four_management_pages(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+    page = client.get("/admin/").data
+    for path in (b'/admin/users', b'/admin/groups', b'/admin/simulator', b'/admin/server'):
+        assert b'href="' + path + b'"' in page
+
+
+def test_server_page_requires_session_and_disables_controls_without_supervisor(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    assert client.get("/admin/server", follow_redirects=False).status_code == 302
+    _login(client)
+    page = client.get("/admin/server")
+    assert page.status_code == 200
+    assert b"run_stack.py" in page.data
+    assert b"profiles.demo" in page.data
+
+
 def test_correct_login_reaches_the_dashboard_and_lists_existing_users(tmp_path, teardown_ctx, _admin_env):
     client = _client(tmp_path, teardown_ctx)
 
@@ -131,8 +149,10 @@ def test_correct_login_reaches_the_dashboard_and_lists_existing_users(tmp_path, 
 
     dashboard = client.get("/admin/")
     assert dashboard.status_code == 200
-    assert COMMANDER_IDENTITY.encode() in dashboard.data
-    assert VIEWER_IDENTITY.encode() in dashboard.data
+    assert b'href="/admin/users"' in dashboard.data
+    users = client.get("/admin/users")
+    assert COMMANDER_IDENTITY.encode() in users.data
+    assert VIEWER_IDENTITY.encode() in users.data
 
 
 def test_wrong_password_does_not_authenticate_and_gives_a_generic_message(tmp_path, teardown_ctx, _admin_env):
@@ -507,8 +527,8 @@ def test_write_user_without_csrf_token_is_rejected(tmp_path, teardown_ctx, _admi
 
     client.post("/admin/users", data={"telegram_identity": "new-1", "permission_level": "viewer"})
 
-    dashboard = client.get("/admin/")
-    assert b"new-1" not in dashboard.data
+    users = client.get("/admin/users")
+    assert b"new-1" not in users.data
 
 
 def test_write_user_with_a_stale_or_wrong_csrf_token_is_rejected(tmp_path, teardown_ctx, _admin_env):
@@ -520,8 +540,8 @@ def test_write_user_with_a_stale_or_wrong_csrf_token_is_rejected(tmp_path, teard
         data={"telegram_identity": "new-1", "permission_level": "viewer", "csrf_token": "not-the-real-token"},
     )
 
-    dashboard = client.get("/admin/")
-    assert b"new-1" not in dashboard.data
+    users = client.get("/admin/users")
+    assert b"new-1" not in users.data
 
 
 # -- User management ------------------------------------------------------
@@ -560,6 +580,15 @@ def test_editing_an_existing_users_level_upserts_via_write_user(tmp_path, teardo
     assert resp.status_code == 200
     updated = teardown_ctx[0].deps.persistence.read_user(VIEWER_IDENTITY)
     assert updated["permission_level"] == "commander"
+
+
+def test_admin_can_set_a_single_full_name_and_level_only_edits_preserve_it(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+    csrf_token = _extract_csrf(client.get("/admin/").data)
+    client.post("/admin/users", data={"telegram_identity": VIEWER_IDENTITY, "permission_level": "viewer", "full_name": "Dana Levi", "csrf_token": csrf_token})
+    client.post("/admin/users", data={"telegram_identity": VIEWER_IDENTITY, "permission_level": "commander", "csrf_token": csrf_token})
+    assert teardown_ctx[0].deps.persistence.read_user(VIEWER_IDENTITY)["full_name"] == "Dana Levi"
 
 
 def test_remove_user(tmp_path, teardown_ctx, _admin_env):
@@ -619,8 +648,10 @@ def test_dashboard_lists_groups_and_routable_agents(tmp_path, teardown_ctx, _adm
     teardown_ctx[0].group_routing.upsert("-1001", "reference_agent", "ops room")
     _login(client)
 
-    page = client.get("/admin/").data
+    menu = client.get("/admin/").data
+    page = client.get("/admin/groups").data
 
+    assert b'href="/admin/groups"' in menu
     assert b"Telegram groups" in page
     assert b"-1001" in page
     assert b"ops room" in page
@@ -705,7 +736,7 @@ def test_admin_pages_render_ltr_english_for_an_english_profile(tmp_path, teardow
     _login(client)
     dashboard = client.get("/admin/").data
     assert b'<html lang="en" dir="ltr">' in dashboard
-    assert b"User administration" in dashboard
+    assert b"Administration" in dashboard
 
 
 def test_admin_pages_render_rtl_hebrew_for_a_hebrew_profile(tmp_path, teardown_ctx, _admin_env):
@@ -725,9 +756,9 @@ def test_admin_pages_render_rtl_hebrew_for_a_hebrew_profile(tmp_path, teardown_c
     _login(client)
     dashboard = client.get("/admin/").data.decode("utf-8")
     assert '<html lang="he" dir="rtl">' in dashboard
-    assert hebrew.text("admin.dashboard_title") in dashboard
-    assert hebrew.text("admin.groups_title") in dashboard
-    assert hebrew.text("admin.nav_simulator") in dashboard
+    assert hebrew.text("admin.menu_title") in dashboard
+    assert hebrew.text("admin.menu_groups") in dashboard
+    assert hebrew.text("admin.menu_simulator") in dashboard
 
     csrf_token = _extract_csrf(dashboard.encode("utf-8"))
     flashed = client.post(
@@ -800,6 +831,32 @@ def test_simulator_embeds_live_groups_users_and_catalog_strings(tmp_path, teardo
     assert data["strings"]["route_bound"] == english.messages["admin.simulator.route_bound"]
 
 
+def test_bundled_example_mapping_reads_the_current_server_name(tmp_path, teardown_ctx, _admin_env):
+    import json
+
+    client = _client(tmp_path, teardown_ctx)
+    ctx = teardown_ctx[0]
+    ctx.deps.persistence.write_user("12345", "viewer", "Dana Levi")
+    _login(client)
+    page = client.get("/admin/simulator")
+    csrf_token = _extract_csrf(page.data)
+    example = _embedded_simulator_data(page.data)["examples"][0]
+    response = client.post(
+        "/admin/simulator/example",
+        data={
+            "csrf_token": csrf_token,
+            "example_key": example["key"],
+            "persona_ids": json.dumps({persona: "12345" for persona in example["personas"]}),
+            "group_ids": json.dumps({source: str(-1000 - index) for index, source in enumerate(example["group_sources"])}),
+        },
+    )
+    assert response.status_code == 200
+    mapped = response.get_json()
+    assert len(mapped["steps"]) == 9
+    assert {step["sender_identity"] for step in mapped["steps"]} == {"12345"}
+    assert {step["sender_name"] for step in mapped["steps"]} == {"Dana Levi"}
+
+
 def test_simulator_page_talks_to_the_real_endpoints_only(tmp_path, teardown_ctx, _admin_env):
     """The page's script sends steps to /Msg and /Event and polls /Job — the bot's own
     endpoints — and does not route through any admin-side proxy."""
@@ -812,7 +869,7 @@ def test_simulator_page_talks_to_the_real_endpoints_only(tmp_path, teardown_ctx,
     assert "'/Event'" in page
     assert "'/Job/'" in page
     assert "'X-Identity'" in page
-    assert "/admin/simulator/" not in page  # no dispatch/proxy sub-route exists or is referenced
+    assert "/admin/simulator/dispatch" not in page  # example mapping is server-side; dispatch never is
 
 
 def test_simulator_script_is_syntactically_valid_javascript(tmp_path, teardown_ctx, _admin_env):

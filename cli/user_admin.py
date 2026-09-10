@@ -4,7 +4,7 @@ import argparse
 import os
 import sys
 
-from auth.permissions import PermissionLevel
+from auth.permissions import InvalidFullNameError, PermissionLevel, normalize_full_name
 from config import ModelTierError, TierModel, resolve_tier_model_from_env
 from persistence import NotFoundError, PersistenceError, PersistenceInterface, open_persistence
 from profiles.loader import ProfileLoadError, ProfileValidationError, load_profile
@@ -28,10 +28,12 @@ def _build_parser() -> argparse.ArgumentParser:
     add_parser = subparsers.add_parser("add", help="add or replace a user")
     add_parser.add_argument("--telegram-id", required=True)
     add_parser.add_argument("--level", required=True, choices=[level.name.lower() for level in PermissionLevel])
+    add_parser.add_argument("--full-name", default=None, help="single full-name field; omit to let the bot collect it")
 
     update_parser = subparsers.add_parser("update", help="change a user's permission level")
     update_parser.add_argument("--telegram-id", required=True)
     update_parser.add_argument("--level", required=True, choices=[level.name.lower() for level in PermissionLevel])
+    update_parser.add_argument("--full-name", default=None, help="replace the full name; omit to preserve it")
 
     remove_parser = subparsers.add_parser("remove", help="remove a user")
     remove_parser.add_argument("--telegram-id", required=True)
@@ -75,7 +77,14 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_command(args: argparse.Namespace, store: PersistenceInterface) -> int:
     if args.command in ("add", "update"):
-        store.write_user(args.telegram_id, args.level)
+        full_name = None
+        if args.full_name is not None:
+            try:
+                full_name = normalize_full_name(args.full_name, allow_empty=True)
+            except InvalidFullNameError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 1
+        store.write_user(args.telegram_id, args.level, full_name)
         print(f"{args.command}: '{args.telegram_id}' is now '{args.level}'")
         return 0
 
@@ -90,7 +99,7 @@ def _run_command(args: argparse.Namespace, store: PersistenceInterface) -> int:
 
     if args.command == "list":
         for user in store.list_users():
-            print(f"{user['telegram_identity']}\t{user['permission_level']}")
+            print(f"{user['telegram_identity']}\t{user['permission_level']}\t{user['full_name']}")
         return 0
 
     raise AssertionError(f"unreachable: unknown command '{args.command}'")

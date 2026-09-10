@@ -601,25 +601,39 @@ class SQLitePersistence(PersistenceInterface):
         connection = self._read_connection()
         try:
             user_row = connection.execute(
-                "SELECT telegram_identity, permission_level FROM users WHERE telegram_identity = ?",
+                "SELECT telegram_identity, permission_level, full_name FROM users WHERE telegram_identity = ?",
                 (telegram_identity,),
             ).fetchone()
             return dict(user_row) if user_row is not None else None
         finally:
             connection.close()
 
-    def write_user(self, telegram_identity: str, permission_level: str) -> None:
+    def write_user(self, telegram_identity: str, permission_level: str, full_name: str | None = None) -> None:
         def _do(connection: sqlite3.Connection) -> None:
             try:
                 connection.execute(
-                    "INSERT INTO users (telegram_identity, permission_level) VALUES (?, ?) "
-                    "ON CONFLICT(telegram_identity) DO UPDATE SET permission_level = excluded.permission_level",
-                    (telegram_identity, permission_level),
+                    "INSERT INTO users (telegram_identity, permission_level, full_name) VALUES (?, ?, COALESCE(?, '')) "
+                    "ON CONFLICT(telegram_identity) DO UPDATE SET "
+                    "permission_level = excluded.permission_level, "
+                    "full_name = CASE WHEN ? IS NULL THEN users.full_name ELSE excluded.full_name END",
+                    (telegram_identity, permission_level, full_name, full_name),
                 )
                 connection.commit()
             except sqlite3.Error as exc:
                 connection.rollback()
                 raise PersistenceError(f"failed to write user '{telegram_identity}': {exc}") from exc
+
+        self._submit_write(_do)
+
+    def update_user_full_name(self, telegram_identity: str, full_name: str) -> None:
+        def _do(connection: sqlite3.Connection) -> None:
+            cursor = connection.execute(
+                "UPDATE users SET full_name = ? WHERE telegram_identity = ?",
+                (full_name, telegram_identity),
+            )
+            connection.commit()
+            if cursor.rowcount == 0:
+                raise NotFoundError(f"no such user: '{telegram_identity}'")
 
         self._submit_write(_do)
 
@@ -635,7 +649,9 @@ class SQLitePersistence(PersistenceInterface):
     def list_users(self) -> list[dict]:
         connection = self._read_connection()
         try:
-            user_rows = connection.execute("SELECT telegram_identity, permission_level FROM users").fetchall()
+            user_rows = connection.execute(
+                "SELECT telegram_identity, permission_level, full_name FROM users"
+            ).fetchall()
             return [dict(user_row) for user_row in user_rows]
         finally:
             connection.close()

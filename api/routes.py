@@ -27,6 +27,7 @@ from config import environment as base_config
 import logging
 
 from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
+from auth.permissions import InvalidFullNameError, normalize_full_name
 from agents import authenticated_request_identity, set_invocation_deadline
 
 from orchestrator.flows import (
@@ -1088,9 +1089,33 @@ def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
 
         user = ctx.deps.persistence.read_user(identity)
         if user is None:
-            return jsonify({"registered": False, "permission_level": None})
+            return jsonify({"registered": False, "permission_level": None, "full_name": None})
 
-        return jsonify({"registered": True, "permission_level": user["permission_level"]})
+        return jsonify({
+            "registered": True,
+            "permission_level": user["permission_level"],
+            "full_name": user["full_name"],
+        })
+
+    @blueprint.route("/User/<identity>/name", methods=["PUT"])
+    def update_own_name(identity):
+        caller_identity = request.headers.get("X-Identity")
+        authenticate(ctx.deps.persistence, caller_identity)
+        if identity != caller_identity:
+            raise AuthorizationError(messages.text("api.other_identity_forbidden"))
+
+        request_payload = request.get_json(silent=True)
+        if not isinstance(request_payload, dict):
+            raise InvalidInputError(messages.text("api.full_name_invalid"), field="full_name")
+        try:
+            full_name = normalize_full_name(request_payload.get("full_name"))
+        except InvalidFullNameError:
+            raise InvalidInputError(messages.text("api.full_name_invalid"), field="full_name") from None
+        try:
+            ctx.deps.persistence.update_user_full_name(identity, full_name)
+        except PersistenceNotFoundError:
+            raise NotFoundError(messages.text("api.identity_unregistered", identity=identity)) from None
+        return jsonify({"telegram_identity": identity, "full_name": full_name})
 
     @blueprint.route("/Commanders", methods=["GET"])
     def get_commanders():

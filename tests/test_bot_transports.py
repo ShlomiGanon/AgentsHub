@@ -16,6 +16,7 @@ def _run(coro):
 
 _DUMMY_ARGS = {
     "resolve_user": ("u1",),
+    "update_own_full_name": ("u1", "Test User"),
     "list_commander_chat_ids": (),
     "list_groups": (),
     "run_attendance_check": (),

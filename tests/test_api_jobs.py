@@ -269,7 +269,7 @@ def test_a_known_identity_reports_registered_and_its_level(tmp_path, teardown_ct
     resp = client.get(f"/User/{VIEWER_IDENTITY}", headers=auth_headers(COMMANDER_IDENTITY))
 
     assert resp.status_code == 200
-    assert resp.get_json() == {"registered": True, "permission_level": "viewer"}
+    assert resp.get_json() == {"registered": True, "permission_level": "viewer", "full_name": ""}
 
 
 def test_an_unknown_identity_reports_unregistered_not_an_error(tmp_path, teardown_ctx):
@@ -280,7 +280,7 @@ def test_an_unknown_identity_reports_unregistered_not_an_error(tmp_path, teardow
     resp = client.get("/User/nobody", headers=auth_headers(COMMANDER_IDENTITY))
 
     assert resp.status_code == 200
-    assert resp.get_json() == {"registered": False, "permission_level": None}
+    assert resp.get_json() == {"registered": False, "permission_level": None, "full_name": None}
 
 
 def test_viewer_can_resolve_their_own_identity(tmp_path, teardown_ctx):
@@ -291,7 +291,44 @@ def test_viewer_can_resolve_their_own_identity(tmp_path, teardown_ctx):
     resp = client.get(f"/User/{VIEWER_IDENTITY}", headers=auth_headers(VIEWER_IDENTITY))
 
     assert resp.status_code == 200
-    assert resp.get_json() == {"registered": True, "permission_level": "viewer"}
+    assert resp.get_json() == {"registered": True, "permission_level": "viewer", "full_name": ""}
+
+
+def test_user_can_update_only_their_own_normalized_full_name(tmp_path, teardown_ctx):
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    updated = client.put(
+        f"/User/{VIEWER_IDENTITY}/name",
+        headers=auth_headers(VIEWER_IDENTITY),
+        json={"full_name": "  Dana   Levi  "},
+    )
+    forbidden = client.put(
+        f"/User/{COMMANDER_IDENTITY}/name",
+        headers=auth_headers(VIEWER_IDENTITY),
+        json={"full_name": "Other Person"},
+    )
+
+    assert updated.status_code == 200
+    assert updated.get_json()["full_name"] == "Dana Levi"
+    assert ctx.deps.persistence.read_user(VIEWER_IDENTITY)["full_name"] == "Dana Levi"
+    assert forbidden.status_code == 403
+
+
+def test_full_name_update_rejects_an_unclear_name(tmp_path, teardown_ctx):
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    response = client.put(
+        f"/User/{VIEWER_IDENTITY}/name",
+        headers=auth_headers(VIEWER_IDENTITY),
+        json={"full_name": "Dana"},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["field"] == "full_name"
 
 
 def test_viewer_is_denied_resolving_another_identity(tmp_path, teardown_ctx):
