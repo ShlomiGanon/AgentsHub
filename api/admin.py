@@ -54,6 +54,17 @@ from flask import Blueprint, flash, get_flashed_messages, jsonify, redirect, ren
 
 from api.admin_scenarios import ScenarioMappingError, map_legacy_scenario, scenario_catalog
 from api.admin_simulator import SIMULATOR_BODY, SIMULATOR_STYLE, simulator_page_context
+from api.admin_api_pages import (
+    API_CONSOLE_STYLE,
+    EVENTS_BODY,
+    GROUPS_API_SCRIPT,
+    GROUPS_API_SECTION,
+    IDENTITY_BAR,
+    PROFILES_BODY,
+    PROTOCOLS_BODY,
+    USERS_API_SCRIPT,
+    USERS_API_SECTION,
+)
 from auth.permissions import InvalidFullNameError, PermissionLevel, normalize_full_name
 from config import discover_profiles, read_server_status, submit_server_command, supervisor_available
 from messages import get_current_catalog
@@ -759,6 +770,9 @@ _MENU_TEMPLATE = """<!DOCTYPE html>
     <div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>
   {% endfor %}
   <div class="row g-3">
+    <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.profiles') }}"><h2 class="h5">{{ t('admin.menu_profiles') }}</h2><span class="subtitle">{{ t('admin.profiles.subtitle') }}</span></a></div>
+    <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.protocols') }}"><h2 class="h5">{{ t('admin.menu_protocols') }}</h2><span class="subtitle">{{ t('admin.protocols.subtitle') }}</span></a></div>
+    <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.events') }}"><h2 class="h5">{{ t('admin.menu_events') }}</h2><span class="subtitle">{{ t('admin.events.subtitle') }}</span></a></div>
     <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.users') }}"><h2 class="h5">{{ t('admin.menu_users') }}</h2><span class="subtitle">{{ t('admin.users_subtitle') }}</span></a></div>
     <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.groups') }}"><h2 class="h5">{{ t('admin.menu_groups') }}</h2><span class="subtitle">{{ t('admin.groups_page_subtitle') }}</span></a></div>
     <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.simulator') }}"><h2 class="h5">{{ t('admin.menu_simulator') }}</h2><span class="subtitle">{{ t('admin.simulator.subtitle') }}</span></a></div>
@@ -769,11 +783,11 @@ _MENU_TEMPLATE = """<!DOCTYPE html>
 
 _USERS_TEMPLATE = """<!DOCTYPE html>
 <html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{{ t('admin.users_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """
-</head><body><div class="container container-narrow">
+<title>{{ t('admin.users_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + """
+</head><body data-api-identity="{{ api_identity }}"><div class="container container-narrow">
   <div class="d-flex justify-content-between align-items-baseline mb-1"><h1>{{ t('admin.users_title') }}</h1>
     <a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div>
-  <p class="subtitle mb-4">{{ t('admin.users_subtitle') }}</p>
+  <p class="subtitle mb-4">{{ t('admin.users_subtitle') }}</p>""" + IDENTITY_BAR + USERS_API_SECTION + """
   {% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>{% endfor %}
   <table class="table table-console mb-5"><thead><tr><th>{{ t('admin.col_identity') }}</th><th>{{ t('admin.col_full_name') }}</th><th>{{ t('admin.col_level') }}</th><th></th></tr></thead><tbody>
   {% for user in users %}<tr><td class="identity">{{ user.telegram_identity }}{% if user.telegram_identity == bot_service_identity %} <span class="tag">{{ t('admin.tag_bot_service') }}</span>{% endif %}</td>
@@ -789,17 +803,27 @@ _USERS_TEMPLATE = """<!DOCTYPE html>
     <div class="col-auto"><div class="form-label-console">{{ t('admin.col_level') }}</div><select name="permission_level" class="form-select form-select-console">{% for level in levels %}<option value="{{ level }}">{{ level }}</option>{% endfor %}</select></div>
     <div class="col-auto"><button class="btn btn-console-primary">{{ t('admin.add') }}</button></div></form></div>
   <div class="block-console"><span class="block-label">{{ t('admin.bot_service_title') }}</span><p class="subtitle">{{ t('admin.bot_service_help', identity=bot_service_identity) }}</p><form method="post" action="{{ url_for('admin.provision_bot_service') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console">{{ t('admin.bot_service_button') }}</button></form></div>
-</div></body></html>"""
+</div>""" + USERS_API_SCRIPT + """</body></html>"""
 
 
 _GROUPS_TEMPLATE = """<!DOCTYPE html>
-<html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.groups_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """</head>
-<body><div class="container container-narrow"><div class="d-flex justify-content-between align-items-baseline"><h1>{{ t('admin.groups_title') }}</h1><a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div><p class="subtitle mb-4">{{ t('admin.groups_page_subtitle') }}</p>
+<html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.groups_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + """</head>
+<body data-api-identity="{{ api_identity }}"><div class="container container-narrow"><div class="d-flex justify-content-between align-items-baseline"><h1>{{ t('admin.groups_title') }}</h1><a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div><p class="subtitle mb-4">{{ t('admin.groups_page_subtitle') }}</p>
+""" + IDENTITY_BAR + GROUPS_API_SECTION + """
 {% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>{% endfor %}
 <table class="table table-console mb-4"><thead><tr><th>{{ t('admin.col_chat_id') }}</th><th>{{ t('admin.col_label') }}</th><th>{{ t('admin.col_routed_to') }}</th><th></th></tr></thead><tbody>
 {% for group in groups %}<tr><td class="identity">{{ group.chat_id }}</td><td>{{ group.label }}</td><td><form class="d-flex gap-2" method="post" action="{{ url_for('admin.write_group') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="chat_id" value="{{ group.chat_id }}"><input type="hidden" name="label" value="{{ group.label }}"><select name="agent_name" class="form-select form-select-console">{% for agent_name in routable_agents %}<option value="{{ agent_name }}" {% if agent_name == group.agent_name %}selected{% endif %}>{{ agent_name }}</option>{% endfor %}</select><button class="btn btn-console">{{ t('admin.save') }}</button></form></td><td><form method="post" action="{{ url_for('admin.remove_group', chat_id=group.chat_id) }}" onsubmit="return confirm({{ t('admin.confirm_remove_group', chat_id=group.chat_id)|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-danger">{{ t('admin.remove') }}</button></form></td></tr>{% else %}<tr><td colspan="4">{{ t('admin.no_groups') }}</td></tr>{% endfor %}</tbody></table>
 <div class="block-console"><span class="block-label">{{ t('admin.add_group') }}</span><p class="subtitle">{{ t('admin.add_group_help', main_agent='main_agent') }}</p><form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.write_group') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="col"><div class="form-label-console">{{ t('admin.col_chat_id') }}</div><input name="chat_id" class="form-control form-control-console" placeholder="-1001234567890" required></div><div class="col"><div class="form-label-console">{{ t('admin.col_label') }}</div><input name="label" class="form-control form-control-console" maxlength="200"></div><div class="col-auto"><select name="agent_name" class="form-select form-select-console">{% for agent_name in routable_agents %}<option value="{{ agent_name }}">{{ agent_name }}</option>{% endfor %}</select></div><div class="col-auto"><button class="btn btn-console-primary">{{ t('admin.add') }}</button></div></form></div>
-</div></body></html>"""
+</div>""" + GROUPS_API_SCRIPT + """</body></html>"""
+
+
+_PROFILES_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.profiles.title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + """</head>""" + PROFILES_BODY + """</html>"""
+
+
+_PROTOCOLS_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.protocols.title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + """</head>""" + PROTOCOLS_BODY + """</html>"""
+
+
+_EVENTS_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.events.title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + """</head>""" + EVENTS_BODY + """</html>"""
 
 
 _SERVER_TEMPLATE = """<!DOCTYPE html>
@@ -901,6 +925,43 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
     blueprint = Blueprint("admin", __name__, url_prefix="/admin")
     rate_limiter = LoginRateLimiter(config.login_max_attempts, config.login_lockout_minutes)
     levels = [level.name.lower() for level in PermissionLevel]
+
+    def _api_users() -> list[dict]:
+        """Human identities available to the browser API console.
+
+        The service identity is intentionally excluded: the console is meant to
+        exercise the same Telegram identities and RBAC rules as real callers,
+        not turn the admin password into an API authorization bypass.
+        """
+
+        return sorted(
+            (
+                user
+                for user in ctx.deps.persistence.list_users()
+                if user["telegram_identity"] != BOT_SERVICE_IDENTITY
+            ),
+            key=lambda user: (
+                user["permission_level"] != "commander",
+                user["full_name"].casefold(),
+                user["telegram_identity"],
+            ),
+        )
+
+    def _api_page_context(current_page: str) -> dict:
+        users = _api_users()
+        available = {user["telegram_identity"] for user in users}
+        selected = str(session.get("api_identity") or "")
+        if selected not in available:
+            selected = users[0]["telegram_identity"] if users else ""
+            if selected:
+                session["api_identity"] = selected
+            else:
+                session.pop("api_identity", None)
+        return {
+            "api_users": users,
+            "api_identity": selected,
+            "current_page": current_page,
+        }
 
     def _session_expired() -> bool:
         last_activity = session.get("last_activity")
@@ -1033,6 +1094,77 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
 
         return _render(_MENU_TEMPLATE, csrf_token=session["csrf_token"])
 
+    @blueprint.route("/identity", methods=["POST"])
+    def select_api_identity():
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        csrf_response = _require_csrf()
+        if csrf_response is not None:
+            return csrf_response
+
+        identity = request.form.get("api_identity", "").strip()
+        if identity not in {user["telegram_identity"] for user in _api_users()}:
+            flash(_t("admin.api.identity_invalid"), "error")
+        else:
+            session["api_identity"] = identity
+            flash(_t("admin.api.identity_selected", identity=identity), "ok")
+
+        destinations = {
+            "profiles": "admin.profiles",
+            "protocols": "admin.protocols",
+            "events": "admin.events",
+            "users": "admin.users",
+            "groups": "admin.groups",
+        }
+        return redirect(url_for(destinations.get(request.form.get("next_page", ""), "admin.dashboard")))
+
+    @blueprint.route("/profiles", methods=["GET"])
+    def profiles():
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        return _render(
+            _PROFILES_TEMPLATE,
+            csrf_token=session["csrf_token"],
+            **_api_page_context("profiles"),
+        )
+
+    @blueprint.route("/protocols", methods=["GET"])
+    def protocols():
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        agents = tuple(sorted(agent.name for agent in ctx.deps.registry.all()))
+        tools = tuple(
+            sorted(
+                {
+                    tool.name
+                    for agent in ctx.deps.registry.all()
+                    for tool in agent.exposed_tools()
+                }
+            )
+        )
+        return _render(
+            _PROTOCOLS_TEMPLATE,
+            agents=agents,
+            tools=tools,
+            csrf_token=session["csrf_token"],
+            **_api_page_context("protocols"),
+        )
+
+    @blueprint.route("/events", methods=["GET"])
+    def events():
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        return _render(
+            _EVENTS_TEMPLATE,
+            event_types=ctx.deps.event_type_registry.types,
+            csrf_token=session["csrf_token"],
+            **_api_page_context("events"),
+        )
+
     @blueprint.route("/users", methods=["GET"])
     def users():
         redirect_response = _require_session()
@@ -1047,6 +1179,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             levels=levels,
             csrf_token=session["csrf_token"],
             bot_service_identity=BOT_SERVICE_IDENTITY,
+            **_api_page_context("users"),
         )
 
     @blueprint.route("/groups", methods=["GET"])
@@ -1059,6 +1192,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             groups=ctx.group_routing.all(),
             routable_agents=ctx.group_routing.routable_targets,
             csrf_token=session["csrf_token"],
+            **_api_page_context("groups"),
         )
 
     @blueprint.route("/server", methods=["GET"])

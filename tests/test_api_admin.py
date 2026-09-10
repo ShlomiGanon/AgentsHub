@@ -122,12 +122,147 @@ def test_dashboard_redirects_to_login_when_not_authenticated(tmp_path, teardown_
     assert "/admin/login" in resp.headers["Location"]
 
 
-def test_admin_menu_links_to_all_four_management_pages(tmp_path, teardown_ctx, _admin_env):
+def test_admin_menu_links_to_all_seven_management_pages(tmp_path, teardown_ctx, _admin_env):
     client = _client(tmp_path, teardown_ctx)
     _login(client)
     page = client.get("/admin/").data
-    for path in (b'/admin/users', b'/admin/groups', b'/admin/simulator', b'/admin/server'):
+    for path in (
+        b'/admin/profiles', b'/admin/protocols', b'/admin/events', b'/admin/users',
+        b'/admin/groups', b'/admin/simulator', b'/admin/server',
+    ):
         assert b'href="' + path + b'"' in page
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/admin/profiles", "/admin/protocols", "/admin/events"],
+)
+def test_new_api_management_pages_require_an_admin_session(path, tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+
+    response = client.get(path, follow_redirects=False)
+
+    assert response.status_code in (302, 303)
+    assert "/admin/login" in response.headers["Location"]
+
+
+def test_profiles_page_exposes_both_system_methods_through_the_live_api(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+
+    page = client.get("/admin/profiles").data.decode("utf-8")
+
+    assert "GET" in page and "PUT" in page
+    assert page.count("/SYSTEM") >= 4
+    assert "AdminApi.call('GET', '/SYSTEM'" in page
+    assert "AdminApi.call('PUT', '/SYSTEM'" in page
+    assert "'X-Identity':identity" in page
+
+
+def test_protocols_page_exposes_every_protocol_method_through_the_live_api(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+
+    page = client.get("/admin/protocols").data.decode("utf-8")
+
+    for method in ("GET", "POST", "PUT", "DELETE"):
+        assert f"AdminApi.call('{method}'" in page
+    assert "/Protocol" in page
+    assert "participating_agents" in page
+    assert "approved_tools" in page
+    assert "approval_flag" in page
+
+
+def test_events_page_exposes_every_operational_endpoint_through_the_live_api(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+
+    page = client.get("/admin/events").data.decode("utf-8")
+
+    for endpoint in (
+        "/Event", "/Msg", "/Job/", "/Holds/Pending", "/Clarify/", "/Approve/",
+        "/Notifications", "/Trace/", "/TeamStatus/AttendanceCheck",
+    ):
+        assert endpoint in page
+    assert "sender_identity:AdminApi.identity" in page
+    assert "telegram_chat_id" in page
+    assert "HTTP ${response.status}" in page
+
+
+def test_api_identity_selection_is_registered_session_scoped_and_shared_between_pages(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+    csrf_token = _extract_csrf(client.get("/admin/events").data)
+
+    selected = client.post(
+        "/admin/identity",
+        data={
+            "csrf_token": csrf_token,
+            "api_identity": VIEWER_IDENTITY,
+            "next_page": "events",
+        },
+        follow_redirects=False,
+    )
+
+    assert selected.status_code in (302, 303)
+    assert selected.headers["Location"].endswith("/admin/events")
+    for path in ("/admin/events", "/admin/profiles", "/admin/protocols", "/admin/users", "/admin/groups"):
+        page = client.get(path).data.decode("utf-8")
+        assert f'data-api-identity="{VIEWER_IDENTITY}"' in page
+        assert f'<option value="{VIEWER_IDENTITY}" selected>' in page
+
+
+def test_api_identity_selection_rejects_unregistered_and_service_identities(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+    page = client.get("/admin/events")
+    csrf_token = _extract_csrf(page.data)
+    assert '<option value="bot-service"' not in page.data.decode("utf-8")
+
+    for identity in ("not-registered", "bot-service"):
+        response = client.post(
+            "/admin/identity",
+            data={"csrf_token": csrf_token, "api_identity": identity, "next_page": "events"},
+            follow_redirects=True,
+        )
+        assert b"not a registered human user" in response.data
+
+
+def test_api_identity_selection_requires_csrf(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+
+    response = client.post(
+        "/admin/identity",
+        data={"api_identity": VIEWER_IDENTITY, "next_page": "events"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (302, 303)
+    assert response.headers["Location"].endswith("/admin/")
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/admin/profiles", "/admin/protocols", "/admin/events", "/admin/users", "/admin/groups"],
+)
+def test_api_management_page_javascript_is_syntactically_valid(path, tmp_path, teardown_ctx, _admin_env):
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+    page = client.get(path).data.decode("utf-8")
+    scripts = re.findall(r"<script>(.*?)</script>", page, re.DOTALL)
+    assert scripts
+
+    script_path = tmp_path / (path.rsplit("/", 1)[-1] + ".js")
+    script_path.write_text("\n".join(scripts), encoding="utf-8")
+    result = subprocess.run([node, "--check", str(script_path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_server_page_requires_session_and_disables_controls_without_supervisor(tmp_path, teardown_ctx, _admin_env):
@@ -153,6 +288,32 @@ def test_correct_login_reaches_the_dashboard_and_lists_existing_users(tmp_path, 
     users = client.get("/admin/users")
     assert COMMANDER_IDENTITY.encode() in users.data
     assert VIEWER_IDENTITY.encode() in users.data
+
+
+def test_users_page_exposes_all_public_user_endpoints(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+
+    page = client.get("/admin/users").data.decode("utf-8")
+
+    assert "/User/&lt;identity&gt;" in page
+    assert "/User/&lt;identity&gt;/name" in page
+    assert "/Commanders" in page
+    assert "AdminApi.call('GET',`/User/" in page
+    assert "AdminApi.call('PUT',`/User/" in page
+    assert "AdminApi.call('GET','/Commanders'" in page
+
+
+def test_groups_page_exposes_all_public_group_endpoints(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+
+    page = client.get("/admin/groups").data.decode("utf-8")
+
+    assert "/Groups/&lt;chat_id&gt;" in page
+    assert "AdminApi.call('GET','/Groups'" in page
+    assert "AdminApi.call('PUT',`/Groups/" in page
+    assert "AdminApi.call('DELETE',`/Groups/" in page
 
 
 def test_wrong_password_does_not_authenticate_and_gives_a_generic_message(tmp_path, teardown_ctx, _admin_env):
@@ -759,6 +920,9 @@ def test_admin_pages_render_rtl_hebrew_for_a_hebrew_profile(tmp_path, teardown_c
     assert hebrew.text("admin.menu_title") in dashboard
     assert hebrew.text("admin.menu_groups") in dashboard
     assert hebrew.text("admin.menu_simulator") in dashboard
+    assert hebrew.text("admin.menu_profiles") in dashboard
+    assert hebrew.text("admin.menu_protocols") in dashboard
+    assert hebrew.text("admin.menu_events") in dashboard
 
     csrf_token = _extract_csrf(dashboard.encode("utf-8"))
     flashed = client.post(

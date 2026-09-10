@@ -20,7 +20,10 @@ def repository_files() -> set[str]:
     return {
         path.replace("\\", "/")
         for path in paths
-        if path and (ROOT / path).is_file() and path != ".env"
+        if path
+        and (ROOT / path).is_file()
+        and path != ".env"
+        and not path.replace("\\", "/").startswith(".claude/")
     }
 
 

@@ -8,12 +8,12 @@ from typing import Mapping
 
 SCENARIO_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "admin_scenarios"
 SCENARIO_FILES = (
-    "כיתת כוננת - חלק 1.json",
-    "כיתת כוננת - חלק 2.json",
-    "כיתת כוננת - חלק 3.json",
-    "מכבי אש - חלק 1.json",
-    "מכבי אש - חלק 2.json",
-    "מכבי אש - חלק 3.json",
+    "\u05db\u05d9\u05ea\u05ea \u05db\u05d5\u05e0\u05e0\u05ea - \u05d7\u05dc\u05e7 1.json",
+    "\u05db\u05d9\u05ea\u05ea \u05db\u05d5\u05e0\u05e0\u05ea - \u05d7\u05dc\u05e7 2.json",
+    "\u05db\u05d9\u05ea\u05ea \u05db\u05d5\u05e0\u05e0\u05ea - \u05d7\u05dc\u05e7 3.json",
+    "\u05de\u05db\u05d1\u05d9 \u05d0\u05e9 - \u05d7\u05dc\u05e7 1.json",
+    "\u05de\u05db\u05d1\u05d9 \u05d0\u05e9 - \u05d7\u05dc\u05e7 2.json",
+    "\u05de\u05db\u05d1\u05d9 \u05d0\u05e9 - \u05d7\u05dc\u05e7 3.json",
 )
 GROUP_SOURCES = (
     "TELEGRAM_GROUP_RESPONSE_TEAM",
@@ -81,8 +81,8 @@ def map_legacy_scenario(
     group_ids: Mapping[str, object],
     registered_users: Mapping[str, Mapping],
     *,
-    unregistered_label: str = "לא רשום",
-    missing_name_label: str = "שם חסר",
+    unregistered_label: str = "\u05dc\u05d0 \u05e8\u05e9\u05d5\u05dd",
+    missing_name_label: str = "\u05e9\u05dd \u05d7\u05e1\u05e8",
 ) -> dict:
     """Convert one bundled schema to the canonical simulator schema.
 

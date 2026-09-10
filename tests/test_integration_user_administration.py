@@ -93,7 +93,7 @@ def test_a_commander_added_via_the_admin_command_can_approve_a_real_held_run(tmp
         ctx.deps.persistence.close()
 
 
-def test_no_registered_api_route_creates_changes_or_removes_a_user(tmp_path):
+def test_user_api_exposes_only_reads_and_the_self_name_update(tmp_path):
     ctx = build_context(tmp_path)
     try:
         app = build_app(ctx)
@@ -104,10 +104,11 @@ def test_no_registered_api_route_creates_changes_or_removes_a_user(tmp_path):
             if "user" in rule.rule.lower() or "commander" in rule.rule.lower()
         ]
 
-        assert user_touching_routes, "expected at least GET /User/<identity> and GET /Commanders to exist"
-
-        for path, methods in user_touching_routes:
-            assert methods == ["GET"], f"{path} exposes {methods} — only reads are allowed on user-shaped routes (§8.2/§9.5)"
+        assert dict(user_touching_routes) == {
+            "/Commanders": ["GET"],
+            "/User/<identity>": ["GET"],
+            "/User/<identity>/name": ["PUT"],
+        }
     finally:
         ctx.queue.stop()
         ctx.deps.persistence.close()

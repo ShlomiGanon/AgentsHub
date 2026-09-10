@@ -11,7 +11,9 @@ This English catalog describes every tracked or pending first-party file in the 
 | `.vscode/extensions.json` | Project | Internal | Recommends editor extensions for this workspace. |
 | `benchmark_baseline.json` | Evaluation | Internal | Stores baseline response-pipeline benchmark measurements. |
 | `benchmark_optimized.json` | Evaluation | Internal | Stores optimized response-pipeline benchmark measurements. |
+| `codebase_invest.md` | Documentation | Internal | Records a codebase investigation and implementation findings. |
 | `IMPROVE.MD` | Documentation | Internal | Reports evidence-backed improvements for Main Agent response latency and quality. |
+| `invest.md` | Documentation | Internal | Records repository investigation notes. |
 | `README.md` | Project | Internal | Introduces the system and its primary startup commands. |
 | `run_stack.py` | Production | Public entry point | Starts and supervises the unified API and Telegram bot processes together. |
 | `SPEED.MD` | Documentation | Internal | Records the measured response-latency investigation and evidence. |
@@ -25,13 +27,16 @@ This English catalog describes every tracked or pending first-party file in the 
 | `agents/surveillance_agent.py` | Production | Private implementation | Implements the visual-surveillance, camera-monitoring, and tactical-drone specialist. |
 | `agents/team_status_agent.py` | Production | Private implementation | Implements the readiness-team roster, attendance-cycle, response, and availability-report specialist. |
 | `api/__init__.py` | Production | Public facade | Exposes the API facade and compatibility module aliases. |
-| `api/admin.py` | Production | Private implementation | Serves the login-gated admin web panel (users, Telegram group routing, scenario simulator) under `/admin`, in the profile's catalog language. |
+| `api/admin.py` | Production | Private implementation | Serves the login-gated, seven-page admin web panel under `/admin`, in the profile's catalog language. |
+| `api/admin_api_pages.py` | Production | Private implementation | Provides the profiles, protocols, events, users, and groups browser controls that call the live JSON endpoints with the selected `X-Identity`. |
+| `api/admin_scenarios.py` | Production | Private implementation | Loads the six bundled scenarios and maps their personas and groups to real Telegram identities for the simulator. |
 | `api/admin_simulator.py` | Production | Private implementation | Style, body and script of the admin scenario simulator page, plus the helper that gathers its embedded data. |
 | `api/app.py` | Production | Public entry point | Builds API dependencies, owns ApiContext, and starts Flask. |
 | `api/request_boundary.py` | Production | Private implementation | Authenticates requests and translates API and HTTP failures into responses. |
 | `api/routes.py` | Production | Private implementation | Defines ingestion, management, hold, job, system, and notification routes. |
 | `auth/__init__.py` | Production | Public facade | Exposes authorization contracts. |
 | `auth/permissions.py` | Production | Private implementation | Maps actions to permission levels and evaluates authorization. |
+| `auth/user_names.py` | Production | Private implementation | Normalizes and validates the single full-name field associated with a Telegram identity. |
 | `bot/__init__.py` | Production | Public facade | Exposes the bot facade and compatibility module aliases. |
 | `bot/app.py` | Production | Public entry point | Builds bot dependencies, routes Telegram updates, and starts polling. |
 | `bot/background_services.py` | Production | Private implementation | Polls and dispatches notifications, persists cursors, and manages single-instance startup. |
@@ -45,6 +50,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `config/__init__.py` | Production | Public facade | Exposes environment and live-settings configuration facades. |
 | `config/environment.py` | Production | Private implementation | Resolves model tiers and process flags from environment values. |
 | `config/live_settings.py` | Production | Private implementation | Persists retry, risk, and lookback settings atomically. |
+| `config/server_control.py` | Production | Private implementation | Discovers safe profiles and exchanges restart, profile-switch, reset, and status messages with the stack supervisor. |
 | `conftest.py` | Project | Internal | Defines repository-wide pytest fixtures, model-tier configuration, and trace isolation. |
 | `docs/DEMO_READY.md` | Documentation | Internal | Documents DEMO READY. |
 | `docs/GT critial agents.pptx.pdf` | Documentation | Internal | Stores the GT critial agents.pptx reference artifact. |
@@ -85,6 +91,12 @@ This English catalog describes every tracked or pending first-party file in the 
 | `docs/תיאור משימות שבועיות.pdf` | Documentation | Internal | Stores the תיאור משימות שבועיות reference artifact. |
 | `fixtures/__init__.py` | Fixture | Internal | Marks reusable fixtures as a package. |
 | `fixtures/adversarial_disclosure_v1.jsonl` | Fixture | Internal | Provides a versioned Hebrew and English adversarial disclosure-safety corpus. |
+| `fixtures/admin_scenarios/כיתת כוננת - חלק 1.json` | Fixture | Internal | Provides the first readiness-team simulator scenario. |
+| `fixtures/admin_scenarios/כיתת כוננת - חלק 2.json` | Fixture | Internal | Provides the second readiness-team simulator scenario. |
+| `fixtures/admin_scenarios/כיתת כוננת - חלק 3.json` | Fixture | Internal | Provides the third readiness-team simulator scenario. |
+| `fixtures/admin_scenarios/מכבי אש - חלק 1.json` | Fixture | Internal | Provides the first fire-response simulator scenario. |
+| `fixtures/admin_scenarios/מכבי אש - חלק 2.json` | Fixture | Internal | Provides the second fire-response simulator scenario. |
+| `fixtures/admin_scenarios/מכבי אש - חלק 3.json` | Fixture | Internal | Provides the third fire-response simulator scenario. |
 | `fixtures/profiles/__init__.py` | Fixture | Internal | Marks fixture deployment profiles as a package. |
 | `fixtures/profiles/minimal_profile.py` | Fixture | Internal | Defines the minimal valid profile used by loading and integration tests. |
 | `fixtures/response_eval_v1.jsonl` | Fixture | Internal | Provides a versioned Hebrew and English response-quality corpus. |
@@ -144,6 +156,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_agent_permission_enforcement.py` | Test | Internal | Verifies agent permission enforcement behavior and edge cases. |
 | `tests/test_agent_registry.py` | Test | Internal | Verifies agent registry behavior and edge cases. |
 | `tests/test_agent_runtime.py` | Test | Internal | Verifies agent construction, invocation, CrewAI adaptation, and output handling. |
+| `tests/test_admin_scenarios.py` | Test | Internal | Verifies bundled scenario discovery, conversion, step counts, and real Telegram identity mapping. |
 | `tests/test_api_admin.py` | Test | Internal | Verifies the admin web panel's login, session, CSRF, rate limiting, and user-management behavior. |
 | `tests/test_api_app.py` | Test | Internal | Verifies api app behavior and edge cases. |
 | `tests/test_api_groups.py` | Test | Internal | Verifies Telegram group binding routes, group-scoped message handling, and the attendance-check trigger. |
@@ -212,6 +225,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_question_answering.py` | Test | Internal | Verifies question routing and read-only specialist/history answers. |
 | `tests/test_reference_agent.py` | Test | Internal | Verifies reference agent behavior and edge cases. |
 | `tests/test_response_improvements.py` | Test | Internal | Verifies conversation retention, long polling, trace propagation, queue ordering, idempotency, and removal of the obsolete stream route. |
+| `tests/test_server_control.py` | Test | Internal | Verifies safe profile discovery and supervisor command and selection persistence. |
 | `tests/test_situational_picture.py` | Test | Internal | Verifies picture planning, per-domain live questioning, recent-events window and scope, unavailable-domain handling, and composition fallbacks. |
 | `tests/test_sqlite_store.py` | Test | Internal | Verifies SQLite serialization, concurrency, and user persistence. |
 | `tests/test_sub_agent_surveillance_profile.py` | Test | Internal | Verifies the surveillance profile, isolated databases, agent, and protocol declarations. |

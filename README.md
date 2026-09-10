@@ -162,7 +162,7 @@ python -m bot.app profiles.unified_test
 
 ### Admin web panel (optional)
 
-A browser-based, login-gated alternative to `cli.user_admin`, served by the same API process at `/admin` — disabled by default (no `/admin` route exists at all) unless both `ADMIN_USERNAME` and `ADMIN_PASSWORD` are set; once they are, `ADMIN_SESSION_SECRET` is also required (fails startup loudly if missing). See step 1's env var list and `.env.example` for all admin-related variables and how to generate `ADMIN_SESSION_SECRET`.
+A browser-based, login-gated administration console, served by the same API process at `/admin` — disabled by default (no `/admin` route exists at all) unless both `ADMIN_USERNAME` and `ADMIN_PASSWORD` are set; once they are, `ADMIN_SESSION_SECRET` is also required (fails startup loudly if missing). The menu has separate pages for profiles, protocols, events, users, Telegram groups, server management, and simulations. API controls call the public endpoints directly with a registered Telegram identity selected for the admin session, so normal `X-Identity` permissions and error responses are preserved. See step 1's env var list and `.env.example` for all admin-related variables and how to generate `ADMIN_SESSION_SECRET`.
 
 ```
 http://127.0.0.1:8902/admin/login
