@@ -28,7 +28,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `agents/team_status_agent.py` | Production | Private implementation | Implements the readiness-team roster, attendance-cycle, response, and availability-report specialist. |
 | `api/__init__.py` | Production | Public facade | Exposes the API facade and compatibility module aliases. |
 | `api/admin.py` | Production | Private implementation | Serves the login-gated, seven-page admin web panel under `/admin`, in the profile's catalog language. |
-| `api/admin_api_pages.py` | Production | Private implementation | Provides the profiles, protocols, events, users, and groups browser controls that call the live JSON endpoints with the selected `X-Identity`. |
+| `api/admin_api_pages.py` | Production | Private implementation | Provides the tailored profiles, protocols, and events management UI; live endpoint actions use the selected `X-Identity` and retain normal API authorization. |
 | `api/admin_scenarios.py` | Production | Private implementation | Loads the six bundled scenarios and maps their personas and groups to real Telegram identities for the simulator. |
 | `api/admin_simulator.py` | Production | Private implementation | Style, body and script of the admin scenario simulator page, plus the helper that gathers its embedded data. |
 | `api/app.py` | Production | Public entry point | Builds API dependencies, owns ApiContext, and starts Flask. |

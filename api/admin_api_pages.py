@@ -13,9 +13,6 @@ API_CONSOLE_STYLE = """
   .api-identity-bar .identity-field { min-width:280px; flex:1; }
   .api-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:18px; }
   .api-card { border:1px solid var(--line); background:rgba(255,255,255,.16); padding:18px; }
-  .api-endpoint { direction:ltr; unicode-bidi:isolate; display:inline-flex; gap:8px; align-items:center;
-    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:13px; }
-  .api-method { min-width:56px; padding:2px 7px; border:1px solid var(--line-strong); text-align:center; font-weight:700; }
   .api-output { direction:ltr; text-align:left; unicode-bidi:plaintext; white-space:pre-wrap; overflow-wrap:anywhere;
     min-height:80px; max-height:360px; overflow:auto; margin:12px 0 0; padding:12px;
     border:1px solid var(--line); background:rgba(255,255,255,.25); font-size:12px; }
@@ -69,7 +66,11 @@ API_CLIENT_SCRIPT = """
 window.AdminApi = (() => {
   const identity = document.body.dataset.apiIdentity || '';
   const networkErrorLabel = {{ t('admin.api.network_error')|tojson }};
-  const pretty = value => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  const successLabel = {{ t('admin.api.success')|tojson }};
+  const failedLabel = {{ t('admin.api.failed')|tojson }};
+  const statusLabel = {{ t('admin.api.result_status')|tojson }};
+  const eventLabel = {{ t('admin.api.result_event')|tojson }};
+  const typeLabel = {{ t('admin.api.result_type')|tojson }};
   const value = id => document.getElementById(id).value.trim();
   const checked = id => document.getElementById(id).checked;
   const csv = id => value(id).split(',').map(item => item.trim()).filter(Boolean);
@@ -78,6 +79,7 @@ window.AdminApi = (() => {
 
   function setOutput(outputId, state, content) {
     const output = document.getElementById(outputId);
+    output.hidden = false;
     output.dataset.state = state;
     output.textContent = content;
   }
@@ -94,12 +96,24 @@ window.AdminApi = (() => {
       const raw = await response.text();
       let payload;
       try { payload = raw ? JSON.parse(raw) : null; } catch (_) { payload = raw; }
-      const trace = response.headers.get('X-Trace-ID');
-      const summary = `${method} ${path}\nHTTP ${response.status}${trace ? `\nTrace: ${trace}` : ''}\n\n${pretty(payload)}`;
+      const details = [];
+      if (payload && typeof payload === 'object') {
+        if (payload.message) details.push(payload.message);
+        if (payload.answer) details.push(payload.answer);
+        if (payload.event_id || payload.job_id) details.push(`${eventLabel}: ${payload.event_id || payload.job_id}`);
+        if (payload.status || payload.outcome) details.push(`${statusLabel}: ${payload.status || payload.outcome}`);
+        if (payload.taken_as) details.push(`${typeLabel}: ${payload.taken_as}`);
+        if (payload.detail) details.push(payload.detail);
+        if (payload.insight_text) details.push(payload.insight_text);
+        if (Array.isArray(payload.steps_completed)) details.push(...payload.steps_completed);
+        if (Array.isArray(payload.entries)) details.push(...payload.entries.map(entry => entry.text));
+      } else if (payload) details.push(String(payload));
+      const content = details.join('\\n');
+      const summary = `${response.ok ? successLabel : failedLabel}${content ? `\n\n${content}` : ''}`;
       setOutput(outputId, response.ok ? 'ok' : 'error', summary);
       return {ok:response.ok, status:response.status, payload};
     } catch (error) {
-      setOutput(outputId, 'error', `${method} ${path}\n\n${networkErrorLabel}: ${error.message}`);
+      setOutput(outputId, 'error', `${networkErrorLabel}: ${error.message}`);
       return {ok:false, status:0, payload:null};
     }
   }
@@ -127,29 +141,35 @@ PROFILES_BODY = """
   <div class="d-flex justify-content-between align-items-baseline"><h1>{{ t('admin.profiles.title') }}</h1><a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div>
   <p class="subtitle mb-4">{{ t('admin.profiles.subtitle') }}</p>
   """ + IDENTITY_BAR + FLASH_MESSAGES + """
-  <div class="api-grid">
-    <section class="api-card">
-      <div class="api-endpoint"><span class="api-method">GET</span><span>/SYSTEM</span></div>
-      <p class="api-hint mt-3">{{ t('admin.profiles.get_help') }}</p>
-      <button id="system-get" class="btn btn-console-primary">{{ t('admin.api.execute') }}</button>
-      <pre id="system-get-output" class="api-output">{{ t('admin.api.not_run') }}</pre>
-    </section>
-    <section class="api-card">
-      <div class="api-endpoint"><span class="api-method">PUT</span><span>/SYSTEM</span></div>
-      <p class="api-hint mt-3">{{ t('admin.profiles.put_help') }}</p>
-      <form id="system-put-form" class="api-form-grid">
-        <div><label for="system-retry">retry_count</label><input id="system-retry" type="number" min="0" class="form-control form-control-console"></div>
-        <div><label for="system-risk">risk_threshold</label><input id="system-risk" type="number" min="0" max="1" step="0.01" class="form-control form-control-console"></div>
-        <div><label for="system-lookback">lookback_window_days</label><input id="system-lookback" type="number" min="1" class="form-control form-control-console"></div>
-        <div class="wide"><button class="btn btn-console-primary">{{ t('admin.api.execute') }}</button></div>
-      </form>
-      <pre id="system-put-output" class="api-output">{{ t('admin.api.not_run') }}</pre>
-    </section>
+  <div class="row g-3 mb-4">
+    <div class="col-md-6"><div class="block-console h-100"><span class="block-label">{{ t('admin.profiles.active') }}</span><h2 class="h5 mb-2">{{ profile_name }}</h2><div class="identity">{{ profile_module }}</div><div class="mt-3"><span class="tag">{{ t('admin.profiles.agents_count', count=agents|length) }}</span> <span class="tag">{{ t('admin.profiles.protocols_count', count=protocols|length) }}</span></div></div></div>
+    <div class="col-md-6"><div class="block-console h-100"><span class="block-label">{{ t('admin.profiles.operational_scope') }}</span><div class="mb-3"><strong>{{ t('admin.profiles.event_types') }}</strong><div class="mt-2">{% for item in event_types %}<span class="tag">{{ item }}</span> {% else %}—{% endfor %}</div></div><div><strong>{{ t('admin.profiles.areas') }}</strong><div class="mt-2">{% for item in areas %}<span class="tag">{{ item }}</span> {% else %}—{% endfor %}</div></div></div></div>
+  </div>
+  <div class="block-console mb-4">
+    <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap"><span class="block-label mb-0">{{ t('admin.profiles.settings_title') }}</span><button id="system-get" class="btn btn-console btn-sm">{{ t('admin.api.refresh') }}</button></div>
+    <p class="api-hint mt-3">{{ t('admin.profiles.put_help') }}</p>
+    <form id="system-put-form" class="api-form-grid">
+      <div><label for="system-retry">{{ t('admin.profiles.retry_count') }}</label><input id="system-retry" type="number" min="0" value="{{ settings.retry_count }}" class="form-control form-control-console"></div>
+      <div><label for="system-risk">{{ t('admin.profiles.risk_threshold') }}</label><input id="system-risk" type="number" min="0" max="1" step="0.01" value="{{ settings.risk_threshold }}" class="form-control form-control-console"></div>
+      <div><label for="system-lookback">{{ t('admin.profiles.lookback_days') }}</label><input id="system-lookback" type="number" min="1" value="{{ settings.lookback_window_days }}" class="form-control form-control-console"></div>
+      <div class="wide"><button class="btn btn-console-primary">{{ t('admin.save') }}</button></div>
+    </form>
+    <pre id="system-put-output" class="api-output" hidden></pre>
+  </div>
+  <pre id="system-get-output" class="api-output mb-4" hidden></pre>
+  <div class="block-console"><span class="block-label">{{ t('admin.profiles.components') }}</span><div class="api-form-grid"><div><strong>{{ t('admin.profiles.agents') }}</strong><ul class="mt-2">{% for item in agents %}<li>{{ item }}</li>{% endfor %}</ul></div><div><strong>{{ t('admin.profiles.protocols') }}</strong><ul class="mt-2">{% for item in protocols %}<li>{{ item }}</li>{% endfor %}</ul></div></div>
   </div>
 </div>
 """ + API_CLIENT_SCRIPT + """
 <script>
-document.getElementById('system-get').addEventListener('click', () => AdminApi.call('GET', '/SYSTEM', undefined, 'system-get-output'));
+document.getElementById('system-get').addEventListener('click', async () => {
+  const result = await AdminApi.call('GET', '/SYSTEM', undefined, 'system-get-output');
+  if (result.ok && result.payload && result.payload.settings) {
+    document.getElementById('system-retry').value = result.payload.settings.retry_count;
+    document.getElementById('system-risk').value = result.payload.settings.risk_threshold;
+    document.getElementById('system-lookback').value = result.payload.settings.lookback_window_days;
+  }
+});
 document.getElementById('system-put-form').addEventListener('submit', event => {
   event.preventDefault();
   const body = {};
@@ -169,15 +189,22 @@ PROTOCOLS_BODY = """
   """ + IDENTITY_BAR + FLASH_MESSAGES + """
   <datalist id="known-agents">{% for agent in agents %}<option value="{{ agent }}">{% endfor %}</datalist>
   <datalist id="known-tools">{% for tool in tools %}<option value="{{ tool }}">{% endfor %}</datalist>
-  <div class="api-grid">
-    <section class="api-card">
-      <div class="api-endpoint"><span class="api-method">GET</span><span>/Protocol</span></div>
-      <p class="api-hint mt-3">{{ t('admin.protocols.list_help') }}</p>
-      <button id="protocol-list" class="btn btn-console-primary">{{ t('admin.api.execute') }}</button>
-      <pre id="protocol-list-output" class="api-output">{{ t('admin.api.not_run') }}</pre>
-    </section>
-    <section class="api-card">
-      <div class="api-endpoint"><span class="api-method">POST</span><span>/Protocol</span></div>
+  <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-3"><h2 class="h5 mb-0">{{ t('admin.protocols.existing', count=protocols|length) }}</h2><button id="protocol-list" class="btn btn-console btn-sm">{{ t('admin.api.refresh') }}</button></div>
+  <p class="api-hint">{{ t('admin.protocols.restart_note') }}</p>
+  <div class="api-list mb-5">
+    {% for protocol in protocols %}<section class="api-list-item">
+      <form class="protocol-edit-form api-form-grid" data-name="{{ protocol.name }}">
+        <div><label>{{ t('admin.protocols.name') }}</label><input name="name" value="{{ protocol.name }}" readonly class="form-control form-control-console"></div>
+        <div><label>{{ t('admin.protocols.criticality') }}</label><select name="criticality" class="form-select form-select-console">{% for level in ('low','medium','high') %}<option value="{{ level }}" {% if protocol.criticality == level %}selected{% endif %}>{{ level }}</option>{% endfor %}</select></div>
+        <div class="wide"><label>{{ t('admin.protocols.description') }}</label><textarea name="description" required class="form-control form-control-console">{{ protocol.description }}</textarea></div>
+        <div><label>{{ t('admin.protocols.agents') }}</label><input name="agents" value="{{ protocol.participating_agents|join(', ') }}" required class="form-control form-control-console"></div>
+        <div><label>{{ t('admin.protocols.tools') }}</label><input name="tools" value="{{ protocol.approved_tools|join(', ') }}" class="form-control form-control-console"></div>
+        <div class="wide"><label>{{ t('admin.protocols.success') }}</label><input name="success" value="{{ protocol.expected_success_output }}" required class="form-control form-control-console"></div>
+        <div class="wide d-flex justify-content-between align-items-center gap-2"><label class="form-check mb-0"><input name="approval" type="checkbox" class="form-check-input" {% if protocol.approval_flag %}checked{% endif %}> <span class="form-check-label">{{ t('admin.protocols.approval') }}</span></label><div><button class="btn btn-console me-2">{{ t('admin.save') }}</button><button type="button" class="btn btn-console-danger protocol-delete">{{ t('admin.remove') }}</button></div></div>
+      </form>
+    </section>{% else %}<div class="api-list-item">{{ t('admin.protocols.none') }}</div>{% endfor %}
+  </div>
+  <div class="block-console mb-4"><span class="block-label">{{ t('admin.protocols.add') }}</span>
       <form id="protocol-create-form" class="api-form-grid mt-3">
         <div><label>{{ t('admin.protocols.name') }}</label><input id="create-name" required class="form-control form-control-console"></div>
         <div><label>{{ t('admin.protocols.criticality') }}</label><select id="create-criticality" class="form-select form-select-console"><option>low</option><option>medium</option><option>high</option></select></div>
@@ -186,40 +213,24 @@ PROTOCOLS_BODY = """
         <div><label>{{ t('admin.protocols.tools') }}</label><input id="create-tools" list="known-tools" class="form-control form-control-console" placeholder="tool_a, tool_b"></div>
         <div class="wide"><label>{{ t('admin.protocols.success') }}</label><input id="create-success" required class="form-control form-control-console"></div>
         <div class="wide form-check"><input id="create-approval" type="checkbox" class="form-check-input"><label class="form-check-label" for="create-approval">{{ t('admin.protocols.approval') }}</label></div>
-        <div class="wide"><button class="btn btn-console-primary">{{ t('admin.api.execute') }}</button></div>
+        <div class="wide"><button class="btn btn-console-primary">{{ t('admin.add') }}</button></div>
       </form>
-      <pre id="protocol-create-output" class="api-output">{{ t('admin.api.not_run') }}</pre>
-    </section>
-    <section class="api-card">
-      <div class="api-endpoint"><span class="api-method">PUT</span><span>/Protocol/&lt;name&gt;</span></div>
-      <form id="protocol-update-form" class="api-form-grid mt-3">
-        <div><label>{{ t('admin.protocols.name') }}</label><input id="update-name" required class="form-control form-control-console"></div>
-        <div><label>{{ t('admin.protocols.criticality') }}</label><select id="update-criticality" class="form-select form-select-console"><option>low</option><option>medium</option><option>high</option></select></div>
-        <div class="wide"><label>{{ t('admin.protocols.description') }}</label><textarea id="update-description" required class="form-control form-control-console"></textarea></div>
-        <div><label>{{ t('admin.protocols.agents') }}</label><input id="update-agents" list="known-agents" required class="form-control form-control-console"></div>
-        <div><label>{{ t('admin.protocols.tools') }}</label><input id="update-tools" list="known-tools" class="form-control form-control-console"></div>
-        <div class="wide"><label>{{ t('admin.protocols.success') }}</label><input id="update-success" required class="form-control form-control-console"></div>
-        <div class="wide form-check"><input id="update-approval" type="checkbox" class="form-check-input"><label class="form-check-label" for="update-approval">{{ t('admin.protocols.approval') }}</label></div>
-        <div class="wide"><button class="btn btn-console-primary">{{ t('admin.api.execute') }}</button></div>
-      </form>
-      <pre id="protocol-update-output" class="api-output">{{ t('admin.api.not_run') }}</pre>
-    </section>
-    <section class="api-card">
-      <div class="api-endpoint"><span class="api-method">DELETE</span><span>/Protocol/&lt;name&gt;</span></div>
-      <form id="protocol-delete-form" class="api-form-grid mt-3">
-        <div class="wide"><label>{{ t('admin.protocols.name') }}</label><input id="delete-protocol-name" required class="form-control form-control-console"></div>
-        <div class="wide"><button class="btn btn-console-danger">{{ t('admin.api.execute') }}</button></div>
-      </form>
-      <pre id="protocol-delete-output" class="api-output">{{ t('admin.api.not_run') }}</pre>
-    </section>
   </div>
+  <pre id="protocol-status" class="api-output" hidden></pre>
+  <pre id="protocol-list-output" class="api-output" hidden></pre>
 </div>
 """ + API_CLIENT_SCRIPT + """
 <script>
 document.getElementById('protocol-list').addEventListener('click', () => AdminApi.call('GET', '/Protocol', undefined, 'protocol-list-output'));
-document.getElementById('protocol-create-form').addEventListener('submit', event => { event.preventDefault(); AdminApi.call('POST', '/Protocol', AdminApi.protocolBody('create'), 'protocol-create-output'); });
-document.getElementById('protocol-update-form').addEventListener('submit', event => { event.preventDefault(); const name=AdminApi.value('update-name'); AdminApi.call('PUT', `/Protocol/${encodeURIComponent(name)}`, AdminApi.protocolBody('update'), 'protocol-update-output'); });
-document.getElementById('protocol-delete-form').addEventListener('submit', event => { event.preventDefault(); const name=AdminApi.value('delete-protocol-name'); if (confirm({{ t('admin.protocols.delete_confirm')|tojson }})) AdminApi.call('DELETE', `/Protocol/${encodeURIComponent(name)}`, undefined, 'protocol-delete-output'); });
+document.getElementById('protocol-create-form').addEventListener('submit', event => { event.preventDefault(); document.getElementById('protocol-status').hidden=false; AdminApi.call('POST', '/Protocol', AdminApi.protocolBody('create'), 'protocol-status'); });
+function editableProtocolBody(form) {
+  const list = name => form.elements[name].value.split(',').map(item => item.trim()).filter(Boolean);
+  return {name:form.elements.name.value,description:form.elements.description.value,participating_agents:list('agents'),approved_tools:list('tools'),expected_success_output:form.elements.success.value,criticality:form.elements.criticality.value,approval_flag:form.elements.approval.checked};
+}
+document.querySelectorAll('.protocol-edit-form').forEach(form => {
+  form.addEventListener('submit', event => { event.preventDefault(); document.getElementById('protocol-status').hidden=false; AdminApi.call('PUT', `/Protocol/${encodeURIComponent(form.dataset.name)}`, editableProtocolBody(form), 'protocol-status'); });
+  form.querySelector('.protocol-delete').addEventListener('click', () => { if(confirm({{ t('admin.protocols.delete_confirm')|tojson }})){ document.getElementById('protocol-status').hidden=false; AdminApi.call('DELETE', `/Protocol/${encodeURIComponent(form.dataset.name)}`, undefined, 'protocol-status'); } });
+});
 </script></body>
 """
 
@@ -229,86 +240,59 @@ EVENTS_BODY = """
   <div class="d-flex justify-content-between align-items-baseline"><h1>{{ t('admin.events.title') }}</h1><a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div>
   <p class="subtitle mb-4">{{ t('admin.events.subtitle') }}</p>
   """ + IDENTITY_BAR + FLASH_MESSAGES + """
+  <div class="block-console mb-4">
+    <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap"><span class="block-label mb-0">{{ t('admin.events.recent', count=recent_events|length) }}</span><span class="api-hint">{{ t('admin.events.recent_help') }}</span></div>
+    <div class="table-responsive mt-3"><table class="table table-console"><thead><tr><th>{{ t('admin.events.received') }}</th><th>{{ t('admin.events.description') }}</th><th>{{ t('admin.events.sender') }}</th><th>{{ t('admin.events.classification') }}</th><th>{{ t('admin.events.status') }}</th><th></th></tr></thead><tbody>
+      {% for item in recent_events %}<tr><td class="identity">{{ item.received_at }}</td><td><div>{{ item.text }}</div><small class="identity">{{ item.event_id }}</small></td><td>{{ item.sender_name or item.sender_identity }}</td><td>{{ item.classification or '—' }}{% if item.area %} · {{ item.area }}{% endif %}</td><td><span class="tag">{{ item.status }}</span></td><td><button type="button" class="btn btn-console btn-sm recent-job" data-event-id="{{ item.event_id }}">{{ t('admin.events.check_status') }}</button></td></tr>
+      {% else %}<tr><td colspan="6">{{ t('admin.events.none') }}</td></tr>{% endfor %}
+    </tbody></table></div><pre id="recent-job-output" class="api-output" hidden></pre>
+  </div>
+  <h2 class="h5 mb-3">{{ t('admin.events.new_activity') }}</h2>
   <div class="api-grid">
-    <section class="api-card"><div class="api-endpoint"><span class="api-method">POST</span><span>/Event</span></div>
-      <form id="event-form" class="api-form-grid mt-3"><div class="wide"><label>{{ t('admin.events.text') }}</label><textarea id="event-text" required class="form-control form-control-console"></textarea></div><div class="wide"><button class="btn btn-console-primary">{{ t('admin.api.execute') }}</button></div></form><pre id="event-output" class="api-output">{{ t('admin.api.not_run') }}</pre></section>
-    <section class="api-card"><div class="api-endpoint"><span class="api-method">POST</span><span>/Msg</span></div>
+    <section class="api-card"><h3 class="h6">{{ t('admin.events.sensor_report') }}</h3><p class="api-hint">{{ t('admin.events.sensor_report_help') }}</p>
+      <form id="event-form" class="api-form-grid mt-3"><div class="wide"><label>{{ t('admin.events.text') }}</label><textarea id="event-text" required class="form-control form-control-console"></textarea></div><div class="wide"><button class="btn btn-console-primary">{{ t('admin.events.send_report') }}</button></div></form><pre id="event-output" class="api-output" hidden></pre></section>
+    <section class="api-card"><h3 class="h6">{{ t('admin.events.user_message') }}</h3><p class="api-hint">{{ t('admin.events.user_message_help') }}</p>
       <form id="message-form" class="api-form-grid mt-3">
         <div class="wide"><label>{{ t('admin.events.text') }}</label><textarea id="message-text" required class="form-control form-control-console"></textarea></div>
-        <div><label>conversation_id</label><input id="message-conversation" class="form-control form-control-console"></div><div><label>source_message_id</label><input id="message-source" class="form-control form-control-console"></div>
-        <div><label>telegram_chat_id</label><input id="message-chat-id" class="form-control form-control-console"></div><div><label>telegram_chat_type</label><select id="message-chat-type" class="form-select form-select-console"><option value="">—</option><option>private</option><option>group</option><option>supergroup</option></select></div>
-        <div><label>protocol_hint</label><input id="message-protocol" class="form-control form-control-console"></div><div><label>event_data_event_id</label><input id="message-event-data" class="form-control form-control-console"></div>
-        <div class="wide"><button class="btn btn-console-primary">{{ t('admin.api.execute') }}</button></div>
-      </form><pre id="message-output" class="api-output">{{ t('admin.api.not_run') }}</pre></section>
-    <section class="api-card"><div class="api-endpoint"><span class="api-method">GET</span><span>/Job/&lt;event_id&gt;</span></div>
-      <form id="job-form" class="api-form-grid mt-3"><div class="wide"><label>event_id</label><input id="job-id" required class="form-control form-control-console"></div><div class="wide"><button class="btn btn-console-primary">{{ t('admin.api.execute') }}</button></div></form><pre id="job-output" class="api-output">{{ t('admin.api.not_run') }}</pre></section>
-    <section class="api-card"><div class="api-endpoint"><span class="api-method">GET</span><span>/Holds/Pending</span></div><p class="api-hint mt-3">{{ t('admin.events.holds_help') }}</p><button id="holds-get" class="btn btn-console-primary">{{ t('admin.api.execute') }}</button><pre id="holds-output" class="api-output">{{ t('admin.api.not_run') }}</pre></section>
-    <section class="api-card"><div class="api-endpoint"><span class="api-method">POST</span><span>/Clarify/&lt;event_id&gt;</span></div>
-      <form id="clarify-form" class="api-form-grid mt-3"><div><label>event_id</label><input id="clarify-id" required class="form-control form-control-console"></div><div><label>classification</label><input id="clarify-classification" required list="event-types" class="form-control form-control-console"></div><div class="wide"><button class="btn btn-console-primary">{{ t('admin.api.execute') }}</button></div></form><pre id="clarify-output" class="api-output">{{ t('admin.api.not_run') }}</pre></section>
-    <section class="api-card"><div class="api-endpoint"><span class="api-method">POST</span><span>/Approve/&lt;event_id&gt;</span></div>
-      <form id="approve-form" class="api-form-grid mt-3"><div><label>event_id</label><input id="approve-id" required class="form-control form-control-console"></div><div><label>decision</label><input id="approve-decision" required list="approval-decisions" value="approved" class="form-control form-control-console"></div><div class="wide"><button class="btn btn-console-primary">{{ t('admin.api.execute') }}</button></div></form><p class="api-hint mt-2">{{ t('admin.events.approval_help') }}</p><pre id="approve-output" class="api-output">{{ t('admin.api.not_run') }}</pre></section>
-    <section class="api-card"><div class="api-endpoint"><span class="api-method">GET</span><span>/Notifications</span></div>
-      <form id="notifications-form" class="api-form-grid mt-3"><div><label>since</label><input id="notifications-since" type="number" min="0" value="0" class="form-control form-control-console"></div><div><label>wait_seconds</label><input id="notifications-wait" type="number" min="0" max="30" value="0" class="form-control form-control-console"></div><div class="wide"><button class="btn btn-console-primary">{{ t('admin.api.execute') }}</button></div></form><pre id="notifications-output" class="api-output">{{ t('admin.api.not_run') }}</pre></section>
-    <section class="api-card"><div class="api-endpoint"><span class="api-method">GET</span><span>/Trace/&lt;trace_id&gt;</span></div>
-      <form id="trace-form" class="api-form-grid mt-3"><div class="wide"><label>trace_id</label><input id="trace-id" required class="form-control form-control-console"></div><div><label>since</label><input id="trace-since" type="number" min="0" value="0" class="form-control form-control-console"></div><div><label>wait_seconds</label><input id="trace-wait" type="number" min="0" max="30" value="0" class="form-control form-control-console"></div><div class="wide"><button class="btn btn-console-primary">{{ t('admin.api.execute') }}</button></div></form><pre id="trace-output" class="api-output">{{ t('admin.api.not_run') }}</pre></section>
-    <section class="api-card"><div class="api-endpoint"><span class="api-method">POST</span><span>/TeamStatus/AttendanceCheck</span></div>
-      <form id="attendance-form" class="api-form-grid mt-3"><div><label>now_iso</label><input id="attendance-now" type="datetime-local" class="form-control form-control-console"></div><div class="form-check align-self-end"><input id="attendance-force" type="checkbox" class="form-check-input"><label for="attendance-force" class="form-check-label">force</label></div><div class="wide"><button class="btn btn-console-primary">{{ t('admin.api.execute') }}</button></div></form><pre id="attendance-output" class="api-output">{{ t('admin.api.not_run') }}</pre></section>
+        <div><label>{{ t('admin.events.conversation') }}</label><input id="message-conversation" class="form-control form-control-console"></div><div><label>{{ t('admin.events.source_message') }}</label><input id="message-source" class="form-control form-control-console"></div>
+        <div><label>{{ t('admin.events.chat_id') }}</label><input id="message-chat-id" class="form-control form-control-console"></div><div><label>{{ t('admin.events.chat_type') }}</label><select id="message-chat-type" class="form-select form-select-console"><option value="">—</option><option value="private">{{ t('admin.events.private_chat') }}</option><option value="group">{{ t('admin.events.group_chat') }}</option><option value="supergroup">{{ t('admin.events.supergroup_chat') }}</option></select></div>
+        <div><label>{{ t('admin.events.preferred_protocol') }}</label><input id="message-protocol" class="form-control form-control-console"></div><div><label>{{ t('admin.events.related_event') }}</label><input id="message-event-data" class="form-control form-control-console"></div>
+        <div class="wide"><button class="btn btn-console-primary">{{ t('admin.events.send_message') }}</button></div>
+      </form><pre id="message-output" class="api-output" hidden></pre></section>
+    <section class="api-card"><h3 class="h6">{{ t('admin.events.find_job') }}</h3><p class="api-hint">{{ t('admin.events.find_job_help') }}</p>
+      <form id="job-form" class="api-form-grid mt-3"><div class="wide"><label>{{ t('admin.events.event_id') }}</label><input id="job-id" required class="form-control form-control-console"></div><div class="wide"><button class="btn btn-console-primary">{{ t('admin.events.check_status') }}</button></div></form><pre id="job-output" class="api-output" hidden></pre></section>
+    <section class="api-card"><div class="d-flex justify-content-between align-items-center gap-2"><h3 class="h6 mb-0">{{ t('admin.events.pending_holds') }}</h3><button id="holds-get" class="btn btn-console btn-sm">{{ t('admin.api.refresh') }}</button></div><p class="api-hint mt-3">{{ t('admin.events.holds_help') }}</p><div id="holds-list" class="api-list"><div class="api-list-item">{{ t('admin.api.loading') }}</div></div><pre id="holds-output" class="api-output" hidden></pre><pre id="hold-action-output" class="api-output" hidden></pre></section>
+    <section class="api-card"><div class="d-flex justify-content-between align-items-center gap-2"><h3 class="h6 mb-0">{{ t('admin.events.notifications') }}</h3><button id="notifications-refresh" class="btn btn-console btn-sm">{{ t('admin.api.refresh') }}</button></div>
+      <div class="api-form-grid mt-3"><div><label>since</label><input id="notifications-since" type="number" min="0" value="0" class="form-control form-control-console"></div><div><label>wait_seconds</label><input id="notifications-wait" type="number" min="0" max="30" value="0" class="form-control form-control-console"></div></div><div id="notifications-list" class="api-list"><div class="api-list-item">{{ t('admin.api.loading') }}</div></div><pre id="notifications-output" class="api-output" hidden></pre></section>
+    <section class="api-card"><h3 class="h6">{{ t('admin.events.live_trace') }}</h3><p class="api-hint">{{ t('admin.events.live_trace_help') }}</p>
+      <form id="trace-form" class="api-form-grid mt-3"><div class="wide"><label>{{ t('admin.events.trace_id') }}</label><input id="trace-id" required class="form-control form-control-console"></div><div><label>{{ t('admin.events.from_cursor') }}</label><input id="trace-since" type="number" min="0" value="0" class="form-control form-control-console"></div><div><label>{{ t('admin.events.wait_seconds') }}</label><input id="trace-wait" type="number" min="0" max="30" value="0" class="form-control form-control-console"></div><div class="wide"><button class="btn btn-console-primary">{{ t('admin.events.show_log') }}</button></div></form><pre id="trace-output" class="api-output" hidden></pre></section>
+    <section class="api-card"><h3 class="h6">{{ t('admin.events.attendance') }}</h3><p class="api-hint">{{ t('admin.events.attendance_help') }}</p>
+      <form id="attendance-form" class="api-form-grid mt-3"><div><label>{{ t('admin.events.check_time') }}</label><input id="attendance-now" type="datetime-local" class="form-control form-control-console"></div><div class="form-check align-self-end"><input id="attendance-force" type="checkbox" class="form-check-input"><label for="attendance-force" class="form-check-label">{{ t('admin.events.force_check') }}</label></div><div class="wide"><button class="btn btn-console-primary">{{ t('admin.events.start_check') }}</button></div></form><pre id="attendance-output" class="api-output" hidden></pre></section>
   </div>
   <datalist id="event-types">{% for event_type in event_types %}<option value="{{ event_type }}">{% endfor %}</datalist>
-  <datalist id="approval-decisions"><option value="approved"><option value="rejected"></datalist>
 </div>
 """ + API_CLIENT_SCRIPT + """
 <script>
 document.getElementById('event-form').addEventListener('submit', event => { event.preventDefault(); AdminApi.call('POST','/Event',{text:AdminApi.value('event-text'),sender_identity:AdminApi.identity},'event-output'); });
 document.getElementById('message-form').addEventListener('submit', event => { event.preventDefault(); const body={text:AdminApi.value('message-text'),sender_identity:AdminApi.identity}; AdminApi.optional(body,'conversation_id','message-conversation'); AdminApi.optional(body,'source_message_id','message-source'); AdminApi.optional(body,'telegram_chat_id','message-chat-id'); AdminApi.optional(body,'telegram_chat_type','message-chat-type'); AdminApi.optional(body,'protocol_hint','message-protocol'); AdminApi.optional(body,'event_data_event_id','message-event-data'); AdminApi.call('POST','/Msg',body,'message-output'); });
 document.getElementById('job-form').addEventListener('submit', event => { event.preventDefault(); AdminApi.call('GET',`/Job/${encodeURIComponent(AdminApi.value('job-id'))}`,undefined,'job-output'); });
-document.getElementById('holds-get').addEventListener('click', () => AdminApi.call('GET','/Holds/Pending',undefined,'holds-output'));
-document.getElementById('clarify-form').addEventListener('submit', event => { event.preventDefault(); AdminApi.call('POST',`/Clarify/${encodeURIComponent(AdminApi.value('clarify-id'))}`,{classification:AdminApi.value('clarify-classification')},'clarify-output'); });
-document.getElementById('approve-form').addEventListener('submit', event => { event.preventDefault(); AdminApi.call('POST',`/Approve/${encodeURIComponent(AdminApi.value('approve-id'))}`,{decision:AdminApi.value('approve-decision')},'approve-output'); });
-document.getElementById('notifications-form').addEventListener('submit', event => { event.preventDefault(); const query=new URLSearchParams({since:AdminApi.value('notifications-since'),wait_seconds:AdminApi.value('notifications-wait')}); AdminApi.call('GET',`/Notifications?${query}`,undefined,'notifications-output'); });
+document.querySelectorAll('.recent-job').forEach(button => button.addEventListener('click', () => { const output=document.getElementById('recent-job-output'); output.hidden=false; AdminApi.call('GET',`/Job/${encodeURIComponent(button.dataset.eventId)}`,undefined,'recent-job-output'); }));
+const uiText={emptyHolds:{{ t('admin.events.no_holds')|tojson }},resolve:{{ t('admin.events.resolve')|tojson }},approve:{{ t('admin.events.approve')|tojson }},reject:{{ t('admin.events.reject')|tojson }},emptyNotifications:{{ t('admin.events.no_notifications')|tojson }},failed:{{ t('admin.api.failed')|tojson }}};
+function field(tag,className,text){const element=document.createElement(tag);if(className)element.className=className;element.textContent=text;return element;}
+async function loadHolds(){
+  const output=document.getElementById('holds-output'); const result=await AdminApi.call('GET','/Holds/Pending',undefined,'holds-output'); output.hidden=true;
+  const list=document.getElementById('holds-list'); list.replaceChildren();
+  if(!result.ok||!result.payload){list.append(field('div','api-list-item',result.payload?.message||uiText.failed));return;}
+  if(!result.payload.holds.length){list.append(field('div','api-list-item',uiText.emptyHolds));return;}
+  result.payload.holds.forEach(hold=>{const card=field('div','api-list-item','');card.append(field('strong','',`${hold.kind} · ${hold.event_id}`));card.append(field('p','api-hint mt-2',hold.raw_text||hold.reason||''));
+    if(hold.kind==='clarification'){const select=document.createElement('select');select.className='form-select form-select-console mb-2';(hold.available_classifications||[]).forEach(value=>{const option=document.createElement('option');option.value=value;option.textContent=value;select.append(option);});const button=field('button','btn btn-console-primary btn-sm',uiText.resolve);button.addEventListener('click',async()=>{const action=document.getElementById('hold-action-output');action.hidden=false;await AdminApi.call('POST',`/Clarify/${encodeURIComponent(hold.event_id)}`,{classification:select.value},'hold-action-output');loadHolds();});card.append(select,button);}
+    else{const approve=field('button','btn btn-console-primary btn-sm me-2',uiText.approve);const reject=field('button','btn btn-console-danger btn-sm',uiText.reject);approve.addEventListener('click',async()=>{const action=document.getElementById('hold-action-output');action.hidden=false;await AdminApi.call('POST',`/Approve/${encodeURIComponent(hold.event_id)}`,{decision:'approved'},'hold-action-output');loadHolds();});reject.addEventListener('click',async()=>{const action=document.getElementById('hold-action-output');action.hidden=false;await AdminApi.call('POST',`/Approve/${encodeURIComponent(hold.event_id)}`,{decision:'rejected'},'hold-action-output');loadHolds();});card.append(approve,reject);}list.append(card);});
+}
+document.getElementById('holds-get').addEventListener('click',loadHolds);
+async function loadNotifications(){const query=new URLSearchParams({since:AdminApi.value('notifications-since'),wait_seconds:AdminApi.value('notifications-wait')});const output=document.getElementById('notifications-output');const result=await AdminApi.call('GET',`/Notifications?${query}`,undefined,'notifications-output');output.hidden=true;const list=document.getElementById('notifications-list');list.replaceChildren();if(!result.ok||!result.payload){list.append(field('div','api-list-item',result.payload?.message||uiText.emptyNotifications));return;}document.getElementById('notifications-since').value=result.payload.next_cursor;if(!result.payload.notifications.length){list.append(field('div','api-list-item',uiText.emptyNotifications));return;}result.payload.notifications.forEach(item=>{const card=field('div','api-list-item','');const payload=item.payload||{};card.append(field('strong','',`${item.kind} · ${payload.event_id||payload.job_id||''}`));const description=payload.raw_text||payload.question||payload.reason||payload.insight_text||payload.outcome||'';if(description)card.append(field('p','api-hint mt-2 mb-0',description));list.append(card);});}
+document.getElementById('notifications-refresh').addEventListener('click',loadNotifications);
 document.getElementById('trace-form').addEventListener('submit', event => { event.preventDefault(); const trace=encodeURIComponent(AdminApi.value('trace-id')); const query=new URLSearchParams({since:AdminApi.value('trace-since'),wait_seconds:AdminApi.value('trace-wait')}); AdminApi.call('GET',`/Trace/${trace}?${query}`,undefined,'trace-output'); });
 document.getElementById('attendance-form').addEventListener('submit', event => { event.preventDefault(); const body={force:AdminApi.checked('attendance-force')}; AdminApi.optional(body,'now_iso','attendance-now'); AdminApi.call('POST','/TeamStatus/AttendanceCheck',body,'attendance-output'); });
+loadHolds(); loadNotifications();
 </script></body>
-"""
-
-
-USERS_API_SECTION = """
-<div class="block-console mb-5">
-  <span class="block-label">{{ t('admin.users.api_title') }}</span>
-  <div class="api-grid">
-    <section class="api-card"><div class="api-endpoint"><span class="api-method">GET</span><span>/User/&lt;identity&gt;</span></div><form id="user-get-form" class="api-form-grid mt-3"><div class="wide"><label>identity</label><input id="user-get-id" value="{{ api_identity }}" required class="form-control form-control-console"></div><div class="wide"><button class="btn btn-console-primary">{{ t('admin.api.execute') }}</button></div></form><pre id="user-get-output" class="api-output">{{ t('admin.api.not_run') }}</pre></section>
-    <section class="api-card"><div class="api-endpoint"><span class="api-method">PUT</span><span>/User/&lt;identity&gt;/name</span></div><form id="user-name-form" class="api-form-grid mt-3"><div><label>identity</label><input id="user-name-id" value="{{ api_identity }}" required class="form-control form-control-console"></div><div><label>full_name</label><input id="user-full-name" required maxlength="120" class="form-control form-control-console"></div><div class="wide"><button class="btn btn-console-primary">{{ t('admin.api.execute') }}</button></div></form><p class="api-hint mt-2">{{ t('admin.users.self_name_help') }}</p><pre id="user-name-output" class="api-output">{{ t('admin.api.not_run') }}</pre></section>
-    <section class="api-card"><div class="api-endpoint"><span class="api-method">GET</span><span>/Commanders</span></div><p class="api-hint mt-3">{{ t('admin.users.commanders_help') }}</p><button id="commanders-get" class="btn btn-console-primary">{{ t('admin.api.execute') }}</button><pre id="commanders-output" class="api-output">{{ t('admin.api.not_run') }}</pre></section>
-  </div>
-</div>
-"""
-
-
-USERS_API_SCRIPT = API_CLIENT_SCRIPT + """
-<script>
-document.getElementById('user-get-form').addEventListener('submit', event => { event.preventDefault(); AdminApi.call('GET',`/User/${encodeURIComponent(AdminApi.value('user-get-id'))}`,undefined,'user-get-output'); });
-document.getElementById('user-name-form').addEventListener('submit', event => { event.preventDefault(); const id=AdminApi.value('user-name-id'); AdminApi.call('PUT',`/User/${encodeURIComponent(id)}/name`,{full_name:AdminApi.value('user-full-name')},'user-name-output'); });
-document.getElementById('commanders-get').addEventListener('click', () => AdminApi.call('GET','/Commanders',undefined,'commanders-output'));
-</script>
-"""
-
-
-GROUPS_API_SECTION = """
-<div class="block-console mb-5">
-  <span class="block-label">{{ t('admin.groups.api_title') }}</span>
-  <div class="api-grid">
-    <section class="api-card"><div class="api-endpoint"><span class="api-method">GET</span><span>/Groups</span></div><button id="groups-get" class="btn btn-console-primary mt-3">{{ t('admin.api.execute') }}</button><pre id="groups-get-output" class="api-output">{{ t('admin.api.not_run') }}</pre></section>
-    <section class="api-card"><div class="api-endpoint"><span class="api-method">PUT</span><span>/Groups/&lt;chat_id&gt;</span></div><form id="group-put-form" class="api-form-grid mt-3"><div><label>chat_id</label><input id="group-put-id" required placeholder="-1001234567890" class="form-control form-control-console"></div><div><label>agent_name</label><select id="group-put-agent" class="form-select form-select-console">{% for agent in routable_agents %}<option value="{{ agent }}">{{ agent }}</option>{% endfor %}</select></div><div class="wide"><label>label</label><input id="group-put-label" maxlength="200" class="form-control form-control-console"></div><div class="wide"><button class="btn btn-console-primary">{{ t('admin.api.execute') }}</button></div></form><pre id="group-put-output" class="api-output">{{ t('admin.api.not_run') }}</pre></section>
-    <section class="api-card"><div class="api-endpoint"><span class="api-method">DELETE</span><span>/Groups/&lt;chat_id&gt;</span></div><form id="group-delete-form" class="api-form-grid mt-3"><div class="wide"><label>chat_id</label><input id="group-delete-id" required placeholder="-1001234567890" class="form-control form-control-console"></div><div class="wide"><button class="btn btn-console-danger">{{ t('admin.api.execute') }}</button></div></form><pre id="group-delete-output" class="api-output">{{ t('admin.api.not_run') }}</pre></section>
-  </div>
-</div>
-"""
-
-
-GROUPS_API_SCRIPT = API_CLIENT_SCRIPT + """
-<script>
-document.getElementById('groups-get').addEventListener('click', () => AdminApi.call('GET','/Groups',undefined,'groups-get-output'));
-document.getElementById('group-put-form').addEventListener('submit', event => { event.preventDefault(); const id=AdminApi.value('group-put-id'); AdminApi.call('PUT',`/Groups/${encodeURIComponent(id)}`,{agent_name:AdminApi.value('group-put-agent'),label:AdminApi.value('group-put-label')},'group-put-output'); });
-document.getElementById('group-delete-form').addEventListener('submit', event => { event.preventDefault(); const id=AdminApi.value('group-delete-id'); if(confirm({{ t('admin.groups.delete_confirm')|tojson }})) AdminApi.call('DELETE',`/Groups/${encodeURIComponent(id)}`,undefined,'group-delete-output'); });
-</script>
 """

@@ -153,10 +153,13 @@ def test_profiles_page_exposes_both_system_methods_through_the_live_api(tmp_path
     page = client.get("/admin/profiles").data.decode("utf-8")
 
     assert "GET" in page and "PUT" in page
-    assert page.count("/SYSTEM") >= 4
+    assert page.count("/SYSTEM") >= 2
     assert "AdminApi.call('GET', '/SYSTEM'" in page
     assert "AdminApi.call('PUT', '/SYSTEM'" in page
     assert "'X-Identity':identity" in page
+    assert "For Tests" in page
+    assert 'value="0.5"' in page
+    assert "reference_agent" in page
 
 
 def test_protocols_page_exposes_every_protocol_method_through_the_live_api(tmp_path, teardown_ctx, _admin_env):
@@ -171,10 +174,20 @@ def test_protocols_page_exposes_every_protocol_method_through_the_live_api(tmp_p
     assert "participating_agents" in page
     assert "approved_tools" in page
     assert "approval_flag" in page
+    assert "status_check" in page
+    assert "protocol-edit-form" in page
 
 
 def test_events_page_exposes_every_operational_endpoint_through_the_live_api(tmp_path, teardown_ctx, _admin_env):
     client = _client(tmp_path, teardown_ctx)
+    ctx = teardown_ctx[0]
+    ctx.deps.persistence.append_event({
+        "event_id": "event-visible-in-admin",
+        "received_at": "2026-09-10T10:00:00+00:00",
+        "source": "telegram",
+        "sender_identity": COMMANDER_IDENTITY,
+        "raw_text": "Smoke beside the north gate",
+    })
     _login(client)
 
     page = client.get("/admin/events").data.decode("utf-8")
@@ -186,7 +199,32 @@ def test_events_page_exposes_every_operational_endpoint_through_the_live_api(tmp
         assert endpoint in page
     assert "sender_identity:AdminApi.identity" in page
     assert "telegram_chat_id" in page
-    assert "HTTP ${response.status}" in page
+    assert "successLabel" in page and "failedLabel" in page
+    assert "event-visible-in-admin" in page
+    assert "Smoke beside the north gate" in page
+    assert "recent-job" in page
+    assert "holds-list" in page and "notifications-list" in page
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/admin/", "/admin/profiles", "/admin/protocols", "/admin/events",
+        "/admin/users", "/admin/groups", "/admin/server", "/admin/simulator",
+    ],
+)
+def test_admin_pages_do_not_show_http_methods_or_endpoint_paths(path, tmp_path, teardown_ctx, _admin_env):
+    from html import unescape
+
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+    html = client.get(path).data.decode("utf-8")
+    without_code = re.sub(r"<(script|style)\b.*?</\1>", " ", html, flags=re.DOTALL | re.IGNORECASE)
+    visible_text = unescape(re.sub(r"<[^>]+>", " ", without_code))
+
+    assert re.search(r"\b(?:GET|POST|PUT|DELETE)\b", visible_text) is None
+    for endpoint in ("/SYSTEM", "/Protocol", "/Event", "/Msg", "/Job", "/Trace", "/Groups", "/User"):
+        assert endpoint not in visible_text
 
 
 def test_api_identity_selection_is_registered_session_scoped_and_shared_between_pages(tmp_path, teardown_ctx, _admin_env):
@@ -206,7 +244,7 @@ def test_api_identity_selection_is_registered_session_scoped_and_shared_between_
 
     assert selected.status_code in (302, 303)
     assert selected.headers["Location"].endswith("/admin/events")
-    for path in ("/admin/events", "/admin/profiles", "/admin/protocols", "/admin/users", "/admin/groups"):
+    for path in ("/admin/events", "/admin/profiles", "/admin/protocols"):
         page = client.get(path).data.decode("utf-8")
         assert f'data-api-identity="{VIEWER_IDENTITY}"' in page
         assert f'<option value="{VIEWER_IDENTITY}" selected>' in page
@@ -244,7 +282,7 @@ def test_api_identity_selection_requires_csrf(tmp_path, teardown_ctx, _admin_env
 
 @pytest.mark.parametrize(
     "path",
-    ["/admin/profiles", "/admin/protocols", "/admin/events", "/admin/users", "/admin/groups"],
+    ["/admin/profiles", "/admin/protocols", "/admin/events"],
 )
 def test_api_management_page_javascript_is_syntactically_valid(path, tmp_path, teardown_ctx, _admin_env):
     import shutil
@@ -290,30 +328,32 @@ def test_correct_login_reaches_the_dashboard_and_lists_existing_users(tmp_path, 
     assert VIEWER_IDENTITY.encode() in users.data
 
 
-def test_users_page_exposes_all_public_user_endpoints(tmp_path, teardown_ctx, _admin_env):
+def test_users_page_is_a_complete_crud_ui(tmp_path, teardown_ctx, _admin_env):
     client = _client(tmp_path, teardown_ctx)
     _login(client)
 
     page = client.get("/admin/users").data.decode("utf-8")
 
-    assert "/User/&lt;identity&gt;" in page
-    assert "/User/&lt;identity&gt;/name" in page
-    assert "/Commanders" in page
-    assert "AdminApi.call('GET',`/User/" in page
-    assert "AdminApi.call('PUT',`/User/" in page
-    assert "AdminApi.call('GET','/Commanders'" in page
+    assert COMMANDER_IDENTITY in page and VIEWER_IDENTITY in page
+    assert 'name="full_name"' in page
+    assert 'name="permission_level"' in page
+    assert 'action="/admin/users"' in page
+    assert f'action="/admin/users/{COMMANDER_IDENTITY}/remove"' in page
 
 
-def test_groups_page_exposes_all_public_group_endpoints(tmp_path, teardown_ctx, _admin_env):
+def test_groups_page_is_a_complete_inline_crud_ui(tmp_path, teardown_ctx, _admin_env):
     client = _client(tmp_path, teardown_ctx)
+    ctx = teardown_ctx[0]
+    ctx.group_routing.upsert("-10055", "reference_agent", "Operations room")
     _login(client)
 
     page = client.get("/admin/groups").data.decode("utf-8")
 
-    assert "/Groups/&lt;chat_id&gt;" in page
-    assert "AdminApi.call('GET','/Groups'" in page
-    assert "AdminApi.call('PUT',`/Groups/" in page
-    assert "AdminApi.call('DELETE',`/Groups/" in page
+    assert "-10055" in page and "Operations room" in page
+    assert 'name="label" value="Operations room"' in page
+    assert 'name="agent_name"' in page
+    assert 'action="/admin/groups"' in page
+    assert 'action="/admin/groups/-10055/remove"' in page
 
 
 def test_wrong_password_does_not_authenticate_and_gives_a_generic_message(tmp_path, teardown_ctx, _admin_env):
@@ -838,11 +878,12 @@ def test_admin_adds_updates_and_removes_a_group_binding(tmp_path, teardown_ctx, 
 
     updated = client.post(
         "/admin/groups",
-        data={"csrf_token": csrf_token, "chat_id": "-1002", "agent_name": "main_agent", "label": "readiness"},
+        data={"csrf_token": csrf_token, "chat_id": "-1002", "agent_name": "main_agent", "label": "command room"},
         follow_redirects=True,
     )
     assert updated.status_code == 200
     assert ctx.group_routing.get("-1002").agent_name == "main_agent"
+    assert ctx.deps.persistence.read_group("-1002")["label"] == "command room"
 
     removed = client.post("/admin/groups/-1002/remove", data={"csrf_token": csrf_token}, follow_redirects=True)
     assert removed.status_code == 200
