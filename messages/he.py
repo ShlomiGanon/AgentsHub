@@ -690,4 +690,17 @@ MESSAGES = {
     "unified.keyboard.event_history": "{icon} היסטוריית אירועים",
     "unified.keyboard.available": "{icon} אני זמין לכוננות",
     "unified.keyboard.unavailable": "{icon} איני זמין",
+
+    "orchestrator.picture.default_domain_query": (
+        "דווח כעת על המצב העדכני בכל תחום האחריות שלך: מספרים, סטטוסים, שמות, מזהים, מיקומים וכל חריגה. "
+        "ענה רק מנתוני הכלים שלך."
+    ),
+    "orchestrator.picture.recent_events_question": (
+        "אילו אירועים נרשמו ב-{hours} השעות האחרונות? לכל אירוע ציין זמן, סיווג, אזור, פרוטוקול ותוצאה."
+    ),
+    "orchestrator.picture.no_recent_events": "לא נרשמו אירועים ב-{hours} השעות האחרונות.",
+    "orchestrator.picture.recent_events_label": "אירועים אחרונים ({hours} השעות האחרונות)",
+    "orchestrator.picture.domain_unavailable": "לא התקבל דיווח מ-{domain}.",
+    "orchestrator.picture.fallback_header": "תמונת מצב נכון ל-{time}:",
+    "orchestrator.picture.missing_note": "(הערה מבצעית: לא התקבל דיווח מ-{domains})",
 }

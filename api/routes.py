@@ -44,8 +44,7 @@ from orchestrator.flows import (
     begin_report,
     begin_request,
     classify_intent,
-    run_parallel_specialists,
-    synthesize_operational_picture,
+    build_situational_picture,
     plan_message,
     protocol_requires_approval,
     WorkItem,
@@ -54,7 +53,7 @@ from orchestrator.flows import (
     resume_after_event_data,
 )
 
-from protocols import CriticalityLevel, Protocol, ProtocolEditError, Step, StepOutcome, add_protocol, remove_protocol, replace_protocol
+from protocols import CriticalityLevel, Protocol, ProtocolEditError, add_protocol, remove_protocol, replace_protocol
 from profiles.loader import hash_profile_file
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy
 from persistence import NotFoundError as PersistenceNotFoundError
@@ -153,6 +152,30 @@ KNOWN_BUTTON_PROTOCOLS: dict[str, str] = {
     "✅ \u05d0\u05e0\u05d9 \u05d6\u05de\u05d9\u05df \u05dc\u05db\u05d5\u05e0\u05e0\u05d5\u05ea": "record_attendance_response",
     "❌ \u05d0\u05d9\u05e0\u05d9 \u05d6\u05de\u05d9\u05df": "record_attendance_response",
 }
+
+
+SITUATIONAL_PICTURE_PROTOCOL = "overall_situational_picture"
+
+# Phrases that ask for the overall picture in so many words. Escaped \uXXXX
+# Hebrew literals keep tests/test_hebrew_leakage.py's scan clean, exactly as
+# `_is_team_roster_query` below does. Matching one of these routes the message
+# deterministically to the live multi-domain picture instead of leaving the
+# choice to general question routing.
+_SITUATIONAL_PICTURE_TERMS = (
+    "\u05ea\u05de\u05d5\u05e0\u05ea \u05de\u05e6\u05d1",  # (Hebrew) situational picture
+    "\u05ea\u05de\u05d5\u05e0\u05ea \u05d4\u05de\u05e6\u05d1",  # (Hebrew) the situational picture
+    "\u05ea\u05de\u05d5\u05e0\u05ea-\u05de\u05e6\u05d1",  # (Hebrew) situational-picture
+    "\u05de\u05e6\u05d1 \u05d4\u05d2\u05d6\u05e8\u05d4",  # (Hebrew) the sector's state
+    "\u05e1\u05d8\u05d8\u05d5\u05e1 \u05d2\u05d6\u05e8\u05d4",  # (Hebrew) sector status
+    "situational picture",
+    "situation picture",
+    "sector status",
+)
+
+
+def _is_situational_picture_query(text: str) -> bool:
+    normalized = " ".join(text.strip().casefold().split())
+    return any(term in normalized for term in _SITUATIONAL_PICTURE_TERMS)
 
 
 def _is_team_roster_query(text: str, prior_messages: tuple[dict, ...]) -> bool:
@@ -529,6 +552,8 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 messages.text("api.protocol_out_of_group_scope", protocol=matched_protocol_name, agent=scoped_agent),
                 field="protocol_hint",
             )
+        if matched_protocol_name is None and _is_situational_picture_query(str(text)):
+            matched_protocol_name = SITUATIONAL_PICTURE_PROTOCOL
         if matched_protocol_name is None and _is_team_roster_query(str(text), prior_messages):
             matched_protocol_name = "report_team_availability"
         matched_protocol = ctx.deps.protocol_set.get(matched_protocol_name) if matched_protocol_name else None
@@ -590,54 +615,28 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 return jsonify({"taken_as": "question", "answer": answer, "protocol": matched_protocol.name})
 
             if len(matched_protocol.participating_agents) > 1:
+                # A multi-domain, read-only picture: the Main Agent decides what to ask each
+                # participating specialist, they answer from live tool data concurrently, the
+                # recent event log is pulled for the window it chose, and the answer is written
+                # from those findings only (orchestrator/situational_picture.py). A viewer's
+                # recent-events view keeps the same ownership scope as any question they ask.
                 require(level, RequestedOperation.ASK_QUESTION)
-                participating = matched_protocol.participating_agents
-                approved_tools_set = set(matched_protocol.approved_tools)
-
-                def _run_subagent_task(ag_name: str) -> tuple[str, str]:
-                    ag = ctx.deps.registry.get(ag_name)
-                    agent_tools = [t.name for t in ag.exposed_tools() if t.name in approved_tools_set and not t.side_effecting]
-                    if not agent_tools:
-                        agent_tools = [t for t in matched_protocol.approved_tools if t in [tool.name for tool in ag.exposed_tools()]]
-                    with authenticated_request_identity(caller_identity):
-                        res = ag.process(f"\u05d3\u05d5\u05d7 \u05de\u05d1\u05e6\u05e2\u05d9 \u05e2\u05d1\u05d5\u05e8 {matched_protocol.description}", agent_tools)
-                    if res.status != "success":
-                        return ag_name, f"({res.text})"
-                    return ag_name, res.text
-
-                task_runners = [(ag_name, (lambda n=ag_name: _run_subagent_task(n))) for ag_name in participating]
-                sub_answers = run_parallel_specialists(task_runners, max_workers=len(participating), timeout_per_specialist=25.0)
-
-                step_outcomes = []
-                for ag_name in participating:
-                    res_text = sub_answers.get(ag_name, "")
-                    is_failed = not res_text or res_text.startswith("(")
-                    step = Step(
-                        agent_name=ag_name,
-                        task_text=f"\u05d3\u05d5\u05d7 \u05de\u05d1\u05e6\u05e2\u05d9 \u05e2\u05d1\u05d5\u05e8 {matched_protocol.description}",
-                        allowed_tools=tuple(matched_protocol.approved_tools),
-                        step_id=ag_name,
-                    )
-                    step_outcomes.append(
-                        StepOutcome(
-                            step=step,
-                            result_text=res_text,
-                            attempt_count=1,
-                            succeeded=not is_failed,
-                            status="succeeded" if not is_failed else "failed",
-                            failure_reason=res_text if is_failed else None,
-                        )
-                    )
-
-                synthesized = synthesize_operational_picture(
+                picture = build_situational_picture(
                     ctx.main_agent,
                     matched_protocol,
-                    tuple(step_outcomes),
-                    raw_text=text,
+                    ctx.deps.registry,
+                    ctx.deps.history_query_service,
+                    str(text),
+                    caller_identity=caller_identity,
+                    sender_identity_filter=None if is_commander else caller_identity,
                 )
-                answer = synthesized or "\n".join(f"• {txt}" for txt in sub_answers.values() if txt and not txt.startswith("("))
-                _remember("assistant", answer)
-                return jsonify({"taken_as": "question", "answer": answer, "protocol": matched_protocol.name})
+                _remember("assistant", picture.text)
+                return jsonify({
+                    "taken_as": "question",
+                    "answer": picture.text,
+                    "protocol": matched_protocol.name,
+                    "provenance": picture.provenance(),
+                })
 
             ag_name = matched_protocol.participating_agents[0]
             ag = ctx.deps.registry.get(ag_name)

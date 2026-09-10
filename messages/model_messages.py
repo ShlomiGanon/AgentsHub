@@ -44,3 +44,22 @@ HISTORY_LIST_INSTRUCTION = (
     "its entry, so any one of them can be referenced again later by number or by ID. "
     "State plainly when a fact is missing rather than inventing it."
 )
+
+SITUATIONAL_PICTURE_PLAN_INSTRUCTION = """You are the Main Agent preparing a live situational picture and you know nothing about the current state yet. Decide what you must ask each specialist agent right now so the picture is built only from data they fetch at this moment. For every specialist listed below write one concrete, self-contained question in the requester's language that makes that specialist call its read-only tools and report current facts for its whole domain: counts, statuses, names, identifiers, locations, and anomalies. Then choose how many hours of the recent event log to review for what happened lately.
+
+Requester's message JSON: {request_json}
+Current time: {current_time}
+Specialists JSON: {specialists_json}
+
+Respond with only a JSON object of exactly this shape and nothing else:
+{{"domains": [{{"agent": "<specialist name exactly as listed>", "query": "<question to that specialist>"}}], "recent_events_hours": <integer between 1 and 72>}}
+Include every listed specialist exactly once and no other agent."""
+
+SITUATIONAL_PICTURE_COMPOSE_INSTRUCTION = """Write the live situational picture for the requester. The specialist reports and the recent-events log below were gathered moments ago and are the only facts that exist; use nothing else. State counts, statuses, names and identifiers exactly as reported, cover every domain that reported, mention what happened recently when the log has events, and open with the most operationally significant fact. If a domain is marked unavailable, say plainly that its data is unavailable right now; never fill the gap. Do not add recommendations, assumptions, background, or general statements. Write in the requester's language, in at most {max_lines} short lines, as plain text without headings, bullets, or markdown.
+
+Requester's message JSON: {request_json}
+Current time: {current_time}
+Specialist reports JSON: {reports_json}
+Recent events log: {recent_events}
+
+Respond with only the picture text."""

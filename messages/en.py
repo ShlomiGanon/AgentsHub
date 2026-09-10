@@ -716,4 +716,18 @@ MESSAGES = {
     "unified.keyboard.event_history": "{icon} היסטוריית אירועים",
     "unified.keyboard.available": "{icon} אני זמין לכוננות",
     "unified.keyboard.unavailable": "{icon} איני זמין",
+
+    "orchestrator.picture.default_domain_query": (
+        "Report the current state of your whole area of responsibility right now: counts, statuses, names, "
+        "identifiers, locations, and any anomaly. Answer only from your tools' data."
+    ),
+    "orchestrator.picture.recent_events_question": (
+        "Which events were recorded in the last {hours} hours? For each event state its time, classification, "
+        "area, protocol, and outcome."
+    ),
+    "orchestrator.picture.no_recent_events": "No events were recorded in the last {hours} hours.",
+    "orchestrator.picture.recent_events_label": "Recent events (last {hours} hours)",
+    "orchestrator.picture.domain_unavailable": "No report was received from {domain}.",
+    "orchestrator.picture.fallback_header": "Situational picture as of {time}:",
+    "orchestrator.picture.missing_note": "(Operational note: no report was received from {domains})",
 }

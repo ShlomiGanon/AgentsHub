@@ -50,12 +50,16 @@ from orchestrator.reasoning import (
     rewrite_task,
     extract_event_data_update,
     select_protocol,
-    synthesize_operational_picture,
     ProtocolSelectionResult,
     RiskAssessment,
     run_parallel_specialists,
 )
 from orchestrator.reasoning import answer_question, determine_closure, look_up_precedent
+from orchestrator.situational_picture import (  # re-exported: api may only import orchestrator.flows
+    SituationalPicture,
+    build_situational_picture,
+    compose_picture_from_step_outcomes,
+)
 from orchestrator.event_queue import PolicyAwareEventQueue, SerialEventQueue, WorkItem
 from orchestrator.group_routing import (  # re-exported: api may only import orchestrator.flows
     GROUP_CHAT_TYPES,
@@ -1063,19 +1067,30 @@ def _finish_protocol_assessment(
         if final_assessment is not None
         else build_insight(insights_agent, protocol, step_outcomes, comparable_history=precedent_matches)
     )
-    if protocol.name == "overall_situational_picture" or len(protocol.participating_agents) > 1:
-        valid_outcomes = tuple(o for o in step_outcomes if o.result_text and o.succeeded)
-        if len(valid_outcomes) > 1:
-            try:
-                synthesis = synthesize_operational_picture(
-                    main_agent, protocol, valid_outcomes, persisted_event.get("raw_text", "")
-                )
-                if synthesis:
-                    insight_text = synthesis
-            except Exception as exc:
-                logger.warning(
-                    "multi-agent synthesis failed: %s", exc, extra={"event": "synthesis_failed", "trace_id": get_trace_id()}
-                )
+    if len(protocol.participating_agents) > 1:
+        # A multi-domain protocol's insight is the live picture composed from what the
+        # specialists just reported plus the recent event log, never a prepared text.
+        # The viewer/commander ownership scope follows the event's persisted role snapshot.
+        sender_filter = (
+            None
+            if persisted_event.get("sender_permission_level") == "commander"
+            else persisted_event.get("sender_identity")
+        )
+        try:
+            synthesis = compose_picture_from_step_outcomes(
+                main_agent,
+                protocol,
+                step_outcomes,
+                persisted_event.get("raw_text", ""),
+                deps.history_query_service,
+                sender_identity_filter=sender_filter,
+            )
+            if synthesis:
+                insight_text = synthesis
+        except Exception as exc:
+            logger.warning(
+                "multi-agent synthesis failed: %s", exc, extra={"event": "synthesis_failed", "trace_id": get_trace_id()}
+            )
     logger.info(
         "insight generated",
         extra={

@@ -244,6 +244,36 @@ Response, when the message was a **question** — answered inline, no job:
 ```
 `provenance` is optional and does not replace the stable `answer` field.
 
+A read-only protocol with more than one participating agent (for example
+`overall_situational_picture`, selected by button, `protocol_hint`, or a
+message that asks for the situational picture in so many words) is answered
+inline as a **live picture**, never from prepared text: the Main Agent first
+decides what to ask each participating specialist for this request, those
+questions run concurrently against the specialists' read-only tools, the
+recent event log is pulled for the window the Main Agent chose (ownership-
+scoped to the caller's own events for a viewer, unscoped for a commander),
+and the answer is composed from those findings only. The response adds
+`protocol` and a picture-specific `provenance`:
+```json
+{
+  "taken_as": "question",
+  "protocol": "overall_situational_picture",
+  "answer": "...",
+  "provenance": {
+    "generated_at": "2026-09-10T12:00:00Z",
+    "recent_events_hours": 6,
+    "planned_by_model": true,
+    "domains": [
+      {"domain": "surveillance_agent", "query": "...", "succeeded": true},
+      {"domain": "team_status_agent", "query": "...", "succeeded": true},
+      {"domain": "recent_events", "query": "...", "succeeded": true}
+    ]
+  }
+}
+```
+A domain that failed or timed out is listed with `"succeeded": false` and the
+answer says its data is unavailable rather than filling the gap.
+
 Conversation is also answered inline. When the intent cannot be chosen safely, the same synchronous shape asks for clarification and creates no event:
 
 ```json

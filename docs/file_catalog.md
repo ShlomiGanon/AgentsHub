@@ -110,6 +110,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `orchestrator/group_routing.py` | Production | Private implementation | Holds the in-memory, DB-backed Telegram group to agent routing table and scopes flow dependencies per group. |
 | `orchestrator/holds.py` | Production | Private implementation | Creates and resolves clarification and approval holds. |
 | `orchestrator/reasoning.py` | Production | Private implementation | Prompts and parses Main/Insights decisions, questions, selection, formulation, and judgment. |
+| `orchestrator/situational_picture.py` | Production | Private implementation | Builds the multi-domain situational picture at request time: the Main Agent plans one live question per specialist, gathers their answers and the recent event log concurrently, and composes the picture from those findings only. |
 | `persistence/__init__.py` | Production | Public facade | Exposes persistence contracts, constructors, and compatibility aliases. |
 | `persistence/contracts.py` | Production | Private implementation | Defines persistence interfaces and domain errors. |
 | `persistence/schema.py` | Production | Private implementation | Owns immutable migration DDL and the current SQLite schema. |
@@ -152,6 +153,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_api_notifications.py` | Test | Internal | Verifies api notifications behavior and edge cases. |
 | `tests/test_api_protocols.py` | Test | Internal | Verifies api protocols behavior and edge cases. |
 | `tests/test_api_request_boundary.py` | Test | Internal | Verifies authentication and structured API error translation. |
+| `tests/test_api_situational_picture.py` | Test | Internal | Verifies `/Msg` builds the multi-domain picture from live specialist answers and caller-scoped recent events, by hint or in plain words. |
 | `tests/test_api_system.py` | Test | Internal | Verifies api system behavior and edge cases. |
 | `tests/test_api_trace.py` | Test | Internal | Verifies commander-only Deep Debug trace polling, authorization, ordering, and rendering. |
 | `tests/test_api_unified_ingestion.py` | Test | Internal | Verifies api unified ingestion behavior and edge cases. |
@@ -210,6 +212,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_question_answering.py` | Test | Internal | Verifies question routing and read-only specialist/history answers. |
 | `tests/test_reference_agent.py` | Test | Internal | Verifies reference agent behavior and edge cases. |
 | `tests/test_response_improvements.py` | Test | Internal | Verifies conversation retention, long polling, trace propagation, queue ordering, idempotency, and removal of the obsolete stream route. |
+| `tests/test_situational_picture.py` | Test | Internal | Verifies picture planning, per-domain live questioning, recent-events window and scope, unavailable-domain handling, and composition fallbacks. |
 | `tests/test_sqlite_store.py` | Test | Internal | Verifies SQLite serialization, concurrency, and user persistence. |
 | `tests/test_sub_agent_surveillance_profile.py` | Test | Internal | Verifies the surveillance profile, isolated databases, agent, and protocol declarations. |
 | `tests/test_sub_agent_team_status_profile.py` | Test | Internal | Verifies the readiness-team profile, isolated database configuration, agent, and protocol declaration. |
