@@ -27,6 +27,27 @@ class HoldAnswerResult:
     message: str = ""
 
 
+def protocol_requires_approval(protocol: Protocol, originated_from_commander: bool) -> bool:
+    """One policy for every ingestion path.
+
+    `commander_only` means execution is commander-controlled, not that a
+    viewer may not request it: a non-commander request is persisted as a hold
+    and only a commander can resolve that hold. `requires_confirmation`
+    additionally forces a hold for a commander's own request.
+    """
+
+    return bool(
+        getattr(protocol, "requires_confirmation", False)
+        or (
+            not originated_from_commander
+            and (
+                getattr(protocol, "commander_only", False)
+                or protocol.approval_flag
+            )
+        )
+    )
+
+
 def determine_approval_hold(
     selection: "ProtocolSelectionResult",
     protocols_by_name: dict[str, Protocol],
@@ -38,13 +59,8 @@ def determine_approval_hold(
         return "ambiguous_selection"
 
     protocol = protocols_by_name.get(selection.protocol_name)
-    if protocol is not None:
-        if getattr(protocol, "requires_confirmation", False):
-            return "flagged_protocol"
-        if getattr(protocol, "commander_only", False) and not originated_from_commander:
-            return "flagged_protocol"
-        if protocol.approval_flag and not originated_from_commander:
-            return "flagged_protocol"
+    if protocol is not None and protocol_requires_approval(protocol, originated_from_commander):
+        return "flagged_protocol"
 
     return None
 

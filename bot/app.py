@@ -644,11 +644,6 @@ async def _on_text_message(update, context) -> None:
         is_attendance_submission = True
 
     if incoming_text == "🚀 \u05d4\u05d6\u05e0\u05e7\u05ea \u05e8\u05d7\u05e4\u05df":
-        if resolution.caller and resolution.caller.level != PermissionLevel.COMMANDER:
-            await deps.telegram_client.send_text(
-                chat_id, "\u05e4\u05e2\u05d5\u05dc\u05d4 \u05d6\u05d5 \u05de\u05d9\u05d5\u05e2\u05d3\u05ea \u05dc\u05de\u05e4\u05e7\u05d3 \u05d1\u05dc\u05d1\u05d3."
-            )
-            return
         await deps.telegram_client.send_text(
             chat_id,
             "🚀 \u05dc\u05e9\u05d9\u05d2\u05d5\u05e8 \u05d5\u05d4\u05d6\u05e0\u05e7\u05ea \u05e8\u05d7\u05e4\u05df \u05d8\u05e7\u05d8\u05d9, \u05e9\u05dc\u05d7 \u05d4\u05d5\u05d3\u05e2\u05d4 \u05e2\u05dd \u05d2\u05d6\u05e8\u05ea \u05d4\u05d9\u05e2\u05d3:\n"
@@ -660,11 +655,6 @@ async def _on_text_message(update, context) -> None:
         return
 
     if incoming_text == "🚨 \u05d4\u05d6\u05e0\u05e7\u05ea \u05db\u05d5\u05d7\u05d5\u05ea":
-        if resolution.caller and resolution.caller.level != PermissionLevel.COMMANDER:
-            await deps.telegram_client.send_text(
-                chat_id, "\u05e4\u05e2\u05d5\u05dc\u05d4 \u05d6\u05d5 \u05de\u05d9\u05d5\u05e2\u05d3\u05ea \u05dc\u05de\u05e4\u05e7\u05d3 \u05d1\u05dc\u05d1\u05d3."
-            )
-            return
         await deps.telegram_client.send_text(
             chat_id,
             "🚨 \u05dc\u05d4\u05d6\u05e0\u05e7\u05ea \u05db\u05d5\u05d7\u05d5\u05ea \u05d7\u05d9\u05e8\u05d5\u05dd \u05d5\u05d1\u05d9\u05d8\u05d7\u05d5\u05df, \u05e9\u05dc\u05d7 \u05d4\u05d5\u05d3\u05e2\u05d4 \u05e2\u05dd \u05e1\u05d5\u05d2 \u05d4\u05db\u05d5\u05d7 \u05d5\u05d4\u05d9\u05e2\u05d3:\n"

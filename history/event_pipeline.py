@@ -242,6 +242,8 @@ def record_initial_event(persistence, envelope: InitialEventEnvelope) -> str:
         raise ValueError("received_at must not be empty")
     if not envelope.sender_identity:
         raise ValueError("sender_identity must not be empty")
+    if envelope.sender_permission_level not in {"viewer", "commander"}:
+        raise ValueError("sender_permission_level must be 'viewer' or 'commander'")
     return persistence.append_event(asdict(envelope))
 
 

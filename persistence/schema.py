@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS events (
     received_at TEXT NOT NULL,
     source TEXT NOT NULL,
     sender_identity TEXT NOT NULL,
+    sender_permission_level TEXT NOT NULL DEFAULT 'viewer',
     source_message_id TEXT,
 
     occurred_at TEXT,
@@ -246,6 +247,11 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "UPDATE event_steps SET status = CASE WHEN result_text IS NULL THEN 'failed' ELSE 'succeeded' END;",
     ),
     (16, "create telegram_groups table", TELEGRAM_GROUPS_TABLE_DDL),
+    (
+        17,
+        "snapshot event sender permission level",
+        "ALTER TABLE events ADD COLUMN sender_permission_level TEXT NOT NULL DEFAULT 'viewer';",
+    ),
 ]
 
 
@@ -267,6 +273,14 @@ def run_migrations(db_path: str) -> None:
                 columns = {row[1] for row in connection.execute("PRAGMA table_info(events)").fetchall()}
                 if "source_message_id" not in columns:
                     connection.execute("ALTER TABLE events ADD COLUMN source_message_id TEXT")
+            elif version == 17:
+                # Fresh databases already get the column from EVENTS_TABLE_DDL;
+                # only databases created before migration 17 need ALTER TABLE.
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(events)").fetchall()}
+                if "sender_permission_level" not in columns:
+                    connection.execute(
+                        "ALTER TABLE events ADD COLUMN sender_permission_level TEXT NOT NULL DEFAULT 'viewer'"
+                    )
             else:
                 connection.executescript(sql)
 

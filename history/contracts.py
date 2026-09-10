@@ -27,6 +27,10 @@ class InitialEventEnvelope:
     source: str
     received_at: str
     sender_identity: str
+    # Immutable authorization snapshot of the authenticated submitter.  A
+    # resumed event must not inherit the role of whoever later supplies event
+    # data or resolves a hold.
+    sender_permission_level: str = "viewer"
     source_message_id: str | None = None
     occurred_at: str | None = None
     occurred_at_is_fallback: bool = False

@@ -689,3 +689,147 @@ def test_admin_group_routes_require_a_session_and_csrf(tmp_path, teardown_ctx, _
     no_csrf = client.post("/admin/groups", data={"chat_id": "-1", "agent_name": "reference_agent"}, follow_redirects=False)
     assert no_csrf.status_code != 200 or b"is now routed to" not in no_csrf.data
     assert teardown_ctx[0].group_routing.get("-1") is None
+
+
+# -- Language / direction -----------------------------------------------------
+
+
+def test_admin_pages_render_ltr_english_for_an_english_profile(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+
+    login_page = client.get("/admin/login").data
+    assert b'<html lang="en" dir="ltr">' in login_page
+    assert b"bootstrap.min.css" in login_page
+    assert b"bootstrap.rtl.min.css" not in login_page
+
+    _login(client)
+    dashboard = client.get("/admin/").data
+    assert b'<html lang="en" dir="ltr">' in dashboard
+    assert b"User administration" in dashboard
+
+
+def test_admin_pages_render_rtl_hebrew_for_a_hebrew_profile(tmp_path, teardown_ctx, _admin_env):
+    """The panel's language is the profile's DEFAULT_LANGUAGE, through the same catalog the bot
+    uses — api/app.py sets it per request from `loaded_profile.message_catalog`."""
+
+    client = _client(tmp_path, teardown_ctx)
+    teardown_ctx[0].loaded_profile.message_catalog = get_catalog("he")
+    hebrew = get_catalog("he")
+
+    login_page = client.get("/admin/login").data.decode("utf-8")
+    assert '<html lang="he" dir="rtl">' in login_page
+    assert "bootstrap.rtl.min.css" in login_page
+    assert hebrew.text("admin.login_title") in login_page
+    assert hebrew.text("admin.username") in login_page
+
+    _login(client)
+    dashboard = client.get("/admin/").data.decode("utf-8")
+    assert '<html lang="he" dir="rtl">' in dashboard
+    assert hebrew.text("admin.dashboard_title") in dashboard
+    assert hebrew.text("admin.groups_title") in dashboard
+    assert hebrew.text("admin.nav_simulator") in dashboard
+
+    csrf_token = _extract_csrf(dashboard.encode("utf-8"))
+    flashed = client.post(
+        "/admin/users",
+        data={"csrf_token": csrf_token, "telegram_identity": "he-1", "permission_level": "viewer"},
+        follow_redirects=True,
+    ).data.decode("utf-8")
+    from html import unescape
+
+    assert hebrew.text("admin.user_written", identity="he-1", level="viewer") in unescape(flashed)
+
+    simulator = client.get("/admin/simulator").data.decode("utf-8")
+    assert '<html lang="he" dir="rtl">' in simulator
+    assert hebrew.text("admin.simulator.title") in simulator
+
+
+# -- Scenario simulator -------------------------------------------------------
+
+
+def test_simulator_requires_a_session(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+
+    anonymous = client.get("/admin/simulator", follow_redirects=False)
+    assert anonymous.status_code in (302, 303)
+    assert "/admin/login" in anonymous.headers["Location"]
+
+
+def test_dashboard_links_to_the_simulator_and_back(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+
+    dashboard = client.get("/admin/").data
+    assert b'href="/admin/simulator"' in dashboard
+    assert b"Scenario simulator" in dashboard
+
+    simulator = client.get("/admin/simulator").data
+    assert b'href="/admin/"' in simulator
+    assert b"User administration" in simulator
+
+
+def _embedded_simulator_data(page: bytes) -> dict:
+    import json
+    from html import unescape
+
+    match = re.search(rb'<script id="sim-data" type="application/json">(.*?)</script>', page, re.DOTALL)
+    assert match, "simulator page must embed its data as JSON"
+    return json.loads(unescape(match.group(1).decode("utf-8")))
+
+
+def test_simulator_embeds_live_groups_users_and_catalog_strings(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    ctx = teardown_ctx[0]
+    ctx.group_routing.upsert("-1001", "reference_agent", "ops room")
+    _login(client)
+
+    page = client.get("/admin/simulator").data
+    assert page is not None
+    data = _embedded_simulator_data(page)
+
+    assert data["groups"] == [{"chat_id": "-1001", "agent_name": "reference_agent", "label": "ops room"}]
+    identities = {user["telegram_identity"] for user in data["users"]}
+    assert {COMMANDER_IDENTITY, VIEWER_IDENTITY} <= identities
+    assert "main_agent" in data["routable_agents"] and "reference_agent" in data["routable_agents"]
+    assert data["bot_service_identity"] == "bot-service"
+
+    english = get_catalog("en")
+    # Every admin.simulator.* key is forwarded, prefix stripped, as a raw template for the script.
+    expected_keys = {key[len("admin.simulator."):] for key in english.messages if key.startswith("admin.simulator.")}
+    assert set(data["strings"]) == expected_keys
+    assert data["strings"]["route_bound"] == english.messages["admin.simulator.route_bound"]
+
+
+def test_simulator_page_talks_to_the_real_endpoints_only(tmp_path, teardown_ctx, _admin_env):
+    """The page's script sends steps to /Msg and /Event and polls /Job — the bot's own
+    endpoints — and does not route through any admin-side proxy."""
+
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+
+    page = client.get("/admin/simulator").data.decode("utf-8")
+    assert "'/Msg'" in page
+    assert "'/Event'" in page
+    assert "'/Job/'" in page
+    assert "'X-Identity'" in page
+    assert "/admin/simulator/" not in page  # no dispatch/proxy sub-route exists or is referenced
+
+
+def test_simulator_script_is_syntactically_valid_javascript(tmp_path, teardown_ctx, _admin_env):
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+    page = client.get("/admin/simulator").data.decode("utf-8")
+    script = re.search(r"<script>\s*(\(function \(\) \{.*?\}\)\(\);)\s*</script>", page, re.DOTALL)
+    assert script, "simulator script block not found"
+
+    script_path = tmp_path / "simulator.js"
+    script_path.write_text(script.group(1), encoding="utf-8")
+    result = subprocess.run([node, "--check", str(script_path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

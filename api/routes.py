@@ -47,6 +47,7 @@ from orchestrator.flows import (
     run_parallel_specialists,
     synthesize_operational_picture,
     plan_message,
+    protocol_requires_approval,
     WorkItem,
     continue_from_risk_assessment,
     run_report_extraction,
@@ -75,7 +76,8 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
     @blueprint.route("/Event", methods=["POST"])
     def post_event():
         optimization_policy = getattr(ctx.loaded_profile, "optimization_policy", OptimizationPolicy())
-        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
+        caller_identity = request.headers.get("X-Identity")
+        level = authenticate(ctx.deps.persistence, caller_identity)
         require(level, RequestedOperation.SUBMIT_EVENT)
 
         request_payload = request.get_json(silent=True) or {}
@@ -88,6 +90,8 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
             raise InvalidInputError(
                 messages.text("api.field_required", field="sender_identity"), field="sender_identity"
             )
+        if sender_identity != caller_identity:
+            raise AuthorizationError(messages.text("api.sender_identity_mismatch"))
         reservation = ctx.queue.reserve(False)
         if reservation is None:
             raise ServiceUnavailableError(messages.text("api.queue_full"))
@@ -96,7 +100,15 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
         set_trace_id(trace_id)
         deadline_at = storage_timestamp(datetime.now(timezone.utc) + timedelta(seconds=optimization_policy.job_deadline_seconds))
         try:
-            event_id = begin_report(ctx.deps, text, "sensor", _now(), sender_identity, deadline_at=deadline_at)
+            event_id = begin_report(
+                ctx.deps,
+                text,
+                "sensor",
+                _now(),
+                sender_identity,
+                deadline_at=deadline_at,
+                sender_permission_level=level.name.lower(),
+            )
         except Exception:
             ctx.queue.release_reservation(reservation)
             raise
@@ -524,13 +536,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
         if matched_protocol is not None:
             received_at = _now()
             is_commander = level >= PermissionLevel.COMMANDER
-            if getattr(matched_protocol, "commander_only", False) and not is_commander:
-                raise AuthorizationError("\u05d4\u05e4\u05e2\u05d5\u05dc\u05d4 \u05e0\u05d3\u05d7\u05ea\u05d4: \u05e4\u05e2\u05d5\u05dc\u05d4 \u05d6\u05d5 \u05d3\u05d5\u05e8\u05e9\u05ea \u05d4\u05e8\u05e9\u05d0\u05ea \u05de\u05e4\u05e7\u05d3 (COMMANDER).")
-
-            needs_approval = bool(
-                getattr(matched_protocol, "requires_confirmation", False)
-                or (getattr(matched_protocol, "approval_flag", False) and not is_commander)
-            )
+            needs_approval = protocol_requires_approval(matched_protocol, is_commander)
 
             if needs_approval:
                 require(level, RequestedOperation.REQUEST_ACTION)
@@ -544,6 +550,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     event_id = begin_request(
                         ctx.deps, text, received_at, sender_identity, source_message_id,
                         conversation_id=conversation_id, deadline_at=deadline_at,
+                        sender_permission_level=level.name.lower(),
                     )
                 except Exception:
                     ctx.queue.release_reservation(reservation)
@@ -556,7 +563,6 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                             event_id,
                             ctx.main_agent,
                             ctx.insights_agent,
-                            is_commander,
                             selected_protocol=matched_protocol,
                         )
 
@@ -775,6 +781,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 event_id = begin_report(
                     ctx.deps, text, "telegram", received_at, sender_identity, source_message_id,
                     conversation_id=conversation_id, deadline_at=deadline_at,
+                    sender_permission_level=level.name.lower(),
                 )
             except Exception:
                 ctx.queue.release_reservation(reservation)
@@ -808,6 +815,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             event_id = begin_request(
                 ctx.deps, text, received_at, sender_identity, source_message_id,
                 conversation_id=conversation_id, deadline_at=deadline_at,
+                sender_permission_level=level.name.lower(),
             )
         except Exception:
             ctx.queue.release_reservation(reservation)
@@ -815,7 +823,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
 
         def _work() -> None:
             with trace_context(trace_id):
-                continue_from_risk_assessment(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent, is_commander)
+                continue_from_risk_assessment(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent)
 
         ctx.queue.submit(
             WorkItem(

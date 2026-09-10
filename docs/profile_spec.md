@@ -354,19 +354,25 @@ the required `approval_flag`, both defaulting to `False`:
 
 | Field | What it does at runtime |
 |---|---|
-| `commander_only` | Refuses the protocol outright for a caller whose permission level is `VIEWER` — a viewer typing free text that would otherwise select this protocol gets rejected server-side, before any agent or tool runs. Checked in `orchestrator/flows.py` (`continue_from_risk_assessment`, which returns `outcome="unauthorized_for_viewer"`) and, independently, in `api/routes.py` for the direct-submission path (`AuthorizationError`, HTTP 403) — both consult `getattr(protocol, "commander_only", False)`, so an object that doesn't define the attribute at all is treated as `False`, never as a hidden failure. |
+| `commander_only` | Makes execution commander-controlled. A `VIEWER` may submit the report or request, but the selected run is persisted as a `flagged_protocol` approval hold and no agent/tool executes until a commander approves it. Only a commander may resolve that hold. |
 | `requires_confirmation` | Forces an approval hold even for a **commander** — normally a commander's own action runs immediately unless `approval_flag` is set; `requires_confirmation=True` means this specific protocol always pauses for an explicit approve/reject first, regardless of who triggered it. Checked in `orchestrator/holds.py`'s `determine_approval_hold`, which returns `"flagged_protocol"` when either `requires_confirmation` or (for a non-commander origin) `commander_only` is set. |
 
 These are a finer-grained pair layered on top of the required
 `approval_flag` (which governs whether *any* run of this protocol needs a
 human's approve/reject at all), not a replacement for it:
 
-- `approval_flag=True` — the protocol always needs a commander's
-  approve/reject before it runs, for anyone.
-- `commander_only=True` — a viewer can never trigger this protocol at
-  all, approved or not; a commander can.
+- `approval_flag=True` — a non-commander submission needs a commander's
+  approve/reject; a commander normally bypasses this flag alone.
+- `commander_only=True` — a viewer may request the protocol, but can never
+  authorize or execute it; it waits for a commander.
 - `requires_confirmation=True` — even a commander, who would otherwise
   skip straight to execution, still has to confirm first.
+
+The decision is centralized in `orchestrator.holds.protocol_requires_approval`
+and is identical for sensor events, Telegram free text, and deterministic
+button/`protocol_hint` submissions. It never examines words in the message.
+The event stores the authenticated submitter's permission level when it is
+created, so a delayed or resumed run keeps the original authorization context.
 
 A profile with only one caller role (every profile in this repo except
 `profiles/unified_test.py`) generally has no reason to set either field —
@@ -376,8 +382,8 @@ viewer/commander role separation (a Telegram deployment with both kinds
 of user), and sets both fields on its three side-effecting, HIGH-criticality
 protocols (`dispatch_drone_to_incident`, `recall_drone_to_base`,
 `dispatch_emergency_forces`) — see `tests/test_unified_role_and_security.py`
-for the enforced behavior end to end (server-side viewer rejection, and a
-commander still being held for confirmation).
+for the enforced behavior end to end (viewer requests wait for commander
+approval, and a commander is still held for confirmation).
 
 ## The `action.{protocol_name}` catalog-key convention
 

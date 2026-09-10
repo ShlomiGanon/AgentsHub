@@ -163,8 +163,8 @@ def test_unregistered_user_rejected_without_agent_invocation(unified_env):
     assert not any(call[0] == "submit_message" for call in api_client.calls)
 
 
-def test_viewer_free_text_drone_dispatch_rejected_server_side(unified_env):
-    """Scenario 2: VIEWER typing 'שלח רחפן לשער צפון' is blocked server-side, no mission created."""
+def test_viewer_free_text_drone_dispatch_is_held_for_commander(unified_env):
+    """A viewer may request an action, but no mission runs before commander approval."""
     from orchestrator.flows import continue_from_risk_assessment
     from orchestrator.reasoning import ProtocolSelectionResult
     from profiles import unified_test
@@ -177,13 +177,14 @@ def test_viewer_free_text_drone_dispatch_rejected_server_side(unified_env):
     deps.persistence = MagicMock()
     deps.persistence.fetch_event.return_value = {
         "deadline_at": None,
-        "raw_text": "שלח רחפן",
-        "classification": "drone_dispatch",
+        "raw_text": "smoke observed at gate 3",
+        "classification": "surveillance_report",
         "area": "north_gate",
-        "description": "סיור",
+        "description": "smoke",
         "severity": "LOW",
         "occurred_at": "2026-09-07T12:00:00Z",
         "received_at": "2026-09-07T12:00:00Z",
+        "sender_permission_level": "viewer",
     }
 
     selection = ProtocolSelectionResult(status="selected", protocol_name="dispatch_drone_to_incident", reason="test")
@@ -197,20 +198,17 @@ def test_viewer_free_text_drone_dispatch_rejected_server_side(unified_env):
             event_id="evt_test_1",
             main_agent=MagicMock(),
             insights_agent=MagicMock(),
-            originated_from_commander=False,  # VIEWER
         )
 
-    # Must be unauthorized_for_viewer
-    assert result.outcome == "unauthorized_for_viewer"
-    assert "הרשאת מפקד" in result.detail
+    assert result.outcome == "held_for_approval"
+    deps.persistence.store_held_event.assert_called_once()
 
     # Ensure no drone state changed
     current_drones = {d["drone_id"]: d["status"] for d in surv_store.list_drones()}
     assert current_drones == initial_drones
 
 
-def test_viewer_free_text_drone_recall_rejected_server_side(unified_env):
-    """Scenario 3: VIEWER typing 'תחזיר את הרחפן' is blocked server-side."""
+def test_viewer_free_text_drone_recall_is_held_for_commander(unified_env):
     from orchestrator.flows import continue_from_risk_assessment
     from orchestrator.reasoning import ProtocolSelectionResult
     from profiles import unified_test
@@ -243,12 +241,11 @@ def test_viewer_free_text_drone_recall_rejected_server_side(unified_env):
             originated_from_commander=False,  # VIEWER
         )
 
-    assert result.outcome == "unauthorized_for_viewer"
-    assert "הרשאת מפקד" in result.detail
+    assert result.outcome == "held_for_approval"
+    deps.persistence.store_held_event.assert_called_once()
 
 
-def test_viewer_free_text_emergency_forces_rejected_server_side(unified_env):
-    """Scenario 4: VIEWER typing 'תזניק משטרה' is blocked server-side."""
+def test_viewer_free_text_emergency_forces_is_held_for_commander(unified_env):
     from orchestrator.flows import continue_from_risk_assessment
     from orchestrator.reasoning import ProtocolSelectionResult
     from profiles import unified_test
@@ -281,8 +278,8 @@ def test_viewer_free_text_emergency_forces_rejected_server_side(unified_env):
             originated_from_commander=False,  # VIEWER
         )
 
-    assert result.outcome == "unauthorized_for_viewer"
-    assert "הרשאת מפקד" in result.detail
+    assert result.outcome == "held_for_approval"
+    deps.persistence.store_held_event.assert_called_once()
 
 
 def test_commander_side_effects_trigger_confirmation_flow(unified_env):
@@ -317,6 +314,19 @@ def test_commander_side_effects_trigger_confirmation_flow(unified_env):
 
     sel_team = ProtocolSelectionResult(status="selected", protocol_name="report_team_availability", reason="r")
     assert determine_approval_hold(sel_team, protocols_by_name, originated_from_commander=True) is None
+
+
+def test_approval_authorization_never_depends_on_raw_message_phrasing():
+    """Language and wording may affect intent/protocol selection, never whether
+    a selected protocol reaches the shared approval policy."""
+
+    import inspect
+    from orchestrator.flows import continue_from_risk_assessment
+
+    source = inspect.getsource(continue_from_risk_assessment)
+    assert "observational_report" not in source
+    assert "normalized_report" not in source
+    assert "determine_approval_hold" in source
 
 
 def test_viewer_attendance_reporting_shortcut(unified_env):
@@ -623,15 +633,32 @@ def test_all_commander_and_viewer_buttons_mapped(unified_env):
     asyncio.run(app._on_text_message(up_drone, MagicMock(bot_data={"deps": deps})))
     assert "לשיגור והזנקת רחפן טקטי" in telegram_client.sent[-1].text
 
-    # 3. Viewer trying "🚨 הזנקת כוחות" or "🚀 הזנקת רחפן" is blocked with commander-only message
-    for blocked_btn in ["🚨 הזנקת כוחות", "🚀 הזנקת רחפן"]:
+    # 3. Viewers receive the same detail prompt. Their completed request is
+    # persisted as an approval hold by the API; only a commander may resolve it.
+    for action_btn, expected_guidance in [
+        ("🚨 הזנקת כוחות", "להזנקת כוחות חירום וביטחון"),
+        ("🚀 הזנקת רחפן", "לשיגור והזנקת רחפן טקטי"),
+    ]:
         up_v = MagicMock()
         up_v.effective_user.id = "vwr_1"
         up_v.effective_chat.id = "2"
-        up_v.message.text = blocked_btn
+        up_v.message.text = action_btn
         up_v.message.message_id = 303
         asyncio.run(app._on_text_message(up_v, MagicMock(bot_data={"deps": deps})))
-        assert "מפקד בלבד" in telegram_client.sent[-1].text
+        assert expected_guidance in telegram_client.sent[-1].text
+
+    # Once the viewer supplies the requested operational detail, the bot
+    # forwards it. The server—not the Telegram UI—creates the commander hold.
+    detailed = MagicMock()
+    detailed.effective_user.id = "vwr_1"
+    detailed.effective_chat.id = "2"
+    detailed.message.text = "הזנק משטרה לשער צפון"
+    detailed.message.message_id = 304
+    asyncio.run(app._on_text_message(detailed, MagicMock(bot_data={"deps": deps})))
+    assert any(
+        call[0] == "submit_message" and "הזנק משטרה" in call[1]
+        for call in api_client.calls
+    )
 
     # 4. Test query buttons map to canonical prompts submitted to API
     test_buttons = [

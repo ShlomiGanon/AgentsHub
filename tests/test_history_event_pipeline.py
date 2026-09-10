@@ -109,6 +109,20 @@ def _initial(store):
     )
 
 
+def test_initial_event_rejects_an_unknown_sender_permission_level(store):
+    with pytest.raises(ValueError, match="sender_permission_level"):
+        record_initial_event(
+            store,
+            InitialEventEnvelope(
+                raw_text="smoke",
+                source="sensor",
+                received_at="2026-08-20T10:00:00",
+                sender_identity="sensor-1",
+                sender_permission_level="administrator",
+            ),
+        )
+
+
 def test_history_write_path_is_incremental(store):
     event_id = _initial(store)
     result = ExtractionResult(

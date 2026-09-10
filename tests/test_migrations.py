@@ -52,6 +52,39 @@ def test_event_steps_include_resumable_event_data_wait_columns(tmp_path):
     assert {"required_event_fields", "missing_event_fields", "status", "failure_reason"} <= columns
 
 
+def test_migration_seventeen_adds_safe_sender_permission_snapshot_to_legacy_events(tmp_path):
+    db_path = str(tmp_path / "version-sixteen.db")
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "CREATE TABLE events ("
+            "event_id TEXT PRIMARY KEY, received_at TEXT NOT NULL, source TEXT NOT NULL, "
+            "sender_identity TEXT NOT NULL, raw_text TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO events(event_id, received_at, source, sender_identity, raw_text) "
+            "VALUES ('legacy', '2026-01-01', 'sensor', 'sensor-1', 'smoke')"
+        )
+        connection.execute("PRAGMA user_version = 16")
+        connection.commit()
+    finally:
+        connection.close()
+
+    run_migrations(db_path)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+        snapshot = connection.execute(
+            "SELECT sender_permission_level FROM events WHERE event_id = 'legacy'"
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    assert "sender_permission_level" in columns
+    assert snapshot == "viewer"
+
+
 def test_history_query_indexes_are_present_on_a_fresh_database(tmp_path):
     import sqlite3
 

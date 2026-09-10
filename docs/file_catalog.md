@@ -25,7 +25,8 @@ This English catalog describes every tracked or pending first-party file in the 
 | `agents/surveillance_agent.py` | Production | Private implementation | Implements the visual-surveillance, camera-monitoring, and tactical-drone specialist. |
 | `agents/team_status_agent.py` | Production | Private implementation | Implements the readiness-team roster, attendance-cycle, response, and availability-report specialist. |
 | `api/__init__.py` | Production | Public facade | Exposes the API facade and compatibility module aliases. |
-| `api/admin.py` | Production | Private implementation | Serves the login-gated admin web panel for user management under `/admin`. |
+| `api/admin.py` | Production | Private implementation | Serves the login-gated admin web panel (users, Telegram group routing, scenario simulator) under `/admin`, in the profile's catalog language. |
+| `api/admin_simulator.py` | Production | Private implementation | Style, body and script of the admin scenario simulator page, plus the helper that gathers its embedded data. |
 | `api/app.py` | Production | Public entry point | Builds API dependencies, owns ApiContext, and starts Flask. |
 | `api/request_boundary.py` | Production | Private implementation | Authenticates requests and translates API and HTTP failures into responses. |
 | `api/routes.py` | Production | Private implementation | Defines ingestion, management, hold, job, system, and notification routes. |

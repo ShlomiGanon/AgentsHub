@@ -77,6 +77,16 @@ Maps every API route, bot command/callback, and message intent to its `Requested
 
 Messages from a Telegram group bound to a specialist are additionally **scoped**: the same operations apply, but the Main Agent only sees that specialist's protocols and tools (plus `history_agent`) — see `docs/api_spec.md`'s `POST /Msg` section. A group with no binding is ignored by the bot and refused (`403`) by the API.
 
+Viewer availability in this matrix means the caller may **submit** the
+operation. If protocol selection resolves to `commander_only` or an
+`approval_flag` protocol, the submission becomes a `flagged_protocol` hold:
+no tool runs until a commander uses `approve_run`. This same
+`orchestrator.holds.protocol_requires_approval` rule is used by sensor,
+free-text, and deterministic protocol-hint paths; authorization never depends
+on message-language substrings. `POST /Event` additionally requires its body
+`sender_identity` to equal `X-Identity`, and events retain the authenticated
+submitter's permission snapshot for delayed/resumed processing.
+
 `GET /SYSTEM` remains one endpoint, gated by `view_profile_overview`; `api/routes.py::get_system` builds its JSON response field-group by field-group, each behind its own operation (`view_system_internals` for `agents`/`protocols`/`queued_events`/`held_events`/`scheduler`, `view_settings` for `settings`), so a viewer's response has those fields absent entirely rather than gating the whole endpoint at once — see `docs/api_spec.md`'s `GET /SYSTEM` section for both response shapes.
 
 This matrix reflects the completed implementation (docs/Next_Plan.md Stages 0–7, all complete as of 2026-08-29) — not a proposal.

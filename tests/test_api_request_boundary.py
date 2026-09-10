@@ -105,6 +105,7 @@ def test_api_error_is_the_common_base():
     assert issubclass(InvalidInputError, ApiError)
     assert issubclass(RunFailureError, ApiError)
 
+import dataclasses
 import types
 
 import pytest
@@ -112,6 +113,7 @@ import pytest
 from agents import adapter
 from api.app import build_app
 from api.operations import job_status
+from protocols import ProtocolSet
 from tests.api_fakes import COMMANDER_IDENTITY, SENSOR_IDENTITY, VIEWER_IDENTITY, auth_headers, build_context, happy_path_agent
 
 
@@ -146,6 +148,8 @@ def test_post_event_returns_202_with_a_job_id_immediately(ctx):
     resp = client.post("/Event", headers=auth_headers(SENSOR_IDENTITY), json={"text": "smoke at gate 3", "sender_identity": SENSOR_IDENTITY})
 
     assert resp.status_code == 202
+    event = ctx.deps.persistence.fetch_event(resp.get_json()["event_id"])
+    assert event["sender_permission_level"] == "viewer"
     body = resp.get_json()
     assert body["status"] == "queued"
     assert body["event_id"]
@@ -192,6 +196,19 @@ def test_post_event_rejects_a_missing_sender_identity(ctx):
     assert resp.get_json()["field"] == "sender_identity"
 
 
+def test_post_event_rejects_sender_identity_impersonation_before_writing(ctx):
+    client = build_app(ctx).test_client()
+
+    resp = client.post(
+        "/Event",
+        headers=auth_headers(VIEWER_IDENTITY),
+        json={"text": "smoke at gate 3", "sender_identity": SENSOR_IDENTITY},
+    )
+
+    assert resp.status_code == 403
+    assert ctx.deps.persistence.fetch_events_range("2000-01-01", "2100-01-01") == []
+
+
 def test_post_event_requires_authentication(ctx):
     client = build_app(ctx).test_client()
 
@@ -218,6 +235,38 @@ def test_post_event_permits_a_viewer_level_sensor_identity(ctx):
 
     assert resp.status_code == 202
 
+
+def test_viewer_sensor_event_selecting_commander_only_protocol_is_held(ctx):
+    protocols = tuple(
+        dataclasses.replace(
+            protocol,
+            approval_flag=False,
+            commander_only=True,
+            requires_confirmation=False,
+        )
+        if protocol.name == "status_check"
+        else protocol
+        for protocol in ctx.deps.protocol_set.all()
+    )
+    scoped_ctx = dataclasses.replace(
+        ctx,
+        deps=dataclasses.replace(ctx.deps, protocol_set=ProtocolSet(protocols)),
+    )
+    client = build_app(scoped_ctx).test_client()
+
+    resp = client.post(
+        "/Event",
+        headers=auth_headers(SENSOR_IDENTITY),
+        json={"text": "smoke observed at gate 3", "sender_identity": SENSOR_IDENTITY},
+    )
+
+    assert resp.status_code == 202
+    event_id = resp.get_json()["event_id"]
+    ctx.queue.wait_until_idle()
+    assert job_status(scoped_ctx, event_id)["status"] == "held_for_approval"
+    assert scoped_ctx.deps.persistence.fetch_event(event_id)["outcome"] is None
+
+
 def test_post_event_works_for_any_registered_identity_not_only_the_sensor_one(ctx):
     client = build_app(ctx).test_client()
 
@@ -232,3 +281,5 @@ def test_post_event_works_for_a_commander_identity_too(ctx):
     resp = client.post("/Event", headers=auth_headers(COMMANDER_IDENTITY), json={"text": "smoke at gate 3", "sender_identity": COMMANDER_IDENTITY})
 
     assert resp.status_code == 202
+    event = ctx.deps.persistence.fetch_event(resp.get_json()["event_id"])
+    assert event["sender_permission_level"] == "commander"

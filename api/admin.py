@@ -1,4 +1,10 @@
-"""Admin web panel for user management (login-gated, server-rendered HTML).
+"""Admin web panel (login-gated, server-rendered HTML): users, Telegram group routing, and the
+scenario simulator (`api/admin_simulator.py`).
+
+Every string the panel shows comes from the `admin.*` keys of the message catalog
+(`messages/en.py`, `messages/he.py`), read through `get_current_catalog()` — which `api/app.py`
+sets from the profile's DEFAULT_LANGUAGE before each request — so the panel renders in Hebrew
+(right-to-left, Bootstrap's RTL build) for a `he` profile and in English for an `en` one.
 
 Mounted on the same Flask app and port as the JSON API (`api/app.py`), under
 `/admin` — a deliberate choice for now: this deployment's whole surface is a
@@ -45,6 +51,7 @@ from typing import TYPE_CHECKING
 
 from flask import Blueprint, flash, get_flashed_messages, redirect, render_template_string, request, session, url_for
 
+from api.admin_simulator import SIMULATOR_BODY, SIMULATOR_STYLE, simulator_page_context
 from auth.permissions import PermissionLevel
 from messages import get_current_catalog
 from orchestrator.flows import InvalidRoutingTargetError
@@ -204,14 +211,24 @@ class LoginRateLimiter:
             self._locked_at_monotonic = None
 
 
+# Bootstrap ships a mirrored build for right-to-left pages; the template picks one by the
+# catalog's language (`dir` below), so the Hebrew catalog gets a genuinely RTL layout rather
+# than an LTR grid with Hebrew text poured into it.
 _BOOTSTRAP_CSS_LINK = (
+    '{% if dir == "rtl" %}'
+    '<link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/css/bootstrap.rtl.min.css" rel="stylesheet">'
+    "{% else %}"
     '<link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/css/bootstrap.min.css" rel="stylesheet">'
+    "{% endif %}"
 )
 
-# Both style blocks below are copied verbatim from the design references (user-admin-bootstrap.html,
-# login.html) rather than merged into one shared stylesheet — the two pages diverge in real ways
+# Both style blocks below follow the design references (user-admin-bootstrap.html, login.html)
+# rather than being merged into one shared stylesheet — the two pages diverge in real ways
 # (status-pill's font-size and centering differ between them, the login page has no table/block-console
-# rules at all) and keeping each page's CSS exactly as designed avoids introducing any drift.
+# rules at all) and keeping each page's CSS as designed avoids introducing any drift. The one
+# deliberate departure: physical left/right properties are written as CSS logical properties
+# (`border-inline-start`, `inset-inline-start`, `margin-inline-end`) so the same stylesheet lays
+# out correctly under both `dir="ltr"` and `dir="rtl"`.
 _DASHBOARD_STYLE = """
 <style>
   :root {
@@ -251,14 +268,16 @@ _DASHBOARD_STYLE = """
     border-radius: 50%;
     background: var(--commander);
     box-shadow: 0 0 0 3px var(--commander-dim);
-    margin-right: 6px;
+    margin-inline-end: 6px;
   }
   .subtitle { color: var(--text-dim); font-size: 15px; }
+  .nav-console { font-size: 14px; color: var(--text-dim); text-decoration: none; }
+  .nav-console:hover { color: var(--text); text-decoration: underline; }
 
   .alert-console {
     background: var(--commander-dim);
     border: 1px solid #9DCFC0;
-    border-left: 3px solid var(--commander);
+    border-inline-start: 3px solid var(--commander);
     border-radius: 4px;
     color: #075A47;
     font-family: var(--mono);
@@ -268,7 +287,7 @@ _DASHBOARD_STYLE = """
   .alert-console-error {
     background: var(--danger-dim);
     border: 1px solid #C98782;
-    border-left: 3px solid var(--danger);
+    border-inline-start: 3px solid var(--danger);
     border-radius: 4px;
     color: #6B1F1B;
     font-family: var(--mono);
@@ -288,24 +307,25 @@ _DASHBOARD_STYLE = """
     letter-spacing: 0.04em;
     border-bottom: 1px solid var(--line-strong) !important;
     border-top: none;
-    padding-left: 0;
+    padding-inline-start: 0;
   }
   table.table-console tbody td {
     border-color: var(--line);
     vertical-align: middle;
-    padding: 14px 0.5rem 14px 0;
+    padding-block: 14px;
+    padding-inline: 0 0.5rem;
     font-size: 15px;
   }
-  table.table-console tbody td:first-child { padding-left: 0; }
+  table.table-console tbody td:first-child { padding-inline-start: 0; }
 
   .identity { font-family: var(--mono); font-size: 15px; }
-  .identity .tag { font-family: inherit; font-size: 13px; color: var(--text-faint); margin-left: 8px; }
+  .identity .tag { font-family: inherit; font-size: 13px; color: var(--text-faint); margin-inline-start: 8px; }
 
   .level-dot {
     display: inline-block;
     width: 5px; height: 5px;
     border-radius: 50%;
-    margin-right: 6px;
+    margin-inline-end: 6px;
   }
   .badge-commander { color: var(--commander); }
   .badge-commander .level-dot { background: var(--commander); }
@@ -351,7 +371,7 @@ _DASHBOARD_STYLE = """
   .block-label {
     position: absolute;
     top: -11px;
-    left: 18px;
+    inset-inline-start: 18px;
     background: var(--bg);
     padding: 0 8px;
     font-size: 14px;
@@ -448,7 +468,7 @@ _LOGIN_STYLE = """
   .alert-console-error {
     background: var(--danger-dim);
     border: 1px solid #C98782;
-    border-left: 3px solid var(--danger);
+    border-inline-start: 3px solid var(--danger);
     border-radius: 4px;
     color: #6B1F1B;
     font-family: var(--mono);
@@ -496,24 +516,24 @@ _LOGIN_STYLE = """
     border-radius: 50%;
     background: var(--commander);
     box-shadow: 0 0 0 3px var(--commander-dim);
-    margin-right: 6px;
+    margin-inline-end: 6px;
   }
 </style>
 """
 
 _LOGIN_TEMPLATE = """<!DOCTYPE html>
-<html lang="en">
+<html lang="{{ lang }}" dir="{{ dir }}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin sign in</title>
+<title>{{ t('admin.login_title') }}</title>
 """ + _BOOTSTRAP_CSS_LINK + _LOGIN_STYLE + """
 </head>
 <body>
 
   <div class="login-card">
-    <h1>Admin sign in</h1>
-    <p class="subtitle">Bot control panel</p>
+    <h1>{{ t('admin.login_title') }}</h1>
+    <p class="subtitle">{{ t('admin.login_subtitle') }}</p>
 
     {% if lockout %}
       <div class="alert-console-error">
@@ -532,17 +552,17 @@ _LOGIN_TEMPLATE = """<!DOCTYPE html>
 
     <form id="loginForm" method="post">
       <div class="field-group">
-        <label class="form-label-console" for="username">Username</label>
-        <input type="text" class="form-control-console" id="username" name="username" placeholder="username" autofocus required>
+        <label class="form-label-console" for="username">{{ t('admin.username') }}</label>
+        <input type="text" class="form-control-console" id="username" name="username" placeholder="{{ t('admin.username') }}" autofocus required>
       </div>
       <div class="field-group">
-        <label class="form-label-console" for="password">Password</label>
+        <label class="form-label-console" for="password">{{ t('admin.password') }}</label>
         <input type="password" class="form-control-console" id="password" name="password" placeholder="••••••••" required>
       </div>
-      <button type="submit" class="btn-console-primary">Sign in</button>
+      <button type="submit" class="btn-console-primary">{{ t('admin.sign_in') }}</button>
     </form>
 
-    <div class="status-pill"><span class="dot"></span>connected</div>
+    <div class="status-pill"><span class="dot"></span>{{ t('admin.connected') }}</div>
   </div>
 
 </body>
@@ -550,27 +570,28 @@ _LOGIN_TEMPLATE = """<!DOCTYPE html>
 """
 
 _DASHBOARD_TEMPLATE = """<!DOCTYPE html>
-<html lang="en">
+<html lang="{{ lang }}" dir="{{ dir }}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>User administration</title>
+<title>{{ t('admin.dashboard_title') }}</title>
 """ + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """
 </head>
 <body>
 <div class="container container-narrow">
 
   <div class="d-flex justify-content-between align-items-baseline mb-1">
-    <h1 class="mb-0">User administration</h1>
+    <h1 class="mb-0">{{ t('admin.dashboard_title') }}</h1>
     <div class="d-flex align-items-center gap-3">
-      <span class="status-pill"><span class="dot"></span>connected</span>
+      <a class="nav-console" href="{{ url_for('admin.simulator') }}">{{ t('admin.nav_simulator') }}</a>
+      <span class="status-pill"><span class="dot"></span>{{ t('admin.connected') }}</span>
       <form method="post" action="{{ url_for('admin.logout') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="btn btn-console-danger btn-sm">Log out</button>
+        <button type="submit" class="btn btn-console-danger btn-sm">{{ t('admin.log_out') }}</button>
       </form>
     </div>
   </div>
-  <p class="subtitle mb-4">Manage who can talk to the bot and what they're allowed to do.</p>
+  <p class="subtitle mb-4">{{ t('admin.dashboard_subtitle') }}</p>
 
   {% for category, message in get_flashed_messages(with_categories=true) %}
     <div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>
@@ -579,15 +600,15 @@ _DASHBOARD_TEMPLATE = """<!DOCTYPE html>
   <table class="table table-console mb-5">
     <thead>
       <tr>
-        <th>Telegram identity</th>
-        <th>Level</th>
+        <th>{{ t('admin.col_identity') }}</th>
+        <th>{{ t('admin.col_level') }}</th>
         <th></th>
       </tr>
     </thead>
     <tbody>
       {% for user in users %}
       <tr>
-        <td class="identity">{{ user.telegram_identity }}{% if user.telegram_identity == bot_service_identity %} <span class="tag">bot's own service identity</span>{% endif %}</td>
+        <td class="identity">{{ user.telegram_identity }}{% if user.telegram_identity == bot_service_identity %} <span class="tag">{{ t('admin.tag_bot_service') }}</span>{% endif %}</td>
         <td>
           <form class="d-flex gap-2" method="post" action="{{ url_for('admin.write_user') }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -597,14 +618,14 @@ _DASHBOARD_TEMPLATE = """<!DOCTYPE html>
               <option value="{{ level }}" {% if level == user.permission_level %}selected{% endif %}>{{ level }}</option>
               {% endfor %}
             </select>
-            <button type="submit" class="btn btn-console btn-sm">Save</button>
+            <button type="submit" class="btn btn-console btn-sm">{{ t('admin.save') }}</button>
           </form>
         </td>
         <td class="text-end">
           <form method="post" action="{{ url_for('admin.remove_user', identity=user.telegram_identity) }}"
-                onsubmit="return confirm('Remove {{ user.telegram_identity }}?');">
+                onsubmit="return confirm({{ t('admin.confirm_remove_user', identity=user.telegram_identity)|tojson|forceescape }});">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button type="submit" class="btn btn-console-danger btn-sm">Remove</button>
+            <button type="submit" class="btn btn-console-danger btn-sm">{{ t('admin.remove') }}</button>
           </form>
         </td>
       </tr>
@@ -613,34 +634,34 @@ _DASHBOARD_TEMPLATE = """<!DOCTYPE html>
   </table>
 
   <div class="block-console mb-4">
-    <span class="block-label">Add a user</span>
+    <span class="block-label">{{ t('admin.add_user') }}</span>
     <form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.write_user') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="col">
-        <div class="form-label-console">Telegram identity</div>
+        <div class="form-label-console">{{ t('admin.col_identity') }}</div>
         <input type="text" name="telegram_identity" class="form-control form-control-console" placeholder="123456789" required>
       </div>
       <div class="col-auto">
-        <div class="form-label-console">Level</div>
+        <div class="form-label-console">{{ t('admin.col_level') }}</div>
         <select name="permission_level" class="form-select form-select-console">
           {% for level in levels %}<option value="{{ level }}">{{ level }}</option>{% endfor %}
         </select>
       </div>
       <div class="col-auto">
-        <button type="submit" class="btn btn-console-primary">Add</button>
+        <button type="submit" class="btn btn-console-primary">{{ t('admin.add') }}</button>
       </div>
     </form>
   </div>
 
-  <h2 class="mb-1" style="font-size:18px;">Telegram groups</h2>
-  <p class="subtitle mb-3">Bind a group chat to the specialist its messages belong to. Groups not listed here are ignored by the bot.</p>
+  <h2 class="mb-1" style="font-size:18px;">{{ t('admin.groups_title') }}</h2>
+  <p class="subtitle mb-3">{{ t('admin.groups_subtitle') }}</p>
 
   <table class="table table-console mb-4">
     <thead>
       <tr>
-        <th>Chat ID</th>
-        <th>Label</th>
-        <th>Routed to</th>
+        <th>{{ t('admin.col_chat_id') }}</th>
+        <th>{{ t('admin.col_label') }}</th>
+        <th>{{ t('admin.col_routed_to') }}</th>
         <th></th>
       </tr>
     </thead>
@@ -659,64 +680,80 @@ _DASHBOARD_TEMPLATE = """<!DOCTYPE html>
               <option value="{{ agent_name }}" {% if agent_name == group.agent_name %}selected{% endif %}>{{ agent_name }}</option>
               {% endfor %}
             </select>
-            <button type="submit" class="btn btn-console btn-sm">Save</button>
+            <button type="submit" class="btn btn-console btn-sm">{{ t('admin.save') }}</button>
           </form>
         </td>
         <td class="text-end">
           <form method="post" action="{{ url_for('admin.remove_group', chat_id=group.chat_id) }}"
-                onsubmit="return confirm('Remove group {{ group.chat_id }}?');">
+                onsubmit="return confirm({{ t('admin.confirm_remove_group', chat_id=group.chat_id)|tojson|forceescape }});">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button type="submit" class="btn btn-console-danger btn-sm">Remove</button>
+            <button type="submit" class="btn btn-console-danger btn-sm">{{ t('admin.remove') }}</button>
           </form>
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="4" style="color:var(--text-dim);">No groups registered yet.</td></tr>
+      <tr><td colspan="4" style="color:var(--text-dim);">{{ t('admin.no_groups') }}</td></tr>
       {% endfor %}
     </tbody>
   </table>
 
   <div class="block-console mb-5">
-    <span class="block-label">Add a group</span>
+    <span class="block-label">{{ t('admin.add_group') }}</span>
     <p class="mb-3" style="font-size:13px; color:var(--text-dim); max-width:560px; line-height:1.6;">
-      The chat ID is the negative number the bot posts when it is added to an unregistered group.
-      Choose <code class="console-code">main_agent</code> for full routing, or one specialist to restrict the group to that agent's protocols.
+      {{ t('admin.add_group_help', main_agent='main_agent') }}
     </p>
     <form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.write_group') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="col">
-        <div class="form-label-console">Chat ID</div>
+        <div class="form-label-console">{{ t('admin.col_chat_id') }}</div>
         <input type="text" name="chat_id" class="form-control form-control-console" placeholder="-1001234567890" required>
       </div>
       <div class="col">
-        <div class="form-label-console">Label</div>
-        <input type="text" name="label" class="form-control form-control-console" placeholder="readiness team" maxlength="200">
+        <div class="form-label-console">{{ t('admin.col_label') }}</div>
+        <input type="text" name="label" class="form-control form-control-console" placeholder="{{ t('admin.label_placeholder') }}" maxlength="200">
       </div>
       <div class="col-auto">
-        <div class="form-label-console">Routed to</div>
+        <div class="form-label-console">{{ t('admin.col_routed_to') }}</div>
         <select name="agent_name" class="form-select form-select-console">
           {% for agent_name in routable_agents %}<option value="{{ agent_name }}">{{ agent_name }}</option>{% endfor %}
         </select>
       </div>
       <div class="col-auto">
-        <button type="submit" class="btn btn-console-primary">Add</button>
+        <button type="submit" class="btn btn-console-primary">{{ t('admin.add') }}</button>
       </div>
     </form>
   </div>
 
   <div class="block-console mb-4">
-    <span class="block-label">Bot's own service identity</span>
+    <span class="block-label">{{ t('admin.bot_service_title') }}</span>
     <p class="mb-3" style="font-size:13px; color:var(--text-dim); max-width:560px; line-height:1.6;">
-      Registers or re-registers <code class="console-code">{{ bot_service_identity }}</code> at commander level.
-      Required before the bot can poll notifications, read the commander roster, or check for profile changes.
+      {{ t('admin.bot_service_help', identity=bot_service_identity) }}
     </p>
     <form method="post" action="{{ url_for('admin.provision_bot_service') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <button type="submit" class="btn btn-console">Register bot-service</button>
+      <button type="submit" class="btn btn-console">{{ t('admin.bot_service_button') }}</button>
     </form>
   </div>
 
 </div>
+</body>
+</html>
+"""
+
+
+# The simulator page shares the dashboard's chrome (Bootstrap build, palette, header) and adds
+# its own style + body from api/admin_simulator.py; assembled here so one module decides how
+# admin pages are put together.
+_SIMULATOR_TEMPLATE = """<!DOCTYPE html>
+<html lang="{{ lang }}" dir="{{ dir }}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ t('admin.simulator.title') }}</title>
+""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + SIMULATOR_STYLE + """
+</head>
+<body>
+""" + SIMULATOR_BODY + """
 </body>
 </html>
 """
@@ -751,6 +788,27 @@ def _format_duration_phrase(remaining_minutes: float) -> str:
     return catalog.text("admin.lockout_hours", hours=hours_value)
 
 
+def _t(key: str, **values: object) -> str:
+    """Admin-panel text through the request's message catalog (`api/app.py` sets it from the
+    profile's DEFAULT_LANGUAGE before every request), so the panel follows the profile's
+    language — Hebrew for a `he` profile, English for an `en` one — with no second mechanism."""
+
+    return get_current_catalog().text(key, **values)
+
+
+def _text_direction() -> str:
+    return "rtl" if get_current_catalog().language == "he" else "ltr"
+
+
+def _render(template: str, **context) -> str:
+    """render_template_string plus the three values every admin template needs: the catalog
+    text function `t`, and the `lang`/`dir` attributes for the `<html>` element."""
+
+    return render_template_string(
+        template, t=_t, lang=get_current_catalog().language, dir=_text_direction(), **context
+    )
+
+
 def _issue_session(config: AdminConfig) -> None:
     session.clear()
     session["admin_authenticated"] = True
@@ -778,7 +836,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             return redirect(url_for("admin.login"))
         if _session_expired():
             session.clear()
-            flash("Your session expired from inactivity — please sign in again.", "error")
+            flash(_t("admin.session_expired"), "error")
             return redirect(url_for("admin.login"))
         session["last_activity"] = time.time()
         return None
@@ -808,8 +866,8 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         remaining = rate_limiter.remaining_minutes()
         if remaining > 0:
             get_flashed_messages()  # discard — the lockout banner takes precedence, never both
-            return render_template_string(_LOGIN_TEMPLATE, lockout=_lockout_context(remaining))
-        return render_template_string(_LOGIN_TEMPLATE, lockout=None)
+            return _render(_LOGIN_TEMPLATE, lockout=_lockout_context(remaining))
+        return _render(_LOGIN_TEMPLATE, lockout=None)
 
     def _require_csrf():
         """None if the submitted csrf_token matches this session's; otherwise a redirect the
@@ -822,7 +880,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             logger.warning(
                 "admin CSRF token mismatch", extra={"event": "admin_csrf_rejected", "route": request.path, "trace_id": get_trace_id()}
             )
-            flash("That action could not be verified — please try again.", "error")
+            flash(_t("admin.csrf_failed"), "error")
             return redirect(url_for("admin.dashboard"))
         return None
 
@@ -884,7 +942,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
 
         logger.info("admin logout", extra={"event": "admin_logout", "trace_id": get_trace_id()})
         session.clear()
-        flash("Signed out.", "ok")
+        flash(_t("admin.signed_out"), "ok")
         return redirect(url_for("admin.login"))
 
     @blueprint.route("/", methods=["GET"])
@@ -894,7 +952,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             return redirect_response
 
         users = sorted(ctx.deps.persistence.list_users(), key=lambda user: user["telegram_identity"])
-        return render_template_string(
+        return _render(
             _DASHBOARD_TEMPLATE,
             users=users,
             levels=levels,
@@ -902,6 +960,22 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             routable_agents=ctx.group_routing.routable_targets,
             csrf_token=session["csrf_token"],
             bot_service_identity=BOT_SERVICE_IDENTITY,
+        )
+
+    @blueprint.route("/simulator", methods=["GET"])
+    def simulator():
+        """Scenario simulator (api/admin_simulator.py). Session-gated like every other admin
+        page; the steps it releases are then sent by the browser to the real /Msg and /Event
+        under each step's own X-Identity, so this route itself only serves the page + data."""
+
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+
+        return _render(
+            _SIMULATOR_TEMPLATE,
+            page_data=simulator_page_context(ctx, get_current_catalog(), BOT_SERVICE_IDENTITY),
+            csrf_token=session["csrf_token"],
         )
 
     @blueprint.route("/groups", methods=["POST"])
@@ -917,7 +991,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         agent_name = request.form.get("agent_name", "").strip()
         label = request.form.get("label", "").strip()
         if not chat_id:
-            flash("A Telegram chat ID is required.", "error")
+            flash(_t("admin.chat_id_required"), "error")
             return redirect(url_for("admin.dashboard"))
 
         existed = ctx.group_routing.get(chat_id) is not None
@@ -926,7 +1000,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             # source of truth for the routing table either way.
             ctx.group_routing.upsert(chat_id, agent_name, label)
         except InvalidRoutingTargetError:
-            flash(f"'{agent_name}' is not a routable agent.", "error")
+            flash(_t("admin.group_agent_invalid", agent=agent_name), "error")
             return redirect(url_for("admin.dashboard"))
         logger.info(
             "admin wrote a telegram group binding",
@@ -935,7 +1009,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
                 "chat_id": chat_id, "agent_name": agent_name, "trace_id": get_trace_id(),
             },
         )
-        flash(f"Group '{chat_id}' is now routed to '{agent_name}'.", "ok")
+        flash(_t("admin.group_routed", chat_id=chat_id, agent=agent_name), "ok")
         return redirect(url_for("admin.dashboard"))
 
     @blueprint.route("/groups/<chat_id>/remove", methods=["POST"])
@@ -950,14 +1024,14 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         try:
             ctx.group_routing.remove(chat_id)
         except NotFoundError:
-            flash(f"No such group: '{chat_id}'.", "error")
+            flash(_t("admin.group_not_found", chat_id=chat_id), "error")
             return redirect(url_for("admin.dashboard"))
 
         logger.info(
             "admin removed a telegram group binding",
             extra={"event": "admin_group_removed", "chat_id": chat_id, "trace_id": get_trace_id()},
         )
-        flash(f"Group '{chat_id}' removed.", "ok")
+        flash(_t("admin.group_removed", chat_id=chat_id), "ok")
         return redirect(url_for("admin.dashboard"))
 
     @blueprint.route("/users", methods=["POST"])
@@ -972,10 +1046,10 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         identity = request.form.get("telegram_identity", "").strip()
         level = request.form.get("permission_level", "")
         if not identity:
-            flash("A Telegram identity is required.", "error")
+            flash(_t("admin.identity_required"), "error")
             return redirect(url_for("admin.dashboard"))
         if level not in levels:
-            flash(f"'{level}' is not a valid permission level.", "error")
+            flash(_t("admin.level_invalid", level=level), "error")
             return redirect(url_for("admin.dashboard"))
 
         existed = ctx.deps.persistence.read_user(identity) is not None
@@ -987,7 +1061,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
                 "telegram_identity": identity, "permission_level": level, "trace_id": get_trace_id(),
             },
         )
-        flash(f"'{identity}' is now '{level}'.", "ok")
+        flash(_t("admin.user_written", identity=identity, level=level), "ok")
         return redirect(url_for("admin.dashboard"))
 
     @blueprint.route("/users/<identity>/remove", methods=["POST"])
@@ -1002,14 +1076,14 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         try:
             ctx.deps.persistence.delete_user(identity)
         except NotFoundError:
-            flash(f"No such user: '{identity}'.", "error")
+            flash(_t("admin.user_not_found", identity=identity), "error")
             return redirect(url_for("admin.dashboard"))
 
         logger.info(
             "admin removed a user",
             extra={"event": "admin_user_removed", "telegram_identity": identity, "trace_id": get_trace_id()},
         )
-        flash(f"'{identity}' removed.", "ok")
+        flash(_t("admin.user_removed", identity=identity), "ok")
         return redirect(url_for("admin.dashboard"))
 
     @blueprint.route("/bot-service/provision", methods=["POST"])
@@ -1028,7 +1102,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             "admin (re-)provisioned the bot-service identity",
             extra={"event": "admin_bot_service_provisioned", "trace_id": get_trace_id()},
         )
-        flash(f"'{BOT_SERVICE_IDENTITY}' is registered at commander level.", "ok")
+        flash(_t("admin.bot_service_provisioned", identity=BOT_SERVICE_IDENTITY), "ok")
         return redirect(url_for("admin.dashboard"))
 
     @blueprint.errorhandler(Exception)
@@ -1036,12 +1110,12 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         logger.exception(
             "unhandled exception in an admin request", extra={"event": "admin_unexpected_error", "trace_id": get_trace_id()}
         )
-        return render_template_string(
-            "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">"
-            "<title>Something went wrong</title>" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE
+        return _render(
+            '<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8">'
+            "<title>{{ t('admin.error_title') }}</title>" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE
             + '</head><body><div class="container container-narrow">'
-            '<h1 class="mb-2">Something went wrong</h1>'
-            '<p class="subtitle">Try again, or check the server log.</p>'
+            '<h1 class="mb-2">{{ t(\'admin.error_title\') }}</h1>'
+            '<p class="subtitle">{{ t(\'admin.error_subtitle\') }}</p>'
             "</div></body></html>"
         ), 500
 

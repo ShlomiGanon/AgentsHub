@@ -30,6 +30,7 @@ from orchestrator.holds import (
     create_event_data_hold,
     determine_approval_hold,
     determine_clarification_hold,
+    protocol_requires_approval,
 )
 from orchestrator.capabilities import CapabilityDescriptor, build_role_aware_system_context, visible_capabilities
 from orchestrator.reasoning import build_insight, construct_insights_agent
@@ -193,6 +194,7 @@ def begin_report(
     source_message_id: str | None = None,
     conversation_id: str | None = None,
     deadline_at: str | None = None,
+    sender_permission_level: str = "viewer",
 ) -> str:
     """The synchronous prefix of a report: write the raw text and return the event ID, before any model call runs (§7.2's own requirement — "before any processing begins")."""
 
@@ -200,6 +202,7 @@ def begin_report(
         deps.persistence,
         InitialEventEnvelope(
             raw_text=raw_text, source=source, received_at=received_at, sender_identity=sender_identity,
+            sender_permission_level=sender_permission_level,
             source_message_id=source_message_id,
             trace_id=get_trace_id() or None, conversation_id=conversation_id, deadline_at=deadline_at,
         ),
@@ -351,7 +354,7 @@ def _continue_after_required_fields(
         )
         return FlowResult(event_id, "held_for_clarification")
 
-    return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent, originated_from_commander=False)
+    return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent)
 
 
 def process_report(
@@ -377,6 +380,7 @@ def begin_request(
     source_message_id: str | None = None,
     conversation_id: str | None = None,
     deadline_at: str | None = None,
+    sender_permission_level: str = "viewer",
 ) -> str:
     """The synchronous prefix of a request: write the raw text, already classified `human_activation` (§6.13 — there is nothing to extract), and return the event ID."""
 
@@ -384,6 +388,7 @@ def begin_request(
         deps.persistence,
         InitialEventEnvelope(
             raw_text=raw_text, source="telegram", received_at=received_at, sender_identity=sender_identity,
+            sender_permission_level=sender_permission_level,
             source_message_id=source_message_id, occurred_at=received_at, occurred_at_is_fallback=False,
             trace_id=get_trace_id() or None, conversation_id=conversation_id, deadline_at=deadline_at,
         ),
@@ -412,8 +417,14 @@ def process_request(
 ) -> FlowResult:
     """A person's request for an action, run synchronously start to finish — `begin_request` + `continue_from_risk_assessment` composed back into one call."""
 
-    event_id = begin_request(deps, raw_text, received_at, sender_identity)
-    return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent, originated_from_commander)
+    event_id = begin_request(
+        deps,
+        raw_text,
+        received_at,
+        sender_identity,
+        sender_permission_level="commander" if originated_from_commander else "viewer",
+    )
+    return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent)
 
 
 def process_message(
@@ -496,7 +507,7 @@ def continue_after_clarification(deps: FlowDeps, event_id: str, main_agent: "Mai
     if gate_result is not None:
         return gate_result
 
-    return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent, originated_from_commander=False)
+    return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent)
 
 
 def resume_after_clarification(
@@ -611,13 +622,18 @@ def continue_from_risk_assessment(
     event_id: str,
     main_agent: "MainAgent",
     insights_agent: "InsightsAgent",
-    originated_from_commander: bool,
+    originated_from_commander: bool | None = None,
     selected_protocol: "Protocol | None" = None,
 ) -> FlowResult:
     deadline_failure = _deadline_failure(deps, event_id, "risk_assessment")
     if deadline_failure is not None:
         return deadline_failure
     event = deps.persistence.fetch_event(event_id)
+    if originated_from_commander is None:
+        # Authorization belongs to the original authenticated submitter.  It
+        # is persisted with the event so delayed extraction and resumptions do
+        # not accidentally inherit the role of a hold/event-data answerer.
+        originated_from_commander = event.get("sender_permission_level") == "commander"
     raw_text, classification, area = event["raw_text"], event["classification"], event["area"]
     description, severity = event["description"], event["severity"]
 
@@ -743,31 +759,6 @@ def continue_from_risk_assessment(
         return FlowResult(event_id, "no_match_protocol", selection.reason)
 
     protocols_by_name = {protocol.name: protocol for protocol in deps.protocol_set.all()}
-    selected_proto = protocols_by_name.get(selection.protocol_name)
-    normalized_report = str(raw_text).strip().casefold()
-    observational_report = any(
-        marker in normalized_report
-        for marker in ("\u05d0\u05e0\u05d9 \u05e8\u05d5\u05d0\u05d4", "\u05e8\u05d0\u05d9\u05ea\u05d9", "\u05d6\u05d9\u05d4\u05d9\u05ea\u05d9", "\u05d0\u05e0\u05d9 \u05de\u05d3\u05d5\u05d5\u05d7", "\u05d9\u05e9 \u05d0\u05e9", "\u05d9\u05e9 \u05e2\u05e9\u05df")
-    )
-    if (
-        selected_proto is not None
-        and not originated_from_commander
-        and getattr(selected_proto, "commander_only", False)
-        and not observational_report
-    ):
-        record_event_outcome(
-            deps.persistence,
-            event_id,
-            "declined",
-            failure_reason="\u05d4\u05d1\u05e7\u05e9\u05d4 \u05e0\u05d3\u05d7\u05ea\u05d4: \u05d4\u05e4\u05e2\u05dc\u05ea \u05d4\u05e4\u05e8\u05d5\u05d8\u05d5\u05e7\u05d5\u05dc \u05d3\u05d5\u05e8\u05e9\u05ea \u05d4\u05e8\u05e9\u05d0\u05ea \u05de\u05e4\u05e7\u05d3.",
-        )
-        _log_event_outcome(event_id, "declined", reason="commander permission required")
-        return FlowResult(
-            event_id,
-            "unauthorized_for_viewer",
-            "\u05d4\u05d1\u05e7\u05e9\u05d4 \u05e0\u05d3\u05d7\u05ea\u05d4: \u05d4\u05e4\u05e2\u05dc\u05ea \u05d4\u05e4\u05e8\u05d5\u05d8\u05d5\u05e7\u05d5\u05dc \u05d3\u05d5\u05e8\u05e9\u05ea \u05d4\u05e8\u05e9\u05d0\u05ea \u05de\u05e4\u05e7\u05d3.",
-        )
-
     hold_reason: "HoldReason | None" = determine_approval_hold(selection, protocols_by_name, originated_from_commander)
 
     if hold_reason is not None:

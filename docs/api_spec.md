@@ -164,6 +164,11 @@ Request:
 
 Response `202 Accepted`: the acknowledgment shape. `occurred_at` is set
 equal to the receipt time server-side; nothing here can override it.
+`sender_identity` must exactly equal the authenticated `X-Identity`, just as
+for `POST /Msg`; a registered caller cannot submit an event under another
+identity. The server snapshots that authenticated identity's permission level
+on the event so delayed extraction and hold/event-data resumptions use the
+original submitter's authorization context.
 
 ## `POST /Msg`
 
@@ -216,6 +221,15 @@ The binding table lives in memory on the server (loaded from the
 `telegram_groups` table at startup, updated write-through by `PUT`/`DELETE
 /Groups` and the admin panel, and re-read from the database at most once a
 minute so `cli.group_admin` writes from another process also become visible).
+
+Approval policy is independent of input path and wording. Once a protocol is
+selected, the same centralized rule applies to free text, button/
+`protocol_hint`, Telegram reports, and sensor events: a non-commander
+submission selecting `commander_only` or `approval_flag` waits in
+`held_for_approval`; `requires_confirmation` also holds a commander's own
+submission. No protocol agent or tool runs before approval, and only a
+commander can resolve the hold. A group-scope violation is still rejected
+before this rule because approval cannot expand a group's allowed protocols.
 
 Response, when the message was a **question** — answered inline, no job:
 ```json

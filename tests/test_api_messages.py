@@ -1,3 +1,4 @@
+import dataclasses
 import types
 
 import pytest
@@ -7,6 +8,7 @@ from api.app import build_app
 from api.operations import job_status
 from orchestrator.flows import begin_report
 from orchestrator.holds import create_event_data_hold
+from protocols import ProtocolSet
 from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, ScriptedAgent, auth_headers, build_context, happy_path_agent
 
 
@@ -29,6 +31,31 @@ def _mock_crewai(monkeypatch):
 
 def _ctx_with(tmp_path, main_agent):
     return build_context(tmp_path, main_agent=main_agent)
+
+
+def _ctx_with_protocol_flags(
+    tmp_path, *, approval_flag=False, commander_only=False, requires_confirmation=False
+):
+    """A normal API fake context whose known `dispatch_response` protocol has
+    the requested approval flags. The protocol remains executable by the same
+    registered reference agent, but these tests stop at the hold."""
+
+    ctx = build_context(tmp_path)
+    protocols = tuple(
+        dataclasses.replace(
+            protocol,
+            approval_flag=approval_flag,
+            commander_only=commander_only,
+            requires_confirmation=requires_confirmation,
+        )
+        if protocol.name == "dispatch_response"
+        else protocol
+        for protocol in ctx.deps.protocol_set.all()
+    )
+    return dataclasses.replace(
+        ctx,
+        deps=dataclasses.replace(ctx.deps, protocol_set=ProtocolSet(protocols)),
+    )
 
 
 @pytest.fixture
@@ -229,6 +256,59 @@ def test_a_viewers_request_for_a_flagged_protocol_still_holds(tmp_path, teardown
     ctx.queue.wait_until_idle()
 
     assert job_status(ctx, event_id)["status"] == "held_for_approval"
+
+
+def test_viewer_protocol_hint_for_commander_only_protocol_queues_approval_not_403(
+    tmp_path, teardown_ctx
+):
+    ctx = _ctx_with_protocol_flags(tmp_path, commander_only=True)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    resp = client.post(
+        "/Msg",
+        headers=auth_headers(VIEWER_IDENTITY),
+        json={
+            "text": "dispatch someone",
+            "sender_identity": VIEWER_IDENTITY,
+            "protocol_hint": "dispatch_response",
+        },
+    )
+
+    assert resp.status_code == 202
+    event_id = resp.get_json()["event_id"]
+    ctx.queue.wait_until_idle()
+    assert job_status(ctx, event_id)["status"] == "held_for_approval"
+    assert ctx.deps.persistence.fetch_event(event_id)["outcome"] is None
+
+
+def test_commander_protocol_hint_still_holds_when_confirmation_is_required(
+    tmp_path, teardown_ctx
+):
+    ctx = _ctx_with_protocol_flags(
+        tmp_path,
+        approval_flag=True,
+        commander_only=True,
+        requires_confirmation=True,
+    )
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    resp = client.post(
+        "/Msg",
+        headers=auth_headers(COMMANDER_IDENTITY),
+        json={
+            "text": "dispatch someone",
+            "sender_identity": COMMANDER_IDENTITY,
+            "protocol_hint": "dispatch_response",
+        },
+    )
+
+    assert resp.status_code == 202
+    event_id = resp.get_json()["event_id"]
+    ctx.queue.wait_until_idle()
+    assert job_status(ctx, event_id)["status"] == "held_for_approval"
+    assert ctx.deps.persistence.fetch_event(event_id)["sender_permission_level"] == "commander"
 
 
 def test_post_msg_rejects_missing_text(tmp_path, teardown_ctx):

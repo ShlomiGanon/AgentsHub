@@ -263,6 +263,50 @@ def test_process_report_holds_for_clarification_logs_the_hold_kind(deps, caplog)
     assert resumed_holds[0].hold_kind == "clarification"
 
 
+def test_resumed_event_uses_original_sender_permission_snapshot(deps):
+    commander_controlled = tuple(
+        replace(
+            protocol,
+            approval_flag=False,
+            commander_only=True,
+            requires_confirmation=False,
+        )
+        if protocol.name == "status_check"
+        else protocol
+        for protocol in deps.protocol_set.all()
+    )
+    resumed_deps = replace(deps, protocol_set=ProtocolSet(protocols=commander_controlled))
+    event_id = begin_report(
+        resumed_deps,
+        "smoke observed at gate 3",
+        "sensor",
+        "2026-08-20T10:00:00",
+        "sensor-1",
+        sender_permission_level="viewer",
+    )
+    resumed_deps.persistence.update_event(
+        event_id,
+        {
+            "classification": "fire",
+            "area": "north_sector",
+            "description": "smoke",
+            "severity": "moderate",
+            "occurred_at": "2026-08-20T10:00:00",
+        },
+    )
+
+    result = resume_after_event_data(
+        resumed_deps,
+        event_id,
+        _happy_path_agent(selected="status_check"),
+        _ScriptedAgent({}),
+    )
+
+    assert result.outcome == "held_for_approval"
+    assert resumed_deps.persistence.fetch_event(event_id)["sender_permission_level"] == "viewer"
+    assert resumed_deps.persistence.fetch_event(event_id)["outcome"] is None
+
+
 def test_required_fields_gate_asks_only_for_the_field_extraction_could_not_resolve(deps):
     """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 (item #6): a profile-
     defined event type's required fields are checked immediately after

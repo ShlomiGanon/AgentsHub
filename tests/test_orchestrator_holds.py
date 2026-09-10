@@ -9,6 +9,7 @@ from orchestrator.holds import (
     create_clarification_hold,
     determine_approval_hold,
     determine_clarification_hold,
+    protocol_requires_approval,
 )
 from orchestrator.main_agent import RiskAssessment
 from orchestrator.main_agent import ProtocolSelectionResult
@@ -17,7 +18,7 @@ from protocols.model import CriticalityLevel, Protocol
 from profiles import EventTypeRegistry
 
 
-def _protocol(name, approval_flag):
+def _protocol(name, approval_flag, *, commander_only=False, requires_confirmation=False):
     return Protocol(
         name=name,
         description="d",
@@ -26,6 +27,8 @@ def _protocol(name, approval_flag):
         expected_success_output="x",
         criticality=CriticalityLevel.LOW,
         approval_flag=approval_flag,
+        commander_only=commander_only,
+        requires_confirmation=requires_confirmation,
     )
 
 
@@ -72,6 +75,34 @@ def test_unflagged_selected_protocol_never_holds():
     protocols = {"p": _protocol("p", approval_flag=False)}
 
     assert determine_approval_hold(selection, protocols, originated_from_commander=False) is None
+
+
+@pytest.mark.parametrize(
+    "is_commander,approval_flag,commander_only,requires_confirmation,expected",
+    [
+        (False, False, False, False, False),
+        (True, False, False, False, False),
+        (False, True, False, False, True),
+        (True, True, False, False, False),
+        (False, False, True, False, True),
+        (True, False, True, False, False),
+        (False, False, False, True, True),
+        (True, False, False, True, True),
+        (False, True, True, True, True),
+        (True, True, True, True, True),
+    ],
+)
+def test_protocol_approval_policy_matrix(
+    is_commander, approval_flag, commander_only, requires_confirmation, expected
+):
+    protocol = _protocol(
+        "p",
+        approval_flag,
+        commander_only=commander_only,
+        requires_confirmation=requires_confirmation,
+    )
+
+    assert protocol_requires_approval(protocol, is_commander) is expected
 
 
 # -- create_approval_hold / answer_approval_hold -------------------------

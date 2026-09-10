@@ -31,6 +31,7 @@ _EVENT_COLUMNS = (
     "received_at",
     "source",
     "sender_identity",
+    "sender_permission_level",
     "source_message_id",
     "occurred_at",
     "occurred_at_is_fallback",
@@ -67,7 +68,8 @@ _EVENT_JSON_COLUMNS = {"entities", "precedent_matched_event_ids"}
 _EVENT_BOOL_COLUMNS = {"occurred_at_is_fallback", "clarification_held", "approval_held"}
 
 _EVENT_IMMUTABLE_COLUMNS = {
-    "event_id", "received_at", "source", "sender_identity", "source_message_id", "raw_text",
+    "event_id", "received_at", "source", "sender_identity", "sender_permission_level",
+    "source_message_id", "raw_text",
     "trace_id", "conversation_id", "deadline_at", "ingestion_key",
 }
 _UPDATABLE_EVENT_COLUMNS = frozenset(_EVENT_COLUMNS) - _EVENT_IMMUTABLE_COLUMNS
@@ -361,6 +363,10 @@ class SQLitePersistence(PersistenceInterface):
         event_id = event.get("event_id") or uuid.uuid4().hex
         event_row = {column: _encode_event_value(column, event.get(column)) for column in _EVENT_COLUMNS}
         event_row["event_id"] = event_id
+        # Plain dictionary callers from before migration 17 omit the immutable
+        # snapshot. Match the schema's safe legacy default instead of inserting
+        # an explicit NULL into the NOT NULL column.
+        event_row["sender_permission_level"] = event.get("sender_permission_level") or "viewer"
         if event_row.get("source_message_id") and event_row.get("ingestion_key") is None:
             event_row["ingestion_key"] = "\x1f".join(
                 (str(event_row.get("source") or ""), str(event_row.get("sender_identity") or ""), str(event_row["source_message_id"]))
