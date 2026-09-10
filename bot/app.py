@@ -24,16 +24,24 @@ from bot.contracts import (
     ApiRequestError,
     BotDeps,
     BotStartupError,
+    GroupBindingView,
     MessageSubmissionResult,
     resolve_bot_service_key,
 )
-from bot.background_services import NotificationCursorStore, SingleInstanceLock, run_notification_poll_loop
+from bot.background_services import (
+    ATTENDANCE_CALLBACK_PREFIX,
+    NotificationCursorStore,
+    SingleInstanceLock,
+    run_attendance_check_loop,
+    run_notification_poll_loop,
+)
 from bot.interactions import check_permission, resolve_caller
 from bot.presentation import replace_status
 
 logger = logging.getLogger(__name__)
 
 NOTIFICATION_POLL_INTERVAL_SECONDS = 5.0
+ATTENDANCE_CHECK_INTERVAL_SECONDS = 60.0
 
 REGISTERED_COMMANDS = ("profile", "settings")
 _background_trace_tasks: set[asyncio.Task] = set()
@@ -41,10 +49,57 @@ _background_trace_tasks: set[asyncio.Task] = set()
 _USER_ROLE_CACHE: dict[tuple[int, str], tuple[interactions.UserResolutionResult, float]] = {}
 _USER_ROLE_CACHE_TTL_SECONDS = 60.0
 
+# Telegram's own chat.type values for multi-member chats. Mirrors
+# orchestrator.group_routing.GROUP_CHAT_TYPES (bot may not import orchestrator).
+GROUP_CHAT_TYPES = frozenset({"group", "supergroup"})
+
+# chat_id -> binding, plus the moment the whole table was fetched. One GET /Groups
+# per TTL per api client, not one per message; a group bound in the admin panel
+# becomes visible here within the TTL.
+_GROUP_BINDINGS_CACHE: dict[int, tuple[dict[str, GroupBindingView], float]] = {}
+_GROUP_BINDINGS_CACHE_TTL_SECONDS = 60.0
+
 
 def clear_caller_cache() -> None:
     """Clear in-memory caller resolution cache (for test isolation or admin resets)."""
     _USER_ROLE_CACHE.clear()
+    _GROUP_BINDINGS_CACHE.clear()
+
+
+async def _group_binding_cached(api_client, chat_id: str) -> GroupBindingView | None:
+    """The binding for `chat_id`, from a TTL-cached copy of the server's routing table."""
+
+    now = time.monotonic()
+    key = id(api_client)
+    cached = _GROUP_BINDINGS_CACHE.get(key)
+    if cached is None or now >= cached[1]:
+        bindings = {binding.chat_id: binding for binding in await api_client.list_groups()}
+        _GROUP_BINDINGS_CACHE[key] = (bindings, now + _GROUP_BINDINGS_CACHE_TTL_SECONDS)
+    else:
+        bindings = cached[0]
+    return bindings.get(str(chat_id))
+
+
+def _chat_type(update) -> str:
+    chat = getattr(update, "effective_chat", None)
+    return str(getattr(chat, "type", None) or "private")
+
+
+async def _group_is_handled(deps: BotDeps, update) -> bool:
+    """False when the update comes from a group the server has no binding for — the bot stays silent there (and logs), by design."""
+
+    chat_type = _chat_type(update)
+    if chat_type not in GROUP_CHAT_TYPES:
+        return True
+    chat_id = str(update.effective_chat.id)
+    binding = await _group_binding_cached(deps.api_client, chat_id)
+    if binding is None:
+        logger.info(
+            "ignoring update from unregistered telegram group",
+            extra={"event": "bot_group_unregistered", "chat_id": chat_id, "chat_type": chat_type},
+        )
+        return False
+    return True
 
 
 async def _resolve_caller_cached(
@@ -150,6 +205,8 @@ async def _on_start_command(update, context) -> None:
     telegram_identity, chat_id = _identity_and_chat_id(update)
     messages = interactions.message_catalog_for(deps)
 
+    if not await _group_is_handled(deps, update):
+        return
     resolution = await _resolve_caller_cached(deps.api_client, telegram_identity, messages)
     if resolution.status == "unregistered":
         await deps.telegram_client.send_text(chat_id, resolution.refusal_message)
@@ -230,6 +287,8 @@ async def _submit_and_format_message(
     trace_id: str | None = None,
     event_data_event_id: str | None = None,
     protocol_hint: str | None = None,
+    telegram_chat_id: str | None = None,
+    telegram_chat_type: str | None = None,
 ) -> tuple[str, MessageSubmissionResult | None]:
     """Submit one message and return both presentation text and semantic result."""
 
@@ -242,6 +301,8 @@ async def _submit_and_format_message(
             trace_id,
             event_data_event_id,
             protocol_hint,
+            telegram_chat_id=telegram_chat_id,
+            telegram_chat_type=telegram_chat_type,
         )
     except ApiRequestError as exc:
         messages = interactions.message_catalog_for(deps)
@@ -319,8 +380,13 @@ async def present_incoming_message(
     conversation_id: str | None = None,
     event_data_event_id: str | None = None,
     protocol_hint: str | None = None,
+    telegram_chat_type: str | None = None,
 ) -> str | None:
-    """Present one free-form message with the shared status/edit lifecycle."""
+    """Present one free-form message with the shared status/edit lifecycle.
+
+    `telegram_chat_type` (Telegram's `chat.type`) is forwarded with `chat_id` so
+    the server can scope a bound group's message; None means "not known", which
+    the server treats like a private chat."""
 
     messages = interactions.message_catalog_for(deps)
     status_message_id = await deps.telegram_client.send_status(
@@ -348,6 +414,8 @@ async def present_incoming_message(
             trace_id,
             event_data_event_id,
             protocol_hint,
+            telegram_chat_id=chat_id if telegram_chat_type is not None else None,
+            telegram_chat_type=telegram_chat_type,
         )
     except ApiNotImplementedError as exc:
         logger.info(
@@ -467,7 +535,10 @@ async def _on_text_message(update, context) -> None:
     deps: BotDeps = context.bot_data["deps"]
     telegram_identity, chat_id = _identity_and_chat_id(update)
     messages = interactions.message_catalog_for(deps)
+    chat_type = _chat_type(update)
 
+    if not await _group_is_handled(deps, update):
+        return
     resolution = await _resolve_caller_cached(deps.api_client, telegram_identity, messages)
     if resolution.status == "unregistered":
         await deps.telegram_client.send_text(chat_id, resolution.refusal_message)
@@ -642,9 +713,55 @@ async def _on_text_message(update, context) -> None:
             conversation_id,
             event_data_event_id,
             protocol_hint=protocol_hint,
+            telegram_chat_type=chat_type,
         )
     finally:
         activity_task.cancel()
+
+
+async def _on_attendance_callback(deps: BotDeps, update, choice: str) -> None:
+    """`attend:available` / `attend:unavailable` buttons under a group attendance prompt.
+
+    Runs the same two flows the private-chat keyboard buttons run in
+    `_on_text_message` — an immediate `record_attendance_response` submission
+    for "available", and a pending reason/days follow-up (keyed by chat *and*
+    identity, so members in one group never complete each other's report) for
+    "unavailable"."""
+
+    query = update.callback_query
+    telegram_identity, chat_id = _identity_and_chat_id(update)
+    messages = interactions.message_catalog_for(deps)
+
+    resolution = await _resolve_caller_cached(deps.api_client, telegram_identity, messages)
+    if resolution.status == "unregistered":
+        await deps.telegram_client.send_text(chat_id, resolution.refusal_message)
+        return
+
+    attendance_key = (chat_id, telegram_identity)
+    if choice == "unavailable":
+        _PENDING_UNAVAILABILITY[attendance_key] = {"reason": None}
+        user = getattr(update, "effective_user", None)
+        display_name = getattr(user, "full_name", None) or getattr(user, "first_name", None) or telegram_identity
+        await deps.telegram_client.send_text(chat_id, messages.text("bot.unavailability_prompt_group", name=display_name))
+        return
+
+    if choice != "available":
+        logger.warning("unrecognized attendance callback choice: %s", choice, extra={"event": "bot_unknown_callback"})
+        return
+
+    _PENDING_UNAVAILABILITY.pop(attendance_key, None)
+    prompt_message = getattr(query, "message", None)
+    prompt_message_id = getattr(prompt_message, "message_id", None) if prompt_message is not None else None
+    await present_incoming_message(
+        deps,
+        chat_id,
+        telegram_identity,
+        messages.text("bot.availability_report_available", identity=telegram_identity),
+        f"{prompt_message_id if prompt_message_id is not None else query.id}:{telegram_identity}",
+        f"telegram:{chat_id}:attendance:{telegram_identity}",
+        protocol_hint="record_attendance_response",
+        telegram_chat_type=_chat_type(update),
+    )
 
 
 async def _on_callback_query(update, context) -> None:
@@ -662,8 +779,16 @@ async def _on_callback_query(update, context) -> None:
     if not query.data:
         return
 
+    if not await _group_is_handled(deps, update):
+        return
+
     namespace = query.data.split(":", 1)[0]
     try:
+        if namespace == ATTENDANCE_CALLBACK_PREFIX:
+            _prefix, _sep, choice = query.data.partition(":")
+            await _on_attendance_callback(deps, update, choice)
+            return
+
         if namespace == interactions.CLARIFICATION_CALLBACK_PREFIX:
             event_id, choice = interactions.parse_clarification_callback_data(query.data)
             outcome = await interactions.handle_clarification_answer(deps, chat_id, telegram_identity, event_id, choice)
@@ -747,6 +872,8 @@ async def _on_profile_command(update, context) -> None:
     deps: BotDeps = context.bot_data["deps"]
     telegram_identity, chat_id = _identity_and_chat_id(update)
     args = context.args or []
+    if not await _group_is_handled(deps, update):
+        return
 
     if not args or args[0] == "view":
         caller = await _resolve_caller_or_refuse(deps, chat_id, telegram_identity)
@@ -804,6 +931,8 @@ async def _on_settings_command(update, context) -> None:
     deps: BotDeps = context.bot_data["deps"]
     telegram_identity, chat_id = _identity_and_chat_id(update)
     args = context.args or []
+    if not await _group_is_handled(deps, update):
+        return
 
     if not args or args[0] == "view":
         caller = await _resolve_caller_or_refuse(deps, chat_id, telegram_identity)
@@ -833,8 +962,35 @@ async def _on_settings_command(update, context) -> None:
     )
 
 
+_JOINED_MEMBER_STATUSES = frozenset({"member", "administrator", "restricted"})
+
+
+async def _on_my_chat_member(update, context) -> None:
+    """The bot was added to (or promoted in) a group: if that group has no binding yet, post its chat ID once so a commander can register it."""
+
+    deps: BotDeps = context.bot_data["deps"]
+    change = getattr(update, "my_chat_member", None)
+    if change is None:
+        return
+    chat = getattr(change, "chat", None)
+    chat_type = str(getattr(chat, "type", None) or "")
+    if chat_type not in GROUP_CHAT_TYPES:
+        return
+    old_status = str(getattr(getattr(change, "old_chat_member", None), "status", "") or "")
+    new_status = str(getattr(getattr(change, "new_chat_member", None), "status", "") or "")
+    if new_status not in _JOINED_MEMBER_STATUSES or old_status in _JOINED_MEMBER_STATUSES:
+        return  # left/kicked, or a status change between two joined states
+
+    chat_id = str(chat.id)
+    logger.info("bot added to telegram group", extra={"event": "bot_group_joined", "chat_id": chat_id, "chat_type": chat_type})
+    if await _group_binding_cached(deps.api_client, chat_id) is not None:
+        return
+    messages = interactions.message_catalog_for(deps)
+    await deps.telegram_client.send_text(chat_id, messages.text("bot.group_added_hint", chat_id=chat_id))
+
+
 def register_handlers(application, deps: BotDeps) -> None:
-    from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, filters
+    from telegram.ext import CallbackQueryHandler, ChatMemberHandler, CommandHandler, MessageHandler, filters
 
     application.bot_data["deps"] = deps
 
@@ -845,6 +1001,7 @@ def register_handlers(application, deps: BotDeps) -> None:
     application.add_handler(CommandHandler(REGISTERED_COMMANDS[1], _guarded(_on_settings_command)))
     application.add_handler(CallbackQueryHandler(_guarded(_on_callback_query)))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _guarded(_on_text_message)))
+    application.add_handler(ChatMemberHandler(_guarded(_on_my_chat_member), ChatMemberHandler.MY_CHAT_MEMBER))
 
     async def _post_init(started_application) -> None:
         await deps.api_client.start()
@@ -875,17 +1032,20 @@ def register_handlers(application, deps: BotDeps) -> None:
             run_notification_poll_loop(deps, NOTIFICATION_POLL_INTERVAL_SECONDS, cursor_store=cursor_store)
         )
         started_application.bot_data["notification_task"] = poll_task
+        attendance_task = asyncio.create_task(run_attendance_check_loop(deps, ATTENDANCE_CHECK_INTERVAL_SECONDS))
+        started_application.bot_data["attendance_task"] = attendance_task
 
     application.post_init = _post_init
 
     async def _post_shutdown(_stopped_application) -> None:
-        poll_task = _stopped_application.bot_data.get("notification_task")
-        if poll_task is not None and not poll_task.done():
-            poll_task.cancel()
-            try:
-                await poll_task
-            except (asyncio.CancelledError, Exception):
-                pass
+        for task_key in ("notification_task", "attendance_task"):
+            background_task = _stopped_application.bot_data.get(task_key)
+            if background_task is not None and not background_task.done():
+                background_task.cancel()
+                try:
+                    await background_task
+                except (asyncio.CancelledError, Exception):
+                    pass
         await deps.api_client.close()
 
     application.post_shutdown = _post_shutdown

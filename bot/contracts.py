@@ -104,6 +104,27 @@ class TracePollResult:
 
 
 @dataclass(frozen=True)
+class GroupBindingView:
+    """One Telegram group -> agent binding as `GET /Groups` reports it."""
+
+    chat_id: str
+    agent_name: str
+    label: str = ""
+
+
+@dataclass(frozen=True)
+class AttendanceCheckResult:
+    """`POST /TeamStatus/AttendanceCheck`'s answer: whether a cycle was just opened, and where to announce it."""
+
+    opened: bool
+    agent_name: str
+    target_chat_ids: tuple[str, ...] = ()
+    cycle_key: str | None = None
+    deadline_at: str | None = None
+    members_required: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class JobResult:
     job_id: str
     outcome: BotOutcome
@@ -279,6 +300,13 @@ class BotApiClient(ABC):
     async def list_commander_chat_ids(self) -> tuple[str, ...]:
         """Every commander's Telegram identity, for pushing §8.4/§8.5/§8.6 notifications to."""
 
+    @abstractmethod
+    async def list_groups(self) -> tuple[GroupBindingView, ...]:
+        """Every registered Telegram group binding (`GET /Groups`, as bot-service) — the bot's only source for "is this group ours, and whose is it"."""
+
+    @abstractmethod
+    async def run_attendance_check(self) -> AttendanceCheckResult:
+        """Ask the server to open today's attendance cycle if it is due (`POST /TeamStatus/AttendanceCheck`, as bot-service)."""
 
     @abstractmethod
     async def submit_message(
@@ -290,8 +318,14 @@ class BotApiClient(ABC):
         trace_id: str | None = None,
         event_data_event_id: str | None = None,
         protocol_hint: str | None = None,
+        telegram_chat_id: str | None = None,
+        telegram_chat_type: str | None = None,
     ) -> MessageSubmissionResult:
-        """`source_message_id` — the incoming Telegram message's own ID — is what an eventual asynchronous job result (§8.9) or failure notification (§8.11) needs to send its reply *as a r..."""
+        """`source_message_id` — the incoming Telegram message's own ID — is what an eventual asynchronous job result (§8.9) or failure notification (§8.11) needs to send its reply *as a r...
+
+        `telegram_chat_id`/`telegram_chat_type` (Telegram's own `chat.id`/`chat.type`) let the
+        server scope a group's message to the agent the group is bound to; a private chat sends
+        `chat_type="private"` and is never scoped."""
 
 
     @abstractmethod
@@ -363,10 +397,17 @@ class UnimplementedApiClient(BotApiClient):
     async def list_commander_chat_ids(self) -> tuple[str, ...]:
         raise ApiNotImplementedError("list_commander_chat_ids", "§7.9 (authentication/authorization enforcement)")
 
+    async def list_groups(self) -> tuple[GroupBindingView, ...]:
+        raise ApiNotImplementedError("list_groups", "§7.9 (GET /Groups, Telegram group routing)")
+
+    async def run_attendance_check(self) -> AttendanceCheckResult:
+        raise ApiNotImplementedError("run_attendance_check", "§7.9 (POST /TeamStatus/AttendanceCheck)")
+
     async def submit_message(
         self, text: str, sender_identity: str, source_message_id: str,
         conversation_id: str | None = None, trace_id: str | None = None,
         event_data_event_id: str | None = None, protocol_hint: str | None = None,
+        telegram_chat_id: str | None = None, telegram_chat_type: str | None = None,
     ) -> MessageSubmissionResult:
         raise ApiNotImplementedError("submit_message", "§7.4 (POST /Msg)")
 

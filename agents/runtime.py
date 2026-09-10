@@ -688,6 +688,14 @@ class AgentRegistry:
     def descriptor_for(self, name: str) -> AgentDescriptor:
         return self.get(name).descriptor
 
+    def restricted_to(self, names: "set[str] | frozenset[str]") -> "AgentRegistry":
+        """A registry view over the subset of agents whose names are in `names`.
+
+        Unknown names are ignored; the underlying Agent instances are shared,
+        not copied, so tool state and provider clients stay the same."""
+
+        return AgentRegistry({name: agent for name, agent in self._agents.items() if name in names})
+
 
 def build_agent_registry(core_agents: dict[str, Agent], profile_agents: list[Agent]) -> AgentRegistry:
     agents: dict[str, Agent] = {}

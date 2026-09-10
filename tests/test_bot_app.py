@@ -16,6 +16,16 @@ BOT_TOKEN_ENV = "TEST_APP_BOT_TOKEN"
 MODEL_CRED_ENV = "TEST_APP_MODEL_KEY"
 
 
+@pytest.fixture(autouse=True)
+def _fresh_bot_caches():
+    # bot.app's caller/group caches are keyed by id(api_client); a freed fake
+    # client's id can be reused by the next test's fake, so a stale cached
+    # resolution from one test must never leak into another.
+    app.clear_caller_cache()
+    yield
+    app.clear_caller_cache()
+
+
 def _run(coro):
     return asyncio.run(coro)
 
@@ -228,14 +238,14 @@ class _FakeMessage:
         self.message_thread_id = message_thread_id
 
 
-def _fake_update(user_id="42", chat_id="99", text=None, callback_data=None, callback_query_id="cbq-1", message_id="777", message_thread_id=None):
+def _fake_update(user_id="42", chat_id="99", text=None, callback_data=None, callback_query_id="cbq-1", message_id="777", message_thread_id=None, chat_type="private"):
     message = _FakeMessage(text, message_id, message_thread_id) if text is not None else None
     callback_query = None
     if callback_data is not None:
-        callback_query = SimpleNamespace(data=callback_data, id=callback_query_id)
+        callback_query = SimpleNamespace(data=callback_data, id=callback_query_id, message=message)
     return SimpleNamespace(
         effective_user=SimpleNamespace(id=user_id),
-        effective_chat=SimpleNamespace(id=chat_id),
+        effective_chat=SimpleNamespace(id=chat_id, type=chat_type),
         message=message,
         callback_query=callback_query,
     )

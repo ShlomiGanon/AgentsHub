@@ -9,6 +9,19 @@ CREATE TABLE IF NOT EXISTS users (
 );
 """
 
+# Telegram group chat -> routing target. `agent_name` is either a specialist
+# agent name registered by the active profile or the literal "main_agent"
+# (full, unscoped routing). Owned by orchestrator.group_routing's in-memory
+# table; this is its durable backing store.
+TELEGRAM_GROUPS_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS telegram_groups (
+    chat_id TEXT PRIMARY KEY,
+    agent_name TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+"""
+
 
 EVENTS_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS events (
@@ -232,6 +245,7 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "ALTER TABLE event_steps ADD COLUMN failure_reason TEXT;"
         "UPDATE event_steps SET status = CASE WHEN result_text IS NULL THEN 'failed' ELSE 'succeeded' END;",
     ),
+    (16, "create telegram_groups table", TELEGRAM_GROUPS_TABLE_DDL),
 ]
 
 

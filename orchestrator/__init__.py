@@ -38,10 +38,14 @@ sys.modules[insights.__name__] = insights
 
 from orchestrator import flows
 from orchestrator.flows import FlowDeps, FlowResult, assemble_core_agents, process_message
+from orchestrator.group_routing import GroupBinding, GroupNotRegisteredError, GroupRoutingTable, resolve_scope, scope_deps
 
 __all__ = [
     "FlowDeps",
     "FlowResult",
+    "GroupBinding",
+    "GroupNotRegisteredError",
+    "GroupRoutingTable",
     "InsightsAgent",
     "MainAgent",
     "OrchestrationParseError",
@@ -49,4 +53,6 @@ __all__ = [
     "assemble_core_agents",
     "build_insight",
     "process_message",
+    "resolve_scope",
+    "scope_deps",
 ]

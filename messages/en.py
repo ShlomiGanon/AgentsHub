@@ -240,6 +240,23 @@ MESSAGES = {
     "api.wait_invalid": "'wait_seconds' must be an integer between 0 and 30.",
     "api.trace_id_invalid": "The trace ID is invalid.",
     "api.deep_debug_disabled": "Deep Debug is not enabled on this server.",
+    "api.group_not_registered": "Telegram group '{chat_id}' is not registered for routing.",
+    "api.protocol_out_of_group_scope": "Protocol '{protocol}' is not available in this group (routed to {agent}).",
+    "api.group_agent_invalid": "'{agent}' is not a routable agent. Allowed: {allowed}.",
+    "api.attendance_agent_unavailable": "No attendance specialist is registered in this deployment.",
+    "bot.group_added_hint": (
+        "This group (chat ID {chat_id}) is not yet registered. A commander must bind it to an agent "
+        "in the admin panel or with the group-admin command before messages here are handled."
+    ),
+    "bot.unavailability_prompt_group": "{name}, please reply to this message with the reason for your unavailability and the estimated number of days (for example: 'ill for two days').",
+    "attendance.group_prompt": (
+        "Daily readiness-team attendance check. Reply within one hour (until {deadline}) with your availability. "
+        "If you are unavailable, include the reason and number of days.\n\nMembers required to report:\n{members}"
+    ),
+    "attendance.group_prompt_nobody": "The daily attendance check is open. No members need to report today.",
+    "attendance.button_available": "Available for duty",
+    "attendance.button_unavailable": "Unavailable",
+    "attendance.already_open": "Today's attendance cycle is already open.",
     "bot.unavailability_prompt": "Please provide the reason for your unavailability and the estimated number of days (for example: 'ill for two days').",
     "bot.unavailability_days_prompt": "The reason was saved. How many days will you be unavailable? Please send a number, for example: 2.",
     "bot.availability_report_available": "Readiness attendance report: user {identity} is available for duty.",

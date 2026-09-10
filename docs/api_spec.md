@@ -191,6 +191,32 @@ clients and no conversation memory is read or written. Conversation is a
 reference aid only: permissions, protocols, event facts and outcomes are
 always read from their authoritative stores.
 
+`telegram_chat_id` and `telegram_chat_type` are optional and carry Telegram's
+own `chat.id` / `chat.type` (`private`, `group`, `supergroup`). They drive
+**Telegram group routing**:
+
+- Absent, or `telegram_chat_type` = `private` — the message is unscoped; the
+  Main Agent reasons over every agent and protocol in the profile (the
+  behavior of every caller before this field existed).
+- A `group`/`supergroup` chat with **no** binding in `GET /Groups` — `403`
+  (`api.group_not_registered`). The bot never sends such messages in the first
+  place (it ignores unregistered groups), so this is a defense against other
+  HTTP callers.
+- A group bound to `main_agent` — unscoped, exactly as a private chat.
+- A group bound to a specialist (e.g. `team_status_agent`) — **hard scope**:
+  the Main Agent still classifies intent, but the registry and protocol set it
+  reasons over contain only that specialist plus `history_agent`, and only the
+  protocols whose participating agents are within that pair. Multi-agent
+  protocols such as `overall_situational_picture` are not visible from a
+  single-agent group. An explicit `protocol_hint` (or keyboard button) for a
+  protocol outside the scope is refused with `400`
+  (`api.protocol_out_of_group_scope`) rather than silently re-routed.
+
+The binding table lives in memory on the server (loaded from the
+`telegram_groups` table at startup, updated write-through by `PUT`/`DELETE
+/Groups` and the admin panel, and re-read from the database at most once a
+minute so `cli.group_admin` writes from another process also become visible).
+
 Response, when the message was a **question** — answered inline, no job:
 ```json
 {
@@ -513,6 +539,69 @@ COMMANDER-level (`view_commander_roster`) — see **Service identity**
 above for who the real caller is and why this isn't VIEWER-level like
 most reads in this system.
 
+## `GET /Groups`, `PUT /Groups/<chat_id>`, `DELETE /Groups/<chat_id>`
+
+Telegram group -> agent bindings (see `POST /Msg` above for what a binding
+does). All three are COMMANDER-level: `GET` is `list_groups`, `PUT`/`DELETE`
+are `manage_groups`. The bot reads this list as `bot-service` to decide
+which groups it answers in at all.
+
+`GET /Groups` — `200 OK`:
+```json
+{
+  "groups": [{ "chat_id": "-1001234567890", "agent_name": "team_status_agent", "label": "readiness team" }],
+  "routable_agents": ["main_agent", "friendly_forces_agent", "surveillance_agent", "team_status_agent"]
+}
+```
+`routable_agents` is every value `PUT` accepts for `agent_name`: `main_agent`
+plus each specialist the active profile declares. `history_agent` and
+`insights_agent` are never bindable.
+
+`PUT /Groups/<chat_id>` — create or rebind. Request:
+```json
+{ "agent_name": "team_status_agent", "label": "readiness team" }
+```
+`label` is optional (max 200 chars). `200 OK` with the stored binding;
+`400` (`api.group_agent_invalid`) for an agent that is not routable. The
+in-memory table is updated in the same request, so the next `/Msg` from that
+group is already scoped.
+
+`DELETE /Groups/<chat_id>` — `200 OK` `{ "chat_id": "...", "removed": true }`;
+`404` (`api.group_not_registered`) when there was no binding.
+
+## `POST /TeamStatus/AttendanceCheck`
+
+COMMANDER-level (`run_attendance_check`). Asks the deployment's attendance
+specialist (the registered agent exposing `open_scheduled_cycle` —
+`TeamStatusAgent`) to open today's readiness attendance cycle **if it is due**:
+roster approved, past the profile's attendance hour in the profile's timezone,
+and not yet opened today. The bot polls this once a minute as `bot-service`;
+because the server decides "due", restarting the bot never opens a second
+cycle. Request body is optional: `{ "now_iso": "...", "force": true }` —
+`force` skips the time-of-day check (still never re-opens today's cycle).
+
+`200 OK` when a cycle was opened:
+```json
+{
+  "opened": true,
+  "agent_name": "team_status_agent",
+  "cycle_key": "2026-09-10",
+  "deadline_at": "2026-09-10T06:00:00+00:00",
+  "members_required": ["Alex Cohen", "Dana Levi"],
+  "target_chat_ids": ["-1001234567890"]
+}
+```
+`target_chat_ids` is every group bound to the attendance agent — where the
+bot posts the prompt with its two inline buttons (`attend:available`,
+`attend:unavailable`). Members answer through the buttons; each press is
+submitted as that member's own `record_attendance_response` through
+`POST /Msg`, so identity binding and the late-response rules are unchanged.
+
+`200 OK` `{ "opened": false, "agent_name": "...", "target_chat_ids": [...] }`
+when nothing was due. `404` (`api.attendance_agent_unavailable`) in a
+deployment whose profile has no attendance specialist — the bot stops polling
+on that answer.
+
 ## Notification waiting
 
 `GET /Notifications` accepts `since=<cursor>` and optional
@@ -676,6 +765,19 @@ every other read.
 **`list_commander_chat_ids` → `tuple[str, ...]`.** `GET /Commanders`'s
 `commanders` array, each entry's `telegram_identity` — a plain tuple of
 strings, no DTO wrapper. `401`/`403` raise.
+
+**`list_groups` → `tuple[GroupBindingView, ...]`.** `GET /Groups`'s `groups`
+array, one DTO per entry (`chat_id`, `agent_name`, `label`). The bot caches
+the result for 60 seconds per API client. `401`/`403` raise.
+
+**`run_attendance_check` → `AttendanceCheckResult`.** `POST /TeamStatus/
+AttendanceCheck`'s body mapped field for field (`opened`, `agent_name`,
+`target_chat_ids`, `cycle_key`, `deadline_at`, `members_required`).
+`404` raises `ApiRequestError(404)`, which the bot's attendance loop treats as
+"this deployment has no attendance agent" and stops.
+
+**`submit_message`** additionally forwards `telegram_chat_id` /
+`telegram_chat_type` into the `POST /Msg` body when given.
 
 **`poll_pending_notifications` → `tuple[tuple[BotNotification, ...],
 int]`.** `GET /Notifications`'s `notifications` array, each entry built

@@ -1,5 +1,6 @@
 """Consolidated responsibility module for routes."""
 
+import dataclasses
 from datetime import datetime, timedelta, timezone
 import time
 
@@ -29,7 +30,12 @@ from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
 from agents import authenticated_request_identity, set_invocation_deadline
 
 from orchestrator.flows import (
+    GroupNotRegisteredError,
+    InvalidRoutingTargetError,
     OrchestrationParseError,
+    is_scoped_target,
+    resolve_scope,
+    scope_deps,
     answer_conversationally,
     answer_question,
     answer_question_from_plan,
@@ -50,6 +56,7 @@ from orchestrator.flows import (
 from protocols import CriticalityLevel, Protocol, ProtocolEditError, Step, StepOutcome, add_protocol, remove_protocol, replace_protocol
 from profiles.loader import hash_profile_file
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy
+from persistence import NotFoundError as PersistenceNotFoundError
 
 from orchestrator.flows import continue_after_approval, continue_after_clarification, decline, resolve_approval, resolve_clarification
 
@@ -179,21 +186,50 @@ def _is_pending_report_cancellation(text: str) -> bool:
     )
 
 
-def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
+def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
     blueprint = Blueprint("messages", __name__)
-    messages = ctx.loaded_profile.message_catalog
+    messages = app_ctx.loaded_profile.message_catalog
     non_human_activation_event_types = tuple(
         event_type
-        for event_type in ctx.deps.event_type_registry.types
+        for event_type in app_ctx.deps.event_type_registry.types
         if event_type != HUMAN_ACTIVATION_TYPE
     )
-    areas = tuple(ctx.deps.area_registry.areas)
+    areas = tuple(app_ctx.deps.area_registry.areas)
 
     @blueprint.route("/Msg", methods=["POST"])
     def post_msg():
+        # `ctx` is request-local: for a message from a Telegram group bound to a
+        # specialist it becomes a copy of `app_ctx` whose `deps` only expose that
+        # agent (+ history). Every `ctx.deps.*` read below is therefore scoped
+        # automatically; nothing else on the context differs.
+        ctx = app_ctx
         caller_identity = request.headers.get("X-Identity")
         level = authenticate(ctx.deps.persistence, caller_identity)
         require(level, RequestedOperation.SUBMIT_MESSAGE)
+
+        request_payload = request.get_json(silent=True) or {}
+        text = request_payload.get("text")
+        sender_identity = request_payload.get("sender_identity")
+        source_message_id = request_payload.get("source_message_id")
+        conversation_id = request_payload.get("conversation_id")
+        event_data_event_id = request_payload.get("event_data_event_id")
+        telegram_chat_id = request_payload.get("telegram_chat_id")
+        telegram_chat_type = request_payload.get("telegram_chat_type")
+
+        try:
+            scoped_agent = resolve_scope(
+                app_ctx.group_routing,
+                str(telegram_chat_id) if telegram_chat_id is not None else None,
+                str(telegram_chat_type) if telegram_chat_type is not None else None,
+            )
+        except GroupNotRegisteredError as exc:
+            raise AuthorizationError(messages.text("api.group_not_registered", chat_id=exc.chat_id)) from exc
+        if is_scoped_target(scoped_agent):
+            ctx = dataclasses.replace(app_ctx, deps=scope_deps(app_ctx.deps, scoped_agent))
+            logger.info(
+                "message scoped to group agent",
+                extra={"event": "group_scope_applied", "chat_id": str(telegram_chat_id), "agent": scoped_agent, "trace_id": get_trace_id()},
+            )
 
         # Built fresh, per authenticated request — never once at blueprint
         # creation, before a caller is known (docs/Next_Plan.md §4.5/Stage 3).
@@ -207,13 +243,6 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
             non_human_activation_event_types,
             areas,
         )
-
-        request_payload = request.get_json(silent=True) or {}
-        text = request_payload.get("text")
-        sender_identity = request_payload.get("sender_identity")
-        source_message_id = request_payload.get("source_message_id")
-        conversation_id = request_payload.get("conversation_id")
-        event_data_event_id = request_payload.get("event_data_event_id")
 
         if not text:
             raise InvalidInputError(messages.text("api.field_required", field="text"), field="text")
@@ -476,6 +505,18 @@ def build_messages_blueprint(ctx: "ApiContext") -> Blueprint:
         # Fast Path for known buttons / deterministic protocol selection
         # button -> known protocol -> RBAC -> approval if required -> agent -> approved tool
         matched_protocol_name = request_payload.get("protocol_hint") or KNOWN_BUTTON_PROTOCOLS.get(str(text).strip())
+        if (
+            matched_protocol_name is not None
+            and is_scoped_target(scoped_agent)
+            and ctx.deps.protocol_set.get(matched_protocol_name) is None
+            and app_ctx.deps.protocol_set.get(matched_protocol_name) is not None
+        ):
+            # An explicit button/hint for a protocol this group's agent does not
+            # own: refuse loudly rather than silently re-routing it elsewhere.
+            raise InvalidInputError(
+                messages.text("api.protocol_out_of_group_scope", protocol=matched_protocol_name, agent=scoped_agent),
+                field="protocol_hint",
+            )
         if matched_protocol_name is None and _is_team_roster_query(str(text), prior_messages):
             matched_protocol_name = "report_team_availability"
         matched_protocol = ctx.deps.protocol_set.get(matched_protocol_name) if matched_protocol_name else None
@@ -1054,6 +1095,124 @@ def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
             if u["permission_level"] == "commander" and u["telegram_identity"] != "bot-service"
         ]
         return jsonify({"commanders": [{"telegram_identity": u["telegram_identity"]} for u in commanders]})
+
+    return blueprint
+
+
+def _binding_to_dict(binding) -> dict:
+    return {"chat_id": binding.chat_id, "agent_name": binding.agent_name, "label": binding.label}
+
+
+def _attendance_agent(ctx: "ApiContext"):
+    """The registered specialist that owns attendance cycles (duck-typed on `open_scheduled_cycle`)."""
+
+    for agent in ctx.deps.registry.all():
+        if hasattr(agent, "open_scheduled_cycle"):
+            return agent
+    return None
+
+
+def build_groups_blueprint(ctx: "ApiContext") -> Blueprint:
+    """Telegram group -> agent bindings, plus the attendance-check trigger the bot polls.
+
+    Every write goes through `ctx.group_routing` (write-through to persistence),
+    so the in-memory table the `/Msg` scope check consults is updated in the same
+    request that persisted the change."""
+
+    blueprint = Blueprint("groups", __name__)
+    messages = ctx.loaded_profile.message_catalog
+
+    @blueprint.route("/Groups", methods=["GET"])
+    def list_groups():
+        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
+        require(level, RequestedOperation.LIST_GROUPS)
+        return jsonify({
+            "groups": [_binding_to_dict(binding) for binding in ctx.group_routing.all()],
+            "routable_agents": list(ctx.group_routing.routable_targets),
+        })
+
+    @blueprint.route("/Groups/<chat_id>", methods=["PUT"])
+    def put_group(chat_id):
+        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
+        require(level, RequestedOperation.MANAGE_GROUPS)
+
+        request_payload = request.get_json(silent=True) or {}
+        agent_name = request_payload.get("agent_name")
+        label = request_payload.get("label") or ""
+        if not agent_name or not isinstance(agent_name, str):
+            raise InvalidInputError(messages.text("api.field_required", field="agent_name"), field="agent_name")
+        if not isinstance(label, str) or len(label) > 200:
+            raise InvalidInputError(messages.text("api.field_required", field="label"), field="label")
+
+        try:
+            binding = ctx.group_routing.upsert(chat_id, agent_name, label)
+        except InvalidRoutingTargetError as exc:
+            raise InvalidInputError(
+                messages.text(
+                    "api.group_agent_invalid",
+                    agent=agent_name,
+                    allowed=", ".join(ctx.group_routing.routable_targets),
+                ),
+                field="agent_name",
+            ) from exc
+        logger.info(
+            "telegram group binding written",
+            extra={"event": "group_binding_written", "chat_id": binding.chat_id, "agent": binding.agent_name, "trace_id": get_trace_id()},
+        )
+        return jsonify(_binding_to_dict(binding))
+
+    @blueprint.route("/Groups/<chat_id>", methods=["DELETE"])
+    def delete_group(chat_id):
+        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
+        require(level, RequestedOperation.MANAGE_GROUPS)
+
+        try:
+            ctx.group_routing.remove(chat_id)
+        except PersistenceNotFoundError as exc:
+            raise NotFoundError(messages.text("api.group_not_registered", chat_id=chat_id)) from exc
+        logger.info(
+            "telegram group binding removed",
+            extra={"event": "group_binding_removed", "chat_id": chat_id, "trace_id": get_trace_id()},
+        )
+        return jsonify({"chat_id": chat_id, "removed": True})
+
+    @blueprint.route("/TeamStatus/AttendanceCheck", methods=["POST"])
+    def post_attendance_check():
+        """Open today's attendance cycle if due; the bot polls this and posts the prompt to bound groups."""
+
+        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
+        require(level, RequestedOperation.RUN_ATTENDANCE_CHECK)
+
+        request_payload = request.get_json(silent=True) or {}
+        now_iso = request_payload.get("now_iso")
+        force = bool(request_payload.get("force", False))
+        if now_iso is not None and not isinstance(now_iso, str):
+            raise InvalidInputError(messages.text("api.field_required", field="now_iso"), field="now_iso")
+
+        agent = _attendance_agent(ctx)
+        if agent is None:
+            raise NotFoundError(messages.text("api.attendance_agent_unavailable"))
+
+        try:
+            opened = agent.open_scheduled_cycle(now_iso, force=force)
+        except ValueError as exc:
+            raise InvalidInputError(str(exc), field="now_iso") from exc
+
+        target_chat_ids = list(ctx.group_routing.chat_ids_for(agent.name))
+        if opened is None:
+            return jsonify({"opened": False, "agent_name": agent.name, "target_chat_ids": target_chat_ids})
+        logger.info(
+            "attendance cycle opened",
+            extra={"event": "attendance_cycle_opened", "cycle_key": opened["cycle_key"], "targets": len(target_chat_ids), "trace_id": get_trace_id()},
+        )
+        return jsonify({
+            "opened": True,
+            "agent_name": agent.name,
+            "cycle_key": opened["cycle_key"],
+            "deadline_at": opened["deadline_at"],
+            "members_required": opened["members_required"],
+            "target_chat_ids": target_chat_ids,
+        })
 
     return blueprint
 

@@ -141,6 +141,43 @@ syntax.
    is expected behavior for an unregistered or non-commander identity, not a
    sign anything is broken.
 
+## 6a. Optional — add the bot to Telegram groups
+
+The bot can also work inside group chats, with each group routed to the
+sub-agent its messages belong to. Nothing here is required for private
+chats.
+
+1. **Add the bot to the group.** In Telegram, add the bot as a member. For the
+   bot to see ordinary (non-command) messages in a group it must either have
+   *Group Privacy* disabled in @BotFather (`/setprivacy` -> Disable) or be a
+   group administrator. Without one of those, only `/commands`, button presses
+   and replies to the bot reach it.
+2. **Get the chat ID.** As soon as it is added, the bot posts one message with
+   the group's chat ID (a negative number such as `-1001234567890`). Until the
+   group is registered the bot ignores everything said there and only logs
+   `bot_group_unregistered`.
+3. **Bind the group to an agent.** Either:
+   - Admin panel: `http://<host>:<API_PORT>/admin/` -> *Telegram groups* ->
+     *Add a group* (chat ID, label, and the agent to route to), or
+   - Command line, against the same deployment database:
+     ```
+     python -m cli.group_admin --profile <profile.module> add --chat-id -1001234567890 --agent team_status_agent --label "readiness team"
+     python -m cli.group_admin --profile <profile.module> list
+     ```
+   `--agent main_agent` gives the group the full system (same as a private
+   chat). Any specialist name from the profile's `AGENTS` restricts the group
+   to that agent's protocols and tools (plus history questions). A change made
+   from the command line is picked up by a running API within about a minute;
+   admin-panel changes apply immediately.
+4. **Readiness-team attendance.** Bind the readiness team's group to
+   `team_status_agent`. Once the roster is approved, every day after the
+   profile's attendance hour the bot posts the attendance prompt to that group
+   with two buttons. Each member's press is recorded as *their own* response
+   (the Telegram identity that pressed), so members must be registered users
+   (Step 3) and on the approved roster; pressing *Unavailable* asks that member
+   for a reason and number of days in the group, and only that member's next
+   message completes it.
+
 ## 7. Optional — verbose diagnostic logging
 
 For the first real run against Telegram, it can help to turn on verbose

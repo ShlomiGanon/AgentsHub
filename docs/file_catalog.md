@@ -39,6 +39,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `bot/presentation.py` | Production | Private implementation | Implements the shared Telegram/CLI status replacement and fallback lifecycle. |
 | `bot/transports.py` | Production | Private implementation | Implements HTTP API access and Telegram transport adapters. |
 | `cli/__init__.py` | Production | Public facade | Marks the command-line package. |
+| `cli/group_admin.py` | Production | Public entry point | Provides the Telegram group routing administration command-line entry point. |
 | `cli/user_admin.py` | Production | Public entry point | Provides the user-administration command-line entry point. |
 | `config/__init__.py` | Production | Public facade | Exposes environment and live-settings configuration facades. |
 | `config/environment.py` | Production | Private implementation | Resolves model tiers and process flags from environment values. |
@@ -105,6 +106,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `orchestrator/capabilities.py` | Production | Private implementation | Builds the role-aware, per-caller Main Agent capability and system context. |
 | `orchestrator/event_queue.py` | Production | Private implementation | Serializes event processing on a dedicated worker. |
 | `orchestrator/flows.py` | Production | Private implementation | Coordinates report, request, hold-resume, protocol, and outcome workflows. |
+| `orchestrator/group_routing.py` | Production | Private implementation | Holds the in-memory, DB-backed Telegram group to agent routing table and scopes flow dependencies per group. |
 | `orchestrator/holds.py` | Production | Private implementation | Creates and resolves clarification and approval holds. |
 | `orchestrator/reasoning.py` | Production | Private implementation | Prompts and parses Main/Insights decisions, questions, selection, formulation, and judgment. |
 | `persistence/__init__.py` | Production | Public facade | Exposes persistence contracts, constructors, and compatibility aliases. |
@@ -142,6 +144,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_agent_runtime.py` | Test | Internal | Verifies agent construction, invocation, CrewAI adaptation, and output handling. |
 | `tests/test_api_admin.py` | Test | Internal | Verifies the admin web panel's login, session, CSRF, rate limiting, and user-management behavior. |
 | `tests/test_api_app.py` | Test | Internal | Verifies api app behavior and edge cases. |
+| `tests/test_api_groups.py` | Test | Internal | Verifies Telegram group binding routes, group-scoped message handling, and the attendance-check trigger. |
 | `tests/test_api_holds.py` | Test | Internal | Verifies api holds behavior and edge cases. |
 | `tests/test_api_jobs.py` | Test | Internal | Verifies api jobs behavior and edge cases. |
 | `tests/test_api_messages.py` | Test | Internal | Verifies api messages behavior and edge cases. |
@@ -155,14 +158,17 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_architecture.py` | Test | Internal | Enforces package boundaries and prevents recreation of the registries package. |
 | `tests/test_bot_app.py` | Test | Internal | Verifies bot dependency wiring, entry-point behavior, and update routing. |
 | `tests/test_bot_background_services.py` | Test | Internal | Verifies notification polling, delivery, failures, results, and startup services. |
+| `tests/test_bot_groups.py` | Test | Internal | Verifies bot group handling: binding cache, ignoring unbound groups, chat metadata on messages, attendance prompts and buttons. |
 | `tests/test_bot_holds.py` | Test | Internal | Verifies clarification and approval interaction lifecycles. |
 | `tests/test_bot_interactions.py` | Test | Internal | Verifies profile, settings, user, formatting, and command interactions. |
 | `tests/test_bot_presentation.py` | Test | Internal | Verifies shared status editing, long-message splitting, and fallback behavior. |
 | `tests/test_bot_transports.py` | Test | Internal | Verifies bot HTTP clients, abstract client behavior, and Telegram transports. |
+| `tests/test_cli_group_admin.py` | Test | Internal | Verifies the Telegram group routing administration command. |
 | `tests/test_demo_profile.py` | Test | Internal | Verifies demo profile behavior and edge cases. |
 | `tests/test_environment_config.py` | Test | Internal | Verifies environment-backed model and runtime configuration. |
 | `tests/test_file_catalog.py` | Test | Internal | Ensures this catalog exactly matches the first-party repository tree. |
 | `tests/test_friendly_forces_agent.py` | Test | Internal | Verifies friendly forces agent dispatch tools and coordination records. |
+| `tests/test_group_routing.py` | Test | Internal | Verifies the group routing table, staleness refresh, scope resolution, and dependency scoping. |
 | `tests/test_history_agent.py` | Test | Internal | Verifies history agent behavior and edge cases. |
 | `tests/test_history_event_pipeline.py` | Test | Internal | Verifies extraction, time normalization, and durable history writes. |
 | `tests/test_history_logging.py` | Test | Internal | Verifies history logging behavior and edge cases. |

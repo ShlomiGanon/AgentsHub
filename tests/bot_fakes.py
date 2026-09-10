@@ -12,7 +12,21 @@ which exists to fail loudly, not to be a test double.
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from bot.api_client import ApiRequestError, BotApiClient, BotNotification, HoldAnswerOutcome, JobResult, MessageSubmissionResult, ProfileView, SettingsView, TracePollResult, UserLookupResult, WriteResult
+from bot.api_client import (
+    ApiRequestError,
+    AttendanceCheckResult,
+    BotApiClient,
+    BotNotification,
+    GroupBindingView,
+    HoldAnswerOutcome,
+    JobResult,
+    MessageSubmissionResult,
+    ProfileView,
+    SettingsView,
+    TracePollResult,
+    UserLookupResult,
+    WriteResult,
+)
 from bot.telegram_client import TelegramClient
 
 
@@ -83,6 +97,8 @@ class FakeBotApiClient(BotApiClient):
     job_result: JobResult | None = None
     pending_notifications: tuple[BotNotification, ...] = ()
     trace_results: list[TracePollResult] = field(default_factory=list)
+    groups: tuple[GroupBindingView, ...] = ()
+    attendance_check_result: AttendanceCheckResult | None = None
 
     calls: list[tuple] = field(default_factory=list)
 
@@ -97,11 +113,23 @@ class FakeBotApiClient(BotApiClient):
         self.calls.append(("list_commander_chat_ids",))
         return self.commander_chat_ids
 
+    async def list_groups(self) -> tuple[GroupBindingView, ...]:
+        self.calls.append(("list_groups",))
+        return self.groups
+
+    async def run_attendance_check(self) -> AttendanceCheckResult:
+        self.calls.append(("run_attendance_check",))
+        if self.attendance_check_result is None:
+            return AttendanceCheckResult(opened=False, agent_name="team_status_agent")
+        return self.attendance_check_result
+
     async def submit_message(
         self, text: str, sender_identity: str, source_message_id: str,
         conversation_id: str | None = None, trace_id: str | None = None,
         event_data_event_id: str | None = None,
         protocol_hint: str | None = None,
+        telegram_chat_id: str | None = None,
+        telegram_chat_type: str | None = None,
     ) -> MessageSubmissionResult:
         if sender_identity not in self.users:
             raise ApiRequestError(401, f"'{sender_identity}' is not a registered identity")
@@ -115,6 +143,8 @@ class FakeBotApiClient(BotApiClient):
             self.calls.append(("submit_message_event_data", event_data_event_id))
         if protocol_hint is not None:
             self.calls.append(("submit_message_protocol_hint", protocol_hint))
+        if telegram_chat_id is not None or telegram_chat_type is not None:
+            self.calls.append(("submit_message_chat", telegram_chat_id, telegram_chat_type))
         assert self.message_submission_result is not None, "test must set message_submission_result"
         return self.message_submission_result
 

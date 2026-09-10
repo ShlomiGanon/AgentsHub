@@ -22,7 +22,7 @@ from config import ModelTierError, SettingsStore, TierModel, load_base_config, r
 from history import SummaryScheduler
 from messages import set_current_catalog
 from history.query import HistoryQueryService
-from orchestrator.flows import FlowDeps, PolicyAwareEventQueue, SerialEventQueue, assemble_core_agents
+from orchestrator.flows import FlowDeps, GroupRoutingTable, PolicyAwareEventQueue, SerialEventQueue, assemble_core_agents
 from persistence import open_persistence
 from profiles import build_area_registry, build_event_type_registry
 from profiles.loader import load_profile
@@ -32,10 +32,16 @@ from tools import configure_logging, configure_telemetry, get_trace_id, normaliz
 if TYPE_CHECKING:
     from agents import Agent
     from history import SummaryScheduler
-    from orchestrator.flows import FlowDeps, SerialEventQueue
+    from orchestrator.flows import FlowDeps, GroupRoutingTable, SerialEventQueue
     from profiles.loader import LoadedProfile
 
 logger = logging.getLogger(__name__)
+
+# Agents a Telegram group may never be bound to directly: they are the
+# orchestration core, not a specialist a group "belongs" to. `main_agent` is
+# still a valid binding target (meaning "unscoped"), handled by
+# orchestrator.group_routing.MAIN_AGENT_TARGET rather than by this set.
+_NON_ROUTABLE_AGENTS = frozenset({"main_agent", "insights_agent", "history_agent"})
 
 
 @dataclass(frozen=True)
@@ -46,6 +52,16 @@ class ApiContext:
     loaded_profile: "LoadedProfile"
     queue: "SerialEventQueue"
     scheduler: "SummaryScheduler"
+    group_routing: "GroupRoutingTable"
+
+
+def build_group_routing(persistence, registry) -> GroupRoutingTable:
+    """The process-wide Telegram group -> agent table, loaded from persistence right away."""
+
+    routable = frozenset(agent.name for agent in registry.all()) - _NON_ROUTABLE_AGENTS
+    table = GroupRoutingTable(persistence, routable)
+    table.load()
+    return table
 
 
 def _dispatch_queue_item(item: object) -> None:
@@ -123,6 +139,12 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
     scheduler = SummaryScheduler(persistence, history_agent)
     scheduler.start()
 
+    group_routing = build_group_routing(persistence, registry)
+    logger.info(
+        "telegram group routing table loaded",
+        extra={"event": "group_routing_loaded", "bindings": len(group_routing.all())},
+    )
+
     return ApiContext(
         deps=deps,
         main_agent=registry.get("main_agent"),
@@ -130,6 +152,7 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
         loaded_profile=loaded_profile,
         queue=queue,
         scheduler=scheduler,
+        group_routing=group_routing,
     )
 
 
@@ -173,6 +196,7 @@ def build_app(ctx: ApiContext) -> Flask:
     from api.request_boundary import register_error_handlers
     from api.routes import (
         build_events_blueprint,
+        build_groups_blueprint,
         build_holds_blueprint,
         build_jobs_blueprint,
         build_messages_blueprint,
@@ -191,6 +215,7 @@ def build_app(ctx: ApiContext) -> Flask:
     app.register_blueprint(build_system_blueprint(ctx))
     app.register_blueprint(build_users_blueprint(ctx))
     app.register_blueprint(build_notifications_blueprint(ctx))
+    app.register_blueprint(build_groups_blueprint(ctx))
 
     from api.admin import build_admin_blueprint, resolve_admin_config
 

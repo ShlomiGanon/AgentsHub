@@ -56,6 +56,17 @@ from orchestrator.reasoning import (
 )
 from orchestrator.reasoning import answer_question, determine_closure, look_up_precedent
 from orchestrator.event_queue import PolicyAwareEventQueue, SerialEventQueue, WorkItem
+from orchestrator.group_routing import (  # re-exported: api may only import orchestrator.flows
+    GROUP_CHAT_TYPES,
+    MAIN_AGENT_TARGET,
+    GroupBinding,
+    GroupNotRegisteredError,
+    GroupRoutingTable,
+    InvalidRoutingTargetError,
+    is_scoped_target,
+    resolve_scope,
+    scope_deps,
+)
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
 from protocols import CriticalityLevel, Step, StepOutcome
 from protocols.executor import execute_steps

@@ -132,6 +132,34 @@ def test_deleting_an_unknown_user_raises_not_found(persistence):
         persistence.delete_user("nonexistent")
 
 
+# -- Telegram groups ----------------------------------------------------
+
+
+def test_group_crud_round_trip(persistence):
+    persistence.write_group("-1001", "team_status_agent", "readiness team")
+
+    stored = persistence.read_group("-1001")
+    assert stored is not None
+    assert stored["chat_id"] == "-1001"
+    assert stored["agent_name"] == "team_status_agent"
+    assert stored["label"] == "readiness team"
+    assert stored["created_at"]
+
+    persistence.write_group("-1001", "main_agent")
+    assert persistence.read_group("-1001")["agent_name"] == "main_agent"
+    assert persistence.read_group("-1001")["label"] == ""
+    assert [g["chat_id"] for g in persistence.list_groups()] == ["-1001"]
+
+    persistence.delete_group("-1001")
+    assert persistence.read_group("-1001") is None
+    assert persistence.list_groups() == []
+
+
+def test_deleting_an_unknown_group_raises_not_found(persistence):
+    with pytest.raises(NotFoundError):
+        persistence.delete_group("-999")
+
+
 # -- Held events (§6.7) -------------------------------------------------
 
 

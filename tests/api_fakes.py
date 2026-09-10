@@ -21,7 +21,7 @@ import threading
 from agents.history import HistoryAgent
 from agents.reference import ReferenceAgent
 from agents.runtime import build_agent_registry
-from api.app import ApiContext
+from api.app import ApiContext, build_group_routing
 from config.live_settings import SettingsStore
 from history.interface import SummaryScheduler
 from history.query import HistoryQueryService
@@ -199,6 +199,7 @@ def build_context(
         loaded_profile=_FakeLoadedProfile(module_path or "fixtures.profiles.minimal_profile", conversation_history_turns=conversation_history_turns),
         queue=queue,
         scheduler=scheduler,
+        group_routing=build_group_routing(persistence, registry),
     )
 
 

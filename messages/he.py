@@ -219,6 +219,23 @@ MESSAGES = {
     "api.wait_invalid": "השדה 'wait_seconds' חייב להיות מספר שלם בין 0 ל-30.",
     "api.trace_id_invalid": "מזהה המעקב אינו תקין.",
     "api.deep_debug_disabled": "מצב Deep Debug אינו מופעל בשרת הזה.",
+    "api.group_not_registered": "קבוצת הטלגרם '{chat_id}' אינה רשומה לניתוב.",
+    "api.protocol_out_of_group_scope": "הפרוטוקול '{protocol}' אינו זמין בקבוצה זו (מנותבת אל {agent}).",
+    "api.group_agent_invalid": "'{agent}' אינו סוכן שניתן לנתב אליו. מותר: {allowed}.",
+    "api.attendance_agent_unavailable": "לא רשום סוכן נוכחות בפריסה הזו.",
+    "bot.group_added_hint": (
+        "הקבוצה הזו (מזהה צ'אט {chat_id}) עדיין לא רשומה. מפקד צריך לשייך אותה לסוכן "
+        "בממשק הניהול או בפקודת ניהול הקבוצות לפני שהודעות כאן יטופלו."
+    ),
+    "bot.unavailability_prompt_group": "{name}, אנא השב להודעה זו עם סיבת אי-הזמינות ומספר ימים משוער (לדוגמה: 'עקב מחלה ליומיים').",
+    "attendance.group_prompt": (
+        "בדיקת נוכחות יומית לכיתת הכוננות. יש להשיב תוך שעה (עד {deadline}) על זמינותך. "
+        "אם אינך זמין, ציין סיבה ומספר ימים.\n\nחברים שנדרשים לדווח:\n{members}"
+    ),
+    "attendance.group_prompt_nobody": "בדיקת הנוכחות היומית נפתחה. אין חברים שנדרשים לדווח היום.",
+    "attendance.button_available": "אני זמין לכוננות",
+    "attendance.button_unavailable": "איני זמין",
+    "attendance.already_open": "מחזור הנוכחות של היום כבר פתוח.",
     "bot.unavailability_prompt": "אנא ציין את סיבת אי-הזמינות ומספר ימים משוער (לדוגמה: 'עקב מחלה ליומיים').",
     "bot.unavailability_days_prompt": "הסיבה נשמרה. לכמה ימים אינך זמין? אנא שלח מספר ימים, לדוגמה: 2.",
     "bot.availability_report_available": "דיווח נוכחות כיתת כוננות: המשתמש {identity} זמין לכוננות.",

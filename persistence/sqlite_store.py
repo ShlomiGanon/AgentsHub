@@ -257,6 +257,9 @@ class SQLitePersistence(PersistenceInterface):
         self._read_local = threading.local()
         self._read_connections: list[sqlite3.Connection] = []
         self._read_connections_lock = threading.Lock()
+        # Bumped by close(): a thread whose cached read connection belongs to an
+        # older generation was closed underneath it and must reconnect lazily.
+        self._read_generation = 0
         self._writer_thread = threading.Thread(target=self._run_writer, daemon=True)
         self._writer_thread.start()
 
@@ -265,6 +268,7 @@ class SQLitePersistence(PersistenceInterface):
         self._writer_thread.join()
         with self._read_connections_lock:
             connections, self._read_connections = self._read_connections, []
+            self._read_generation += 1
         for connection in connections:
             connection.close()
 
@@ -314,10 +318,15 @@ class SQLitePersistence(PersistenceInterface):
 
     def _read_connection(self) -> _ReadConnectionLease:
         connection = getattr(self._read_local, "connection", None)
+        with self._read_connections_lock:
+            current_generation = self._read_generation
+        if connection is not None and getattr(self._read_local, "generation", None) != current_generation:
+            connection = None  # closed by close() on another (or this) thread; reconnect below
         if connection is None:
             connection = sqlite3.connect(self.db_path, check_same_thread=False)
             connection.row_factory = sqlite3.Row
             self._read_local.connection = connection
+            self._read_local.generation = current_generation
             with self._read_connections_lock:
                 self._read_connections.append(connection)
         return _ReadConnectionLease(connection)
@@ -622,6 +631,53 @@ class SQLitePersistence(PersistenceInterface):
         try:
             user_rows = connection.execute("SELECT telegram_identity, permission_level FROM users").fetchall()
             return [dict(user_row) for user_row in user_rows]
+        finally:
+            connection.close()
+
+    def read_group(self, chat_id: str) -> dict | None:
+        connection = self._read_connection()
+        try:
+            group_row = connection.execute(
+                "SELECT chat_id, agent_name, label, created_at FROM telegram_groups WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchone()
+            return dict(group_row) if group_row is not None else None
+        finally:
+            connection.close()
+
+    def write_group(self, chat_id: str, agent_name: str, label: str = "") -> None:
+        created_at = datetime.now(timezone.utc).isoformat()
+
+        def _do(connection: sqlite3.Connection) -> None:
+            try:
+                connection.execute(
+                    "INSERT INTO telegram_groups (chat_id, agent_name, label, created_at) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(chat_id) DO UPDATE SET agent_name = excluded.agent_name, label = excluded.label",
+                    (chat_id, agent_name, label, created_at),
+                )
+                connection.commit()
+            except sqlite3.Error as exc:
+                connection.rollback()
+                raise PersistenceError(f"failed to write telegram group '{chat_id}': {exc}") from exc
+
+        self._submit_write(_do)
+
+    def delete_group(self, chat_id: str) -> None:
+        def _do(connection: sqlite3.Connection) -> None:
+            cursor = connection.execute("DELETE FROM telegram_groups WHERE chat_id = ?", (chat_id,))
+            connection.commit()
+            if cursor.rowcount == 0:
+                raise NotFoundError(f"no such telegram group: '{chat_id}'")
+
+        self._submit_write(_do)
+
+    def list_groups(self) -> list[dict]:
+        connection = self._read_connection()
+        try:
+            group_rows = connection.execute(
+                "SELECT chat_id, agent_name, label, created_at FROM telegram_groups ORDER BY chat_id"
+            ).fetchall()
+            return [dict(group_row) for group_row in group_rows]
         finally:
             connection.close()
 

@@ -13,11 +13,11 @@ Each subsystem exposes a package facade and keeps implementation details inside 
 | `agents` | `agents` | `agents.adapter`, `agents.base`, `agents.registry`, `agents.results`, `agents.errors`, `agents.builtins`, `agents.reference`, `agents.history` | `contracts`, `runtime`, `standard_agents` |
 | `protocols` | `protocols` | `protocols.model`, `protocols.loader`, `protocols.editor`, `protocols.service` | `contracts`, `repository`, `executor` |
 | `history` | `history` | `history.interface`, `history.events`, `history.extraction`, `history.time_utils`, `history.write` | `contracts`, `event_pipeline`, `field_catalog`, `query`, `summaries` |
-| `orchestrator` | `orchestrator.flows` | `orchestrator.main_agent`, `orchestrator.insights`, `orchestrator.precedent`, `orchestrator.decisions`, `orchestrator.question_flow`, `orchestrator.queue`, `orchestrator.runtime` | `reasoning`, `holds`, `event_queue`, `flows`, `capabilities` |
+| `orchestrator` | `orchestrator.flows` | `orchestrator.main_agent`, `orchestrator.insights`, `orchestrator.precedent`, `orchestrator.decisions`, `orchestrator.question_flow`, `orchestrator.queue`, `orchestrator.runtime` | `reasoning`, `holds`, `event_queue`, `flows`, `capabilities`, `group_routing` |
 | `api` | `api.app` | `api.contracts`, `api.auth`, `api.errors`, `api.http`, `api.ingestion`, `api.management`, `api.operations` | `request_boundary`, `routes`, `app` |
 | `bot` | `bot.app`, `bot` | all former bot module paths remain aliases | `contracts`, `transports`, `interactions`, `background_services`, `app` |
 | `tools` | `tools` | `tools.logging_config`, `tools.tracing`, `tools.terminal`, `tools._terminal_client_shared` | `observability`, `terminal_support`, executable clients, simulator |
-| `cli` | shell entry points only | `cli.user_admin` | `user_admin` |
+| `cli` | shell entry points only | `cli.user_admin`, `cli.group_admin` | `user_admin`, `group_admin` |
 
 Compatibility modules are aliases registered by package facades; they do not correspond to duplicate physical files. New code should prefer the canonical facade or the physical responsibility module when working inside the same package.
 
@@ -30,6 +30,7 @@ Compatibility modules are aliases registered by package facades; they do not cor
 - API translates HTTP into orchestration calls.
 - Bot reaches the application only through HTTP and never imports API internals.
 - CLI user administration is the only user-write path.
+- Telegram group bindings are written only through `orchestrator.group_routing.GroupRoutingTable` (write-through to persistence) — by the API (`PUT`/`DELETE /Groups`), the admin panel, or the offline `cli.group_admin` command, which writes the same table directly.
 - Raw SQL remains confined to persistence implementation modules.
 
 `tests/test_architecture.py` enforces the supported cross-package import graph. `tests/test_legacy_imports.py` separately proves that compatibility aliases resolve to the canonical module objects.
@@ -61,6 +62,9 @@ Maps every API route, bot command/callback, and message intent to its `Requested
 | `POST /Approve/<event_id>` | `approve_run` | no |
 | `GET /Notifications` | `poll_notifications` | no |
 | `GET /Trace/<trace_id>` | `view_live_trace` | no |
+| `GET /Groups` | `list_groups` | no |
+| `PUT /Groups/<chat_id>`, `DELETE /Groups/<chat_id>` | `manage_groups` | no |
+| `POST /TeamStatus/AttendanceCheck` | `run_attendance_check` | no |
 | bot `/profile view`, `/profile diff` | `view_profile_overview` | yes |
 | bot `/profile add\|edit\|remove` | `create_protocol` / `update_protocol` / `delete_protocol` | no |
 | bot `/settings view` | `view_settings` | no |
@@ -68,6 +72,10 @@ Maps every API route, bot command/callback, and message intent to its `Requested
 | bot free-text message | `submit_message`, then the resolved-intent operation above | yes, subject to the intent operation |
 | bot approval callback (`approve:<event_id>:<choice>`) | `approve_run` | no |
 | bot clarification callback (`clarify:<event_id>:<classification>`) | `resolve_clarification` | no |
+| bot attendance callback (`attend:available` / `attend:unavailable`) | `submit_message` as the pressing member, then `record_attendance_response`'s own operation | yes |
+| bot attendance poll (`POST /TeamStatus/AttendanceCheck` as `bot-service`) | `run_attendance_check` | no |
+
+Messages from a Telegram group bound to a specialist are additionally **scoped**: the same operations apply, but the Main Agent only sees that specialist's protocols and tools (plus `history_agent`) — see `docs/api_spec.md`'s `POST /Msg` section. A group with no binding is ignored by the bot and refused (`403`) by the API.
 
 `GET /SYSTEM` remains one endpoint, gated by `view_profile_overview`; `api/routes.py::get_system` builds its JSON response field-group by field-group, each behind its own operation (`view_system_internals` for `agents`/`protocols`/`queued_events`/`held_events`/`scheduler`, `view_settings` for `settings`), so a viewer's response has those fields absent entirely rather than gating the whole endpoint at once — see `docs/api_spec.md`'s `GET /SYSTEM` section for both response shapes.
 

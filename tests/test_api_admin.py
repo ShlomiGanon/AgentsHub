@@ -609,3 +609,83 @@ def test_provision_bot_service_registers_it_at_commander_level(tmp_path, teardow
     assert resp.status_code == 200
     assert b"bot-service" in resp.data
     assert b"is registered at commander level" in resp.data
+
+
+# -- Telegram groups ----------------------------------------------------------
+
+
+def test_dashboard_lists_groups_and_routable_agents(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    teardown_ctx[0].group_routing.upsert("-1001", "reference_agent", "ops room")
+    _login(client)
+
+    page = client.get("/admin/").data
+
+    assert b"Telegram groups" in page
+    assert b"-1001" in page
+    assert b"ops room" in page
+    assert b'value="main_agent"' in page
+    assert b'value="reference_agent"' in page
+
+
+def test_admin_adds_updates_and_removes_a_group_binding(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    ctx = teardown_ctx[0]
+    _login(client)
+    csrf_token = _extract_csrf(client.get("/admin/").data)
+
+    added = client.post(
+        "/admin/groups",
+        data={"csrf_token": csrf_token, "chat_id": "-1002", "agent_name": "reference_agent", "label": "readiness"},
+        follow_redirects=True,
+    )
+    assert added.status_code == 200
+    assert b"is now routed to" in added.data
+    assert ctx.group_routing.get("-1002").agent_name == "reference_agent"
+    assert ctx.deps.persistence.read_group("-1002")["label"] == "readiness"
+
+    updated = client.post(
+        "/admin/groups",
+        data={"csrf_token": csrf_token, "chat_id": "-1002", "agent_name": "main_agent", "label": "readiness"},
+        follow_redirects=True,
+    )
+    assert updated.status_code == 200
+    assert ctx.group_routing.get("-1002").agent_name == "main_agent"
+
+    removed = client.post("/admin/groups/-1002/remove", data={"csrf_token": csrf_token}, follow_redirects=True)
+    assert removed.status_code == 200
+    assert b"removed" in removed.data
+    assert ctx.group_routing.get("-1002") is None
+    assert ctx.deps.persistence.read_group("-1002") is None
+
+
+def test_admin_group_writes_flash_errors_for_bad_input(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+    csrf_token = _extract_csrf(client.get("/admin/").data)
+
+    bad_agent = client.post(
+        "/admin/groups",
+        data={"csrf_token": csrf_token, "chat_id": "-1003", "agent_name": "history_agent"},
+        follow_redirects=True,
+    )
+    assert b"is not a routable agent" in bad_agent.data
+    assert teardown_ctx[0].group_routing.get("-1003") is None
+
+    no_chat = client.post("/admin/groups", data={"csrf_token": csrf_token, "agent_name": "reference_agent"}, follow_redirects=True)
+    assert b"chat ID is required" in no_chat.data
+
+    unknown = client.post("/admin/groups/-9999/remove", data={"csrf_token": csrf_token}, follow_redirects=True)
+    assert b"No such group" in unknown.data
+
+
+def test_admin_group_routes_require_a_session_and_csrf(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+
+    anonymous = client.post("/admin/groups", data={"chat_id": "-1", "agent_name": "reference_agent"}, follow_redirects=False)
+    assert anonymous.status_code in (302, 303)
+
+    _login(client)
+    no_csrf = client.post("/admin/groups", data={"chat_id": "-1", "agent_name": "reference_agent"}, follow_redirects=False)
+    assert no_csrf.status_code != 200 or b"is now routed to" not in no_csrf.data
+    assert teardown_ctx[0].group_routing.get("-1") is None

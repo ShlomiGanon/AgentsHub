@@ -14,8 +14,10 @@ from typing import Literal
 
 from bot.contracts import (
     ApiRequestError,
+    AttendanceCheckResult,
     BOT_SERVICE_IDENTITY,
     BotApiClient,
+    GroupBindingView,
     BotNotification,
     EventDataNeededNotice,
     FailureNotice,
@@ -146,6 +148,28 @@ class HttpApiClient(BotApiClient):
             self._raise_for_error(status, response_payload)
         return tuple(c["telegram_identity"] for c in response_payload["commanders"])
 
+    async def list_groups(self) -> tuple[GroupBindingView, ...]:
+        status, response_payload = await self._call("GET", "/Groups", BOT_SERVICE_IDENTITY)
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+        return tuple(
+            GroupBindingView(chat_id=str(g["chat_id"]), agent_name=g["agent_name"], label=g.get("label") or "")
+            for g in response_payload["groups"]
+        )
+
+    async def run_attendance_check(self) -> AttendanceCheckResult:
+        status, response_payload = await self._call("POST", "/TeamStatus/AttendanceCheck", BOT_SERVICE_IDENTITY, {})
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+        return AttendanceCheckResult(
+            opened=bool(response_payload.get("opened")),
+            agent_name=response_payload.get("agent_name", ""),
+            target_chat_ids=tuple(str(c) for c in response_payload.get("target_chat_ids", ())),
+            cycle_key=response_payload.get("cycle_key"),
+            deadline_at=response_payload.get("deadline_at"),
+            members_required=tuple(response_payload.get("members_required", ())),
+        )
+
     async def submit_message(
         self,
         text: str,
@@ -155,6 +179,8 @@ class HttpApiClient(BotApiClient):
         trace_id: str | None = None,
         event_data_event_id: str | None = None,
         protocol_hint: str | None = None,
+        telegram_chat_id: str | None = None,
+        telegram_chat_type: str | None = None,
     ) -> MessageSubmissionResult:
         body = {"text": text, "sender_identity": sender_identity, "source_message_id": source_message_id}
         if conversation_id is not None:
@@ -163,6 +189,10 @@ class HttpApiClient(BotApiClient):
             body["event_data_event_id"] = event_data_event_id
         if protocol_hint is not None:
             body["protocol_hint"] = protocol_hint
+        if telegram_chat_id is not None:
+            body["telegram_chat_id"] = telegram_chat_id
+        if telegram_chat_type is not None:
+            body["telegram_chat_type"] = telegram_chat_type
         status, response_payload = await self._call(
             "POST", "/Msg", sender_identity, body, trace_id_override=trace_id
         )

@@ -148,6 +148,122 @@ async def run_notification_poll_loop(
                 await asyncio.sleep(poll_interval_seconds)
 
 
+# -- group attendance checks ---------------------------------------------------
+
+ATTENDANCE_CALLBACK_PREFIX = "attend"
+
+
+def attendance_buttons(messages) -> tuple[tuple[str, str], ...]:
+    """The two inline buttons under a group attendance prompt: (label, callback_data)."""
+
+    return (
+        (messages.text("attendance.button_available"), f"{ATTENDANCE_CALLBACK_PREFIX}:available"),
+        (messages.text("attendance.button_unavailable"), f"{ATTENDANCE_CALLBACK_PREFIX}:unavailable"),
+    )
+
+
+def _local_clock_time(deadline_iso: str | None, timezone_name: str | None) -> str:
+    """`HH:MM` in the deployment's timezone, or the raw value when it cannot be parsed."""
+
+    if not deadline_iso:
+        return ""
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        parsed = datetime.fromisoformat(deadline_iso.replace("Z", "+00:00"))
+        if timezone_name:
+            parsed = parsed.astimezone(ZoneInfo(timezone_name))
+        return parsed.strftime("%H:%M")
+    except (ValueError, KeyError):
+        return deadline_iso
+
+
+def format_attendance_prompt(deps: "BotDeps", result) -> str:
+    messages = message_catalog_for(deps)
+    if not result.members_required:
+        return messages.text("attendance.group_prompt_nobody")
+    deadline = _local_clock_time(result.deadline_at, getattr(deps.loaded_profile, "timezone_name", None))
+    members = "\n".join(f"- {name}" for name in result.members_required)
+    return messages.text("attendance.group_prompt", deadline=deadline, members=members)
+
+
+async def run_attendance_check_once(deps: "BotDeps") -> int:
+    """Ask the server to open today's cycle if due; when it did, post the prompt with buttons to every group bound to the attendance agent. Returns how many groups were prompted."""
+
+    result = await deps.api_client.run_attendance_check()
+    if not result.opened:
+        return 0
+    if not result.target_chat_ids:
+        logger.warning(
+            "attendance cycle opened but no telegram group is bound to the attendance agent",
+            extra={"event": "attendance_no_target_group", "cycle_key": result.cycle_key, "agent": result.agent_name},
+        )
+        return 0
+    prompt = format_attendance_prompt(deps, result)
+    buttons = attendance_buttons(message_catalog_for(deps))
+    prompted = 0
+    for chat_id in result.target_chat_ids:
+        try:
+            await deps.telegram_client.send_with_buttons(chat_id, prompt, buttons)
+            prompted += 1
+        except Exception:
+            logger.exception(
+                "could not post attendance prompt to group; continuing",
+                extra={"event": "attendance_prompt_failed", "chat_id": chat_id, "cycle_key": result.cycle_key},
+            )
+    logger.info(
+        "attendance prompt posted",
+        extra={"event": "attendance_prompt_posted", "cycle_key": result.cycle_key, "groups": prompted},
+    )
+    return prompted
+
+
+async def run_attendance_check_loop(
+    deps: "BotDeps",
+    poll_interval_seconds: float = 60.0,
+    max_iterations: int | None = None,
+) -> None:
+    """Repeatedly call `run_attendance_check_once`, forever by default, or a fixed number of times — for tests.
+
+    The server decides whether a cycle is due (once per local day, after the
+    profile's attendance hour); this loop only asks and delivers, so restarting
+    the bot never opens a second cycle."""
+
+    iterations = 0
+    current_backoff = 1.0
+
+    while max_iterations is None or iterations < max_iterations:
+        had_error = False
+        try:
+            await run_attendance_check_once(deps)
+            current_backoff = 1.0
+        except asyncio.CancelledError:
+            logger.info("attendance check loop cancelled; stopping gracefully", extra={"event": "attendance_loop_cancelled"})
+            break
+        except ApiNotImplementedError as exc:
+            logger.info("attendance check skipped: %s", exc, extra={"event": "attendance_check_not_implemented"})
+        except ApiRequestError as exc:
+            if exc.status_code == 404:
+                # This deployment has no attendance specialist: nothing to do, ever. Stay quiet.
+                logger.info("attendance check unavailable in this deployment; loop stopping", extra={"event": "attendance_check_unavailable"})
+                break
+            had_error = True
+            logger.exception("attendance check transport failed; retrying with backoff", extra={"event": "attendance_check_transport_failed"})
+        except Exception:
+            had_error = True
+            logger.exception("attendance check failed; continuing with backoff", extra={"event": "attendance_check_failed"})
+
+        iterations += 1
+        if max_iterations is None or iterations < max_iterations:
+            if had_error:
+                jitter = random.uniform(0.8, 1.2)
+                await asyncio.sleep(min(60.0, current_backoff * jitter))
+                current_backoff = min(60.0, current_backoff * 2.0)
+            else:
+                await asyncio.sleep(poll_interval_seconds)
+
+
 if TYPE_CHECKING:
     from bot.contracts import BotDeps, BotNotification
 

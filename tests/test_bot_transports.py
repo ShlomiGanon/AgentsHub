@@ -17,6 +17,8 @@ def _run(coro):
 _DUMMY_ARGS = {
     "resolve_user": ("u1",),
     "list_commander_chat_ids": (),
+    "list_groups": (),
+    "run_attendance_check": (),
     "submit_message": ("text", "u1", "m1"),
     "answer_clarification_hold": ("h1", "fire", "u1"),
     "answer_approval_hold": ("h1", "approved", "u1"),

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from agents.runtime import Agent, get_authenticated_request_identity, tool
-from persistence import TeamStatusPersistenceError, open_team_status_persistence
+from persistence import AttendanceCycle, TeamStatusPersistenceError, open_team_status_persistence
 
 
 def _aware_datetime(value: str | None) -> datetime:
@@ -91,13 +91,30 @@ class TeamStatusAgent(Agent):
             return None
         return self.start_daily_attendance_check(now_iso or "")
 
-    @tool(
-        "start_daily_attendance_check",
-        "Opens today's one-hour readiness-team attendance window and returns the exact group message for the system Telegram transport to send.",
-        side_effecting=True,
-        idempotent=True,
-    )
-    def start_daily_attendance_check(self, now_iso: str = "") -> str:
+    def open_scheduled_cycle(self, now_iso: str | None = None, *, force: bool = False) -> dict | None:
+        """Open today's cycle if it is due (or `force`d) and return its structured facts.
+
+        Returns None when the roster is not yet approved, when the check is not
+        due yet, or when today's cycle is already open — so a caller polling this
+        on a timer opens each day's cycle exactly once. The returned dict
+        (`cycle_key`, `opened_at`, `deadline_at`, `members_required`) carries no
+        user-facing text: the transport renders the prompt from its own catalog."""
+
+        if not self.status_store.roster_is_approved():
+            return None
+        if not force and not self.attendance_check_due(now_iso):
+            return None
+        cycle, requested = self._open_cycle(now_iso or "")
+        if not cycle.created:
+            return None
+        return {
+            "cycle_key": cycle.cycle_key,
+            "opened_at": cycle.opened_at,
+            "deadline_at": cycle.deadline_at,
+            "members_required": requested,
+        }
+
+    def _open_cycle(self, now_iso: str) -> tuple[AttendanceCycle, list[str]]:
         now = _aware_datetime(now_iso or None)
         local_now = now.astimezone(ZoneInfo(self.timezone_name))
         deadline = now + timedelta(hours=self.response_window_hours)
@@ -108,6 +125,16 @@ class TeamStatusAgent(Agent):
         )
         snapshot = self.status_store.availability_snapshot(now.isoformat())
         requested = [entry["full_name"] for entry in snapshot if entry["availability"] != "unavailable"]
+        return cycle, requested
+
+    @tool(
+        "start_daily_attendance_check",
+        "Opens today's one-hour readiness-team attendance window and returns the exact group message for the system Telegram transport to send.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def start_daily_attendance_check(self, now_iso: str = "") -> str:
+        cycle, requested = self._open_cycle(now_iso)
         if not cycle.created:
             return f"The attendance cycle for {cycle.cycle_key} is already open."
         if not requested:

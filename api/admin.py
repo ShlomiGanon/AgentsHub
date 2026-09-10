@@ -47,6 +47,7 @@ from flask import Blueprint, flash, get_flashed_messages, redirect, render_templ
 
 from auth.permissions import PermissionLevel
 from messages import get_current_catalog
+from orchestrator.flows import InvalidRoutingTargetError
 from persistence import NotFoundError
 from tools import get_trace_id
 
@@ -631,6 +632,78 @@ _DASHBOARD_TEMPLATE = """<!DOCTYPE html>
     </form>
   </div>
 
+  <h2 class="mb-1" style="font-size:18px;">Telegram groups</h2>
+  <p class="subtitle mb-3">Bind a group chat to the specialist its messages belong to. Groups not listed here are ignored by the bot.</p>
+
+  <table class="table table-console mb-4">
+    <thead>
+      <tr>
+        <th>Chat ID</th>
+        <th>Label</th>
+        <th>Routed to</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for group in groups %}
+      <tr>
+        <td class="identity">{{ group.chat_id }}</td>
+        <td>{{ group.label }}</td>
+        <td>
+          <form class="d-flex gap-2" method="post" action="{{ url_for('admin.write_group') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="chat_id" value="{{ group.chat_id }}">
+            <input type="hidden" name="label" value="{{ group.label }}">
+            <select name="agent_name" class="form-select form-select-console form-select-sm w-auto">
+              {% for agent_name in routable_agents %}
+              <option value="{{ agent_name }}" {% if agent_name == group.agent_name %}selected{% endif %}>{{ agent_name }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit" class="btn btn-console btn-sm">Save</button>
+          </form>
+        </td>
+        <td class="text-end">
+          <form method="post" action="{{ url_for('admin.remove_group', chat_id=group.chat_id) }}"
+                onsubmit="return confirm('Remove group {{ group.chat_id }}?');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-console-danger btn-sm">Remove</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" style="color:var(--text-dim);">No groups registered yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="block-console mb-5">
+    <span class="block-label">Add a group</span>
+    <p class="mb-3" style="font-size:13px; color:var(--text-dim); max-width:560px; line-height:1.6;">
+      The chat ID is the negative number the bot posts when it is added to an unregistered group.
+      Choose <code class="console-code">main_agent</code> for full routing, or one specialist to restrict the group to that agent's protocols.
+    </p>
+    <form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.write_group') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="col">
+        <div class="form-label-console">Chat ID</div>
+        <input type="text" name="chat_id" class="form-control form-control-console" placeholder="-1001234567890" required>
+      </div>
+      <div class="col">
+        <div class="form-label-console">Label</div>
+        <input type="text" name="label" class="form-control form-control-console" placeholder="readiness team" maxlength="200">
+      </div>
+      <div class="col-auto">
+        <div class="form-label-console">Routed to</div>
+        <select name="agent_name" class="form-select form-select-console">
+          {% for agent_name in routable_agents %}<option value="{{ agent_name }}">{{ agent_name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-console-primary">Add</button>
+      </div>
+    </form>
+  </div>
+
   <div class="block-console mb-4">
     <span class="block-label">Bot's own service identity</span>
     <p class="mb-3" style="font-size:13px; color:var(--text-dim); max-width:560px; line-height:1.6;">
@@ -825,9 +898,67 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             _DASHBOARD_TEMPLATE,
             users=users,
             levels=levels,
+            groups=ctx.group_routing.all(),
+            routable_agents=ctx.group_routing.routable_targets,
             csrf_token=session["csrf_token"],
             bot_service_identity=BOT_SERVICE_IDENTITY,
         )
+
+    @blueprint.route("/groups", methods=["POST"])
+    def write_group():
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        csrf_response = _require_csrf()
+        if csrf_response is not None:
+            return csrf_response
+
+        chat_id = request.form.get("chat_id", "").strip()
+        agent_name = request.form.get("agent_name", "").strip()
+        label = request.form.get("label", "").strip()
+        if not chat_id:
+            flash("A Telegram chat ID is required.", "error")
+            return redirect(url_for("admin.dashboard"))
+
+        existed = ctx.group_routing.get(chat_id) is not None
+        try:
+            # The same write-through path PUT /Groups and cli.group_admin use — one
+            # source of truth for the routing table either way.
+            ctx.group_routing.upsert(chat_id, agent_name, label)
+        except InvalidRoutingTargetError:
+            flash(f"'{agent_name}' is not a routable agent.", "error")
+            return redirect(url_for("admin.dashboard"))
+        logger.info(
+            "admin wrote a telegram group binding",
+            extra={
+                "event": "admin_group_updated" if existed else "admin_group_added",
+                "chat_id": chat_id, "agent_name": agent_name, "trace_id": get_trace_id(),
+            },
+        )
+        flash(f"Group '{chat_id}' is now routed to '{agent_name}'.", "ok")
+        return redirect(url_for("admin.dashboard"))
+
+    @blueprint.route("/groups/<chat_id>/remove", methods=["POST"])
+    def remove_group(chat_id):
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        csrf_response = _require_csrf()
+        if csrf_response is not None:
+            return csrf_response
+
+        try:
+            ctx.group_routing.remove(chat_id)
+        except NotFoundError:
+            flash(f"No such group: '{chat_id}'.", "error")
+            return redirect(url_for("admin.dashboard"))
+
+        logger.info(
+            "admin removed a telegram group binding",
+            extra={"event": "admin_group_removed", "chat_id": chat_id, "trace_id": get_trace_id()},
+        )
+        flash(f"Group '{chat_id}' removed.", "ok")
+        return redirect(url_for("admin.dashboard"))
 
     @blueprint.route("/users", methods=["POST"])
     def write_user():

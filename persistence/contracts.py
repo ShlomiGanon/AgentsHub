@@ -148,6 +148,22 @@ class PersistenceInterface(ABC):
     def list_users(self) -> list[dict]:
         """Return every registered user."""
 
+    @abstractmethod
+    def read_group(self, chat_id: str) -> dict | None:
+        """Return the Telegram group's routing record (`chat_id`, `agent_name`, `label`, `created_at`), or None if unregistered."""
+
+    @abstractmethod
+    def write_group(self, chat_id: str, agent_name: str, label: str = "") -> None:
+        """Create or update a Telegram group's routing target."""
+
+    @abstractmethod
+    def delete_group(self, chat_id: str) -> None:
+        """Remove a Telegram group binding; raises NotFoundError when absent."""
+
+    @abstractmethod
+    def list_groups(self) -> list[dict]:
+        """Return every registered Telegram group binding."""
+
 
     @abstractmethod
     def write_log_entry(self, trace_id: str | None, details: dict) -> None:

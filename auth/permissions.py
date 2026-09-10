@@ -38,6 +38,9 @@ class RequestedOperation(Enum):
     APPROVE_RUN = "approve_run"
     POLL_NOTIFICATIONS = "poll_notifications"
     VIEW_LIVE_TRACE = "view_live_trace"
+    LIST_GROUPS = "list_groups"
+    MANAGE_GROUPS = "manage_groups"
+    RUN_ATTENDANCE_CHECK = "run_attendance_check"
 
 
 class ViewerAllowedAction(Enum):
