@@ -135,7 +135,7 @@ def test_admin_menu_links_to_all_seven_management_pages(tmp_path, teardown_ctx, 
 
 @pytest.mark.parametrize(
     "path",
-    ["/admin/profiles", "/admin/protocols", "/admin/events"],
+    ["/admin/profiles", "/admin/protocols", "/admin/events", "/admin/server"],
 )
 def test_new_api_management_pages_require_an_admin_session(path, tmp_path, teardown_ctx, _admin_env):
     client = _client(tmp_path, teardown_ctx)
@@ -311,6 +311,23 @@ def test_server_page_requires_session_and_disables_controls_without_supervisor(t
     assert page.status_code == 200
     assert b"run_stack.py" in page.data
     assert b"profiles.demo" in page.data
+
+
+def test_server_safe_mode_control_reflects_the_live_system_setting(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    ctx = teardown_ctx[0]
+    _login(client)
+    enabled = client.put(
+        "/SYSTEM",
+        headers={"X-Identity": COMMANDER_IDENTITY},
+        json={"safe_mode": True},
+    )
+    assert enabled.status_code == 200
+    assert ctx.deps.settings_store.get_safe_mode() is True
+    page = client.get("/admin/server")
+    assert b"SAFE_MODE = true" in page.data
+    assert b"Safe mode is active" in page.data
+    assert b"AdminApi.call('PUT', '/SYSTEM'" in page.data
 
 
 def test_correct_login_reaches_the_dashboard_and_lists_existing_users(tmp_path, teardown_ctx, _admin_env):
@@ -930,13 +947,14 @@ def test_admin_lists_and_explicitly_approves_an_automatic_group(tmp_path, teardo
     assert ctx.group_routing.get("-1004").auto_register is False
 
 
-def test_profiles_page_has_a_friendly_safe_mode_control(tmp_path, teardown_ctx, _admin_env):
+def test_server_page_has_a_friendly_safe_mode_control(tmp_path, teardown_ctx, _admin_env):
     client = _client(tmp_path, teardown_ctx)
     _login(client)
-    page = client.get("/admin/profiles").data
-    assert b'id="system-safe"' in page
-    assert b"Open - accept new people and groups" in page
-    assert b"Safe - approved people and groups only" in page
+    page = client.get("/admin/server").data
+    assert b"SAFE_MODE = false" in page
+    assert b"Open mode is active" in page
+    assert b'data-safe-mode="true"' in page
+    assert b'data-safe-mode="false"' in page
 
 
 def test_admin_group_writes_flash_errors_for_bad_input(tmp_path, teardown_ctx, _admin_env):

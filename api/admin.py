@@ -55,8 +55,10 @@ from flask import Blueprint, flash, get_flashed_messages, jsonify, redirect, ren
 from api.admin_scenarios import ScenarioMappingError, map_legacy_scenario, scenario_catalog
 from api.admin_simulator import SIMULATOR_BODY, SIMULATOR_STYLE, simulator_page_context
 from api.admin_api_pages import (
+    API_CLIENT_SCRIPT,
     API_CONSOLE_STYLE,
     EVENTS_BODY,
+    IDENTITY_BAR,
     PROFILES_BODY,
     PROTOCOLS_BODY,
 )
@@ -820,18 +822,156 @@ _PROTOCOLS_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}">
 _EVENTS_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.events.title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + """</head>""" + EVENTS_BODY + """</html>"""
 
 
+_SERVER_STYLE = """
+<style>
+  .mode-panel {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid rgba(14, 116, 95, .22);
+    background: linear-gradient(135deg, rgba(14, 116, 95, .08), rgba(255, 255, 255, .96) 48%, rgba(31, 78, 121, .07));
+  }
+  .mode-panel.safe-active {
+    border-color: rgba(31, 78, 121, .30);
+    background: linear-gradient(135deg, rgba(31, 78, 121, .10), rgba(255, 255, 255, .97) 48%, rgba(14, 116, 95, .06));
+  }
+  .mode-panel::after {
+    content: "";
+    position: absolute;
+    width: 220px;
+    height: 220px;
+    inset-inline-end: -95px;
+    top: -120px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(14, 116, 95, .16), transparent 68%);
+    animation: modeGlow 4.8s ease-in-out infinite;
+    pointer-events: none;
+  }
+  .safe-active::after { background: radial-gradient(circle, rgba(31, 78, 121, .18), transparent 68%); }
+  .mode-layout { display: grid; grid-template-columns: minmax(150px, .62fr) minmax(280px, 1.38fr); gap: 28px; align-items: center; }
+  .mode-visual { display: flex; align-items: center; justify-content: center; min-height: 150px; }
+  .mode-orbit {
+    position: relative;
+    width: 116px;
+    height: 116px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    border: 1px solid rgba(14, 116, 95, .28);
+    animation: modePulse 2.8s ease-in-out infinite;
+  }
+  .safe-active .mode-orbit { border-color: rgba(31, 78, 121, .35); }
+  .mode-orbit::before, .mode-orbit::after {
+    content: "";
+    position: absolute;
+    border-radius: 50%;
+    border: 1px solid currentColor;
+    opacity: .16;
+  }
+  .mode-orbit::before { inset: 12px; }
+  .mode-orbit::after { inset: 27px; }
+  .mode-shield {
+    width: 48px;
+    height: 56px;
+    display: grid;
+    place-items: center;
+    color: #fff;
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 12px;
+    background: var(--commander);
+    clip-path: polygon(50% 0, 92% 17%, 84% 70%, 50% 100%, 16% 70%, 8% 17%);
+    filter: drop-shadow(0 8px 12px rgba(14, 116, 95, .22));
+    animation: shieldFloat 3.2s ease-in-out infinite;
+  }
+  .safe-active .mode-shield { background: #1f4e79; filter: drop-shadow(0 8px 12px rgba(31, 78, 121, .25)); }
+  .mode-value { font-family: var(--mono); font-size: 12px; color: var(--text-faint); letter-spacing: .02em; }
+  .mode-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .mode-state-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--commander); box-shadow: 0 0 0 5px rgba(14, 116, 95, .12); animation: statusBlink 2s ease-in-out infinite; }
+  .safe-active .mode-state-dot { background: #1f4e79; box-shadow: 0 0 0 5px rgba(31, 78, 121, .12); }
+  .mode-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
+  .mode-choice {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 13px 15px;
+    background: rgba(255,255,255,.78);
+    color: var(--text);
+    text-align: start;
+    transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease, background .2s ease;
+  }
+  .mode-choice:hover { transform: translateY(-2px); border-color: var(--commander); box-shadow: 0 8px 18px rgba(16, 35, 58, .09); }
+  .mode-choice.active { border-color: var(--commander); background: var(--commander-dim); box-shadow: inset 0 0 0 1px rgba(14, 116, 95, .12); }
+  .safe-active .mode-choice.active { border-color: #1f4e79; background: rgba(31, 78, 121, .09); }
+  .mode-choice strong { display: block; margin-bottom: 3px; }
+  .mode-choice small { display: block; color: var(--text-dim); line-height: 1.35; }
+  .mode-counts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 15px; }
+  @keyframes modeGlow { 0%,100% { transform: scale(.92); opacity: .65; } 50% { transform: scale(1.08); opacity: 1; } }
+  @keyframes modePulse { 0%,100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(14,116,95,.08); } 50% { transform: scale(1.035); box-shadow: 0 0 0 13px rgba(14,116,95,0); } }
+  @keyframes shieldFloat { 0%,100% { transform: translateY(2px); } 50% { transform: translateY(-4px); } }
+  @keyframes statusBlink { 0%,100% { opacity: .62; } 50% { opacity: 1; } }
+  @media (max-width: 700px) { .mode-layout { grid-template-columns: 1fr; gap: 8px; } .mode-visual { min-height: 118px; } .mode-actions { grid-template-columns: 1fr; } }
+  @media (prefers-reduced-motion: reduce) { .mode-panel::after, .mode-orbit, .mode-shield, .mode-state-dot { animation: none; } .mode-choice { transition: none; } }
+</style>
+"""
+
+
 _SERVER_TEMPLATE = """<!DOCTYPE html>
-<html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.server_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """</head>
-<body><div class="container container-narrow"><div class="d-flex justify-content-between align-items-baseline"><h1>{{ t('admin.server_title') }}</h1><a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div>
+<html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.server_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + _SERVER_STYLE + """</head>
+<body data-api-identity="{{ api_identity }}"><div class="container container-narrow"><div class="d-flex justify-content-between align-items-baseline"><h1>{{ t('admin.server_title') }}</h1><a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div>
 <p class="subtitle mb-4">{{ t('admin.server_subtitle') }}</p>
 {% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>{% endfor %}
+""" + IDENTITY_BAR + """
 {% if status.get('last_error') %}<div class="alert-console-error px-3 py-2 mb-4">{{ status.get('last_error') }}</div>{% endif %}
 {% if not supervisor %}<div class="alert-console-error px-3 py-2 mb-4">{{ t('admin.server_unavailable') }}</div>{% endif %}
+<div class="block-console mode-panel {% if safe_mode %}safe-active{% else %}open-active{% endif %} mb-4">
+  <div class="mode-layout">
+    <div class="mode-visual"><div class="mode-orbit" aria-hidden="true"><div class="mode-shield">{% if safe_mode %}SAFE{% else %}OPEN{% endif %}</div></div></div>
+    <div>
+      <span class="block-label">SAFE_MODE</span>
+      <div class="mode-title"><span class="mode-state-dot"></span><h2 class="h4 mb-0">{% if safe_mode %}{{ t('admin.server_safe_on') }}{% else %}{{ t('admin.server_safe_off') }}{% endif %}</h2><span class="mode-value">SAFE_MODE = {{ safe_mode|string|lower }}</span></div>
+      <p class="subtitle mt-2 mb-0">{% if safe_mode %}{{ t('admin.server_safe_on_help') }}{% else %}{{ t('admin.server_safe_off_help') }}{% endif %}</p>
+      <div class="mode-counts"><span class="tag">{{ t('admin.server_pending_users', count=automatic_users) }}</span><span class="tag">{{ t('admin.server_pending_groups', count=automatic_groups) }}</span></div>
+      <div class="mode-actions" data-confirm="{{ t('admin.server_safe_confirm', users=automatic_users, groups=automatic_groups) }}">
+        <button type="button" data-safe-mode="false" class="mode-choice {% if not safe_mode %}active{% endif %}"><strong>{{ t('admin.server_choose_open') }}</strong><small>{{ t('admin.server_choose_open_help') }}</small></button>
+        <button type="button" data-safe-mode="true" class="mode-choice {% if safe_mode %}active{% endif %}"><strong>{{ t('admin.server_choose_safe') }}</strong><small>{{ t('admin.server_choose_safe_help') }}</small></button>
+      </div>
+      <div id="safe-mode-feedback" class="api-hint mt-3" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+</div>
 <div class="block-console mb-4"><span class="block-label">{{ t('admin.server_profile') }}</span><p class="subtitle">{{ t('admin.server_active_profile', profile=active_profile) }}</p>
 <form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.switch_profile') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="col"><select class="form-select form-select-console" name="profile_module" {% if not supervisor %}disabled{% endif %}>{% for profile in profiles %}<option value="{{ profile.module_path }}" {% if profile.module_path == active_module %}selected{% endif %}>{{ profile.profile_name }} — {{ profile.module_path }} ({{ profile.api_port }})</option>{% endfor %}</select></div><div class="col-auto"><button class="btn btn-console-primary" {% if not supervisor %}disabled{% endif %}>{{ t('admin.server_load_profile') }}</button></div></form>
 <p class="subtitle mt-3 mb-0">{{ t('admin.server_restart_required') }}</p></div>
 <div class="block-console"><span class="block-label">{{ t('admin.server_reset') }}</span><p class="subtitle">{{ t('admin.server_reset_help') }}</p><form method="post" action="{{ url_for('admin.reset_server') }}" onsubmit="return confirm({{ t('admin.server_reset_confirm')|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="confirm" value="yes"><button class="btn btn-console-danger" {% if not supervisor %}disabled{% endif %}>{{ t('admin.server_reset_button') }}</button></form></div>
-</div></body></html>"""
+</div>""" + API_CLIENT_SCRIPT + """
+<script>
+(() => {
+  const controls = document.querySelector('.mode-actions');
+  const feedback = document.getElementById('safe-mode-feedback');
+  const currentMode = {{ safe_mode|tojson }};
+  const changingText = {{ t('admin.server_safe_changing')|tojson }};
+  const changedText = {{ t('admin.server_safe_changed')|tojson }};
+  const failedText = {{ t('admin.server_safe_change_failed')|tojson }};
+  controls.querySelectorAll('[data-safe-mode]').forEach(button => {
+    button.addEventListener('click', async () => {
+      const requestedMode = button.dataset.safeMode === 'true';
+      if (requestedMode === currentMode) return;
+      if (requestedMode && !window.confirm(controls.dataset.confirm)) return;
+      controls.querySelectorAll('button').forEach(item => { item.disabled = true; });
+      feedback.textContent = changingText;
+      const result = await AdminApi.call('PUT', '/SYSTEM', {safe_mode: requestedMode}, 'safe-mode-api-output');
+      if (result.ok) {
+        feedback.textContent = changedText;
+        window.setTimeout(() => window.location.reload(), 450);
+      } else {
+        feedback.textContent = failedText;
+        controls.querySelectorAll('button').forEach(item => { item.disabled = false; });
+      }
+    });
+  });
+})();
+</script>
+<pre id="safe-mode-api-output" class="d-none" hidden></pre>
+</body></html>"""
 
 
 _SERVER_WAIT_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.server_restarting') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """</head><body><div class="container container-narrow"><div class="block-console"><h1>{{ t('admin.server_restarting') }}</h1><p class="subtitle">{{ t('admin.server_restarting_help') }}</p><p><a id="retry-link" href="{{ target_url }}">{{ t('admin.server_retry_link') }}</a></p></div></div><script>
@@ -1110,6 +1250,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             "events": "admin.events",
             "users": "admin.users",
             "groups": "admin.groups",
+            "server": "admin.server",
         }
         return redirect(url_for(destinations.get(request.form.get("next_page", ""), "admin.dashboard")))
 
@@ -1130,10 +1271,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
                 "retry_count": ctx.deps.settings_store.get_retry_count(),
                 "risk_threshold": ctx.deps.settings_store.get_risk_threshold(),
                 "lookback_window_days": ctx.deps.settings_store.get_lookback_window_days(),
-                "safe_mode": ctx.deps.settings_store.get_safe_mode(),
             },
-            automatic_users=sum(bool(user.get("auto_register", False)) for user in ctx.deps.persistence.list_users()),
-            automatic_groups=sum(bool(group.auto_register) for group in ctx.group_routing.all()),
             csrf_token=session["csrf_token"],
             **_api_page_context("profiles"),
         )
@@ -1253,7 +1391,16 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             profiles=discover_profiles(),
             supervisor=supervisor_available(),
             status=read_server_status(),
+            safe_mode=ctx.deps.settings_store.get_safe_mode(),
+            automatic_users=sum(
+                bool(user.get("auto_register", False))
+                for user in ctx.deps.persistence.list_users()
+            ),
+            automatic_groups=sum(
+                bool(group.auto_register) for group in ctx.group_routing.all()
+            ),
             csrf_token=session["csrf_token"],
+            **_api_page_context("server"),
         )
 
     def _restart_page(port: int):

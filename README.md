@@ -242,6 +242,10 @@ Most profile edits take effect after a restart. These four settings are differen
 - `lookback_window_days`
 - `safe_mode` — defaults to `false`; when enabled, Telegram users and groups collected automatically are blocked until an administrator approves them.
 
+The current `SAFE_MODE` value and its live open/safe selector are shown on the
+admin **Server management** page. Changing it updates the running server
+immediately through `/SYSTEM`; no restart is required.
+
 Telegram admission is deliberately separate from general API authentication. In open mode the real bot may register a previously unknown Telegram person as a `viewer` and an unknown group against `main_agent`; both records are marked `auto_register`. The person must provide a valid full name before their first operation resumes. Private chats always use `main_agent` and users have no configurable agent assignment. Unknown callers of the HTTP API still receive an authentication error in both modes. The bot-only admission path requires the `bot-service` identity and its `X-Service-Key`.
 
 ## Roles and capability disclosure

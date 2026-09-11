@@ -148,12 +148,10 @@ PROFILES_BODY = """
   <div class="block-console mb-4">
     <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap"><span class="block-label mb-0">{{ t('admin.profiles.settings_title') }}</span><button id="system-get" class="btn btn-console btn-sm">{{ t('admin.api.refresh') }}</button></div>
     <p class="api-hint mt-3">{{ t('admin.profiles.put_help') }}</p>
-    <form id="system-put-form" class="api-form-grid" data-safe-confirm="{{ t('admin.profiles.safe_mode_confirm', users=automatic_users, groups=automatic_groups) }}">
+    <form id="system-put-form" class="api-form-grid">
       <div><label for="system-retry">{{ t('admin.profiles.retry_count') }}</label><input id="system-retry" type="number" min="0" value="{{ settings.retry_count }}" class="form-control form-control-console"></div>
       <div><label for="system-risk">{{ t('admin.profiles.risk_threshold') }}</label><input id="system-risk" type="number" min="0" max="1" step="0.01" value="{{ settings.risk_threshold }}" class="form-control form-control-console"></div>
       <div><label for="system-lookback">{{ t('admin.profiles.lookback_days') }}</label><input id="system-lookback" type="number" min="1" value="{{ settings.lookback_window_days }}" class="form-control form-control-console"></div>
-      <div><label for="system-safe">{{ t('admin.profiles.safe_mode') }}</label><select id="system-safe" class="form-select form-select-console"><option value="false" {% if not settings.safe_mode %}selected{% endif %}>{{ t('admin.profiles.safe_mode_open') }}</option><option value="true" {% if settings.safe_mode %}selected{% endif %}>{{ t('admin.profiles.safe_mode_safe') }}</option></select></div>
-      <div class="wide"><p class="api-hint mb-2">{{ t('admin.profiles.safe_mode_help') }}</p><span class="tag">{{ t('admin.profiles.pending_approvals', users=automatic_users, groups=automatic_groups) }}</span></div>
       <div class="wide"><button class="btn btn-console-primary">{{ t('admin.save') }}</button></div>
     </form>
     <pre id="system-put-output" class="api-output" hidden></pre>
@@ -170,18 +168,14 @@ document.getElementById('system-get').addEventListener('click', async () => {
     document.getElementById('system-retry').value = result.payload.settings.retry_count;
     document.getElementById('system-risk').value = result.payload.settings.risk_threshold;
     document.getElementById('system-lookback').value = result.payload.settings.lookback_window_days;
-    document.getElementById('system-safe').value = String(result.payload.settings.safe_mode);
   }
 });
 document.getElementById('system-put-form').addEventListener('submit', event => {
   event.preventDefault();
-  const safeMode = document.getElementById('system-safe').value === 'true';
-  if (safeMode && !confirm(event.currentTarget.dataset.safeConfirm)) return;
   const body = {};
   AdminApi.numberOptional(body, 'retry_count', 'system-retry', Number.parseInt);
   AdminApi.numberOptional(body, 'risk_threshold', 'system-risk', Number.parseFloat);
   AdminApi.numberOptional(body, 'lookback_window_days', 'system-lookback', Number.parseInt);
-  body.safe_mode = safeMode;
   AdminApi.call('PUT', '/SYSTEM', body, 'system-put-output');
 });
 </script></body>
