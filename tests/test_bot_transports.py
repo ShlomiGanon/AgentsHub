@@ -15,6 +15,7 @@ def _run(coro):
 
 
 _DUMMY_ARGS = {
+    "admit_telegram_update": ("u1", "u1", "private"),
     "resolve_user": ("u1",),
     "update_own_full_name": ("u1", "Test User"),
     "list_commander_chat_ids": (),
@@ -173,6 +174,19 @@ def _minimal_event(persistence, **overrides):
 
 
 # -- resolve_user -------------------------------------------------------
+
+
+def test_admit_telegram_update_registers_a_real_unknown_caller_in_open_mode(server):
+    client = HttpApiClient(server.base_url, bot_service_key=_TEST_BOT_SERVICE_KEY)
+
+    result = _run(client.admit_telegram_update("7009", "7009", "private"))
+
+    assert result.allowed is True
+    assert result.reason == "auto_registered"
+    assert result.user.registered is True
+    assert result.user.permission_level == "viewer"
+    assert result.user.auto_register is True
+    assert result.group is None
 
 
 def test_resolve_user_known_and_unknown(server):

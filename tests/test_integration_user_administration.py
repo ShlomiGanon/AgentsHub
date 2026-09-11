@@ -93,7 +93,7 @@ def test_a_commander_added_via_the_admin_command_can_approve_a_real_held_run(tmp
         ctx.deps.persistence.close()
 
 
-def test_user_api_exposes_only_reads_and_the_self_name_update(tmp_path):
+def test_user_api_exposes_reads_self_name_update_and_commander_approval(tmp_path):
     ctx = build_context(tmp_path)
     try:
         app = build_app(ctx)
@@ -107,6 +107,7 @@ def test_user_api_exposes_only_reads_and_the_self_name_update(tmp_path):
         assert dict(user_touching_routes) == {
             "/Commanders": ["GET"],
             "/User/<identity>": ["GET"],
+            "/User/<identity>/approve": ["POST"],
             "/User/<identity>/name": ["PUT"],
         }
     finally:

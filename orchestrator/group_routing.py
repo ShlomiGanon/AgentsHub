@@ -53,6 +53,7 @@ class GroupBinding:
     chat_id: str
     agent_name: str
     label: str = ""
+    auto_register: bool = False
 
 
 class GroupRoutingTable:
@@ -78,7 +79,12 @@ class GroupRoutingTable:
 
         rows = self._persistence.list_groups()
         fresh = {
-            str(row["chat_id"]): GroupBinding(str(row["chat_id"]), row["agent_name"], row.get("label") or "")
+            str(row["chat_id"]): GroupBinding(
+                str(row["chat_id"]),
+                row["agent_name"],
+                row.get("label") or "",
+                bool(row.get("auto_register", False)),
+            )
             for row in rows
         }
         with self._lock:
@@ -126,9 +132,42 @@ class GroupRoutingTable:
             raise InvalidRoutingTargetError("chat_id must be a non-empty string")
         self.validate_target(agent_name)
         self._persistence.write_group(chat_id, agent_name, label or "")
-        binding = GroupBinding(chat_id, agent_name, label or "")
+        record = self._persistence.read_group(chat_id)
+        binding = GroupBinding(
+            chat_id,
+            agent_name,
+            label or "",
+            bool(record and record.get("auto_register", False)),
+        )
         with self._lock:
             self._bindings[chat_id] = binding
+        return binding
+
+    def register_telegram_group_if_missing(self, chat_id: str, label: str = "") -> GroupBinding:
+        chat_id = str(chat_id).strip()
+        if not chat_id:
+            raise InvalidRoutingTargetError("chat_id must be a non-empty string")
+        record = self._persistence.register_telegram_group_if_missing(chat_id, label or "")
+        binding = GroupBinding(
+            str(record["chat_id"]),
+            record["agent_name"],
+            record.get("label") or "",
+            bool(record.get("auto_register", False)),
+        )
+        with self._lock:
+            self._bindings[chat_id] = binding
+        return binding
+
+    def approve(self, chat_id: str) -> GroupBinding:
+        record = self._persistence.approve_group(str(chat_id))
+        binding = GroupBinding(
+            str(record["chat_id"]),
+            record["agent_name"],
+            record.get("label") or "",
+            False,
+        )
+        with self._lock:
+            self._bindings[str(chat_id)] = binding
         return binding
 
     def remove(self, chat_id: str) -> None:

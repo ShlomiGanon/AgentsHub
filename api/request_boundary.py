@@ -10,7 +10,7 @@ from werkzeug.exceptions import HTTPException
 
 from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
 from messages import get_current_catalog
-from tools import get_trace_id
+from tools import get_trace_id, record_telegram_security_metric
 
 if TYPE_CHECKING:
     from persistence import PersistenceInterface
@@ -92,6 +92,40 @@ def _bot_service_key_matches(provided: str | None) -> bool:
     # Compare as bytes, not str: hmac.compare_digest raises TypeError on a non-ASCII str
     # (a malformed/garbage header would then 500 instead of the intended 401).
     return hmac.compare_digest(provided.encode("utf-8"), configured.encode("utf-8"))
+
+
+def is_authenticated_bot_request() -> bool:
+    """Whether this request carries the bot's service proof, regardless of the human X-Identity."""
+
+    return _bot_service_key_matches(request.headers.get(SERVICE_KEY_HEADER))
+
+
+def enforce_safe_mode_for_bot_request(persistence, settings_store) -> None:
+    """Block auto-registered Telegram entities immediately when safe mode is active.
+
+    Generic API clients are intentionally unaffected by this source-specific gate;
+    they still pass through the normal registered-identity authentication policy.
+    """
+
+    if not is_authenticated_bot_request() or not settings_store.get_safe_mode():
+        return
+    identity = request.headers.get(IDENTITY_HEADER)
+    if not identity or identity == BOT_SERVICE_IDENTITY:
+        return
+    user = persistence.read_user(identity)
+    if user is None:
+        raise AuthenticationError(get_current_catalog().text("api.identity_unregistered", identity=identity))
+    if bool(user.get("auto_register", False)):
+        record_telegram_security_metric("blocked", "user")
+        raise AuthorizationError(get_current_catalog().text("auth.safe_mode_blocked"))
+
+    chat_type = request.headers.get("X-Telegram-Chat-Type")
+    chat_id = request.headers.get("X-Telegram-Chat-ID")
+    if chat_type in {"group", "supergroup"}:
+        group = persistence.read_group(chat_id or "")
+        if group is None or bool(group.get("auto_register", False)):
+            record_telegram_security_metric("blocked", "group")
+            raise AuthorizationError(get_current_catalog().text("auth.safe_mode_group_blocked"))
 
 
 def authenticate(persistence: "PersistenceInterface", identity: str | None) -> PermissionLevel:

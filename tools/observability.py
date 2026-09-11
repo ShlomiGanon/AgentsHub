@@ -32,7 +32,27 @@ except ImportError:
 _tracer = trace.get_tracer("agentshub") if trace is not None else None
 _meter = metrics.get_meter("agentshub") if metrics is not None else None
 _stage_histogram = _meter.create_histogram("agentshub.stage.duration", unit="s") if _meter is not None else None
+_telegram_security_counter = (
+    _meter.create_counter(
+        "agentshub.telegram.security.events",
+        unit="{event}",
+        description="Telegram automatic registrations, safe-mode denials, and approvals",
+    )
+    if _meter is not None
+    else None
+)
 _telemetry_configured = False
+
+
+def record_telegram_security_metric(action: str, entity: str) -> None:
+    """Record a low-cardinality Telegram security event without identity data."""
+
+    if action not in {"auto_registered", "blocked", "approved"}:
+        raise ValueError(f"unsupported telegram security metric action: {action!r}")
+    if entity not in {"user", "group", "admission"}:
+        raise ValueError(f"unsupported telegram security metric entity: {entity!r}")
+    if _telegram_security_counter is not None:
+        _telegram_security_counter.add(1, {"action": action, "entity": entity})
 
 
 def new_trace_id() -> str:

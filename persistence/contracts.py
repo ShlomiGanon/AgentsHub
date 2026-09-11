@@ -134,11 +134,29 @@ class PersistenceInterface(ABC):
 
     @abstractmethod
     def read_user(self, telegram_identity: str) -> dict | None:
-        """Return the user's record, or None if unregistered."""
+        """Return the user's record, including auto_register, or None if unregistered."""
 
     @abstractmethod
     def write_user(self, telegram_identity: str, permission_level: str, full_name: str | None = None) -> None:
-        """Create/update a user; None preserves an existing full name."""
+        """Create/update a manual user; None preserves an existing full name and edits preserve registration source."""
+
+    @abstractmethod
+    def register_telegram_user_if_missing(self, telegram_identity: str) -> dict:
+        """Atomically create an automatic viewer when absent and return the effective record."""
+
+    @abstractmethod
+    def admit_telegram_update(
+        self,
+        telegram_identity: str,
+        group_chat_id: str | None,
+        group_label: str,
+        allow_registration: bool,
+    ) -> dict:
+        """Atomically read, and when allowed create, the user and optional group for one Telegram update."""
+
+    @abstractmethod
+    def approve_user(self, telegram_identity: str) -> dict:
+        """Mark an existing user as manually approved and return it."""
 
     @abstractmethod
     def update_user_full_name(self, telegram_identity: str, full_name: str) -> None:
@@ -154,11 +172,19 @@ class PersistenceInterface(ABC):
 
     @abstractmethod
     def read_group(self, chat_id: str) -> dict | None:
-        """Return the Telegram group's routing record (`chat_id`, `agent_name`, `label`, `created_at`), or None if unregistered."""
+        """Return the Telegram group's routing record, including auto_register, or None if unregistered."""
 
     @abstractmethod
     def write_group(self, chat_id: str, agent_name: str, label: str = "") -> None:
-        """Create or update a Telegram group's routing target."""
+        """Create/update a manual Telegram group; edits preserve registration source."""
+
+    @abstractmethod
+    def register_telegram_group_if_missing(self, chat_id: str, label: str = "") -> dict:
+        """Atomically create an automatic main-agent group when absent and return the effective record."""
+
+    @abstractmethod
+    def approve_group(self, chat_id: str) -> dict:
+        """Mark an existing Telegram group as manually approved and return it."""
 
     @abstractmethod
     def delete_group(self, chat_id: str) -> None:

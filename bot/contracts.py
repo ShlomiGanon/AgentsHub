@@ -86,6 +86,7 @@ class UserLookupResult:
     registered: bool
     permission_level: PermissionLevelName | None = None
     full_name: str | None = None
+    auto_register: bool = False
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,16 @@ class GroupBindingView:
     chat_id: str
     agent_name: str
     label: str = ""
+    auto_register: bool = False
+
+
+@dataclass(frozen=True)
+class TelegramAdmissionResult:
+    allowed: bool
+    reason: str
+    safe_mode: bool
+    user: UserLookupResult | None = None
+    group: GroupBindingView | None = None
 
 
 @dataclass(frozen=True)
@@ -240,6 +251,7 @@ class SettingsView:
     retry_count: int
     risk_threshold: float
     lookback_window_days: int
+    safe_mode: bool = False
 
 
 
@@ -293,6 +305,14 @@ class BotApiClient(ABC):
     async def close(self) -> None:
         """Close lifecycle-managed transport resources."""
 
+    @abstractmethod
+    async def admit_telegram_update(
+        self,
+        telegram_identity: str,
+        chat_id: str,
+        chat_type: str,
+        chat_label: str = "",
+    ) -> TelegramAdmissionResult: ...
 
     @abstractmethod
     async def resolve_user(self, telegram_identity: str) -> UserLookupResult: ...
@@ -394,6 +414,18 @@ class BotApiClient(ABC):
 
 class UnimplementedApiClient(BotApiClient):
     """The only concrete `BotApiClient` today."""
+
+    async def admit_telegram_update(
+        self,
+        telegram_identity: str,
+        chat_id: str,
+        chat_type: str,
+        chat_label: str = "",
+    ) -> TelegramAdmissionResult:
+        raise ApiNotImplementedError(
+            "admit_telegram_update",
+            "§7 Telegram admission policy",
+        )
 
     async def resolve_user(self, telegram_identity: str) -> UserLookupResult:
         raise ApiNotImplementedError("resolve_user", "§7.9 (authentication/authorization enforcement)")

@@ -96,6 +96,8 @@ MESSAGES = {
         "חובה להגדיר את 'approval_flag' במפורש כ-true או false; אין לו ערך ברירת מחדל."
     ),
     "common.rejected": "נדחה: {message}",
+    "settings.safe_mode_boolean": "הערך 'safe_mode' חייב להיות true או false.",
+    "settings.safe_mode_state": "מצב בטוח: {value}",
     "settings.view": (
         "מספר ניסיונות: {retry_count}\nסף סיכון: {risk_threshold}\n"
         "חלון היסטוריה (ימים): {lookback_window_days}"
@@ -160,6 +162,8 @@ MESSAGES = {
         "שלום — זהו {profile_name}. דווח על משהו, שאל שאלה, "
         "או בקש פעולה — פשוט הקלד."
     ),
+    "auth.safe_mode_blocked": "חשבון הטלגרם הזה ממתין לאישור מנהל בזמן שמצב בטוח פעיל.",
+    "auth.safe_mode_group_blocked": "קבוצת הטלגרם הזאת ממתינה לאישור מנהל בזמן שמצב בטוח פעיל.",
     "bot.full_name_prompt": "לפני שנמשיך, נא לכתוב שם מלא (לפחות שתי מילים).",
     "bot.full_name_invalid": "השם אינו ברור. נא לכתוב שם מלא הכולל לפחות שתי מילים.",
     "bot.full_name_saved": "תודה, {name}. השם נשמר וכעת נמשיך בבקשה הקודמת.",
@@ -182,6 +186,8 @@ MESSAGES = {
     "api.event_data_event_id_invalid": "מזהה אירוע ההמשך אינו תקין.",
     "api.event_data_reply_not_pending": "בקשת ההשלמה אינה פתוחה עבור משתמש ושיחה אלה.",
     "api.identity_unregistered": "הזהות '{identity}' אינה רשומה במערכת.",
+    "api.telegram_admission_invalid": "בקשת הקבלה מטלגרם אינה תקינה.",
+    "api.safe_mode_boolean": "הערך 'safe_mode' חייב להיות אמת או שקר.",
     "api.operation_forbidden": "רמת ההרשאה {level} אינה רשאית לבצע {operation}.",
     "api.field_required": "השדה '{field}' הוא שדה חובה.",
     "api.conversation_id_invalid": (
@@ -373,6 +379,12 @@ MESSAGES = {
     "admin.profiles.retry_count": "ניסיונות חוזרים לאחר כשל",
     "admin.profiles.risk_threshold": "סף סיכון לאישור",
     "admin.profiles.lookback_days": "טווח היסטוריה בימים",
+    "admin.profiles.safe_mode": "מצב גישה לטלגרם",
+    "admin.profiles.safe_mode_open": "פתוח - קבלת אנשים וקבוצות חדשים",
+    "admin.profiles.safe_mode_safe": "בטוח - אנשים וקבוצות שאושרו בלבד",
+    "admin.profiles.safe_mode_help": "שיחות פרטיות תמיד מופנות לסוכן הראשי. גם קבוצה חדשה משויכת לסוכן הראשי עד לעריכתה.",
+    "admin.profiles.safe_mode_confirm": "להפעיל מצב בטוח? {users} משתמשים אוטומטיים ו-{groups} קבוצות אוטומטיות ייחסמו עד לאישור.",
+    "admin.profiles.pending_approvals": "ממתינים לאישור: {users} משתמשים ו-{groups} קבוצות",
     "admin.profiles.components": "רכיבי הפרופיל",
     "admin.profiles.agents": "סוכנים",
     "admin.profiles.protocols": "פרוטוקולים",
@@ -458,7 +470,14 @@ MESSAGES = {
     "admin.confirm_remove_user": "להסיר את {identity}?",
     "admin.groups_title": "קבוצות טלגרם",
     "admin.groups_page_subtitle": "קישור מזהי קבוצות טלגרם אמיתיים לתחום סוכן.",
-    "admin.groups_subtitle": "קשר קבוצה לתת-הסוכן שההודעות שלה שייכות לו. קבוצות שאינן ברשימה - הבוט מתעלם מהן.",
+    "admin.groups_subtitle": "קשר כל קבוצה לסוכן שלה ואשר קבוצות שנקלטו אוטומטית.",
+    "admin.registration_automatic": "נקלט אוטומטית",
+    "admin.registration_approved": "מאושר",
+    "admin.registration_blocked": "חסום במצב בטוח",
+    "admin.registration_active": "פעיל",
+    "admin.approve_registration": "אישור",
+    "admin.user_approved": "המשתמש {identity} אושר.",
+    "admin.group_approved": "הקבוצה {chat_id} אושרה.",
     "admin.col_chat_id": "מזהה צ'אט",
     "admin.col_label": "תיאור",
     "admin.col_routed_to": "מנותב אל",

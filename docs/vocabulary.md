@@ -76,6 +76,18 @@ resolves it into a question, a report, or a request.
 
 ## Protocol
 
+## Telegram admission
+
+`safe_mode` is the persistent commander-controlled switch for Telegram
+admission. Its default is `false`. An automatically collected user or group
+has `auto_register=true`; an explicitly created or approved record has
+`auto_register=false`. Safe mode blocks the former without deleting it.
+Automatic users are always viewers. Automatic groups are initially routed to
+`main_agent`. Users have no agent assignment: every private Telegram message
+always routes to `main_agent`.
+
+## Protocol
+
 A named playbook. Not keyed to event types — chosen by the Main Agent
 reading descriptions.
 

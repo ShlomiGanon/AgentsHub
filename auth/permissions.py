@@ -34,6 +34,7 @@ class RequestedOperation(Enum):
     VIEW_SETTINGS = "view_settings"
     CHANGE_SETTINGS = "change_settings"
     VIEW_USER_REGISTRATION = "view_user_registration"
+    MANAGE_USERS = "manage_users"
     VIEW_COMMANDER_ROSTER = "view_commander_roster"
     VIEW_JOB_STATUS = "view_job_status"
     RESOLVE_CLARIFICATION = "resolve_clarification"

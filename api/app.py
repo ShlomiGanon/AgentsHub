@@ -173,6 +173,9 @@ def build_app(ctx: ApiContext) -> Flask:
                 "trace_id": get_trace_id(),
             },
         )
+        from api.request_boundary import enforce_safe_mode_for_bot_request
+
+        enforce_safe_mode_for_bot_request(ctx.deps.persistence, ctx.deps.settings_store)
 
     @app.after_request
     def _finish_request(response):
@@ -203,6 +206,7 @@ def build_app(ctx: ApiContext) -> Flask:
         build_notifications_blueprint,
         build_protocols_blueprint,
         build_system_blueprint,
+        build_telegram_blueprint,
         build_users_blueprint,
     )
 
@@ -216,6 +220,7 @@ def build_app(ctx: ApiContext) -> Flask:
     app.register_blueprint(build_users_blueprint(ctx))
     app.register_blueprint(build_notifications_blueprint(ctx))
     app.register_blueprint(build_groups_blueprint(ctx))
+    app.register_blueprint(build_telegram_blueprint(ctx))
 
     from api.admin import build_admin_blueprint, resolve_admin_config
 

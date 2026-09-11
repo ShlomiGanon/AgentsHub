@@ -45,6 +45,9 @@ def _build_parser() -> argparse.ArgumentParser:
     remove_parser = subparsers.add_parser("remove", help="remove a group binding")
     remove_parser.add_argument("--chat-id", required=True)
 
+    approve_parser = subparsers.add_parser("approve", help="approve an automatically registered group")
+    approve_parser.add_argument("--chat-id", required=True)
+
     subparsers.add_parser("list", help="list every registered group binding")
 
     return parser
@@ -101,9 +104,19 @@ def _run_command(args: argparse.Namespace, store: PersistenceInterface, routable
         print(f"remove: group '{args.chat_id}' removed")
         return 0
 
+    if args.command == "approve":
+        try:
+            store.approve_group(args.chat_id)
+        except NotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"approve: group '{args.chat_id}' approved")
+        return 0
+
     if args.command == "list":
         for group in store.list_groups():
-            print(f"{group['chat_id']}\t{group['agent_name']}\t{group['label']}")
+            source = "automatic" if group.get("auto_register", False) else "approved"
+            print(f"{group['chat_id']}\t{group['agent_name']}\t{group['label']}\t{source}")
         return 0
 
     raise AssertionError(f"unreachable: unknown command '{args.command}'")

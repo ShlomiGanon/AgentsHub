@@ -6,7 +6,8 @@ USERS_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS users (
     telegram_identity TEXT PRIMARY KEY,
     permission_level TEXT NOT NULL,
-    full_name TEXT NOT NULL DEFAULT ''
+    full_name TEXT NOT NULL DEFAULT '',
+    auto_register INTEGER NOT NULL DEFAULT 0 CHECK (auto_register IN (0, 1))
 );
 """
 
@@ -19,7 +20,8 @@ CREATE TABLE IF NOT EXISTS telegram_groups (
     chat_id TEXT PRIMARY KEY,
     agent_name TEXT NOT NULL,
     label TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    auto_register INTEGER NOT NULL DEFAULT 0 CHECK (auto_register IN (0, 1))
 );
 """
 
@@ -254,6 +256,12 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "ALTER TABLE events ADD COLUMN sender_permission_level TEXT NOT NULL DEFAULT 'viewer';",
     ),
     (18, "add full name to users", "ALTER TABLE users ADD COLUMN full_name TEXT NOT NULL DEFAULT '';"),
+    (
+        19,
+        "mark automatically registered telegram users and groups",
+        "ALTER TABLE users ADD COLUMN auto_register INTEGER NOT NULL DEFAULT 0 CHECK (auto_register IN (0, 1));"
+        "ALTER TABLE telegram_groups ADD COLUMN auto_register INTEGER NOT NULL DEFAULT 0 CHECK (auto_register IN (0, 1));",
+    ),
 ]
 
 
@@ -287,6 +295,22 @@ def run_migrations(db_path: str) -> None:
                 columns = {row[1] for row in connection.execute("PRAGMA table_info(users)").fetchall()}
                 if columns and "full_name" not in columns:
                     connection.execute("ALTER TABLE users ADD COLUMN full_name TEXT NOT NULL DEFAULT ''")
+            elif version == 19:
+                connection.executescript(USERS_TABLE_DDL + TELEGRAM_GROUPS_TABLE_DDL)
+                user_columns = {row[1] for row in connection.execute("PRAGMA table_info(users)").fetchall()}
+                if "auto_register" not in user_columns:
+                    connection.execute(
+                        "ALTER TABLE users ADD COLUMN auto_register INTEGER NOT NULL DEFAULT 0 "
+                        "CHECK (auto_register IN (0, 1))"
+                    )
+                group_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(telegram_groups)").fetchall()
+                }
+                if "auto_register" not in group_columns:
+                    connection.execute(
+                        "ALTER TABLE telegram_groups ADD COLUMN auto_register INTEGER NOT NULL DEFAULT 0 "
+                        "CHECK (auto_register IN (0, 1))"
+                    )
             else:
                 connection.executescript(sql)
 

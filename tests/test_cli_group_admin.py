@@ -95,6 +95,20 @@ def test_remove_deletes_a_binding_and_unknown_fails(profile_module, capsys, real
     assert "error" in capsys.readouterr().err
 
 
+def test_approve_preserves_the_group_route(profile_module, real_tier_env):
+    module_name, db_path = profile_module
+    store = SQLitePersistence(str(db_path))
+    try:
+        store.register_telegram_group_if_missing("-1010", "auto")
+    finally:
+        store.close()
+
+    assert main(["--profile", module_name, "approve", "--chat-id", "-1010"]) == 0
+    group = _groups(db_path)["-1010"]
+    assert group["agent_name"] == "main_agent"
+    assert group["auto_register"] is False
+
+
 def test_list_reports_every_binding(profile_module, capsys, real_tier_env):
     module_name, _ = profile_module
 

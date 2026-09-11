@@ -412,16 +412,18 @@ async def write_protocol(
 if TYPE_CHECKING:
     from bot.contracts import BotDeps, SettingsView
 
-SettingField = Literal["retry_count", "risk_threshold", "lookback_window_days"]
+SettingField = Literal["retry_count", "risk_threshold", "lookback_window_days", "safe_mode"]
 
 
 def format_settings_view(view: "SettingsView", catalog: MessageCatalog | None = None) -> str:
-    return _catalog(catalog).text(
+    messages = _catalog(catalog)
+    base = messages.text(
         "settings.view",
         retry_count=view.retry_count,
         risk_threshold=view.risk_threshold,
         lookback_window_days=view.lookback_window_days,
     )
+    return f"{base}\n{messages.text('settings.safe_mode_state', value=str(view.safe_mode).lower())}"
 
 
 async def view_settings(deps: "BotDeps", caller_identity: str) -> str:
@@ -460,6 +462,14 @@ def _validate_value(
         if parsed_value <= 0:
             return None, _catalog(catalog).text("settings.lookback_positive")
         return parsed_value, None
+
+    if field == "safe_mode":
+        normalized = raw_value.strip().casefold()
+        if normalized == "true":
+            return True, None
+        if normalized == "false":
+            return False, None
+        return None, _catalog(catalog).text("settings.safe_mode_boolean")
 
     return None, _catalog(catalog).text("settings.unknown", field=repr(field))
 

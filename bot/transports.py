@@ -1,6 +1,8 @@
 """HTTP and Telegram transport implementations."""
 
 import asyncio
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 import json
 import random
@@ -33,6 +35,7 @@ from bot.contracts import (
     WriteResult,
     SettingsView,
     TracePollResult,
+    TelegramAdmissionResult,
     UncertainVerdictNotice,
     UncertainVerdictReporterNotice,
     UserLookupResult,
@@ -44,6 +47,21 @@ from typing import Callable, Sequence
 
 from bot.interactions import split_message
 from tools import get_trace_id, new_trace_id, stage_context
+
+_TELEGRAM_REQUEST_CONTEXT: ContextVar[tuple[str, str] | None] = ContextVar(
+    "telegram_request_context", default=None
+)
+
+
+@contextmanager
+def telegram_request_context(chat_id: str, chat_type: str):
+    """Attach trusted Telegram chat metadata to every API call in one update task."""
+
+    token = _TELEGRAM_REQUEST_CONTEXT.set((str(chat_id), str(chat_type)))
+    try:
+        yield
+    finally:
+        _TELEGRAM_REQUEST_CONTEXT.reset(token)
 
 def _do_request(url: str, method: str, identity: str, request_payload: dict | None) -> tuple[int, dict]:
     try:
@@ -101,10 +119,13 @@ class HttpApiClient(BotApiClient):
             "X-Trace-ID": trace_id_override or get_trace_id() or new_trace_id(),
             "X-Client-Request-ID": uuid.uuid4().hex,
         }
-        # Only the bot-service identity needs this — a human Telegram identity is
-        # authenticated purely by that identity string, unaffected either way.
-        if identity == BOT_SERVICE_IDENTITY and self._bot_service_key:
+        # The proof is also sent for human identities so the API can distinguish
+        # trusted Telegram-origin traffic and re-check safe mode at its boundary.
+        if self._bot_service_key:
             headers["X-Service-Key"] = self._bot_service_key
+        telegram_context = _TELEGRAM_REQUEST_CONTEXT.get()
+        if telegram_context is not None:
+            headers["X-Telegram-Chat-ID"], headers["X-Telegram-Chat-Type"] = telegram_context
         attempts = 3 if method == "GET" else 1
 
         try:
@@ -134,6 +155,52 @@ class HttpApiClient(BotApiClient):
     def _raise_for_error(self, status: int, payload: dict) -> None:
         raise ApiRequestError(status, payload.get("message", ""), payload.get("error_class"), payload.get("field"))
 
+    async def admit_telegram_update(
+        self,
+        telegram_identity: str,
+        chat_id: str,
+        chat_type: str,
+        chat_label: str = "",
+    ) -> TelegramAdmissionResult:
+        status, response_payload = await self._call(
+            "POST",
+            "/Telegram/Admission",
+            BOT_SERVICE_IDENTITY,
+            {
+                "telegram_identity": str(telegram_identity),
+                "chat_id": str(chat_id),
+                "chat_type": str(chat_type),
+                "chat_label": chat_label or "",
+            },
+        )
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+        user_payload = response_payload.get("user")
+        user = None
+        if user_payload is not None:
+            user = UserLookupResult(
+                registered=True,
+                permission_level=user_payload.get("permission_level"),
+                full_name=user_payload.get("full_name"),
+                auto_register=bool(user_payload.get("auto_register", False)),
+            )
+        group_payload = response_payload.get("group")
+        group = None
+        if group_payload is not None:
+            group = GroupBindingView(
+                chat_id=str(group_payload["chat_id"]),
+                agent_name=group_payload["agent_name"],
+                label=group_payload.get("label") or "",
+                auto_register=bool(group_payload.get("auto_register", False)),
+            )
+        return TelegramAdmissionResult(
+            allowed=bool(response_payload.get("allowed")),
+            reason=str(response_payload.get("reason") or "unknown"),
+            safe_mode=bool(response_payload.get("safe_mode")),
+            user=user,
+            group=group,
+        )
+
 
     async def resolve_user(self, telegram_identity: str) -> UserLookupResult:
         status, response_payload = await self._call("GET", f"/User/{quote(telegram_identity, safe='')}", BOT_SERVICE_IDENTITY)
@@ -143,6 +210,7 @@ class HttpApiClient(BotApiClient):
             registered=response_payload["registered"],
             permission_level=response_payload["permission_level"],
             full_name=response_payload.get("full_name"),
+            auto_register=bool(response_payload.get("auto_register", False)),
         )
 
     async def update_own_full_name(self, telegram_identity: str, full_name: str) -> str:
@@ -166,7 +234,12 @@ class HttpApiClient(BotApiClient):
         if status >= 400:
             self._raise_for_error(status, response_payload)
         return tuple(
-            GroupBindingView(chat_id=str(g["chat_id"]), agent_name=g["agent_name"], label=g.get("label") or "")
+            GroupBindingView(
+                chat_id=str(g["chat_id"]),
+                agent_name=g["agent_name"],
+                label=g.get("label") or "",
+                auto_register=bool(g.get("auto_register", False)),
+            )
             for g in response_payload["groups"]
         )
 
@@ -329,6 +402,7 @@ class HttpApiClient(BotApiClient):
             retry_count=settings["retry_count"],
             risk_threshold=settings["risk_threshold"],
             lookback_window_days=settings["lookback_window_days"],
+            safe_mode=bool(settings.get("safe_mode", False)),
         )
 
     async def write_setting(self, field: str, value: object, caller_identity: str) -> WriteResult:

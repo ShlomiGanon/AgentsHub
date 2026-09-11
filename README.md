@@ -235,11 +235,14 @@ Free-form messages are classified as questions, reports, requests, or conversati
 
 System self-description is generated naturally rather than returned from a fixed response. For questions about identity, capabilities, protocols, or sub-agents, the model is grounded with the active `PROFILE_NAME` and a runtime catalog filtered to what the *asking caller* is authorized to see (see "Roles and capability disclosure" below). Adding an agent, tool, or protocol changes a commander's catalog after restart; a viewer's catalog only ever changes when `ViewerAllowedAction` itself changes.
 
-Most profile edits take effect after a restart. These three settings are different: they take effect immediately and are saved beside the deployment database:
+Most profile edits take effect after a restart. These four settings are different: they take effect immediately and are saved beside the deployment database:
 
 - `retry_count`
 - `risk_threshold`
 - `lookback_window_days`
+- `safe_mode` — defaults to `false`; when enabled, Telegram users and groups collected automatically are blocked until an administrator approves them.
+
+Telegram admission is deliberately separate from general API authentication. In open mode the real bot may register a previously unknown Telegram person as a `viewer` and an unknown group against `main_agent`; both records are marked `auto_register`. The person must provide a valid full name before their first operation resumes. Private chats always use `main_agent` and users have no configurable agent assignment. Unknown callers of the HTTP API still receive an authentication error in both modes. The bot-only admission path requires the `bot-service` identity and its `X-Service-Key`.
 
 ## Roles and capability disclosure
 

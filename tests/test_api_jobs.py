@@ -269,7 +269,7 @@ def test_a_known_identity_reports_registered_and_its_level(tmp_path, teardown_ct
     resp = client.get(f"/User/{VIEWER_IDENTITY}", headers=auth_headers(COMMANDER_IDENTITY))
 
     assert resp.status_code == 200
-    assert resp.get_json() == {"registered": True, "permission_level": "viewer", "full_name": ""}
+    assert resp.get_json() == {"registered": True, "permission_level": "viewer", "full_name": "", "auto_register": False}
 
 
 def test_an_unknown_identity_reports_unregistered_not_an_error(tmp_path, teardown_ctx):

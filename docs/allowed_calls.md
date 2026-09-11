@@ -55,6 +55,9 @@ Maps every API route, bot command/callback, and message intent to its `Requested
 | `GET /SYSTEM` — agent names, protocol bodies, scheduler, queue/held-count slice | `view_system_internals` | no |
 | `GET /SYSTEM` — settings slice | `view_settings` | no |
 | `PUT /SYSTEM` | `change_settings` | no |
+| `POST /User/<identity>/approve` | `manage_users` | no |
+| `POST /Groups/<chat_id>/approve` | `manage_groups` | no |
+| `POST /Telegram/Admission` | bot-service admission gate | no; `bot-service` plus service key only |
 | `GET /User/<identity>` | `view_user_registration` | yes — own identity only |
 | `GET /Commanders` | `view_commander_roster` | no |
 | `GET /Job/<event_id>` | `view_job_status` | yes — own submitted events only |

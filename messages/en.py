@@ -100,6 +100,8 @@ MESSAGES = {
         "Retry count: {retry_count}\nRisk threshold: {risk_threshold}\n"
         "Lookback window (days): {lookback_window_days}"
     ),
+    "settings.safe_mode_boolean": "Refused: 'safe_mode' must be true or false.",
+    "settings.safe_mode_state": "Safe mode: {value}",
     "settings.retry_whole": "Refused: 'retry_count' must be a whole number, got {value}.",
     "settings.retry_nonnegative": "Refused: 'retry_count' cannot be negative.",
     "settings.risk_number": "Refused: 'risk_threshold' must be a number, got {value}.",
@@ -111,8 +113,8 @@ MESSAGES = {
         "Refused: 'lookback_window_days' must be at least 1 — a zero-length window is a configuration error."
     ),
     "settings.unknown": (
-        "Refused: unknown setting {field}. Only retry_count, risk_threshold, and "
-        "lookback_window_days may be changed."
+        "Refused: unknown setting {field}. Only retry_count, risk_threshold, "
+        "lookback_window_days, and safe_mode may be changed."
     ),
     "settings.saved": (
         "{message}\n\nThis took effect immediately and has been saved — unlike a profile edit, no restart is needed."
@@ -161,6 +163,8 @@ MESSAGES = {
         "Hi — this is {profile_name}. Report something, ask a question, or "
         "request an action — just type it."
     ),
+    "auth.safe_mode_blocked": "This Telegram account is awaiting administrator approval while safe mode is active.",
+    "auth.safe_mode_group_blocked": "This Telegram group is awaiting administrator approval while safe mode is active.",
     "bot.full_name_prompt": "Before we continue, please enter your full name (at least two words).",
     "bot.full_name_invalid": "That is not a clear full name. Please enter at least two words.",
     "bot.full_name_saved": "Thanks, {name}. Your name was saved; continuing your previous request.",
@@ -183,6 +187,8 @@ MESSAGES = {
     "api.event_data_event_id_invalid": "The event-data continuation ID is invalid.",
     "api.event_data_reply_not_pending": "That event-data request is not pending for this user and conversation.",
     "api.identity_unregistered": "'{identity}' is not a registered identity.",
+    "api.telegram_admission_invalid": "The Telegram admission request is invalid.",
+    "api.safe_mode_boolean": "'safe_mode' must be true or false.",
     "api.operation_forbidden": "Permission level {level} may not {operation}.",
     "api.field_required": "'{field}' is required.",
     "api.conversation_id_invalid": (
@@ -396,6 +402,12 @@ MESSAGES = {
     "admin.profiles.retry_count": "Retries after a failed step",
     "admin.profiles.risk_threshold": "Approval risk threshold",
     "admin.profiles.lookback_days": "History lookback (days)",
+    "admin.profiles.safe_mode": "Telegram access mode",
+    "admin.profiles.safe_mode_open": "Open - accept new people and groups",
+    "admin.profiles.safe_mode_safe": "Safe - approved people and groups only",
+    "admin.profiles.safe_mode_help": "Private conversations always use the main agent. New groups are also assigned to the main agent until edited.",
+    "admin.profiles.safe_mode_confirm": "Enable safe mode? {users} automatically registered users and {groups} automatically registered groups will be blocked until approved.",
+    "admin.profiles.pending_approvals": "Awaiting approval: {users} users and {groups} groups",
     "admin.profiles.components": "Profile components",
     "admin.profiles.agents": "Agents",
     "admin.profiles.protocols": "Protocols",
@@ -481,7 +493,14 @@ MESSAGES = {
     "admin.confirm_remove_user": "Remove {identity}?",
     "admin.groups_title": "Telegram groups",
     "admin.groups_page_subtitle": "Bind real Telegram group IDs to an agent scope.",
-    "admin.groups_subtitle": "Bind a group chat to the specialist its messages belong to. Groups not listed here are ignored by the bot.",
+    "admin.groups_subtitle": "Bind each group to its agent and approve groups that were collected automatically.",
+    "admin.registration_automatic": "Automatic",
+    "admin.registration_approved": "Approved",
+    "admin.registration_blocked": "Blocked in safe mode",
+    "admin.registration_active": "Active",
+    "admin.approve_registration": "Approve",
+    "admin.user_approved": "User {identity} was approved.",
+    "admin.group_approved": "Group {chat_id} was approved.",
     "admin.col_chat_id": "Chat ID",
     "admin.col_label": "Label",
     "admin.col_routed_to": "Routed to",

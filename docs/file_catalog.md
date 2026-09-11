@@ -18,6 +18,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `run_stack.py` | Production | Public entry point | Starts and supervises the unified API and Telegram bot processes together. |
 | `SPEED.MD` | Documentation | Internal | Records the measured response-latency investigation and evidence. |
 | `SPEED_PLAN.MD` | Documentation | Internal | Defines the approved sequential implementation and verification plan for current speed and operator-experience work. |
+| `unsafe_system.md` | Documentation | Internal | Defines the approved safe/open Telegram admission design, implementation stages, and verification criteria. |
 | `agents/__init__.py` | Production | Public facade | Exposes the public agent facade and compatibility module aliases. |
 | `agents/contracts.py` | Production | Private implementation | Defines agent results, descriptors, tool metadata, parsing, and typed errors. |
 | `agents/friendly_forces_agent.py` | Production | Private implementation | Implements the tactical coordination and dispatch specialist for friendly forces. |
@@ -235,6 +236,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_team_status_agent.py` | Test | Internal | Verifies daily attendance, multi-day unavailability, late approval, and protocol execution. |
 | `tests/test_team_status_persistence.py` | Test | Internal | Verifies readiness-team roster approval, message idempotency, late-response isolation, and separate SQLite schemas. |
 | `tests/test_unified_role_and_security.py` | Test | Internal | Verifies unified role-based security, button workflows, and confirmation flows. |
+| `tests/test_unsafe_system.py` | Test | Internal | Verifies safe/open Telegram admission, automatic registration, approval, and API isolation. |
 | `tests/test_user_admin.py` | Test | Internal | Verifies user admin behavior and edge cases. |
 | `tools/__init__.py` | Production | Public facade | Exposes shared observability helpers and lazy terminal compatibility aliases. |
 | `tools/observability.py` | Production | Private implementation | Provides trace contexts, structured logging, and human/JSON output. |

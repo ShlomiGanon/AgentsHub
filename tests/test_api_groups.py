@@ -116,10 +116,10 @@ def test_group_bindings_are_created_listed_and_removed(tmp_path, teardown_ctx):
 
     put = client.put(f"/Groups/{GROUP}", headers=headers, json={"agent_name": "reference_agent", "label": "ops room"})
     assert put.status_code == 200
-    assert put.get_json() == {"chat_id": GROUP, "agent_name": "reference_agent", "label": "ops room"}
+    assert put.get_json() == {"chat_id": GROUP, "agent_name": "reference_agent", "label": "ops room", "auto_register": False}
 
     listed = client.get("/Groups", headers=headers).get_json()["groups"]
-    assert listed == [{"chat_id": GROUP, "agent_name": "reference_agent", "label": "ops room"}]
+    assert listed == [{"chat_id": GROUP, "agent_name": "reference_agent", "label": "ops room", "auto_register": False}]
     # Write-through: the in-memory table and the DB agree without a reload.
     assert ctx.group_routing.get(GROUP).agent_name == "reference_agent"
     assert ctx.deps.persistence.read_group(GROUP)["agent_name"] == "reference_agent"

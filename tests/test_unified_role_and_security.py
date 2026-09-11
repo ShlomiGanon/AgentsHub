@@ -14,7 +14,7 @@ from protocols.contracts import CriticalityLevel, Protocol
 
 
 @pytest.fixture
-def unified_env(monkeypatch):
+def unified_env(monkeypatch, tmp_path):
     """Set up environment variables for unified test profile.
 
     Also ensures profiles.unified_test's mock/demo data is seeded. That
@@ -30,6 +30,37 @@ def unified_env(monkeypatch):
     monkeypatch.setenv("BOT_SERVICE_KEY", "mock-service-key")
 
     from profiles import unified_test
+
+    monkeypatch.setattr(unified_test, "DB_PATH", str(tmp_path / "history.db"))
+    monkeypatch.setattr(
+        unified_test,
+        "UNIFIED_SURVEILLANCE_DB_PATH",
+        str(tmp_path / "surveillance.db"),
+    )
+    monkeypatch.setattr(
+        unified_test,
+        "UNIFIED_TEAM_STATUS_DB_PATH",
+        str(tmp_path / "team-status.db"),
+    )
+    monkeypatch.setattr(
+        unified_test,
+        "RESETTABLE_DATABASES",
+        (
+            unified_test.DB_PATH,
+            unified_test.UNIFIED_SURVEILLANCE_DB_PATH,
+            unified_test.UNIFIED_TEAM_STATUS_DB_PATH,
+        ),
+    )
+    monkeypatch.setattr(
+        unified_test.UnifiedSurveillanceAgent,
+        "surveillance_db_path",
+        unified_test.UNIFIED_SURVEILLANCE_DB_PATH,
+    )
+    monkeypatch.setattr(
+        unified_test.UnifiedTeamStatusAgent,
+        "status_db_path",
+        unified_test.UNIFIED_TEAM_STATUS_DB_PATH,
+    )
     unified_test.ensure_seed_data()
 
 

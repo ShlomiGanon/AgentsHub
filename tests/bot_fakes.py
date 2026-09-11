@@ -24,6 +24,7 @@ from bot.api_client import (
     ProfileView,
     SettingsView,
     TracePollResult,
+    TelegramAdmissionResult,
     UserLookupResult,
     WriteResult,
 )
@@ -99,8 +100,58 @@ class FakeBotApiClient(BotApiClient):
     trace_results: list[TracePollResult] = field(default_factory=list)
     groups: tuple[GroupBindingView, ...] = ()
     attendance_check_result: AttendanceCheckResult | None = None
+    safe_mode: bool = False
 
     calls: list[tuple] = field(default_factory=list)
+
+    async def admit_telegram_update(
+        self,
+        telegram_identity: str,
+        chat_id: str,
+        chat_type: str,
+        chat_label: str = "",
+    ) -> TelegramAdmissionResult:
+        self.calls.append(("admit_telegram_update", telegram_identity, chat_id, chat_type, chat_label))
+        record = self.users.get(telegram_identity)
+        user_created = False
+        if record is None and not self.safe_mode:
+            record = {"permission_level": "viewer", "full_name": "", "auto_register": True}
+            self.users[telegram_identity] = record
+            user_created = True
+        user = None
+        if record is not None:
+            if isinstance(record, dict):
+                user = UserLookupResult(
+                    registered=True,
+                    permission_level=record["permission_level"],
+                    full_name=record.get("full_name", ""),
+                    auto_register=bool(record.get("auto_register", False)),
+                )
+            else:
+                user = UserLookupResult(registered=True, permission_level=record, full_name="Test User")
+
+        group = None
+        group_created = False
+        if chat_type in {"group", "supergroup"}:
+            group = next((item for item in self.groups if item.chat_id == str(chat_id)), None)
+            if group is None and not self.safe_mode:
+                group = GroupBindingView(str(chat_id), "main_agent", chat_label, True)
+                self.groups = (*self.groups, group)
+                group_created = True
+
+        allowed = user is not None
+        reason = "known"
+        if user is None:
+            reason = "unknown_user"
+        elif self.safe_mode and user.auto_register:
+            allowed, reason = False, "user_awaiting_approval"
+        elif chat_type in {"group", "supergroup"} and group is None:
+            allowed, reason = False, "unknown_group"
+        elif self.safe_mode and group is not None and group.auto_register:
+            allowed, reason = False, "group_awaiting_approval"
+        elif user_created or group_created:
+            reason = "auto_registered"
+        return TelegramAdmissionResult(allowed, reason, self.safe_mode, user, group)
 
     async def resolve_user(self, telegram_identity: str) -> UserLookupResult:
         self.calls.append(("resolve_user", telegram_identity))
@@ -112,6 +163,7 @@ class FakeBotApiClient(BotApiClient):
                 registered=True,
                 permission_level=record["permission_level"],
                 full_name=record.get("full_name", ""),
+                auto_register=bool(record.get("auto_register", False)),
             )
         return UserLookupResult(registered=True, permission_level=record, full_name="Test User")
 
@@ -121,7 +173,12 @@ class FakeBotApiClient(BotApiClient):
         if record is None:
             raise ApiRequestError(401, f"'{telegram_identity}' is not a registered identity")
         level = record["permission_level"] if isinstance(record, dict) else record
-        self.users[telegram_identity] = {"permission_level": level, "full_name": full_name}
+        auto_register = bool(record.get("auto_register", False)) if isinstance(record, dict) else False
+        self.users[telegram_identity] = {
+            "permission_level": level,
+            "full_name": full_name,
+            "auto_register": auto_register,
+        }
         return full_name
 
     async def list_commander_chat_ids(self) -> tuple[str, ...]:

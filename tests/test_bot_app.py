@@ -293,6 +293,57 @@ def test_missing_name_is_collected_then_original_message_resumes_once():
     assert all(call[1] != "Dana Levi" for call in submissions)
 
 
+def test_open_mode_auto_registers_a_stranger_then_collects_name_and_resumes():
+    api = FakeBotApiClient(
+        message_submission_result=MessageSubmissionResult(kind="question", answer_text="done"),
+        safe_mode=False,
+    )
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
+    handler = app._guarded(app._on_text_message)
+
+    _run(handler(_fake_update(user_id="7001", chat_id="7001", text="original"), _fake_context(deps)))
+    assert api.users["7001"]["permission_level"] == "viewer"
+    assert api.users["7001"]["auto_register"] is True
+    assert "full name" in telegram.sent[-1].text.lower()
+
+    _run(handler(_fake_update(user_id="7001", chat_id="7001", text="Dana Levi"), _fake_context(deps)))
+    submissions = [call for call in api.calls if call[0] == "submit_message"]
+    assert len(submissions) == 1
+    assert submissions[0][1] == "original"
+
+
+def test_safe_mode_blocks_an_unknown_private_caller_without_registering_them():
+    api = FakeBotApiClient(safe_mode=True)
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
+
+    _run(app._guarded(app._on_text_message)(
+        _fake_update(user_id="7002", chat_id="7002", text="hello"),
+        _fake_context(deps),
+    ))
+
+    assert "7002" not in api.users
+    assert telegram.sent
+    assert not any(call[0] == "submit_message" for call in api.calls)
+
+
+def test_pending_name_action_is_scoped_to_the_chat_where_it_started():
+    api = FakeBotApiClient(
+        users={"42": {"permission_level": "viewer", "full_name": ""}},
+        message_submission_result=MessageSubmissionResult(kind="question", answer_text="done"),
+    )
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
+    handler = app._guarded(app._on_text_message)
+
+    _run(handler(_fake_update(chat_id="100", text="first request"), _fake_context(deps)))
+    _run(handler(_fake_update(chat_id="200", text="Dana Levi"), _fake_context(deps)))
+
+    assert not any(call[0] == "submit_message" for call in api.calls)
+    assert ("update_own_full_name", "42", "Dana Levi") not in api.calls
+
+
 def test_missing_name_resumes_a_callback_after_the_name_reply():
     from bot.api_client import HoldAnswerOutcome
 
@@ -546,7 +597,7 @@ def test_on_callback_query_with_malformed_data_in_a_known_namespace_is_reported_
     # unpack fails — going through the real _guarded(_on_callback_query)
     # composition (what register_handlers actually wires up) to confirm
     # the malformed input becomes a chat reply, not a crash.
-    api = FakeBotApiClient()
+    api = FakeBotApiClient(users={"42": "viewer"})
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
 
@@ -559,7 +610,11 @@ def test_on_callback_query_with_malformed_data_in_a_known_namespace_is_reported_
 
 def test_guarded_handler_reports_a_not_implemented_dependency_without_crashing():
     telegram = FakeTelegramClient()
-    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
+    deps = BotDeps(
+        loaded_profile=None,
+        telegram_client=telegram,
+        api_client=FakeBotApiClient(users={"42": "viewer"}),
+    )
 
     async def _boom(update, context):
         raise ApiNotImplementedError("some_operation", "§7.9")
@@ -573,7 +628,11 @@ def test_guarded_handler_reports_a_not_implemented_dependency_without_crashing()
 
 def test_guarded_handler_reports_an_unexpected_error_without_leaking_it():
     telegram = FakeTelegramClient()
-    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
+    deps = BotDeps(
+        loaded_profile=None,
+        telegram_client=telegram,
+        api_client=FakeBotApiClient(users={"42": "viewer"}),
+    )
 
     async def _boom(update, context):
         raise ValueError("some internal detail")

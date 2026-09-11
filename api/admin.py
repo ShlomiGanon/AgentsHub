@@ -65,7 +65,7 @@ from config import discover_profiles, read_server_status, submit_server_command,
 from messages import get_current_catalog
 from orchestrator.flows import InvalidRoutingTargetError
 from persistence import EventSearchCriteria, NotFoundError
-from tools import get_trace_id
+from tools import get_trace_id, record_telegram_security_metric
 
 if TYPE_CHECKING:
     from api.app import ApiContext
@@ -785,12 +785,12 @@ _USERS_TEMPLATE = """<!DOCTYPE html>
   <p class="subtitle mb-4">{{ t('admin.users_subtitle') }}</p>
   {% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>{% endfor %}
   <table class="table table-console mb-5"><thead><tr><th>{{ t('admin.col_identity') }}</th><th>{{ t('admin.col_full_name') }}</th><th>{{ t('admin.col_level') }}</th><th></th></tr></thead><tbody>
-  {% for user in users %}<tr><td class="identity">{{ user.telegram_identity }}{% if user.telegram_identity == bot_service_identity %} <span class="tag">{{ t('admin.tag_bot_service') }}</span>{% endif %}</td>
+  {% for user in users %}<tr><td class="identity">{{ user.telegram_identity }}{% if user.telegram_identity == bot_service_identity %} <span class="tag">{{ t('admin.tag_bot_service') }}</span>{% endif %}<div class="mt-2"><span class="tag">{% if user.auto_register %}{{ t('admin.registration_automatic') }}{% else %}{{ t('admin.registration_approved') }}{% endif %}</span> <span class="tag">{% if safe_mode and user.auto_register %}{{ t('admin.registration_blocked') }}{% else %}{{ t('admin.registration_active') }}{% endif %}</span></div></td>
     <td colspan="2"><form class="d-flex gap-2" method="post" action="{{ url_for('admin.write_user') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="telegram_identity" value="{{ user.telegram_identity }}">
       <input type="text" name="full_name" value="{{ user.full_name }}" class="form-control form-control-console" maxlength="120" placeholder="{{ t('admin.col_full_name') }}">
       <select name="permission_level" class="form-select form-select-console form-select-sm w-auto">{% for level in levels %}<option value="{{ level }}" {% if level == user.permission_level %}selected{% endif %}>{{ level }}</option>{% endfor %}</select>
       <button class="btn btn-console btn-sm">{{ t('admin.save') }}</button></form></td>
-    <td><form method="post" action="{{ url_for('admin.remove_user', identity=user.telegram_identity) }}" onsubmit="return confirm({{ t('admin.confirm_remove_user', identity=user.telegram_identity)|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-danger btn-sm">{{ t('admin.remove') }}</button></form></td></tr>{% endfor %}
+    <td><div class="d-flex gap-2">{% if user.auto_register %}<form method="post" action="{{ url_for('admin.approve_user', identity=user.telegram_identity) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-primary btn-sm">{{ t('admin.approve_registration') }}</button></form>{% endif %}<form method="post" action="{{ url_for('admin.remove_user', identity=user.telegram_identity) }}" onsubmit="return confirm({{ t('admin.confirm_remove_user', identity=user.telegram_identity)|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-danger btn-sm">{{ t('admin.remove') }}</button></form></div></td></tr>{% endfor %}
   </tbody></table>
   <div class="block-console mb-4"><span class="block-label">{{ t('admin.add_user') }}</span><form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.write_user') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="col"><div class="form-label-console">{{ t('admin.col_identity') }}</div><input name="telegram_identity" class="form-control form-control-console" required></div>
@@ -806,7 +806,7 @@ _GROUPS_TEMPLATE = """<!DOCTYPE html>
 <body><div class="container container-narrow"><div class="d-flex justify-content-between align-items-baseline"><h1>{{ t('admin.groups_title') }}</h1><a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div><p class="subtitle mb-4">{{ t('admin.groups_page_subtitle') }}</p>
 {% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>{% endfor %}
 <table class="table table-console mb-4"><thead><tr><th>{{ t('admin.col_chat_id') }}</th><th>{{ t('admin.col_label') }}</th><th>{{ t('admin.col_routed_to') }}</th><th></th></tr></thead><tbody>
-{% for group in groups %}<tr><td class="identity">{{ group.chat_id }}</td><td colspan="2"><form class="d-flex gap-2" method="post" action="{{ url_for('admin.write_group') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="chat_id" value="{{ group.chat_id }}"><input name="label" value="{{ group.label }}" maxlength="200" class="form-control form-control-console" placeholder="{{ t('admin.col_label') }}"><select name="agent_name" class="form-select form-select-console">{% for agent_name in routable_agents %}<option value="{{ agent_name }}" {% if agent_name == group.agent_name %}selected{% endif %}>{{ agent_name }}</option>{% endfor %}</select><button class="btn btn-console">{{ t('admin.save') }}</button></form></td><td><form method="post" action="{{ url_for('admin.remove_group', chat_id=group.chat_id) }}" onsubmit="return confirm({{ t('admin.confirm_remove_group', chat_id=group.chat_id)|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-danger">{{ t('admin.remove') }}</button></form></td></tr>{% else %}<tr><td colspan="4">{{ t('admin.no_groups') }}</td></tr>{% endfor %}</tbody></table>
+{% for group in groups %}<tr><td class="identity">{{ group.chat_id }}<div class="mt-2"><span class="tag">{% if group.auto_register %}{{ t('admin.registration_automatic') }}{% else %}{{ t('admin.registration_approved') }}{% endif %}</span> <span class="tag">{% if safe_mode and group.auto_register %}{{ t('admin.registration_blocked') }}{% else %}{{ t('admin.registration_active') }}{% endif %}</span></div></td><td colspan="2"><form class="d-flex gap-2" method="post" action="{{ url_for('admin.write_group') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="chat_id" value="{{ group.chat_id }}"><input name="label" value="{{ group.label }}" maxlength="200" class="form-control form-control-console" placeholder="{{ t('admin.col_label') }}"><select name="agent_name" class="form-select form-select-console">{% for agent_name in routable_agents %}<option value="{{ agent_name }}" {% if agent_name == group.agent_name %}selected{% endif %}>{{ agent_name }}</option>{% endfor %}</select><button class="btn btn-console">{{ t('admin.save') }}</button></form></td><td><div class="d-flex gap-2">{% if group.auto_register %}<form method="post" action="{{ url_for('admin.approve_group', chat_id=group.chat_id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-primary">{{ t('admin.approve_registration') }}</button></form>{% endif %}<form method="post" action="{{ url_for('admin.remove_group', chat_id=group.chat_id) }}" onsubmit="return confirm({{ t('admin.confirm_remove_group', chat_id=group.chat_id)|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-danger">{{ t('admin.remove') }}</button></form></div></td></tr>{% else %}<tr><td colspan="4">{{ t('admin.no_groups') }}</td></tr>{% endfor %}</tbody></table>
 <div class="block-console"><span class="block-label">{{ t('admin.add_group') }}</span><p class="subtitle">{{ t('admin.add_group_help', main_agent='main_agent') }}</p><form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.write_group') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="col"><div class="form-label-console">{{ t('admin.col_chat_id') }}</div><input name="chat_id" class="form-control form-control-console" placeholder="-1001234567890" required></div><div class="col"><div class="form-label-console">{{ t('admin.col_label') }}</div><input name="label" class="form-control form-control-console" maxlength="200"></div><div class="col-auto"><select name="agent_name" class="form-select form-select-console">{% for agent_name in routable_agents %}<option value="{{ agent_name }}">{{ agent_name }}</option>{% endfor %}</select></div><div class="col-auto"><button class="btn btn-console-primary">{{ t('admin.add') }}</button></div></form></div>
 </div></body></html>"""
 
@@ -1130,7 +1130,10 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
                 "retry_count": ctx.deps.settings_store.get_retry_count(),
                 "risk_threshold": ctx.deps.settings_store.get_risk_threshold(),
                 "lookback_window_days": ctx.deps.settings_store.get_lookback_window_days(),
+                "safe_mode": ctx.deps.settings_store.get_safe_mode(),
             },
+            automatic_users=sum(bool(user.get("auto_register", False)) for user in ctx.deps.persistence.list_users()),
+            automatic_groups=sum(bool(group.auto_register) for group in ctx.group_routing.all()),
             csrf_token=session["csrf_token"],
             **_api_page_context("profiles"),
         )
@@ -1220,6 +1223,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             _USERS_TEMPLATE,
             users=registered_users,
             levels=levels,
+            safe_mode=ctx.deps.settings_store.get_safe_mode(),
             csrf_token=session["csrf_token"],
             bot_service_identity=BOT_SERVICE_IDENTITY,
         )
@@ -1233,6 +1237,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             _GROUPS_TEMPLATE,
             groups=ctx.group_routing.all(),
             routable_agents=ctx.group_routing.routable_targets,
+            safe_mode=ctx.deps.settings_store.get_safe_mode(),
             csrf_token=session["csrf_token"],
         )
 
@@ -1397,6 +1402,27 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         flash(_t("admin.group_removed", chat_id=chat_id), "ok")
         return redirect(url_for("admin.groups"))
 
+    @blueprint.route("/groups/<chat_id>/approve", methods=["POST"])
+    def approve_group(chat_id):
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        csrf_response = _require_csrf()
+        if csrf_response is not None:
+            return csrf_response
+        try:
+            ctx.group_routing.approve(chat_id)
+        except NotFoundError:
+            flash(_t("admin.group_not_found", chat_id=chat_id), "error")
+            return redirect(url_for("admin.groups"))
+        logger.info(
+            "admin approved a telegram group",
+            extra={"event": "telegram_group_approved", "chat_id": chat_id, "approved_by": "admin-session", "trace_id": get_trace_id()},
+        )
+        record_telegram_security_metric("approved", "group")
+        flash(_t("admin.group_approved", chat_id=chat_id), "ok")
+        return redirect(url_for("admin.groups"))
+
     @blueprint.route("/users", methods=["POST"])
     def write_user():
         redirect_response = _require_session()
@@ -1460,6 +1486,27 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         flash(_t("admin.user_removed", identity=identity), "ok")
         return redirect(url_for("admin.users"))
 
+    @blueprint.route("/users/<identity>/approve", methods=["POST"])
+    def approve_user(identity):
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        csrf_response = _require_csrf()
+        if csrf_response is not None:
+            return csrf_response
+        try:
+            ctx.deps.persistence.approve_user(identity)
+        except NotFoundError:
+            flash(_t("admin.user_not_found", identity=identity), "error")
+            return redirect(url_for("admin.users"))
+        logger.info(
+            "admin approved a telegram user",
+            extra={"event": "telegram_user_approved", "telegram_identity": identity, "approved_by": "admin-session", "trace_id": get_trace_id()},
+        )
+        record_telegram_security_metric("approved", "user")
+        flash(_t("admin.user_approved", identity=identity), "ok")
+        return redirect(url_for("admin.users"))
+
     @blueprint.route("/bot-service/provision", methods=["POST"])
     def provision_bot_service():
         redirect_response = _require_session()
@@ -1472,6 +1519,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         # The exact same write cli.user_admin's `add`/`update` commands make — not a
         # separate mechanism, one source of truth for user storage either way.
         ctx.deps.persistence.write_user(BOT_SERVICE_IDENTITY, "commander")
+        ctx.deps.persistence.approve_user(BOT_SERVICE_IDENTITY)
         logger.info(
             "admin (re-)provisioned the bot-service identity",
             extra={"event": "admin_bot_service_provisioned", "trace_id": get_trace_id()},

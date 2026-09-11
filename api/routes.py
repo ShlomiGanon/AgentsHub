@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from flask import Blueprint, jsonify, request
 
-from api.request_boundary import AuthorizationError, ConflictError, InvalidInputError, NotFoundError, RunFailureError, ServiceUnavailableError, authenticate, require
+from api.request_boundary import BOT_SERVICE_IDENTITY, AuthorizationError, ConflictError, InvalidInputError, NotFoundError, RunFailureError, ServiceUnavailableError, authenticate, require
 from history import record_event_outcome, storage_timestamp
 
 from orchestrator.flows import begin_report, run_report_extraction
@@ -17,6 +17,7 @@ from tools import (
     get_trace_id,
     is_valid_trace_id,
     new_trace_id,
+    record_telegram_security_metric,
     render_deep_debug_entry,
     set_trace_id,
     stage_context,
@@ -939,7 +940,7 @@ def build_protocols_blueprint(ctx: "ApiContext") -> Blueprint:
 if TYPE_CHECKING:
     from api.app import ApiContext
 
-_SETTINGS_FIELDS = {"retry_count", "risk_threshold", "lookback_window_days"}
+_SETTINGS_FIELDS = {"retry_count", "risk_threshold", "lookback_window_days", "safe_mode"}
 
 
 def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
@@ -982,6 +983,7 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
                 "retry_count": ctx.deps.settings_store.get_retry_count(),
                 "risk_threshold": ctx.deps.settings_store.get_risk_threshold(),
                 "lookback_window_days": ctx.deps.settings_store.get_lookback_window_days(),
+                "safe_mode": ctx.deps.settings_store.get_safe_mode(),
             }
 
         return jsonify(response_payload)
@@ -991,35 +993,67 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.CHANGE_SETTINGS)
 
-        request_payload = request.get_json(silent=True) or {}
+        request_payload = request.get_json(silent=True)
+        if request_payload is None:
+            request_payload = {}
+        if not isinstance(request_payload, dict):
+            raise InvalidInputError(messages.text("api.telegram_admission_invalid"))
 
         unknown = sorted(set(request_payload) - _SETTINGS_FIELDS)
         if unknown:
             field = unknown[0]
             raise InvalidInputError(messages.text("api.profile_field_restart", field=field), field=field)
 
+        validated: dict[str, object] = {}
         if "retry_count" in request_payload:
             setting_value = request_payload["retry_count"]
             if not isinstance(setting_value, int) or isinstance(setting_value, bool) or setting_value < 0:
                 raise InvalidInputError(messages.text("api.retry_nonnegative_integer"), field="retry_count")
-            ctx.deps.settings_store.set_retry_count(setting_value)
+            validated["retry_count"] = setting_value
 
         if "risk_threshold" in request_payload:
             setting_value = request_payload["risk_threshold"]
             if not isinstance(setting_value, (int, float)) or isinstance(setting_value, bool) or not (0.0 <= setting_value <= 1.0):
                 raise InvalidInputError(messages.text("api.risk_threshold_range"), field="risk_threshold")
-            ctx.deps.settings_store.set_risk_threshold(setting_value)
+            validated["risk_threshold"] = setting_value
 
         if "lookback_window_days" in request_payload:
             setting_value = request_payload["lookback_window_days"]
             if not isinstance(setting_value, int) or isinstance(setting_value, bool) or setting_value < 1:
                 raise InvalidInputError(messages.text("api.lookback_positive_integer"), field="lookback_window_days")
-            ctx.deps.settings_store.set_lookback_window_days(setting_value)
+            validated["lookback_window_days"] = setting_value
+
+        if "safe_mode" in request_payload:
+            setting_value = request_payload["safe_mode"]
+            if not isinstance(setting_value, bool):
+                raise InvalidInputError(messages.text("api.safe_mode_boolean"), field="safe_mode")
+            validated["safe_mode"] = setting_value
+
+        previous_safe_mode = ctx.deps.settings_store.get_safe_mode()
+        if "retry_count" in validated:
+            ctx.deps.settings_store.set_retry_count(validated["retry_count"])
+        if "risk_threshold" in validated:
+            ctx.deps.settings_store.set_risk_threshold(validated["risk_threshold"])
+        if "lookback_window_days" in validated:
+            ctx.deps.settings_store.set_lookback_window_days(validated["lookback_window_days"])
+        if "safe_mode" in validated:
+            ctx.deps.settings_store.set_safe_mode(validated["safe_mode"])
+            logger.info(
+                "safe mode changed",
+                extra={
+                    "event": "safe_mode_changed",
+                    "previous_safe_mode": previous_safe_mode,
+                    "safe_mode": validated["safe_mode"],
+                    "changed_by": request.headers.get("X-Identity"),
+                    "trace_id": get_trace_id(),
+                },
+            )
 
         return jsonify({
             "retry_count": ctx.deps.settings_store.get_retry_count(),
             "risk_threshold": ctx.deps.settings_store.get_risk_threshold(),
             "lookback_window_days": ctx.deps.settings_store.get_lookback_window_days(),
+            "safe_mode": ctx.deps.settings_store.get_safe_mode(),
         })
 
     @blueprint.route("/Trace/<trace_id>", methods=["GET"])
@@ -1095,6 +1129,7 @@ def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
             "registered": True,
             "permission_level": user["permission_level"],
             "full_name": user["full_name"],
+            **({"auto_register": bool(user.get("auto_register", False))} if level is PermissionLevel.COMMANDER else {}),
         })
 
     @blueprint.route("/User/<identity>/name", methods=["PUT"])
@@ -1117,6 +1152,31 @@ def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
             raise NotFoundError(messages.text("api.identity_unregistered", identity=identity)) from None
         return jsonify({"telegram_identity": identity, "full_name": full_name})
 
+    @blueprint.route("/User/<identity>/approve", methods=["POST"])
+    def approve_user(identity):
+        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
+        require(level, RequestedOperation.MANAGE_USERS)
+        try:
+            user = ctx.deps.persistence.approve_user(identity)
+        except PersistenceNotFoundError:
+            raise NotFoundError(messages.text("api.identity_unregistered", identity=identity)) from None
+        logger.info(
+            "telegram user approved",
+            extra={
+                "event": "telegram_user_approved",
+                "telegram_identity": identity,
+                "approved_by": request.headers.get("X-Identity"),
+                "trace_id": get_trace_id(),
+            },
+        )
+        record_telegram_security_metric("approved", "user")
+        return jsonify({
+            "telegram_identity": user["telegram_identity"],
+            "permission_level": user["permission_level"],
+            "full_name": user["full_name"],
+            "auto_register": False,
+        })
+
     @blueprint.route("/Commanders", methods=["GET"])
     def get_commanders():
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
@@ -1132,7 +1192,12 @@ def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
 
 
 def _binding_to_dict(binding) -> dict:
-    return {"chat_id": binding.chat_id, "agent_name": binding.agent_name, "label": binding.label}
+    return {
+        "chat_id": binding.chat_id,
+        "agent_name": binding.agent_name,
+        "label": binding.label,
+        "auto_register": bool(getattr(binding, "auto_register", False)),
+    }
 
 
 def _attendance_agent(ctx: "ApiContext"):
@@ -1208,6 +1273,26 @@ def build_groups_blueprint(ctx: "ApiContext") -> Blueprint:
         )
         return jsonify({"chat_id": chat_id, "removed": True})
 
+    @blueprint.route("/Groups/<chat_id>/approve", methods=["POST"])
+    def approve_group(chat_id):
+        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
+        require(level, RequestedOperation.MANAGE_GROUPS)
+        try:
+            binding = ctx.group_routing.approve(chat_id)
+        except PersistenceNotFoundError as exc:
+            raise NotFoundError(messages.text("api.group_not_registered", chat_id=chat_id)) from exc
+        logger.info(
+            "telegram group approved",
+            extra={
+                "event": "telegram_group_approved",
+                "chat_id": chat_id,
+                "approved_by": request.headers.get("X-Identity"),
+                "trace_id": get_trace_id(),
+            },
+        )
+        record_telegram_security_metric("approved", "group")
+        return jsonify(_binding_to_dict(binding))
+
     @blueprint.route("/TeamStatus/AttendanceCheck", methods=["POST"])
     def post_attendance_check():
         """Open today's attendance cycle if due; the bot polls this and posts the prompt to bound groups."""
@@ -1230,7 +1315,12 @@ def build_groups_blueprint(ctx: "ApiContext") -> Blueprint:
         except ValueError as exc:
             raise InvalidInputError(str(exc), field="now_iso") from exc
 
-        target_chat_ids = list(ctx.group_routing.chat_ids_for(agent.name))
+        target_chat_ids = [
+            binding.chat_id
+            for binding in ctx.group_routing.all()
+            if binding.agent_name == agent.name
+            and (not ctx.deps.settings_store.get_safe_mode() or not binding.auto_register)
+        ]
         if opened is None:
             return jsonify({"opened": False, "agent_name": agent.name, "target_chat_ids": target_chat_ids})
         logger.info(
@@ -1244,6 +1334,127 @@ def build_groups_blueprint(ctx: "ApiContext") -> Blueprint:
             "deadline_at": opened["deadline_at"],
             "members_required": opened["members_required"],
             "target_chat_ids": target_chat_ids,
+        })
+
+    return blueprint
+
+
+def build_telegram_blueprint(ctx: "ApiContext") -> Blueprint:
+    """Bot-service-only admission gate for real Telegram updates."""
+
+    blueprint = Blueprint("telegram_admission", __name__)
+    messages = ctx.loaded_profile.message_catalog
+
+    @blueprint.route("/Telegram/Admission", methods=["POST"])
+    def admit_telegram_update():
+        caller_identity = request.headers.get("X-Identity")
+        level = authenticate(ctx.deps.persistence, caller_identity)
+        if caller_identity != BOT_SERVICE_IDENTITY:
+            raise AuthorizationError(messages.text("api.operation_forbidden", level=level.name, operation="telegram admission"))
+
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise InvalidInputError(messages.text("api.telegram_admission_invalid"))
+        telegram_identity = payload.get("telegram_identity")
+        chat_id = payload.get("chat_id")
+        chat_type = payload.get("chat_type")
+        chat_label = payload.get("chat_label") or ""
+        if (
+            not isinstance(telegram_identity, str)
+            or not telegram_identity.isdigit()
+            or int(telegram_identity) <= 0
+            or not isinstance(chat_id, str)
+            or not chat_id.strip()
+            or chat_type not in {"private", "group", "supergroup"}
+            or not isinstance(chat_label, str)
+            or len(chat_label) > 200
+        ):
+            raise InvalidInputError(messages.text("api.telegram_admission_invalid"))
+        group_chat_id = chat_id if chat_type in {"group", "supergroup"} else None
+        if group_chat_id is not None:
+            try:
+                if int(group_chat_id) >= 0:
+                    raise ValueError
+            except ValueError:
+                raise InvalidInputError(messages.text("api.telegram_admission_invalid")) from None
+
+        safe_mode = ctx.deps.settings_store.get_safe_mode()
+        user_before = ctx.deps.persistence.read_user(telegram_identity)
+        group_before = ctx.deps.persistence.read_group(group_chat_id) if group_chat_id is not None else None
+        records = ctx.deps.persistence.admit_telegram_update(
+            telegram_identity,
+            group_chat_id,
+            chat_label,
+            allow_registration=not safe_mode,
+        )
+        user = records["user"]
+        group = records["group"]
+        if group_chat_id is not None and group_before is None and group is not None:
+            ctx.group_routing.load()
+
+        if user_before is None and user is not None:
+            record_telegram_security_metric("auto_registered", "user")
+            logger.info(
+                "telegram user automatically registered",
+                extra={"event": "telegram_user_auto_registered", "telegram_identity": telegram_identity, "trace_id": get_trace_id()},
+            )
+        if group_before is None and group is not None:
+            record_telegram_security_metric("auto_registered", "group")
+            logger.info(
+                "telegram group automatically registered",
+                extra={"event": "telegram_group_auto_registered", "chat_id": group_chat_id, "trace_id": get_trace_id()},
+            )
+
+        reason = "known"
+        allowed = True
+        if user is None:
+            allowed, reason = False, "unknown_user"
+        elif safe_mode and bool(user.get("auto_register", False)):
+            allowed, reason = False, "user_awaiting_approval"
+        elif group_chat_id is not None and group is None:
+            allowed, reason = False, "unknown_group"
+        elif safe_mode and group is not None and bool(group.get("auto_register", False)):
+            allowed, reason = False, "group_awaiting_approval"
+        elif user_before is None or (group_chat_id is not None and group_before is None):
+            reason = "auto_registered"
+
+        if not allowed:
+            record_telegram_security_metric("blocked", "admission")
+            logger.info(
+                "telegram admission denied in safe mode",
+                extra={
+                    "event": "telegram_admission_denied_safe_mode",
+                    "telegram_identity": telegram_identity,
+                    "chat_id": chat_id,
+                    "reason": reason,
+                    "trace_id": get_trace_id(),
+                },
+            )
+
+        def _user_payload(record):
+            if record is None:
+                return None
+            return {
+                "telegram_identity": record["telegram_identity"],
+                "permission_level": record["permission_level"],
+                "full_name": record["full_name"],
+                "auto_register": bool(record.get("auto_register", False)),
+            }
+
+        group_payload = None
+        if group is not None:
+            group_payload = {
+                "chat_id": str(group["chat_id"]),
+                "agent_name": group["agent_name"],
+                "label": group.get("label") or "",
+                "auto_register": bool(group.get("auto_register", False)),
+            }
+        return jsonify({
+            "allowed": allowed,
+            "reason": reason,
+            "safe_mode": safe_mode,
+            "user": _user_payload(user),
+            "group": group_payload,
         })
 
     return blueprint
@@ -1640,6 +1851,13 @@ def _target_chat_ids(ctx: "ApiContext", kind: str, event_id: str) -> list[str]:
     if event is None or not event.get("sender_identity"):
         return []
     sender = event["sender_identity"]
+    sender_record = ctx.deps.persistence.read_user(sender)
+    if (
+        ctx.deps.settings_store.get_safe_mode()
+        and sender_record is not None
+        and bool(sender_record.get("auto_register", False))
+    ):
+        return []
     return [sender] if sender != "bot-service" else []
 
 

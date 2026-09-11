@@ -6,6 +6,11 @@ def test_surveillance_profile_loads_with_isolated_databases(monkeypatch, tmp_pat
     monkeypatch.setenv("SURVEILLANCE_BOT_TOKEN", "dedicated-bot-token")
     monkeypatch.setattr(profile_module, "DB_PATH", str(tmp_path / "history.db"))
     monkeypatch.setattr(profile_module, "SURVEILLANCE_DB_PATH", str(tmp_path / "surveillance.db"))
+    monkeypatch.setattr(
+        profile_module,
+        "RESETTABLE_DATABASES",
+        (profile_module.DB_PATH, profile_module.SURVEILLANCE_DB_PATH),
+    )
     monkeypatch.setattr(profile_module.SubAgentSurveillanceAgent, "surveillance_db_path", profile_module.SURVEILLANCE_DB_PATH)
 
     loaded = load_profile(

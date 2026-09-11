@@ -135,10 +135,10 @@ def _deps(api):
     return BotDeps(loaded_profile=None, telegram_client=None, api_client=api)
 
 
-def test_view_shows_all_three_current_values():
+def test_view_shows_all_four_current_values():
     api = FakeBotApiClient(settings_view=SettingsView(retry_count=3, risk_threshold=0.6, lookback_window_days=30))
     text = _run(view_settings(_deps(api), "v1"))
-    assert "3" in text and "0.6" in text and "30" in text
+    assert "3" in text and "0.6" in text and "30" in text and "Safe mode: false" in text
 
 
 def test_settings_view_forwards_the_real_callers_identity_to_the_api_client():
@@ -165,6 +165,7 @@ def test_viewer_cannot_change_a_setting():
         ("risk_threshold", "not-a-number", "must be a number"),
         ("lookback_window_days", "0", "at least 1"),
         ("lookback_window_days", "-3", "at least 1"),
+        ("safe_mode", "yes", "true or false"),
         ("bogus_field", "1", "unknown setting"),
     ],
 )

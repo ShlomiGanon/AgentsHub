@@ -6,6 +6,11 @@ def test_profile_loads_with_isolated_databases(monkeypatch, tmp_path, test_core_
     monkeypatch.setenv("TEAM_STATUS_BOT_TOKEN", "dedicated-bot-token")
     monkeypatch.setattr(profile_module, "DB_PATH", str(tmp_path / "history.db"))
     monkeypatch.setattr(profile_module, "TEAM_STATUS_DB_PATH", str(tmp_path / "team-status.db"))
+    monkeypatch.setattr(
+        profile_module,
+        "RESETTABLE_DATABASES",
+        (profile_module.DB_PATH, profile_module.TEAM_STATUS_DB_PATH),
+    )
     monkeypatch.setattr(profile_module.SubAgentTeamStatusAgent, "status_db_path", profile_module.TEAM_STATUS_DB_PATH)
 
     loaded = load_profile(

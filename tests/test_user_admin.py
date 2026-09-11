@@ -42,7 +42,7 @@ def test_add_first_commander_against_an_empty_database(profile_module, capsys, r
 
     store = SQLitePersistence(str(db_path))
     try:
-        assert store.read_user("1001") == {"telegram_identity": "1001", "permission_level": "commander", "full_name": ""}
+        assert store.read_user("1001") == {"telegram_identity": "1001", "permission_level": "commander", "full_name": "", "auto_register": False}
     finally:
         store.close()
 
@@ -81,6 +81,24 @@ def test_remove_deletes_a_user(profile_module, real_tier_env):
     store = SQLitePersistence(str(db_path))
     try:
         assert store.read_user("3003") is None
+    finally:
+        store.close()
+
+
+def test_approve_clears_only_the_automatic_registration_flag(profile_module, real_tier_env):
+    module_name, db_path = profile_module
+    store = SQLitePersistence(str(db_path))
+    try:
+        store.register_telegram_user_if_missing("auto-user")
+    finally:
+        store.close()
+
+    assert main(["--profile", module_name, "approve", "--telegram-id", "auto-user"]) == 0
+    store = SQLitePersistence(str(db_path))
+    try:
+        user = store.read_user("auto-user")
+        assert user["permission_level"] == "viewer"
+        assert user["auto_register"] is False
     finally:
         store.close()
 

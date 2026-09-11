@@ -38,6 +38,9 @@ def _build_parser() -> argparse.ArgumentParser:
     remove_parser = subparsers.add_parser("remove", help="remove a user")
     remove_parser.add_argument("--telegram-id", required=True)
 
+    approve_parser = subparsers.add_parser("approve", help="approve an automatically registered user")
+    approve_parser.add_argument("--telegram-id", required=True)
+
     subparsers.add_parser("list", help="list every registered user")
 
     return parser
@@ -97,9 +100,19 @@ def _run_command(args: argparse.Namespace, store: PersistenceInterface) -> int:
         print(f"remove: '{args.telegram_id}' removed")
         return 0
 
+    if args.command == "approve":
+        try:
+            store.approve_user(args.telegram_id)
+        except NotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"approve: '{args.telegram_id}' approved")
+        return 0
+
     if args.command == "list":
         for user in store.list_users():
-            print(f"{user['telegram_identity']}\t{user['permission_level']}\t{user['full_name']}")
+            source = "automatic" if user.get("auto_register", False) else "approved"
+            print(f"{user['telegram_identity']}\t{user['permission_level']}\t{user['full_name']}\t{source}")
         return 0
 
     raise AssertionError(f"unreachable: unknown command '{args.command}'")

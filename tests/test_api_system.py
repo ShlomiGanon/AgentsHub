@@ -140,7 +140,7 @@ def test_get_system_reports_current_settings(tmp_path, teardown_ctx):
 
     resp = client.get("/SYSTEM", headers=auth_headers(COMMANDER_IDENTITY))
 
-    assert resp.get_json()["settings"] == {"retry_count": 3, "risk_threshold": 0.5, "lookback_window_days": 30}
+    assert resp.get_json()["settings"] == {"retry_count": 3, "risk_threshold": 0.5, "lookback_window_days": 30, "safe_mode": False}
 
 
 def test_get_system_viewer_response_omits_internals_and_settings(tmp_path, teardown_ctx):

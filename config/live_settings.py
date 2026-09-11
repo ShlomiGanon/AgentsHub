@@ -6,16 +6,27 @@ from pathlib import Path
 
 
 class SettingsStore:
-    def __init__(self, db_path: str, starting_retry_count: int, starting_risk_threshold: float, starting_lookback_window_days: int):
+    def __init__(
+        self,
+        db_path: str,
+        starting_retry_count: int,
+        starting_risk_threshold: float,
+        starting_lookback_window_days: int,
+        starting_safe_mode: bool = False,
+    ):
         self._settings_path = Path(f"{db_path}.settings.json")
 
         if self._settings_path.exists():
             self._values = json.loads(self._settings_path.read_text(encoding="utf-8"))
+            if not isinstance(self._values.get("safe_mode"), bool):
+                self._values["safe_mode"] = bool(starting_safe_mode)
+                self._write()
         else:
             self._values = {
                 "retry_count": starting_retry_count,
                 "risk_threshold": starting_risk_threshold,
                 "lookback_window_days": starting_lookback_window_days,
+                "safe_mode": bool(starting_safe_mode),
             }
             self._write()
 
@@ -28,6 +39,9 @@ class SettingsStore:
     def get_lookback_window_days(self) -> int:
         return self._values["lookback_window_days"]
 
+    def get_safe_mode(self) -> bool:
+        return bool(self._values["safe_mode"])
+
     def set_retry_count(self, value: int) -> None:
         self._values["retry_count"] = value
         self._write()
@@ -38,6 +52,12 @@ class SettingsStore:
 
     def set_lookback_window_days(self, value: int) -> None:
         self._values["lookback_window_days"] = value
+        self._write()
+
+    def set_safe_mode(self, value: bool) -> None:
+        if not isinstance(value, bool):
+            raise TypeError("safe_mode must be a bool")
+        self._values["safe_mode"] = value
         self._write()
 
     def _write(self) -> None:

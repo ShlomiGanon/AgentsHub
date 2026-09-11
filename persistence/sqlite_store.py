@@ -601,10 +601,14 @@ class SQLitePersistence(PersistenceInterface):
         connection = self._read_connection()
         try:
             user_row = connection.execute(
-                "SELECT telegram_identity, permission_level, full_name FROM users WHERE telegram_identity = ?",
+                "SELECT telegram_identity, permission_level, full_name, auto_register FROM users WHERE telegram_identity = ?",
                 (telegram_identity,),
             ).fetchone()
-            return dict(user_row) if user_row is not None else None
+            if user_row is None:
+                return None
+            result = dict(user_row)
+            result["auto_register"] = bool(result["auto_register"])
+            return result
         finally:
             connection.close()
 
@@ -612,7 +616,8 @@ class SQLitePersistence(PersistenceInterface):
         def _do(connection: sqlite3.Connection) -> None:
             try:
                 connection.execute(
-                    "INSERT INTO users (telegram_identity, permission_level, full_name) VALUES (?, ?, COALESCE(?, '')) "
+                    "INSERT INTO users (telegram_identity, permission_level, full_name, auto_register) "
+                    "VALUES (?, ?, COALESCE(?, ''), 0) "
                     "ON CONFLICT(telegram_identity) DO UPDATE SET "
                     "permission_level = excluded.permission_level, "
                     "full_name = CASE WHEN ? IS NULL THEN users.full_name ELSE excluded.full_name END",
@@ -624,6 +629,88 @@ class SQLitePersistence(PersistenceInterface):
                 raise PersistenceError(f"failed to write user '{telegram_identity}': {exc}") from exc
 
         self._submit_write(_do)
+
+    def register_telegram_user_if_missing(self, telegram_identity: str) -> dict:
+        def _do(connection: sqlite3.Connection) -> None:
+            connection.execute(
+                "INSERT INTO users (telegram_identity, permission_level, full_name, auto_register) "
+                "VALUES (?, 'viewer', '', 1) ON CONFLICT(telegram_identity) DO NOTHING",
+                (telegram_identity,),
+            )
+            connection.commit()
+
+        self._submit_write(_do)
+        result = self.read_user(telegram_identity)
+        if result is None:
+            raise PersistenceError(f"failed to register telegram user '{telegram_identity}'")
+        return result
+
+    def admit_telegram_update(
+        self,
+        telegram_identity: str,
+        group_chat_id: str | None,
+        group_label: str,
+        allow_registration: bool,
+    ) -> dict:
+        created_at = datetime.now(timezone.utc).isoformat()
+
+        def _do(connection: sqlite3.Connection) -> dict:
+            try:
+                if allow_registration:
+                    connection.execute(
+                        "INSERT INTO users (telegram_identity, permission_level, full_name, auto_register) "
+                        "VALUES (?, 'viewer', '', 1) ON CONFLICT(telegram_identity) DO NOTHING",
+                        (telegram_identity,),
+                    )
+                    if group_chat_id is not None:
+                        connection.execute(
+                            "INSERT INTO telegram_groups (chat_id, agent_name, label, created_at, auto_register) "
+                            "VALUES (?, 'main_agent', ?, ?, 1) ON CONFLICT(chat_id) DO NOTHING",
+                            (group_chat_id, group_label or "", created_at),
+                        )
+                user_row = connection.execute(
+                    "SELECT telegram_identity, permission_level, full_name, auto_register "
+                    "FROM users WHERE telegram_identity = ?",
+                    (telegram_identity,),
+                ).fetchone()
+                group_row = None
+                if group_chat_id is not None:
+                    group_row = connection.execute(
+                        "SELECT chat_id, agent_name, label, created_at, auto_register "
+                        "FROM telegram_groups WHERE chat_id = ?",
+                        (group_chat_id,),
+                    ).fetchone()
+                connection.commit()
+                return {
+                    "user": dict(user_row) if user_row is not None else None,
+                    "group": dict(group_row) if group_row is not None else None,
+                }
+            except sqlite3.Error as exc:
+                connection.rollback()
+                raise PersistenceError(f"failed to admit telegram update for '{telegram_identity}': {exc}") from exc
+
+        result = self._submit_write(_do)
+        if result["user"] is not None:
+            result["user"]["auto_register"] = bool(result["user"]["auto_register"])
+        if result["group"] is not None:
+            result["group"]["auto_register"] = bool(result["group"]["auto_register"])
+        return result
+
+    def approve_user(self, telegram_identity: str) -> dict:
+        def _do(connection: sqlite3.Connection) -> None:
+            cursor = connection.execute(
+                "UPDATE users SET auto_register = 0 WHERE telegram_identity = ?",
+                (telegram_identity,),
+            )
+            connection.commit()
+            if cursor.rowcount == 0:
+                raise NotFoundError(f"no such user: '{telegram_identity}'")
+
+        self._submit_write(_do)
+        result = self.read_user(telegram_identity)
+        if result is None:
+            raise NotFoundError(f"no such user: '{telegram_identity}'")
+        return result
 
     def update_user_full_name(self, telegram_identity: str, full_name: str) -> None:
         def _do(connection: sqlite3.Connection) -> None:
@@ -650,9 +737,12 @@ class SQLitePersistence(PersistenceInterface):
         connection = self._read_connection()
         try:
             user_rows = connection.execute(
-                "SELECT telegram_identity, permission_level, full_name FROM users"
+                "SELECT telegram_identity, permission_level, full_name, auto_register FROM users"
             ).fetchall()
-            return [dict(user_row) for user_row in user_rows]
+            results = [dict(user_row) for user_row in user_rows]
+            for result in results:
+                result["auto_register"] = bool(result["auto_register"])
+            return results
         finally:
             connection.close()
 
@@ -660,10 +750,14 @@ class SQLitePersistence(PersistenceInterface):
         connection = self._read_connection()
         try:
             group_row = connection.execute(
-                "SELECT chat_id, agent_name, label, created_at FROM telegram_groups WHERE chat_id = ?",
+                "SELECT chat_id, agent_name, label, created_at, auto_register FROM telegram_groups WHERE chat_id = ?",
                 (chat_id,),
             ).fetchone()
-            return dict(group_row) if group_row is not None else None
+            if group_row is None:
+                return None
+            result = dict(group_row)
+            result["auto_register"] = bool(result["auto_register"])
+            return result
         finally:
             connection.close()
 
@@ -673,7 +767,7 @@ class SQLitePersistence(PersistenceInterface):
         def _do(connection: sqlite3.Connection) -> None:
             try:
                 connection.execute(
-                    "INSERT INTO telegram_groups (chat_id, agent_name, label, created_at) VALUES (?, ?, ?, ?) "
+                    "INSERT INTO telegram_groups (chat_id, agent_name, label, created_at, auto_register) VALUES (?, ?, ?, ?, 0) "
                     "ON CONFLICT(chat_id) DO UPDATE SET agent_name = excluded.agent_name, label = excluded.label",
                     (chat_id, agent_name, label, created_at),
                 )
@@ -683,6 +777,39 @@ class SQLitePersistence(PersistenceInterface):
                 raise PersistenceError(f"failed to write telegram group '{chat_id}': {exc}") from exc
 
         self._submit_write(_do)
+
+    def register_telegram_group_if_missing(self, chat_id: str, label: str = "") -> dict:
+        created_at = datetime.now(timezone.utc).isoformat()
+
+        def _do(connection: sqlite3.Connection) -> None:
+            connection.execute(
+                "INSERT INTO telegram_groups (chat_id, agent_name, label, created_at, auto_register) "
+                "VALUES (?, 'main_agent', ?, ?, 1) ON CONFLICT(chat_id) DO NOTHING",
+                (chat_id, label or "", created_at),
+            )
+            connection.commit()
+
+        self._submit_write(_do)
+        result = self.read_group(chat_id)
+        if result is None:
+            raise PersistenceError(f"failed to register telegram group '{chat_id}'")
+        return result
+
+    def approve_group(self, chat_id: str) -> dict:
+        def _do(connection: sqlite3.Connection) -> None:
+            cursor = connection.execute(
+                "UPDATE telegram_groups SET auto_register = 0 WHERE chat_id = ?",
+                (chat_id,),
+            )
+            connection.commit()
+            if cursor.rowcount == 0:
+                raise NotFoundError(f"no such telegram group: '{chat_id}'")
+
+        self._submit_write(_do)
+        result = self.read_group(chat_id)
+        if result is None:
+            raise NotFoundError(f"no such telegram group: '{chat_id}'")
+        return result
 
     def delete_group(self, chat_id: str) -> None:
         def _do(connection: sqlite3.Connection) -> None:
@@ -697,9 +824,12 @@ class SQLitePersistence(PersistenceInterface):
         connection = self._read_connection()
         try:
             group_rows = connection.execute(
-                "SELECT chat_id, agent_name, label, created_at FROM telegram_groups ORDER BY chat_id"
+                "SELECT chat_id, agent_name, label, created_at, auto_register FROM telegram_groups ORDER BY chat_id"
             ).fetchall()
-            return [dict(group_row) for group_row in group_rows]
+            results = [dict(group_row) for group_row in group_rows]
+            for result in results:
+                result["auto_register"] = bool(result["auto_register"])
+            return results
         finally:
             connection.close()
 

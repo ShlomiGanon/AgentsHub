@@ -8,7 +8,7 @@ import os
 import re
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -20,7 +20,7 @@ from auth.permissions import PermissionLevel, RequestedOperation
 from auth.permissions import InvalidFullNameError, normalize_full_name
 
 from bot import interactions
-from bot.transports import HttpApiClient, PTBTelegramClient
+from bot.transports import HttpApiClient, PTBTelegramClient, telegram_request_context
 from bot.contracts import (
     ApiNotImplementedError,
     ApiRequestError,
@@ -50,6 +50,7 @@ _background_trace_tasks: set[asyncio.Task] = set()
 
 _USER_ROLE_CACHE: dict[tuple[int, str], tuple[interactions.UserResolutionResult, float]] = {}
 _USER_ROLE_CACHE_TTL_SECONDS = 60.0
+_PENDING_NAME_ACTION_TTL_SECONDS = 3600.0
 
 
 @dataclass
@@ -57,9 +58,10 @@ class _PendingNameAction:
     handler: Callable[..., Awaitable[None]]
     update: object
     context: object
+    created_at: float = field(default_factory=time.monotonic)
 
 
-_PENDING_NAME_ACTIONS: dict[str, _PendingNameAction] = {}
+_PENDING_NAME_ACTIONS: dict[tuple[str, str], _PendingNameAction] = {}
 
 # Telegram's own chat.type values for multi-member chats. Mirrors
 # orchestrator.group_routing.GROUP_CHAT_TYPES (bot may not import orchestrator).
@@ -256,7 +258,11 @@ async def _gate_on_full_name(handler, update, context) -> bool:
     if resolution.status != "ok" or resolution.full_name:
         return False
 
-    pending = _PENDING_NAME_ACTIONS.get(telegram_identity)
+    pending_key = (telegram_identity, chat_id)
+    pending = _PENDING_NAME_ACTIONS.get(pending_key)
+    if pending is not None and time.monotonic() - pending.created_at >= _PENDING_NAME_ACTION_TTL_SECONDS:
+        _PENDING_NAME_ACTIONS.pop(pending_key, None)
+        pending = None
     candidate = getattr(getattr(update, "message", None), "text", None)
     if pending is not None and isinstance(candidate, str):
         try:
@@ -265,14 +271,14 @@ async def _gate_on_full_name(handler, update, context) -> bool:
             await deps.telegram_client.send_text(chat_id, messages.text("bot.full_name_invalid"))
             return True
         await deps.api_client.update_own_full_name(telegram_identity, full_name)
-        _PENDING_NAME_ACTIONS.pop(telegram_identity, None)
+        _PENDING_NAME_ACTIONS.pop(pending_key, None)
         _USER_ROLE_CACHE.pop((id(deps.api_client), telegram_identity), None)
         await deps.telegram_client.send_text(chat_id, messages.text("bot.full_name_saved", name=full_name))
         await pending.handler(pending.update, pending.context)
         return True
 
     if pending is None:
-        _PENDING_NAME_ACTIONS[telegram_identity] = _PendingNameAction(handler, update, context)
+        _PENDING_NAME_ACTIONS[pending_key] = _PendingNameAction(handler, update, context)
     query = getattr(update, "callback_query", None)
     if query is not None:
         try:
@@ -290,9 +296,36 @@ def _guarded(handler: Callable[..., Awaitable[None]], *, require_full_name: bool
         deps = context.bot_data["deps"]
         messages = interactions.message_catalog_for(deps)
         try:
-            if require_full_name and await _gate_on_full_name(handler, update, context):
-                return
-            await handler(update, context)
+            telegram_identity, chat_id = _identity_and_chat_id(update)
+            chat_type = _chat_type(update)
+            chat = getattr(update, "effective_chat", None)
+            chat_label = str(getattr(chat, "title", None) or "")
+            with telegram_request_context(chat_id, chat_type):
+                admission = await deps.api_client.admit_telegram_update(
+                    telegram_identity,
+                    chat_id,
+                    chat_type,
+                    chat_label,
+                )
+                if not admission.allowed:
+                    _PENDING_NAME_ACTIONS.pop((telegram_identity, chat_id), None)
+                    logger.info(
+                        "telegram update blocked by admission policy",
+                        extra={
+                            "event": "bot_telegram_admission_blocked",
+                            "telegram_identity": telegram_identity,
+                            "chat_id": chat_id,
+                            "reason": admission.reason,
+                        },
+                    )
+                    if chat_type == "private":
+                        await deps.telegram_client.send_text(chat_id, messages.text("auth.safe_mode_blocked"))
+                    return
+                if admission.reason == "auto_registered":
+                    clear_caller_cache()
+                if require_full_name and await _gate_on_full_name(handler, update, context):
+                    return
+                await handler(update, context)
         except ApiNotImplementedError as exc:
             logger.info("handler blocked on unimplemented API: %s", exc, extra={"event": "bot_api_not_implemented"})
             if update.effective_chat is not None:

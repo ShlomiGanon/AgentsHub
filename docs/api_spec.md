@@ -1,6 +1,21 @@
 # API Spec (work_plan.md §7.1)
 
 The request and response shape of every endpoint the API layer serves.
+
+`safe_mode` is a persistent, commander-only live setting exposed in the
+`GET /SYSTEM` settings object and changed with `PUT /SYSTEM`. It is a JSON
+boolean, defaults to `false`, and is validated together with all other fields
+before anything is written. When true, Telegram users and groups marked
+`auto_register` are blocked until separately approved.
+
+`POST /Telegram/Admission` is an internal bot-service endpoint. It requires
+both `X-Identity: bot-service` and a valid `X-Service-Key`, accepts the real
+Telegram user/chat identity and chat type, and atomically registers missing
+people as viewers and missing groups against `main_agent` only while the
+system is open. Generic API authentication never auto-registers a caller.
+`POST /User/<identity>/approve` and `POST /Groups/<chat_id>/approve` are
+commander-only, idempotent actions that clear only the registration-source
+flag. Private chats always route to `main_agent`; users have no agent field.
 Every field name and meaning is drawn from `docs/vocabulary.md`
 (work_plan.md §1.2) — this document doesn't restate what a field *means*,
 only how it's carried over HTTP. All bodies are JSON. All timestamps are
@@ -517,7 +532,7 @@ some values blanked out.
   "queued_events": 2,
   "held_events": { "clarification": 1, "approval": 0 },
   "scheduler": { "last_run_at": "2026-08-24T09:00:00", "last_run_ok": true, "last_run_error": null },
-  "settings": { "retry_count": 3, "risk_threshold": 0.5, "lookback_window_days": 30 },
+  "settings": { "retry_count": 3, "risk_threshold": 0.5, "lookback_window_days": 30, "safe_mode": false },
   "profile_file_changed": false
 }
 ```
@@ -544,7 +559,7 @@ just to get one protocol's full description and criticality (§7.12).
 
 Request — only these three keys are ever accepted:
 ```json
-{ "retry_count": 5, "risk_threshold": 0.6, "lookback_window_days": 45 }
+{ "retry_count": 5, "risk_threshold": 0.6, "lookback_window_days": 45, "safe_mode": true }
 ```
 A partial body is fine — only the keys present are changed. Any other
 key is rejected (the errors shape, `invalid_input`, naming the field)
@@ -553,7 +568,7 @@ rather than silently ignored.
 Response `200 OK`, the new values, already written to the settings store
 before this response is sent:
 ```json
-{ "retry_count": 5, "risk_threshold": 0.6, "lookback_window_days": 45 }
+{ "retry_count": 5, "risk_threshold": 0.6, "lookback_window_days": 45, "safe_mode": true }
 ```
 
 ## `GET /User/<identity>` (§8.14)

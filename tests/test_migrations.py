@@ -105,6 +105,36 @@ def test_migration_eighteen_adds_empty_full_name_without_losing_users(tmp_path):
     assert row == ("42", "viewer", "")
 
 
+def test_migration_nineteen_marks_existing_users_and_groups_as_manually_approved(tmp_path):
+    db_path = str(tmp_path / "version-eighteen.db")
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "CREATE TABLE users (telegram_identity TEXT PRIMARY KEY, permission_level TEXT NOT NULL, "
+            "full_name TEXT NOT NULL DEFAULT '')"
+        )
+        connection.execute("INSERT INTO users VALUES ('42', 'viewer', 'Dana Levi')")
+        connection.execute(
+            "CREATE TABLE telegram_groups (chat_id TEXT PRIMARY KEY, agent_name TEXT NOT NULL, "
+            "label TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)"
+        )
+        connection.execute("INSERT INTO telegram_groups VALUES ('-1001', 'main_agent', 'Ops', '2026-01-01')")
+        connection.execute("PRAGMA user_version = 18")
+        connection.commit()
+    finally:
+        connection.close()
+
+    run_migrations(db_path)
+    connection = sqlite3.connect(db_path)
+    try:
+        user = connection.execute("SELECT full_name, auto_register FROM users WHERE telegram_identity='42'").fetchone()
+        group = connection.execute("SELECT agent_name, auto_register FROM telegram_groups WHERE chat_id='-1001'").fetchone()
+    finally:
+        connection.close()
+    assert user == ("Dana Levi", 0)
+    assert group == ("main_agent", 0)
+
+
 def test_history_query_indexes_are_present_on_a_fresh_database(tmp_path):
     import sqlite3
 

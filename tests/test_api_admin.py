@@ -792,6 +792,24 @@ def test_admin_can_set_a_single_full_name_and_level_only_edits_preserve_it(tmp_p
     assert teardown_ctx[0].deps.persistence.read_user(VIEWER_IDENTITY)["full_name"] == "Dana Levi"
 
 
+def test_admin_lists_and_explicitly_approves_an_automatic_user(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    teardown_ctx[0].deps.persistence.register_telegram_user_if_missing("auto-1")
+    _login(client)
+    page = client.get("/admin/users")
+    csrf_token = _extract_csrf(page.data)
+    assert b"auto-1" in page.data
+    assert b"Automatic" in page.data
+
+    response = client.post(
+        "/admin/users/auto-1/approve",
+        data={"csrf_token": csrf_token},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert teardown_ctx[0].deps.persistence.read_user("auto-1")["auto_register"] is False
+
+
 def test_remove_user(tmp_path, teardown_ctx, _admin_env):
     ctx_list = teardown_ctx
     client = _client(tmp_path, ctx_list)
@@ -890,6 +908,35 @@ def test_admin_adds_updates_and_removes_a_group_binding(tmp_path, teardown_ctx, 
     assert b"removed" in removed.data
     assert ctx.group_routing.get("-1002") is None
     assert ctx.deps.persistence.read_group("-1002") is None
+
+
+def test_admin_lists_and_explicitly_approves_an_automatic_group(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    ctx = teardown_ctx[0]
+    ctx.group_routing.register_telegram_group_if_missing("-1004", "Visitors")
+    _login(client)
+    page = client.get("/admin/groups")
+    csrf_token = _extract_csrf(page.data)
+    assert b"-1004" in page.data
+    assert b"Automatic" in page.data
+
+    response = client.post(
+        "/admin/groups/-1004/approve",
+        data={"csrf_token": csrf_token},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert ctx.deps.persistence.read_group("-1004")["auto_register"] is False
+    assert ctx.group_routing.get("-1004").auto_register is False
+
+
+def test_profiles_page_has_a_friendly_safe_mode_control(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+    page = client.get("/admin/profiles").data
+    assert b'id="system-safe"' in page
+    assert b"Open - accept new people and groups" in page
+    assert b"Safe - approved people and groups only" in page
 
 
 def test_admin_group_writes_flash_errors_for_bad_input(tmp_path, teardown_ctx, _admin_env):
