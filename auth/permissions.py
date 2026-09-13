@@ -44,6 +44,7 @@ class RequestedOperation(Enum):
     LIST_GROUPS = "list_groups"
     MANAGE_GROUPS = "manage_groups"
     RUN_ATTENDANCE_CHECK = "run_attendance_check"
+    VIEW_SIMULATIONS = "view_simulations"
 
 
 class ViewerAllowedAction(Enum):

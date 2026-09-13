@@ -31,6 +31,17 @@ from profiles.loader import (
     validate_single_protocol,
 )
 
+from profiles.simulation import (
+    SIMULATION_GROUP_ID_BASE,
+    SIMULATION_USER_ID_BASE,
+    SimulationGroup,
+    SimulationPersona,
+    SimulationScenario,
+    simulation_group_chat_id,
+    simulation_user_telegram_id,
+)
+from profiles.simulation_provisioning import ProvisioningResult, ensure_simulation_entities
+
 example = template
 reference = template
 sys.modules[f"{__name__}.example"] = template
@@ -55,4 +66,13 @@ __all__ = [
     "load_profile",
     "validate_profile",
     "validate_single_protocol",
+    "SIMULATION_GROUP_ID_BASE",
+    "SIMULATION_USER_ID_BASE",
+    "SimulationGroup",
+    "SimulationPersona",
+    "SimulationScenario",
+    "simulation_group_chat_id",
+    "simulation_user_telegram_id",
+    "ProvisioningResult",
+    "ensure_simulation_entities",
 ]

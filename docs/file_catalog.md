@@ -35,6 +35,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `api/app.py` | Production | Public entry point | Builds API dependencies, owns ApiContext, and starts Flask. |
 | `api/request_boundary.py` | Production | Private implementation | Authenticates requests and translates API and HTTP failures into responses. |
 | `api/routes.py` | Production | Private implementation | Defines ingestion, management, hold, job, system, and notification routes. |
+| `api/simulations.py` | Production | Private implementation | Converts a profile's declared simulations into the existing admin-simulator scenario JSON, substituting reserved simulation IDs for persona/group keys. |
 | `auth/__init__.py` | Production | Public facade | Exposes authorization contracts. |
 | `auth/permissions.py` | Production | Private implementation | Maps actions to permission levels and evaluates authorization. |
 | `auth/user_names.py` | Production | Private implementation | Normalizes and validates the single full-name field associated with a Telegram identity. |
@@ -79,6 +80,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `docs/links.txt` | Documentation | Internal | Documents links. |
 | `docs/Next_Plan.md` | Documentation | Internal | Defines deferred optimizations that remain disabled until the current speed changes pass their gates. |
 | `docs/operator_guide.md` | Documentation | Internal | Documents operator guide. |
+| `docs/profile_simulations_design.md` | Documentation | Internal | Documents the per-profile simulation mechanism's architecture, data model, reserved ID scheme, and file impact. |
 | `docs/profile_spec.md` | Documentation | Internal | Documents profile spec. |
 | `docs/progress.md` | Documentation | Internal | Documents progress. |
 | `docs/questions.txt` | Documentation | Internal | Documents questions. |
@@ -137,6 +139,8 @@ This English catalog describes every tracked or pending first-party file in the 
 | `profiles/demo.py` | Production | Private implementation | Defines the runnable demonstration deployment profile. |
 | `profiles/friendly_forces.py` | Production | Private implementation | Defines the friendly forces profile. |
 | `profiles/loader.py` | Production | Private implementation | Imports, validates, hashes, and constructs deployment profiles and registries. |
+| `profiles/simulation.py` | Production | Private implementation | Defines simulation persona, group, and scenario declarations and the reserved Telegram ID scheme. |
+| `profiles/simulation_provisioning.py` | Production | Private implementation | Ensures a profile's declared simulation users and groups exist, creating any that are missing. |
 | `profiles/sub_agent_surveillance.py` | Production | Private implementation | Defines the dedicated visual-surveillance deployment and protocols. |
 | `profiles/sub_agent_team_status.py` | Production | Private implementation | Defines the dedicated readiness-team status deployment and reporting protocol. |
 | `profiles/template.py` | Production | Private implementation | Provides a reference template for authoring deployment profiles. |
@@ -167,6 +171,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_api_notifications.py` | Test | Internal | Verifies api notifications behavior and edge cases. |
 | `tests/test_api_protocols.py` | Test | Internal | Verifies api protocols behavior and edge cases. |
 | `tests/test_api_request_boundary.py` | Test | Internal | Verifies authentication and structured API error translation. |
+| `tests/test_api_simulations.py` | Test | Internal | Verifies `GET /Simulations` and `GET /Simulations/<key>` permission gating and ID materialization. |
 | `tests/test_api_situational_picture.py` | Test | Internal | Verifies `/Msg` builds the multi-domain picture from live specialist answers and caller-scoped recent events, by hint or in plain words. |
 | `tests/test_api_system.py` | Test | Internal | Verifies api system behavior and edge cases. |
 | `tests/test_api_trace.py` | Test | Internal | Verifies commander-only Deep Debug trace polling, authorization, ordering, and rendering. |
@@ -202,6 +207,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_integration_profile_editing_and_settings.py` | Test | Internal | Verifies the profile editing and settings scenario across real subsystem boundaries. |
 | `tests/test_integration_profile_isolation.py` | Test | Internal | Verifies the profile isolation scenario across real subsystem boundaries. |
 | `tests/test_integration_profile_loading.py` | Test | Internal | Verifies the profile loading scenario across real subsystem boundaries. |
+| `tests/test_integration_profile_simulations.py` | Test | Internal | Verifies a materialized simulation runs end to end through the real `/Msg`/`/Event` endpoints, with reserved IDs provisioned by `ensure_simulation_entities` alone. |
 | `tests/test_integration_retry_exhaustion.py` | Test | Internal | Verifies the retry exhaustion scenario across real subsystem boundaries. |
 | `tests/test_integration_serial_processing_under_load.py` | Test | Internal | Verifies the serial processing under load scenario across real subsystem boundaries. |
 | `tests/test_integration_user_administration.py` | Test | Internal | Verifies the user administration scenario across real subsystem boundaries. |
@@ -220,6 +226,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_persistence_conformance.py` | Test | Internal | Verifies persistence conformance behavior and edge cases. |
 | `tests/test_persistence_events.py` | Test | Internal | Verifies persistence events behavior and edge cases. |
 | `tests/test_profile_loading.py` | Test | Internal | Verifies profile imports, validation, construction, and registry configuration. |
+| `tests/test_profile_simulations.py` | Test | Internal | Verifies the simulation ID scheme, profile validation, provisioning, and JSON materialization. |
 | `tests/test_protocol_repository.py` | Test | Internal | Verifies protocol loading, validation, rendering, and atomic editing. |
 | `tests/test_protocol_retry.py` | Test | Internal | Verifies protocol retry behavior and edge cases. |
 | `tests/test_provider_telemetry.py` | Test | Internal | Verifies CrewAI provider-event correlation, usage fields, failures, and race recovery. |

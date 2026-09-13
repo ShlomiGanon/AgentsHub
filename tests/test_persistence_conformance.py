@@ -10,7 +10,7 @@ replacement engine.
 
 import pytest
 
-from persistence.exceptions import NotFoundError
+from persistence.exceptions import NotFoundError, PersistenceError
 from persistence.sqlite_store import SQLitePersistence
 
 IMPLEMENTATIONS = [SQLitePersistence]
@@ -132,6 +132,25 @@ def test_deleting_an_unknown_user_raises_not_found(persistence):
         persistence.delete_user("nonexistent")
 
 
+def test_ensure_user_exists_creates_once_and_never_overwrites(persistence):
+    """Idempotent create-if-missing for simulation-user provisioning
+    (docs/profile_simulations_design.md) — distinct from write_user's upsert
+    and from register_telegram_user_if_missing's auto_register=True."""
+
+    created = persistence.ensure_user_exists("9000000000000000", "commander", "Sim Commander")
+    assert created is True
+    assert persistence.read_user("9000000000000000") == {
+        "telegram_identity": "9000000000000000", "permission_level": "commander",
+        "full_name": "Sim Commander", "auto_register": False,
+    }
+
+    # An admin's later edit must survive a second "ensure" pass.
+    persistence.write_user("9000000000000000", "commander", "Edited Name")
+    created_again = persistence.ensure_user_exists("9000000000000000", "commander", "Sim Commander")
+    assert created_again is False
+    assert persistence.read_user("9000000000000000")["full_name"] == "Edited Name"
+
+
 # -- Telegram groups ----------------------------------------------------
 
 
@@ -158,6 +177,57 @@ def test_group_crud_round_trip(persistence):
 def test_deleting_an_unknown_group_raises_not_found(persistence):
     with pytest.raises(NotFoundError):
         persistence.delete_group("-999")
+
+
+def test_ensure_group_exists_creates_once_and_never_overwrites(persistence):
+    """Idempotent create-if-missing for simulation-group provisioning
+    (docs/profile_simulations_design.md) — mirrors test_ensure_user_exists_*."""
+
+    created = persistence.ensure_group_exists("-9000000000000000", "team_status_agent", "Sim group")
+    assert created is True
+    stored = persistence.read_group("-9000000000000000")
+    assert stored["agent_name"] == "team_status_agent"
+    assert stored["label"] == "Sim group"
+    assert stored["auto_register"] is False
+
+    # An admin's later edit (e.g. via the Groups page) must survive a second "ensure" pass.
+    persistence.write_group("-9000000000000000", "main_agent", "Promoted label")
+    created_again = persistence.ensure_group_exists("-9000000000000000", "team_status_agent", "Sim group")
+    assert created_again is False
+    assert persistence.read_group("-9000000000000000")["agent_name"] == "main_agent"
+    assert persistence.read_group("-9000000000000000")["label"] == "Promoted label"
+
+
+def test_rename_group_moves_the_row_to_a_new_chat_id(persistence):
+    """The operator-driven "replace placeholder ID with a real one" primitive
+    (docs/profile_simulations_design.md) — changes the primary key in place."""
+
+    persistence.write_group("-9000000000000000", "team_status_agent", "Sim group")
+
+    renamed = persistence.rename_group("-9000000000000000", "-1001234567890")
+
+    assert renamed["chat_id"] == "-1001234567890"
+    assert renamed["agent_name"] == "team_status_agent"
+    assert renamed["label"] == "Sim group"
+    assert persistence.read_group("-9000000000000000") is None
+    assert persistence.read_group("-1001234567890") is not None
+
+
+def test_rename_group_unknown_old_id_raises_not_found(persistence):
+    with pytest.raises(NotFoundError):
+        persistence.rename_group("-999", "-1001")
+
+
+def test_rename_group_onto_an_existing_id_raises_and_leaves_both_rows_untouched(persistence):
+    persistence.write_group("-1001", "team_status_agent", "existing")
+    persistence.write_group("-9000000000000000", "main_agent", "sim placeholder")
+
+    with pytest.raises(PersistenceError):
+        persistence.rename_group("-9000000000000000", "-1001")
+
+    # Rolled back, not partially applied.
+    assert persistence.read_group("-9000000000000000")["label"] == "sim placeholder"
+    assert persistence.read_group("-1001")["label"] == "existing"
 
 
 # -- Held events (§6.7) -------------------------------------------------

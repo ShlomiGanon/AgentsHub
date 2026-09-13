@@ -254,6 +254,7 @@ MESSAGES = {
     "api.protocol_out_of_group_scope": "Protocol '{protocol}' is not available in this group (routed to {agent}).",
     "api.group_agent_invalid": "'{agent}' is not a routable agent. Allowed: {allowed}.",
     "api.attendance_agent_unavailable": "No attendance specialist is registered in this deployment.",
+    "api.simulation_not_found": "No such simulation: '{simulation_key}'.",
     "bot.group_added_hint": (
         "This group (chat ID {chat_id}) is not yet registered. A commander must bind it to an agent "
         "in the admin panel or with the group-admin command before messages here are handled."
@@ -543,6 +544,16 @@ MESSAGES = {
     "admin.group_routed": "Group '{chat_id}' is now routed to '{agent}'.",
     "admin.group_not_found": "No such group: '{chat_id}'.",
     "admin.group_removed": "Group '{chat_id}' removed.",
+    "admin.rename_group": "Change ID",
+    "admin.new_chat_id_placeholder": "-1009876543210",
+    "admin.group_rename_help": (
+        "Replace this group's Telegram chat ID — for example, once a real Telegram group exists "
+        "to receive traffic for a simulation group that was provisioned at a placeholder ID."
+    ),
+    "admin.new_chat_id_required": "A new Telegram chat ID is required.",
+    "admin.new_chat_id_invalid": "The new chat ID must be a negative number, like a real Telegram group ID.",
+    "admin.group_chat_id_taken": "'{chat_id}' is already used by another group.",
+    "admin.group_renamed": "Group '{old_chat_id}' is now '{new_chat_id}'.",
     "admin.identity_required": "A Telegram identity is required.",
     "admin.full_name_invalid": "A full name must be empty or contain at least two words (maximum 120 characters).",
     "admin.level_invalid": "'{level}' is not a valid permission level.",
@@ -637,6 +648,12 @@ MESSAGES = {
     "admin.simulator.example_text_group": "Good morning, I am available tonight.",
     "admin.simulator.example_text_event": "smoke observed at gate 3",
     "admin.simulator.example_needs_user": "Register at least one human user before loading the example.",
+    "admin.simulator.profile_simulations": "Profile simulations",
+    "admin.simulator.choose_profile_simulation": "Choose a declared simulation",
+    "admin.simulator.load_profile_simulation": "Load",
+    "admin.simulator.no_profile_simulations": "This profile declares no simulations.",
+    "admin.simulator.profile_simulation_load_failed": "Could not load this simulation: {message}",
+    "admin.simulator.select_identity_first": "Select an acting identity above to list this profile's simulations.",
     "bot.queue_empty": "There are currently no requests awaiting your approval.",
     "bot.queue_header": "{count} request(s) awaiting your approval:",
     "bot.queue_card_approval": "Type: {action_type}\nDescription: {description}\nWaiting: {waiting_time}\nRequester: {requester}\nRisk: {risk_level}{risk_reason}",
@@ -856,6 +873,17 @@ MESSAGES = {
     "unified.seed.member_1001": "Dan Levi",
     "unified.seed.member_1002": "Yossi Cohen",
     "unified.seed.member_1003": "Michal Avraham",
+
+    "unified.simulation.commander_name": "Simulated Commander",
+    "unified.simulation.viewer_name": "Simulated Viewer",
+    "unified.simulation.response_team_label": "Simulated response team",
+    "unified.simulation.viewer_dm_label": "Viewer private chat",
+    "unified.simulation.overall_picture.title": "Overall situational picture (demo)",
+    "unified.simulation.overall_picture.description": (
+        "A single-step demo: a simulated viewer privately asks for the overall situational "
+        "picture, a LOW-criticality, no-approval-needed protocol that completes immediately."
+    ),
+    "unified.simulation.overall_picture.step_text": "What is the overall situational picture right now?",
 
     "unified.protocol.overall_situational_picture.description": (
         "Overall sector situational picture (read-only, no data changes): combines surveillance (cameras and drones) with the readiness team's roster in the sector."

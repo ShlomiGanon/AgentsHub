@@ -68,6 +68,7 @@ Maps every API route, bot command/callback, and message intent to its `Requested
 | `GET /Groups` | `list_groups` | no |
 | `PUT /Groups/<chat_id>`, `DELETE /Groups/<chat_id>` | `manage_groups` | no |
 | `POST /TeamStatus/AttendanceCheck` | `run_attendance_check` | no |
+| `GET /Simulations`, `GET /Simulations/<key>` | `view_simulations` | no |
 | bot `/profile view`, `/profile diff` | `view_profile_overview` | yes |
 | bot `/profile add\|edit\|remove` | `create_protocol` / `update_protocol` / `delete_protocol` | no |
 | bot `/settings view` | `view_settings` | no |

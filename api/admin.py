@@ -66,7 +66,7 @@ from auth.permissions import InvalidFullNameError, PermissionLevel, normalize_fu
 from config import discover_profiles, read_server_status, submit_server_command, supervisor_available
 from messages import get_current_catalog
 from orchestrator.flows import InvalidRoutingTargetError
-from persistence import EventSearchCriteria, NotFoundError
+from persistence import EventSearchCriteria, NotFoundError, PersistenceError
 from tools import get_trace_id, record_telegram_security_metric
 
 if TYPE_CHECKING:
@@ -808,7 +808,7 @@ _GROUPS_TEMPLATE = """<!DOCTYPE html>
 <body><div class="container container-narrow"><div class="d-flex justify-content-between align-items-baseline"><h1>{{ t('admin.groups_title') }}</h1><a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div><p class="subtitle mb-4">{{ t('admin.groups_page_subtitle') }}</p>
 {% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>{% endfor %}
 <table class="table table-console mb-4"><thead><tr><th>{{ t('admin.col_chat_id') }}</th><th>{{ t('admin.col_label') }}</th><th>{{ t('admin.col_routed_to') }}</th><th></th></tr></thead><tbody>
-{% for group in groups %}<tr><td class="identity">{{ group.chat_id }}<div class="mt-2"><span class="tag">{% if group.auto_register %}{{ t('admin.registration_automatic') }}{% else %}{{ t('admin.registration_approved') }}{% endif %}</span> <span class="tag">{% if safe_mode and group.auto_register %}{{ t('admin.registration_blocked') }}{% else %}{{ t('admin.registration_active') }}{% endif %}</span></div></td><td colspan="2"><form class="d-flex gap-2" method="post" action="{{ url_for('admin.write_group') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="chat_id" value="{{ group.chat_id }}"><input name="label" value="{{ group.label }}" maxlength="200" class="form-control form-control-console" placeholder="{{ t('admin.col_label') }}"><select name="agent_name" class="form-select form-select-console">{% for agent_name in routable_agents %}<option value="{{ agent_name }}" {% if agent_name == group.agent_name %}selected{% endif %}>{{ agent_name }}</option>{% endfor %}</select><button class="btn btn-console">{{ t('admin.save') }}</button></form></td><td><div class="d-flex gap-2">{% if group.auto_register %}<form method="post" action="{{ url_for('admin.approve_group', chat_id=group.chat_id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-primary">{{ t('admin.approve_registration') }}</button></form>{% endif %}<form method="post" action="{{ url_for('admin.remove_group', chat_id=group.chat_id) }}" onsubmit="return confirm({{ t('admin.confirm_remove_group', chat_id=group.chat_id)|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-danger">{{ t('admin.remove') }}</button></form></div></td></tr>{% else %}<tr><td colspan="4">{{ t('admin.no_groups') }}</td></tr>{% endfor %}</tbody></table>
+{% for group in groups %}<tr><td class="identity">{{ group.chat_id }}<div class="mt-2"><span class="tag">{% if group.auto_register %}{{ t('admin.registration_automatic') }}{% else %}{{ t('admin.registration_approved') }}{% endif %}</span> <span class="tag">{% if safe_mode and group.auto_register %}{{ t('admin.registration_blocked') }}{% else %}{{ t('admin.registration_active') }}{% endif %}</span></div><form class="d-flex gap-2 mt-2" method="post" action="{{ url_for('admin.rename_group', chat_id=group.chat_id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input name="new_chat_id" class="form-control form-control-console form-control-sm" placeholder="{{ t('admin.new_chat_id_placeholder') }}" title="{{ t('admin.group_rename_help') }}"><button class="btn btn-console btn-sm" title="{{ t('admin.group_rename_help') }}">{{ t('admin.rename_group') }}</button></form></td><td colspan="2"><form class="d-flex gap-2" method="post" action="{{ url_for('admin.write_group') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="chat_id" value="{{ group.chat_id }}"><input name="label" value="{{ group.label }}" maxlength="200" class="form-control form-control-console" placeholder="{{ t('admin.col_label') }}"><select name="agent_name" class="form-select form-select-console">{% for agent_name in routable_agents %}<option value="{{ agent_name }}" {% if agent_name == group.agent_name %}selected{% endif %}>{{ agent_name }}</option>{% endfor %}</select><button class="btn btn-console">{{ t('admin.save') }}</button></form></td><td><div class="d-flex gap-2">{% if group.auto_register %}<form method="post" action="{{ url_for('admin.approve_group', chat_id=group.chat_id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-primary">{{ t('admin.approve_registration') }}</button></form>{% endif %}<form method="post" action="{{ url_for('admin.remove_group', chat_id=group.chat_id) }}" onsubmit="return confirm({{ t('admin.confirm_remove_group', chat_id=group.chat_id)|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-danger">{{ t('admin.remove') }}</button></form></div></td></tr>{% else %}<tr><td colspan="4">{{ t('admin.no_groups') }}</td></tr>{% endfor %}</tbody></table>
 <div class="block-console"><span class="block-label">{{ t('admin.add_group') }}</span><p class="subtitle">{{ t('admin.add_group_help', main_agent='main_agent') }}</p><form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.write_group') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="col"><div class="form-label-console">{{ t('admin.col_chat_id') }}</div><input name="chat_id" class="form-control form-control-console" placeholder="-1001234567890" required></div><div class="col"><div class="form-label-console">{{ t('admin.col_label') }}</div><input name="label" class="form-control form-control-console" maxlength="200"></div><div class="col-auto"><select name="agent_name" class="form-select form-select-console">{% for agent_name in routable_agents %}<option value="{{ agent_name }}">{{ agent_name }}</option>{% endfor %}</select></div><div class="col-auto"><button class="btn btn-console-primary">{{ t('admin.add') }}</button></div></form></div>
 </div></body></html>"""
 
@@ -1251,6 +1251,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             "users": "admin.users",
             "groups": "admin.groups",
             "server": "admin.server",
+            "simulator": "admin.simulator",
         }
         return redirect(url_for(destinations.get(request.form.get("next_page", ""), "admin.dashboard")))
 
@@ -1460,10 +1461,14 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         if redirect_response is not None:
             return redirect_response
 
+        api_context = _api_page_context("simulator")
         return _render(
             _SIMULATOR_TEMPLATE,
-            page_data=simulator_page_context(ctx, get_current_catalog(), BOT_SERVICE_IDENTITY),
+            page_data=simulator_page_context(
+                ctx, get_current_catalog(), BOT_SERVICE_IDENTITY, api_identity=api_context["api_identity"]
+            ),
             csrf_token=session["csrf_token"],
+            **api_context,
         )
 
     @blueprint.route("/simulator/example", methods=["POST"])
@@ -1568,6 +1573,46 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         )
         record_telegram_security_metric("approved", "group")
         flash(_t("admin.group_approved", chat_id=chat_id), "ok")
+        return redirect(url_for("admin.groups"))
+
+    @blueprint.route("/groups/<chat_id>/rename", methods=["POST"])
+    def rename_group(chat_id):
+        """Change a group's chat_id in place — generic (any group, not simulation-specific);
+        e.g. an operator replacing a simulation group's reserved placeholder chat ID with a
+        real Telegram group ID once one exists (docs/profile_simulations_design.md)."""
+
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        csrf_response = _require_csrf()
+        if csrf_response is not None:
+            return csrf_response
+
+        new_chat_id = request.form.get("new_chat_id", "").strip()
+        if not new_chat_id:
+            flash(_t("admin.new_chat_id_required"), "error")
+            return redirect(url_for("admin.groups"))
+        if not new_chat_id.lstrip("-").isdigit() or not new_chat_id.startswith("-") or int(new_chat_id) >= 0:
+            flash(_t("admin.new_chat_id_invalid"), "error")
+            return redirect(url_for("admin.groups"))
+
+        try:
+            ctx.group_routing.rename(chat_id, new_chat_id)
+        except NotFoundError:
+            flash(_t("admin.group_not_found", chat_id=chat_id), "error")
+            return redirect(url_for("admin.groups"))
+        except PersistenceError:
+            flash(_t("admin.group_chat_id_taken", chat_id=new_chat_id), "error")
+            return redirect(url_for("admin.groups"))
+
+        logger.info(
+            "admin renamed a telegram group's chat ID",
+            extra={
+                "event": "admin_group_renamed",
+                "old_chat_id": chat_id, "new_chat_id": new_chat_id, "trace_id": get_trace_id(),
+            },
+        )
+        flash(_t("admin.group_renamed", old_chat_id=chat_id, new_chat_id=new_chat_id), "ok")
         return redirect(url_for("admin.groups"))
 
     @blueprint.route("/users", methods=["POST"])

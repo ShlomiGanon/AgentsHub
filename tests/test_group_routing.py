@@ -13,7 +13,7 @@ from orchestrator.flows import (
     resolve_scope,
     scope_deps,
 )
-from persistence.contracts import NotFoundError
+from persistence.contracts import NotFoundError, PersistenceError
 from protocols.model import CriticalityLevel, Protocol
 from protocols.repository import ProtocolSet
 
@@ -39,6 +39,16 @@ class _MemoryGroups:
         if chat_id not in self.rows:
             raise NotFoundError(chat_id)
         del self.rows[chat_id]
+
+    def rename_group(self, old_chat_id, new_chat_id):
+        if old_chat_id not in self.rows:
+            raise NotFoundError(old_chat_id)
+        if new_chat_id in self.rows:
+            raise PersistenceError(f"telegram group '{new_chat_id}' already exists")
+        record = dict(self.rows.pop(old_chat_id))
+        record["chat_id"] = new_chat_id
+        self.rows[new_chat_id] = record
+        return record
 
 
 class _Clock:
@@ -114,6 +124,43 @@ def test_remove_deletes_from_persistence_and_memory_and_propagates_not_found():
     assert "-1" not in store.rows
     with pytest.raises(NotFoundError):
         table.remove("-1")
+
+
+def test_rename_moves_the_binding_in_persistence_and_memory_without_reload():
+    """docs/profile_simulations_design.md: the operator-driven "replace a
+    simulation group's placeholder ID with a real one" primitive — generic,
+    not simulation-specific."""
+
+    store = _MemoryGroups()
+    table = _table(store)
+    table.load()
+    table.upsert("-1", "team_status_agent", "readiness")
+
+    binding = table.rename("-1", "-2")
+
+    assert binding.chat_id == "-2"
+    assert binding.agent_name == "team_status_agent"
+    assert binding.label == "readiness"
+    assert table.get("-1") is None
+    assert table.get("-2") == binding
+    assert "-1" not in store.rows
+    assert store.rows["-2"]["agent_name"] == "team_status_agent"
+
+
+def test_rename_propagates_not_found_and_conflict_errors():
+    store = _MemoryGroups()
+    table = _table(store)
+    table.load()
+    table.upsert("-1", "team_status_agent")
+    table.upsert("-2", "surveillance_agent")
+
+    with pytest.raises(NotFoundError):
+        table.rename("-999", "-3")
+    with pytest.raises(PersistenceError):
+        table.rename("-1", "-2")
+    # Neither binding moved.
+    assert table.get("-1").agent_name == "team_status_agent"
+    assert table.get("-2").agent_name == "surveillance_agent"
 
 
 def test_external_writes_become_visible_after_the_refresh_interval():

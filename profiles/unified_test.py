@@ -17,6 +17,7 @@ from agents import (
 from messages import get_catalog
 from persistence import open_persistence, open_surveillance_persistence, open_team_status_persistence
 from profiles.contracts import AgentSpec, OptimizationPolicy
+from profiles.simulation import SimulationGroup, SimulationPersona, SimulationScenario
 from protocols import CriticalityLevel, Protocol
 
 DEFAULT_LANGUAGE = "he"
@@ -1001,3 +1002,67 @@ VIEWER_KEYBOARD = (
         _catalog_text("unified.keyboard.event_history", icon=_ICON_SCROLL),
     ),
 )
+
+
+# -- Simulations (docs/profile_simulations_design.md) -----------------------
+#
+# Pilot declaration: two simulation users (one of each permission level) and
+# one simulation group, provisioned automatically on every API server start
+# at this profile's reserved Telegram ID block (never colliding with a real
+# Telegram user/group). One worked-example simulation ties them together —
+# a viewer privately asking for the overall situational picture, a
+# LOW-criticality protocol with approval_flag=False, so it completes
+# immediately with no commander interaction needed.
+
+SIMULATION_USERS = [
+    SimulationPersona(
+        key="commander", offset=0, permission_level="commander",
+        full_name=_catalog_text("unified.simulation.commander_name"),
+    ),
+    SimulationPersona(
+        key="viewer", offset=1, permission_level="viewer",
+        full_name=_catalog_text("unified.simulation.viewer_name"),
+    ),
+]
+
+SIMULATION_GROUPS = [
+    SimulationGroup(
+        key="response_team", offset=0, agent_name="team_status_agent",
+        label=_catalog_text("unified.simulation.response_team_label"),
+    ),
+]
+
+SIMULATIONS = [
+    SimulationScenario(
+        key="overall_picture_query",
+        title=_catalog_text("unified.simulation.overall_picture.title"),
+        description=_catalog_text("unified.simulation.overall_picture.description"),
+        tags=("demo",),
+        raw={
+            "scenario": {
+                "id": "overall_picture_query",
+                "title": _catalog_text("unified.simulation.overall_picture.title"),
+                "description": _catalog_text("unified.simulation.overall_picture.description"),
+                "tags": ["demo"],
+            },
+            "chats": [
+                {
+                    "key": "viewer_dm",
+                    "kind": "message",
+                    "label": _catalog_text("unified.simulation.viewer_dm_label"),
+                    "telegram_chat_type": "private",
+                },
+            ],
+            "steps": [
+                {
+                    "step": 1,
+                    "chat": "viewer_dm",
+                    "sender_identity": "viewer",
+                    "sender_name": _catalog_text("unified.simulation.viewer_name"),
+                    "text": _catalog_text("unified.simulation.overall_picture.step_text"),
+                    "protocol_hint": "overall_situational_picture",
+                },
+            ],
+        },
+    ),
+]

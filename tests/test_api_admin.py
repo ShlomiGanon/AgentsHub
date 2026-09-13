@@ -927,6 +927,60 @@ def test_admin_adds_updates_and_removes_a_group_binding(tmp_path, teardown_ctx, 
     assert ctx.deps.persistence.read_group("-1002") is None
 
 
+def test_admin_renames_a_groups_chat_id(tmp_path, teardown_ctx, _admin_env):
+    """The generic "change chat ID" action (docs/profile_simulations_design.md) —
+    e.g. replacing a simulation group's reserved placeholder with a real Telegram
+    group ID once one exists. Not simulation-specific: works for any group."""
+
+    client = _client(tmp_path, teardown_ctx)
+    ctx = teardown_ctx[0]
+    ctx.deps.persistence.write_group("-9000000000000000", "reference_agent", "placeholder")
+    _login(client)
+    csrf_token = _extract_csrf(client.get("/admin/groups").data)
+
+    renamed = client.post(
+        "/admin/groups/-9000000000000000/rename",
+        data={"csrf_token": csrf_token, "new_chat_id": "-1009876543210"},
+        follow_redirects=True,
+    )
+    assert renamed.status_code == 200
+    assert b"is now" in renamed.data
+    assert ctx.group_routing.get("-9000000000000000") is None
+    assert ctx.group_routing.get("-1009876543210").agent_name == "reference_agent"
+    assert ctx.deps.persistence.read_group("-9000000000000000") is None
+    assert ctx.deps.persistence.read_group("-1009876543210")["label"] == "placeholder"
+
+
+def test_admin_rename_group_rejects_bad_input_and_conflicts(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    ctx = teardown_ctx[0]
+    ctx.deps.persistence.write_group("-1005", "reference_agent", "existing")
+    ctx.deps.persistence.write_group("-1006", "reference_agent", "other")
+    _login(client)
+    csrf_token = _extract_csrf(client.get("/admin/groups").data)
+
+    empty = client.post("/admin/groups/-1005/rename", data={"csrf_token": csrf_token, "new_chat_id": ""}, follow_redirects=True)
+    assert b"new Telegram chat ID is required" in empty.data
+
+    not_negative = client.post(
+        "/admin/groups/-1005/rename", data={"csrf_token": csrf_token, "new_chat_id": "1007"}, follow_redirects=True
+    )
+    assert b"must be a negative number" in not_negative.data
+
+    unknown_old = client.post(
+        "/admin/groups/-9999/rename", data={"csrf_token": csrf_token, "new_chat_id": "-1007"}, follow_redirects=True
+    )
+    assert b"No such group" in unknown_old.data
+
+    taken = client.post(
+        "/admin/groups/-1005/rename", data={"csrf_token": csrf_token, "new_chat_id": "-1006"}, follow_redirects=True
+    )
+    assert b"already used by another group" in taken.data
+    # Rolled back, not partially applied.
+    assert ctx.deps.persistence.read_group("-1005")["label"] == "existing"
+    assert ctx.deps.persistence.read_group("-1006")["label"] == "other"
+
+
 def test_admin_lists_and_explicitly_approves_an_automatic_group(tmp_path, teardown_ctx, _admin_env):
     client = _client(tmp_path, teardown_ctx)
     ctx = teardown_ctx[0]

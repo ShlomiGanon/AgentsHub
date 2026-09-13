@@ -145,6 +145,13 @@ class PersistenceInterface(ABC):
         """Atomically create an automatic viewer when absent and return the effective record."""
 
     @abstractmethod
+    def ensure_user_exists(self, telegram_identity: str, permission_level: str, full_name: str) -> bool:
+        """Create the user (auto_register=False) if absent; never touch it if present.
+        Returns True iff a new row was created — used for idempotent simulation-user
+        provisioning (docs/profile_simulations_design.md), distinct from
+        `register_telegram_user_if_missing`'s safe-mode-pending-approval semantics."""
+
+    @abstractmethod
     def admit_telegram_update(
         self,
         telegram_identity: str,
@@ -181,6 +188,19 @@ class PersistenceInterface(ABC):
     @abstractmethod
     def register_telegram_group_if_missing(self, chat_id: str, label: str = "") -> dict:
         """Atomically create an automatic main-agent group when absent and return the effective record."""
+
+    @abstractmethod
+    def ensure_group_exists(self, chat_id: str, agent_name: str, label: str) -> bool:
+        """Create the group (auto_register=False) if absent; never touch it if present.
+        Returns True iff a new row was created — used for idempotent simulation-group
+        provisioning (docs/profile_simulations_design.md), distinct from
+        `register_telegram_group_if_missing`'s safe-mode-pending-approval semantics."""
+
+    @abstractmethod
+    def rename_group(self, old_chat_id: str, new_chat_id: str) -> dict:
+        """Change a group's chat_id (its primary key) in place and return the updated record.
+        Raises NotFoundError if `old_chat_id` doesn't exist, or PersistenceError if
+        `new_chat_id` is already taken by another group."""
 
     @abstractmethod
     def approve_group(self, chat_id: str) -> dict:

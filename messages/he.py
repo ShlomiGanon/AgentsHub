@@ -233,6 +233,7 @@ MESSAGES = {
     "api.protocol_out_of_group_scope": "הפרוטוקול '{protocol}' אינו זמין בקבוצה זו (מנותבת אל {agent}).",
     "api.group_agent_invalid": "'{agent}' אינו סוכן שניתן לנתב אליו. מותר: {allowed}.",
     "api.attendance_agent_unavailable": "לא רשום סוכן נוכחות בפריסה הזו.",
+    "api.simulation_not_found": "אין סימולציה כזו: '{simulation_key}'.",
     "bot.group_added_hint": (
         "הקבוצה הזו (מזהה צ'אט {chat_id}) עדיין לא רשומה. מפקד צריך לשייך אותה לסוכן "
         "בממשק הניהול או בפקודת ניהול הקבוצות לפני שהודעות כאן יטופלו."
@@ -520,6 +521,16 @@ MESSAGES = {
     "admin.group_routed": "הקבוצה '{chat_id}' מנותבת כעת אל '{agent}'.",
     "admin.group_not_found": "אין קבוצה כזו: '{chat_id}'.",
     "admin.group_removed": "הקבוצה '{chat_id}' הוסרה.",
+    "admin.rename_group": "שינוי מזהה",
+    "admin.new_chat_id_placeholder": "-1009876543210",
+    "admin.group_rename_help": (
+        "החלף את מזהה הצ'אט של הקבוצה בטלגרם - לדוגמה, לאחר שקבוצת טלגרם אמיתית קיימת לקליטת "
+        "תעבורה של קבוצת סימולציה שנוצרה במזהה זמני."
+    ),
+    "admin.new_chat_id_required": "נדרש מזהה צ'אט חדש בטלגרם.",
+    "admin.new_chat_id_invalid": "מזהה הצ'אט החדש חייב להיות מספר שלילי, כמו מזהה קבוצה אמיתי בטלגרם.",
+    "admin.group_chat_id_taken": "'{chat_id}' כבר בשימוש על ידי קבוצה אחרת.",
+    "admin.group_renamed": "הקבוצה '{old_chat_id}' היא כעת '{new_chat_id}'.",
     "admin.identity_required": "נדרשת זהות טלגרם.",
     "admin.full_name_invalid": "שם מלא יכול להיות ריק או לכלול לפחות שתי מילים, ועד 120 תווים.",
     "admin.level_invalid": "'{level}' אינה רמת הרשאה תקינה.",
@@ -614,6 +625,12 @@ MESSAGES = {
     "admin.simulator.example_text_group": "בוקר טוב, אני זמין הלילה.",
     "admin.simulator.example_text_event": "smoke observed at gate 3",
     "admin.simulator.example_needs_user": "רשום לפחות משתמש אנושי אחד לפני טעינת הדוגמה.",
+    "admin.simulator.profile_simulations": "סימולציות הפרופיל",
+    "admin.simulator.choose_profile_simulation": "בחר סימולציה מוצהרת",
+    "admin.simulator.load_profile_simulation": "טען",
+    "admin.simulator.no_profile_simulations": "הפרופיל הזה לא מצהיר על אף סימולציה.",
+    "admin.simulator.profile_simulation_load_failed": "לא ניתן לטעון סימולציה זו: {message}",
+    "admin.simulator.select_identity_first": "בחר זהות פעילה למעלה כדי להציג את סימולציות הפרופיל.",
     "bot.queue_empty": "אין כרגע בקשות הממתינות לאישורך.",
     "bot.queue_header": "{count} בקשות ממתינות לאישורך:",
     "bot.queue_card_approval": "סוג: {action_type}\nתיאור: {description}\nהמתנה: {waiting_time}\nגורם מבקש: {requester}\nרמת סיכון: {risk_level}{risk_reason}",
@@ -830,6 +847,17 @@ MESSAGES = {
     "unified.seed.member_1001": "דן לוי",
     "unified.seed.member_1002": "יוסי כהן",
     "unified.seed.member_1003": "מיכל אברהם",
+
+    "unified.simulation.commander_name": "מפקד מדומה",
+    "unified.simulation.viewer_name": "צופה מדומה",
+    "unified.simulation.response_team_label": "כיתת כוננות מדומה",
+    "unified.simulation.viewer_dm_label": "שיחה פרטית עם צופה",
+    "unified.simulation.overall_picture.title": "תמונת מצב כוללת (הדגמה)",
+    "unified.simulation.overall_picture.description": (
+        "הדגמה בצעד יחיד: צופה מדומה שואל בשיחה פרטית לתמונת המצב הכוללת - פרוטוקול ברמת סיכון "
+        "נמוכה שאינו דורש אישור ומסתיים מיד."
+    ),
+    "unified.simulation.overall_picture.step_text": "מה תמונת המצב הכוללת כרגע?",
 
     "unified.protocol.overall_situational_picture.description": (
         "תמונת מצב גזרתית כוללת (קריאה בלבד ללא שינוי נתונים): שילוב תצפית (מצלמות ורחפנים) ומצבת כיתת כוננות בגזרה."

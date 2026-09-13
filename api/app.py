@@ -24,7 +24,7 @@ from messages import set_current_catalog
 from history.query import HistoryQueryService
 from orchestrator.flows import FlowDeps, GroupRoutingTable, PolicyAwareEventQueue, SerialEventQueue, assemble_core_agents
 from persistence import open_persistence
-from profiles import build_area_registry, build_event_type_registry
+from profiles import build_area_registry, build_event_type_registry, ensure_simulation_entities
 from profiles.loader import load_profile
 from protocols import load_protocols
 from tools import configure_logging, configure_telemetry, get_trace_id, normalize_trace_id, set_trace_id
@@ -81,6 +81,22 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
 
     persistence = open_persistence(loaded_profile.db_path)
     configure_logging(loaded_profile.module_path, persistence=persistence)
+
+    # On every profile load, ensure this profile's declared simulation users/groups
+    # exist (docs/profile_simulations_design.md) — before group_routing below does its
+    # own first load(), so a freshly-provisioned group is already in the routing table
+    # at startup rather than needing a second reload.
+    provisioning_result = ensure_simulation_entities(persistence, loaded_profile)
+    if provisioning_result.created_users or provisioning_result.created_groups:
+        logger.info(
+            "simulation entities provisioned",
+            extra={
+                "event": "simulation_entities_provisioned",
+                "created_users": len(provisioning_result.created_users),
+                "created_groups": len(provisioning_result.created_groups),
+            },
+        )
+
     install_crewai_provider_telemetry()
     base_config = load_base_config(core_model=core_model)
 
@@ -205,6 +221,7 @@ def build_app(ctx: ApiContext) -> Flask:
         build_messages_blueprint,
         build_notifications_blueprint,
         build_protocols_blueprint,
+        build_simulations_blueprint,
         build_system_blueprint,
         build_telegram_blueprint,
         build_users_blueprint,
@@ -221,6 +238,7 @@ def build_app(ctx: ApiContext) -> Flask:
     app.register_blueprint(build_notifications_blueprint(ctx))
     app.register_blueprint(build_groups_blueprint(ctx))
     app.register_blueprint(build_telegram_blueprint(ctx))
+    app.register_blueprint(build_simulations_blueprint(ctx))
 
     from api.admin import build_admin_blueprint, resolve_admin_config
 

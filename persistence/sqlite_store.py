@@ -645,6 +645,22 @@ class SQLitePersistence(PersistenceInterface):
             raise PersistenceError(f"failed to register telegram user '{telegram_identity}'")
         return result
 
+    def ensure_user_exists(self, telegram_identity: str, permission_level: str, full_name: str) -> bool:
+        def _do(connection: sqlite3.Connection) -> bool:
+            try:
+                cursor = connection.execute(
+                    "INSERT INTO users (telegram_identity, permission_level, full_name, auto_register) "
+                    "VALUES (?, ?, ?, 0) ON CONFLICT(telegram_identity) DO NOTHING",
+                    (telegram_identity, permission_level, full_name),
+                )
+                connection.commit()
+                return cursor.rowcount > 0
+            except sqlite3.Error as exc:
+                connection.rollback()
+                raise PersistenceError(f"failed to ensure user '{telegram_identity}' exists: {exc}") from exc
+
+        return self._submit_write(_do)
+
     def admit_telegram_update(
         self,
         telegram_identity: str,
@@ -793,6 +809,47 @@ class SQLitePersistence(PersistenceInterface):
         result = self.read_group(chat_id)
         if result is None:
             raise PersistenceError(f"failed to register telegram group '{chat_id}'")
+        return result
+
+    def ensure_group_exists(self, chat_id: str, agent_name: str, label: str) -> bool:
+        created_at = datetime.now(timezone.utc).isoformat()
+
+        def _do(connection: sqlite3.Connection) -> bool:
+            try:
+                cursor = connection.execute(
+                    "INSERT INTO telegram_groups (chat_id, agent_name, label, created_at, auto_register) "
+                    "VALUES (?, ?, ?, ?, 0) ON CONFLICT(chat_id) DO NOTHING",
+                    (chat_id, agent_name, label, created_at),
+                )
+                connection.commit()
+                return cursor.rowcount > 0
+            except sqlite3.Error as exc:
+                connection.rollback()
+                raise PersistenceError(f"failed to ensure telegram group '{chat_id}' exists: {exc}") from exc
+
+        return self._submit_write(_do)
+
+    def rename_group(self, old_chat_id: str, new_chat_id: str) -> dict:
+        def _do(connection: sqlite3.Connection) -> None:
+            try:
+                cursor = connection.execute(
+                    "UPDATE telegram_groups SET chat_id = ? WHERE chat_id = ?",
+                    (new_chat_id, old_chat_id),
+                )
+                connection.commit()
+            except sqlite3.IntegrityError as exc:
+                connection.rollback()
+                raise PersistenceError(f"telegram group '{new_chat_id}' already exists") from exc
+            except sqlite3.Error as exc:
+                connection.rollback()
+                raise PersistenceError(f"failed to rename telegram group '{old_chat_id}': {exc}") from exc
+            if cursor.rowcount == 0:
+                raise NotFoundError(f"no such telegram group: '{old_chat_id}'")
+
+        self._submit_write(_do)
+        result = self.read_group(new_chat_id)
+        if result is None:
+            raise PersistenceError(f"failed to rename telegram group '{old_chat_id}' to '{new_chat_id}'")
         return result
 
     def approve_group(self, chat_id: str) -> dict:

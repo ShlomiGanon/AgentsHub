@@ -46,6 +46,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from api.admin_api_pages import FLASH_MESSAGES, IDENTITY_BAR
 from api.admin_scenarios import scenario_catalog
 from messages import MessageCatalog
 
@@ -55,11 +56,20 @@ if TYPE_CHECKING:
 SIMULATOR_STRING_PREFIX = "admin.simulator."
 
 
-def simulator_page_context(ctx: "ApiContext", catalog: MessageCatalog, bot_service_identity: str) -> dict:
+def simulator_page_context(
+    ctx: "ApiContext", catalog: MessageCatalog, bot_service_identity: str, api_identity: str = ""
+) -> dict:
     """Everything the page's script needs, as one JSON-serialisable dict: the live group
     bindings and registered users (so cards can show how a chat will be routed and warn about an
     unregistered sender before the API refuses it), the routable agents, and the raw
-    `admin.simulator.*` message templates of the current catalog (formatted client-side)."""
+    `admin.simulator.*` message templates of the current catalog (formatted client-side).
+
+    `api_identity` is the admin's currently-selected registered identity (the same
+    `IDENTITY_BAR`/`api_identity` mechanism the Profiles/Protocols/Events pages already
+    use, `api/admin_api_pages.py`) — the script's only use for it is authenticating its
+    own `GET /Simulations`/`GET /Simulations/<key>` calls to discover and load this
+    profile's declared simulations; it is unrelated to any scenario step's own
+    `sender_identity`, which is always used for that step's own request."""
 
     groups = [
         {"chat_id": binding.chat_id, "agent_name": binding.agent_name, "label": binding.label}
@@ -83,6 +93,7 @@ def simulator_page_context(ctx: "ApiContext", catalog: MessageCatalog, bot_servi
         "users": users,
         "routable_agents": list(ctx.group_routing.routable_targets),
         "bot_service_identity": bot_service_identity,
+        "api_identity": api_identity,
         "examples": scenario_catalog(),
         "strings": strings,
     }
@@ -223,6 +234,8 @@ SIMULATOR_BODY = """
   </div>
   <p class="subtitle mb-4">{{ t('admin.simulator.subtitle') }}</p>
 
+  """ + IDENTITY_BAR + FLASH_MESSAGES + """
+
   <div class="sim-toolbar">
     <div class="sim-drop" id="drop-zone">
       <span>{{ t('admin.simulator.drop_zone') }}</span>
@@ -238,6 +251,11 @@ SIMULATOR_BODY = """
       <select id="example-select" class="form-select form-select-console"><option value="">{{ t('admin.simulator.choose_example') }}</option></select>
       <button type="button" class="btn btn-console-primary" id="send-next" disabled>{{ t('admin.simulator.send_next') }}</button>
       <button type="button" class="btn btn-console-danger" id="reset-view" disabled>{{ t('admin.simulator.reset_view') }}</button>
+    </div>
+    <div class="sim-actions">
+      <label class="form-label-console" for="profile-simulation-select">{{ t('admin.simulator.profile_simulations') }}</label>
+      <select id="profile-simulation-select" class="form-select form-select-console" disabled><option value="">{{ t('admin.simulator.choose_profile_simulation') }}</option></select>
+      <button type="button" class="btn btn-console-primary" id="load-profile-simulation" disabled>{{ t('admin.simulator.load_profile_simulation') }}</button>
     </div>
   </div>
 
@@ -781,6 +799,69 @@ SIMULATOR_BODY = """
     });
     return { persona_ids: personaIds, group_ids: groupIds };
   }
+
+  // ---- profile-declared simulations: server-queried, no manual ID entry ------------------
+  // The admin page discovers and loads these purely by querying the server (GET /Simulations,
+  // GET /Simulations/<key>) — it holds no knowledge of any simulation user/group ID itself.
+  // The response is already the exact canonical scenario shape, so it feeds straight into the
+  // same loadScenario() the manual paste/drop/bundled-example paths already use.
+
+  const profileSimSelect = document.getElementById('profile-simulation-select');
+  const profileSimLoadButton = document.getElementById('load-profile-simulation');
+
+  async function loadProfileSimulationCatalog() {
+    profileSimSelect.innerHTML = '';
+    if (!DATA.api_identity) {
+      profileSimSelect.appendChild(el('option', null, t('select_identity_first')));
+      profileSimSelect.disabled = true;
+      profileSimLoadButton.disabled = true;
+      return;
+    }
+    let result;
+    try {
+      result = await apiCall('GET', '/Simulations', DATA.api_identity);
+    } catch (error) {
+      profileSimSelect.appendChild(el('option', null, t('profile_simulation_load_failed', { message: error.message })));
+      profileSimSelect.disabled = true;
+      profileSimLoadButton.disabled = true;
+      return;
+    }
+    const simulations = (result.payload && result.payload.simulations) || [];
+    profileSimSelect.appendChild(el('option', null, t('choose_profile_simulation')));
+    if (result.status >= 400 || !simulations.length) {
+      profileSimSelect.appendChild(el('option', null, t('no_profile_simulations')));
+      profileSimSelect.disabled = true;
+      profileSimLoadButton.disabled = true;
+      return;
+    }
+    simulations.forEach(function (simulation) {
+      const option = el('option', null, simulation.title || simulation.key);
+      option.value = simulation.key;
+      profileSimSelect.appendChild(option);
+    });
+    profileSimSelect.disabled = false;
+    profileSimLoadButton.disabled = false;
+  }
+
+  profileSimLoadButton.addEventListener('click', async function () {
+    const key = profileSimSelect.value;
+    if (!key) return;
+    profileSimLoadButton.disabled = true;
+    try {
+      const result = await apiCall('GET', '/Simulations/' + encodeURIComponent(key), DATA.api_identity);
+      if (result.status >= 400 || !result.payload) {
+        showAlert(t('profile_simulation_load_failed', { message: errorMessage(result) }), true);
+        return;
+      }
+      loadScenario(result.payload);
+    } catch (error) {
+      showAlert(t('profile_simulation_load_failed', { message: error.message }), true);
+    } finally {
+      profileSimLoadButton.disabled = false;
+    }
+  });
+
+  loadProfileSimulationCatalog();
 
   // ---- wiring --------------------------------------------------------------------------------
 

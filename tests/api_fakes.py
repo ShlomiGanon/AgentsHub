@@ -162,6 +162,7 @@ def build_context(
     tmp_path, main_agent=None, insights_agent=None, module_path=None,
     users=((VIEWER_IDENTITY, "viewer"), (COMMANDER_IDENTITY, "commander"), (SENSOR_IDENTITY, "viewer")),
     conversation_history_turns=0,
+    simulation_users=(), simulation_groups=(), simulations=(),
 ) -> ApiContext:
     persistence = SQLitePersistence(str(tmp_path / "api_test.db"))
     for identity, level in users:
@@ -203,7 +204,10 @@ def build_context(
         deps=deps,
         main_agent=fake_main_agent,
         insights_agent=fake_insights_agent,
-        loaded_profile=_FakeLoadedProfile(module_path or "fixtures.profiles.minimal_profile", conversation_history_turns=conversation_history_turns),
+        loaded_profile=_FakeLoadedProfile(
+            module_path or "fixtures.profiles.minimal_profile", conversation_history_turns=conversation_history_turns,
+            simulation_users=simulation_users, simulation_groups=simulation_groups, simulations=simulations,
+        ),
         queue=queue,
         scheduler=scheduler,
         group_routing=build_group_routing(persistence, registry),
@@ -222,7 +226,10 @@ class _FakeLoadedProfile:
     never touch a shared fixture file.
     """
 
-    def __init__(self, module_path: str, conversation_history_turns: int = 0):
+    def __init__(
+        self, module_path: str, conversation_history_turns: int = 0,
+        simulation_users: tuple = (), simulation_groups: tuple = (), simulations: tuple = (),
+    ):
         from profiles.loader import hash_profile_file
 
         self.module_path = module_path
@@ -237,6 +244,13 @@ class _FakeLoadedProfile:
         # behavior (docs/Next_Plan.md Stage 5) passes a positive value.
         self.conversation_history_turns = conversation_history_turns
         self.conversation_history_ttl_hours = 24
+        # Defaults to empty, mirroring the real LoadedProfile's defaults
+        # (docs/profile_simulations_design.md) — a test exercising
+        # GET /Simulations passes real SimulationPersona/SimulationGroup/
+        # SimulationScenario declarations instead.
+        self.simulation_users = simulation_users
+        self.simulation_groups = simulation_groups
+        self.simulations = simulations
         # Captured once, here, at "load" time — like the real LoadedProfile
         # does — not recomputed live. A property recomputing it on every
         # access would always equal api/management.py's own fresh recompute,

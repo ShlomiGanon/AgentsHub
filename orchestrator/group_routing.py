@@ -176,6 +176,26 @@ class GroupRoutingTable:
         with self._lock:
             self._bindings.pop(chat_id, None)
 
+    def rename(self, old_chat_id: str, new_chat_id: str) -> GroupBinding:
+        """Change a group's chat_id in place — e.g. an operator replacing a simulation
+        group's reserved placeholder ID with a real Telegram group ID
+        (docs/profile_simulations_design.md). NotFoundError/PersistenceError propagate
+        untouched from `persistence.rename_group`."""
+
+        old_chat_id = str(old_chat_id).strip()
+        new_chat_id = str(new_chat_id).strip()
+        record = self._persistence.rename_group(old_chat_id, new_chat_id)
+        binding = GroupBinding(
+            str(record["chat_id"]),
+            record["agent_name"],
+            record.get("label") or "",
+            bool(record.get("auto_register", False)),
+        )
+        with self._lock:
+            self._bindings.pop(old_chat_id, None)
+            self._bindings[new_chat_id] = binding
+        return binding
+
 
 # -- scope resolution --------------------------------------------------------
 

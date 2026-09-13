@@ -26,6 +26,7 @@ from profiles.contracts import (
     StageModelPolicy,
     protocol_missing_attrs,
 )
+from profiles.simulation import SimulationGroup, SimulationPersona, SimulationScenario
 from protocols import CriticalityLevel, EVENT_DATA_FIELDS
 
 
@@ -158,6 +159,104 @@ def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> lis
                 continue
             if stage_policy.max_output_tokens <= 0 or stage_policy.timeout_seconds <= 0:
                 failures.append(f"stage model policy {stage_name!r} requires positive token and timeout budgets")
+
+    failures.extend(_validate_simulation_declarations(loaded))
+
+    return failures
+
+
+def _validate_simulation_declarations(loaded: "LoadedProfile") -> list[str]:
+    """SIMULATION_USERS/SIMULATION_GROUPS/SIMULATIONS (docs/profile_simulations_design.md):
+    unique keys/offsets, and every persona/group key a scenario references actually
+    resolves to a declared one. Defaults are empty tuples, so a profile declaring
+    none of this is unaffected (every failure below is vacuous on empty input).
+
+    Read via getattr(..., ()) rather than direct attribute access, like every other
+    optional LoadedProfile field validate_profile checks (e.g. event_type_required_fields
+    below) — some test doubles (e.g. tests/test_profile_loading.py's SimpleNamespace
+    fixture) predate this field and never set it."""
+
+    failures: list[str] = []
+    simulation_users = getattr(loaded, "simulation_users", ())
+    simulation_groups = getattr(loaded, "simulation_groups", ())
+    simulations = getattr(loaded, "simulations", ())
+
+    for index, persona in enumerate(simulation_users):
+        if not isinstance(persona, SimulationPersona):
+            failures.append(f"SIMULATION_USERS[{index}] is {persona!r}, not a profiles.simulation.SimulationPersona")
+    for index, group in enumerate(simulation_groups):
+        if not isinstance(group, SimulationGroup):
+            failures.append(f"SIMULATION_GROUPS[{index}] is {group!r}, not a profiles.simulation.SimulationGroup")
+    for index, scenario in enumerate(simulations):
+        if not isinstance(scenario, SimulationScenario):
+            failures.append(f"SIMULATIONS[{index}] is {scenario!r}, not a profiles.simulation.SimulationScenario")
+    if failures:
+        # A wrongly-typed entry can't be introspected further (.key/.offset/.raw may not
+        # exist) — report the type errors alone rather than cascading into AttributeErrors.
+        return failures
+
+    persona_keys = [persona.key for persona in simulation_users]
+    duplicate_persona_keys = sorted({key for key in persona_keys if persona_keys.count(key) > 1})
+    if duplicate_persona_keys:
+        failures.append(f"SIMULATION_USERS declares duplicate key(s): {', '.join(duplicate_persona_keys)}")
+    persona_offsets = [persona.offset for persona in simulation_users]
+    duplicate_persona_offsets = sorted({offset for offset in persona_offsets if persona_offsets.count(offset) > 1})
+    if duplicate_persona_offsets:
+        failures.append(f"SIMULATION_USERS declares duplicate offset(s): {duplicate_persona_offsets}")
+
+    group_keys = [group.key for group in simulation_groups]
+    duplicate_group_keys = sorted({key for key in group_keys if group_keys.count(key) > 1})
+    if duplicate_group_keys:
+        failures.append(f"SIMULATION_GROUPS declares duplicate key(s): {', '.join(duplicate_group_keys)}")
+    group_offsets = [group.offset for group in simulation_groups]
+    duplicate_group_offsets = sorted({offset for offset in group_offsets if group_offsets.count(offset) > 1})
+    if duplicate_group_offsets:
+        failures.append(f"SIMULATION_GROUPS declares duplicate offset(s): {duplicate_group_offsets}")
+
+    scenario_keys = [scenario.key for scenario in simulations]
+    duplicate_scenario_keys = sorted({key for key in scenario_keys if scenario_keys.count(key) > 1})
+    if duplicate_scenario_keys:
+        failures.append(f"SIMULATIONS declares duplicate key(s): {', '.join(duplicate_scenario_keys)}")
+
+    known_persona_keys = set(persona_keys)
+    known_group_keys = set(group_keys)
+
+    for scenario in simulations:
+        raw = scenario.raw
+        if not isinstance(raw, dict) or not isinstance(raw.get("chats"), list) or not isinstance(raw.get("steps"), list):
+            failures.append(
+                f"simulation '{scenario.key}' raw must be a dict with 'chats' and 'steps' lists "
+                "(the existing admin-simulator scenario JSON shape)"
+            )
+            continue
+
+        chats_by_key = {chat.get("key"): chat for chat in raw["chats"] if isinstance(chat, dict)}
+
+        for chat in raw["chats"]:
+            if not isinstance(chat, dict):
+                continue
+            chat_kind = chat.get("kind", "message")
+            chat_type = chat.get("telegram_chat_type")
+            chat_id_key = chat.get("telegram_chat_id")
+            if chat_kind == "message" and chat_type in {"group", "supergroup"}:
+                if chat_id_key not in known_group_keys:
+                    failures.append(
+                        f"simulation '{scenario.key}' chat '{chat.get('key')}' names telegram_chat_id "
+                        f"{chat_id_key!r} which is not a key in SIMULATION_GROUPS"
+                    )
+
+        for step in raw["steps"]:
+            if not isinstance(step, dict):
+                continue
+            chat = chats_by_key.get(step.get("chat"))
+            if chat is None or chat.get("kind", "message") != "message":
+                continue  # a sensor ("event") step's sender_identity is not a persona
+            sender_key = step.get("sender_identity")
+            if sender_key not in known_persona_keys:
+                failures.append(
+                    f"simulation '{scenario.key}' step {step.get('step')} names sender_identity "
+                    f"{sender_key!r} which is not a key in SIMULATION_USERS"
+                )
 
     return failures
 
@@ -357,6 +456,9 @@ def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) 
                 for event_type, fields in getattr(profile_module, "EVENT_TYPE_REQUIRED_FIELDS", {}).items()
             }
         ),
+        simulation_users=tuple(getattr(profile_module, "SIMULATION_USERS", ())),
+        simulation_groups=tuple(getattr(profile_module, "SIMULATION_GROUPS", ())),
+        simulations=tuple(getattr(profile_module, "SIMULATIONS", ())),
     )
 
     failures = validate_profile(loaded, declared_event_types=profile_module.EVENT_TYPES)

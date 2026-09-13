@@ -59,6 +59,7 @@ from protocols import CriticalityLevel, Protocol, ProtocolEditError, add_protoco
 from profiles.loader import hash_profile_file
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy
 from persistence import NotFoundError as PersistenceNotFoundError
+from api.simulations import find_simulation_scenario, materialize_simulation, simulation_catalog_payload
 
 from orchestrator.flows import continue_after_approval, continue_after_clarification, decline, resolve_approval, resolve_clarification
 
@@ -1915,5 +1916,40 @@ def build_notifications_blueprint(ctx: "ApiContext") -> Blueprint:
         next_cursor = notification_rows[-1]["sequence_id"] if notification_rows else since
 
         return jsonify({"notifications": notifications, "next_cursor": next_cursor})
+
+    return blueprint
+
+
+def build_simulations_blueprint(ctx: "ApiContext") -> Blueprint:
+    """Discovery and materialization for a profile's declared simulations
+    (docs/profile_simulations_design.md) — the server-side JSON adapter the admin
+    panel's simulator page queries instead of maintaining its own knowledge of
+    simulation user/group IDs. `GET /Simulations/<key>` returns the exact
+    existing admin-simulator scenario JSON shape, ready to feed straight into
+    the same `loadScenario()` a manually pasted/uploaded scenario already uses —
+    execution from there goes through `POST /Msg`/`POST /Event` exactly as today,
+    unchanged."""
+
+    blueprint = Blueprint("simulations", __name__)
+    messages = ctx.loaded_profile.message_catalog
+
+    @blueprint.route("/Simulations", methods=["GET"])
+    def list_simulations():
+        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
+        require(level, RequestedOperation.VIEW_SIMULATIONS)
+        return jsonify({"simulations": simulation_catalog_payload(ctx.loaded_profile)})
+
+    @blueprint.route("/Simulations/<key>", methods=["GET"])
+    def get_simulation(key):
+        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
+        require(level, RequestedOperation.VIEW_SIMULATIONS)
+        scenario = find_simulation_scenario(ctx.loaded_profile, key)
+        if scenario is None:
+            raise NotFoundError(messages.text("api.simulation_not_found", simulation_key=key))
+        return jsonify(
+            materialize_simulation(scenario, ctx.loaded_profile.simulation_users, ctx.loaded_profile.simulation_groups)
+        )
+
+    return blueprint
 
     return blueprint
