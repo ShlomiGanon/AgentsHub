@@ -2,7 +2,8 @@
 
 MESSAGES = {
     "status.thinking": "המודל חושב...",
-    "status.async_ack": "הבקשה התקבלה ונכנסה לתור.\nמזהה משימה: {task_id}\nהתוצאה תישלח כאן בסיום.",
+    "status.async_ack": "התקבל, אני מטפל/ת בזה עכשיו. אעדכן כאן ברגע שיסתיים.",
+    "status.async_ack_debug": "התקבל, אני מטפל/ת בזה עכשיו.\nמזהה משימה: {task_id}\nאעדכן כאן ברגע שיסתיים.",
     "error.request_failed": "הבקשה נכשלה: {reason}",
     "error.run_failure_generic": "לא הצלחתי לעבד את זה — נסה לנסח מחדש או פנה למפקד.",
     "debug.llm_call": (
@@ -156,7 +157,8 @@ MESSAGES = {
     "bot.handler_error": "אירעה שגיאה בטיפול בבקשה. פרטי השגיאה נרשמו.",
     "bot.no_answer": "(לא הוחזרה תשובה)",
     "bot.refused": "הבקשה נדחתה: {message}",
-    "bot.taken_as": "הבקשה התקבלה וסווגה כ-{kind}.",
+    "bot.taken_as_report": "התקבל, ונרשם כדיווח.",
+    "bot.taken_as_request": "התקבל, ונרשם כבקשת פעולה.",
     "bot.waiting_approval": "הבקשה ממתינה כעת לאישור מפקד.",
     "bot.welcome": (
         "שלום — זהו {profile_name}. דווח על משהו, שאל שאלה, "

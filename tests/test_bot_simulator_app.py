@@ -184,7 +184,8 @@ def test_handle_message_dispatches_through_the_real_handler_and_captures_the_rep
         return result
 
     result = _run(scenario())
-    assert result == {"reply_text": "42 events"}
+    assert result["reply_text"] == "42 events"
+    assert result["watermark"] == {"status_len": 2, "sent_len": 0}  # send_status + edit_status, no plain sends
 
 
 def test_handle_message_reuses_the_same_message_id_for_a_repeated_source_message_id(tmp_path):
@@ -302,7 +303,9 @@ def test_simulator_msg_dispatches_and_returns_the_real_reply(tmp_path):
             headers={"X-Service-Key": "test-key"},
         )
         assert response.status_code == 200
-        assert response.get_json() == {"reply_text": "42 events"}
+        body = response.get_json()
+        assert body["reply_text"] == "42 events"
+        assert set(body["watermark"]) == {"status_len", "sent_len"}
 
 
 def test_simulator_msg_returns_500_on_an_unexpected_handler_failure(tmp_path):
@@ -366,4 +369,119 @@ def test_handle_message_persists_real_state_through_a_real_running_api_server(tm
 
         result = _run(scenario())
 
-    assert result == {"reply_text": "Hello from the real bot handler!"}
+    assert result["reply_text"] == "Hello from the real bot handler!"
+
+
+# -- SimulatorRuntime.poll_chat / GET /Simulator-msg/poll: Priority 3 -----------------------
+# (docs/work_process.md §16 — surfacing a real run_notification_poll_loop delivery that
+# arrives after the original request already returned, without blocking anything.)
+
+
+def test_poll_chat_returns_nothing_when_nothing_happened_since_the_watermark(tmp_path):
+    loaded = _fake_loaded_profile(tmp_path, simulation_users=(_PERSONA,))
+    api_client = FakeBotApiClient(users={_PERSONA_ID: "viewer"})
+
+    async def scenario():
+        loop = asyncio.get_event_loop()
+        runtime = SimulatorRuntime(loaded, loop, api_client=api_client)
+        await runtime.startup()
+        try:
+            mark = runtime.telegram_client.mark()
+            return runtime.poll_chat(_PERSONA_ID, mark)
+        finally:
+            await runtime.shutdown()
+
+    result = _run(scenario())
+    assert result["reply_text"] is None
+
+
+def test_poll_chat_surfaces_a_background_delivery_that_arrives_after_the_watermark(tmp_path):
+    """Simulates exactly what `run_notification_poll_loop` does on its own timer —
+    calls `deps.telegram_client.send_reply(...)` independently of any request/response
+    cycle — and proves `poll_chat` picks it up."""
+
+    loaded = _fake_loaded_profile(tmp_path, simulation_users=(_PERSONA,))
+    api_client = FakeBotApiClient(users={_PERSONA_ID: "viewer"})
+
+    async def scenario():
+        loop = asyncio.get_event_loop()
+        runtime = SimulatorRuntime(loaded, loop, api_client=api_client)
+        await runtime.startup()
+        try:
+            mark = runtime.telegram_client.mark()
+            await runtime.telegram_client.send_reply(_PERSONA_ID, "your report is done", None)
+            return runtime.poll_chat(_PERSONA_ID, mark)
+        finally:
+            await runtime.shutdown()
+
+    result = _run(scenario())
+    assert result["reply_text"] == "your report is done"
+
+
+def test_poll_chat_refuses_an_undeclared_chat_id(tmp_path):
+    loaded = _fake_loaded_profile(tmp_path, simulation_users=(_PERSONA,))
+    api_client = FakeBotApiClient(users={_PERSONA_ID: "viewer"})
+
+    async def scenario():
+        loop = asyncio.get_event_loop()
+        runtime = SimulatorRuntime(loaded, loop, api_client=api_client)
+        await runtime.startup()
+        try:
+            mark = runtime.telegram_client.mark()
+            try:
+                runtime.poll_chat("999999999999999", mark)
+                assert False, "expected SimulatorRequestRefused"
+            except SimulatorRequestRefused:
+                pass
+        finally:
+            await runtime.shutdown()
+
+    _run(scenario())
+
+
+def test_simulator_msg_poll_requires_the_service_key(tmp_path):
+    with _RunningSimulator(tmp_path) as sim:
+        response = sim.client.get(f"/Simulator-msg/poll?chat_id={_PERSONA_ID}&status_len=0&sent_len=0")
+        assert response.status_code == 403
+
+
+def test_simulator_msg_poll_refuses_an_undeclared_chat_id(tmp_path):
+    with _RunningSimulator(tmp_path) as sim:
+        response = sim.client.get(
+            "/Simulator-msg/poll?chat_id=999999999999999&status_len=0&sent_len=0",
+            headers={"X-Service-Key": "test-key"},
+        )
+        assert response.status_code == 403
+
+
+def test_simulator_msg_poll_finds_a_reply_delivered_after_the_original_watermark(tmp_path):
+    with _RunningSimulator(tmp_path) as sim:
+        first = sim.client.post(
+            "/Simulator-msg",
+            json={
+                "sender_identity": _PERSONA_ID, "chat_id": _PERSONA_ID, "chat_type": "private",
+                "text": "how many events?", "source_message_id": "sim-step-1",
+            },
+            headers={"X-Service-Key": "test-key"},
+        )
+        watermark = first.get_json()["watermark"]
+
+        # Simulate run_notification_poll_loop's own later, independent delivery.
+        asyncio.run_coroutine_threadsafe(
+            sim.runtime.telegram_client.send_reply(_PERSONA_ID, "job finished", None), sim.loop
+        ).result(timeout=5)
+
+        poll = sim.client.get(
+            f"/Simulator-msg/poll?chat_id={_PERSONA_ID}&status_len={watermark['status_len']}&sent_len={watermark['sent_len']}",
+            headers={"X-Service-Key": "test-key"},
+        )
+        assert poll.status_code == 200
+        assert poll.get_json()["reply_text"] == "job finished"
+
+        # A second poll from the *new* watermark finds nothing further.
+        second_watermark = poll.get_json()["watermark"]
+        again = sim.client.get(
+            f"/Simulator-msg/poll?chat_id={_PERSONA_ID}&status_len={second_watermark['status_len']}&sent_len={second_watermark['sent_len']}",
+            headers={"X-Service-Key": "test-key"},
+        )
+        assert again.get_json()["reply_text"] is None

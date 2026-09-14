@@ -55,15 +55,15 @@ def test_catalog_formats_the_profile_selected_language():
 
     assert english.text("status.thinking") == "The model is thinking..."
     assert hebrew.text("status.thinking") == "המודל חושב..."
-    assert "abc123" in english.text("status.async_ack", task_id="abc123")
-    assert "abc123" in hebrew.text("status.async_ack", task_id="abc123")
+    assert "abc123" in english.text("status.async_ack_debug", task_id="abc123")
+    assert "abc123" in hebrew.text("status.async_ack_debug", task_id="abc123")
 
 
 def test_catalog_rejects_missing_extra_or_unknown_format_fields():
     catalog = get_catalog("en")
 
     with pytest.raises(MessageCatalogError, match="requires placeholders"):
-        catalog.text("status.async_ack")
+        catalog.text("status.async_ack_debug")
     with pytest.raises(MessageCatalogError, match="requires placeholders"):
         catalog.text("status.thinking", unexpected="value")
     with pytest.raises(MessageCatalogError, match="unknown message key"):

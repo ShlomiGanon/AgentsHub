@@ -703,6 +703,39 @@ SIMULATOR_BODY = """
     return false;
   }
 
+  // Priority 3 (docs/work_process.md §16): watches one chat, in the background, for
+  // whatever run_notification_poll_loop's own real, unmodified background delivery
+  // eventually sends there (a job result, a held-approval/clarification prompt, ...) —
+  // the same real event a real Telegram user would see as a second message. Not
+  // awaited by sendNext(): unlike pollJob() (which the operator is explicitly waiting
+  // on for one sensor event), most message-kind steps resolve inline immediately, so
+  // blocking every step's queue on a multi-minute watch would make stepping through a
+  // scenario painfully slow for no benefit — this runs quietly alongside it instead,
+  // appending a new bubble only if and when something actually arrives.
+  async function pollSimulatorChat(chatKey, chatId, watermark) {
+    const startedAt = Date.now();
+    let mark = watermark || { status_len: 0, sent_len: 0 };
+    while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
+      await new Promise(function (resolve) { setTimeout(resolve, POLL_INTERVAL_MS); });
+      let result;
+      try {
+        result = await apiCall(
+          'GET',
+          '/admin/simulator/bot-poll?chat_id=' + encodeURIComponent(chatId) +
+            '&status_len=' + encodeURIComponent(mark.status_len) + '&sent_len=' + encodeURIComponent(mark.sent_len),
+          null
+        );
+      } catch (error) {
+        return; // a network hiccup while quietly watching for a follow-up isn't worth an error bubble
+      }
+      if (result.status !== 200 || !result.payload) return;
+      if (result.payload.watermark) mark = result.payload.watermark;
+      if (result.payload.reply_text) {
+        appendBubble(chatKey, 'sys', t('system_label'), result.payload.reply_text, null);
+      }
+    }
+  }
+
   async function sendNext(chatKey) {
     const queue = state.queues[chatKey];
     if (!queue || queue.length === 0 || state.busy || nextChatKey() !== chatKey) return;
@@ -749,11 +782,13 @@ SIMULATOR_BODY = """
     // reconstruction of /Msg's richer {taken_as, event_id, status} shape (which is only ever
     // observed from *outside* the handler, not returned by it). An async job's eventual
     // outcome is delivered later, out-of-band, by the same background notification loop a
-    // real bot uses — not polled here, since there is no event_id to poll.
+    // real bot uses — pollSimulatorChat() (Priority 3) watches for it quietly in the
+    // background, without blocking this step's queue.
     setBubbleText(reply, payload.reply_text || t('bot_no_reply'), null, false);
     queue.shift();
     state.busy = false;
     updateGlobalState();
+    pollSimulatorChat(chatKey, request.body.chat_id, payload.watermark);
   }
 
   // ---- mapping panel: prompts for any Telegram ID a manually-provided scenario is missing ----

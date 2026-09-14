@@ -45,6 +45,12 @@ logger = logging.getLogger(__name__)
 NOTIFICATION_POLL_INTERVAL_SECONDS = 5.0
 ATTENDANCE_CHECK_INTERVAL_SECONDS = 60.0
 
+# The two `MessageSubmissionResult.kind` values that ever reach `_submit_and_format_message`'s
+# synchronous-fallback branch (every other kind is handled earlier) — a full, natural-language
+# sentence per kind rather than interpolating the raw English enum word into the catalog
+# template, which used to read oddly in a non-English catalog (e.g. Hebrew) (docs/work_process.md §16).
+_TAKEN_AS_CATALOG_KEYS = {"report": "bot.taken_as_report", "request": "bot.taken_as_request"}
+
 REGISTERED_COMMANDS = ("profile", "settings")
 _background_trace_tasks: set[asyncio.Task] = set()
 
@@ -409,12 +415,21 @@ async def _submit_and_format_message(
         return submission_result.answer_text or messages.text("bot.no_answer"), submission_result
 
     if submission_result.job_id:
-        return messages.text("status.async_ack", task_id=submission_result.job_id), submission_result
+        # The raw task ID has no user-facing purpose today (no bot command lets a
+        # caller look a job up by it) — shown only under DEEP_DEBUG, the existing
+        # general "verbose diagnostics" flag (tools.deep_debug_enabled(),
+        # config/environment.py's DEEP_DEBUG), not a mechanism invented for this
+        # one message. The task ID itself is unaffected either way — only whether
+        # this reply's text includes it.
+        if deep_debug_enabled():
+            return messages.text("status.async_ack_debug", task_id=submission_result.job_id), submission_result
+        return messages.text("status.async_ack"), submission_result
 
     # Note: a truthy `submission_result.job_id` always returns above via the
     # `status.async_ack` branch, so this fallback never has a job_id to report —
-    # only `awaiting_approval` (or neither) is reachable here.
-    lines = [messages.text("bot.taken_as", kind=submission_result.kind)]
+    # only `awaiting_approval` (or neither) is reachable here, and `kind` is
+    # always "report" or "request" (every other kind is handled above).
+    lines = [messages.text(_TAKEN_AS_CATALOG_KEYS[submission_result.kind])]
     if submission_result.awaiting_approval:
         lines.append(messages.text("bot.waiting_approval"))
     return "\n".join(lines), submission_result

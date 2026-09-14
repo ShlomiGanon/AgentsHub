@@ -1308,6 +1308,13 @@ class _FakeSimulatorHandler(http.server.BaseHTTPRequestHandler):
             "headers": dict(self.headers),
             "body": json.loads(body) if body else None,
         })
+        self._respond()
+
+    def do_GET(self):
+        self.server.received.append({"path": self.path, "headers": dict(self.headers), "body": None})
+        self._respond()
+
+    def _respond(self):
         payload = json.dumps(self.server.response_body).encode("utf-8")
         self.send_response(self.server.response_status)
         self.send_header("Content-Type", "application/json")
@@ -1417,3 +1424,40 @@ def test_simulator_bot_msg_never_leaks_the_service_key_to_the_browser(tmp_path, 
         assert b"test-service-key" not in response.data
         for header_value in response.headers.values():
             assert "test-service-key" not in header_value
+
+
+# -- GET /admin/simulator/bot-poll: Priority 3's polling proxy (docs/work_process.md §16) --
+
+
+def test_simulator_bot_poll_requires_an_admin_session(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx, simulator_port=9999)
+
+    response = client.get("/admin/simulator/bot-poll?chat_id=1&status_len=0&sent_len=0", follow_redirects=False)
+
+    assert response.status_code in (302, 303)
+    assert "/admin/login" in response.headers["Location"]
+
+
+def test_simulator_bot_poll_reports_a_clear_error_when_unconfigured(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)  # simulator_port defaults to None
+    _login(client)
+
+    response = client.get("/admin/simulator/bot-poll?chat_id=1&status_len=0&sent_len=0")
+
+    assert response.status_code == 501
+
+
+def test_simulator_bot_poll_forwards_query_params_and_relays_the_response(tmp_path, teardown_ctx, _admin_env, monkeypatch):
+    monkeypatch.setenv("BOT_SERVICE_KEY", "test-service-key")
+    with _fake_simulator_server(status=200, body={"reply_text": "job finished", "watermark": {"status_len": 3, "sent_len": 0}}) as server:
+        port = server.server_address[1]
+        client = _client(tmp_path, teardown_ctx, simulator_port=port)
+        _login(client)
+
+        response = client.get("/admin/simulator/bot-poll?chat_id=9000000000000002&status_len=2&sent_len=0")
+
+        assert response.status_code == 200
+        assert response.get_json() == {"reply_text": "job finished", "watermark": {"status_len": 3, "sent_len": 0}}
+        assert len(server.received) == 1
+        assert server.received[0]["path"] == "/Simulator-msg/poll?chat_id=9000000000000002&status_len=2&sent_len=0"
+        assert server.received[0]["headers"]["X-Service-Key"] == "test-service-key"

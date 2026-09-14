@@ -779,3 +779,154 @@ never reaches the browser); one pre-existing test there
 Full suite: 1456 passing (1420 + 36 new). `docs/file_catalog.md` updated
 for every new file (including this design doc itself, initially missed and
 caught by `tests/test_file_catalog.py`).
+
+## 16. First real run: `bot-service` was never registered — three linked findings, first fix applied
+
+Running a real SEC_001 step through the live `bot.simulator_app` for the
+first time surfaced a generic `bot.handler_error` reply. Investigated
+across several rounds (no code changes until root cause was fully nailed
+down, per explicit instruction each round):
+
+- Traced the exact request via the live `bot-sim-unified_test.stderr.log`:
+  `POST /Telegram/Admission "401 UNAUTHORIZED"` → `_guarded()`'s generic
+  `except Exception` → `bot.handler_error`. Not `full_name` (already set
+  correctly on `eli_response_team`), not a bot-simulation-mode-specific
+  bug — the real `bot-unified_test.stderr.log` showed the identical 401 on
+  the same class of call, at the same time, from the real unmodified
+  `bot.app`.
+- Ruled out `run_stack.py`'s env-propagation mechanism precisely (one
+  `os.environ.copy()`, passed via `env=` to all three `subprocess.Popen()`
+  calls in one `start()`; `BOT_TOKEN` — same file, same mechanism, same
+  processes — was working, proving propagation itself wasn't broken) and
+  ruled out a stale-process/timing explanation (user stopped and restarted
+  the whole stack fresh from a shell with a confirmed-correct
+  `BOT_SERVICE_KEY`; identical 401 persisted).
+- Root cause, found by direct (read-only) inspection of the live
+  database: `bot-service` was never a registered user in this profile's
+  `users` table at all — `authenticate()`'s second check
+  (`persistence.read_user(identity) is None`) produces the *identical*
+  401/message as a key mismatch (by design, so a caller can't
+  distinguish "wrong key" from "never registered" — `api/request_boundary.py`'s
+  own comment says so), which is exactly why the key/environment
+  investigation kept coming up clean.
+- This one gap explained two real, general-layer symptoms at once: the
+  admission-check crash, *and* `run_notification_poll_loop`'s own
+  `GET /Notifications` call (also bot-service-scoped) failing identically
+  — meaning async job completions were not reaching **any** real Telegram
+  user either, not just the simulator. Confirmed the raw "taken as
+  {kind}" / "Task ID: {uuid}" text the operator also found unfriendly
+  (`messages/he.py`'s `bot.taken_as`/`status.async_ack`) is genuine,
+  unmodified production text from `bot/app.py`'s `_submit_and_format_message`
+  — the admin simulator renders it verbatim, no wrapping — so not a
+  simulator-only issue either.
+
+User set priority order (1 → 2 → 3), all framed around the same
+constraint: fixes must improve real production behavior, not just the
+simulator's display.
+
+**Priority 1 — done and verified.** Used the existing
+`/admin/bot-service/provision` admin route (no new code — a one-time data
+action, exactly as designed) against the live, running `unified_test` API
+server: logged in, fetched the CSRF token, submitted the form. Confirmed
+directly against the database (`bot-service`, `commander`,
+`auto_register=0` — present). Then watched the **already-running** real
+`bot.app` and `bot.simulator_app` processes' live logs (no restart needed
+— `authenticate()` reads the `users` table fresh on every request) turn
+from `401 UNAUTHORIZED` to `200 OK` on `/Notifications`,
+`/TeamStatus/AttendanceCheck`, and (same code path) `/Telegram/Admission`,
+for both processes, within one poll cycle. This is a genuinely general,
+production-layer fix — the real bot's own admission and notification
+delivery are now working, independent of anything simulation-related.
+
+**Priority 2 — done and verified.** Two separate wording decisions,
+confirmed with the user before editing (`AskUserQuestion`, twice — the
+task-ID visibility mechanism, then the `kind` wording) each time:
+
+- The task ID's user-facing visibility (`status.async_ack`) is gated on
+  `tools.deep_debug_enabled()` — the codebase's own existing, general
+  "verbose diagnostics" flag (`config/environment.py`'s `DEEP_DEBUG`,
+  already used elsewhere in `bot/app.py` for live-trace polling), not a
+  new mechanism invented for this message. Default: friendly text, no raw
+  ID (no bot command lets a caller look a job up by it today, so it had no
+  user-facing purpose). Under `DEEP_DEBUG=true`: the same text plus the
+  ID, via a second catalog key (`status.async_ack_debug`). The job ID
+  itself is completely unaffected either way — only this one reply's text.
+- `bot.taken_as`'s raw `{kind}` interpolation (always literally "report"
+  or "request", the only two kinds that reach this fallback branch) — was
+  showing the raw English enum word even inside the Hebrew sentence.
+  Split into two full-sentence catalog keys per kind
+  (`bot.taken_as_report`/`bot.taken_as_request`) instead of interpolating
+  a word, so each language phrases it naturally rather than force-fitting
+  an English token into it (`_TAKEN_AS_CATALOG_KEYS` dict, `bot/app.py`).
+
+Both are genuine `messages/en.py`/`messages/he.py` catalog changes read by
+`bot/app.py`'s `_submit_and_format_message()` — real, shared production
+code, unmodified by the earlier simulation-mode work — so real Telegram
+users see the improved text identically to the simulator, per the user's
+standing "no behavioral divergence" principle. Tests updated to match
+(`tests/test_bot_app.py` — one test split in two, covering both the
+default and `DEEP_DEBUG` paths; `tests/test_messages.py`,
+`tests/test_integration_ingestion_parity.py`). Full suite: 1457 passing.
+
+**Priority 3 — done, verified by tests.** Genuinely simulator-specific
+(confirmed with the user before designing: no production/simulator
+divergence, since the real delivery already happens identically either
+way — this is purely the admin page's own missing "did anything new
+arrive" check), so unlike Priorities 1–2 this adds simulator-only surface
+area, deliberately.
+
+Design confirmed via two `AskUserQuestion` checks first: a late arrival
+renders as a **new** bubble (it's a genuinely separate, later message, not
+an edit of the original ack — matches how a real Telegram user would see
+a second message appear), and the poll window reuses the existing
+`pollJob()` constants (`POLL_INTERVAL_MS`/`POLL_TIMEOUT_MS`) rather than
+inventing new ones.
+
+Rejected building this on `GET /Job/<id>` (the old `pollJob()`'s target):
+`/Simulator-msg`'s response only ever returns `{reply_text}` — the
+structured `job_id` never reaches it, since `_submit_and_format_message()`
+(production code) returns only the formatted string. Piping `job_id` out
+through there would mean changing a production function's return contract
+just to serve the simulator — exactly the entanglement being avoided.
+
+**What was built instead** — generalizing `SimulatorTelegramClient`'s
+existing capture mechanism (`reply_since()`, from Priority-1-era work)
+into a proper watermark-based poll:
+
+- `SimulatorRuntime.handle_message()`'s response now also returns a
+  `watermark` (`{status_len, sent_len}` — `SimulatorTelegramClient.mark()`,
+  JSON-shaped).
+- New `SimulatorRuntime.poll_chat(chat_id, since)` — "what's arrived in
+  this chat since `since`", reusing `reply_since()` verbatim; gated by the
+  exact same identity-allowlist as `handle_message` (a poll can only ever
+  watch a currently-declared simulation chat).
+- New `GET /Simulator-msg/poll` on `bot.simulator_app` (same
+  `X-Service-Key` auth as the POST route; a shared `_check_service_key()`
+  helper factored out of both).
+- New `GET /admin/simulator/bot-poll` proxy on `api/admin.py` — session-gated,
+  read-only (no CSRF concern). Both `api/admin.py` proxy routes now share
+  one `_forward_to_simulator(method, path, **kwargs)` helper instead of
+  duplicating the httpx/error-handling logic.
+- `api/admin_simulator.py`'s `sendNext()` fires `pollSimulatorChat()`
+  after every message-kind step — **not awaited**, deliberately: unlike
+  `pollJob()` (which blocks because the operator is explicitly watching
+  one sensor event), most message-kind steps resolve inline immediately,
+  so blocking the step queue on a multi-minute watch for every single step
+  would make working through a scenario painfully slow for no benefit.
+  Runs quietly in the background; appends a new system bubble only if and
+  when something actually arrives, advancing its own watermark so a
+  second background delivery (if any) gets its own bubble too rather than
+  repeating the first.
+
+**Tests** (9 new): `tests/test_bot_simulator_app.py` — `poll_chat()`
+finding nothing / finding a delivery made the same way
+`run_notification_poll_loop` actually makes one (`send_reply` called
+independently of any request) / refusing an undeclared chat_id; the same
+three shapes again at the HTTP layer via `_RunningSimulator`, plus a
+full round-trip proving a *second* poll from the *new* watermark correctly
+finds nothing further. `tests/test_api_admin.py` — the proxy route's
+session gate, "unconfigured" error, and query-param forwarding (extended
+`_FakeSimulatorHandler` with a `do_GET`, shared with the existing POST
+tests). Full suite: 1466 passing (1457 + 9).
+
+All three priorities from this round are now complete and verified.

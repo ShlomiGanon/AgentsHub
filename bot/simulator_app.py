@@ -156,7 +156,35 @@ class SimulatorRuntime:
             bot=self.bot,
         )
         await self.application.process_update(update)
-        return {"reply_text": self.telegram_client.reply_since(mark, chat_id)}
+        reply_text = self.telegram_client.reply_since(mark, chat_id)
+        return {"reply_text": reply_text, "watermark": _mark_to_dict(self.telegram_client.mark())}
+
+    def poll_chat(self, chat_id: str, since: tuple[int, int]) -> dict:
+        """Anything sent to `chat_id` since `since` (a watermark from `handle_message`
+        or a previous `poll_chat`) — surfaces `run_notification_poll_loop`'s own,
+        real, unmodified background deliveries (job results, held-approval/
+        clarification prompts, ...) once they actually arrive, the same way a real
+        Telegram user would see a second message appear in their chat (§10's
+        "admin page has no way to observe an async reply" gap). Gated by the same
+        identity allowlist as `handle_message` — a poll can only ever watch a
+        currently-declared simulation chat, never an arbitrary string."""
+
+        if chat_id not in self._allowed_users and chat_id not in self._allowed_groups:
+            raise SimulatorRequestRefused(f"{chat_id!r} is not a currently-declared simulation chat_id for this profile")
+
+        reply_text = self.telegram_client.reply_since(since, chat_id)
+        return {"reply_text": reply_text, "watermark": _mark_to_dict(self.telegram_client.mark())}
+
+
+def _mark_to_dict(mark: tuple[int, int]) -> dict:
+    return {"status_len": mark[0], "sent_len": mark[1]}
+
+
+def _mark_from_dict(payload: dict) -> tuple[int, int]:
+    try:
+        return int(payload.get("status_len", 0)), int(payload.get("sent_len", 0))
+    except (TypeError, ValueError):
+        raise SimulatorRequestRefused("watermark must be two integers (status_len, sent_len)") from None
 
 
 def build_flask_app(runtime: SimulatorRuntime, bot_service_key: str) -> Flask:
@@ -168,11 +196,19 @@ def build_flask_app(runtime: SimulatorRuntime, bot_service_key: str) -> Flask:
 
     app = Flask(__name__)
 
-    @app.route("/Simulator-msg", methods=["POST"])
-    def simulator_msg():
+    def _check_service_key():
+        """None if `X-Service-Key` matches; otherwise the (jsonify'd body, status) a route must return immediately."""
+
         provided_key = request.headers.get(SERVICE_KEY_HEADER)
         if not provided_key or provided_key != bot_service_key:
             return jsonify({"error": {"message": "missing or invalid X-Service-Key"}}), 403
+        return None
+
+    @app.route("/Simulator-msg", methods=["POST"])
+    def simulator_msg():
+        refused = _check_service_key()
+        if refused is not None:
+            return refused
 
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
@@ -192,7 +228,50 @@ def build_flask_app(runtime: SimulatorRuntime, bot_service_key: str) -> Flask:
 
         return jsonify(result)
 
+    @app.route("/Simulator-msg/poll", methods=["GET"])
+    def simulator_msg_poll():
+        """Priority 3 (docs/work_process.md §16): lets the admin page ask "has
+        anything new arrived in this chat" after the fact, so a
+        `run_notification_poll_loop`-delivered async follow-up (a real, unmodified
+        background delivery — job result, held-approval/clarification prompt, ...)
+        actually reaches the operator instead of a dead-end promise."""
+
+        refused = _check_service_key()
+        if refused is not None:
+            return refused
+
+        chat_id = request.args.get("chat_id") or ""
+        try:
+            since = _mark_from_dict(
+                {"status_len": request.args.get("status_len"), "sent_len": request.args.get("sent_len")}
+            )
+        except SimulatorRequestRefused as exc:
+            return jsonify({"error": {"message": str(exc)}}), 400
+
+        future = asyncio.run_coroutine_threadsafe(_poll_async(runtime, chat_id, since), runtime.loop)
+        try:
+            result = future.result(timeout=30)
+        except SimulatorRequestRefused as exc:
+            return jsonify({"error": {"message": str(exc)}}), 403
+        except Exception:
+            logger.exception(
+                "bot.simulator_app failed polling a chat",
+                extra={"event": "bot_simulator_poll_failed"},
+            )
+            return jsonify({"error": {"message": "the simulation-mode bot process failed handling this poll"}}), 500
+
+        return jsonify(result)
+
     return app
+
+
+async def _poll_async(runtime: SimulatorRuntime, chat_id: str, since: tuple[int, int]) -> dict:
+    """`poll_chat` itself needs no `await` (it only reads `SimulatorTelegramClient`'s
+    in-memory record) — wrapped as a coroutine purely so it runs on `runtime.loop`
+    via the same `run_coroutine_threadsafe` bridge every other request uses,
+    rather than reading that record from the Flask thread directly."""
+
+    return runtime.poll_chat(chat_id, since)
 
 
 def run_simulator(loaded_profile: "LoadedProfile") -> None:

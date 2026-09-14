@@ -2,7 +2,8 @@
 
 MESSAGES = {
     "status.thinking": "The model is thinking...",
-    "status.async_ack": "Got it — your request is queued.\nTask ID: {task_id}\nYou'll hear back here once it's done.",
+    "status.async_ack": "Got it — I'm working on it now. I'll follow up right here once it's done.",
+    "status.async_ack_debug": "Got it — I'm working on it now.\nTask ID: {task_id}\nI'll follow up right here once it's done.",
     "error.request_failed": "Request failed: {reason}",
     "error.run_failure_generic": "Couldn't process that — try rephrasing, or contact a commander.",
     "debug.llm_call": (
@@ -157,7 +158,8 @@ MESSAGES = {
     "bot.handler_error": "Something went wrong handling that. It has been logged.",
     "bot.no_answer": "(no answer was returned)",
     "bot.refused": "Refused: {message}",
-    "bot.taken_as": "Got it — taken as a {kind}.",
+    "bot.taken_as_report": "Got it — I've logged this as a report.",
+    "bot.taken_as_request": "Got it — I've logged this as an action request.",
     "bot.waiting_approval": "It is now waiting for a commander's approval.",
     "bot.welcome": (
         "Hi — this is {profile_name}. Report something, ask a question, or "

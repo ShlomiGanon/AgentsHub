@@ -832,7 +832,11 @@ def test_intent_clarification_returns_the_question_without_creating_a_job_messag
     assert "Job ID" not in reply
 
 
-def test_report_acknowledges_with_job_id_and_kind():
+def test_report_acknowledges_without_a_raw_job_id_by_default():
+    """The default (non-DEEP_DEBUG) async ack is deliberately friendly and omits
+    the raw job ID — no bot command lets a caller look a job up by it, so it has
+    no user-facing purpose today (docs/work_process.md §16)."""
+
     api = FakeBotApiClient(
         users={"v1": "viewer"},
         message_submission_result=MessageSubmissionResult(kind="report", job_id="job-42"),
@@ -840,7 +844,23 @@ def test_report_acknowledges_with_job_id_and_kind():
 
     reply = _run(handle_incoming_message(_deps(api), "v1", "there is smoke near the depot", "m1"))
 
-    assert "queued" in reply
+    assert "job-42" not in reply
+    assert "working on it" in reply
+
+
+def test_report_acknowledges_with_the_job_id_under_deep_debug(monkeypatch):
+    """Under DEEP_DEBUG (`tools.deep_debug_enabled()`, the existing general
+    verbose-diagnostics flag — not a mechanism invented for this one message),
+    the raw job ID is shown, for troubleshooting."""
+
+    monkeypatch.setattr(app, "deep_debug_enabled", lambda: True)
+    api = FakeBotApiClient(
+        users={"v1": "viewer"},
+        message_submission_result=MessageSubmissionResult(kind="report", job_id="job-42"),
+    )
+
+    reply = _run(handle_incoming_message(_deps(api), "v1", "there is smoke near the depot", "m1"))
+
     assert "job-42" in reply
 
 
@@ -850,7 +870,8 @@ def test_queued_ack_promises_a_follow_up_message():
     the wording that did promise one (`bot.job_queued`, "You'll hear back here once
     it's done.") lived in a dead `elif` branch that could never execute, since the
     `if submission_result.job_id:` check above it always returns first. The
-    follow-up promise now lives in `status.async_ack` itself."""
+    follow-up promise now lives in `status.async_ack` itself, in both its default
+    and DEEP_DEBUG-verbose forms."""
     api = FakeBotApiClient(
         users={"v1": "viewer"},
         message_submission_result=MessageSubmissionResult(kind="report", job_id="job-42"),
@@ -858,8 +879,7 @@ def test_queued_ack_promises_a_follow_up_message():
 
     reply = _run(handle_incoming_message(_deps(api), "v1", "there is smoke near the depot", "m1"))
 
-    assert "job-42" in reply
-    assert "hear back" in reply.lower()
+    assert "follow up" in reply.lower()
 
 
 def test_request_awaiting_approval_says_so():

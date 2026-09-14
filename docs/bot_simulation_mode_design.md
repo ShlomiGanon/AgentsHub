@@ -558,6 +558,11 @@ up (started by `run_stack.py` alongside the stack, per §2 decision 4):
 
 ## 9. File impact
 
+*(§12's addendum touches `bot/simulator_app.py`, `api/admin.py`,
+`api/admin_simulator.py` further — `GET /Simulator-msg/poll`,
+`GET /admin/simulator/bot-poll`, and `pollSimulatorChat()` — not restated
+here since this section predates that round.)*
+
 **New:**
 - `bot/simulator_transport.py` — `FakeBotRequest`, `SimulatorTelegramClient`,
   `build_synthetic_text_update()`.
@@ -672,3 +677,42 @@ dependency at implementation time.
 - Whether a later iteration wants `bot.simulator_app` reachable outside
   local dev (e.g. a hosted admin environment) — out of scope for this plan,
   which targets `run_stack.py`'s existing local-dev shape.
+
+## 12. Addendum: `GET /Simulator-msg/poll` (docs/work_process.md §16, Priority 3)
+
+Added after this plan's first real run surfaced §10's `bot-service`
+provisioning gap (fixed as a real, general production fix — not covered
+here, see the work log) and, separately, a genuinely simulator-specific
+gap this plan didn't originally cover: once `run_notification_poll_loop`
+delivers an async job's outcome, nothing in the admin page ever asks
+whether it arrived — `/Simulator-msg`'s response only ever carried the
+*inline* reply text.
+
+**`SimulatorRuntime.handle_message()`'s response gains a `watermark`**
+(`{status_len, sent_len}`, the JSON shape of `SimulatorTelegramClient.mark()`).
+**A new `GET /Simulator-msg/poll?chat_id=&status_len=&sent_len=`** (same
+`X-Service-Key` auth as the POST route) answers "what has this chat
+received since that watermark" by calling `reply_since()` — the exact
+same method `handle_message()` already used — and returns a fresh
+watermark alongside, so repeated polls only ever look forward. Gated by
+the same identity allowlist as `handle_message`: a poll can only ever
+watch a currently-declared simulation chat.
+
+A matching `GET /admin/simulator/bot-poll` proxy on `api/admin.py` (session-gated,
+no CSRF — a read-only GET). `api/admin_simulator.py`'s `sendNext()` fires
+a background poll loop after every message-kind step — deliberately not
+awaited, unlike `pollJob()` (§7's own polling mechanism for `/Event`
+steps, which the operator is explicitly waiting on for one sensor event):
+most message-kind steps resolve inline immediately, so blocking the
+step queue on a multi-minute watch for every step would make working
+through a scenario painfully slow for no benefit. A late arrival renders
+as a new bubble — it is a genuinely separate, later message, not an edit
+of the original acknowledgment.
+
+Deliberately **not** built on `GET /Job/<id>` (§7's original assumption
+for how this might eventually work): `/Simulator-msg`'s response never
+carries the structured `job_id`, since `_submit_and_format_message()`
+(production code, unmodified) returns only the already-formatted reply
+string — piping `job_id` out through it would mean changing a production
+function's return contract solely to serve the simulator, which is
+exactly the kind of entanglement this whole design avoids elsewhere.

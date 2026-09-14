@@ -1471,6 +1471,39 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             **api_context,
         )
 
+    def _forward_to_simulator(method: str, path: str, **kwargs):
+        """Shared plumbing for every `bot.simulator_app` proxy route (§4.4, and
+        Priority 3's polling extension) — no business logic, just the HTTP call
+        and its two failure shapes. `**kwargs` (`json=`/`params=`) pass straight
+        through to `httpx`. Returns a `(flask_response, status_code)` pair the
+        caller returns directly."""
+
+        simulator_port = ctx.loaded_profile.simulator_port
+        if not simulator_port:
+            return jsonify({"error": {"message": _t("admin.simulator.bot_mode_unconfigured")}}), 501
+
+        service_key = os.environ.get(BOT_SERVICE_KEY_ENV_VAR) or ""
+        try:
+            response = httpx.request(
+                method,
+                f"http://localhost:{simulator_port}{path}",
+                headers={SERVICE_KEY_HEADER: service_key},
+                timeout=httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=75.0),
+                **kwargs,
+            )
+        except httpx.HTTPError:
+            logger.warning(
+                "simulation-mode bot process unreachable",
+                extra={"event": "admin_simulator_bot_unreachable", "trace_id": get_trace_id()},
+            )
+            return jsonify({"error": {"message": _t("admin.simulator.bot_mode_unreachable")}}), 502
+
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        return jsonify(body), response.status_code
+
     @blueprint.route("/simulator/bot-msg", methods=["POST"])
     def simulator_bot_msg():
         """Proxies one message-kind simulation step to `bot.simulator_app`'s own
@@ -1494,31 +1527,29 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         if redirect_response is not None:
             return redirect_response
 
-        simulator_port = ctx.loaded_profile.simulator_port
-        if not simulator_port:
-            return jsonify({"error": {"message": _t("admin.simulator.bot_mode_unconfigured")}}), 501
-
         payload = request.get_json(silent=True) or {}
-        service_key = os.environ.get(BOT_SERVICE_KEY_ENV_VAR) or ""
-        try:
-            response = httpx.post(
-                f"http://localhost:{simulator_port}/Simulator-msg",
-                json=payload,
-                headers={SERVICE_KEY_HEADER: service_key},
-                timeout=httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=75.0),
-            )
-        except httpx.HTTPError:
-            logger.warning(
-                "simulation-mode bot process unreachable",
-                extra={"event": "admin_simulator_bot_unreachable", "trace_id": get_trace_id()},
-            )
-            return jsonify({"error": {"message": _t("admin.simulator.bot_mode_unreachable")}}), 502
+        return _forward_to_simulator("POST", "/Simulator-msg", json=payload)
 
-        try:
-            body = response.json()
-        except ValueError:
-            body = {}
-        return jsonify(body), response.status_code
+    @blueprint.route("/simulator/bot-poll", methods=["GET"])
+    def simulator_bot_poll():
+        """Proxies to `bot.simulator_app`'s `GET /Simulator-msg/poll` (Priority 3,
+        docs/work_process.md §16) — lets the admin page ask whether anything new
+        has arrived in a chat since a previous reply/poll's watermark, so a real,
+        unmodified `run_notification_poll_loop` delivery (a job result, a held-
+        approval/clarification prompt, ...) actually reaches the operator instead
+        of the earlier dead-end promise. Same session gating, same reasoning, as
+        the POST route above — a read-only GET, so no CSRF concern at all."""
+
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+
+        params = {
+            "chat_id": request.args.get("chat_id", ""),
+            "status_len": request.args.get("status_len", "0"),
+            "sent_len": request.args.get("sent_len", "0"),
+        }
+        return _forward_to_simulator("GET", "/Simulator-msg/poll", params=params)
 
     @blueprint.route("/groups", methods=["POST"])
     def write_group():
