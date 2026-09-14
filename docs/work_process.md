@@ -930,3 +930,135 @@ session gate, "unconfigured" error, and query-param forwarding (extended
 tests). Full suite: 1466 passing (1457 + 9).
 
 All three priorities from this round are now complete and verified.
+
+## 17. Architecture check: does the bot decide anything? — real inconsistency found and fixed
+
+User asked for a precise trace, against the project's own standing principle
+("the bot relays, only the server decides"): was `_submit_and_format_message`
+(`bot/app.py`) — the place `bot.taken_as`/`status.async_ack` text got
+assembled — doing any decision-making itself?
+
+**Traced and confirmed**: no business decision happens bot-side.
+`kind`/`job_id` are read straight from `/Msg`'s `taken_as`/`event_id` fields
+(`bot/transports.py`'s `HttpApiClient.submit_message()`) — the bot never
+classifies or decides to queue anything. But a **real, pre-existing
+inconsistency** turned up: for `question`/`conversational`/`clarification`,
+the server already sends a ready-to-display `"answer"` field (built
+server-side via its own `messages.text(...)` calls) — the bot's job for
+those is pure relay. For `report`/`request`/the queued-job ack, `/Msg`'s
+response carried *no* `"answer"` field at all — just `taken_as`/`event_id`/
+`status`. The tell: the server already computes equivalent text
+(`api.queued_report`/`api.queued_request`) for its *own* conversation-memory
+record (`_remember(...)`), but never puts it in the HTTP response — leaving
+the bot to independently reconstruct similar text from its own, separately-
+maintained catalog. Not something introduced by §16's wording work — that
+work rewrote the bot-side text within an already-inconsistent pattern,
+without realizing report/request are *always* queued via the real path
+(confirmed by re-reading `api/routes.py`: `ctx.queue.submit(...)` then
+`jsonify({..., "status": "queued"}), 202`, unconditionally) — meaning
+`bot.taken_as_report`/`bot.taken_as_request` (added in §16) were themselves
+unreachable in production; only `status.async_ack`/`_debug` ever fired for
+real report/request traffic.
+
+**Fix — `/Msg`'s response contract extended** (`api/routes.py`): all three
+report/request queued-response call sites now include `"answer"`, via a new
+`_queued_answer_text(messages, kind, task_id)` — DEEP_DEBUG-gated
+(`tools.deep_debug_enabled()`, read **server-side** now, not by whichever
+bot process happens to relay the reply — the single-source-of-truth
+process now owns this decision, same flag, moved to where "decides"
+belongs). `api.queued_report`/`api.queued_request` reworded to the friendly,
+no-task-id text; new `_debug` variants carry the ID, for both the HTTP
+answer and (always, regardless of DEEP_DEBUG — an internal audit record,
+not user-facing) the conversation-memory write.
+
+`_submit_and_format_message` (`bot/app.py`) **collapsed to pure relay for
+every kind** — no more kind-based branching, no more DEEP_DEBUG check, no
+more bot-local catalog lookup for this content:
+
+```python
+lines = [submission_result.answer_text or messages.text("bot.no_answer")]
+if submission_result.awaiting_approval:
+    lines.append(messages.text("bot.waiting_approval"))
+return "\n".join(lines), submission_result
+```
+
+Removed as dead now that the server is the single source of truth:
+`bot.taken_as_report`/`bot.taken_as_request`/`status.async_ack`/
+`status.async_ack_debug` (all four catalog keys, both languages) and
+`_TAKEN_AS_CATALOG_KEYS`. Also cleaned up, found along the way: `en.py` had
+an entire verbatim-duplicate block of ~15 keys (including the original
+`api.queued_report`/`api.queued_request`) — pre-existing, unrelated to this
+work, harmless (Python dicts just keep the last one), removed while already
+editing that exact area rather than left to compound further.
+
+**Tests**: `tests/test_api_messages.py` gained the server-side coverage
+this now belongs to (`test_a_report_includes_the_task_id_under_deep_debug`,
+plus `answer`-field assertions added to the existing report/request 202
+tests). `tests/test_bot_app.py`'s now-obsolete bot-side DEEP_DEBUG tests
+(testing behavior the bot no longer performs) replaced with pure-relay
+tests (`test_report_reply_is_a_pure_relay_of_the_servers_own_answer`,
+`test_request_awaiting_approval_appends_the_waiting_line`) asserting the
+bot echoes exactly what a `FakeBotApiClient` stands in for the server
+providing. `tests/test_messages.py`/`test_integration_ingestion_parity.py`
+updated to the surviving keys/wording. Full suite: 1465 passing.
+
+**Part 2 (the hardcoded `awaiting_approval=False`) — investigated, not yet
+fixed; a real finding to flag rather than a straightforward wiring bug.**
+See the conversation for the full report: `/Msg`'s response for report/
+request is *always* the immediate, synchronous `202 {status: "queued"}` —
+`ctx.queue.submit(...)` schedules the actual protocol selection/risk
+assessment as background work; the server itself cannot know, at the
+moment it answers `/Msg`, whether that will later become held for approval
+(`job_status()`'s own `held_for_approval` branch, `api/routes.py`, only
+ever fires against `/Job/<id>` polling or the async `approval_hold`
+notification — both real, working, and entirely independent of this
+field). Confirmed `register_open_approval_hold` is *already* correctly
+called from the real, working path (`push_approval_prompt`, triggered by
+the async notification) — the `bot/app.py` call site gated on
+`submission_result.awaiting_approval` is redundant dead code, never
+reachable via the real client. Awaiting the user's direction on how they
+want this resolved, given the field cannot be populated from `/Msg`'s
+synchronous response as currently modeled.
+
+## 18. `awaiting_approval` removed entirely — dead code, not a wiring fix
+
+User chose option 1 from §17's three options: remove the field and every
+call site depending on it, rather than leave a documented always-`False`
+stub or invent a synthetic value. Traced every reference across the repo
+first (not just the ones already found) to separate this concept
+precisely from an unrelated, same-named-sounding one: `api/routes.py`'s
+`"user_awaiting_approval"`/`"group_awaiting_approval"` (safe-mode
+auto-registration blocking reasons) and `tests/bot_fakes.py`/
+`tests/test_unsafe_system.py`'s matching tests are a **completely
+different concept** — left untouched, on purpose.
+
+**Removed:**
+- `MessageSubmissionResult.awaiting_approval` (`bot/contracts.py`).
+- The hardcoded `awaiting_approval=False` kwarg in
+  `HttpApiClient.submit_message()` (`bot/transports.py`).
+- `bot/app.py`'s dead gate (`if submission_result.awaiting_approval and
+  submission_result.job_id: interactions.register_open_approval_hold(...)`)
+  and the `bot.waiting_approval` append — `_submit_and_format_message`
+  collapses further, to a single-line pure relay.
+- `"bot.waiting_approval"` (`messages/en.py`/`he.py`), now unused.
+
+**Confirmed untouched and still working**: `bot/interactions.py`'s
+`register_open_approval_hold`/`unregister_open_approval_hold` and their
+real call sites — `push_approval_prompt` (the async `approval_hold`
+notification path, `bot/interactions.py:575`) and the approval-answer
+handler (`:665`) — none of this was ever reached through the field being
+removed; it's a fully independent, already-correct mechanism. Verified
+directly: `tests/test_unified_role_and_security.py`'s dedicated
+`register_open_approval_hold`/`unregister_open_approval_hold`/
+`get_open_approval_holds` tests pass unchanged.
+
+**Tests**: `tests/test_bot_transports.py`'s
+`test_submit_message_report_never_claims_to_know_awaiting_approval`
+renamed to `test_submit_message_report_returns_a_job_id`, dropping only
+the now-impossible assertion (kind/job_id coverage kept).
+`tests/test_bot_app.py`'s `test_request_awaiting_approval_appends_the_waiting_line`
+renamed to `test_request_reply_is_also_a_pure_relay_of_the_servers_own_answer`,
+same reasoning — confirms `request`, like `report`, is now a pure relay of
+whatever `/Msg` sends, with no bot-side augmentation left for either.
+Full suite: 1465 passing (net-zero test count — two renames, no coverage
+lost, none of it dead-code testing anymore).

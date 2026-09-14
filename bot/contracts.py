@@ -94,7 +94,6 @@ class MessageSubmissionResult:
     kind: Literal["question", "report", "request", "conversational", "clarification", "event_update"]
     answer_text: str | None = None
     job_id: str | None = None
-    awaiting_approval: bool = False
     provenance: dict | None = None
 
 

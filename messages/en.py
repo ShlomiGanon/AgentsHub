@@ -2,8 +2,6 @@
 
 MESSAGES = {
     "status.thinking": "The model is thinking...",
-    "status.async_ack": "Got it — I'm working on it now. I'll follow up right here once it's done.",
-    "status.async_ack_debug": "Got it — I'm working on it now.\nTask ID: {task_id}\nI'll follow up right here once it's done.",
     "error.request_failed": "Request failed: {reason}",
     "error.run_failure_generic": "Couldn't process that — try rephrasing, or contact a commander.",
     "debug.llm_call": (
@@ -158,9 +156,6 @@ MESSAGES = {
     "bot.handler_error": "Something went wrong handling that. It has been logged.",
     "bot.no_answer": "(no answer was returned)",
     "bot.refused": "Refused: {message}",
-    "bot.taken_as_report": "Got it — I've logged this as a report.",
-    "bot.taken_as_request": "Got it — I've logged this as an action request.",
-    "bot.waiting_approval": "It is now waiting for a commander's approval.",
     "bot.welcome": (
         "Hi — this is {profile_name}. Report something, ask a question, or "
         "request an action — just type it."
@@ -210,8 +205,10 @@ MESSAGES = {
     "api.drone_recall_none": "There are no active drone missions; no state was changed.",
     "api.drone_recall_all_done": "Returned to base: {names}. Their missions were closed.",
     "api.drone_recall_one_done": "{callsign} returned to base. Mission {mission_id} was closed.",
-    "api.queued_report": "Queued report. Task ID: {task_id}.",
-    "api.queued_request": "Queued request. Task ID: {task_id}.",
+    "api.queued_report": "Got it — I've logged this as a report. I'm working on it now and I'll follow up right here once it's done.",
+    "api.queued_report_debug": "Got it — I've logged this as a report. I'm working on it now.\nTask ID: {task_id}\nI'll follow up right here once it's done.",
+    "api.queued_request": "Got it — I've logged this as an action request. I'm working on it now and I'll follow up right here once it's done.",
+    "api.queued_request_debug": "Got it — I've logged this as an action request. I'm working on it now.\nTask ID: {task_id}\nI'll follow up right here once it's done.",
     "api.missing_required_field": "Missing required field: {field}.",
     "api.malformed_protocol": "The protocol body is malformed: {reason}",
     "api.profile_field_restart": (
@@ -222,26 +219,6 @@ MESSAGES = {
     "api.lookback_positive_integer": "'lookback_window_days' must be a positive integer.",
     "api.other_identity_forbidden": "A viewer may not view another identity's registration.",
     "api.full_name_invalid": "'full_name' must contain at least two words and be at most 120 characters.",
-    "api.job_not_found": "No such task: '{task_id}'.",
-    "api.hold_not_found": "No {kind} hold was created for event '{event_id}'.",
-    "api.hold_resolved": "Already resolved by '{identity}' at {resolved_at}.",
-    "api.decision_required": (
-        "'decision' is required: 'approved', 'rejected', or a candidate protocol name."
-    ),
-    "api.cursor_invalid": "'since' must be a non-negative integer cursor.",
-    "api.wait_invalid": "'wait_seconds' must be an integer between 0 and 30.",
-    "api.trace_id_invalid": "The trace ID is invalid.",
-    "api.queued_report": "Queued report. Task ID: {task_id}.",
-    "api.queued_request": "Queued request. Task ID: {task_id}.",
-    "api.missing_required_field": "Missing required field: {field}.",
-    "api.malformed_protocol": "The protocol body is malformed: {reason}",
-    "api.profile_field_restart": (
-        "'{field}' belongs to the profile and takes effect only after a restart."
-    ),
-    "api.retry_nonnegative_integer": "'retry_count' must be a non-negative integer.",
-    "api.risk_threshold_range": "'risk_threshold' must be a number between 0.0 and 1.0.",
-    "api.lookback_positive_integer": "'lookback_window_days' must be a positive integer.",
-    "api.other_identity_forbidden": "A viewer may not view another identity's registration.",
     "api.job_not_found": "No such task: '{task_id}'.",
     "api.hold_not_found": "No {kind} hold was created for event '{event_id}'.",
     "api.hold_resolved": "Already resolved by '{identity}' at {resolved_at}.",

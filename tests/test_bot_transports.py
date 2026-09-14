@@ -254,7 +254,7 @@ def test_submit_message_conversational_preserves_the_direct_answer(tmp_path):
         assert result.job_id is None
 
 
-def test_submit_message_report_never_claims_to_know_awaiting_approval(tmp_path):
+def test_submit_message_report_returns_a_job_id(tmp_path):
     ctx = build_context(tmp_path, main_agent=happy_path_agent(intent="report"))
     ctx.deps.persistence.write_user(BOT_SERVICE_IDENTITY, "commander")
     with RunningApiServer(ctx) as running:
@@ -264,7 +264,6 @@ def test_submit_message_report_never_claims_to_know_awaiting_approval(tmp_path):
 
         assert result.kind == "report"
         assert result.job_id is not None
-        assert result.awaiting_approval is False
 
 
 # -- answer_clarification_hold / answer_approval_hold ------------------------

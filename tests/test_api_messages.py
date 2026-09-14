@@ -4,6 +4,7 @@ import types
 import pytest
 
 from agents import adapter
+from api import routes
 from api.app import build_app
 from api.operations import job_status
 from orchestrator.flows import begin_report
@@ -136,8 +137,32 @@ def test_a_report_returns_202_with_a_job_id(tmp_path, teardown_ctx):
     body = resp.get_json()
     assert body["taken_as"] == "report"
     assert body["status"] == "queued"
+    # docs/work_process.md §17: /Msg itself is the single source of truth for this
+    # reply text now — the bot purely relays it — so the friendly, default
+    # (non-DEEP_DEBUG) wording is asserted here, not reconstructed bot-side.
+    assert "working on it" in body["answer"]
+    assert body["event_id"] not in body["answer"]
     ctx.queue.wait_until_idle()
     assert job_status(ctx, body["event_id"])["status"] == "succeeded"
+
+
+def test_a_report_includes_the_task_id_under_deep_debug(tmp_path, teardown_ctx, monkeypatch):
+    """The raw task ID has no user-facing purpose without a bot command to look a
+    job up by it, so /Msg includes it only under this server's own DEEP_DEBUG —
+    the same general verbose-diagnostics flag `tools.deep_debug_enabled()` gates
+    everywhere else, read here (not by whichever bot process relays the reply) so
+    every caller sees identical text regardless of its own environment."""
+
+    monkeypatch.setattr(routes, "deep_debug_enabled", lambda: True)
+    agent = happy_path_agent(risk_score="0.1", selected="status_check", intent="report")
+    ctx = _ctx_with(tmp_path, agent)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    resp = client.post("/Msg", headers=auth_headers(VIEWER_IDENTITY), json={"text": "smoke seen at gate 3", "sender_identity": VIEWER_IDENTITY})
+
+    body = resp.get_json()
+    assert body["event_id"] in body["answer"]
 
 
 def test_authenticated_identity_cannot_submit_as_another_sender(tmp_path, teardown_ctx):
@@ -225,6 +250,8 @@ def test_a_request_returns_202_and_is_classified_human_activation(tmp_path, tear
     assert resp.status_code == 202
     body = resp.get_json()
     assert body["taken_as"] == "request"
+    assert "working on it" in body["answer"]
+    assert body["event_id"] not in body["answer"]
 
     event = ctx.deps.persistence.fetch_event(body["event_id"])
     assert event["classification"] == "human_activation"

@@ -14,6 +14,7 @@ from history import record_event_outcome, storage_timestamp
 from orchestrator.flows import begin_report, run_report_extraction
 
 from tools import (
+    deep_debug_enabled,
     get_trace_id,
     is_valid_trace_id,
     new_trace_id,
@@ -222,6 +223,22 @@ def _is_pending_report_cancellation(text: str) -> bool:
         phrase in normalized
         for phrase in ("\u05e2\u05d6\u05d5\u05d1", "\u05ea\u05d1\u05d8\u05dc", "\u05d1\u05d8\u05dc", "\u05d0\u05d9\u05df \u05d9\u05d5\u05ea\u05e8", "\u05d0\u05d9\u05df \u05db\u05dc\u05d5\u05dd", "\u05d1\u05d8\u05e2\u05d5\u05ea", "\u05dc\u05d0 \u05e9\u05de\u05e2\u05ea\u05d9 \u05d8\u05d5\u05d1")
     )
+
+
+def _queued_answer_text(messages, kind: str, task_id: str) -> str:
+    """The user-facing `answer` for a report/request that was just queued
+    (docs/work_process.md §17) — this server, not the bot, is the single source
+    of truth for this text now, exactly as it already was for question/
+    conversational/clarification/event_update's own `answer` field. The raw
+    task ID has no user-facing purpose without a bot command to look a job up
+    by it, so it's included only under this process's own `DEEP_DEBUG`
+    (`tools.deep_debug_enabled()`) — the same flag, read here instead of by
+    whichever bot process happens to relay the reply, so every caller sees
+    identical text regardless of its own environment."""
+
+    if deep_debug_enabled():
+        return messages.text(f"api.queued_{kind}_debug", task_id=task_id)
+    return messages.text(f"api.queued_{kind}")
 
 
 def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
@@ -603,8 +620,11 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     ),
                     reservation,
                 )
-                _remember("assistant", messages.text("api.queued_request", task_id=event_id), event_id)
-                return jsonify({"taken_as": "request", "event_id": event_id, "status": "queued"}), 202
+                _remember("assistant", messages.text("api.queued_request_debug", task_id=event_id), event_id)
+                return jsonify({
+                    "taken_as": "request", "event_id": event_id, "status": "queued",
+                    "answer": _queued_answer_text(messages, "request", event_id),
+                }), 202
 
             if matched_protocol.name == "query_historical_incidents":
                 require(level, RequestedOperation.ASK_QUESTION)
@@ -801,8 +821,11 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 ),
                 reservation,
             )
-            _remember("assistant", messages.text("api.queued_report", task_id=event_id), event_id)
-            return jsonify({"taken_as": "report", "event_id": event_id, "status": "queued"}), 202
+            _remember("assistant", messages.text("api.queued_report_debug", task_id=event_id), event_id)
+            return jsonify({
+                "taken_as": "report", "event_id": event_id, "status": "queued",
+                "answer": _queued_answer_text(messages, "report", event_id),
+            }), 202
 
         if intent.intent != "request":
             raise RunFailureError(f"unsupported message intent: {intent.intent!r}")
@@ -835,8 +858,11 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             ),
             reservation,
         )
-        _remember("assistant", messages.text("api.queued_request", task_id=event_id), event_id)
-        return jsonify({"taken_as": "request", "event_id": event_id, "status": "queued"}), 202
+        _remember("assistant", messages.text("api.queued_request_debug", task_id=event_id), event_id)
+        return jsonify({
+            "taken_as": "request", "event_id": event_id, "status": "queued",
+            "answer": _queued_answer_text(messages, "request", event_id),
+        }), 202
 
     return blueprint
 

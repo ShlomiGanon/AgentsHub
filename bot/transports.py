@@ -296,7 +296,6 @@ class HttpApiClient(BotApiClient):
             kind=response_payload["taken_as"],
             answer_text=response_payload.get("answer"),
             job_id=response_payload.get("event_id"),
-            awaiting_approval=False,
         )
 
     async def answer_clarification_hold(self, event_id: str, chosen_classification: str, answering_identity: str) -> HoldAnswerOutcome:

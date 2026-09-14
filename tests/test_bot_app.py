@@ -832,66 +832,48 @@ def test_intent_clarification_returns_the_question_without_creating_a_job_messag
     assert "Job ID" not in reply
 
 
-def test_report_acknowledges_without_a_raw_job_id_by_default():
-    """The default (non-DEEP_DEBUG) async ack is deliberately friendly and omits
-    the raw job ID — no bot command lets a caller look a job up by it, so it has
-    no user-facing purpose today (docs/work_process.md §16)."""
+def test_report_reply_is_a_pure_relay_of_the_servers_own_answer():
+    """docs/work_process.md §17: /Msg now sends a ready-to-display `answer` for
+    every kind, including a queued report/request — the bot's job collapses to
+    pure relay (the same shape question/conversational/clarification already
+    had), matching the "bot only relays, server decides" principle. Which
+    wording to use (friendly vs. DEEP_DEBUG-verbose with the raw task ID) is now
+    entirely the server's own decision — see tests/test_api_messages.py for that
+    behavior, no longer testable bot-side since the bot doesn't make it anymore."""
 
     api = FakeBotApiClient(
         users={"v1": "viewer"},
-        message_submission_result=MessageSubmissionResult(kind="report", job_id="job-42"),
+        message_submission_result=MessageSubmissionResult(
+            kind="report", job_id="job-42",
+            answer_text="Got it — I've logged this as a report. I'm working on it now and I'll follow up right here once it's done.",
+        ),
     )
 
     reply = _run(handle_incoming_message(_deps(api), "v1", "there is smoke near the depot", "m1"))
 
-    assert "job-42" not in reply
-    assert "working on it" in reply
+    assert reply == api.message_submission_result.answer_text
 
 
-def test_report_acknowledges_with_the_job_id_under_deep_debug(monkeypatch):
-    """Under DEEP_DEBUG (`tools.deep_debug_enabled()`, the existing general
-    verbose-diagnostics flag — not a mechanism invented for this one message),
-    the raw job ID is shown, for troubleshooting."""
+def test_request_reply_is_also_a_pure_relay_of_the_servers_own_answer():
+    """docs/work_process.md §18: `MessageSubmissionResult.awaiting_approval` (and
+    the dead `bot.waiting_approval` append it used to gate) is gone entirely —
+    /Msg's synchronous response can never actually know a queued report/request
+    will later be held for approval (that's discovered asynchronously, well
+    after this reply is sent — see the real, working `approval_hold`
+    notification path instead, `bot/interactions.py`'s
+    `register_open_approval_hold`, untouched by this)."""
 
-    monkeypatch.setattr(app, "deep_debug_enabled", lambda: True)
-    api = FakeBotApiClient(
-        users={"v1": "viewer"},
-        message_submission_result=MessageSubmissionResult(kind="report", job_id="job-42"),
-    )
-
-    reply = _run(handle_incoming_message(_deps(api), "v1", "there is smoke near the depot", "m1"))
-
-    assert "job-42" in reply
-
-
-def test_queued_ack_promises_a_follow_up_message():
-    """CRITICAL_FIXES_PLAN item 5: the only reachable queued-ack branch (job_id is
-    truthy) previously used `status.async_ack`, which never promised a follow-up —
-    the wording that did promise one (`bot.job_queued`, "You'll hear back here once
-    it's done.") lived in a dead `elif` branch that could never execute, since the
-    `if submission_result.job_id:` check above it always returns first. The
-    follow-up promise now lives in `status.async_ack` itself, in both its default
-    and DEEP_DEBUG-verbose forms."""
-    api = FakeBotApiClient(
-        users={"v1": "viewer"},
-        message_submission_result=MessageSubmissionResult(kind="report", job_id="job-42"),
-    )
-
-    reply = _run(handle_incoming_message(_deps(api), "v1", "there is smoke near the depot", "m1"))
-
-    assert "follow up" in reply.lower()
-
-
-def test_request_awaiting_approval_says_so():
     api = FakeBotApiClient(
         users={"c1": "commander"},
-        message_submission_result=MessageSubmissionResult(kind="request", awaiting_approval=True),
+        message_submission_result=MessageSubmissionResult(
+            kind="request", job_id="job-42",
+            answer_text="Got it — I've logged this as an action request. I'm working on it now and I'll follow up right here once it's done.",
+        ),
     )
 
     reply = _run(handle_incoming_message(_deps(api), "c1", "dispatch a response", "m1"))
 
-    assert "request" in reply
-    assert "approval" in reply.lower()
+    assert reply == api.message_submission_result.answer_text
 
 
 def test_the_real_message_id_is_forwarded_to_submit_message():

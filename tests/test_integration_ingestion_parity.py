@@ -76,9 +76,10 @@ def test_the_real_bot_path_converges_with_a_sensor_submission(tmp_path):
     with RunningApiServer(bot_ctx) as bot_server:
         bot_deps = BotDeps(loaded_profile=None, telegram_client=_FakeTelegramClient(), api_client=HttpApiClient(bot_server.base_url))
         reply = _run(handle_incoming_message(bot_deps, VIEWER_IDENTITY, same_text, "12345"))
-        # The friendly, default (non-DEEP_DEBUG) async-ack text — messages/en.py's
-        # "status.async_ack" — confirms this became a queued job, same as before;
-        # the raw task ID is no longer in the default reply (see bot/app.py).
+        # The friendly, default (non-DEEP_DEBUG) queued-report ack — messages/en.py's
+        # "api.queued_report" (server-side, docs/work_process.md §17) — confirms this
+        # became a queued job, same as before; the raw task ID is no longer in the
+        # default reply — the bot now purely relays whatever /Msg's own "answer" says.
         assert "working on it" in reply
         bot_ctx.queue.wait_until_idle()
         via_bot = bot_ctx.deps.persistence.fetch_events_range("2000-01-01T00:00:00", "2100-01-01T00:00:00")[0]

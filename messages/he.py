@@ -2,8 +2,6 @@
 
 MESSAGES = {
     "status.thinking": "המודל חושב...",
-    "status.async_ack": "התקבל, אני מטפל/ת בזה עכשיו. אעדכן כאן ברגע שיסתיים.",
-    "status.async_ack_debug": "התקבל, אני מטפל/ת בזה עכשיו.\nמזהה משימה: {task_id}\nאעדכן כאן ברגע שיסתיים.",
     "error.request_failed": "הבקשה נכשלה: {reason}",
     "error.run_failure_generic": "לא הצלחתי לעבד את זה — נסה לנסח מחדש או פנה למפקד.",
     "debug.llm_call": (
@@ -157,9 +155,6 @@ MESSAGES = {
     "bot.handler_error": "אירעה שגיאה בטיפול בבקשה. פרטי השגיאה נרשמו.",
     "bot.no_answer": "(לא הוחזרה תשובה)",
     "bot.refused": "הבקשה נדחתה: {message}",
-    "bot.taken_as_report": "התקבל, ונרשם כדיווח.",
-    "bot.taken_as_request": "התקבל, ונרשם כבקשת פעולה.",
-    "bot.waiting_approval": "הבקשה ממתינה כעת לאישור מפקד.",
     "bot.welcome": (
         "שלום — זהו {profile_name}. דווח על משהו, שאל שאלה, "
         "או בקש פעולה — פשוט הקלד."
@@ -209,8 +204,10 @@ MESSAGES = {
     "api.drone_recall_none": "אין כרגע רחפנים במשימה; לא בוצע שינוי.",
     "api.drone_recall_all_done": "הוחזרו לבסיס: {names}. המשימות נסגרו.",
     "api.drone_recall_one_done": "{callsign} הוחזר לבסיס. המשימה {mission_id} נסגרה.",
-    "api.queued_report": "הדיווח נכנס לתור. מזהה משימה: {task_id}.",
-    "api.queued_request": "הבקשה נכנסה לתור. מזהה משימה: {task_id}.",
+    "api.queued_report": "התקבל, ונרשם כדיווח. אני מטפל/ת בזה עכשיו ואעדכן כאן ברגע שיסתיים.",
+    "api.queued_report_debug": "התקבל, ונרשם כדיווח. אני מטפל/ת בזה עכשיו.\nמזהה משימה: {task_id}\nאעדכן כאן ברגע שיסתיים.",
+    "api.queued_request": "התקבל, ונרשם כבקשת פעולה. אני מטפל/ת בזה עכשיו ואעדכן כאן ברגע שיסתיים.",
+    "api.queued_request_debug": "התקבל, ונרשם כבקשת פעולה. אני מטפל/ת בזה עכשיו.\nמזהה משימה: {task_id}\nאעדכן כאן ברגע שיסתיים.",
     "api.missing_required_field": "חסר שדה חובה: {field}.",
     "api.malformed_protocol": "מבנה הפרוטוקול אינו תקין: {reason}",
     "api.profile_field_restart": (
