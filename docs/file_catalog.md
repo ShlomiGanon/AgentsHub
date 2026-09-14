@@ -44,6 +44,8 @@ This English catalog describes every tracked or pending first-party file in the 
 | `bot/contracts.py` | Production | Private implementation | Defines bot DTOs, client interfaces, dependency contracts, and errors. |
 | `bot/interactions.py` | Production | Private implementation | Formats messages and handles commands, holds, settings, and profile interactions. |
 | `bot/presentation.py` | Production | Private implementation | Implements the shared Telegram/CLI status replacement and fallback lifecycle. |
+| `bot/simulator_app.py` | Production | Public entry point | Runs the simulation-mode bot process — real handlers/background loops, stubbed Telegram network (docs/bot_simulation_mode_design.md). |
+| `bot/simulator_transport.py` | Production | Private implementation | Defines the Telegram-network stubs (`FakeBotRequest`, `SimulatorTelegramClient`) and synthetic-Update construction for simulation-mode. |
 | `bot/transports.py` | Production | Private implementation | Implements HTTP API access and Telegram transport adapters. |
 | `cli/__init__.py` | Production | Public facade | Marks the command-line package. |
 | `cli/group_admin.py` | Production | Public entry point | Provides the Telegram group routing administration command-line entry point. |
@@ -69,6 +71,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `docs/agent_authoring.md` | Documentation | Internal | Documents agent authoring. |
 | `docs/allowed_calls.md` | Documentation | Internal | Documents allowed calls. |
 | `docs/api_spec.md` | Documentation | Internal | Documents api spec. |
+| `docs/bot_simulation_mode_design.md` | Documentation | Internal | Documents the simulation-mode bot process's architecture: reusing real handlers/background loops with stubbed Telegram network legs. |
 | `docs/code_example.py` | Documentation | Internal | Documents code example. |
 | `docs/cost_latency_review.md` | Documentation | Internal | Documents cost latency review. |
 | `docs/file_catalog.md` | Documentation | Internal | Documents file catalog. |
@@ -183,6 +186,8 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_bot_holds.py` | Test | Internal | Verifies clarification and approval interaction lifecycles. |
 | `tests/test_bot_interactions.py` | Test | Internal | Verifies profile, settings, user, formatting, and command interactions. |
 | `tests/test_bot_presentation.py` | Test | Internal | Verifies shared status editing, long-message splitting, and fallback behavior. |
+| `tests/test_bot_simulator_app.py` | Test | Internal | Verifies the simulation-mode bot process end-to-end: identity gating, dispatch through real handlers, reply capture. |
+| `tests/test_bot_simulator_transport.py` | Test | Internal | Verifies `FakeBotRequest`, `SimulatorTelegramClient`, and synthetic-Update construction against real PTB filters. |
 | `tests/test_bot_transports.py` | Test | Internal | Verifies bot HTTP clients, abstract client behavior, and Telegram transports. |
 | `tests/test_cli_group_admin.py` | Test | Internal | Verifies the Telegram group routing administration command. |
 | `tests/test_demo_profile.py` | Test | Internal | Verifies demo profile behavior and edge cases. |

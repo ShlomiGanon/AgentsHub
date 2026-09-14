@@ -29,7 +29,7 @@ logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(me
 logger = logging.getLogger("stack_runner")
 
 _SQLITE_SIDECARS = ("-wal", "-shm", "-journal")
-_APP_SIDECARS = (".settings.json", ".settings.json.tmp", ".notification_cursor", ".bot.lock")
+_APP_SIDECARS = (".settings.json", ".settings.json.tmp", ".notification_cursor", ".bot.lock", ".bot-simulator.lock")
 
 
 def reset_artifacts(module_path: str) -> tuple[Path, ...]:
@@ -71,6 +71,9 @@ class StackSupervisor:
         self.python_executable = python_executable or sys.executable
         self.api_proc: subprocess.Popen | None = None
         self.bot_proc: subprocess.Popen | None = None
+        # None for a profile that hasn't declared SIMULATOR_PORT (docs/bot_simulation_mode_design.md) —
+        # the third, simulation-mode bot subprocess is then never started at all.
+        self.bot_sim_proc: subprocess.Popen | None = None
         self._logs: list[object] = []
         self.last_error = ""
 
@@ -84,16 +87,19 @@ class StackSupervisor:
             api_port=info.api_port if info else None,
             api_pid=self.api_proc.pid if self.api_proc and self.api_proc.poll() is None else None,
             bot_pid=self.bot_proc.pid if self.bot_proc and self.bot_proc.poll() is None else None,
+            bot_sim_pid=self.bot_sim_proc.pid if self.bot_sim_proc and self.bot_sim_proc.poll() is None else None,
             last_error=self.last_error,
         )
 
     def start(self) -> None:
-        if available_profile(self.profile_module) is None:
+        info = available_profile(self.profile_module)
+        if info is None:
             raise ValueError(f"unknown profile: {self.profile_module}")
         env = os.environ.copy()
         env["AGENTSHUB_SUPERVISOR"] = "1"
         slug = self.profile_module.rsplit(".", 1)[-1]
-        for component in ("api", "bot"):
+        components = ("api", "bot", "bot-sim") if info.simulator_port else ("api", "bot")
+        for component in components:
             self._logs.append(open(f"{component}-{slug}.stdout.log", "a", encoding="utf-8"))
             self._logs.append(open(f"{component}-{slug}.stderr.log", "a", encoding="utf-8"))
         self._status("starting")
@@ -111,16 +117,28 @@ class StackSupervisor:
         time.sleep(1)
         if self.bot_proc.poll() is not None:
             raise RuntimeError(f"bot exited during startup with code {self.bot_proc.returncode}")
+        if info.simulator_port:
+            self.bot_sim_proc = subprocess.Popen(
+                [self.python_executable, "-m", "bot.simulator_app", self.profile_module],
+                stdout=self._logs[4], stderr=self._logs[5], env=env,
+            )
+            time.sleep(1)
+            if self.bot_sim_proc.poll() is not None:
+                raise RuntimeError(f"simulation-mode bot exited during startup with code {self.bot_sim_proc.returncode}")
         self.last_error = ""
         self._status("running")
-        logger.info("Stack started for %s (API %d, bot %d)", self.profile_module, self.api_proc.pid, self.bot_proc.pid)
+        logger.info(
+            "Stack started for %s (API %d, bot %d%s)",
+            self.profile_module, self.api_proc.pid, self.bot_proc.pid,
+            f", bot-sim {self.bot_sim_proc.pid}" if self.bot_sim_proc else "",
+        )
 
     def stop(self) -> None:
         self._status("stopping")
-        for process in (self.bot_proc, self.api_proc):
+        for process in (self.bot_sim_proc, self.bot_proc, self.api_proc):
             if process is not None and process.poll() is None:
                 process.terminate()
-        for process in (self.bot_proc, self.api_proc):
+        for process in (self.bot_sim_proc, self.bot_proc, self.api_proc):
             if process is None:
                 continue
             try:
@@ -128,11 +146,11 @@ class StackSupervisor:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
-        self.api_proc = self.bot_proc = None
+        self.api_proc = self.bot_proc = self.bot_sim_proc = None
         # On Windows ``terminate`` does not run the bot's Python ``finally`` block, so remove
         # only the now-stopped profile's declared lock files before the next start.
         for artifact in reset_artifacts(self.profile_module):
-            if str(artifact).endswith(".bot.lock") and artifact.is_file():
+            if str(artifact).endswith((".bot.lock", ".bot-simulator.lock")) and artifact.is_file():
                 artifact.unlink()
         for handle in self._logs:
             handle.close()
@@ -182,7 +200,11 @@ class StackSupervisor:
                             self._status("running")
                     elif command.get("action") == "switch_profile":
                         self.switch(str(command.get("profile_module", "")))
-                elif (self.api_proc and self.api_proc.poll() is not None) or (self.bot_proc and self.bot_proc.poll() is not None):
+                elif (
+                    (self.api_proc and self.api_proc.poll() is not None)
+                    or (self.bot_proc and self.bot_proc.poll() is not None)
+                    or (self.bot_sim_proc and self.bot_sim_proc.poll() is not None)
+                ):
                     self.last_error = "A child process exited unexpectedly; the active profile was restarted."
                     logger.error(self.last_error)
                     self.stop()

@@ -92,6 +92,11 @@ class LoadedProfile:
     simulation_groups: tuple = ()
     simulations: tuple = ()
     simulation_rosters: tuple = ()
+    # Optional port for the simulation-mode bot process (docs/bot_simulation_mode_design.md),
+    # mirroring `api_port`'s shape exactly. None (the default) means a profile hasn't opted
+    # into that mechanism — the admin simulator's message-kind steps then have no bot-side
+    # proxy target and the feature is simply unavailable, not broken.
+    simulator_port: int | None = None
 
 REQUIRED_PROFILE_ATTRS = (
     "PROFILE_NAME",

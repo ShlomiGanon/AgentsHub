@@ -2,12 +2,19 @@
 
 The page loads a scenario JSON (file, drag-and-drop, or paste), draws one card per chat or
 sensor the scenario declares, and lets the operator release the steps one at a time, in order.
-Every released step is sent by the **browser** to the real `POST /Msg` / `POST /Event` on the
-same origin with `X-Identity` set to that step's own `sender_identity` — the exact request the
-bot makes (`bot/transports.py`), so the same registration, permission and group-scoping rules
-apply as in production, and nothing here bypasses or duplicates the API's ingestion logic. The
-system's answer (an inline answer, or a queued job polled through `GET /Job/<event_id>` under the
-same identity) is shown in the same card.
+
+`kind: "event"` (sensor) steps are sent by the **browser** directly to the real `POST /Event`
+on the same origin, under that step's own `X-Identity` — a sensor has no Telegram identity and
+was never bot/Telegram traffic to begin with (docs/bot_simulation_mode_design.md §2 decision 3),
+so this path is unchanged. `kind: "message"` (persona chat) steps instead go through
+`POST /admin/simulator/bot-msg` (`api/admin.py`) — a same-origin proxy to a dedicated
+simulation-mode bot process (`bot/simulator_app.py`) that feeds the step through the real bot's
+own handler/dispatch code (`bot/app.py`, unmodified), so the same registration, permission,
+group-scoping *and* real bot behavior (its own derivation of conversation_id/protocol_hint, its
+background loops) apply exactly as they would for a real Telegram message — see
+docs/bot_simulation_mode_design.md for the full design. If the loaded profile hasn't declared
+`SIMULATOR_PORT`, or the simulator process isn't running, the proxy route reports that clearly
+rather than silently falling back to a shortcut.
 
 This module holds only the page's style, body and script as constants plus the helper that
 gathers the page's data; the route, session check and shared admin chrome stay in `api/admin.py`
@@ -35,11 +42,13 @@ Scenario JSON shape (documented in docs/unified_command_guide.md):
       ]
     }
 
-`kind: "message"` steps go to `POST /Msg` (with `telegram_chat_id`/`telegram_chat_type` exactly as
-declared on the chat, `conversation_id` derived the way the bot derives it, and an optional
-`protocol_hint`/`source_message_id`); `kind: "event"` steps go to `POST /Event`. `timestamp`,
-`sender_name`, `label`, `title`, `description` and `tags` are display-only — `occurred_at` is
-always the server's receipt time, and the simulator never pretends otherwise.
+`kind: "message"` steps are proxied with `telegram_chat_id`/`telegram_chat_type` exactly as
+declared on the chat — `conversation_id`/`protocol_hint` are no longer caller-supplied for this
+path, since the real bot handler now derives them itself, exactly as it would for a real Telegram
+message (docs/bot_simulation_mode_design.md §10); `kind: "event"` steps still go straight to
+`POST /Event`, unchanged. `timestamp`, `sender_name`, `label`, `title`, `description` and `tags`
+are display-only — `occurred_at` is always the server's receipt time, and the simulator never
+pretends otherwise.
 """
 
 from __future__ import annotations
@@ -286,7 +295,6 @@ SIMULATOR_BODY = """
   const POLL_INTERVAL_MS = 2000;
   const POLL_TIMEOUT_MS = 5 * 60 * 1000;
   const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'uncertain', 'closed_on_precedent', 'declined']);
-  const INLINE_KINDS = new Set(['question', 'conversational', 'clarification', 'event_update']);
   const CHAT_TYPES = new Set(['private', 'group', 'supergroup']);
   const CHAT_KINDS = new Set(['message', 'event']);
 
@@ -600,29 +608,35 @@ SIMULATOR_BODY = """
 
   function buildRequest(chat, step) {
     if (chat.kind === 'event') {
-      return { url: '/Event', body: { text: step.text, sender_identity: step.sender_identity } };
+      // Sensors have no Telegram identity and were never bot traffic — unchanged
+      // (docs/bot_simulation_mode_design.md §2 decision 3).
+      return { url: '/Event', body: { text: step.text, sender_identity: step.sender_identity }, identity: step.sender_identity };
     }
+    // Proxied to bot.simulator_app through api/admin.py (docs/bot_simulation_mode_design.md
+    // §4.3/§4.4) so the step is fed through the real bot's own handler code, not /Msg
+    // directly. `identity: null` — this call authenticates as the admin's own session
+    // (cookies), not a per-persona X-Identity header; the persona identity travels inside
+    // the body instead, the same way a real Telegram update carries it.
     const chatId = chat.telegram_chat_id || step.sender_identity;
     const body = {
-      text: step.text,
       sender_identity: step.sender_identity,
-      // A unique id per run unless the scenario pins one: /Msg de-duplicates on
-      // (sender, source_message_id), so a re-run must not be swallowed as a duplicate.
+      chat_id: chatId,
+      chat_type: chat.telegram_chat_type || 'private',
+      text: step.text,
+      // A unique id per run unless the scenario pins one — the real bot handler re-derives
+      // its own numeric message_id from this string, deterministically, so a re-run with the
+      // same id still gets /Msg's existing dedup-on-source_message_id behavior.
       source_message_id: step.source_message_id || ('sim-' + state.runId + '-' + step.step),
-      conversation_id: 'telegram:' + chatId + ':main',
     };
-    if (chat.telegram_chat_type) {
-      body.telegram_chat_type = chat.telegram_chat_type;
-      if (chat.telegram_chat_id) body.telegram_chat_id = chat.telegram_chat_id;
-    }
-    if (step.protocol_hint) body.protocol_hint = step.protocol_hint;
-    return { url: '/Msg', body: body };
+    return { url: '/admin/simulator/bot-msg', body: body, identity: null };
   }
 
   async function apiCall(method, url, identity, body) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (identity) headers['X-Identity'] = identity;
     const response = await fetch(url, {
       method: method,
-      headers: { 'Content-Type': 'application/json', 'X-Identity': identity },
+      headers: headers,
       body: body === undefined ? undefined : JSON.stringify(body),
       credentials: 'same-origin',
     });
@@ -703,7 +717,7 @@ SIMULATOR_BODY = """
     const request = buildRequest(chat, step);
     let result;
     try {
-      result = await apiCall('POST', request.url, step.sender_identity, request.body);
+      result = await apiCall('POST', request.url, request.identity, request.body);
     } catch (error) {
       setBubbleText(reply, t('network_error', { message: error.message }), null, true);
       state.busy = false;
@@ -729,29 +743,14 @@ SIMULATOR_BODY = """
       return;
     }
 
-    let header = t('taken_as', { kind: payload.taken_as });
-    if (payload.duplicate) header += ' - ' + t('duplicate');
-    if (INLINE_KINDS.has(payload.taken_as) && !payload.event_id) {
-      setBubbleText(reply, payload.answer ? header + '\\n\\n' + payload.answer : header, null, false);
-      queue.shift();
-      state.busy = false;
-      updateGlobalState();
-      return;
-    }
-    if (payload.event_id) header += ' - ' + t('event_id', { event_id: payload.event_id });
-    const answer = payload.answer ? header + '\\n\\n' + payload.answer : header;
-    const status = payload.status ? jobStatusText({ status: payload.status }) : null;
-    setBubbleText(reply, answer, status, false);
-    // Only the acknowledgment shape ("queued") means a job is running that GET /Job will
-    // progress; a duplicate carries its final outcome, and a clarification that still names
-    // an event is waiting on the operator, not on the job.
-    if (payload.event_id && payload.status === 'queued') {
-      const completed = await pollJob(payload.event_id, step.sender_identity, reply, answer);
-      if (completed) queue.shift();
-      state.busy = false;
-      updateGlobalState();
-      return;
-    }
+    // The bot-msg path (docs/bot_simulation_mode_design.md §4.3/§10): the real bot handler
+    // ran and sent its reply through the simulator process's stub Telegram client, exactly
+    // as it would send a real Telegram message — `reply_text` is that rendered text, not a
+    // reconstruction of /Msg's richer {taken_as, event_id, status} shape (which is only ever
+    // observed from *outside* the handler, not returned by it). An async job's eventual
+    // outcome is delivered later, out-of-band, by the same background notification loop a
+    // real bot uses — not polled here, since there is no event_id to poll.
+    setBubbleText(reply, payload.reply_text || t('bot_no_reply'), null, false);
     queue.shift();
     state.busy = false;
     updateGlobalState();

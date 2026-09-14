@@ -49,6 +49,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import httpx
 from flask import Blueprint, flash, get_flashed_messages, jsonify, redirect, render_template_string, request, session, url_for
 
 from api.admin_simulator import SIMULATOR_BODY, SIMULATOR_STYLE, simulator_page_context
@@ -60,6 +61,7 @@ from api.admin_api_pages import (
     PROFILES_BODY,
     PROTOCOLS_BODY,
 )
+from api.request_boundary import BOT_SERVICE_KEY_ENV_VAR, SERVICE_KEY_HEADER
 from auth.permissions import InvalidFullNameError, PermissionLevel, normalize_full_name
 from config import discover_profiles, read_server_status, submit_server_command, supervisor_available
 from messages import get_current_catalog
@@ -1468,6 +1470,55 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             csrf_token=session["csrf_token"],
             **api_context,
         )
+
+    @blueprint.route("/simulator/bot-msg", methods=["POST"])
+    def simulator_bot_msg():
+        """Proxies one message-kind simulation step to `bot.simulator_app`'s own
+        `POST /Simulator-msg` (docs/bot_simulation_mode_design.md §4.4) — pure plumbing,
+        no business logic here. The browser never talks to the simulator process
+        directly (same-origin only, like every other admin call); an HTTP call rather
+        than a Python import because `tests/test_architecture.py`'s package boundary
+        lets `api` import only `bot`/`bot.app`, never a new submodule directly — the
+        same reason `bot/transports.py`'s `HttpApiClient` reaches `api.app` over HTTP
+        rather than importing it.
+
+        Session-gated like every other admin route; no CSRF token, since this is a
+        JSON `fetch()` call (`request.form` is always empty for it, which is what
+        `_require_csrf()` checks) rather than an HTML form submission — the same
+        distinction Flask's own CSRF guidance draws, and this route makes no state
+        change of its own besides what the simulator process's own identity-allowlist
+        gate (§4.3) already permits.
+        """
+
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+
+        simulator_port = ctx.loaded_profile.simulator_port
+        if not simulator_port:
+            return jsonify({"error": {"message": _t("admin.simulator.bot_mode_unconfigured")}}), 501
+
+        payload = request.get_json(silent=True) or {}
+        service_key = os.environ.get(BOT_SERVICE_KEY_ENV_VAR) or ""
+        try:
+            response = httpx.post(
+                f"http://localhost:{simulator_port}/Simulator-msg",
+                json=payload,
+                headers={SERVICE_KEY_HEADER: service_key},
+                timeout=httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=75.0),
+            )
+        except httpx.HTTPError:
+            logger.warning(
+                "simulation-mode bot process unreachable",
+                extra={"event": "admin_simulator_bot_unreachable", "trace_id": get_trace_id()},
+            )
+            return jsonify({"error": {"message": _t("admin.simulator.bot_mode_unreachable")}}), 502
+
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        return jsonify(body), response.status_code
 
     @blueprint.route("/groups", methods=["POST"])
     def write_group():

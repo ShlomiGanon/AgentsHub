@@ -1,6 +1,10 @@
 """The admin web panel (api/admin.py): login, session, CSRF, rate limiting, user management."""
 
+import contextlib
+import http.server
+import json
 import re
+import threading
 import types
 
 import pytest
@@ -1156,17 +1160,21 @@ def test_simulator_embeds_live_groups_users_and_catalog_strings(tmp_path, teardo
 
 
 def test_simulator_page_talks_to_the_real_endpoints_only(tmp_path, teardown_ctx, _admin_env):
-    """The page's script sends steps to /Msg and /Event and polls /Job — the bot's own
-    endpoints — and does not route through any admin-side proxy."""
+    """Event-kind steps still go straight to /Event and poll /Job — the bot's own
+    endpoints, unchanged (docs/bot_simulation_mode_design.md §2 decision 3).
+    Message-kind steps are proxied through /admin/simulator/bot-msg instead of
+    calling /Msg directly (§4.4/§7) — no client-side dispatch shortcut, and the
+    legacy bundled-fixture route stays gone."""
 
     client = _client(tmp_path, teardown_ctx)
     _login(client)
 
     page = client.get("/admin/simulator").data.decode("utf-8")
-    assert "'/Msg'" in page
     assert "'/Event'" in page
     assert "'/Job/'" in page
     assert "'X-Identity'" in page
+    assert "/admin/simulator/bot-msg" in page
+    assert "'/Msg'" not in page
     assert "/admin/simulator/dispatch" not in page  # never a client-side dispatch shortcut
     assert "/admin/simulator/example" not in page  # the legacy bundled-fixture route is gone
 
@@ -1286,3 +1294,126 @@ console.log(JSON.stringify(results));
     # 3. A completely empty sender_identity is not offered a mapping slot (nothing to label it
     #    with) — it stays a hard validation error from validateScenario() itself, unchanged.
     assert outcomes[2]["missing"] == {"groupsNeedingId": [], "personaValues": []}
+
+
+# -- POST /admin/simulator/bot-msg: proxy to bot.simulator_app (docs/bot_simulation_mode_design.md §4.4) --
+
+
+class _FakeSimulatorHandler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+        self.server.received.append({
+            "path": self.path,
+            "headers": dict(self.headers),
+            "body": json.loads(body) if body else None,
+        })
+        payload = json.dumps(self.server.response_body).encode("utf-8")
+        self.send_response(self.server.response_status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, format, *args):  # keep test output quiet
+        pass
+
+
+@contextlib.contextmanager
+def _fake_simulator_server(status=200, body=None):
+    server = http.server.HTTPServer(("127.0.0.1", 0), _FakeSimulatorHandler)
+    server.received = []
+    server.response_status = status
+    server.response_body = body if body is not None else {}
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_simulator_bot_msg_requires_an_admin_session(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx, simulator_port=9999)
+
+    response = client.post("/admin/simulator/bot-msg", json={}, follow_redirects=False)
+
+    assert response.status_code in (302, 303)
+    assert "/admin/login" in response.headers["Location"]
+
+
+def test_simulator_bot_msg_reports_a_clear_error_when_the_profile_has_no_simulator_port(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)  # simulator_port defaults to None
+    _login(client)
+
+    response = client.post("/admin/simulator/bot-msg", json={"sender_identity": "1"})
+
+    assert response.status_code == 501
+    assert "SIMULATOR_PORT" in response.get_json()["error"]["message"]
+
+
+def test_simulator_bot_msg_reports_a_clear_error_when_the_process_is_unreachable(tmp_path, teardown_ctx, _admin_env):
+    # Port 1 is a privileged, essentially-always-refused port — nothing is listening.
+    client = _client(tmp_path, teardown_ctx, simulator_port=1)
+    _login(client)
+
+    response = client.post("/admin/simulator/bot-msg", json={"sender_identity": "1"})
+
+    assert response.status_code == 502
+
+
+def test_simulator_bot_msg_forwards_the_request_and_relays_the_response(tmp_path, teardown_ctx, _admin_env, monkeypatch):
+    monkeypatch.setenv("BOT_SERVICE_KEY", "test-service-key")
+    with _fake_simulator_server(status=200, body={"reply_text": "42 events"}) as server:
+        port = server.server_address[1]
+        client = _client(tmp_path, teardown_ctx, simulator_port=port)
+        _login(client)
+
+        response = client.post(
+            "/admin/simulator/bot-msg",
+            json={
+                "sender_identity": "9000000000000002", "chat_id": "9000000000000002",
+                "chat_type": "private", "text": "hi", "source_message_id": "s1",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.get_json() == {"reply_text": "42 events"}
+        assert len(server.received) == 1
+        assert server.received[0]["path"] == "/Simulator-msg"
+        assert server.received[0]["headers"]["X-Service-Key"] == "test-service-key"
+        assert server.received[0]["body"] == {
+            "sender_identity": "9000000000000002", "chat_id": "9000000000000002",
+            "chat_type": "private", "text": "hi", "source_message_id": "s1",
+        }
+
+
+def test_simulator_bot_msg_relays_a_refusal_status_and_body_unchanged(tmp_path, teardown_ctx, _admin_env, monkeypatch):
+    """The simulator process's own identity-allowlist refusal (403) must reach the
+    browser exactly as-is — the proxy is pure plumbing, not another decision point."""
+
+    monkeypatch.setenv("BOT_SERVICE_KEY", "test-service-key")
+    with _fake_simulator_server(status=403, body={"error": {"message": "not a currently-declared persona"}}) as server:
+        port = server.server_address[1]
+        client = _client(tmp_path, teardown_ctx, simulator_port=port)
+        _login(client)
+
+        response = client.post("/admin/simulator/bot-msg", json={"sender_identity": "1"})
+
+        assert response.status_code == 403
+        assert response.get_json() == {"error": {"message": "not a currently-declared persona"}}
+
+
+def test_simulator_bot_msg_never_leaks_the_service_key_to_the_browser(tmp_path, teardown_ctx, _admin_env, monkeypatch):
+    monkeypatch.setenv("BOT_SERVICE_KEY", "test-service-key")
+    with _fake_simulator_server(status=200, body={"reply_text": "ok"}) as server:
+        port = server.server_address[1]
+        client = _client(tmp_path, teardown_ctx, simulator_port=port)
+        _login(client)
+
+        response = client.post("/admin/simulator/bot-msg", json={"sender_identity": "1"})
+
+        assert b"test-service-key" not in response.data
+        for header_value in response.headers.values():
+            assert "test-service-key" not in header_value

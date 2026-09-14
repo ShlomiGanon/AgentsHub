@@ -479,6 +479,7 @@ def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) 
         simulation_groups=tuple(getattr(profile_module, "SIMULATION_GROUPS", ())),
         simulations=tuple(getattr(profile_module, "SIMULATIONS", ())),
         simulation_rosters=tuple(getattr(profile_module, "SIMULATION_ROSTERS", ())),
+        simulator_port=getattr(profile_module, "SIMULATOR_PORT", None),
     )
 
     failures = validate_profile(loaded, declared_event_types=profile_module.EVENT_TYPES)

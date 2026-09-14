@@ -960,6 +960,12 @@ AREAS = [
 ]
 
 API_PORT = 8905
+# The simulation-mode bot process (docs/bot_simulation_mode_design.md) — a second,
+# dedicated bot process the admin simulator's message-kind steps talk to (through
+# api/admin.py's proxy route) so they flow through the real bot's handler/dispatch
+# and background-loop code, not just /Msg directly. Optional; a profile that never
+# starts `python -m bot.simulator_app` simply never receives a proxied request.
+SIMULATOR_PORT = 8915
 RETRY_COUNT = 2
 RISK_THRESHOLD = 0.6
 LOOKBACK_WINDOW_DAYS = 30

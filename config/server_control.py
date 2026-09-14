@@ -23,6 +23,10 @@ class ProfileInfo:
     module_path: str
     profile_name: str
     api_port: int
+    # Optional (docs/bot_simulation_mode_design.md) — None for every profile that hasn't
+    # declared SIMULATOR_PORT, which `run_stack.py` reads to decide whether to start the
+    # third, simulation-mode bot subprocess at all.
+    simulator_port: int | None = None
 
 
 def control_dir() -> Path:
@@ -49,6 +53,7 @@ def discover_profiles(directory: Path | None = None) -> tuple[ProfileInfo, ...]:
             module = importlib.import_module(module_path)
             profile_name = getattr(module, "PROFILE_NAME")
             api_port = getattr(module, "API_PORT")
+            simulator_port = getattr(module, "SIMULATOR_PORT", None)
             db_path = getattr(module, "DB_PATH")
             if any(not hasattr(module, attribute) for attribute in REQUIRED_PROFILE_ATTRS):
                 continue
@@ -56,6 +61,8 @@ def discover_profiles(directory: Path | None = None) -> tuple[ProfileInfo, ...]:
             if not isinstance(profile_name, str) or not profile_name.strip():
                 continue
             if not isinstance(api_port, int) or not 1 <= api_port <= 65535:
+                continue
+            if simulator_port is not None and (not isinstance(simulator_port, int) or not 1 <= simulator_port <= 65535):
                 continue
             if not isinstance(db_path, str) or not db_path:
                 continue
@@ -65,7 +72,7 @@ def discover_profiles(directory: Path | None = None) -> tuple[ProfileInfo, ...]:
                 continue
         except Exception:
             continue
-        discovered.append(ProfileInfo(module_path, profile_name.strip(), api_port))
+        discovered.append(ProfileInfo(module_path, profile_name.strip(), api_port, simulator_port))
     return tuple(discovered)
 
 

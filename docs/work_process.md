@@ -58,13 +58,24 @@ in what order*, not the design's own content.
   agent with a similarly-shaped roster store can be targeted the same way.
   Wired up for both SEC_001 (6 personas) and FIRE_002 (3 personas), the
   two series that share that agent's roster.
-- **Test suite**: 1420 tests passing (full `tests/` run) — up from 1411 by
-  9 new tests covering `SimulationRoster`. Dedicated files:
-  `tests/test_profile_simulations.py`, `tests/test_api_simulations.py`,
-  `tests/test_integration_profile_simulations.py`, `tests/test_run_stack.py`
-  (replacing `tests/test_admin_scenarios.py`), plus additions to
-  `tests/test_persistence_conformance.py`, `tests/test_group_routing.py`,
-  `tests/test_api_admin.py`, and `tests/api_fakes.py`.
+- **Group membership: investigated, not a gap.** No Telegram group
+  membership concept exists anywhere in this codebase, for real or
+  simulated users — nothing to fix (§13, item 1).
+- **Attendance-cycle gap (§11): root cause confirmed (§13), designed
+  (§14), and now implemented (§15).** The admin simulator's message-kind
+  steps flow through a dedicated simulation-mode bot process
+  (`bot/simulator_app.py`) that reuses `bot/app.py`'s real handlers and
+  both background loops unmodified — including the real, unforced
+  `run_attendance_check_loop` — with only the Telegram network legs
+  stubbed (`bot/simulator_transport.py`). `docs/bot_simulation_mode_design.md`
+  is the design; §15 is the implementation record. `/Event` (sensor)
+  steps are untouched, exactly as designed.
+- **Test suite**: 1456 tests passing (full `tests/` run) — up from 1420 by
+  36 new tests: `tests/test_bot_simulator_transport.py` (16),
+  `tests/test_bot_simulator_app.py` (14, including one true end-to-end
+  test against a real running `api.app` server), and 6 new
+  `tests/test_api_admin.py` tests for the proxy route, plus one existing
+  test there updated to match the new page (§15).
 
 ---
 
@@ -500,4 +511,271 @@ members); and one integration test against the real
 roster, not its on-disk DB) proving every `pre_approved_rosters` persona
 ends up approved while a bystander persona does not.
 
+## 13. Investigation: group membership, and the attendance-cycle gap's real fix — four rounds, no fixes yet
+
+Two new "investigation only" items, requested together: (1) whether the
+simulation mechanism establishes Telegram group *membership* for simulation
+users, and (2) the still-open "no attendance cycle is open" failure found
+in §11 (root-caused, deliberately left unfixed pending direction).
+
+**Item 1 — group membership**: read `persistence/schema.py`,
+`orchestrator/group_routing.py`, and `/Msg`'s actual auth path
+(`api/routes.py`'s `post_msg`). Finding: there is no group-membership
+concept anywhere in this codebase, for real users or simulated ones —
+`users` and `telegram_groups` are two independent tables with no
+relationship between them; `/Msg` only checks the caller is a known user,
+the chat_id is a registered group, and `sender_identity == caller_identity`.
+In production this is fine because Telegram itself is the real membership
+authority. `ensure_simulation_entities()` correctly does nothing here
+because there is nothing to establish — not a gap, a non-issue, distinct
+from the `TeamStatusAgent` roster (a business-domain roster, unrelated to
+Telegram group membership).
+
+**Item 2 — attendance cycle, round 1**: traced `bot/background_services.py`'s
+`run_attendance_check_loop` (started automatically by the real
+`bot/app.py`, but a *separate OS process* from `api/app.py` that the admin
+simulator never runs) and confirmed the admin simulator only ever calls
+`/Msg`/`/Event` — the real loop that would naturally open a cycle over
+real time never fires during a simulation. Proposed three options
+(provisioning-time fake-open; manual `force=true` call; leave as an
+operator precondition); recommended against baking a fake cycle-open into
+`ensure_simulation_entities()`, since a cycle is a dated/time-boxed entity,
+unlike the once-only roster-approval fix.
+
+**Round 2**: user reframed around a stated principle — simulation traffic
+must flow through the bot, not bypass it. Investigated whether running the
+real `bot/app.py` process alongside a simulation would make the loop fire
+naturally. Finding: mechanically yes for the loop itself (pure time-driven,
+no Telegram-update dependency), but requires real Telegram network
+connectivity (`Bot.get_me()` at bootstrap) and real wall-clock time to
+cross the daily threshold — impractical for on-demand simulation stepping
+— and doesn't generalize to inbound persona messages at all, since reserved
+IDs are deliberately unreal and can never produce a real Telegram update.
+Recommended `force=true` on `POST /TeamStatus/AttendanceCheck` directly as
+the honest alternative (same server-side code path).
+
+**Round 3**: user asked whether a *minimal bot-side endpoint* (skipping
+just the polling/token setup) could close the gap without the full
+process's cost. Traced `run_attendance_check_once`'s exact two-step body —
+found the "open the cycle" half is already 100% the API-side endpoint
+(zero bot involvement), and `BotDeps.telegram_client` is eagerly
+constructed from a validated token *before* any endpoint could be reached,
+so a "minimal" endpoint doesn't actually escape the token/network
+dependency. Conclusion: no functional gap left for a bot-side endpoint to
+close beyond what the direct API call already closes; also would require
+adding a first-ever inbound HTTP surface to `bot/app.py`.
+
+**Round 4 — the precise divergence check**: user pushed on whether
+`force=true` could *silently diverge* from real bot behavior if the loop's
+own code changed later. Traced every line of
+`run_attendance_check_once`/`run_attendance_check_loop`: no business/state
+decision logic beyond the bare API call (formatting, retry/backoff, and
+per-chat delivery-continue are all presentation/infra, not decision logic)
+— *except* one concrete, present-tense fact: the real loop's call is
+always unforced (`{}` body → `force=False`), so it never opens a cycle
+outside the real due-time window, while `force=true` deliberately bypasses
+that. Reported this precisely as a real, acknowledged trade-off rather than
+walking back the recommendation — `force=true` is honest about *what* it
+does (the same server code) but not equivalent to *when* a real bot would
+do it.
+
+**This led directly to round 5** (§14): rather than accept that trade-off,
+the user asked whether the bot's *real* handler/dispatch logic (not just
+the background loop) could be reused end-to-end, with only the Telegram
+network legs stubbed — see §14 for the resulting design.
+
+No code changed in this section — investigation and reporting only, per
+explicit instruction each round.
+
+## 14. `bot_simulation_mode_design.md` — planning a dedicated simulation-mode bot process
+
+Final round of the §13 investigation thread: could a second, dedicated bot
+process reuse PTB's real `Application.process_update()` dispatcher and the
+real handler/background-loop code (`bot/app.py`,
+`bot/background_services.py`, unmodified), with only the literal inbound
+delivery and outbound send legs stubbed for simulation-reserved identities?
+
+Researched precisely against the installed `python-telegram-bot` 22.8:
+`build_deps()`/`PTBTelegramClient.__init__` need no real network access to
+construct (only `Application.initialize()`'s `Bot.initialize()` →
+`get_me()` does, and PTB's own `BaseRequest` abstraction — 4 abstract
+methods — is an already-precedented seam for stubbing exactly that call
+locally); `process_update()` requires a real `telegram.Update`
+(`Update.de_json(...)`), not the loose `SimpleNamespace` today's
+`tests/test_bot_app.py` uses (those tests bypass PTB's dispatcher
+entirely, calling handlers directly — a materially different, less
+faithful test shape than what round 5 asked for); `FakeTelegramClient`
+(`tests/bot_fakes.py`) already proves the outbound stub pattern works.
+Confirmed no hard architectural blocker — everything decomposes into
+engineering work on top of seams that already exist and are already
+tested, with one genuinely new piece of infrastructure (an inbound HTTP
+endpoint on a *new* bot-side process — `bot/app.py` itself has never had
+one).
+
+Before finalizing, asked 4 `AskUserQuestion` clarifications (all answered):
+v1 scope is plain-text messages only (no scenario today uses buttons/
+commands); the browser reaches the new endpoint via a same-origin proxy
+route on `api/app.py`, not directly (also required by
+`tests/test_architecture.py`'s package-boundary rule — `api` may only
+import `bot`/`bot.app`, never a new submodule directly, so HTTP is the only
+option regardless); `/Event` (sensor) steps stay fully untouched, forever
+(sensors were never bot/Telegram traffic); the new process is auto-started
+by `run_stack.py` as a third subprocess, not a manual step.
+
+Produced `docs/bot_simulation_mode_design.md` — architecture/feasibility
+plan only, same rigor as `docs/profile_simulations_design.md`: new
+`bot/simulator_transport.py` (`FakeBotRequest`, `SimulatorTelegramClient`,
+synthetic-`Update` construction) and `bot/simulator_app.py` (the entry
+point — real `Application`, real handlers, real background loops, no
+`run_polling()`, a small Flask-in-a-thread `POST /Simulator-msg` endpoint
+bridged into the asyncio loop); a new proxy route on `api/admin.py`;
+`api/admin_simulator.py`'s `buildRequest()` retargeted for message-kind
+steps only; identity-allowlist gating against the loaded profile's own
+declared reserved IDs as the core isolation guarantee; full maintainability
+argument (no duplicated logic — the new process imports and calls the real
+`bot/app.py`/`bot/background_services.py` functions directly, so future
+changes to either stay automatically reflected); file impact and risk
+sections, including the one open edge case (`conversation_id`/
+`protocol_hint` can no longer be caller-dictated on message-kind steps once
+they go through the real handler, since a real Telegram message never
+could either).
+
+No implementation yet — planning only, per explicit instruction. Next step
+is the user's decision on whether/when to build it.
+
 Full suite: 1420 passing (1411 + 9 new).
+
+## 15. Implementation: the simulation-mode bot process
+
+User: "Go ahead and implement it." Built exactly what
+`docs/bot_simulation_mode_design.md` specified, in the order the design's
+own File impact list laid it out; no re-scoping, one implementation-time
+correction discovered by testing against the real PTB library (below).
+
+**New — `bot/simulator_transport.py`**: `FakeBotRequest(BaseRequest)`,
+`SimulatorTelegramClient(TelegramClient)`, `build_synthetic_text_update()`.
+Verified directly against installed `python-telegram-bot` 22.8 (not just
+inspected) before writing the rest: constructing a real `Application` with
+`FakeBotRequest` and calling `process_update()` on a synthetic update
+correctly reaches a real `MessageHandler`, and `filters.COMMAND` correctly
+never matches it.
+
+**Correction found by that verification, not assumed in the design**:
+`register_handlers()`'s `post_init` hook (`bot/app.py`, reused unmodified)
+calls `set_my_commands()` — a second real Bot-API call beyond `getMe` that
+`FakeBotRequest` also has to satisfy, or reusing `register_handlers()`
+as-is breaks. The design's original "refuse everything but getMe" was
+narrowed from a hypothesis to a tested fact once this surfaced;
+`FakeBotRequest` now succeeds generically for any Bot-API call (documented
+why: every real send in this codebase already goes through
+`deps.telegram_client`, never `context.bot` directly, so nothing but PTB's
+own harmless bootstrap machinery can ever reach this stub) rather than a
+narrow allowlist.
+
+**Also found by testing, not assumed**: `Application.start()` does *not*
+call `post_init`/`post_shutdown` — those are invoked by `run_polling()`
+itself, in a documented order (`initialize → post_init → start`, mirrored
+in reverse for shutdown). Since `simulator_app.py` never calls
+`run_polling()`, it calls `post_init`/`post_shutdown` by hand, in that same
+order — verified directly (both background-loop tasks present and running
+in `application.bot_data` after startup, cleanly cancelled after shutdown).
+
+**`SimulatorTelegramClient.reply_since()`** replays the send/edit/delete
+status-message lifecycle to its *final* surviving text per message_id,
+rather than concatenating a status message with its own "thinking..."
+placeholder — an implementation detail the design didn't fully specify;
+caught immediately by a test asserting the reply is `"42 events"`, not
+`"The model is thinking...\n42 events"`.
+
+**New — `bot/simulator_app.py`**: `SimulatorRuntime` (owns the real
+`Application`, the stubs, and the *real* `HttpApiClient`; `startup()`/
+`shutdown()` do the by-hand `post_init`/`post_shutdown` sequencing above;
+`handle_message()` does identity-allowlist gating against the loaded
+profile's own declared `simulation_users`/`simulation_groups`, then
+dispatches through `process_update()` and reads back the reply) and
+`build_flask_app()` (`POST /Simulator-msg` — `X-Service-Key` auth, JSON
+validation, bridges into the runtime's asyncio loop via
+`asyncio.run_coroutine_threadsafe`). `main()` mirrors `bot/app.py`'s shape;
+a separate `SingleInstanceLock` path (`.bot-simulator.lock`) so a real bot
+and a simulation-mode one can run concurrently for the same profile.
+`api_client` accepts an optional override (production never passes one —
+`run_simulator()` always builds the real `HttpApiClient`) specifically so
+tests can inject a `FakeBotApiClient` or a real one against a live test
+server, per the design's own test-plan.
+
+**Modified**: `profiles/contracts.py`/`profiles/loader.py` — optional
+`simulator_port: int | None = None`, same shape as `api_port`, read via
+`getattr(..., None)`. `profiles/unified_test.py` — declares
+`SIMULATOR_PORT = 8915`. `api/admin.py` — new `POST /admin/simulator/bot-msg`
+proxy route: session-gated like every admin route, no CSRF (a JSON `fetch()`
+call, not a form submission — `request.form` is always empty for it, which
+is what CSRF checking here actually reads), forwards to
+`http://localhost:{simulator_port}/Simulator-msg` with the shared
+`X-Service-Key` (read via `api/request_boundary.py`'s already-existing
+`BOT_SERVICE_KEY_ENV_VAR`/`SERVICE_KEY_HEADER`, not re-duplicated a third
+time), relays the response verbatim. `api/admin_simulator.py` —
+`buildRequest()`'s message-kind branch now targets the proxy route instead
+of `/Msg` directly, with `conversation_id`/`protocol_hint` dropped from the
+request body (the real handler now derives them itself); `sendNext()`'s
+message-kind response handling simplified to `payload.reply_text` — the
+old `/Msg`-shaped `taken_as`/`duplicate`/inline-job-polling branch is fully
+dead now that no message-kind step calls `/Msg` directly, so it (and the
+now-orphaned `admin.simulator.taken_as`/`admin.simulator.duplicate` catalog
+keys, and the `INLINE_KINDS` JS constant) were removed rather than left
+unreachable. Two new catalog keys added
+(`admin.simulator.bot_mode_unconfigured`/`bot_mode_unreachable`/
+`bot_no_reply`) in both `en`/`he`. `run_stack.py` — a third subprocess
+(`python -m bot.simulator_app`), started only when the active profile
+declares `SIMULATOR_PORT` (so every profile that hasn't opted in is
+completely unaffected); `.bot-simulator.lock` added to the known-sidecar
+cleanup list. `config/server_control.py` — `ProfileInfo.simulator_port`
+(optional) so `run_stack.py` can make that "started only if declared"
+decision; `bot_sim_pid` added to the status file. `tests/api_fakes.py` —
+`_FakeLoadedProfile`/`build_context` gained a `simulator_port` parameter.
+
+**One deliberate response-shape simplification, flagged rather than
+silently decided**: `/Msg`'s direct response carries a rich shape
+(`taken_as`, `event_id`, `status`) that only exists *outside* the real
+handler — `present_incoming_message()` never returns it anywhere the
+simulator process could observe, only sends it via `deps.telegram_client`.
+`/Simulator-msg` therefore returns `{"reply_text": ...}` — the rendered
+text a real Telegram user would see — not a reconstruction of that richer
+shape. Concretely: an async job's `event_id`/`status: "queued"` is no
+longer visible to the admin UI for message-kind steps, so `pollJob()`-style
+live status polling no longer applies to that path (it still does for
+`/Event`, unchanged) — a job's eventual outcome is still delivered for
+real, just via the real bot's own background notification loop, out-of-band
+from this synchronous request.
+
+**Tests** (36 new, all passing alongside the existing suite):
+`tests/test_bot_simulator_transport.py` (16 — `FakeBotRequest` satisfies
+`Application.initialize()` and `set_my_commands()` with no network;
+`SimulatorTelegramClient`'s full `TelegramClient` ABC and its send/edit/
+delete replay logic, including the "only the final edit, not the
+placeholder" case and a "does not leak into the next request" case;
+`build_synthetic_text_update()` classified correctly by real PTB filters,
+never matches a `CommandHandler`, and reuses the same message_id for a
+repeated `source_message_id`). `tests/test_bot_simulator_app.py` (14 —
+every identity/chat_type/shape gate on `handle_message()`; a full dispatch
+through the real handler with `FakeBotApiClient`, proving the captured
+reply; the `/Simulator-msg` HTTP surface itself run on a real background
+thread with a real second asyncio loop (the actual thread-bridge, not a
+simplification of it) via a Flask test client — auth, bad JSON, refused
+identity, successful dispatch, and a handler-exception 500; and one true
+end-to-end test using the real `HttpApiClient` against a real, live
+`api.app` Flask server (`RunningApiServer`, mirroring
+`tests/test_bot_transports.py`'s own pattern) — this one caught that a
+persona needs `full_name` set for `_gate_on_full_name()` (real,
+unmodified) not to intercept it, exactly as a real freshly-registered
+Telegram user would be). `tests/test_api_admin.py` (+6 — session
+requirement, "not configured" 501, "unreachable" 502, successful forward
+with header/body verified via a real stdlib `http.server` stand-in for the
+simulator process, refusal-status passthrough, and that the service key
+never reaches the browser); one pre-existing test there
+(`test_simulator_page_talks_to_the_real_endpoints_only`) updated to match
+— `/Msg` no longer appears in the page, `/admin/simulator/bot-msg` does,
+`/Event`/`/Job/`/`X-Identity` still do.
+
+Full suite: 1456 passing (1420 + 36 new). `docs/file_catalog.md` updated
+for every new file (including this design doc itself, initially missed and
+caught by `tests/test_file_catalog.py`).
