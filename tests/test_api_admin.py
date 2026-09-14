@@ -1155,32 +1155,6 @@ def test_simulator_embeds_live_groups_users_and_catalog_strings(tmp_path, teardo
     assert data["strings"]["route_bound"] == english.messages["admin.simulator.route_bound"]
 
 
-def test_bundled_example_mapping_reads_the_current_server_name(tmp_path, teardown_ctx, _admin_env):
-    import json
-
-    client = _client(tmp_path, teardown_ctx)
-    ctx = teardown_ctx[0]
-    ctx.deps.persistence.write_user("12345", "viewer", "Dana Levi")
-    _login(client)
-    page = client.get("/admin/simulator")
-    csrf_token = _extract_csrf(page.data)
-    example = _embedded_simulator_data(page.data)["examples"][0]
-    response = client.post(
-        "/admin/simulator/example",
-        data={
-            "csrf_token": csrf_token,
-            "example_key": example["key"],
-            "persona_ids": json.dumps({persona: "12345" for persona in example["personas"]}),
-            "group_ids": json.dumps({source: str(-1000 - index) for index, source in enumerate(example["group_sources"])}),
-        },
-    )
-    assert response.status_code == 200
-    mapped = response.get_json()
-    assert len(mapped["steps"]) == example["step_count"]
-    assert {step["sender_identity"] for step in mapped["steps"]} == {"12345"}
-    assert {step["sender_name"] for step in mapped["steps"]} == {"Dana Levi"}
-
-
 def test_simulator_page_talks_to_the_real_endpoints_only(tmp_path, teardown_ctx, _admin_env):
     """The page's script sends steps to /Msg and /Event and polls /Job — the bot's own
     endpoints — and does not route through any admin-side proxy."""
@@ -1193,7 +1167,8 @@ def test_simulator_page_talks_to_the_real_endpoints_only(tmp_path, teardown_ctx,
     assert "'/Event'" in page
     assert "'/Job/'" in page
     assert "'X-Identity'" in page
-    assert "/admin/simulator/dispatch" not in page  # example mapping is server-side; dispatch never is
+    assert "/admin/simulator/dispatch" not in page  # never a client-side dispatch shortcut
+    assert "/admin/simulator/example" not in page  # the legacy bundled-fixture route is gone
 
 
 def test_simulator_script_is_syntactically_valid_javascript(tmp_path, teardown_ctx, _admin_env):

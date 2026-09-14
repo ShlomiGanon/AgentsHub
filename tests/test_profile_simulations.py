@@ -14,6 +14,7 @@ from profiles.simulation import (
     SIMULATION_USER_ID_BASE,
     SimulationGroup,
     SimulationPersona,
+    SimulationRoster,
     SimulationScenario,
     simulation_group_chat_id,
     simulation_user_telegram_id,
@@ -75,6 +76,7 @@ def _loaded(**overrides):
     base = dict(
         profile_name="For Tests", default_language="en", max_iter=8, model_timeout_seconds=30.0,
         agents=(), protocols=(), areas=("x",), simulation_users=(), simulation_groups=(), simulations=(),
+        simulation_rosters=(),
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -187,6 +189,26 @@ def test_group_chat_telegram_chat_id_must_resolve_to_a_declared_group():
     assert any("unknown_group" in f and "SIMULATION_GROUPS" in f for f in failures)
 
 
+def test_wrong_type_in_simulation_rosters_is_rejected():
+    failures = validate_profile(_loaded(simulation_rosters=("not-a-roster",)), declared_event_types=["fire"])
+    assert any("SIMULATION_ROSTERS[0]" in f for f in failures)
+
+
+def test_duplicate_roster_key_is_rejected():
+    rosters = (
+        SimulationRoster(key="r", open=lambda path: None, db_path="a"),
+        SimulationRoster(key="r", open=lambda path: None, db_path="b"),
+    )
+    failures = validate_profile(_loaded(simulation_rosters=rosters), declared_event_types=["fire"])
+    assert any("duplicate key" in f and "SIMULATION_ROSTERS" in f for f in failures)
+
+
+def test_persona_pre_approved_roster_must_resolve_to_a_declared_roster():
+    users = (SimulationPersona(key="a", offset=0, pre_approved_rosters=("unknown_roster",)),)
+    failures = validate_profile(_loaded(simulation_users=users), declared_event_types=["fire"])
+    assert any("unknown_roster" in f and "SIMULATION_ROSTERS" in f for f in failures)
+
+
 def test_a_fully_valid_simulation_declaration_reports_no_failures():
     users = (SimulationPersona(key="viewer", offset=0, permission_level="viewer"),)
     groups = (SimulationGroup(key="team", offset=0, agent_name="reference_agent"),)
@@ -208,11 +230,50 @@ def test_a_fully_valid_simulation_declaration_reports_no_failures():
     assert failures == []
 
 
+def test_a_persona_pre_approved_on_a_declared_roster_reports_no_failures():
+    roster = SimulationRoster(key="team_status", open=lambda path: None, db_path="db")
+    users = (SimulationPersona(key="a", offset=0, pre_approved_rosters=("team_status",)),)
+    failures = validate_profile(
+        _loaded(simulation_users=users, simulation_rosters=(roster,)), declared_event_types=["fire"]
+    )
+    assert failures == []
+
+
 # -- profiles/simulation_provisioning.py --------------------------------------
 
 
-def _fake_loaded_profile(simulation_users=(), simulation_groups=()):
-    return SimpleNamespace(simulation_users=simulation_users, simulation_groups=simulation_groups)
+def _fake_loaded_profile(simulation_users=(), simulation_groups=(), simulation_rosters=()):
+    return SimpleNamespace(
+        simulation_users=simulation_users,
+        simulation_groups=simulation_groups,
+        simulation_rosters=simulation_rosters,
+    )
+
+
+class _FakeRosterStore:
+    """Minimal object matching only the shape `SimulationRoster.open` documents
+    (`register_member`/`approve_roster`/`roster_is_approved`/`list_members`) — used
+    to prove `ensure_simulation_entities` never assumes anything beyond that shape,
+    i.e. never imports or names a specific agent (docs/profile_simulations_design.md)."""
+
+    def __init__(self, already_approved=False):
+        self.members: dict[str, str] = {}
+        self._approved = already_approved
+        self.approve_calls: list[str] = []
+
+    def register_member(self, telegram_identity, full_name, registered_at=None):
+        self.members[telegram_identity] = full_name
+
+    def approve_roster(self, approved_by, approved_at=None):
+        self.approve_calls.append(approved_by)
+        self._approved = True
+        return len(self.members)
+
+    def roster_is_approved(self):
+        return self._approved
+
+    def list_members(self, *, approved_only=True):
+        return [{"telegram_identity": telegram_id} for telegram_id in self.members]
 
 
 def test_ensure_simulation_entities_creates_declared_users_and_groups(tmp_path):
@@ -267,6 +328,94 @@ def test_ensure_simulation_entities_defaults_to_nothing():
     result = ensure_simulation_entities(persistence=None, loaded_profile=_fake_loaded_profile())
     assert result.created_users == ()
     assert result.created_groups == ()
+    assert result.registered_roster_members == ()
+    assert result.newly_approved_rosters == ()
+
+
+def test_ensure_simulation_entities_registers_and_approves_a_fresh_roster(tmp_path):
+    persistence = SQLitePersistence(str(tmp_path / "prov.db"))
+    try:
+        store = _FakeRosterStore(already_approved=False)
+        roster = SimulationRoster(key="team_status", open=lambda path: store, db_path="ignored", approved_by="cmdr")
+        personas = (
+            SimulationPersona(key="a", offset=0, full_name="A", pre_approved_rosters=("team_status",)),
+            SimulationPersona(key="b", offset=1, full_name="B", pre_approved_rosters=("team_status",)),
+            SimulationPersona(key="c", offset=2, full_name="C"),  # not on this roster
+        )
+        loaded = _fake_loaded_profile(simulation_users=personas, simulation_rosters=(roster,))
+
+        result = ensure_simulation_entities(persistence, loaded)
+
+        assert store.members == {simulation_user_telegram_id(0): "A", simulation_user_telegram_id(1): "B"}
+        assert store.approve_calls == ["cmdr"]
+        assert store.roster_is_approved()
+        assert set(result.registered_roster_members) == {
+            ("team_status", simulation_user_telegram_id(0)),
+            ("team_status", simulation_user_telegram_id(1)),
+        }
+        assert result.newly_approved_rosters == ("team_status",)
+    finally:
+        persistence.close()
+
+
+def test_ensure_simulation_entities_never_re_approves_an_already_approved_roster(tmp_path):
+    """approve_roster() (the existing, reused method) marks EVERY row in that roster's
+    table approved, with no per-member scoping — calling it again on every restart would
+    risk silently auto-approving an unrelated real member an operator deliberately left
+    pending. So it is only ever called the first time a roster has no approval at all."""
+
+    persistence = SQLitePersistence(str(tmp_path / "prov.db"))
+    try:
+        store = _FakeRosterStore(already_approved=True)
+        roster = SimulationRoster(key="team_status", open=lambda path: store, db_path="ignored")
+        persona = SimulationPersona(key="a", offset=0, full_name="A", pre_approved_rosters=("team_status",))
+        loaded = _fake_loaded_profile(simulation_users=(persona,), simulation_rosters=(roster,))
+
+        result = ensure_simulation_entities(persistence, loaded)
+
+        assert store.approve_calls == []
+        assert result.newly_approved_rosters == ()
+        # registration itself is a plain idempotent upsert, unaffected by approval state
+        assert result.registered_roster_members == (("team_status", simulation_user_telegram_id(0)),)
+    finally:
+        persistence.close()
+
+
+def test_ensure_simulation_entities_roster_registration_reports_only_newly_registered_members(tmp_path):
+    persistence = SQLitePersistence(str(tmp_path / "prov.db"))
+    try:
+        store = _FakeRosterStore(already_approved=False)
+        roster = SimulationRoster(key="team_status", open=lambda path: store, db_path="ignored")
+        persona = SimulationPersona(key="a", offset=0, full_name="A", pre_approved_rosters=("team_status",))
+        loaded = _fake_loaded_profile(simulation_users=(persona,), simulation_rosters=(roster,))
+
+        first = ensure_simulation_entities(persistence, loaded)
+        assert first.registered_roster_members == (("team_status", simulation_user_telegram_id(0)),)
+        assert first.newly_approved_rosters == ("team_status",)
+
+        second = ensure_simulation_entities(persistence, loaded)
+        assert second.registered_roster_members == ()  # already registered — nothing "new" to report
+        assert second.newly_approved_rosters == ()  # already approved after the first call
+    finally:
+        persistence.close()
+
+
+def test_ensure_simulation_entities_never_opens_a_roster_nothing_references(tmp_path):
+    persistence = SQLitePersistence(str(tmp_path / "prov.db"))
+    try:
+        open_calls = []
+        roster = SimulationRoster(
+            key="unused", open=lambda path: open_calls.append(path) or _FakeRosterStore(), db_path="ignored"
+        )
+        loaded = _fake_loaded_profile(simulation_rosters=(roster,))
+
+        result = ensure_simulation_entities(persistence, loaded)
+
+        assert result.registered_roster_members == ()
+        assert result.newly_approved_rosters == ()
+        assert open_calls == []
+    finally:
+        persistence.close()
 
 
 # -- api/simulations.py: the JSON adapter -------------------------------------
@@ -426,3 +575,49 @@ def test_unified_test_declares_the_migrated_fire002_series(test_core_model, test
     group_keys = {g.key for g in loaded.simulation_groups}
     assert fire_group_keys.issubset(group_keys)
     assert fire_group_keys.isdisjoint({"cameras", "external_forces"})
+
+
+def test_unified_test_response_team_personas_become_approved_team_status_members(
+    test_core_model, test_sub_model, monkeypatch, tmp_path
+):
+    """Closes the gap the SEC_001-attendance-step investigation found: a response-team
+    persona could authenticate and post into a team_status_agent-owned group, yet
+    TeamStatusAgent's record_attendance_response tool still refused it because its
+    separate approved-roster store never knew about simulation personas. Runs against
+    an isolated copy of the profile's own declared roster, not its real on-disk DB."""
+
+    from dataclasses import replace
+
+    from persistence.team_status_contracts import open_team_status_persistence
+    from persistence.sqlite_store import SQLitePersistence
+    from profiles.loader import load_profile
+
+    monkeypatch.setenv("BOT_TOKEN", "fake-token")
+    loaded = load_profile("profiles.unified_test", core_model=test_core_model, sub_model=test_sub_model)
+
+    isolated_db_path = str(tmp_path / "team_status.db")
+    real_roster = next(r for r in loaded.simulation_rosters if r.key == "team_status")
+    isolated_profile = SimpleNamespace(
+        simulation_users=loaded.simulation_users,
+        simulation_groups=(),  # not exercised here — this test is only about the roster
+        simulation_rosters=(replace(real_roster, db_path=isolated_db_path),),
+    )
+
+    persistence = SQLitePersistence(str(tmp_path / "prov.db"))
+    try:
+        ensure_simulation_entities(persistence, isolated_profile)
+    finally:
+        persistence.close()
+
+    store = open_team_status_persistence(isolated_db_path)
+    approved_identities = {m["telegram_identity"] for m in store.list_members(approved_only=True)}
+
+    pre_approved_personas = [p for p in loaded.simulation_users if p.pre_approved_rosters]
+    assert pre_approved_personas, "expected at least one persona to declare pre_approved_rosters"
+    for persona in pre_approved_personas:
+        assert simulation_user_telegram_id(persona.offset) in approved_identities
+
+    # A persona that merely posts into the same channel without being a team member
+    # (e.g. a resident reporting in as a bystander) correctly stays off the roster.
+    bystander = next(p for p in loaded.simulation_users if p.key == "resident_avraham")
+    assert simulation_user_telegram_id(bystander.offset) not in approved_identities

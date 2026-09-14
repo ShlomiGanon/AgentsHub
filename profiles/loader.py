@@ -26,7 +26,7 @@ from profiles.contracts import (
     StageModelPolicy,
     protocol_missing_attrs,
 )
-from profiles.simulation import SimulationGroup, SimulationPersona, SimulationScenario
+from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
 from protocols import CriticalityLevel, EVENT_DATA_FIELDS
 
 
@@ -166,10 +166,11 @@ def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> lis
 
 
 def _validate_simulation_declarations(loaded: "LoadedProfile") -> list[str]:
-    """SIMULATION_USERS/SIMULATION_GROUPS/SIMULATIONS (docs/profile_simulations_design.md):
-    unique keys/offsets, and every persona/group key a scenario references actually
-    resolves to a declared one. Defaults are empty tuples, so a profile declaring
-    none of this is unaffected (every failure below is vacuous on empty input).
+    """SIMULATION_USERS/SIMULATION_GROUPS/SIMULATIONS/SIMULATION_ROSTERS
+    (docs/profile_simulations_design.md): unique keys/offsets, and every
+    persona/group/roster key referenced elsewhere actually resolves to a
+    declared one. Defaults are empty tuples, so a profile declaring none of
+    this is unaffected (every failure below is vacuous on empty input).
 
     Read via getattr(..., ()) rather than direct attribute access, like every other
     optional LoadedProfile field validate_profile checks (e.g. event_type_required_fields
@@ -180,6 +181,7 @@ def _validate_simulation_declarations(loaded: "LoadedProfile") -> list[str]:
     simulation_users = getattr(loaded, "simulation_users", ())
     simulation_groups = getattr(loaded, "simulation_groups", ())
     simulations = getattr(loaded, "simulations", ())
+    simulation_rosters = getattr(loaded, "simulation_rosters", ())
 
     for index, persona in enumerate(simulation_users):
         if not isinstance(persona, SimulationPersona):
@@ -190,6 +192,9 @@ def _validate_simulation_declarations(loaded: "LoadedProfile") -> list[str]:
     for index, scenario in enumerate(simulations):
         if not isinstance(scenario, SimulationScenario):
             failures.append(f"SIMULATIONS[{index}] is {scenario!r}, not a profiles.simulation.SimulationScenario")
+    for index, roster in enumerate(simulation_rosters):
+        if not isinstance(roster, SimulationRoster):
+            failures.append(f"SIMULATION_ROSTERS[{index}] is {roster!r}, not a profiles.simulation.SimulationRoster")
     if failures:
         # A wrongly-typed entry can't be introspected further (.key/.offset/.raw may not
         # exist) — report the type errors alone rather than cascading into AttributeErrors.
@@ -218,8 +223,22 @@ def _validate_simulation_declarations(loaded: "LoadedProfile") -> list[str]:
     if duplicate_scenario_keys:
         failures.append(f"SIMULATIONS declares duplicate key(s): {', '.join(duplicate_scenario_keys)}")
 
+    roster_keys = [roster.key for roster in simulation_rosters]
+    duplicate_roster_keys = sorted({key for key in roster_keys if roster_keys.count(key) > 1})
+    if duplicate_roster_keys:
+        failures.append(f"SIMULATION_ROSTERS declares duplicate key(s): {', '.join(duplicate_roster_keys)}")
+
     known_persona_keys = set(persona_keys)
     known_group_keys = set(group_keys)
+    known_roster_keys = set(roster_keys)
+
+    for persona in simulation_users:
+        for roster_key in persona.pre_approved_rosters:
+            if roster_key not in known_roster_keys:
+                failures.append(
+                    f"SIMULATION_USERS[{persona.key!r}] names pre_approved_rosters "
+                    f"{roster_key!r} which is not a key in SIMULATION_ROSTERS"
+                )
 
     for scenario in simulations:
         raw = scenario.raw
@@ -459,6 +478,7 @@ def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) 
         simulation_users=tuple(getattr(profile_module, "SIMULATION_USERS", ())),
         simulation_groups=tuple(getattr(profile_module, "SIMULATION_GROUPS", ())),
         simulations=tuple(getattr(profile_module, "SIMULATIONS", ())),
+        simulation_rosters=tuple(getattr(profile_module, "SIMULATION_ROSTERS", ())),
     )
 
     failures = validate_profile(loaded, declared_event_types=profile_module.EVENT_TYPES)

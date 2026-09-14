@@ -15,7 +15,7 @@ needs a database round trip to compute them.
 """
 
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Any, Callable, Mapping
 
 # Chosen so a simulation ID is always:
 #   - well above Telegram's own documented real-ID ceiling (2^52 ~= 4.5e15), and
@@ -52,12 +52,19 @@ class SimulationPersona:
     ordinal within the reserved user-ID block — never renumbered or reused once a
     profile has shipped with it, or a previously-provisioned simulation user
     silently becomes a different persona on the next restart.
+
+    `pre_approved_rosters` names zero or more `SimulationRoster.key` values this
+    persona should also be registered on (and have that roster approved for, the
+    first time it's ever provisioned) — for agents that keep their own separate
+    approved-roster store outside the main `users` table (e.g. `TeamStatusAgent`).
+    Most personas need none of this and leave it `()`.
     """
 
     key: str
     offset: int
     permission_level: str = "viewer"
     full_name: str = ""
+    pre_approved_rosters: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -74,6 +81,40 @@ class SimulationGroup:
     offset: int
     agent_name: str = "main_agent"
     label: str = ""
+
+
+@dataclass(frozen=True)
+class SimulationRoster:
+    """One agent-owned approved-roster store a profile wants simulation personas
+    pre-registered and pre-approved on, declared once and referenced by key from
+    any `SimulationPersona.pre_approved_rosters` that needs it.
+
+    Some agents (e.g. `TeamStatusAgent`) keep their own separate persistence for
+    an approved membership roster, entirely outside the main `users` table
+    `ensure_user_exists` provisions — so a simulation persona can authenticate
+    and send messages yet still be refused by that agent's own tools until it's
+    also registered and approved there. `SimulationRoster` lets a profile close
+    that gap declaratively, the same "declare, don't construct" way it declares
+    everything else here, without `profiles.simulation_provisioning` needing to
+    import or name any specific agent class.
+
+    `open` is the store's own `open_*_persistence(db_path)` factory — exactly
+    the one the owning agent's class already uses (e.g.
+    `persistence.open_team_status_persistence`) — returning any object exposing
+    `register_member(telegram_identity, full_name, registered_at=None)`,
+    `approve_roster(approved_by, approved_at=None)`, `roster_is_approved()`, and
+    `list_members(approved_only=True)`. Any current or future agent whose roster
+    store has this same shape can be targeted this way, not just `TeamStatusAgent`.
+
+    `approved_by` is the identity recorded as having approved the roster the one
+    time `ensure_simulation_entities` triggers that approval (see there for why
+    it only ever does this once per roster).
+    """
+
+    key: str
+    open: Callable[[str], Any]
+    db_path: str
+    approved_by: str = "simulation-provisioning"
 
 
 @dataclass(frozen=True)

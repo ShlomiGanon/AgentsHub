@@ -17,7 +17,7 @@ from agents import (
 from messages import get_catalog
 from persistence import open_persistence, open_surveillance_persistence, open_team_status_persistence
 from profiles.contracts import AgentSpec, OptimizationPolicy
-from profiles.simulation import SimulationGroup, SimulationPersona, SimulationScenario
+from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
 from protocols import CriticalityLevel, Protocol
 
 DEFAULT_LANGUAGE = "he"
@@ -1032,6 +1032,16 @@ SIMULATION_GROUPS = [
     ),
 ]
 
+# `team_status_agent` (UnifiedTeamStatusAgent) keeps its own separate approved-roster
+# store (UNIFIED_TEAM_STATUS_DB_PATH), outside the main `users` table — a persona can
+# authenticate and post into a team_status_agent-owned group yet still be refused by
+# its record_attendance_response tool until it's also registered+approved there (see
+# docs/profile_simulations_design.md). Any persona meant to be recognized as an
+# existing team member declares "team_status" in its pre_approved_rosters.
+SIMULATION_ROSTERS = [
+    SimulationRoster(key="team_status", open=open_team_status_persistence, db_path=UNIFIED_TEAM_STATUS_DB_PATH),
+]
+
 SIMULATIONS = [
     SimulationScenario(
         key="overall_picture_query",
@@ -1070,13 +1080,13 @@ SIMULATIONS = [
 # -- SEC_001 series: migrated from the three readiness-team-series bundled fixture files
 # under fixtures/admin_scenarios/ (scenario_id SEC_001_PHASE_1/2/3) --
 #
-# These three phases were previously reachable only through the admin panel's legacy
-# "Bundled examples" dropdown (api/admin_scenarios.py's map_legacy_scenario, requiring the
-# operator to type every persona's/group's Telegram ID by hand on every load). Migrated here
-# so they're available through GET /Simulations with reserved IDs already injected — see
-# docs/profile_simulations_design.md. The legacy fixture files/mechanism are retired for these
-# three specifically (removed from api/admin_scenarios.SCENARIO_FILES) now that they're
-# profile-declared; the fixture JSON files themselves are left on disk as the historical source
+# These three phases were originally reachable only through the admin panel's legacy
+# "Bundled examples" dropdown (formerly api/admin_scenarios.py's map_legacy_scenario,
+# requiring the operator to type every persona's/group's Telegram ID by hand on every load).
+# Migrated here so they're available through GET /Simulations with reserved IDs already
+# injected — see docs/profile_simulations_design.md. The legacy dropdown/mapping mechanism
+# and api/admin_scenarios.py have since been removed entirely, once both bundled series were
+# fully migrated; the fixture JSON files themselves are left on disk as the historical source
 # this migration was transcribed from.
 #
 # A handful of personas recur across all three phases (the on-call technician and the site
@@ -1086,18 +1096,18 @@ SIMULATIONS = [
 # re-declared per file. `SEC001_CHATS` is the one shared channel layout every phase reuses.
 
 SIMULATION_USERS.extend([
-    SimulationPersona(key="eli_response_team", offset=2, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.eli_response_team")),
+    SimulationPersona(key="eli_response_team", offset=2, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.eli_response_team"), pre_approved_rosters=("team_status",)),
     SimulationPersona(key="yossi_technician", offset=3, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.yossi_technician")),
     SimulationPersona(key="sdemot_security_coordinator", offset=4, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.sdemot_security_coordinator")),
-    SimulationPersona(key="danny_response_team", offset=5, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.danny_response_team")),
+    SimulationPersona(key="danny_response_team", offset=5, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.danny_response_team"), pre_approved_rosters=("team_status",)),
     SimulationPersona(key="site_security_officer", offset=6, permission_level="commander", full_name=_catalog_text("unified.simulation.sec001.persona.site_security_officer")),
-    SimulationPersona(key="michael_response_team", offset=7, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.michael_response_team")),
+    SimulationPersona(key="michael_response_team", offset=7, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.michael_response_team"), pre_approved_rosters=("team_status",)),
     SimulationPersona(key="police_duty_officer", offset=8, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.police_duty_officer")),
-    SimulationPersona(key="yuval_response_team", offset=9, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.yuval_response_team")),
+    SimulationPersona(key="yuval_response_team", offset=9, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.yuval_response_team"), pre_approved_rosters=("team_status",)),
     SimulationPersona(key="patrol_unit_40", offset=10, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.patrol_unit_40")),
-    SimulationPersona(key="gil_response_team", offset=11, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.gil_response_team")),
+    SimulationPersona(key="gil_response_team", offset=11, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.gil_response_team"), pre_approved_rosters=("team_status",)),
     SimulationPersona(key="resident_avraham", offset=12, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.resident_avraham")),
-    SimulationPersona(key="dan_response_team", offset=13, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.dan_response_team")),
+    SimulationPersona(key="dan_response_team", offset=13, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.dan_response_team"), pre_approved_rosters=("team_status",)),
     SimulationPersona(key="mda_dispatch", offset=14, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.mda_dispatch")),
     SimulationPersona(key="police_patrol", offset=15, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.police_patrol")),
     SimulationPersona(key="yasam_commander", offset=16, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.yasam_commander")),
@@ -1324,13 +1334,13 @@ SIMULATIONS.append(SimulationScenario(
 # SimulationPersona/offset/reserved ID across every phase they appear in.
 
 SIMULATION_USERS.extend([
-    SimulationPersona(key="lahav_avi_shift_commander", offset=17, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.lahav_avi_shift_commander")),
-    SimulationPersona(key="omri_firefighter", offset=18, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.omri_firefighter")),
+    SimulationPersona(key="lahav_avi_shift_commander", offset=17, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.lahav_avi_shift_commander"), pre_approved_rosters=("team_status",)),
+    SimulationPersona(key="omri_firefighter", offset=18, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.omri_firefighter"), pre_approved_rosters=("team_status",)),
     SimulationPersona(key="roni_surveillance_operator", offset=19, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.roni_surveillance_operator")),
     SimulationPersona(key="kkl_mountains_sector", offset=20, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.kkl_mountains_sector")),
     SimulationPersona(key="police_hub_agam", offset=21, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.police_hub_agam")),
     SimulationPersona(key="station_commander", offset=22, permission_level="commander", full_name=_catalog_text("unified.simulation.fire002.persona.station_commander")),
-    SimulationPersona(key="yuval_ashed3_commander", offset=23, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.yuval_ashed3_commander")),
+    SimulationPersona(key="yuval_ashed3_commander", offset=23, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.yuval_ashed3_commander"), pre_approved_rosters=("team_status",)),
     SimulationPersona(key="citizen_reports_group", offset=24, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.citizen_reports_group")),
     SimulationPersona(key="fire_police_patrol", offset=25, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.fire_police_patrol")),
     SimulationPersona(key="district_fire_commander", offset=26, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.district_fire_commander")),

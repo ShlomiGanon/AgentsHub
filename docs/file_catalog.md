@@ -30,7 +30,6 @@ This English catalog describes every tracked or pending first-party file in the 
 | `api/__init__.py` | Production | Public facade | Exposes the API facade and compatibility module aliases. |
 | `api/admin.py` | Production | Private implementation | Serves the login-gated, seven-page admin web panel under `/admin`, in the profile's catalog language. |
 | `api/admin_api_pages.py` | Production | Private implementation | Provides the tailored profiles, protocols, and events management UI; live endpoint actions use the selected `X-Identity` and retain normal API authorization. |
-| `api/admin_scenarios.py` | Production | Private implementation | Loads the six bundled scenarios and maps their personas and groups to real Telegram identities for the simulator. |
 | `api/admin_simulator.py` | Production | Private implementation | Style, body and script of the admin scenario simulator page, plus the helper that gathers its embedded data. |
 | `api/app.py` | Production | Public entry point | Builds API dependencies, owns ApiContext, and starts Flask. |
 | `api/request_boundary.py` | Production | Private implementation | Authenticates requests and translates API and HTTP failures into responses. |
@@ -140,8 +139,8 @@ This English catalog describes every tracked or pending first-party file in the 
 | `profiles/demo.py` | Production | Private implementation | Defines the runnable demonstration deployment profile. |
 | `profiles/friendly_forces.py` | Production | Private implementation | Defines the friendly forces profile. |
 | `profiles/loader.py` | Production | Private implementation | Imports, validates, hashes, and constructs deployment profiles and registries. |
-| `profiles/simulation.py` | Production | Private implementation | Defines simulation persona, group, and scenario declarations and the reserved Telegram ID scheme. |
-| `profiles/simulation_provisioning.py` | Production | Private implementation | Ensures a profile's declared simulation users and groups exist, creating any that are missing. |
+| `profiles/simulation.py` | Production | Private implementation | Defines simulation persona, group, scenario, and roster declarations and the reserved Telegram ID scheme. |
+| `profiles/simulation_provisioning.py` | Production | Private implementation | Ensures a profile's declared simulation users and groups exist, and registers/approves any of them on the agent-owned rosters they declare. |
 | `profiles/sub_agent_surveillance.py` | Production | Private implementation | Defines the dedicated visual-surveillance deployment and protocols. |
 | `profiles/sub_agent_team_status.py` | Production | Private implementation | Defines the dedicated readiness-team status deployment and reporting protocol. |
 | `profiles/template.py` | Production | Private implementation | Provides a reference template for authoring deployment profiles. |
@@ -162,7 +161,6 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_agent_permission_enforcement.py` | Test | Internal | Verifies agent permission enforcement behavior and edge cases. |
 | `tests/test_agent_registry.py` | Test | Internal | Verifies agent registry behavior and edge cases. |
 | `tests/test_agent_runtime.py` | Test | Internal | Verifies agent construction, invocation, CrewAI adaptation, and output handling. |
-| `tests/test_admin_scenarios.py` | Test | Internal | Verifies bundled scenario discovery, conversion, step counts, and real Telegram identity mapping. |
 | `tests/test_api_admin.py` | Test | Internal | Verifies the admin web panel's login, session, CSRF, rate limiting, and user-management behavior. |
 | `tests/test_api_app.py` | Test | Internal | Verifies api app behavior and edge cases. |
 | `tests/test_api_groups.py` | Test | Internal | Verifies Telegram group binding routes, group-scoped message handling, and the attendance-check trigger. |
@@ -234,6 +232,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_question_answering.py` | Test | Internal | Verifies question routing and read-only specialist/history answers. |
 | `tests/test_reference_agent.py` | Test | Internal | Verifies reference agent behavior and edge cases. |
 | `tests/test_response_improvements.py` | Test | Internal | Verifies conversation retention, long polling, trace propagation, queue ordering, idempotency, and removal of the obsolete stream route. |
+| `tests/test_run_stack.py` | Test | Internal | Verifies profile-database reset removes only declared databases and known sidecars, and refuses a non-database path. |
 | `tests/test_server_control.py` | Test | Internal | Verifies safe profile discovery and supervisor command and selection persistence. |
 | `tests/test_situational_picture.py` | Test | Internal | Verifies picture planning, per-domain live questioning, recent-events window and scope, unavailable-domain handling, and composition fallbacks. |
 | `tests/test_sqlite_store.py` | Test | Internal | Verifies SQLite serialization, concurrency, and user persistence. |

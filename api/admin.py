@@ -41,7 +41,6 @@ reachable from anywhere but localhost, and only then consider also setting
 from __future__ import annotations
 
 import hmac
-import json
 import logging
 import os
 import secrets
@@ -52,7 +51,6 @@ from typing import TYPE_CHECKING
 
 from flask import Blueprint, flash, get_flashed_messages, jsonify, redirect, render_template_string, request, session, url_for
 
-from api.admin_scenarios import ScenarioMappingError, map_legacy_scenario, scenario_catalog
 from api.admin_simulator import SIMULATOR_BODY, SIMULATOR_STYLE, simulator_page_context
 from api.admin_api_pages import (
     API_CLIENT_SCRIPT,
@@ -1470,33 +1468,6 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             csrf_token=session["csrf_token"],
             **api_context,
         )
-
-    @blueprint.route("/simulator/example", methods=["POST"])
-    def load_simulator_example():
-        redirect_response = _require_session()
-        if redirect_response is not None:
-            return redirect_response
-        csrf_response = _require_csrf()
-        if csrf_response is not None:
-            return csrf_response
-        example_key = request.form.get("example_key", "")
-        example = next((item for item in scenario_catalog() if item["key"] == example_key), None)
-        if example is None:
-            return jsonify({"error": _t("admin.simulator.example_invalid")}), 400
-        try:
-            persona_ids = json.loads(request.form.get("persona_ids", "{}"))
-            group_ids = json.loads(request.form.get("group_ids", "{}"))
-            registered = {
-                str(user["telegram_identity"]): user for user in ctx.deps.persistence.list_users()
-            }
-            mapped = map_legacy_scenario(
-                example["raw"], persona_ids, group_ids, registered,
-                unregistered_label=_t("admin.simulator.unregistered_name"),
-                missing_name_label=_t("admin.simulator.missing_name"),
-            )
-        except (ValueError, TypeError, ScenarioMappingError) as exc:
-            return jsonify({"error": str(exc)}), 400
-        return jsonify(mapped)
 
     @blueprint.route("/groups", methods=["POST"])
     def write_group():

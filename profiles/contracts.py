@@ -86,10 +86,12 @@ class LoadedProfile:
     event_type_required_fields: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
     # Optional simulation declarations (docs/profile_simulations_design.md); all
     # default to empty so every existing profile is unaffected. See
-    # profiles/simulation.py for SimulationPersona/SimulationGroup/SimulationScenario.
+    # profiles/simulation.py for SimulationPersona/SimulationGroup/SimulationScenario/
+    # SimulationRoster.
     simulation_users: tuple = ()
     simulation_groups: tuple = ()
     simulations: tuple = ()
+    simulation_rosters: tuple = ()
 
 REQUIRED_PROFILE_ATTRS = (
     "PROFILE_NAME",

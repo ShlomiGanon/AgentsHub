@@ -604,6 +604,10 @@ doing the same for FIRE_002:
   included, keep working through the legacy "Bundled examples" dropdown exactly as before;
   the profile-declared versions are a second, additional way to reach the same three phases.
 
+**Update: the legacy path has since been removed entirely** (both series now being fully
+covered by the profile-driven mechanism) — see §11. The rest of this section describes the
+migration as it was done, while both mechanisms still coexisted.
+
 **FIRE_002 (the firefighting series, 3 phases) is migrated too, additively, exactly like
 SEC_001**: 10 new `SimulationPersona` entries (offsets 17-26) and 3 new `SimulationGroup`
 entries (`fire_response_team`/`fire_cameras`/`fire_external_forces`, offsets 3-5 — its own
@@ -624,3 +628,122 @@ legacy "Bundled examples" dropdown, unchanged, alongside the profile-driven vers
   admin action (mirroring `/admin/bot-service/provision`) for picking up
   new simulation declarations without a full restart — deliberately left
   out of this first version per the scoping decision in §2.
+
+## 11. Legacy "Bundled examples" path removed entirely
+
+Once both bundled series (SEC_001 and FIRE_002, §9) were fully migrated into
+`profiles/unified_test.py`'s `SIMULATIONS`, the legacy manual-mapping path
+became fully redundant for that content and was removed outright, at
+explicit request — not just made additive-but-unused.
+
+**Removed**: `api/admin_scenarios.py` (deleted entirely — `scenario_catalog()`,
+`map_legacy_scenario()`, `SCENARIO_FILES`, `GROUP_SOURCES`,
+`SEMANTIC_AGENT_MAP`, `ScenarioMappingError`), the `/admin/simulator/example`
+route (`api/admin.py`), the "Bundled examples" dropdown and its
+`showExampleMapping()`/example-branch JS (`api/admin_simulator.py`), and the
+now-orphaned `admin.simulator.examples`/`choose_example`/`example_invalid`/
+`unregistered_name` catalog keys. `tests/test_admin_scenarios.py` is gone;
+its two `run_stack.reset_profile_databases` tests (unrelated to the bundled
+fixtures — they just happened to share the file) moved to a new
+`tests/test_run_stack.py`.
+
+## 12. `SimulationRoster` — pre-approving personas on an agent's own separate roster
+
+**The gap.** Running a migrated SEC_001 simulation surfaced a real bug once a
+response-team persona's message reached `TeamStatusAgent`'s
+`record_attendance_response` tool: it was refused with "requester is not an
+approved roster member," even though `ensure_simulation_entities` (§8) had
+already provisioned that persona as a normal, authenticated `users` row.
+Root cause: `TeamStatusAgent` (and any future agent shaped the same way)
+keeps its *own* separate persistence for an approved membership roster
+(`TeamStatusPersistenceInterface`'s `register_member`/`approve_roster`,
+entirely outside the main `users` table) — a simulation persona could
+authenticate and post messages, yet still fail that agent's own roster
+check, because nothing had ever registered+approved it there.
+
+**The fix, generalized rather than special-cased to `TeamStatusAgent`:**
+
+```python
+# profiles/simulation.py  (new)
+
+@dataclass(frozen=True)
+class SimulationRoster:
+    key: str                          # referenced by SimulationPersona.pre_approved_rosters
+    open: Callable[[str], Any]        # the store's own open_*_persistence(db_path) factory
+    db_path: str
+    approved_by: str = "simulation-provisioning"
+```
+
+`SimulationPersona` gains one new field, `pre_approved_rosters: tuple[str, ...]
+= ()` — zero or more `SimulationRoster.key` values that persona should be
+registered on (and have that roster approved for, the first time it's ever
+provisioned). A profile declares `SIMULATION_ROSTERS` alongside the other
+three lists; `profiles.loader` validates (like every other cross-reference
+here) that every `pre_approved_rosters` entry resolves to a declared
+`SimulationRoster.key`.
+
+`SimulationRoster.open` is duck-typed to any object exposing
+`register_member(telegram_identity, full_name, registered_at=None)`,
+`approve_roster(approved_by, approved_at=None)`, `roster_is_approved()`, and
+`list_members(approved_only=True)` — exactly `TeamStatusPersistenceInterface`'s
+shape today, but `profiles/simulation_provisioning.py` never imports or names
+`TeamStatusAgent`: any current or future agent whose roster store has this
+same shape can be targeted purely by a profile's own declaration.
+
+**Approval is deliberately once-only, not idempotent-per-restart.**
+`approve_roster()` (reused exactly as-is, per the "call the existing
+register_member()/approve_roster() path" requirement) marks *every* row
+currently in that roster's table approved — it has no per-member scoping.
+Calling it on every server restart would silently re-approve a real, still-
+pending member an operator hasn't approved yet. So `ensure_simulation_entities`
+only ever calls it for a given roster the first time that roster has no
+approval record at all (`roster_is_approved()` is `False`) — mirroring the
+"create if missing, never touch again" idiom §3/§8 already use for users and
+groups, applied here to "has this roster ever been approved" rather than
+per-row existence. `register_member` itself stays a plain idempotent upsert,
+called every restart exactly like `ensure_user_exists`/`ensure_group_exists`.
+
+**Wired up in `profiles/unified_test.py`**: one `SIMULATION_ROSTERS` entry,
+`key="team_status"`, pointing at `open_team_status_persistence` and
+`UNIFIED_TEAM_STATUS_DB_PATH` — the same store/db the profile's own
+`UnifiedTeamStatusAgent` and `_seed_mock_data()` already use. The six SEC_001
+personas whose scenario steps post as members of the response team
+(`eli_response_team`, `danny_response_team`, `michael_response_team`,
+`yuval_response_team`, `gil_response_team`, `dan_response_team`) and the
+three FIRE_002 personas that post into the shared `team_status_agent`-owned
+`fire_response_team` chat as recognized team members
+(`lahav_avi_shift_commander`, `omri_firefighter`, `yuval_ashed3_commander`)
+now declare `pre_approved_rosters=("team_status",)`. Personas that post into
+the same channels as outsiders rather than team members — `resident_avraham`
+(SEC_001) and `citizen_reports_group` (FIRE_002) — deliberately do not, since
+they were never meant to pass that roster check.
+
+**Tests**: `tests/test_profile_simulations.py` covers the new
+`SimulationRoster` validation (type, duplicate-key, and unresolved
+`pre_approved_rosters` checks), the provisioning behavior against a
+duck-typed fake store (registers referencing personas, approves once,
+never re-approves, never opens a roster nothing references), and an
+integration test against the real `profiles.unified_test` profile (an
+isolated copy of its declared roster, not its on-disk DB) proving every
+`pre_approved_rosters` persona ends up on the approved list while a
+bystander persona does not.
+
+**Kept — this was the one thing requiring care, not a blanket deletion**:
+the `#mapping-panel` UI, `mappingInput()`/`renderMappingRows()`/
+`collectMappingValues()`, and the `admin.simulator.mapping_title`/
+`mapping_help`/`apply_mapping`/`map_person`/`map_group`/
+`err_positive_identity`/`err_negative_group`/`telegram_id_placeholder`/
+`chat_id_placeholder`/`missing_name` catalog keys all stayed — they were
+already shared with the generic "prompt for missing IDs in manually-pasted
+JSON" feature (§8's item (c)) before this removal, and remain that
+feature's only home now. The `apply-example` button was renamed to
+`apply-mapping` (it no longer serves two flows) and its click handler
+simplified to the one remaining (manual-mapping) branch.
+
+**Left alone deliberately**: the six fixture JSON files under
+`fixtures/admin_scenarios/` were *not* deleted — they remain on disk as the
+historical source the SEC_001/FIRE_002 migrations were transcribed from,
+just no longer read by any code path.
+
+Full suite: 1411 passing (1415 minus the 3 removed `admin_scenarios`-specific
+tests and the 1 removed bundled-example admin-route test).

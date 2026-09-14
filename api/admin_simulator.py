@@ -47,7 +47,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from api.admin_api_pages import FLASH_MESSAGES, IDENTITY_BAR
-from api.admin_scenarios import scenario_catalog
 from messages import MessageCatalog
 
 if TYPE_CHECKING:
@@ -94,7 +93,6 @@ def simulator_page_context(
         "routable_agents": list(ctx.group_routing.routable_targets),
         "bot_service_identity": bot_service_identity,
         "api_identity": api_identity,
-        "examples": scenario_catalog(),
         "strings": strings,
     }
 
@@ -247,8 +245,6 @@ SIMULATOR_BODY = """
       <button type="button" class="btn btn-console btn-sm" id="load-pasted">{{ t('admin.simulator.load_pasted') }}</button>
     </div>
     <div class="sim-actions">
-      <label class="form-label-console" for="example-select">{{ t('admin.simulator.examples') }}</label>
-      <select id="example-select" class="form-select form-select-console"><option value="">{{ t('admin.simulator.choose_example') }}</option></select>
       <button type="button" class="btn btn-console-primary" id="send-next" disabled>{{ t('admin.simulator.send_next') }}</button>
       <button type="button" class="btn btn-console-danger" id="reset-view" disabled>{{ t('admin.simulator.reset_view') }}</button>
     </div>
@@ -264,7 +260,7 @@ SIMULATOR_BODY = """
     <span class="block-label">{{ t('admin.simulator.mapping_title') }}</span>
     <p class="subtitle">{{ t('admin.simulator.mapping_help') }}</p>
     <div class="mapping-grid" id="mapping-fields"></div>
-    <button type="button" class="btn btn-console-primary mt-3" id="apply-example">{{ t('admin.simulator.apply_mapping') }}</button>
+    <button type="button" class="btn btn-console-primary mt-3" id="apply-mapping">{{ t('admin.simulator.apply_mapping') }}</button>
   </div>
 
   <div id="sim-alert"></div>
@@ -286,7 +282,6 @@ SIMULATOR_BODY = """
   'use strict';
 
   const DATA = JSON.parse(document.getElementById('sim-data').textContent);
-  const CSRF_TOKEN = {{ csrf_token|tojson }};
   const STRINGS = DATA.strings || {};
   const POLL_INTERVAL_MS = 2000;
   const POLL_TIMEOUT_MS = 5 * 60 * 1000;
@@ -336,10 +331,8 @@ SIMULATOR_BODY = """
   // ---- scenario model -------------------------------------------------------------------
 
   const state = { scenario: null, chats: [], chatsByKey: {}, queues: {}, runId: null, busy: false };
-  // Which mapping flow (if any) #mapping-panel currently serves — {type: 'example', ...} or
-  // {type: 'manual', ...}; null when the panel is closed. One panel, one piece of state, shared
-  // by the bundled-example flow and the generic manual-JSON flow (see further below) — never two
-  // independent panels to keep in sync.
+  // Non-null while #mapping-panel is open for a manually-pasted/uploaded scenario missing IDs
+  // (docs/profile_simulations_design.md) — {groupsNeedingId, personaValues}; null when closed.
   let mappingMode = null;
 
   function closeMappingPanel() {
@@ -422,8 +415,8 @@ SIMULATOR_BODY = """
 
   function loadScenario(raw) {
     // A scenario about to load always supersedes any pending mapping prompt — no matter which
-    // entry point got us here (paste, drop, a bundled example, or a profile-driven simulation),
-    // so no leftover panel from a different path can stay on screen (docs/profile_simulations_design.md).
+    // entry point got us here (paste, drop, or a profile-driven simulation), so no leftover
+    // panel from a different path can stay on screen (docs/profile_simulations_design.md).
     closeMappingPanel();
     const parsed = validateScenario(raw);
     state.scenario = parsed.scenario;
@@ -764,12 +757,7 @@ SIMULATOR_BODY = """
     updateGlobalState();
   }
 
-  // ---- shared mapping panel: one #mapping-panel, driven by whichever flow is active --------
-  // Both the bundled-example flow (below) and the generic manual-JSON flow (further below)
-  // render into and read from the same panel/fields, through these three functions, so neither
-  // duplicates the other's row-building or collection/validation logic. `mappingMode` (declared
-  // above, next to `state`) says which flow is currently open and supplies the exact list each
-  // needs; the `apply-example` button's own click handler (in the wiring section) branches on it.
+  // ---- mapping panel: prompts for any Telegram ID a manually-provided scenario is missing ----
 
   function mappingInput(kind, key, label, listId) {
     const wrapper = el('div', 'mapping-field');
@@ -784,8 +772,8 @@ SIMULATOR_BODY = """
   // `groupsNeedingId`: [{key, label}] — one row per chat still needing a real telegram_chat_id,
   // keyed by the chat's own (always-unique) `key`. `personaValues`: [string] — one row per
   // distinct placeholder value found in sender_identity, keyed by that value itself, so the same
-  // placeholder reused across several steps gets exactly one input (matching how a bundled
-  // example's own `personas` list already names one persona regardless of how many steps use it).
+  // placeholder reused across several steps (e.g. the same person reporting more than once) gets
+  // exactly one input.
   function renderMappingRows(groupsNeedingId, personaValues) {
     const fields = document.getElementById('mapping-fields');
     fields.innerHTML = '';
@@ -815,30 +803,12 @@ SIMULATOR_BODY = """
     return { personaIds: personaIds, groupIds: groupIds };
   }
 
-  // ---- bundled examples: mappings are intentionally rebuilt on every load -----------------
-
-  const exampleSelect = document.getElementById('example-select');
-  (DATA.examples || []).forEach(function (example, index) {
-    const option = el('option', null, example.filename + ' (' + example.step_count + ')');
-    option.value = String(index);
-    exampleSelect.appendChild(option);
-  });
-
-  function showExampleMapping(index) {
-    if (!Number.isInteger(index) || !DATA.examples[index]) { closeMappingPanel(); return; }
-    const example = DATA.examples[index];
-    const groupsNeedingId = example.group_sources.map(function (source) { return { key: source, label: source }; });
-    renderMappingRows(groupsNeedingId, example.personas);
-    mappingMode = { type: 'example', index: index, groupsNeedingId: groupsNeedingId, personaValues: example.personas };
-    document.getElementById('mapping-panel').style.display = 'block';
-  }
-
   // ---- generic manual-JSON mapping: any pasted/uploaded (or, defensively, profile-driven) ----
   // scenario missing a Telegram ID — works off whatever validateScenario() would otherwise
-  // reject, not hardcoded to the six bundled fixtures above. A step whose sender_identity is
-  // completely empty stays a hard validation error (there is no placeholder name to label an
-  // input with); only a *non-empty-but-invalid* placeholder (e.g. a profile scenario's own
-  // persona/group key, "viewer", "team", ...) is offered a mapping row.
+  // reject. A step whose sender_identity is completely empty stays a hard validation error
+  // (there is no placeholder name to label an input with); only a *non-empty-but-invalid*
+  // placeholder (e.g. a profile scenario's own persona/group key, "viewer", "team", ...) is
+  // offered a mapping row.
 
   function collectMissingIdentifiers(raw) {
     const groupsNeedingId = [];
@@ -915,7 +885,7 @@ SIMULATOR_BODY = """
   // The admin page discovers and loads these purely by querying the server (GET /Simulations,
   // GET /Simulations/<key>) — it holds no knowledge of any simulation user/group ID itself.
   // The response is already the exact canonical scenario shape, so it feeds straight into the
-  // same loadScenario() the manual paste/drop/bundled-example paths already use.
+  // same loadScenario() the manual paste/drop path already uses.
 
   const profileSimSelect = document.getElementById('profile-simulation-select');
   const profileSimLoadButton = document.getElementById('load-profile-simulation');
@@ -1021,33 +991,14 @@ SIMULATOR_BODY = """
   document.getElementById('load-pasted').addEventListener('click', function () {
     loadFromText(document.getElementById('paste-input').value);
   });
-  exampleSelect.addEventListener('change', function () {
-    showExampleMapping(exampleSelect.value === '' ? NaN : Number(exampleSelect.value));
-  });
-  // Serves both mapping flows (docs/profile_simulations_design.md) — branches on mappingMode.type,
-  // set by showExampleMapping() (bundled) or offerManualMapping() (generic manual JSON) above.
-  document.getElementById('apply-example').addEventListener('click', async function () {
-    const button = document.getElementById('apply-example');
+  document.getElementById('apply-mapping').addEventListener('click', async function () {
+    const button = document.getElementById('apply-mapping');
     if (!mappingMode) return;
     try {
       button.disabled = true;
       const mapping = collectMappingValues(mappingMode.groupsNeedingId, mappingMode.personaValues);
-      if (mappingMode.type === 'example') {
-        const selected = DATA.examples[mappingMode.index];
-        const form = new FormData();
-        form.set('csrf_token', CSRF_TOKEN); form.set('example_key', selected.key);
-        form.set('persona_ids', JSON.stringify(mapping.personaIds)); form.set('group_ids', JSON.stringify(mapping.groupIds));
-        const response = await fetch('/admin/simulator/example', { method: 'POST', body: form, credentials: 'same-origin' });
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || t('request_failed', { status: response.status, message: '' }));
-        document.getElementById('paste-input').value = JSON.stringify(payload, null, 2);
-        loadScenario(payload);
-        exampleSelect.value = '';
-      } else {
-        loadScenario(applyManualMapping(mappingMode.raw, mapping));
-      }
-      // loadScenario() itself already closed the panel (and, on the 'example' branch, reset
-      // mappingMode) — nothing left to clean up here on success.
+      loadScenario(applyManualMapping(mappingMode.raw, mapping));
+      // loadScenario() itself already closed the panel — nothing left to clean up here on success.
     } catch (error) { showAlert(error.message, true); }
     finally { button.disabled = false; }
   });
@@ -1065,7 +1016,6 @@ SIMULATOR_BODY = """
     document.getElementById('expected-actions').innerHTML = '';
     document.getElementById('send-next').disabled = true;
     document.getElementById('reset-view').disabled = true;
-    exampleSelect.value = '';
     closeMappingPanel();
     showAlert('', false);
   });

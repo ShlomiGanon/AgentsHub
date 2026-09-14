@@ -1,10 +1,9 @@
 """Server-side JSON adapter: profile-declared simulations -> the existing
 admin-simulator scenario JSON contract (docs/profile_simulations_design.md).
 
-Pure logic, no Flask — mirrors the separation `api/admin_scenarios.py` already
-keeps between "convert one scenario source to the canonical shape" and the
-Flask routes that serve it. `api/routes.py`'s simulations blueprint
-(`GET /Simulations`, `GET /Simulations/<key>`) is the only caller.
+Pure logic, no Flask — the conversion is kept separate from the Flask routes
+that serve it. `api/routes.py`'s simulations blueprint (`GET /Simulations`,
+`GET /Simulations/<key>`) is the only caller.
 """
 
 from __future__ import annotations
