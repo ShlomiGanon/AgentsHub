@@ -256,6 +256,7 @@ SIMULATOR_BODY = """
       <label class="form-label-console" for="profile-simulation-select">{{ t('admin.simulator.profile_simulations') }}</label>
       <select id="profile-simulation-select" class="form-select form-select-console" disabled><option value="">{{ t('admin.simulator.choose_profile_simulation') }}</option></select>
       <button type="button" class="btn btn-console-primary" id="load-profile-simulation" disabled>{{ t('admin.simulator.load_profile_simulation') }}</button>
+      <div class="subtitle" id="profile-sim-hint" style="font-size:12px; margin:0;"></div>
     </div>
   </div>
 
@@ -335,6 +336,17 @@ SIMULATOR_BODY = """
   // ---- scenario model -------------------------------------------------------------------
 
   const state = { scenario: null, chats: [], chatsByKey: {}, queues: {}, runId: null, busy: false };
+  // Which mapping flow (if any) #mapping-panel currently serves — {type: 'example', ...} or
+  // {type: 'manual', ...}; null when the panel is closed. One panel, one piece of state, shared
+  // by the bundled-example flow and the generic manual-JSON flow (see further below) — never two
+  // independent panels to keep in sync.
+  let mappingMode = null;
+
+  function closeMappingPanel() {
+    document.getElementById('mapping-panel').style.display = 'none';
+    document.getElementById('mapping-fields').innerHTML = '';
+    mappingMode = null;
+  }
 
   function validateScenario(raw) {
     if (!raw || typeof raw !== 'object') throw new Error(t('err_chats_required'));
@@ -409,6 +421,10 @@ SIMULATOR_BODY = """
   }
 
   function loadScenario(raw) {
+    // A scenario about to load always supersedes any pending mapping prompt — no matter which
+    // entry point got us here (paste, drop, a bundled example, or a profile-driven simulation),
+    // so no leftover panel from a different path can stay on screen (docs/profile_simulations_design.md).
+    closeMappingPanel();
     const parsed = validateScenario(raw);
     state.scenario = parsed.scenario;
     state.chats = parsed.chats;
@@ -748,14 +764,12 @@ SIMULATOR_BODY = """
     updateGlobalState();
   }
 
-  // ---- bundled examples: mappings are intentionally rebuilt on every load -----------------
-
-  const exampleSelect = document.getElementById('example-select');
-  (DATA.examples || []).forEach(function (example, index) {
-    const option = el('option', null, example.filename + ' (' + example.step_count + ')');
-    option.value = String(index);
-    exampleSelect.appendChild(option);
-  });
+  // ---- shared mapping panel: one #mapping-panel, driven by whichever flow is active --------
+  // Both the bundled-example flow (below) and the generic manual-JSON flow (further below)
+  // render into and read from the same panel/fields, through these three functions, so neither
+  // duplicates the other's row-building or collection/validation logic. `mappingMode` (declared
+  // above, next to `state`) says which flow is currently open and supplies the exact list each
+  // needs; the `apply-example` button's own click handler (in the wiring section) branches on it.
 
   function mappingInput(kind, key, label, listId) {
     const wrapper = el('div', 'mapping-field');
@@ -767,12 +781,14 @@ SIMULATOR_BODY = """
     return wrapper;
   }
 
-  function showExampleMapping(index) {
-    const panel = document.getElementById('mapping-panel');
+  // `groupsNeedingId`: [{key, label}] — one row per chat still needing a real telegram_chat_id,
+  // keyed by the chat's own (always-unique) `key`. `personaValues`: [string] — one row per
+  // distinct placeholder value found in sender_identity, keyed by that value itself, so the same
+  // placeholder reused across several steps gets exactly one input (matching how a bundled
+  // example's own `personas` list already names one persona regardless of how many steps use it).
+  function renderMappingRows(groupsNeedingId, personaValues) {
     const fields = document.getElementById('mapping-fields');
     fields.innerHTML = '';
-    if (!Number.isInteger(index) || !DATA.examples[index]) { panel.style.display = 'none'; return; }
-    const example = DATA.examples[index];
     const usersList = el('datalist'); usersList.id = 'registered-user-ids';
     (DATA.users || []).filter(function (user) { return String(user.telegram_identity) !== DATA.bot_service_identity; }).forEach(function (user) {
       const option = el('option'); option.value = String(user.telegram_identity); option.label = user.full_name || t('missing_name'); usersList.appendChild(option);
@@ -780,24 +796,119 @@ SIMULATOR_BODY = """
     const groupsList = el('datalist'); groupsList.id = 'registered-group-ids';
     (DATA.groups || []).forEach(function (group) { const option = el('option'); option.value = String(group.chat_id); option.label = group.label || group.agent_name; groupsList.appendChild(option); });
     fields.appendChild(usersList); fields.appendChild(groupsList);
-    example.personas.forEach(function (persona) { fields.appendChild(mappingInput('person', persona, t('map_person', { persona: persona }), usersList.id)); });
-    example.group_sources.forEach(function (source) { fields.appendChild(mappingInput('group', source, t('map_group', { group: source }), groupsList.id)); });
-    panel.style.display = 'block';
+    personaValues.forEach(function (persona) { fields.appendChild(mappingInput('person', persona, t('map_person', { persona: persona }), usersList.id)); });
+    groupsNeedingId.forEach(function (group) { fields.appendChild(mappingInput('group', group.key, t('map_group', { group: group.label }), groupsList.id)); });
   }
 
-  function collectBundledMapping(example) {
+  function collectMappingValues(groupsNeedingId, personaValues) {
     const personaIds = {}, groupIds = {};
     document.querySelectorAll('#mapping-fields input').forEach(function (input) {
       if (input.dataset.kind === 'person') personaIds[input.dataset.key] = input.value.trim();
       else groupIds[input.dataset.key] = input.value.trim();
     });
-    example.personas.forEach(function (persona) {
+    personaValues.forEach(function (persona) {
       if (!/^\\d+$/.test(personaIds[persona] || '') || Number(personaIds[persona]) <= 0) throw new Error(t('err_positive_identity', { persona: persona }));
     });
-    example.group_sources.forEach(function (source) {
-      if (!/^-\\d+$/.test(groupIds[source] || '') || Number(groupIds[source]) >= 0) throw new Error(t('err_negative_group', { group: source }));
+    groupsNeedingId.forEach(function (group) {
+      if (!/^-\\d+$/.test(groupIds[group.key] || '') || Number(groupIds[group.key]) >= 0) throw new Error(t('err_negative_group', { group: group.label }));
     });
-    return { persona_ids: personaIds, group_ids: groupIds };
+    return { personaIds: personaIds, groupIds: groupIds };
+  }
+
+  // ---- bundled examples: mappings are intentionally rebuilt on every load -----------------
+
+  const exampleSelect = document.getElementById('example-select');
+  (DATA.examples || []).forEach(function (example, index) {
+    const option = el('option', null, example.filename + ' (' + example.step_count + ')');
+    option.value = String(index);
+    exampleSelect.appendChild(option);
+  });
+
+  function showExampleMapping(index) {
+    if (!Number.isInteger(index) || !DATA.examples[index]) { closeMappingPanel(); return; }
+    const example = DATA.examples[index];
+    const groupsNeedingId = example.group_sources.map(function (source) { return { key: source, label: source }; });
+    renderMappingRows(groupsNeedingId, example.personas);
+    mappingMode = { type: 'example', index: index, groupsNeedingId: groupsNeedingId, personaValues: example.personas };
+    document.getElementById('mapping-panel').style.display = 'block';
+  }
+
+  // ---- generic manual-JSON mapping: any pasted/uploaded (or, defensively, profile-driven) ----
+  // scenario missing a Telegram ID — works off whatever validateScenario() would otherwise
+  // reject, not hardcoded to the six bundled fixtures above. A step whose sender_identity is
+  // completely empty stays a hard validation error (there is no placeholder name to label an
+  // input with); only a *non-empty-but-invalid* placeholder (e.g. a profile scenario's own
+  // persona/group key, "viewer", "team", ...) is offered a mapping row.
+
+  function collectMissingIdentifiers(raw) {
+    const groupsNeedingId = [];
+    const personaValues = [];
+    if (!raw || !Array.isArray(raw.chats) || !Array.isArray(raw.steps)) {
+      return { groupsNeedingId: groupsNeedingId, personaValues: personaValues };
+    }
+    raw.chats.forEach(function (chat) {
+      if (!chat || typeof chat.key !== 'string') return;
+      const kind = chat.kind === undefined ? 'message' : String(chat.kind);
+      if (kind !== 'message') return;
+      const chatType = chat.telegram_chat_type === undefined || chat.telegram_chat_type === null ? 'private' : String(chat.telegram_chat_type);
+      if (chatType !== 'group' && chatType !== 'supergroup') return;
+      const chatId = chat.telegram_chat_id === undefined || chat.telegram_chat_id === null ? '' : String(chat.telegram_chat_id).trim();
+      if (!/^-\\d+$/.test(chatId) || Number(chatId) >= 0) {
+        groupsNeedingId.push({ key: chat.key, label: chat.label ? String(chat.label) : chat.key });
+      }
+    });
+    raw.steps.forEach(function (step) {
+      if (!step) return;
+      const sender = step.sender_identity === undefined || step.sender_identity === null ? '' : String(step.sender_identity).trim();
+      if (sender && (!/^\\d+$/.test(sender) || Number(sender) <= 0) && personaValues.indexOf(sender) === -1) {
+        personaValues.push(sender);
+      }
+    });
+    return { groupsNeedingId: groupsNeedingId, personaValues: personaValues };
+  }
+
+  // Deep-clones `raw` (never mutates the caller's object — e.g. the exact text still sitting in
+  // the paste box) and substitutes the mapped real IDs: groups by the chat's own key, personas by
+  // the original placeholder string value, everywhere it appears.
+  function applyManualMapping(raw, mapping) {
+    const substituted = JSON.parse(JSON.stringify(raw));
+    (substituted.chats || []).forEach(function (chat) {
+      if (chat && typeof chat.key === 'string' && Object.prototype.hasOwnProperty.call(mapping.groupIds, chat.key)) {
+        chat.telegram_chat_id = mapping.groupIds[chat.key];
+      }
+    });
+    (substituted.steps || []).forEach(function (step) {
+      if (!step) return;
+      const sender = step.sender_identity === undefined || step.sender_identity === null ? '' : String(step.sender_identity).trim();
+      if (Object.prototype.hasOwnProperty.call(mapping.personaIds, sender)) {
+        step.sender_identity = mapping.personaIds[sender];
+      }
+    });
+    return substituted;
+  }
+
+  function offerManualMapping(raw, groupsNeedingId, personaValues) {
+    renderMappingRows(groupsNeedingId, personaValues);
+    mappingMode = { type: 'manual', raw: raw, groupsNeedingId: groupsNeedingId, personaValues: personaValues };
+    document.getElementById('mapping-panel').style.display = 'block';
+  }
+
+  // The one entry point every "I have a raw scenario object, load it" path funnels through:
+  // paste, drop, and the profile-driven Load button (defensively — a materialized simulation is
+  // never expected to have anything left to map, but this costs nothing and keeps every path on
+  // one rule). Offers the mapping panel only when something is actually missing, so a
+  // fully-specified scenario never sees an extra click.
+  function loadRawScenario(raw) {
+    const missing = collectMissingIdentifiers(raw);
+    if (missing.groupsNeedingId.length || missing.personaValues.length) {
+      offerManualMapping(raw, missing.groupsNeedingId, missing.personaValues);
+      return;
+    }
+    try {
+      loadScenario(raw);
+    } catch (error) {
+      showAlert(error.message, true);
+    }
   }
 
   // ---- profile-declared simulations: server-queried, no manual ID entry ------------------
@@ -808,30 +919,37 @@ SIMULATOR_BODY = """
 
   const profileSimSelect = document.getElementById('profile-simulation-select');
   const profileSimLoadButton = document.getElementById('load-profile-simulation');
+  const profileSimHint = document.getElementById('profile-sim-hint');
+
+  // Single place that sets the disabled/enabled state AND makes the reason visible —
+  // a short inline hint (matches this page's existing .subtitle idiom, no new UI pattern)
+  // plus a native title tooltip on both controls, so "why is this greyed out" is never
+  // left to guessing at a disabled <select>'s own option text alone.
+  function setProfileSimAvailability(enabled, hint) {
+    profileSimSelect.disabled = !enabled;
+    profileSimLoadButton.disabled = !enabled;
+    profileSimHint.textContent = hint || '';
+    profileSimSelect.title = hint || '';
+    profileSimLoadButton.title = hint || '';
+  }
 
   async function loadProfileSimulationCatalog() {
     profileSimSelect.innerHTML = '';
+    profileSimSelect.appendChild(el('option', null, t('choose_profile_simulation')));
     if (!DATA.api_identity) {
-      profileSimSelect.appendChild(el('option', null, t('select_identity_first')));
-      profileSimSelect.disabled = true;
-      profileSimLoadButton.disabled = true;
+      setProfileSimAvailability(false, t('select_identity_first'));
       return;
     }
     let result;
     try {
       result = await apiCall('GET', '/Simulations', DATA.api_identity);
     } catch (error) {
-      profileSimSelect.appendChild(el('option', null, t('profile_simulation_load_failed', { message: error.message })));
-      profileSimSelect.disabled = true;
-      profileSimLoadButton.disabled = true;
+      setProfileSimAvailability(false, t('profile_simulation_load_failed', { message: error.message }));
       return;
     }
     const simulations = (result.payload && result.payload.simulations) || [];
-    profileSimSelect.appendChild(el('option', null, t('choose_profile_simulation')));
     if (result.status >= 400 || !simulations.length) {
-      profileSimSelect.appendChild(el('option', null, t('no_profile_simulations')));
-      profileSimSelect.disabled = true;
-      profileSimLoadButton.disabled = true;
+      setProfileSimAvailability(false, t('no_profile_simulations'));
       return;
     }
     simulations.forEach(function (simulation) {
@@ -839,8 +957,7 @@ SIMULATOR_BODY = """
       option.value = simulation.key;
       profileSimSelect.appendChild(option);
     });
-    profileSimSelect.disabled = false;
-    profileSimLoadButton.disabled = false;
+    setProfileSimAvailability(true, '');
   }
 
   profileSimLoadButton.addEventListener('click', async function () {
@@ -853,7 +970,10 @@ SIMULATOR_BODY = """
         showAlert(t('profile_simulation_load_failed', { message: errorMessage(result) }), true);
         return;
       }
-      loadScenario(result.payload);
+      // Always the already-materialized shape (reserved IDs already embedded server-side) — routed
+      // through loadRawScenario purely as defense-in-depth, on the same one rule every other entry
+      // point uses; a real profile simulation is never expected to have anything left to map.
+      loadRawScenario(result.payload);
     } catch (error) {
       showAlert(t('profile_simulation_load_failed', { message: error.message }), true);
     } finally {
@@ -873,11 +993,7 @@ SIMULATOR_BODY = """
       showAlert(t('err_parse', { message: error.message }), true);
       return;
     }
-    try {
-      loadScenario(raw);
-    } catch (error) {
-      showAlert(error.message, true);
-    }
+    loadRawScenario(raw);
   }
 
   function loadFromFile(file) {
@@ -908,25 +1024,30 @@ SIMULATOR_BODY = """
   exampleSelect.addEventListener('change', function () {
     showExampleMapping(exampleSelect.value === '' ? NaN : Number(exampleSelect.value));
   });
+  // Serves both mapping flows (docs/profile_simulations_design.md) — branches on mappingMode.type,
+  // set by showExampleMapping() (bundled) or offerManualMapping() (generic manual JSON) above.
   document.getElementById('apply-example').addEventListener('click', async function () {
-    const index = exampleSelect.value === '' ? NaN : Number(exampleSelect.value);
     const button = document.getElementById('apply-example');
+    if (!mappingMode) return;
     try {
-      const selected = DATA.examples[index];
-      if (!selected) throw new Error(t('example_invalid'));
-      const mapping = collectBundledMapping(selected);
-      const form = new FormData();
-      form.set('csrf_token', CSRF_TOKEN); form.set('example_key', selected.key);
-      form.set('persona_ids', JSON.stringify(mapping.persona_ids)); form.set('group_ids', JSON.stringify(mapping.group_ids));
       button.disabled = true;
-      const response = await fetch('/admin/simulator/example', { method: 'POST', body: form, credentials: 'same-origin' });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || t('request_failed', { status: response.status, message: '' }));
-      document.getElementById('paste-input').value = JSON.stringify(payload, null, 2);
-      loadScenario(payload);
-      document.getElementById('mapping-panel').style.display = 'none';
-      exampleSelect.value = '';
-      document.getElementById('mapping-fields').innerHTML = '';
+      const mapping = collectMappingValues(mappingMode.groupsNeedingId, mappingMode.personaValues);
+      if (mappingMode.type === 'example') {
+        const selected = DATA.examples[mappingMode.index];
+        const form = new FormData();
+        form.set('csrf_token', CSRF_TOKEN); form.set('example_key', selected.key);
+        form.set('persona_ids', JSON.stringify(mapping.personaIds)); form.set('group_ids', JSON.stringify(mapping.groupIds));
+        const response = await fetch('/admin/simulator/example', { method: 'POST', body: form, credentials: 'same-origin' });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || t('request_failed', { status: response.status, message: '' }));
+        document.getElementById('paste-input').value = JSON.stringify(payload, null, 2);
+        loadScenario(payload);
+        exampleSelect.value = '';
+      } else {
+        loadScenario(applyManualMapping(mappingMode.raw, mapping));
+      }
+      // loadScenario() itself already closed the panel (and, on the 'example' branch, reset
+      // mappingMode) — nothing left to clean up here on success.
     } catch (error) { showAlert(error.message, true); }
     finally { button.disabled = false; }
   });
@@ -945,8 +1066,7 @@ SIMULATOR_BODY = """
     document.getElementById('send-next').disabled = true;
     document.getElementById('reset-view').disabled = true;
     exampleSelect.value = '';
-    document.getElementById('mapping-panel').style.display = 'none';
-    document.getElementById('mapping-fields').innerHTML = '';
+    closeMappingPanel();
     showAlert('', false);
   });
 })();

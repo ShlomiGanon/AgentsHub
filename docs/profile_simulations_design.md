@@ -577,7 +577,45 @@ stays accurate:
   `unified.simulation.*`, per this file's own enforced "no Hebrew literal
   outside the message catalog" rule (`tests/test_hebrew_leakage.py`).
 
-## 9. Open follow-ups (not blocking this plan)
+## 9. Bundled-fixture migration (SEC_001 and FIRE_002, both done)
+
+Beyond the pilot scenario, the six legacy bundled fixtures under `fixtures/admin_scenarios/`
+(reachable only through the admin panel's "Bundled examples" dropdown + manual ID-mapping panel)
+are being migrated into real `profiles.unified_test` `SIMULATIONS` declarations, so they become
+available through `GET /Simulations` with reserved IDs already injected — no manual mapping.
+
+**SEC_001 (the readiness-team series, 3 phases) is migrated and done**, as a checkpoint before
+doing the same for FIRE_002:
+
+- 15 new `SimulationPersona` entries (offsets 2-16) and 2 new `SimulationGroup` entries
+  (`cameras`, `external_forces`, offsets 1-2 — `response_team` at offset 0 is reused from the
+  pilot scenario's own declaration, not re-declared).
+- 3 new `SimulationScenario` entries (`sec001_phase1`/`phase2`/`phase3`), transcribed verbatim
+  from the fixture JSON (Hebrew text copied programmatically into `messages/he.py`, never
+  retyped by hand, to guarantee fidelity) with full literal English translations added to
+  `messages/en.py`.
+- Recurring characters across the 3 phases (the on-call technician, the site security officer)
+  share one `SimulationPersona`/offset/reserved ID across every phase they appear in, rather
+  than being re-declared per phase — verified in `tests/test_profile_simulations.py`.
+- Fully additive, per the actual decision (an earlier write-up of this section briefly said
+  the SEC_001 files were removed from `api/admin_scenarios.SCENARIO_FILES` — that was wrong,
+  traced to a mismatch between what the `AskUserQuestion` tool reported back as the selection
+  and what was actually chosen, caught and corrected). All six bundled fixtures, SEC_001
+  included, keep working through the legacy "Bundled examples" dropdown exactly as before;
+  the profile-declared versions are a second, additional way to reach the same three phases.
+
+**FIRE_002 (the firefighting series, 3 phases) is migrated too, additively, exactly like
+SEC_001**: 10 new `SimulationPersona` entries (offsets 17-26) and 3 new `SimulationGroup`
+entries (`fire_response_team`/`fire_cameras`/`fire_external_forces`, offsets 3-5 — its own
+independent group set, not reusing SEC_001's `response_team`/`cameras`/`external_forces`,
+per the "independent roster per series" decision), 3 new `SimulationScenario` entries
+(`fire002_phase1`/`phase2`/`phase3`). One source-data nuance handled: "מוקד משטרה - אגמ"
+(phase 1) and "מוקד משטרה - אג\"מ" (phases 2-3) are the same police-operations-hub character
+with a spelling variant in the raw fixture — both Hebrew strings map to the one
+`police_hub_agam` persona. Both bundled-fixture series remain fully reachable through the
+legacy "Bundled examples" dropdown, unchanged, alongside the profile-driven versions.
+
+## 10. Open follow-ups (not blocking this plan)
 
 - Decide, when implementation starts, which profile becomes the first real
   pilot for `SIMULATION_USERS` / `SIMULATION_GROUPS` / `SIMULATIONS`

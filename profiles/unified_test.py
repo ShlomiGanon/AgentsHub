@@ -1066,3 +1066,454 @@ SIMULATIONS = [
         },
     ),
 ]
+
+# -- SEC_001 series: migrated from the three readiness-team-series bundled fixture files
+# under fixtures/admin_scenarios/ (scenario_id SEC_001_PHASE_1/2/3) --
+#
+# These three phases were previously reachable only through the admin panel's legacy
+# "Bundled examples" dropdown (api/admin_scenarios.py's map_legacy_scenario, requiring the
+# operator to type every persona's/group's Telegram ID by hand on every load). Migrated here
+# so they're available through GET /Simulations with reserved IDs already injected — see
+# docs/profile_simulations_design.md. The legacy fixture files/mechanism are retired for these
+# three specifically (removed from api/admin_scenarios.SCENARIO_FILES) now that they're
+# profile-declared; the fixture JSON files themselves are left on disk as the historical source
+# this migration was transcribed from.
+#
+# A handful of personas recur across all three phases (the on-call technician and the site
+# security officer throughout; the observer, station commander and shift commander throughout
+# the FIRE_002 series migrated separately) — those share one SimulationPersona/offset across the
+# phases that use them, exactly like a real continuing roster would, rather than being
+# re-declared per file. `SEC001_CHATS` is the one shared channel layout every phase reuses.
+
+SIMULATION_USERS.extend([
+    SimulationPersona(key="eli_response_team", offset=2, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.eli_response_team")),
+    SimulationPersona(key="yossi_technician", offset=3, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.yossi_technician")),
+    SimulationPersona(key="sdemot_security_coordinator", offset=4, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.sdemot_security_coordinator")),
+    SimulationPersona(key="danny_response_team", offset=5, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.danny_response_team")),
+    SimulationPersona(key="site_security_officer", offset=6, permission_level="commander", full_name=_catalog_text("unified.simulation.sec001.persona.site_security_officer")),
+    SimulationPersona(key="michael_response_team", offset=7, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.michael_response_team")),
+    SimulationPersona(key="police_duty_officer", offset=8, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.police_duty_officer")),
+    SimulationPersona(key="yuval_response_team", offset=9, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.yuval_response_team")),
+    SimulationPersona(key="patrol_unit_40", offset=10, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.patrol_unit_40")),
+    SimulationPersona(key="gil_response_team", offset=11, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.gil_response_team")),
+    SimulationPersona(key="resident_avraham", offset=12, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.resident_avraham")),
+    SimulationPersona(key="dan_response_team", offset=13, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.dan_response_team")),
+    SimulationPersona(key="mda_dispatch", offset=14, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.mda_dispatch")),
+    SimulationPersona(key="police_patrol", offset=15, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.police_patrol")),
+    SimulationPersona(key="yasam_commander", offset=16, permission_level="viewer", full_name=_catalog_text("unified.simulation.sec001.persona.yasam_commander")),
+])
+
+SIMULATION_GROUPS.extend([
+    # "response_team" (offset 0) is the same simulated channel the demo scenario above already
+    # declares — reused rather than re-declared, since it's the same kind of team_status_agent
+    # channel within this one profile.
+    SimulationGroup(key="cameras", offset=1, agent_name="surveillance_agent", label=_catalog_text("unified.simulation.sec001.group.cameras.label")),
+    SimulationGroup(key="external_forces", offset=2, agent_name="friendly_forces_agent", label=_catalog_text("unified.simulation.sec001.group.external_forces.label")),
+])
+
+SEC001_CHATS = (
+    {"key": "response_team", "kind": "message", "label": _catalog_text("unified.simulation.sec001.chat.response_team.label"), "telegram_chat_type": "supergroup", "telegram_chat_id": "response_team"},
+    {"key": "cameras", "kind": "message", "label": _catalog_text("unified.simulation.sec001.chat.cameras.label"), "telegram_chat_type": "supergroup", "telegram_chat_id": "cameras"},
+    {"key": "external_forces", "kind": "message", "label": _catalog_text("unified.simulation.sec001.chat.external_forces.label"), "telegram_chat_type": "supergroup", "telegram_chat_id": "external_forces"},
+    {"key": "commander_dm", "kind": "message", "label": _catalog_text("unified.simulation.sec001.chat.commander_dm.label"), "telegram_chat_type": "private"},
+)
+
+SIMULATIONS.append(SimulationScenario(
+    key="sec001_phase1",
+    title=_catalog_text("unified.simulation.sec001.phase1.title"),
+    description=_catalog_text("unified.simulation.sec001.phase1.description"),
+    tags=("sec001", "phase1"),
+    raw={
+        "scenario": {
+            "id": "SEC_001_PHASE_1",
+            "title": _catalog_text("unified.simulation.sec001.phase1.title"),
+            "description": _catalog_text("unified.simulation.sec001.phase1.description"),
+            "tags": ["sec001", "phase1"],
+        },
+        "chats": list(SEC001_CHATS),
+        "steps": [
+            {
+                "step": 1, "chat": "response_team", "sender_identity": "eli_response_team",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.eli_response_team"),
+                "text": _catalog_text("unified.simulation.sec001.phase1.step1.text"),
+            },
+            {
+                "step": 2, "chat": "cameras", "sender_identity": "yossi_technician",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.yossi_technician"),
+                "text": _catalog_text("unified.simulation.sec001.phase1.step2.text"),
+            },
+            {
+                "step": 3, "chat": "external_forces", "sender_identity": "sdemot_security_coordinator",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.sdemot_security_coordinator"),
+                "text": _catalog_text("unified.simulation.sec001.phase1.step3.text"),
+            },
+            {
+                "step": 4, "chat": "response_team", "sender_identity": "danny_response_team",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.danny_response_team"),
+                "text": _catalog_text("unified.simulation.sec001.phase1.step4.text"),
+            },
+            {
+                "step": 5, "chat": "commander_dm", "sender_identity": "site_security_officer",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.site_security_officer"),
+                "text": _catalog_text("unified.simulation.sec001.phase1.step5.text"),
+            },
+            {
+                "step": 6, "chat": "response_team", "sender_identity": "michael_response_team",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.michael_response_team"),
+                "text": _catalog_text("unified.simulation.sec001.phase1.step6.text"),
+            },
+            {
+                "step": 7, "chat": "cameras", "sender_identity": "yossi_technician",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.yossi_technician"),
+                "text": _catalog_text("unified.simulation.sec001.phase1.step7.text"),
+            },
+            {
+                "step": 8, "chat": "external_forces", "sender_identity": "sdemot_security_coordinator",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.sdemot_security_coordinator"),
+                "text": _catalog_text("unified.simulation.sec001.phase1.step8.text"),
+            },
+            {
+                "step": 9, "chat": "commander_dm", "sender_identity": "site_security_officer",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.site_security_officer"),
+                "text": _catalog_text("unified.simulation.sec001.phase1.step9.text"),
+            },
+        ],
+    },
+))
+
+SIMULATIONS.append(SimulationScenario(
+    key="sec001_phase2",
+    title=_catalog_text("unified.simulation.sec001.phase2.title"),
+    description=_catalog_text("unified.simulation.sec001.phase2.description"),
+    tags=("sec001", "phase2"),
+    raw={
+        "scenario": {
+            "id": "SEC_001_PHASE_2",
+            "title": _catalog_text("unified.simulation.sec001.phase2.title"),
+            "description": _catalog_text("unified.simulation.sec001.phase2.description"),
+            "tags": ["sec001", "phase2"],
+        },
+        "chats": list(SEC001_CHATS),
+        "steps": [
+            {
+                "step": 1, "chat": "cameras", "sender_identity": "yossi_technician",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.yossi_technician"),
+                "text": _catalog_text("unified.simulation.sec001.phase2.step1.text"),
+            },
+            {
+                "step": 2, "chat": "external_forces", "sender_identity": "police_duty_officer",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.police_duty_officer"),
+                "text": _catalog_text("unified.simulation.sec001.phase2.step2.text"),
+            },
+            {
+                "step": 3, "chat": "response_team", "sender_identity": "yuval_response_team",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.yuval_response_team"),
+                "text": _catalog_text("unified.simulation.sec001.phase2.step3.text"),
+            },
+            {
+                "step": 4, "chat": "commander_dm", "sender_identity": "site_security_officer",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.site_security_officer"),
+                "text": _catalog_text("unified.simulation.sec001.phase2.step4.text"),
+            },
+            {
+                "step": 5, "chat": "cameras", "sender_identity": "yossi_technician",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.yossi_technician"),
+                "text": _catalog_text("unified.simulation.sec001.phase2.step5.text"),
+            },
+            {
+                "step": 6, "chat": "external_forces", "sender_identity": "patrol_unit_40",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.patrol_unit_40"),
+                "text": _catalog_text("unified.simulation.sec001.phase2.step6.text"),
+            },
+            {
+                "step": 7, "chat": "commander_dm", "sender_identity": "site_security_officer",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.site_security_officer"),
+                "text": _catalog_text("unified.simulation.sec001.phase2.step7.text"),
+            },
+            {
+                "step": 8, "chat": "response_team", "sender_identity": "gil_response_team",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.gil_response_team"),
+                "text": _catalog_text("unified.simulation.sec001.phase2.step8.text"),
+            },
+            {
+                "step": 9, "chat": "response_team", "sender_identity": "gil_response_team",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.gil_response_team"),
+                "text": _catalog_text("unified.simulation.sec001.phase2.step9.text"),
+            },
+        ],
+    },
+))
+
+SIMULATIONS.append(SimulationScenario(
+    key="sec001_phase3",
+    title=_catalog_text("unified.simulation.sec001.phase3.title"),
+    description=_catalog_text("unified.simulation.sec001.phase3.description"),
+    tags=("sec001", "phase3"),
+    raw={
+        "scenario": {
+            "id": "SEC_001_PHASE_3",
+            "title": _catalog_text("unified.simulation.sec001.phase3.title"),
+            "description": _catalog_text("unified.simulation.sec001.phase3.description"),
+            "tags": ["sec001", "phase3"],
+        },
+        "chats": list(SEC001_CHATS),
+        "steps": [
+            {
+                "step": 1, "chat": "response_team", "sender_identity": "resident_avraham",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.resident_avraham"),
+                "text": _catalog_text("unified.simulation.sec001.phase3.step1.text"),
+            },
+            {
+                "step": 2, "chat": "response_team", "sender_identity": "dan_response_team",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.dan_response_team"),
+                "text": _catalog_text("unified.simulation.sec001.phase3.step2.text"),
+            },
+            {
+                "step": 3, "chat": "external_forces", "sender_identity": "mda_dispatch",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.mda_dispatch"),
+                "text": _catalog_text("unified.simulation.sec001.phase3.step3.text"),
+            },
+            {
+                "step": 4, "chat": "commander_dm", "sender_identity": "site_security_officer",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.site_security_officer"),
+                "text": _catalog_text("unified.simulation.sec001.phase3.step4.text"),
+            },
+            {
+                "step": 5, "chat": "external_forces", "sender_identity": "police_patrol",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.police_patrol"),
+                "text": _catalog_text("unified.simulation.sec001.phase3.step5.text"),
+            },
+            {
+                "step": 6, "chat": "response_team", "sender_identity": "gil_response_team",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.gil_response_team"),
+                "text": _catalog_text("unified.simulation.sec001.phase3.step6.text"),
+            },
+            {
+                "step": 7, "chat": "cameras", "sender_identity": "yossi_technician",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.yossi_technician"),
+                "text": _catalog_text("unified.simulation.sec001.phase3.step7.text"),
+            },
+            {
+                "step": 8, "chat": "external_forces", "sender_identity": "yasam_commander",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.yasam_commander"),
+                "text": _catalog_text("unified.simulation.sec001.phase3.step8.text"),
+            },
+            {
+                "step": 9, "chat": "external_forces", "sender_identity": "yasam_commander",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.yasam_commander"),
+                "text": _catalog_text("unified.simulation.sec001.phase3.step9.text"),
+            },
+            {
+                "step": 10, "chat": "commander_dm", "sender_identity": "site_security_officer",
+                "sender_name": _catalog_text("unified.simulation.sec001.persona.site_security_officer"),
+                "text": _catalog_text("unified.simulation.sec001.phase3.step10.text"),
+            },
+        ],
+    },
+))
+
+# -- FIRE_002 series: migrated from the three fire-and-rescue-series bundled fixture files
+# under fixtures/admin_scenarios/ (scenario_id FIRE_002_PHASE_1/2/3) --
+#
+# Independent roster from SEC_001 above — the two series' channels happen to share the same
+# generic names in the raw legacy fixture format (TELEGRAM_GROUP_RESPONSE_TEAM etc.), but they
+# represent different simulated Telegram groups for a different demo domain, so nothing here is
+# shared with SEC_001's personas/groups. Same continuity pattern as SEC_001: characters recurring
+# across this series' three phases (the shift commander, the surveillance operator, the station
+# commander, the Ashed-3 team commander, the police operations hub) share one
+# SimulationPersona/offset/reserved ID across every phase they appear in.
+
+SIMULATION_USERS.extend([
+    SimulationPersona(key="lahav_avi_shift_commander", offset=17, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.lahav_avi_shift_commander")),
+    SimulationPersona(key="omri_firefighter", offset=18, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.omri_firefighter")),
+    SimulationPersona(key="roni_surveillance_operator", offset=19, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.roni_surveillance_operator")),
+    SimulationPersona(key="kkl_mountains_sector", offset=20, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.kkl_mountains_sector")),
+    SimulationPersona(key="police_hub_agam", offset=21, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.police_hub_agam")),
+    SimulationPersona(key="station_commander", offset=22, permission_level="commander", full_name=_catalog_text("unified.simulation.fire002.persona.station_commander")),
+    SimulationPersona(key="yuval_ashed3_commander", offset=23, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.yuval_ashed3_commander")),
+    SimulationPersona(key="citizen_reports_group", offset=24, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.citizen_reports_group")),
+    SimulationPersona(key="fire_police_patrol", offset=25, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.fire_police_patrol")),
+    SimulationPersona(key="district_fire_commander", offset=26, permission_level="viewer", full_name=_catalog_text("unified.simulation.fire002.persona.district_fire_commander")),
+])
+
+SIMULATION_GROUPS.extend([
+    SimulationGroup(key="fire_response_team", offset=3, agent_name="team_status_agent", label=_catalog_text("unified.simulation.fire002.group.fire_response_team.label")),
+    SimulationGroup(key="fire_cameras", offset=4, agent_name="surveillance_agent", label=_catalog_text("unified.simulation.fire002.group.fire_cameras.label")),
+    SimulationGroup(key="fire_external_forces", offset=5, agent_name="friendly_forces_agent", label=_catalog_text("unified.simulation.fire002.group.fire_external_forces.label")),
+])
+
+FIRE002_CHATS = (
+    {"key": "fire_response_team", "kind": "message", "label": _catalog_text("unified.simulation.fire002.chat.fire_response_team.label"), "telegram_chat_type": "supergroup", "telegram_chat_id": "fire_response_team"},
+    {"key": "fire_cameras", "kind": "message", "label": _catalog_text("unified.simulation.fire002.chat.fire_cameras.label"), "telegram_chat_type": "supergroup", "telegram_chat_id": "fire_cameras"},
+    {"key": "fire_external_forces", "kind": "message", "label": _catalog_text("unified.simulation.fire002.chat.fire_external_forces.label"), "telegram_chat_type": "supergroup", "telegram_chat_id": "fire_external_forces"},
+    {"key": "fire_commander_dm", "kind": "message", "label": _catalog_text("unified.simulation.fire002.chat.fire_commander_dm.label"), "telegram_chat_type": "private"},
+)
+
+SIMULATIONS.append(SimulationScenario(
+    key="fire002_phase1",
+    title=_catalog_text("unified.simulation.fire002.phase1.title"),
+    description=_catalog_text("unified.simulation.fire002.phase1.description"),
+    tags=("fire002", "phase1"),
+    raw={
+        "scenario": {
+            "id": "FIRE_002_PHASE_1",
+            "title": _catalog_text("unified.simulation.fire002.phase1.title"),
+            "description": _catalog_text("unified.simulation.fire002.phase1.description"),
+            "tags": ["fire002", "phase1"],
+        },
+        "chats": list(FIRE002_CHATS),
+        "steps": [
+            {
+                "step": 1, "chat": "fire_response_team", "sender_identity": "lahav_avi_shift_commander",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.lahav_avi_shift_commander"),
+                "text": _catalog_text("unified.simulation.fire002.phase1.step1.text"),
+            },
+            {
+                "step": 2, "chat": "fire_response_team", "sender_identity": "omri_firefighter",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.omri_firefighter"),
+                "text": _catalog_text("unified.simulation.fire002.phase1.step2.text"),
+            },
+            {
+                "step": 3, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.roni_surveillance_operator"),
+                "text": _catalog_text("unified.simulation.fire002.phase1.step3.text"),
+            },
+            {
+                "step": 4, "chat": "fire_external_forces", "sender_identity": "kkl_mountains_sector",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.kkl_mountains_sector"),
+                "text": _catalog_text("unified.simulation.fire002.phase1.step4.text"),
+            },
+            {
+                "step": 5, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.roni_surveillance_operator"),
+                "text": _catalog_text("unified.simulation.fire002.phase1.step5.text"),
+            },
+            {
+                "step": 6, "chat": "fire_external_forces", "sender_identity": "police_hub_agam",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.police_hub_agam"),
+                "text": _catalog_text("unified.simulation.fire002.phase1.step6.text"),
+            },
+            {
+                "step": 7, "chat": "fire_commander_dm", "sender_identity": "station_commander",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.station_commander"),
+                "text": _catalog_text("unified.simulation.fire002.phase1.step7.text"),
+            },
+        ],
+    },
+))
+
+SIMULATIONS.append(SimulationScenario(
+    key="fire002_phase2",
+    title=_catalog_text("unified.simulation.fire002.phase2.title"),
+    description=_catalog_text("unified.simulation.fire002.phase2.description"),
+    tags=("fire002", "phase2"),
+    raw={
+        "scenario": {
+            "id": "FIRE_002_PHASE_2",
+            "title": _catalog_text("unified.simulation.fire002.phase2.title"),
+            "description": _catalog_text("unified.simulation.fire002.phase2.description"),
+            "tags": ["fire002", "phase2"],
+        },
+        "chats": list(FIRE002_CHATS),
+        "steps": [
+            {
+                "step": 1, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.roni_surveillance_operator"),
+                "text": _catalog_text("unified.simulation.fire002.phase2.step1.text"),
+            },
+            {
+                "step": 2, "chat": "fire_external_forces", "sender_identity": "police_hub_agam",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.police_hub_agam"),
+                "text": _catalog_text("unified.simulation.fire002.phase2.step2.text"),
+            },
+            {
+                "step": 3, "chat": "fire_response_team", "sender_identity": "lahav_avi_shift_commander",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.lahav_avi_shift_commander"),
+                "text": _catalog_text("unified.simulation.fire002.phase2.step3.text"),
+            },
+            {
+                "step": 4, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.roni_surveillance_operator"),
+                "text": _catalog_text("unified.simulation.fire002.phase2.step4.text"),
+            },
+            {
+                "step": 5, "chat": "fire_response_team", "sender_identity": "yuval_ashed3_commander",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.yuval_ashed3_commander"),
+                "text": _catalog_text("unified.simulation.fire002.phase2.step5.text"),
+            },
+            {
+                "step": 6, "chat": "fire_external_forces", "sender_identity": "kkl_mountains_sector",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.kkl_mountains_sector"),
+                "text": _catalog_text("unified.simulation.fire002.phase2.step6.text"),
+            },
+            {
+                "step": 7, "chat": "fire_commander_dm", "sender_identity": "station_commander",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.station_commander"),
+                "text": _catalog_text("unified.simulation.fire002.phase2.step7.text"),
+            },
+        ],
+    },
+))
+
+SIMULATIONS.append(SimulationScenario(
+    key="fire002_phase3",
+    title=_catalog_text("unified.simulation.fire002.phase3.title"),
+    description=_catalog_text("unified.simulation.fire002.phase3.description"),
+    tags=("fire002", "phase3"),
+    raw={
+        "scenario": {
+            "id": "FIRE_002_PHASE_3",
+            "title": _catalog_text("unified.simulation.fire002.phase3.title"),
+            "description": _catalog_text("unified.simulation.fire002.phase3.description"),
+            "tags": ["fire002", "phase3"],
+        },
+        "chats": list(FIRE002_CHATS),
+        "steps": [
+            {
+                "step": 1, "chat": "fire_response_team", "sender_identity": "yuval_ashed3_commander",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.yuval_ashed3_commander"),
+                "text": _catalog_text("unified.simulation.fire002.phase3.step1.text"),
+            },
+            {
+                "step": 2, "chat": "fire_external_forces", "sender_identity": "police_hub_agam",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.police_hub_agam"),
+                "text": _catalog_text("unified.simulation.fire002.phase3.step2.text"),
+            },
+            {
+                "step": 3, "chat": "fire_response_team", "sender_identity": "citizen_reports_group",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.citizen_reports_group"),
+                "text": _catalog_text("unified.simulation.fire002.phase3.step3.text"),
+            },
+            {
+                "step": 4, "chat": "fire_commander_dm", "sender_identity": "station_commander",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.station_commander"),
+                "text": _catalog_text("unified.simulation.fire002.phase3.step4.text"),
+            },
+            {
+                "step": 5, "chat": "fire_external_forces", "sender_identity": "fire_police_patrol",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.fire_police_patrol"),
+                "text": _catalog_text("unified.simulation.fire002.phase3.step5.text"),
+            },
+            {
+                "step": 6, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.roni_surveillance_operator"),
+                "text": _catalog_text("unified.simulation.fire002.phase3.step6.text"),
+            },
+            {
+                "step": 7, "chat": "fire_external_forces", "sender_identity": "district_fire_commander",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.district_fire_commander"),
+                "text": _catalog_text("unified.simulation.fire002.phase3.step7.text"),
+            },
+            {
+                "step": 8, "chat": "fire_response_team", "sender_identity": "lahav_avi_shift_commander",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.lahav_avi_shift_commander"),
+                "text": _catalog_text("unified.simulation.fire002.phase3.step8.text"),
+            },
+            {
+                "step": 9, "chat": "fire_commander_dm", "sender_identity": "station_commander",
+                "sender_name": _catalog_text("unified.simulation.fire002.persona.station_commander"),
+                "text": _catalog_text("unified.simulation.fire002.phase3.step9.text"),
+            },
+        ],
+    },
+))

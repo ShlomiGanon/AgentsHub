@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Mapping
 
 SCENARIO_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "admin_scenarios"
+# The SEC_001 series is also available, additively, through profiles.unified_test's own
+# SIMULATIONS declarations (docs/profile_simulations_design.md) \u2014 that does not replace this
+# legacy, manual-ID-entry path, which keeps serving all six bundled fixtures unchanged.
 SCENARIO_FILES = (
     "\u05db\u05d9\u05ea\u05ea \u05db\u05d5\u05e0\u05e0\u05ea - \u05d7\u05dc\u05e7 1.json",
     "\u05db\u05d9\u05ea\u05ea \u05db\u05d5\u05e0\u05e0\u05ea - \u05d7\u05dc\u05e7 2.json",

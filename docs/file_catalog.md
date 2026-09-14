@@ -88,6 +88,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `docs/unified_command_guide.md` | Documentation | Internal | Operational and architectural guide for Unified Command Hub profile (Hebrew). |
 | `docs/vocabulary.md` | Documentation | Internal | Documents vocabulary. |
 | `docs/work_plan.md` | Documentation | Internal | Documents work plan. |
+| `docs/work_process.md` | Documentation | Internal | Running chronological log of the per-profile simulation mechanism's design, implementation, diagnoses, and fixes. |
 | `docs/ארכיטקטוררה.pptx` | Documentation | Internal | Stores the ארכיטקטוררה reference artifact. |
 | `docs/מצגת ארכיטקטורה.pptx` | Documentation | Internal | Stores the מצגת ארכיטקטורה reference artifact. |
 | `docs/תיאור מבנה מערכת.pdf` | Documentation | Internal | Stores the תיאור מבנה מערכת reference artifact. |

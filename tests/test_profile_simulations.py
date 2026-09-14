@@ -322,3 +322,107 @@ def test_find_simulation_scenario_returns_none_for_an_unknown_key():
     loaded = SimpleNamespace(simulations=(_scenario(),))
     assert find_simulation_scenario(loaded, "does-not-exist") is None
     assert find_simulation_scenario(loaded, "demo") is not None
+
+
+# -- the SEC_001 migration (profiles/unified_test.py), against the real profile -------------
+
+
+def test_unified_test_declares_the_migrated_sec001_series(test_core_model, test_sub_model, monkeypatch):
+    """docs/profile_simulations_design.md: the SEC_001 series
+    (fixtures/admin_scenarios/'כיתת כוננת - חלק 1/2/3.json') was migrated into real
+    SIMULATIONS declarations, with recurring characters sharing one reserved ID
+    across the phases they appear in — not re-declared per phase."""
+
+    monkeypatch.setenv("BOT_TOKEN", "fake-token")
+    from profiles.loader import load_profile
+
+    loaded = load_profile("profiles.unified_test", core_model=test_core_model, sub_model=test_sub_model)
+
+    sec001_keys = {"sec001_phase1", "sec001_phase2", "sec001_phase3"}
+    assert sec001_keys <= {s.key for s in loaded.simulations}
+
+    for key in sec001_keys:
+        scenario = find_simulation_scenario(loaded, key)
+        materialized = materialize_simulation(scenario, loaded.simulation_users, loaded.simulation_groups)
+        for step in materialized["steps"]:
+            assert step["sender_identity"].isdigit() and int(step["sender_identity"]) > 0
+        for chat in materialized["chats"]:
+            if chat.get("telegram_chat_type") in ("group", "supergroup"):
+                assert chat["telegram_chat_id"].startswith("-") and chat["telegram_chat_id"][1:].isdigit()
+
+    # The recurring technician and security-officer characters resolve to the exact same
+    # reserved ID in every phase they appear in.
+    def _sender_ids_for(key, persona_key):
+        scenario = find_simulation_scenario(loaded, key)
+        materialized = materialize_simulation(scenario, loaded.simulation_users, loaded.simulation_groups)
+        persona = next(p for p in loaded.simulation_users if p.key == persona_key)
+        from profiles.simulation import simulation_user_telegram_id
+        expected = simulation_user_telegram_id(persona.offset)
+        return {step["sender_identity"] for step in materialized["steps"]} & {expected}
+
+    for persona_key in ("yossi_technician", "site_security_officer"):
+        for key in sec001_keys:
+            assert _sender_ids_for(key, persona_key), f"{persona_key} missing its reserved ID in {key}"
+
+    # response_team is reused from the pre-existing demo scenario's group, not re-declared.
+    group_keys = [g.key for g in loaded.simulation_groups]
+    assert group_keys.count("response_team") == 1
+    assert {"cameras", "external_forces"}.issubset(group_keys)
+
+
+def test_unified_test_declares_the_migrated_fire002_series(test_core_model, test_sub_model, monkeypatch):
+    """Same migration pattern as SEC_001, applied to the firefighting series — its own
+    independent persona/group roster, despite the raw fixture reusing identical channel
+    names ('TELEGRAM_GROUP_RESPONSE_TEAM' etc.) across both series."""
+
+    monkeypatch.setenv("BOT_TOKEN", "fake-token")
+    from profiles.loader import load_profile
+
+    loaded = load_profile("profiles.unified_test", core_model=test_core_model, sub_model=test_sub_model)
+
+    fire002_keys = {"fire002_phase1", "fire002_phase2", "fire002_phase3"}
+    assert fire002_keys <= {s.key for s in loaded.simulations}
+
+    for key in fire002_keys:
+        scenario = find_simulation_scenario(loaded, key)
+        materialized = materialize_simulation(scenario, loaded.simulation_users, loaded.simulation_groups)
+        for step in materialized["steps"]:
+            assert step["sender_identity"].isdigit() and int(step["sender_identity"]) > 0
+        for chat in materialized["chats"]:
+            if chat.get("telegram_chat_type") in ("group", "supergroup"):
+                assert chat["telegram_chat_id"].startswith("-") and chat["telegram_chat_id"][1:].isdigit()
+
+    def _sender_ids_for(key, persona_key):
+        scenario = find_simulation_scenario(loaded, key)
+        materialized = materialize_simulation(scenario, loaded.simulation_users, loaded.simulation_groups)
+        persona = next(p for p in loaded.simulation_users if p.key == persona_key)
+        expected = simulation_user_telegram_id(persona.offset)
+        return {step["sender_identity"] for step in materialized["steps"]} & {expected}
+
+    # Recurring characters across all three FIRE_002 phases.
+    for persona_key in ("roni_surveillance_operator", "station_commander"):
+        for key in fire002_keys:
+            assert _sender_ids_for(key, persona_key), f"{persona_key} missing its reserved ID in {key}"
+
+    # FIRE_002's roster and groups are entirely independent of SEC_001's — no shared keys.
+    fire_persona_keys = {
+        "lahav_avi_shift_commander", "omri_firefighter", "roni_surveillance_operator", "kkl_mountains_sector",
+        "police_hub_agam", "station_commander", "yuval_ashed3_commander", "citizen_reports_group",
+        "fire_police_patrol", "district_fire_commander",
+    }
+    sec_persona_keys = {
+        "eli_response_team", "yossi_technician", "sdemot_security_coordinator", "danny_response_team",
+        "site_security_officer", "michael_response_team", "police_duty_officer", "yuval_response_team",
+        "patrol_unit_40", "gil_response_team", "resident_avraham", "dan_response_team", "mda_dispatch",
+        "police_patrol", "yasam_commander",
+    }
+    assert fire_persona_keys.isdisjoint(sec_persona_keys)
+    all_persona_keys = [p.key for p in loaded.simulation_users]
+    assert len(all_persona_keys) == len(set(all_persona_keys))  # no key or offset collisions anywhere
+
+    # FIRE_002 declares its own group keys ("fire_*") rather than reusing SEC_001's
+    # same-purpose groups ("cameras", "external_forces") — independent rosters, per series.
+    fire_group_keys = {"fire_response_team", "fire_cameras", "fire_external_forces"}
+    group_keys = {g.key for g in loaded.simulation_groups}
+    assert fire_group_keys.issubset(group_keys)
+    assert fire_group_keys.isdisjoint({"cameras", "external_forces"})

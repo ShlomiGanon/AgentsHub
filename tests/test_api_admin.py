@@ -1176,7 +1176,7 @@ def test_bundled_example_mapping_reads_the_current_server_name(tmp_path, teardow
     )
     assert response.status_code == 200
     mapped = response.get_json()
-    assert len(mapped["steps"]) == 9
+    assert len(mapped["steps"]) == example["step_count"]
     assert {step["sender_identity"] for step in mapped["steps"]} == {"12345"}
     assert {step["sender_name"] for step in mapped["steps"]} == {"Dana Levi"}
 
@@ -1214,3 +1214,100 @@ def test_simulator_script_is_syntactically_valid_javascript(tmp_path, teardown_c
     script_path.write_text(script.group(1), encoding="utf-8")
     result = subprocess.run([node, "--check", str(script_path)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def _extract_between(script: str, start_marker: str, end_marker: str) -> str:
+    start = script.index(start_marker)
+    end = script.index(end_marker, start)
+    return script[start:end]
+
+
+def test_generic_missing_id_collection_and_substitution_are_functionally_correct(tmp_path, teardown_ctx, _admin_env):
+    """docs/profile_simulations_design.md (c): collectMissingIdentifiers()/applyManualMapping()
+    are pure functions (no DOM) — extracted straight from the rendered page and executed for
+    real under node, not just syntax-checked, since this is genuinely new logic."""
+
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+    page = client.get("/admin/simulator").data.decode("utf-8")
+
+    collect_fn = _extract_between(page, "function collectMissingIdentifiers(raw) {", "  function applyManualMapping")
+    apply_fn = _extract_between(page, "function applyManualMapping(raw, mapping) {", "  function offerManualMapping")
+    assert collect_fn.strip() and apply_fn.strip(), "expected functions not found in the rendered page"
+
+    driver = f"""
+{collect_fn}
+{apply_fn}
+
+const cases = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
+const results = cases.map(function (testCase) {{
+  const missing = collectMissingIdentifiers(testCase.raw);
+  const applied = testCase.mapping ? applyManualMapping(testCase.raw, testCase.mapping) : null;
+  return {{ missing: missing, applied: applied }};
+}});
+console.log(JSON.stringify(results));
+"""
+    driver_path = tmp_path / "driver.js"
+    driver_path.write_text(driver, encoding="utf-8")
+
+    fully_specified = {
+        "scenario": {}, "chats": [{"key": "dm", "kind": "message", "telegram_chat_type": "private"}],
+        "steps": [{"step": 1, "chat": "dm", "sender_identity": "12345", "text": "hi"}],
+    }
+    needs_mapping = {
+        "scenario": {},
+        "chats": [
+            {"key": "dm", "kind": "message", "telegram_chat_type": "private"},
+            {"key": "team", "kind": "message", "label": "Response team", "telegram_chat_type": "supergroup", "telegram_chat_id": "team"},
+        ],
+        "steps": [
+            {"step": 1, "chat": "dm", "sender_identity": "viewer", "text": "hi"},
+            {"step": 2, "chat": "team", "sender_identity": "viewer", "text": "status?"},  # same placeholder, reused
+            {"step": 3, "chat": "team", "sender_identity": "commander", "text": "go"},
+        ],
+    }
+    mapping = {"personaIds": {"viewer": "9000000000000001", "commander": "9000000000000000"}, "groupIds": {"team": "-9000000000000000"}}
+    missing_but_empty_sender = {
+        "scenario": {}, "chats": [{"key": "dm", "kind": "message", "telegram_chat_type": "private"}],
+        "steps": [{"step": 1, "chat": "dm", "sender_identity": "", "text": "hi"}],
+    }
+    cases_path = tmp_path / "cases.json"
+    cases_path.write_text(
+        json.dumps([
+            {"raw": fully_specified, "mapping": None},
+            {"raw": needs_mapping, "mapping": mapping},
+            {"raw": missing_but_empty_sender, "mapping": None},
+        ]),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run([node, str(driver_path), str(cases_path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    outcomes = json.loads(result.stdout)
+
+    # 1. A fully-specified scenario has nothing to map.
+    assert outcomes[0]["missing"] == {"groupsNeedingId": [], "personaValues": []}
+
+    # 2. Each distinct placeholder appears exactly once, regardless of how many steps use it;
+    #    groups are identified by the chat's own key, not by the (shared/empty) placeholder text.
+    assert outcomes[1]["missing"]["personaValues"] == ["viewer", "commander"]
+    assert outcomes[1]["missing"]["groupsNeedingId"] == [{"key": "team", "label": "Response team"}]
+    # Substitution replaces every occurrence of each placeholder, and never mutates the input.
+    applied = outcomes[1]["applied"]
+    assert applied["steps"][0]["sender_identity"] == "9000000000000001"
+    assert applied["steps"][1]["sender_identity"] == "9000000000000001"
+    assert applied["steps"][2]["sender_identity"] == "9000000000000000"
+    assert applied["chats"][1]["telegram_chat_id"] == "-9000000000000000"
+    assert needs_mapping["steps"][0]["sender_identity"] == "viewer"  # original untouched
+
+    # 3. A completely empty sender_identity is not offered a mapping slot (nothing to label it
+    #    with) — it stays a hard validation error from validateScenario() itself, unchanged.
+    assert outcomes[2]["missing"] == {"groupsNeedingId": [], "personaValues": []}

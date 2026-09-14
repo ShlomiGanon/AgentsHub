@@ -24,7 +24,7 @@ def test_mapping_writes_real_ids_and_server_names_without_routing_override():
         {first_identity: {"permission_level": "viewer", "full_name": "Dana Levi"}},
     )
 
-    assert len(mapped["steps"]) == 9
+    assert len(mapped["steps"]) == example["step_count"]
     assert mapped["steps"][0]["sender_name"] == "Dana Levi"
     assert any(step["sender_name"] == "לא רשום" for step in mapped["steps"])
     assert all("protocol_hint" not in step for step in mapped["steps"])
