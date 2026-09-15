@@ -300,6 +300,14 @@ SIMULATOR_BODY = """
 
   const groupsByChatId = {};
   (DATA.groups || []).forEach(function (group) { groupsByChatId[String(group.chat_id)] = group; });
+
+  // One active pollSimulatorChat() "generation" per chat_id (docs/work_process.md §19) — a
+  // second message-kind step sent to the same chat starts a *newer* generation, and any
+  // still-running loop from an *earlier* step notices and stops itself immediately, rather
+  // than racing that newer step's own poll loop to rediscover its own send/edit exchange
+  // (both loops watch the same chat's shared event stream; only the latest step's own loop
+  // should ever be reading it at a time).
+  const pollGenerationByChatId = {};
   const registeredIdentities = new Set((DATA.users || []).map(function (user) { return String(user.telegram_identity); }));
   const usersByIdentity = {};
   (DATA.users || []).forEach(function (user) { usersByIdentity[String(user.telegram_identity)] = user; });
@@ -712,11 +720,22 @@ SIMULATOR_BODY = """
   // blocking every step's queue on a multi-minute watch would make stepping through a
   // scenario painfully slow for no benefit — this runs quietly alongside it instead,
   // appending a new bubble only if and when something actually arrives.
+  //
+  // §19's fix: claims this chat's generation for itself first — see
+  // pollGenerationByChatId's own comment for why (a second step sent to the same chat
+  // must make any still-running earlier loop for that chat stand down, or both loops
+  // end up racing to rediscover the newer step's own send/edit exchange as "new").
+  // Checked both before each request (skip a poll entirely once superseded) and after
+  // (discard a response that was already in flight when superseded).
   async function pollSimulatorChat(chatKey, chatId, watermark) {
+    const myGeneration = (pollGenerationByChatId[chatId] || 0) + 1;
+    pollGenerationByChatId[chatId] = myGeneration;
+
     const startedAt = Date.now();
     let mark = watermark || { status_len: 0, sent_len: 0 };
     while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
       await new Promise(function (resolve) { setTimeout(resolve, POLL_INTERVAL_MS); });
+      if (pollGenerationByChatId[chatId] !== myGeneration) return;
       let result;
       try {
         result = await apiCall(
@@ -728,6 +747,7 @@ SIMULATOR_BODY = """
       } catch (error) {
         return; // a network hiccup while quietly watching for a follow-up isn't worth an error bubble
       }
+      if (pollGenerationByChatId[chatId] !== myGeneration) return;
       if (result.status !== 200 || !result.payload) return;
       if (result.payload.watermark) mark = result.payload.watermark;
       if (result.payload.reply_text) {

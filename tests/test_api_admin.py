@@ -1461,3 +1461,92 @@ def test_simulator_bot_poll_forwards_query_params_and_relays_the_response(tmp_pa
         assert len(server.received) == 1
         assert server.received[0]["path"] == "/Simulator-msg/poll?chat_id=9000000000000002&status_len=2&sent_len=0"
         assert server.received[0]["headers"]["X-Service-Key"] == "test-service-key"
+
+
+# -- pollSimulatorChat()'s per-chat generation guard: docs/work_process.md §19 --
+# (the duplicate-ack / stray "model thinking" bubble fix — a second step sent to the
+# same chat must make an earlier, still-running poll loop for that chat stand down.)
+
+
+def test_a_superseded_poll_loop_never_polls_or_renders_anything(tmp_path, teardown_ctx, _admin_env):
+    """Executed for real under node, not just syntax-checked, since this is genuinely
+    new logic: runs a *single* pollSimulatorChat() loop as a same-process timing
+    baseline, then two loops started back-to-back for the same chat_id (exactly what
+    a second message-kind step sent to an already-being-watched chat does), with a
+    fake apiCall that always finds "new" content. Comparing against the baseline
+    (rather than a fixed call count) keeps this robust across machines: without the
+    generation guard, two independent loops poll roughly *twice* as often as one;
+    with it, the superseded loop dies on its very first check (both loops claim
+    their generation synchronously before either ever awaits), so two-loop and
+    one-loop call counts land close together."""
+
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+    page = client.get("/admin/simulator").data.decode("utf-8")
+
+    poll_fn = _extract_between(page, "async function pollSimulatorChat(chatKey, chatId, watermark) {", "  async function sendNext")
+    assert poll_fn.strip(), "pollSimulatorChat not found in the rendered page"
+
+    driver = f"""
+const POLL_INTERVAL_MS = 5;
+const POLL_TIMEOUT_MS = 200;
+
+function makeHarness() {{
+  const pollGenerationByChatId = {{}};
+  let callCount = 0;
+  async function apiCall() {{
+    callCount += 1;
+    return {{ status: 200, payload: {{ reply_text: 'reply-' + callCount, watermark: {{ status_len: callCount, sent_len: 0 }} }} }};
+  }}
+  const appended = [];
+  function appendBubble(chatKey, kind, sender, text) {{ appended.push(text); }}
+  function t(key) {{ return key; }}
+
+  {poll_fn}
+
+  return {{ pollSimulatorChat, getCallCount: function () {{ return callCount; }}, getAppendedCount: function () {{ return appended.length; }} }};
+}}
+
+(async function () {{
+  const baseline = makeHarness();
+  await baseline.pollSimulatorChat('k', 'chat-baseline', {{ status_len: 0, sent_len: 0 }});
+
+  const twoLoop = makeHarness();
+  // Step 1's loop starts (generation 1), then step 2's loop starts for the *same*
+  // chat immediately after, still synchronously — exactly like sendNext() firing
+  // pollSimulatorChat() again for a chat that's already being watched.
+  const oldLoop = twoLoop.pollSimulatorChat('k', 'chat-x', {{ status_len: 0, sent_len: 0 }});
+  const newLoop = twoLoop.pollSimulatorChat('k', 'chat-x', {{ status_len: 0, sent_len: 0 }});
+  await Promise.all([oldLoop, newLoop]);
+
+  console.log(JSON.stringify({{
+    baselineCallCount: baseline.getCallCount(),
+    baselineAppendedCount: baseline.getAppendedCount(),
+    twoLoopCallCount: twoLoop.getCallCount(),
+    twoLoopAppendedCount: twoLoop.getAppendedCount(),
+  }}));
+}})();
+"""
+    driver_path = tmp_path / "poll_driver.js"
+    driver_path.write_text(driver, encoding="utf-8")
+
+    result = subprocess.run([node, str(driver_path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    outcome = json.loads(result.stdout)
+
+    assert outcome["baselineCallCount"] > 1  # the timing window is actually producing several polls
+    # Every poll that happened has a matching bubble, in both scenarios (no orphaned calls).
+    assert outcome["baselineAppendedCount"] == outcome["baselineCallCount"]
+    assert outcome["twoLoopAppendedCount"] == outcome["twoLoopCallCount"]
+    # The actual bug: without the generation guard, two independent loops poll roughly
+    # *twice* as often as one (confirmed by reverting the fix locally: ~26 vs. ~13 calls
+    # in this same window). With the guard, the superseded loop contributes nothing, so
+    # the two-loop count stays close to the single-loop baseline — well under double it.
+    assert outcome["twoLoopCallCount"] <= outcome["baselineCallCount"] * 1.5

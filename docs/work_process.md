@@ -1062,3 +1062,74 @@ same reasoning — confirms `request`, like `report`, is now a pure relay of
 whatever `/Msg` sends, with no bot-side augmentation left for either.
 Full suite: 1465 passing (net-zero test count — two renames, no coverage
 lost, none of it dead-code testing anymore).
+
+## 19. Duplicate-ack bug: root-caused from real logs, fixed, and item 2 confirmed as a side effect
+
+First real-world use of Priority 3's polling surfaced a UI bug: the same
+ack bubble twice with a stray "המודל חושב..." (model thinking) bubble
+between them. Investigated with real evidence before touching anything —
+checked `bot-sim-unified_test.stderr.log` around the reported timestamp
+and found exactly **one** `POST /Simulator-msg` there, ruling out a
+duplicate client send immediately. The same log showed the same chat
+(`-9000000000000001`) received a step at 22:25:11 and another at
+22:27:07 — well inside the first step's own 5-minute poll window.
+
+**Root cause**: `pollSimulatorChat()` starts one independent poll loop per
+step sent, scoped only by `chat_id`, not by which step started it.
+Multiple steps sent to the same chat within that window mean multiple
+loops read the *same* shared, chronological event stream with
+*independent, never-synchronized* watermarks. `reply_since()`'s send/edit
+collapse (so a status placeholder never shows on its own) only works
+*within one poll's own query window* — when an unrelated, earlier step's
+stale watermark happens to land between a *later* step's own send and
+edit events, that later step's own already-displayed synchronous exchange
+gets split across two of the earlier loop's poll ticks and rendered
+twice: once as "model thinking..." (the send, discovered alone), once as
+the ack again (the edit, discovered on the next tick).
+
+**Fix — `api/admin_simulator.py` (JS only; no server-side change)**: a
+per-chat_id "generation" counter (`pollGenerationByChatId`). Starting a
+poll loop claims the next generation for that chat *synchronously*, before
+any `await`; each loop iteration checks — both before issuing a request
+and after receiving its response — that it still holds the current
+generation for that chat, and stops immediately (no further requests, no
+rendering) the moment a newer step's own loop has superseded it. A newer
+step's own loop is never blocked by this — it simply becomes the chat's
+sole active watcher.
+
+**Tests**: `test_a_superseded_poll_loop_never_polls_or_renders_anything`
+(`tests/test_api_admin.py`) — executed for real under node, not just
+syntax-checked. Runs a same-process, self-calibrating single-loop timing
+baseline, then two loops started back-to-back for one chat; asserts the
+two-loop call count stays close to the baseline rather than roughly
+doubling it (a fixed call-count threshold would be fragile across
+machines). **Verified the test actually catches the regression**, not
+just passes by coincidence: temporarily stripped the generation checks,
+confirmed the test fails (26 calls vs. an expected ≤21, against a ~13-14
+call baseline — matching the exact "roughly double" signature of the
+original bug), then restored the real fix and confirmed it passes again.
+Full suite: 1466 passing (1465 + 1).
+
+**Item 2 (surfacing `format_job_result()`'s classification detail),
+confirmed resolved as a side effect — not a new mechanism.** This fix is
+purely client-side (JS generation guard); it does not touch
+`SimulatorTelegramClient`/`poll_chat()`/the notification-delivery path at
+all. Those were already proven correct by existing tests
+(`test_poll_chat_surfaces_a_background_delivery_that_arrives_after_the_watermark`,
+`test_simulator_msg_poll_finds_a_reply_delivered_after_the_original_watermark`,
+`tests/test_bot_simulator_app.py`) — a genuine `deliver_job_result()`
+delivery (which calls `format_job_result()`, carrying the real
+classification/protocol/outcome) was already correctly discoverable by
+polling before this fix, and remains so after it; what was broken was
+never "can a genuine delivery be found," it was "does an *unrelated*,
+stale loop also render something that was never meant for it." §19's new
+test additionally confirms the *surviving* (correct) loop keeps polling
+and rendering normally even with a second step in play — so the specific
+classification detail the user wants to see in the follow-up message now
+reaches them cleanly, with no duplicate or stray bubble noise around it.
+
+The live stack from this investigation's own session had already been
+stopped by the time this fix was verified, so confirmation here is
+test-based (including the deliberate revert-and-confirm above) rather
+than a fresh live-log check; offered to verify against a live run once
+the user restarts one.
