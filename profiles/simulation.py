@@ -102,9 +102,12 @@ class SimulationRoster:
     the one the owning agent's class already uses (e.g.
     `persistence.open_team_status_persistence`) — returning any object exposing
     `register_member(telegram_identity, full_name, registered_at=None)`,
-    `approve_roster(approved_by, approved_at=None)`, `roster_is_approved()`, and
-    `list_members(approved_only=True)`. Any current or future agent whose roster
-    store has this same shape can be targeted this way, not just `TeamStatusAgent`.
+    `approve_roster(approved_by, approved_at=None)`,
+    `approve_member(telegram_identity)` (approve one member without touching the
+    roster-approval record, for late additions to an already-approved roster),
+    `roster_is_approved()`, and `list_members(approved_only=True)`. Any current
+    or future agent whose roster store has this same shape can be targeted this
+    way, not just `TeamStatusAgent`.
 
     `approved_by` is the identity recorded as having approved the roster the one
     time `ensure_simulation_entities` triggers that approval (see there for why

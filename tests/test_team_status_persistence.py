@@ -144,3 +144,48 @@ def test_availability_snapshot_accepts_an_offset_less_as_of_timestamp(tmp_path):
     snapshot = store.availability_snapshot("2026-09-03T05:00:00")
 
     assert snapshot[0]["telegram_identity"] == "101"
+
+
+def test_approve_member_approves_only_the_targeted_member(tmp_path):
+    """approve_member is used by simulation provisioning when a new persona is added
+    to an already-approved roster — it must approve only that persona, leaving any
+    other unapproved members (e.g. real users still pending review) untouched."""
+    store = open_team_status_persistence(str(tmp_path / "team-status.db"))
+    store.register_member("101", "Alex Cohen", _timestamp())
+    store.approve_roster("commander-1", _timestamp())
+
+    # Simulate a real user registered after approval — should NOT be auto-approved
+    store.register_member("999", "Pending Real User", _timestamp())
+    # Simulate a new simulation persona registered after approval
+    store.register_member("sim-42", "Sim Member", _timestamp())
+    store.approve_member("sim-42")
+
+    approved = {m["telegram_identity"] for m in store.list_members(approved_only=True)}
+    assert "101" in approved          # original approved member
+    assert "sim-42" in approved       # targeted by approve_member
+    assert "999" not in approved      # real pending user untouched
+
+
+def test_approve_member_is_idempotent(tmp_path):
+    """Calling approve_member on an already-approved member is a safe no-op."""
+    store = open_team_status_persistence(str(tmp_path / "team-status.db"))
+    store.register_member("101", "Alex Cohen", _timestamp())
+    store.approve_roster("commander-1", _timestamp())
+
+    # Calling approve_member on an already-approved member must not raise
+    store.approve_member("101")
+    approved = {m["telegram_identity"] for m in store.list_members(approved_only=True)}
+    assert "101" in approved
+
+
+def test_approve_member_for_nonexistent_member_is_silent_noop(tmp_path):
+    """approve_member silently ignores an identity that does not exist in team_members."""
+    store = open_team_status_persistence(str(tmp_path / "team-status.db"))
+    store.register_member("101", "Alex Cohen", _timestamp())
+    store.approve_roster("commander-1", _timestamp())
+
+    # Non-existent member: should not raise
+    store.approve_member("does-not-exist")
+    approved = {m["telegram_identity"] for m in store.list_members(approved_only=True)}
+    assert "does-not-exist" not in approved
+

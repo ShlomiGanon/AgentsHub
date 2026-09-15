@@ -29,7 +29,14 @@ logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(me
 logger = logging.getLogger("stack_runner")
 
 _SQLITE_SIDECARS = ("-wal", "-shm", "-journal")
-_APP_SIDECARS = (".settings.json", ".settings.json.tmp", ".notification_cursor", ".bot.lock", ".bot-simulator.lock")
+_APP_SIDECARS = (
+    ".settings.json",
+    ".settings.json.tmp",
+    ".notification_cursor",
+    ".bot-simulator.notification_cursor",
+    ".bot.lock",
+    ".bot-simulator.lock",
+)
 
 
 def reset_artifacts(module_path: str) -> tuple[Path, ...]:

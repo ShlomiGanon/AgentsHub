@@ -25,6 +25,13 @@ class TeamStatusPersistenceInterface(ABC):
     def approve_roster(self, approved_by: str, approved_at: str | None = None) -> int: ...
 
     @abstractmethod
+    def approve_member(self, telegram_identity: str) -> None:
+        """Set approved=1 for one specific member. A no-op if the member does not
+        exist or is already approved. Safe to call on an unapproved roster — the
+        roster_approval record is not touched; only the per-member flag changes."""
+        ...
+
+    @abstractmethod
     def roster_is_approved(self) -> bool: ...
 
     @abstractmethod

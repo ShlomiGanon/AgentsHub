@@ -108,15 +108,26 @@ def _ensure_roster_memberships(
         roster = rosters_by_key[roster_key]  # profiles.loader already validated this resolves
         store = roster.open(roster.db_path)
         already_registered = {member["telegram_identity"] for member in store.list_members(approved_only=False)}
+        roster_was_approved = store.roster_is_approved()
 
+        newly_registered_ids: list[str] = []
         for persona in personas:
             telegram_id = simulation_user_telegram_id(persona.offset)
             store.register_member(telegram_id, persona.full_name)
             if telegram_id not in already_registered:
                 registered_members.append((roster_key, telegram_id))
+                newly_registered_ids.append(telegram_id)
 
-        if not store.roster_is_approved():
+        if not roster_was_approved:
+            # First-ever approval: approve all currently-registered members in one commander action.
             store.approve_roster(roster.approved_by)
             newly_approved.append(roster_key)
+        elif newly_registered_ids:
+            # Roster was already approved by a real commander or a previous provisioning run.
+            # approve_roster() marks EVERY member, which could silently approve real users
+            # that an operator deliberately left pending.  Instead, approve only the simulation
+            # personas that were just registered now, one by one.
+            for telegram_id in newly_registered_ids:
+                store.approve_member(telegram_id)
 
     return tuple(registered_members), tuple(newly_approved)

@@ -34,7 +34,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _is_simulation_identity(chat_id: str | int) -> bool:
+    try:
+        return abs(int(chat_id)) >= 9_000_000_000_000_000
+    except (ValueError, TypeError):
+        return False
+
+
 async def dispatch_notification(deps: "BotDeps", notification: "BotNotification") -> None:
+    is_sim_client = deps.telegram_client.__class__.__name__ == "SimulatorTelegramClient"
+    has_sim_target = any(_is_simulation_identity(cid) for cid in notification.target_chat_ids)
+    if not is_sim_client and has_sim_target:
+        return
+    if is_sim_client and notification.target_chat_ids and not has_sim_target:
+        return
+
     if notification.kind == "clarification_hold":
         await interactions.push_clarification_prompt(deps, notification.payload)
         return

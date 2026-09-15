@@ -768,6 +768,10 @@ MESSAGES = {
         "unavailable for who is unavailable, awaiting for who has not yet reported, count for the number available, and reason for the reason someone is unavailable; "
         "for a reason view, also pass member_query taken from the question. Do not invent names or reasons. "
         "To record an attendance report, call record_attendance_response. "
+        "Notice: The reporting member's identity, message ID, and timestamp are automatically authenticated and injected "
+        "from the system runtime context — never ask for them, never report them as missing (never return MISSING_INFORMATION for them!), "
+        "and call record_attendance_response directly with availability ('available' or 'unavailable'), reason (if unavailable), "
+        "and unavailable_days (integer >= 1 if unavailable: calculate from mentioned dates or default to 1 day if not specified; never pass 0 when unavailable). "
         "Be concise and clear."
     ),
     "unified.team_status.tool.report_availability": (
@@ -777,7 +781,11 @@ MESSAGES = {
     "unified.team_status.tool.get_roster": (
         "Returns only the readiness team's roster picture and members' availability (read-only, no side effects), in Hebrew."
     ),
-    "unified.team_status.tool.record_attendance": "Records a readiness-team member's attendance response, in Hebrew.",
+    "unified.team_status.tool.record_attendance": (
+        "Records the authenticated member's availability response ('available' or 'unavailable'). "
+        "The member identity, message ID, and timestamp are injected automatically from request context — never ask for them or report them missing. "
+        "Pass availability ('available' or 'unavailable'), reason (required if unavailable), and unavailable_days (integer >= 1 if unavailable, default 1 if not specified; never 0)."
+    ),
 
     "unified.team_status.legacy_placeholder_name": "Readiness team member ({identity})",
     "unified.team_status.unnamed_member": "User {identity} (name not set)",
@@ -817,7 +825,7 @@ MESSAGES = {
     "unified.team_status.default_original_text": "Availability report: {availability}",
     "unified.team_status.not_approved": "The response was not recorded: the user is not an approved readiness-team member.",
     "unified.team_status.clarify_availability": "Clarification required: state whether you are available or unavailable.",
-    "unified.team_status.clarify_reason": "Clarification required: a member who is unavailable must provide a reason.",
+    "unified.team_status.clarify_reason": "What is the reason for unavailability?",
     "unified.team_status.clarify_days": "Clarification required: state how many days you will be unavailable.",
     "unified.team_status.record_failed": "The response was not recorded: {error}",
     "unified.team_status.pending_commander_approval": "The report was received and is awaiting commander approval before the readiness status changes.",

@@ -86,6 +86,8 @@ _capture_surv_result = _surv_capture.capture
 
 _team_capture = make_exact_result_capture("unified_team_status")
 _capture_team_result = _team_capture.capture
+_capture_team_failure = _team_capture.capture_failure
+_capture_team_clarification = _team_capture.capture_clarification
 # Separate from the capture above: the raw query text for the current
 # `process()` call, consulted by `_requested_roster_view`/`_matching_member`
 # to infer which roster view or member a free-text question meant.
@@ -634,45 +636,65 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
     )
     def record_attendance_response(
         self,
-        source_message_id: str = "direct-response",
         availability: str = "available",
-        original_text: str = "",
         reason: str = "",
         unavailable_days: int = 0,
+        source_message_id: str = "direct-response",
+        original_text: str = "",
         received_at: str = "",
     ) -> str:
         from datetime import datetime, timedelta, timezone
+        from agents import get_request_message_context
+
         catalog = get_catalog(DEFAULT_LANGUAGE)
         telegram_identity = get_authenticated_request_identity()
         if not telegram_identity:
             res = catalog.text("unified.team_status.identity_unavailable")
-            _capture_team_result(res)
+            _capture_team_failure(res, reason="Sender identity is not authenticated")
             return res
-        now_dt = datetime.now(timezone.utc)
+
+        # Prefer values from the runtime event context over LLM-provided parameters.
+        # This prevents the LLM from fabricating identifiers and ensures the timestamp
+        # reflects when the message actually arrived, not when the worker processed it.
+        msg_ctx = get_request_message_context()
+        if msg_ctx:
+            if msg_ctx.get("source_message_id"):
+                source_message_id = msg_ctx["source_message_id"]
+            if msg_ctx.get("received_at"):
+                received_at = msg_ctx["received_at"]
+            if not original_text and msg_ctx.get("raw_text"):
+                original_text = msg_ctx["raw_text"]
+
+        now_dt = datetime.fromisoformat(received_at.replace("Z", "+00:00")).astimezone(timezone.utc) \
+            if received_at else datetime.now(timezone.utc)
         if not source_message_id:
             source_message_id = f"msg-{int(now_dt.timestamp())}"
         if not original_text:
             original_text = catalog.text("unified.team_status.default_original_text", availability=availability)
 
+        from zoneinfo import ZoneInfo
+        local_now = now_dt.astimezone(ZoneInfo(self.timezone_name))
+        cycle = self.status_store.latest_cycle()
+        if cycle is None or cycle.get("cycle_key") != local_now.date().isoformat():
+            self._open_cycle(now_dt.isoformat())
+
         approved_members = self.status_store.list_members(approved_only=True)
         if not any(m["telegram_identity"] == telegram_identity for m in approved_members):
             res = catalog.text("unified.team_status.not_approved")
-            _capture_team_result(res)
+            _capture_team_failure(res, reason=f"Member {telegram_identity} not on approved roster")
             return res
 
         normalized = availability.strip().lower()
         if normalized not in {"available", "unavailable"}:
             res = catalog.text("unified.team_status.clarify_availability")
-            _capture_team_result(res)
+            _capture_team_clarification(res)
             return res
         if normalized == "unavailable" and not reason.strip():
             res = catalog.text("unified.team_status.clarify_reason")
-            _capture_team_result(res)
+            _capture_team_clarification(res)
             return res
         if normalized == "unavailable" and unavailable_days < 1:
-            res = catalog.text("unified.team_status.clarify_days")
-            _capture_team_result(res)
-            return res
+            unavailable_days = 1
 
         unavailable_until = None
         if normalized == "unavailable":
@@ -691,7 +713,7 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
             )
         except Exception as exc:
             res = catalog.text("unified.team_status.record_failed", error=str(exc))
-            _capture_team_result(res)
+            _capture_team_failure(res, reason=str(exc))
             return res
 
         if stored_response["approval_status"] == "pending":
@@ -702,6 +724,7 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
             res = catalog.text("unified.team_status.marked_unavailable", reason=reason, icon=_ICON_CROSS)
         _capture_team_result(res)
         return res
+
 
 
 class UnifiedFriendlyForcesAgent(FriendlyForcesAgent):

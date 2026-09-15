@@ -29,9 +29,16 @@ class TeamStatusAgent(Agent):
     )
     system_prompt = (
         "You are the readiness-team status specialist. Work only with members of the approved "
-        "roster. A member is either available or unavailable. Unavailable always requires a "
-        "reason and may include a duration in days. If a message is unclear or says unavailable "
-        "without a reason, ask a short clarification question and do not invent a status. "
+        "roster. When recording attendance via record_attendance_response, the reporting member's "
+        "identity, message ID, and timestamp are authenticated and injected automatically by the "
+        "runtime context. You DO NOT need to know or ask for the member's name, telegram ID, "
+        "message ID, or received timestamp — NEVER ask for them and NEVER report them as missing or "
+        "unclear. Call record_attendance_response directly with: "
+        "availability ('available' or 'unavailable'), reason (if unavailable), and unavailable_days "
+        "(if unavailable: count the days if a range is mentioned like Sunday to Tuesday = 3 days, or "
+        "default to 1 day if for tonight, today, or no duration is stated; never 0). "
+        "If a message is unclear whether available or unavailable, or says unavailable without a "
+        "reason, ask a short clarification question and do not invent a status. "
         "Responses received after the one-hour window require commander approval. When the Main "
         "Agent asks for the team picture, call report_team_availability and return its complete "
         "name-by-name result without dropping unavailable or missing members."
@@ -148,22 +155,39 @@ class TeamStatusAgent(Agent):
 
     @tool(
         "record_attendance_response",
-        "Stores one approved-roster member's normalized free-text response; late responses remain pending until a commander reviews them.",
+        "Stores the authenticated readiness-team member's availability response ('available' or 'unavailable'). "
+        "The member identity, message ID, and timestamp are automatically injected from the runtime context — NEVER ask for them or treat them as missing. "
+        "Call this tool with availability ('available' or 'unavailable'), reason (required if unavailable), and unavailable_days (integer days unavailable, default 1 if unavailable and not specified).",
         side_effecting=True,
         idempotent=True,
     )
     def record_attendance_response(
         self,
-        source_message_id: str = "direct-response",
         availability: str = "available",
-        original_text: str = "",
         reason: str = "",
         unavailable_days: int = 0,
+        source_message_id: str = "direct-response",
+        original_text: str = "",
         received_at: str = "",
     ) -> str:
+        from agents.runtime import get_request_message_context
+
         telegram_identity = get_authenticated_request_identity()
         if not telegram_identity:
             return "The attendance response was not stored: authenticated requester identity is unavailable."
+
+        # Prefer values from the runtime event context over LLM-provided parameters.
+        # This prevents the LLM from fabricating identifiers and ensures the timestamp
+        # reflects when the message actually arrived, not when the worker processed it.
+        msg_ctx = get_request_message_context()
+        if msg_ctx:
+            if msg_ctx.get("source_message_id"):
+                source_message_id = msg_ctx["source_message_id"]
+            if msg_ctx.get("received_at"):
+                received_at = msg_ctx["received_at"]
+            if not original_text and msg_ctx.get("raw_text"):
+                original_text = msg_ctx["raw_text"]
+
         now = _aware_datetime(received_at or None)
         if not source_message_id:
             source_message_id = f"msg-{int(now.timestamp())}"
@@ -179,6 +203,14 @@ class TeamStatusAgent(Agent):
             return "Clarification required: specify whether the member is available or unavailable."
         if normalized == "unavailable" and not reason.strip():
             return "Clarification required: an unavailable member must provide a reason."
+        cycle = self.status_store.latest_cycle()
+        if cycle is None or cycle.get("cycle_key") != now.date().isoformat():
+            self.status_store.open_cycle(
+                now.date().isoformat(),
+                now.isoformat(),
+                (now + timedelta(hours=12)).isoformat(),
+            )
+
         if normalized == "unavailable" and unavailable_days < 1:
             return "Clarification required: specify how many days the member will be unavailable."
 
@@ -202,6 +234,7 @@ class TeamStatusAgent(Agent):
         if response["approval_status"] == "pending":
             return f"The late response is pending commander approval. Response ID: {response['response_id']}"
         return "The attendance response was stored."
+
 
     @tool(
         "report_team_availability",

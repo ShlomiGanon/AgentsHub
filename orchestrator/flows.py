@@ -75,7 +75,7 @@ from orchestrator.group_routing import (  # re-exported: api may only import orc
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
 from protocols import CriticalityLevel, Step, StepOutcome
 from protocols.executor import execute_steps
-from agents import authenticated_request_identity
+from agents import authenticated_request_identity, request_message_context
 from tools import get_trace_id
 
 if TYPE_CHECKING:
@@ -942,19 +942,32 @@ def _execute_protocol_plan(
     agents_by_name = {name: deps.registry.get(name) for name in protocol.participating_agents}
     persisted_rows = event.get("steps", [])
     prior = _prior_outcomes(persisted_rows, steps)
-    execution_steps = tuple(
-        replace(
-            step,
-            task_text=(
-                f"{step.task_text}\n\nCurrent validated event data JSON (use this as the source of truth): "
+    execution_steps_list = []
+    for step in steps:
+        task_text = step.task_text
+        if step.agent_name == "team_status_agent" and "record_attendance_response" in step.allowed_tools:
+            raw = event.get("raw_text", "")
+            clarified_reason = event.get("reason") or ""
+            reason_clause = f"\nClarified reason provided by reporting member: {clarified_reason}" if clarified_reason else ""
+            task_text = (
+                f"{task_text}\n\nReporting member message: {raw}{reason_clause}\n"
+                f"Note: The reporting member is authenticated automatically by the request context. "
+                f"Do not ask for member identity, message ID, or timestamp. "
+                f"Call record_attendance_response directly with availability ('available' or 'unavailable'), "
+                f"reason (if unavailable), and unavailable_days (integer >= 1 if unavailable, default 1)."
+            )
+        if step.required_event_fields:
+            task_text = (
+                f"{task_text}\n\nCurrent validated event data JSON (use this as the source of truth): "
                 f"{json.dumps({name: event.get(name) for name in step.required_event_fields}, ensure_ascii=False, sort_keys=True)}"
-            ),
-        )
-        if step.required_event_fields
-        else step
-        for step in steps
-    )
-    with authenticated_request_identity(event["sender_identity"]):
+            )
+        execution_steps_list.append(replace(step, task_text=task_text) if task_text != step.task_text else step)
+    execution_steps = tuple(execution_steps_list)
+    with authenticated_request_identity(event["sender_identity"]), request_message_context(
+        source_message_id=event.get("source_message_id"),
+        received_at=event.get("received_at"),
+        raw_text=event.get("raw_text"),
+    ):
         run_result = execute_steps(
             list(execution_steps),
             agents_by_name,
@@ -966,6 +979,39 @@ def _execute_protocol_plan(
     if run_result.waiting_for_event_data and not persisted_rows:
         _persist_step_plan(deps, event_id, steps)
     _persist_step_outcomes(deps, event_id, steps, run_result.step_outcomes)
+
+    clarification_outcome = next(
+        (outcome for outcome in run_result.step_outcomes if outcome.status == "clarification"),
+        None,
+    )
+    if clarification_outcome is not None:
+        if not persisted_rows:
+            _persist_step_plan(deps, event_id, steps)
+        question = clarification_outcome.result_text or "מה הסיבה לאי-הזמינות?"
+        waiting_step_ids = (clarification_outcome.step.step_id,)
+        latest_event = deps.persistence.fetch_event(event_id)
+        if latest_event.get("conversation_id") and deps.conversation_history_turns > 0:
+            deps.persistence.append_conversation_message(
+                latest_event["conversation_id"],
+                "assistant",
+                question,
+                ttl_hours=deps.conversation_history_ttl_hours,
+                max_turns=deps.conversation_history_turns,
+                event_id=event_id,
+            )
+        create_event_data_hold(
+            deps.persistence, event_id, ("reason",), question, waiting_step_ids
+        )
+        logger.info(
+            "protocol execution requested clarification",
+            extra={
+                "event": "protocol_clarification_hold_created",
+                "event_id": event_id,
+                "question": question,
+                "trace_id": get_trace_id(),
+            },
+        )
+        return FlowResult(event_id, "waiting_for_event_data", question)
 
     if run_result.waiting_for_event_data:
         latest_event = deps.persistence.fetch_event(event_id)

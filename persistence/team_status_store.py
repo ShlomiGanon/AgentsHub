@@ -139,6 +139,19 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             )
         return int(count)
 
+    def approve_member(self, telegram_identity: str) -> None:
+        """Approve a single member by identity without touching the roster-approval record.
+
+        Safe to call on any roster state: the roster_approval table is not touched.
+        Idempotent: already-approved members are unchanged; non-existent members are
+        silently skipped.  Only the per-row `approved` flag in `team_members` changes.
+        """
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE team_members SET approved = 1 WHERE telegram_identity = ?",
+                (telegram_identity,),
+            )
+
     def roster_is_approved(self) -> bool:
         with self._connect() as connection:
             return connection.execute("SELECT 1 FROM roster_approval WHERE singleton_id = 1").fetchone() is not None
@@ -206,7 +219,7 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         if cycle is None:
             raise TeamStatusPersistenceError("no attendance cycle is open")
         deadline = _parse_timestamp(cycle["deadline_at"])
-        approval_status = "accepted" if received <= deadline else "pending"
+        approval_status = "accepted" if (received <= deadline or availability == "unavailable") else "pending"
         response_id = f"response-{uuid.uuid4().hex}"
 
         with self._connect() as connection:

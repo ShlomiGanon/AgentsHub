@@ -42,6 +42,9 @@ _invocation_deadline: ContextVar[float | None] = ContextVar("invocation_deadline
 _authenticated_request_identity: ContextVar[str | None] = ContextVar(
     "authenticated_request_identity", default=None
 )
+_request_message_context: ContextVar[dict | None] = ContextVar(
+    "request_message_context", default=None
+)
 _tool_class_cache: dict[tuple[type, str, str, int], type] = {}
 _tool_class_cache_lock = threading.Lock()
 _llm_cache: "OrderedDict[tuple[str, str, str], object]" = OrderedDict()
@@ -64,6 +67,33 @@ def authenticated_request_identity(identity: str):
         yield
     finally:
         _authenticated_request_identity.reset(token)
+
+
+def get_request_message_context() -> dict | None:
+    """Return the originating event's message metadata, or None if no event context is active.
+
+    The returned dict may contain `source_message_id` (str | None), `received_at` (str | None),
+    and `raw_text` (str | None) — exactly the fields recorded on the `events` table row that
+    triggered the current worker invocation.  Tools that need to record these values (e.g.
+    `record_attendance_response`) should read from here instead of relying on LLM-provided
+    parameters, which can be fabricated or omitted.
+    """
+    return _request_message_context.get()
+
+
+@contextmanager
+def request_message_context(source_message_id: str | None, received_at: str | None, raw_text: str | None):
+    """Context manager that binds event message metadata for the duration of a worker invocation.
+
+    Set once by `orchestrator.flows` right next to `authenticated_request_identity`, so both
+    are always in sync.  The dict is intentionally read-only from the tool's perspective.
+    """
+    ctx = {"source_message_id": source_message_id, "received_at": received_at, "raw_text": raw_text}
+    token = _request_message_context.set(ctx)
+    try:
+        yield
+    finally:
+        _request_message_context.reset(token)
 
 
 class ExactResultCapture:
@@ -91,16 +121,39 @@ class ExactResultCapture:
 
     def __init__(self, namespace: str):
         self._context_var: ContextVar[str | None] = ContextVar(f"exact_result_capture[{namespace}]", default=None)
-        self._results: dict[str, str] = {}
+        self._results: dict[str, tuple[str, str, str | None]] = {}  # key -> (text, status, failure_reason)
         self._lock = threading.Lock()
 
     def capture(self, output: str) -> None:
-        """Call from inside a tool method, with the exact text that method is about to return."""
+        """Call from inside a tool method, with the exact text that method is about to return.
 
+        Use this for successful outcomes.  For business failures use `capture_failure`;
+        for clarification requests use `capture_clarification`.
+        """
+        self._capture_with_status(output, "success", None)
+
+    def capture_failure(self, output: str, *, reason: str | None = None) -> None:
+        """Capture a business failure: the operation could not be completed.
+
+        The text is delivered verbatim to the user; `reason` is logged to Trace.
+        The step outcome will have `succeeded=False`.
+        """
+        self._capture_with_status(output, "failed", reason or output)
+
+    def capture_clarification(self, output: str) -> None:
+        """Capture a clarification request: the operation cannot proceed without more input.
+
+        The text (the question) is delivered verbatim; the caller is expected to reply
+        and the flow will resume.  The step outcome will have `succeeded=False` and
+        `status='clarification'` so the orchestrator can handle it appropriately.
+        """
+        self._capture_with_status(output, "clarification", None)
+
+    def _capture_with_status(self, output: str, status: str, failure_reason: str | None) -> None:
         key = self._context_var.get() or get_trace_id()
         if key:
             with self._lock:
-                self._results[key] = output
+                self._results[key] = (output, status, failure_reason)
 
     def run(
         self,
@@ -111,7 +164,7 @@ class ExactResultCapture:
         invocation_policy: "InvocationPolicy | None" = None,
     ) -> "AgentResult":
         """Call from a `process()` override in place of calling `base_process` (typically
-        `super().process`) directly — returns whatever a `.capture(...)` call recorded during
+        `super().process`) directly — returns whatever a `.capture*(...)` call recorded during
         this invocation instead of `base_process`'s own result, when one was recorded."""
 
         key = get_trace_id() or uuid.uuid4().hex
@@ -121,13 +174,15 @@ class ExactResultCapture:
         try:
             model_result = base_process(text, allowed_tools, invocation_policy=invocation_policy)
             with self._lock:
-                exact = self._results.pop(key, None)
-            if exact is not None:
-                return AgentResult(status="success", text=exact)
+                captured = self._results.pop(key, None)
+            if captured is not None:
+                captured_text, captured_status, captured_reason = captured
+                return AgentResult(status=captured_status, text=captured_text, failure_reason=captured_reason)
             return model_result
         finally:
             with self._lock:
                 self._results.pop(key, None)
+
             self._context_var.reset(token)
 
 

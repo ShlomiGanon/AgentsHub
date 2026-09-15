@@ -762,6 +762,11 @@ MESSAGES = {
         "unavailable למי לא זמין, awaiting למי שטרם דיווח, count לכמות זמינים, ו-reason לסיבת אי-זמינות; "
         "ב-view מסוג reason העבר גם member_query מתוך השאלה. אל תמציא שמות או סיבות. "
         "לרישום דיווח נוכחות קרא ל-record_attendance_response. "
+        "שים לב: זהות הלוחם המדווח, מזהה ההודעה וזמן הדיווח מאומתים ומוזרקים אוטומטית מקונטקסט המערכת — "
+        "אין לבקש אותם לעולם, אין לדווח עליהם כחסרים (לעולם אל תחזיר MISSING_INFORMATION לגביהם!), "
+        "ויש לקרוא מיידית ל-record_attendance_response עם availability ('available' או 'unavailable'), "
+        "reason (אם unavailable), ו-unavailable_days (מספר ימים שלם >= 1 אם unavailable: "
+        "חשב לפי טווח הימים שהוזכר כמו ראשון עד שלישי = 3, או ברירת מחדל 1 אם לא צוין משך מפורש או עבור משמרת הערב/היום; אסור להעביר 0 כאשר unavailable). "
         "היה תמציתי וברור."
     ),
     "unified.team_status.tool.report_availability": (
@@ -771,7 +776,12 @@ MESSAGES = {
     "unified.team_status.tool.get_roster": (
         "מחזיר את תמונת מצבת כיתת הכוננות וזמינות הלוחמים בלבד (קריאה בלבד ללא שום תופעות לוואי) בעברית."
     ),
-    "unified.team_status.tool.record_attendance": "רישום תגובת נוכחות של לוחם כיתת כוננות בעברית.",
+    "unified.team_status.tool.record_attendance": (
+        "רושם את תגובת הזמינות של הלוחם המאומת ('available' או 'unavailable'). "
+        "זהות הלוחם, מזהה ההודעה והזמן מוזרקים אוטומטית מקונטקסט המערכת — אין לבקש אותם ואין לדווח עליהם כחסרים. "
+        "יש להעביר availability ('available' או 'unavailable'), reason (חובה אם unavailable), "
+        "ו-unavailable_days (מספר ימים שלם >= 1 אם unavailable, ברירת מחדל 1 אם לא צוין משך מפורש)."
+    ),
 
     "unified.team_status.legacy_placeholder_name": "חבר כיתת כוננות ({identity})",
     "unified.team_status.unnamed_member": "משתמש {identity} (שם לא הוגדר)",
@@ -811,7 +821,7 @@ MESSAGES = {
     "unified.team_status.default_original_text": "דיווח זמינות: {availability}",
     "unified.team_status.not_approved": "רישום התגובה נכשל: המשתמש אינו חבר מאושר בכיתת הכוננות.",
     "unified.team_status.clarify_availability": "הבהרה נדרשת: ציין האם אתה זמין או לא זמין.",
-    "unified.team_status.clarify_reason": "הבהרה נדרשת: לוחם שאינו זמין נדרש לספק סיבה.",
+    "unified.team_status.clarify_reason": "מה הסיבה לאי-הזמינות?",
     "unified.team_status.clarify_days": "הבהרה נדרשת: ציין לכמה ימים אינך זמין.",
     "unified.team_status.record_failed": "רישום התגובה נכשל: {error}",
     "unified.team_status.pending_commander_approval": "הדיווח התקבל וממתין לאישור מפקד לפני שינוי סטטוס הכוננות.",

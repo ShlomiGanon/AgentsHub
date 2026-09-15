@@ -252,14 +252,16 @@ def _fake_loaded_profile(simulation_users=(), simulation_groups=(), simulation_r
 
 class _FakeRosterStore:
     """Minimal object matching only the shape `SimulationRoster.open` documents
-    (`register_member`/`approve_roster`/`roster_is_approved`/`list_members`) — used
+    (`register_member`/`approve_roster`/`approve_member`/`roster_is_approved`/`list_members`) — used
     to prove `ensure_simulation_entities` never assumes anything beyond that shape,
     i.e. never imports or names a specific agent (docs/profile_simulations_design.md)."""
 
     def __init__(self, already_approved=False):
         self.members: dict[str, str] = {}
+        self.approved_ids: set[str] = set()
         self._approved = already_approved
         self.approve_calls: list[str] = []
+        self.approve_member_calls: list[str] = []
 
     def register_member(self, telegram_identity, full_name, registered_at=None):
         self.members[telegram_identity] = full_name
@@ -267,12 +269,19 @@ class _FakeRosterStore:
     def approve_roster(self, approved_by, approved_at=None):
         self.approve_calls.append(approved_by)
         self._approved = True
+        self.approved_ids.update(self.members)
         return len(self.members)
+
+    def approve_member(self, telegram_identity):
+        self.approve_member_calls.append(telegram_identity)
+        self.approved_ids.add(telegram_identity)
 
     def roster_is_approved(self):
         return self._approved
 
     def list_members(self, *, approved_only=True):
+        if approved_only:
+            return [{"telegram_identity": tid} for tid in self.members if tid in self.approved_ids]
         return [{"telegram_identity": telegram_id} for telegram_id in self.members]
 
 
@@ -396,6 +405,52 @@ def test_ensure_simulation_entities_roster_registration_reports_only_newly_regis
         second = ensure_simulation_entities(persistence, loaded)
         assert second.registered_roster_members == ()  # already registered — nothing "new" to report
         assert second.newly_approved_rosters == ()  # already approved after the first call
+    finally:
+        persistence.close()
+
+
+def test_ensure_simulation_entities_approves_new_persona_on_already_approved_roster(tmp_path):
+    """When a roster is already approved (e.g. by a real commander or a previous provisioning run)
+    and a new simulation persona is added, that persona must end up approved without calling
+    approve_roster() again (which would silently approve real users still pending review)."""
+    persistence = SQLitePersistence(str(tmp_path / "prov.db"))
+    try:
+        store = _FakeRosterStore(already_approved=True)
+        roster = SimulationRoster(key="team_status", open=lambda path: store, db_path="ignored")
+        persona = SimulationPersona(key="new", offset=3, full_name="New Member", pre_approved_rosters=("team_status",))
+        loaded = _fake_loaded_profile(simulation_users=(persona,), simulation_rosters=(roster,))
+
+        result = ensure_simulation_entities(persistence, loaded)
+
+        # approve_roster() must NOT be called — it would auto-approve all pending real users
+        assert store.approve_calls == []
+        assert result.newly_approved_rosters == ()
+        # approve_member() must have been called for the new persona specifically
+        assert simulation_user_telegram_id(3) in store.approve_member_calls
+        assert simulation_user_telegram_id(3) in store.approved_ids
+    finally:
+        persistence.close()
+
+
+def test_ensure_simulation_entities_does_not_call_approve_member_for_already_registered_persona(tmp_path):
+    """approve_member is only called for *newly* registered personas on an already-approved
+    roster; a persona that was already registered on a previous provisioning run is skipped."""
+    persistence = SQLitePersistence(str(tmp_path / "prov.db"))
+    try:
+        store = _FakeRosterStore(already_approved=False)
+        roster = SimulationRoster(key="team_status", open=lambda path: store, db_path="ignored", approved_by="cmdr")
+        persona = SimulationPersona(key="a", offset=0, full_name="A", pre_approved_rosters=("team_status",))
+        loaded = _fake_loaded_profile(simulation_users=(persona,), simulation_rosters=(roster,))
+
+        # First provisioning run: roster starts unapproved -> approve_roster is called
+        ensure_simulation_entities(persistence, loaded)
+        assert store.approve_calls == ["cmdr"]
+        store.approve_member_calls.clear()
+
+        # Second run: roster is now approved, persona already registered -> neither approve method called
+        ensure_simulation_entities(persistence, loaded)
+        assert store.approve_calls == ["cmdr"]  # unchanged
+        assert store.approve_member_calls == []  # not newly registered
     finally:
         persistence.close()
 

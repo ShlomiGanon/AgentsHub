@@ -1093,7 +1093,8 @@ def register_handlers(application, deps: BotDeps) -> None:
         await started_application.bot.set_my_commands(
             [BotCommand(name, description) for name, description in _bot_commands(messages)]
         )
-        cursor_store = NotificationCursorStore(Path(f"{deps.loaded_profile.db_path}.notification_cursor"))
+        cursor_path = deps.notification_cursor_path or Path(f"{deps.loaded_profile.db_path}.notification_cursor")
+        cursor_store = NotificationCursorStore(cursor_path)
         # If the cursor is 0 (first run / reset), fast-forward to the current
         # notification head so we don't redeliver old approval prompts from
         # previous server sessions or test runs. Only new notifications from

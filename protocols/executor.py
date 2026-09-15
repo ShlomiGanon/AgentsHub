@@ -110,7 +110,34 @@ def execute_step_with_retry(
             sleep_fn(backoff_seconds)
             continue
 
+        if agent_result.status == "failed":
+            # The agent reported a definitive business failure (e.g. a tool returned an error
+            # captured via ExactResultCapture.capture_failure).  Do not retry — the failure is
+            # deterministic, not a transient model error.
+            failure_reason = agent_result.failure_reason or agent_result.text
+            logger.info(
+                "step reported business failure",
+                extra={"event": "step_business_failure", "agent": step.agent_name, "attempt": attempts, "reason": failure_reason, "trace_id": get_trace_id()},
+            )
+            return StepOutcome(
+                step=step, result_text=agent_result.text, attempt_count=attempts, succeeded=False,
+                failure_reason=failure_reason, status="failed",
+            )
+
+        if agent_result.status == "clarification":
+            # The agent needs more information from the user before the operation can proceed.
+            # This is not a model error or a retry-able failure; it's a deliberate output.
+            logger.info(
+                "step requests clarification",
+                extra={"event": "step_clarification", "agent": step.agent_name, "attempt": attempts, "trace_id": get_trace_id()},
+            )
+            return StepOutcome(
+                step=step, result_text=agent_result.text, attempt_count=attempts, succeeded=False,
+                failure_reason=None, status="clarification",
+            )
+
         return StepOutcome(step=step, result_text=agent_result.text, attempt_count=attempts, succeeded=True)
+
 
 
 def _missing_event_fields(step: Step, event_data: dict | None) -> tuple[str, ...]:

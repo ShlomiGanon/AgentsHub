@@ -97,8 +97,10 @@ UNCLEAR_TASK_PROMPT_INSTRUCTION = (
 
 @dataclass(frozen=True)
 class AgentResult:
-    status: Literal["success", "unclear_task"]
+    status: Literal["success", "unclear_task", "failed", "clarification"]
     text: str
+    failure_reason: str | None = None
+
 
 
 def parse_agent_output(raw_text: str) -> AgentResult:

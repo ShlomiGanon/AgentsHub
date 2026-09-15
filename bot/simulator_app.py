@@ -73,9 +73,14 @@ class SimulatorRuntime:
         self.telegram_client = SimulatorTelegramClient()
         self.api_client = api_client or HttpApiClient(
             f"http://localhost:{loaded_profile.api_port}",
-            bot_service_key=resolve_bot_service_key(),
         )
-        self.deps = BotDeps(loaded_profile=loaded_profile, telegram_client=self.telegram_client, api_client=self.api_client)
+        sim_cursor_path = Path(f"{loaded_profile.db_path}.bot-simulator.notification_cursor")
+        self.deps = BotDeps(
+            loaded_profile=loaded_profile,
+            telegram_client=self.telegram_client,
+            api_client=self.api_client,
+            notification_cursor_path=sim_cursor_path,
+        )
         self.bot = telegram.Bot(token="simulator", request=FakeBotRequest(), get_updates_request=FakeBotRequest())
         self.application = ApplicationBuilder().bot(self.bot).build()
         register_handlers(self.application, self.deps)

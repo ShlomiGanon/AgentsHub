@@ -3,6 +3,7 @@
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -46,6 +47,7 @@ class BotDeps:
     loaded_profile: "LoadedProfile"
     telegram_client: "TelegramClient"
     api_client: "BotApiClient"
+    notification_cursor_path: Path | None = None
 
 PermissionLevelName = Literal["viewer", "commander"]
 
