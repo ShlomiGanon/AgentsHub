@@ -1,5 +1,6 @@
 """Unified command-and-control profile for readiness team, surveillance, and tactical forces."""
 
+import re
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -478,11 +479,41 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
 
     @classmethod
     def _matching_member(cls, snapshot: list[dict], query: str) -> dict | None:
+        """Match a free-text query (typically `member_query`, or the raw
+        triggering message as a fallback — see `_team_query_text`) against one
+        roster member.
+
+        A registered display name usually carries a role/unit suffix a
+        caller's query never repeats verbatim (a roster entry like "<first
+        name> - standby squad" against a short, natural query naming only
+        the first name, or the fallback's whole original message mentioning
+        that first name in passing — docs/work_process.md §21): the query is
+        normally the *longer* side here (or at least not a literal
+        superstring of the full registered name), so the primary check looks
+        for each of the *name's own words* as a whole word somewhere inside
+        the query, not for the whole name as a literal substring of it. This
+        must be word-boundaried, not a raw substring: two members whose names
+        share a prefix (e.g. "Dan - standby squad" vs. "Danny - standby
+        squad") would otherwise both spuriously match a query for the
+        shorter name. A query that only hits a word several members share (a
+        role/unit suffix, or two different people who happen to share a
+        first name) correctly yields more than one match — refusing to
+        guess, exactly like today's already-existing "more than one match"
+        refusal. The plain substring checks stay for the opposite case — a
+        caller that passes back a (possibly short) phrase which happens to
+        repeat the whole registered name or identity verbatim."""
+
         normalized = query.casefold()
+        if not normalized:
+            return None
         matches = [
             entry for entry in snapshot
             if entry["telegram_identity"].casefold() in normalized
             or cls._member_name(entry).casefold() in normalized
+            or any(
+                re.search(rf"\b{re.escape(word)}\b", normalized)
+                for word in re.findall(r"\w+", cls._member_name(entry).casefold())
+            )
         ]
         return matches[0] if len(matches) == 1 else None
 

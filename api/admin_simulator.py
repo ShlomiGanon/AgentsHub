@@ -307,7 +307,24 @@ SIMULATOR_BODY = """
   // than racing that newer step's own poll loop to rediscover its own send/edit exchange
   // (both loops watch the same chat's shared event stream; only the latest step's own loop
   // should ever be reading it at a time).
+  //
+  // §20 (docs/work_process.md): the generation must be claimed the moment a step *begins*
+  // sending — not only once its own POST (including the real, synchronous /Msg round trip:
+  // status.thinking send, then an LLM classification call, then the edit to a final ack) has
+  // fully returned. Two steps landing closer together than that round trip's own latency
+  // (observed live ~8-18s apart, against a ~10s classification call) otherwise leave an older
+  // generation free to poll *during* the newer step's still-in-flight send/edit window,
+  // rediscovering its un-edited "status.thinking" placeholder as if it were a new arrival.
+  // claimPollGeneration() is called synchronously before that POST even starts, so any older
+  // generation is superseded (and stops itself, at its own next check) well before the new
+  // step's own status message is even sent, let alone edited.
   const pollGenerationByChatId = {};
+
+  function claimPollGeneration(chatId) {
+    const myGeneration = (pollGenerationByChatId[chatId] || 0) + 1;
+    pollGenerationByChatId[chatId] = myGeneration;
+    return myGeneration;
+  }
   const registeredIdentities = new Set((DATA.users || []).map(function (user) { return String(user.telegram_identity); }));
   const usersByIdentity = {};
   (DATA.users || []).forEach(function (user) { usersByIdentity[String(user.telegram_identity)] = user; });
@@ -721,16 +738,12 @@ SIMULATOR_BODY = """
   // scenario painfully slow for no benefit — this runs quietly alongside it instead,
   // appending a new bubble only if and when something actually arrives.
   //
-  // §19's fix: claims this chat's generation for itself first — see
-  // pollGenerationByChatId's own comment for why (a second step sent to the same chat
-  // must make any still-running earlier loop for that chat stand down, or both loops
-  // end up racing to rediscover the newer step's own send/edit exchange as "new").
-  // Checked both before each request (skip a poll entirely once superseded) and after
-  // (discard a response that was already in flight when superseded).
-  async function pollSimulatorChat(chatKey, chatId, watermark) {
-    const myGeneration = (pollGenerationByChatId[chatId] || 0) + 1;
-    pollGenerationByChatId[chatId] = myGeneration;
-
+  // §19/§20's fix: `myGeneration` was already claimed by claimPollGeneration() before this
+  // step's own POST even started (see pollGenerationByChatId's own comment for why it can't
+  // wait until here) — this loop just needs to know the generation it's watching for, not
+  // claim its own. Checked both before each request (skip a poll entirely once superseded)
+  // and after (discard a response that was already in flight when superseded).
+  async function pollSimulatorChat(chatKey, chatId, watermark, myGeneration) {
     const startedAt = Date.now();
     let mark = watermark || { status_len: 0, sent_len: 0 };
     while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
@@ -768,6 +781,10 @@ SIMULATOR_BODY = """
     const reply = appendBubble(chatKey, 'sys', t('system_label'), t('sending'), null);
 
     const request = buildRequest(chat, step);
+    // §20: claimed here, synchronously, before the POST (and its own real send/edit cycle)
+    // even starts — see pollGenerationByChatId's own comment for why. Event-kind steps never
+    // poll a chat (they use pollJob against an event_id instead), so this is skipped for them.
+    const myGeneration = chat.kind === 'event' ? null : claimPollGeneration(request.body.chat_id);
     let result;
     try {
       result = await apiCall('POST', request.url, request.identity, request.body);
@@ -808,7 +825,7 @@ SIMULATOR_BODY = """
     queue.shift();
     state.busy = false;
     updateGlobalState();
-    pollSimulatorChat(chatKey, request.body.chat_id, payload.watermark);
+    pollSimulatorChat(chatKey, request.body.chat_id, payload.watermark, myGeneration);
   }
 
   // ---- mapping panel: prompts for any Telegram ID a manually-provided scenario is missing ----

@@ -102,3 +102,45 @@ def test_operational_history_and_team_status_use_different_schemas(tmp_path):
     assert "team_members" not in operational_tables
     assert "team_members" in status_tables
     assert "events" not in status_tables
+
+
+# -- _parse_timestamp: a missing offset defaults to UTC (docs/work_process.md §21) --
+# A tool-calling model asked for an "as of" timestamp sometimes omits the offset;
+# this used to be a hard TeamStatusPersistenceError the model had to recover from
+# by retrying without the argument — now it is treated as UTC, the same
+# convention history/event_pipeline.py's own parse_timestamp already uses.
+
+
+def test_parse_timestamp_defaults_a_naive_timestamp_to_utc():
+    from persistence.team_status_store import _parse_timestamp
+
+    assert _parse_timestamp("2026-09-15T05:23:00") == datetime(2026, 9, 15, 5, 23, tzinfo=timezone.utc)
+
+
+def test_parse_timestamp_still_converts_a_non_utc_offset_to_utc():
+    from persistence.team_status_store import _parse_timestamp
+
+    # 02:00 at +05:00 is 21:00 UTC the *previous* day.
+    assert _parse_timestamp("2026-03-15T02:00:00+05:00") == datetime(2026, 3, 14, 21, 0, tzinfo=timezone.utc)
+
+
+def test_parse_timestamp_still_rejects_genuinely_unparseable_input():
+    from persistence.team_status_store import _parse_timestamp
+
+    with pytest.raises(TeamStatusPersistenceError, match="invalid ISO timestamp"):
+        _parse_timestamp("not a timestamp at all")
+
+
+def test_availability_snapshot_accepts_an_offset_less_as_of_timestamp(tmp_path):
+    """The exact live-run failure this fixes: `report_team_availability`
+    (profiles/unified_test.py) passes `as_of_iso` straight through to
+    `availability_snapshot` without adding an offset — a naive timestamp must
+    succeed, not raise, exactly as an explicit `Z`/`+00:00` one already does."""
+
+    store = open_team_status_persistence(str(tmp_path / "team-status.db"))
+    store.register_member("101", "Alex Cohen", _timestamp())
+    store.approve_roster("commander-1", _timestamp())
+
+    snapshot = store.availability_snapshot("2026-09-03T05:00:00")
+
+    assert snapshot[0]["telegram_identity"] == "101"

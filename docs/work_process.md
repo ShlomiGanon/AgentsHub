@@ -1133,3 +1133,215 @@ stopped by the time this fix was verified, so confirmation here is
 test-based (including the deliberate revert-and-confirm above) rather
 than a fresh live-log check; offered to verify against a live run once
 the user restarts one.
+
+## 20. Duplicate-ack bug, part 2: a tighter-spacing race §19's fix didn't cover
+
+§19's generation guard was live-verified against a fresh run and the same
+symptom recurred: `כיתת כוננות` (`-9000000000000000`) showed two identical
+ack bubbles (04:41, 04:42) with a stray "המודל חושב..." fragment between
+them. Re-investigated with fresh logs from that actual run, not just the
+existing suite — cross-referencing `bot-sim-unified_test.stderr.log` and
+`api-unified_test.stderr.log` (correcting for a multi-run log file: an
+earlier grep first matched a stale `11/Sep` entry before the real
+`15/Sep` window was isolated) recovered a precise, second-by-second
+timeline of four real `POST /Msg` steps landing on that one chat 8–18s
+apart, plus the trace-level (`stage finished`/LLM call) detail for each.
+
+**Root cause — a real gap in §19's fix, not a regression of it.** §19
+correctly stops an *already-finished* step's poll loop once a *later*
+step's own loop supersedes it. But `sendNext()` only ever called
+`pollSimulatorChat()` (the sole place a generation was claimed) **after**
+a step's entire `POST /Simulator-msg` had returned — and that POST's own
+round trip is not instant: `present_incoming_message()` (`bot/app.py`,
+real production code, unchanged) sends `status.thinking` immediately, then
+synchronously awaits the real `/Msg` call (an actual LLM intent
+classification — ~10s, live-log-confirmed) before editing that message to
+the final ack. Two steps landing closer together than that ~10s round
+trip (live: 8–18s apart) mean an *older* generation is still "current"
+for the newer step's *entire in-flight* send/edit window — free to poll
+during it, and to discover the newer step's own not-yet-edited
+`status.thinking` placeholder as if it were a new arrival (the stray
+bubble), then discover its final text again once the edit lands (the
+"duplicate" ack) — all before the newer step's own loop ever starts.
+
+**Fix — `api/admin_simulator.py` (JS only; no server-side change)**:
+generation-claiming split out of `pollSimulatorChat()` into its own
+`claimPollGeneration(chatId)`, called by `sendNext()` **synchronously
+before its `POST`** (right after `buildRequest()`, before `apiCall('POST',
+...)`), not after. `pollSimulatorChat()` no longer claims its own
+generation — it now takes the already-claimed `myGeneration` as a
+parameter. This means an older generation is superseded (and stops itself
+at its own very next check, within one `POLL_INTERVAL_MS`) the moment a
+new step *begins* sending, well before that step's own status message is
+even sent, let alone edited — closing the window §19 left open.
+Event-kind steps (sensor `POST /Event`) never poll a chat and are
+unaffected (`myGeneration` is skipped for them).
+
+**Tests (`tests/test_api_admin.py`)**:
+- `test_a_superseded_poll_loop_never_polls_or_renders_anything` (§19's
+  original test) updated for the new signature — claims generations via
+  `claimPollGeneration()` explicitly now, same assertions as before.
+- `test_send_next_claims_the_poll_generation_before_its_own_post` (new) —
+  a direct, textual ordering check on the shipped `sendNext()` source:
+  `claimPollGeneration(` must appear before `apiCall('POST'`. This is the
+  test actually coupled to the regression risk (someone moving the claim
+  back inside `pollSimulatorChat()`, or after the POST).
+- `test_an_early_claim_prevents_a_stale_loop_from_rendering_a_step_still_in_flight`
+  (new) — reproduces the tighter-spacing race dynamically, using the real
+  extracted `claimPollGeneration()`/`pollSimulatorChat()` (not a
+  reimplementation) at a timing ratio matched to what was actually
+  observed live (~2s poll interval vs. ~10s request round trip, kept as
+  6:1 scaled down). Compares claiming a second step's generation *before*
+  a round-trip-shaped delay (the fix) against claiming it only *after*
+  (the old bug's shape): asserts the early claim leaves the older
+  generation's loop with zero further appends during that delay, and that
+  a late claim reproduces the bug (appends > 0 during the same window).
+
+**Verified via the same revert-and-confirm rigor as §19**: manually
+reverted all three fix edits back to their §19 shape (backed up first,
+diffed after restoring to confirm an exact match) and reran all three
+tests — the two new tests fail as expected (one via a real, meaningful
+assertion — "sendNext no longer claims a poll generation at all" — the
+other via an extraction error, since `claimPollGeneration` no longer
+exists to extract), and the updated §19 test fails too (its own
+`claimPollGeneration` extraction target is gone). Restored the fix,
+reconfirmed all three pass, then ran the full suite green. Item (b) from
+the same investigation (auto-scroll/highlighting the next-active chat
+card) — the highlighting itself already existed (`active-next` CSS class,
+toggled by `updateGlobalState()`); auto-scroll does not — is intentionally
+not addressed here; the user is deciding on it separately.
+
+## 21. Three fresh reports from the commander DM chat: one non-issue, one already-correct mechanism, two real bugs fixed
+
+Investigated three things the user flagged from a live run's commander DM
+("שיחה פרטית עם רבש\"ץ") card, using the SQLite persistence DB directly
+(`events`, `event_steps`, `log_entries`) rather than the truncated console
+log, to recover full, untruncated reasoning text and exception tracebacks.
+
+**1. "No matching protocol" response — not a bug, and not even that
+chat.** Traced the exact event: a correction/clarification report
+("no gunfire at the western gate — that was our own patrol's warning
+shot") sent by `police_patrol` to the **`external_forces`** chat, not the
+commander DM. `outcome: no_match_protocol` with reason "none of the
+available protocols... fit a real-time operational clarification" — a
+correct read: this profile's 11 declared protocols are all forward-facing
+actions (query X / dispatch X / recall X); none covers "acknowledge a
+correction." `no_match_protocol` is also a first-class, deliberately
+designed terminal outcome (`orchestrator/flows.py` → notification catalog
+`outcome.no_match_protocol`), not a crash or dead end. No fix — confirmed
+correct, intended behavior, per the user's own conclusion.
+
+**2. Commander-originated requests skipping the approval hold — already
+implemented, correctly, and deliberately not bypassed for this profile's
+three high-stakes protocols.** `orchestrator/flows.py` already tracks
+`originated_from_commander` and threads it into
+`orchestrator/holds.py::protocol_requires_approval()`, which already skips
+the `commander_only`/`approval_flag` hold for a commander's own request —
+*unless* `requires_confirmation=True` is also set on the protocol, which
+forces the hold regardless of who's asking (the code's own docstring:
+"`requires_confirmation` additionally forces a hold for a commander's own
+request"). This profile's three physically-consequential protocols
+(`dispatch_drone_to_incident`, `recall_drone_to_base`,
+`dispatch_emergency_forces`) all set `requires_confirmation=True`
+alongside `commander_only`/`approval_flag`, by design — a deliberate
+"confirm your own high-stakes action" safety net. Per the user's explicit
+instruction, left untouched.
+
+**3. Run failure — `team_status_agent` "could not confidently identify"
+a named roster member. Two real bugs found and fixed; roster registration
+itself was never the problem.**
+
+Traced via `log_entries` (the DB's untruncated copy of every emitted log
+record — the console log truncates long messages to ~100 chars and never
+shows `exc_info` at all) to the exact chain: the commander's message named
+"דן" by his short name; `team_status_agent`'s `report_team_availability`
+(`profiles/unified_test.py`) correctly selected `view="reason"` and called
+`_matching_member(snapshot, member_query)` — which returned `None`,
+producing catalog key `unified.team_status.reason_unknown_member`
+verbatim, which the run's own final-verdict agent then cited as the
+specific reason the whole protocol run failed. The roster itself
+(`data/unified_test/unified_team_status.db`) was fully correct: "דן -
+כיתת כוננות" was registered and approved exactly as declared.
+
+- **Bug A — `_matching_member()`'s containment direction (the primary
+  cause).** It required the *query* to contain the member's *full*
+  registered display name, including a role/unit suffix ("דן - כיתת
+  כוננות") that neither a short natural query ("דן") nor the raw
+  triggering message ever repeats verbatim — so it could never resolve
+  any member by their short name, structurally, not just in this one run.
+  **Fix**: reversed the primary direction — each of the *registered
+  name's own words* is now checked (word-boundaried, via `re.search(rf"\b
+  {word}\b", ...)`, not a raw substring) against the query. A literal
+  substring reversal alone was considered and rejected: this exact
+  profile registers a near-miss pair ("דן - כיתת כוננות" /
+  "דני - כיתת כוננות") that a naive substring check in either direction
+  would conflate (a query for "דן" would also match "דני"). The
+  word-boundaried, per-word design was verified (via a standalone Python
+  check before editing) to correctly: resolve a short exact query; resolve
+  a full natural sentence naming the person in passing (the actual
+  fallback-to-`_team_query_text` shape the real failure hit); refuse (not
+  guess) when a query only hits a word several members share (a generic
+  role suffix); and refuse when two genuinely different people share the
+  same first name. The old substring checks were kept alongside it (not
+  replaced) for the opposite case — a caller passing back a longer phrase
+  that happens to repeat the whole registered name or identity verbatim.
+- **Bug B — `persistence/team_status_store.py::_parse_timestamp()`
+  raised on a timestamp with no timezone offset**, instead of defaulting
+  to UTC. `profiles/unified_test.py`'s own `report_team_availability`
+  passes `as_of_iso` straight through to `availability_snapshot()`
+  without adding an offset — the model's first two tool-call attempts in
+  the traced run passed an offset-less timestamp and hit this exact
+  `TeamStatusPersistenceError`, only succeeding on a third attempt that
+  omitted the argument entirely. This didn't directly cause the run's
+  failure (the tool did eventually succeed), but it's a real fragility —
+  a tool-calling model can be expected to sometimes omit the offset — and
+  a needless failure mode along the same call path as Bug A. **Fix**: a
+  timestamp with no offset is now treated as UTC, matching the existing
+  convention `history/event_pipeline.py`'s own `parse_timestamp` already
+  uses elsewhere in this codebase (confirmed against that module's own
+  test, `test_parse_timestamp_treats_a_naive_timestamp_as_already_utc`).
+  Scope: only this one `_parse_timestamp` (12 call sites within
+  `persistence/team_status_store.py`, all now share the more lenient
+  behavior uniformly) — `agents/team_status_agent.py`'s own, separate
+  `_aware_datetime` has the identical raise-on-missing-tz pattern but
+  lives on a different call path this profile's overrides don't use, and
+  was out of scope for the user's explicit request; flagged to the user
+  for awareness, not changed.
+
+**Tests**:
+- `tests/test_unified_role_and_security.py` —
+  `test_team_status_reason_view_matches_a_short_name_against_its_full_suffixed_entry`
+  (the real bug's exact shape: short query, full sentence, and the
+  fallback-to-raw-message path, all resolving correctly; a vague query
+  matching no one correctly refuses) and
+  `test_team_status_reason_view_refuses_to_guess_between_two_real_same_named_members`
+  (two distinct people sharing a first name still refuse to guess).
+- `tests/test_team_status_persistence.py` —
+  `test_parse_timestamp_defaults_a_naive_timestamp_to_utc`,
+  `test_parse_timestamp_still_converts_a_non_utc_offset_to_utc`,
+  `test_parse_timestamp_still_rejects_genuinely_unparseable_input`, and
+  `test_availability_snapshot_accepts_an_offset_less_as_of_timestamp`
+  (the exact live call path: `availability_snapshot` given a bare,
+  offset-less `as_of`).
+
+**Verified via the same revert-and-confirm rigor as §19/§20**: backed up
+both fixed files, reverted each fix to its pre-fix shape in turn, reran
+the new tests — the timezone tests fail with the exact original
+`TeamStatusPersistenceError: timestamps must include a timezone`; the
+name-matching test fails with a real, meaningful assertion mismatch
+(expected the unavailable-with-reason text, got the "cannot confidently
+identify" refusal text instead) — restored each fix from the backup
+(diffed to confirm an exact match), reconfirmed all new and existing
+tests pass.
+
+The first full-suite run caught a real, unrelated-to-correctness issue in
+the fix itself: `tests/test_hebrew_leakage.py` (mechanically enforcing
+`REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md`'s rule that no first-party
+source file outside the message catalog may contain a raw Hebrew literal,
+anywhere — including comments/docstrings) failed on
+`profiles/unified_test.py`, because `_matching_member()`'s new docstring
+quoted Hebrew example names directly. Fixed by rewriting the docstring's
+examples in transliteration/English ("Dan"/"Danny", "standby squad")
+instead of literal Hebrew text — same explanatory content, no rule
+violation. Reran that test plus the affected unit tests to confirm, then
+the full suite.

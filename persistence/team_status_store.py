@@ -69,12 +69,19 @@ def _utc_now() -> str:
 
 
 def _parse_timestamp(value: str) -> datetime:
+    """A timestamp with no offset is assumed UTC rather than rejected — the same
+    convention `history/event_pipeline.py`'s own `parse_timestamp` already uses.
+    A tool-calling model asked for an "as of" timestamp will sometimes omit the
+    offset (docs/work_process.md §21); defaulting it rather than raising keeps
+    that a normal, successful call instead of a hard failure the model then has
+    to recover from by retrying without the argument."""
+
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except (TypeError, ValueError) as exc:
         raise TeamStatusPersistenceError(f"invalid ISO timestamp: {value!r}") from exc
     if parsed.tzinfo is None:
-        raise TeamStatusPersistenceError("timestamps must include a timezone")
+        parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
 
 

@@ -582,6 +582,102 @@ def test_team_status_roster_views_are_complete_and_follow_up_specific(tmp_path, 
     assert "2026-09-07T05:06" not in summary
 
 
+def test_team_status_reason_view_matches_a_short_name_against_its_full_suffixed_entry(tmp_path, monkeypatch):
+    """docs/work_process.md §21 — the real SEC_001 run failure: a registered
+    display name usually carries a role/unit suffix ("דן - כיתת כוננות") that a
+    short, natural query ("דן", exactly as a task description would say it)
+    never repeats. _matching_member() must resolve that short query to its one
+    matching entry — and must *not* also match a different member whose name
+    merely starts the same way ("דני - כיתת כוננות"), which a naive substring
+    check (in either direction) would conflate."""
+
+    from datetime import datetime, timedelta, timezone
+    from profiles import unified_test
+
+    status_path = str(tmp_path / "team-status-name-match.db")
+    monkeypatch.setattr(unified_test.UnifiedTeamStatusAgent, "status_db_path", status_path)
+    agent = unified_test.UnifiedTeamStatusAgent(model="mock")
+    opened = datetime(2026, 9, 7, 5, 0, tzinfo=timezone.utc)
+    for identity, name in (
+        ("2001", "דן - כיתת כוננות"),
+        ("2002", "דני - כיתת כוננות"),
+    ):
+        agent.status_store.register_member(identity, name, opened.isoformat())
+    agent.status_store.approve_roster("commander", opened.isoformat())
+    agent.status_store.open_cycle(
+        "2026-09-07", opened.isoformat(), (opened + timedelta(hours=1)).isoformat()
+    )
+    agent.status_store.record_response(
+        telegram_identity="2001", source_message_id="unavailable-2001",
+        availability="unavailable", reason="רץ למערב",
+        unavailable_until=(opened + timedelta(days=1)).isoformat(),
+        original_text="רץ למערב",
+        received_at=(opened + timedelta(minutes=5)).isoformat(),
+    )
+    as_of = (opened + timedelta(minutes=10)).isoformat()
+
+    # A short, natural query naming "דן" alone resolves to exactly that one
+    # member — not the near-miss "דני", and not an "unknown member" refusal.
+    dan_result = agent.report_team_availability(as_of, "reason", "היכן נמצא דן? הוא רץ למערב")
+    assert "דן - כיתת כוננות אינו זמין" in dan_result
+    assert "רץ למערב" in dan_result
+    assert "דני" not in dan_result
+
+    # The near-miss member's own short name still resolves independently —
+    # this was never ambiguous the other way, but confirms both directions.
+    danny_result = agent.report_team_availability(as_of, "reason", "מה עם דני?")
+    assert "דני - כיתת כוננות טרם דיווח" in danny_result
+
+    # A query naming neither member by any recognizable token stays a
+    # deliberate refusal, not a guess.
+    no_match_result = agent.report_team_availability(as_of, "reason", "מה המצב הכללי?")
+    assert "לא ניתן לזהות בוודאות" in no_match_result
+
+    # The actual live-run shape: no explicit member_query at all, falling back
+    # to the whole original triggering message (`_team_query_text`) — the
+    # confused commander's real message from the traced run.
+    original_message = (
+        "יש לי פה בלבול מטורף! דן רץ למערב בגלל דיווח על ירי, מד\"א מדברים על "
+        "פצוע במזרח, ותושב מדווח על חמוש בהרחבה. תעשה לי סדר מיד! לאן לשלוח "
+        "את הכוח הזמין?!"
+    )
+    token = unified_test._team_query_text.set(original_message)
+    try:
+        fallback_result = agent.report_team_availability(as_of, "reason")
+    finally:
+        unified_test._team_query_text.reset(token)
+    assert "דן - כיתת כוננות אינו זמין" in fallback_result
+    assert "דני" not in fallback_result
+
+
+def test_team_status_reason_view_refuses_to_guess_between_two_real_same_named_members(tmp_path, monkeypatch):
+    """The word-boundary match in the fix above must still refuse — not guess —
+    when a short query for real genuinely names two *different* people who
+    happen to share the same first name (as opposed to the near-miss
+    "דן"/"דני" pair above, which are never actually the same name)."""
+
+    from datetime import datetime, timedelta, timezone
+    from profiles import unified_test
+
+    status_path = str(tmp_path / "team-status-same-name.db")
+    monkeypatch.setattr(unified_test.UnifiedTeamStatusAgent, "status_db_path", status_path)
+    agent = unified_test.UnifiedTeamStatusAgent(model="mock")
+    opened = datetime(2026, 9, 7, 5, 0, tzinfo=timezone.utc)
+    for identity, name in (
+        ("3001", "דן - כיתת כוננות"),
+        ("3002", "דן - צוות רפואה"),
+    ):
+        agent.status_store.register_member(identity, name, opened.isoformat())
+    agent.status_store.approve_roster("commander", opened.isoformat())
+    agent.status_store.open_cycle(
+        "2026-09-07", opened.isoformat(), (opened + timedelta(hours=1)).isoformat()
+    )
+    as_of = (opened + timedelta(minutes=10)).isoformat()
+
+    result = agent.report_team_availability(as_of, "reason", "מה המצב של דן?")
+    assert "לא ניתן לזהות בוודאות" in result
+
+
 def test_team_status_does_not_invent_a_name_for_legacy_placeholder(tmp_path, monkeypatch):
     from datetime import datetime, timedelta, timezone
     from profiles import unified_test

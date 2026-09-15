@@ -1463,22 +1463,33 @@ def test_simulator_bot_poll_forwards_query_params_and_relays_the_response(tmp_pa
         assert server.received[0]["headers"]["X-Service-Key"] == "test-service-key"
 
 
-# -- pollSimulatorChat()'s per-chat generation guard: docs/work_process.md §19 --
+# -- pollSimulatorChat()'s per-chat generation guard: docs/work_process.md §19/§20 --
 # (the duplicate-ack / stray "model thinking" bubble fix — a second step sent to the
 # same chat must make an earlier, still-running poll loop for that chat stand down.)
+
+
+def _extract_claim_and_poll_fns(page: str) -> tuple[str, str]:
+    claim_fn = _extract_between(page, "function claimPollGeneration(chatId) {", "const registeredIdentities")
+    poll_fn = _extract_between(
+        page,
+        "async function pollSimulatorChat(chatKey, chatId, watermark, myGeneration) {",
+        "  async function sendNext",
+    )
+    assert claim_fn.strip() and poll_fn.strip(), "expected functions not found in the rendered page"
+    return claim_fn, poll_fn
 
 
 def test_a_superseded_poll_loop_never_polls_or_renders_anything(tmp_path, teardown_ctx, _admin_env):
     """Executed for real under node, not just syntax-checked, since this is genuinely
     new logic: runs a *single* pollSimulatorChat() loop as a same-process timing
     baseline, then two loops started back-to-back for the same chat_id (exactly what
-    a second message-kind step sent to an already-being-watched chat does), with a
-    fake apiCall that always finds "new" content. Comparing against the baseline
-    (rather than a fixed call count) keeps this robust across machines: without the
-    generation guard, two independent loops poll roughly *twice* as often as one;
-    with it, the superseded loop dies on its very first check (both loops claim
-    their generation synchronously before either ever awaits), so two-loop and
-    one-loop call counts land close together."""
+    a second message-kind step sent to an already-being-watched chat does — generation
+    claimed via claimPollGeneration(), the same way sendNext() now claims it, before
+    either loop is started), with a fake apiCall that always finds "new" content.
+    Comparing against the baseline (rather than a fixed call count) keeps this robust
+    across machines: without the generation guard, two independent loops poll roughly
+    *twice* as often as one; with it, the superseded loop dies on its very first check,
+    so two-loop and one-loop call counts land close together."""
 
     import shutil
     import subprocess
@@ -1491,8 +1502,7 @@ def test_a_superseded_poll_loop_never_polls_or_renders_anything(tmp_path, teardo
     _login(client)
     page = client.get("/admin/simulator").data.decode("utf-8")
 
-    poll_fn = _extract_between(page, "async function pollSimulatorChat(chatKey, chatId, watermark) {", "  async function sendNext")
-    assert poll_fn.strip(), "pollSimulatorChat not found in the rendered page"
+    claim_fn, poll_fn = _extract_claim_and_poll_fns(page)
 
     driver = f"""
 const POLL_INTERVAL_MS = 5;
@@ -1509,21 +1519,31 @@ function makeHarness() {{
   function appendBubble(chatKey, kind, sender, text) {{ appended.push(text); }}
   function t(key) {{ return key; }}
 
+  {claim_fn}
   {poll_fn}
 
-  return {{ pollSimulatorChat, getCallCount: function () {{ return callCount; }}, getAppendedCount: function () {{ return appended.length; }} }};
+  return {{
+    claimPollGeneration,
+    pollSimulatorChat,
+    getCallCount: function () {{ return callCount; }},
+    getAppendedCount: function () {{ return appended.length; }},
+  }};
 }}
 
 (async function () {{
   const baseline = makeHarness();
-  await baseline.pollSimulatorChat('k', 'chat-baseline', {{ status_len: 0, sent_len: 0 }});
+  const baselineGen = baseline.claimPollGeneration('chat-baseline');
+  await baseline.pollSimulatorChat('k', 'chat-baseline', {{ status_len: 0, sent_len: 0 }}, baselineGen);
 
   const twoLoop = makeHarness();
   // Step 1's loop starts (generation 1), then step 2's loop starts for the *same*
-  // chat immediately after, still synchronously — exactly like sendNext() firing
-  // pollSimulatorChat() again for a chat that's already being watched.
-  const oldLoop = twoLoop.pollSimulatorChat('k', 'chat-x', {{ status_len: 0, sent_len: 0 }});
-  const newLoop = twoLoop.pollSimulatorChat('k', 'chat-x', {{ status_len: 0, sent_len: 0 }});
+  // chat immediately after, still synchronously — exactly like sendNext() claiming a
+  // new generation and firing pollSimulatorChat() again for a chat that's already
+  // being watched.
+  const gen1 = twoLoop.claimPollGeneration('chat-x');
+  const oldLoop = twoLoop.pollSimulatorChat('k', 'chat-x', {{ status_len: 0, sent_len: 0 }}, gen1);
+  const gen2 = twoLoop.claimPollGeneration('chat-x');
+  const newLoop = twoLoop.pollSimulatorChat('k', 'chat-x', {{ status_len: 0, sent_len: 0 }}, gen2);
   await Promise.all([oldLoop, newLoop]);
 
   console.log(JSON.stringify({{
@@ -1550,3 +1570,140 @@ function makeHarness() {{
     # in this same window). With the guard, the superseded loop contributes nothing, so
     # the two-loop count stays close to the single-loop baseline — well under double it.
     assert outcome["twoLoopCallCount"] <= outcome["baselineCallCount"] * 1.5
+
+
+def test_send_next_claims_the_poll_generation_before_its_own_post(tmp_path, teardown_ctx, _admin_env):
+    """docs/work_process.md §20: a live run showed the duplicate-ack/stray-"thinking"
+    bubble bug recurring even with §19's generation guard in place, whenever two real
+    steps landed closer together (~8-18s, observed live) than one step's own /Msg round
+    trip (status.thinking send -> LLM classification -> edit to a final ack, ~10s
+    observed live). Root cause: claimPollGeneration() was only ever reached from inside
+    pollSimulatorChat() itself, which sendNext() didn't call until *after* that whole
+    round trip had already returned — leaving an older generation "current", and free to
+    poll, for the newer step's entire in-flight send/edit window.
+
+    The fix moves the claim to the moment sendNext() *starts* sending — before the POST,
+    not after. This is a plain textual ordering check on the shipped sendNext() source
+    (not an executed one): the ordering is the whole contract here, and
+    test_an_early_claim_prevents_a_stale_loop_from_rendering_a_step_still_in_flight below
+    proves, dynamically, why getting it wrong reproduces exactly this race."""
+
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+    page = client.get("/admin/simulator").data.decode("utf-8")
+
+    send_next_fn = _extract_between(page, "async function sendNext(chatKey) {", "  // ---- mapping panel")
+    assert send_next_fn.strip(), "sendNext not found in the rendered page"
+    assert "claimPollGeneration(" in send_next_fn, "sendNext no longer claims a poll generation at all"
+    assert "apiCall('POST'" in send_next_fn, "sendNext no longer POSTs the step directly"
+
+    claim_index = send_next_fn.index("claimPollGeneration(")
+    post_index = send_next_fn.index("apiCall('POST'")
+    assert claim_index < post_index, (
+        "claimPollGeneration() must run before the POST that starts a step's own send/edit "
+        "cycle, not only once that POST has returned — see docs/work_process.md §20"
+    )
+
+
+def test_an_early_claim_prevents_a_stale_loop_from_rendering_a_step_still_in_flight(tmp_path, teardown_ctx, _admin_env):
+    """docs/work_process.md §20: reproduces the tighter-spacing race traced from a live
+    run, using the real, extracted claimPollGeneration()/pollSimulatorChat() — not a
+    reimplementation — at a timing ratio matched to what was actually observed (a poll
+    interval much shorter than a step's own request round trip, ~2s vs. ~10s live, kept
+    here as a 6:1 ratio so a still-current loop gets several chances to poll during it).
+
+    Compares claiming a second step's generation *before* a round-trip-shaped delay (the
+    fix, matching what test_send_next_claims_the_poll_generation_before_its_own_post
+    confirms sendNext() now does) against claiming it only *after* (the old bug's shape,
+    from when pollSimulatorChat() claimed its own generation internally and sendNext()
+    only ever called it post-POST): an early claim must leave the older generation's loop
+    with zero further appends during that delay; a late claim reproduces the bug — the
+    older generation, still "current" for the whole delay, keeps polling and rendering
+    "new" content that is really just the newer step's own not-yet-edited status message."""
+
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+    page = client.get("/admin/simulator").data.decode("utf-8")
+
+    claim_fn, poll_fn = _extract_claim_and_poll_fns(page)
+
+    driver = f"""
+const POLL_INTERVAL_MS = 10;
+const POLL_TIMEOUT_MS = 400;
+// A step's own real /Msg round trip (status.thinking send -> LLM classification ->
+// edit to final ack) took ~10s live, against a 2s poll interval -- roughly a 5:1 ratio.
+// Kept here, scaled down, so a still-current loop gets several chances to poll during it.
+const REQUEST_ROUND_TRIP_MS = 60;
+
+function makeHarness() {{
+  const pollGenerationByChatId = {{}};
+  const appended = [];
+  async function apiCall() {{
+    return {{ status: 200, payload: {{ reply_text: 'reply', watermark: {{ status_len: 1, sent_len: 0 }} }} }};
+  }}
+  function appendBubble(chatKey, kind, sender, text) {{ appended.push(text); }}
+  function t(key) {{ return key; }}
+
+  {claim_fn}
+  {poll_fn}
+
+  return {{
+    claimPollGeneration,
+    pollSimulatorChat,
+    getAppendedCount: function () {{ return appended.length; }},
+  }};
+}}
+
+function sleep(ms) {{ return new Promise(function (resolve) {{ setTimeout(resolve, ms); }}); }}
+
+(async function () {{
+  // "Late claim" (the bug): step 1's loop is already running for this chat_id when step
+  // 2 begins its own send/edit cycle, but nothing claims step 2's generation until
+  // *after* its round trip finishes.
+  const late = makeHarness();
+  const lateGen1 = late.claimPollGeneration('chat-x');
+  late.pollSimulatorChat('k', 'chat-x', {{ status_len: 0, sent_len: 0 }}, lateGen1);
+  await sleep(REQUEST_ROUND_TRIP_MS); // step 2's own in-flight send/edit window
+  const staleAppendsDuringLateWindow = late.getAppendedCount();
+  const lateGen2 = late.claimPollGeneration('chat-x'); // only claimed now
+  late.pollSimulatorChat('k', 'chat-x', {{ status_len: 1, sent_len: 0 }}, lateGen2);
+  await sleep(POLL_TIMEOUT_MS + 50);
+
+  // "Early claim" (the fix): step 2's generation is claimed the moment it begins
+  // sending -- before its own round trip, not after.
+  const early = makeHarness();
+  const earlyGen1 = early.claimPollGeneration('chat-y');
+  early.pollSimulatorChat('k', 'chat-y', {{ status_len: 0, sent_len: 0 }}, earlyGen1);
+  const earlyGen2 = early.claimPollGeneration('chat-y'); // claimed immediately, before the delay
+  await sleep(REQUEST_ROUND_TRIP_MS); // the same in-flight window
+  const staleAppendsDuringEarlyWindow = early.getAppendedCount();
+  early.pollSimulatorChat('k', 'chat-y', {{ status_len: 1, sent_len: 0 }}, earlyGen2);
+  await sleep(POLL_TIMEOUT_MS + 50);
+
+  console.log(JSON.stringify({{
+    staleAppendsDuringLateWindow: staleAppendsDuringLateWindow,
+    staleAppendsDuringEarlyWindow: staleAppendsDuringEarlyWindow,
+  }}));
+}})();
+"""
+    driver_path = tmp_path / "race_driver.js"
+    driver_path.write_text(driver, encoding="utf-8")
+
+    result = subprocess.run([node, str(driver_path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    outcome = json.loads(result.stdout)
+
+    # The bug this reproduces: with a late claim, generation 1's loop is still "current"
+    # for the whole round-trip window, so it keeps polling and appending "new" content
+    # during it -- exactly the stray status.thinking / duplicate-ack bubbles seen live.
+    assert outcome["staleAppendsDuringLateWindow"] > 0
+    # The fix: with an early claim, generation 1 is already superseded before the round
+    # trip even starts, so it contributes nothing during that same window.
+    assert outcome["staleAppendsDuringEarlyWindow"] == 0
