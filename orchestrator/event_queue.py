@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from itertools import count
 from typing import Callable
 
+from agents import invocation_deadline
 from tools import get_trace_id, stage_context, trace_context
 
 logger = logging.getLogger(__name__)
@@ -89,7 +90,7 @@ class SerialEventQueue:
                             "telemetry_only": True,
                         },
                     )
-                    with stage_context("queue_execution"):
+                    with invocation_deadline(work_item.deadline_monotonic), stage_context("queue_execution"):
                         self._process_fn(queued_item)
             except Exception:
                 logger.exception(
@@ -214,7 +215,9 @@ class PolicyAwareEventQueue:
                 else:
                     for resource_lock in locks:
                         resource_lock.acquire()
-                    with trace_context(work_item.trace_id or None), stage_context("queue_execution"):
+                    with trace_context(work_item.trace_id or None), invocation_deadline(
+                        work_item.deadline_monotonic
+                    ), stage_context("queue_execution"):
                         self._process_fn(payload)
             except Exception:
                 logger.exception("event processing failed; continuing", extra={"event": "queue_processing_failed", "item": repr(payload)})

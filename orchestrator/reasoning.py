@@ -21,7 +21,7 @@ from messages.model_messages import (
     EVENT_DATA_QUESTION_INSTRUCTION,
 )
 from protocols import EVENT_DATA_FIELDS, Protocol, Step
-from tools import stage_context
+from tools import get_trace_id, stage_context
 
 _EVENT_DATA_FIELD_MEANINGS = {
     definition.key: definition.meaning
@@ -317,6 +317,11 @@ def _build_intent_prompt(
         "an event?' is CONVERSATIONAL, while text that actually reports an event is REPORT. For system "
         "self-description, set social_only=true and the other three intent flags=false.\n"
         "- NEEDS_CLARIFICATION applies when prior context is missing or there are multiple independent operational asks.\n\n"
+        "A single clear availability or unavailability statement is a REPORT even when business details "
+        "such as the reason, exact duration, or location are missing. Do not use NEEDS_CLARIFICATION to "
+        "validate domain fields; create the event and let the later team-status flow ask for missing "
+        "attendance details (for example, the reason for unavailability). For example, 'I am unavailable "
+        "today' and 'I am on reserve duty and unavailable' are REPORT messages.\n\n"
         "Use one direct ask as primary when facts merely provide context. Social wording never overrides an operational intent. "
         "Quoted or hypothetical action language is not itself a request. Distinguish 'do not dispatch' (request), "
         "'he said do not dispatch' (report), and 'why did you not dispatch?' (question). "
@@ -470,15 +475,47 @@ def _parse_structured_intent_response(raw_text: str, message_text: str, protocol
     if analysis.social_only and any((analysis.asks_for_information, analysis.reports_occurrence, analysis.requests_action)):
         raise OrchestrationParseError("social_only contradicts operational intent flags")
 
+    # An explicit operational primary intent is already the model's answer to
+    # what the user is trying to do.  `ambiguity_reason` may describe missing
+    # domain fields (for example, an unavailable member without a reason); it
+    # must not turn a valid REPORT/REQUEST/QUESTION into an intent-layer hold.
+    # Follow-up/context ambiguity still applies when the model did not identify
+    # a concrete operational intent of its own.
+    if analysis.primary_intent == "needs_clarification":
+        question = analysis.clarification_question or "Could you clarify what you want me to check, record, or do?"
+        return IntentResult("needs_clarification", analysis.ambiguity_reason or analysis.reason, question)
     if (
-        analysis.primary_intent == "needs_clarification"
-        or analysis.is_followup_without_context
-        or analysis.ambiguity_reason is not None
+        analysis.primary_intent not in {"question", "report", "request"}
+        and (analysis.is_followup_without_context or analysis.ambiguity_reason is not None)
     ):
         question = analysis.clarification_question or "Could you clarify what you want me to check, record, or do?"
         return IntentResult("needs_clarification", analysis.ambiguity_reason or analysis.reason, question)
 
     return IntentResult(analysis.primary_intent, analysis.reason)
+
+
+_ATTENDANCE_REPORT_PATTERNS = (
+    re.compile(r"\bאני\s+(?:לא\s+)?זמי(?:ן|נה|נים|נות)\b", re.IGNORECASE),
+    re.compile(r"\bלא\s+אוכל\s+להשתתף\b", re.IGNORECASE),
+    re.compile(r"\bאני\b[^?\n]{0,40}\bבמילואים\b", re.IGNORECASE),
+    re.compile(r"\b(?:i\s+am|i['’]m|i\s+will\s+be|i\s+won['’]t\s+be)\s+(?:un)?available\b", re.IGNORECASE),
+    re.compile(r"\b(?:i\s+am|i['’]m)\s+(?:on\s+)?reserve\s+duty\b", re.IGNORECASE),
+)
+
+
+def _looks_like_clear_attendance_report(message_text: str) -> bool:
+    """Recognize only unambiguous first-person attendance statements.
+
+    This is a narrow safety net for a model that incorrectly asks for
+    clarification on a clear availability report. It intentionally does not
+    infer a reason, duration, member identity, or any other business field;
+    those remain the Team Status flow's responsibility.
+    """
+
+    normalized = " ".join(message_text.split())
+    if not normalized or "?" in normalized:
+        return False
+    return any(pattern.search(normalized) for pattern in _ATTENDANCE_REPORT_PATTERNS)
 
 
 def _parse_intent_response(raw_text: str, message_text: str | None = None, protocols: tuple[Protocol, ...] = ()) -> IntentResult:
@@ -513,9 +550,32 @@ def classify_intent(
             )
             continue
         try:
-            return _parse_intent_response(agent_result.text, message_text, protocols)
+            result = _parse_intent_response(agent_result.text, message_text, protocols)
+            if result.intent == "needs_clarification" and _looks_like_clear_attendance_report(message_text):
+                logger.info(
+                    "clear attendance report recovered from intent clarification",
+                    extra={
+                        "event": "intent_attendance_recovered",
+                        "reason": "intent is clear; attendance domain validation is deferred",
+                        "trace_id": get_trace_id(),
+                    },
+                )
+                return IntentResult(
+                    "report",
+                    "clear attendance report; missing attendance details are validated downstream",
+                )
+            return result
         except OrchestrationParseError as exc:
             last_error = exc
+            logger.warning(
+                "intent classification response rejected",
+                extra={
+                    "event": "intent_response_rejected",
+                    "attempt": attempt + 1,
+                    "reason": str(exc),
+                    "trace_id": get_trace_id(),
+                },
+            )
 
     assert last_error is not None
     raise last_error
@@ -592,12 +652,18 @@ def _parse_selection_response(raw_text: str) -> ProtocolSelectionResult:
     raise OrchestrationParseError(f"could not parse protocol selection response: {raw_text!r}")
 
 
-def select_protocol(main_agent: MainAgent, raw_text: str, classification: str | None, area: str | None, description: str | None, protocols: tuple[Protocol, ...], risk_level: Literal["high", "low"]) -> ProtocolSelectionResult:
-    with stage_context("protocol_selection"):
-        agent_result = main_agent.process(_build_selection_prompt(raw_text, classification, area, description, protocols), [])
-    if agent_result.status != "success":
-        raise OrchestrationParseError(f"protocol selection did not produce a usable response: {agent_result.text}")
-    selection = _parse_selection_response(agent_result.text)
+def _normalize_protocol_selection(
+    selection: ProtocolSelectionResult,
+    protocols: tuple[Protocol, ...],
+    risk_level: Literal["high", "low"],
+) -> ProtocolSelectionResult:
+    """Validate and apply the shared high-risk ambiguity rule.
+
+    Keeping this post-processing in one place makes the merged operational
+    decision obey exactly the same protocol/approval semantics as the legacy
+    two-call path.
+    """
+
     available_names = {protocol.name for protocol in protocols}
     if selection.status == "selected" and selection.protocol_name not in available_names:
         raise OrchestrationParseError(f"protocol selection named an unavailable protocol: {selection.protocol_name!r}")
@@ -609,13 +675,29 @@ def select_protocol(main_agent: MainAgent, raw_text: str, classification: str | 
             raise OrchestrationParseError(
                 f"ambiguous protocol selection named unavailable candidates: {', '.join(unknown_candidates)}"
             )
-    if selection.status == "ambiguous" and risk_level == "high":
-        protocols_by_name = {protocol.name: protocol for protocol in protocols}
-        candidates = [protocols_by_name[name] for name in selection.candidate_names if name in protocols_by_name]
-        if candidates:
-            most_critical = max(candidates, key=lambda protocol: protocol.criticality)
-            return ProtocolSelectionResult(status="selected", protocol_name=most_critical.name, reason=f"high risk, ambiguous among {', '.join(selection.candidate_names)}; proceeding with the most critical candidate rather than waiting ({selection.reason})")
+        if risk_level == "high":
+            protocols_by_name = {protocol.name: protocol for protocol in protocols}
+            candidates = [protocols_by_name[name] for name in selection.candidate_names if name in protocols_by_name]
+            if candidates:
+                most_critical = max(candidates, key=lambda protocol: protocol.criticality)
+                return ProtocolSelectionResult(
+                    status="selected",
+                    protocol_name=most_critical.name,
+                    reason=(
+                        f"high risk, ambiguous among {', '.join(selection.candidate_names)}; "
+                        f"proceeding with the most critical candidate rather than waiting ({selection.reason})"
+                    ),
+                )
     return selection
+
+
+def select_protocol(main_agent: MainAgent, raw_text: str, classification: str | None, area: str | None, description: str | None, protocols: tuple[Protocol, ...], risk_level: Literal["high", "low"]) -> ProtocolSelectionResult:
+    with stage_context("protocol_selection"):
+        agent_result = main_agent.process(_build_selection_prompt(raw_text, classification, area, description, protocols), [])
+    if agent_result.status != "success":
+        raise OrchestrationParseError(f"protocol selection did not produce a usable response: {agent_result.text}")
+    selection = _parse_selection_response(agent_result.text)
+    return _normalize_protocol_selection(selection, protocols, risk_level)
 
 
 def make_operational_decision(
@@ -670,14 +752,14 @@ def make_operational_decision(
             raise OrchestrationParseError(f"operational decision selected unknown protocol: {protocol_name!r}")
         selection = ProtocolSelectionResult("selected", protocol_name=protocol_name, reason=protocol_reason.strip())
     elif status == "ambiguous":
-        if not isinstance(candidates, list) or len(candidates) < 2 or any(name not in available for name in candidates):
-            raise OrchestrationParseError("operational ambiguity requires at least two listed protocols")
+        if not isinstance(candidates, list) or not candidates or any(name not in available for name in candidates):
+            raise OrchestrationParseError("operational ambiguity requires at least one listed protocol")
         selection = ProtocolSelectionResult("ambiguous", candidate_names=tuple(dict.fromkeys(candidates)), reason=protocol_reason.strip())
     elif status == "no_match":
         selection = ProtocolSelectionResult("no_match", reason=protocol_reason.strip())
     else:
         raise OrchestrationParseError(f"invalid operational protocol_status: {status!r}")
-    return OperationalDecision(risk, selection)
+    return OperationalDecision(risk, _normalize_protocol_selection(selection, protocols, risk.level))
 
 
 def _build_formulation_prompt(

@@ -40,6 +40,7 @@ from agents.runtime import (
     get_authenticated_request_identity,
     initialize_agent_runtime,
     make_exact_result_capture,
+    invocation_deadline,
     set_invocation_deadline,
 )
 from agents.provider_telemetry import install_crewai_provider_telemetry
@@ -82,6 +83,7 @@ __all__ = [
     "get_authenticated_request_identity",
     "install_crewai_provider_telemetry",
     "initialize_agent_runtime",
+    "invocation_deadline",
     "set_invocation_deadline",
     "DuplicateAgentNameError",
     "ExactResultCapture",

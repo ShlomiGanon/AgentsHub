@@ -1,9 +1,10 @@
 import threading
 import time
+import types
 
 from api.app import build_app
-from agents import AgentResult
-from orchestrator.event_queue import PolicyAwareEventQueue, WorkItem
+from agents import AgentDescriptor, AgentResult, AgentTimeoutError, adapter
+from orchestrator.event_queue import PolicyAwareEventQueue, SerialEventQueue, WorkItem
 from persistence import open_persistence
 from protocols import Step, execute_steps
 from tests.api_fakes import VIEWER_IDENTITY, auth_headers, build_context
@@ -79,6 +80,93 @@ def test_policy_queue_preserves_same_resource_order_and_runs_to_idle():
     event_queue.stop()
 
     assert processed == ["first", "second"]
+
+
+def test_policy_queue_passes_work_item_deadline_to_model_invocation(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _FakeLLM:
+        def __init__(self, **kwargs):
+            captured["llm_kwargs"] = kwargs
+
+    class _FakeAgent:
+        def __init__(self, **kwargs):
+            captured["agent_kwargs"] = kwargs
+
+        def kickoff(self, _text):
+            return types.SimpleNamespace(raw="ok")
+
+    fake_module = types.SimpleNamespace(
+        Agent=_FakeAgent,
+        LLM=_FakeLLM,
+        tools=types.SimpleNamespace(BaseTool=type("BaseTool", (), {})),
+    )
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+    adapter._clear_llm_cache()
+
+    descriptor = AgentDescriptor(
+        name="queue-deadline-agent",
+        role="test",
+        system_prompt="test",
+        tools=(),
+        model="queue-deadline-model",
+    )
+
+    def process(_payload):
+        adapter.invoke(descriptor, {}, "x", 60)
+
+    event_queue = PolicyAwareEventQueue(process, workers=1, max_size=5)
+    event_queue.start()
+    try:
+        event_queue.submit(WorkItem("payload", deadline_monotonic=time.monotonic() + 5.0))
+        event_queue.wait_until_idle()
+    finally:
+        event_queue.stop()
+
+    assert captured["llm_kwargs"]["timeout"] < 30.0
+    assert 1 <= captured["agent_kwargs"]["max_execution_time"] < 30
+
+
+def test_worker_keeps_expired_deadline_as_clean_timeout_failure(monkeypatch):
+    called = False
+
+    class _FakeAgent:
+        def __init__(self, **_kwargs):
+            nonlocal called
+            called = True
+
+    fake_module = types.SimpleNamespace(
+        Agent=_FakeAgent,
+        LLM=lambda **_kwargs: object(),
+        tools=types.SimpleNamespace(BaseTool=type("BaseTool", (), {})),
+    )
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+    descriptor = AgentDescriptor(
+        name="expired-deadline-agent",
+        role="test",
+        system_prompt="test",
+        tools=(),
+        model="expired-deadline-model",
+    )
+    failures: list[BaseException] = []
+
+    def process(_payload):
+        try:
+            adapter.invoke(descriptor, {}, "x", 60)
+        except BaseException as exc:  # capture the typed failure from the worker callback
+            failures.append(exc)
+
+    event_queue = SerialEventQueue(process)
+    event_queue.start()
+    try:
+        event_queue.submit(WorkItem("payload", deadline_monotonic=time.monotonic() - 1.0))
+        event_queue.wait_until_idle()
+    finally:
+        event_queue.stop()
+
+    assert not called
+    assert len(failures) == 1
+    assert isinstance(failures[0], AgentTimeoutError)
 
 
 def test_policy_queue_reserves_capacity_for_continuations():

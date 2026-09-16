@@ -168,6 +168,21 @@ def set_invocation_deadline(deadline_monotonic: float | None) -> None:
     _invocation_deadline.set(deadline_monotonic)
 
 
+@contextmanager
+def invocation_deadline(deadline_monotonic: float | None):
+    """Install an event deadline for the duration of one worker invocation.
+
+    The explicit context is used by queue workers so the deadline travels with
+    the WorkItem instead of depending on the request thread's ContextVar.
+    """
+
+    token = _invocation_deadline.set(deadline_monotonic)
+    try:
+        yield
+    finally:
+        _invocation_deadline.reset(token)
+
+
 def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> Callable:
     @wraps(bound_method)
     def _wrapped(*args, **kwargs):
@@ -505,17 +520,11 @@ def invoke(
     invocation_policy: InvocationPolicy | None = None,
 ) -> str:
     setup_started = time.monotonic()
-    crewai_module = _get_crewai()
-    imported_at = time.monotonic()
-    crewai_tools = _build_crewai_tools(crewai_module, descriptor.name, wrapped_tools, descriptor.tools)
-    tools_built_at = time.monotonic()
-
-    backstory = f"{descriptor.system_prompt}\n\n{UNCLEAR_TASK_PROMPT_INSTRUCTION}"
-
     effective_timeout = timeout_seconds
     effective_timeout = min(effective_timeout, _model_timeout_seconds)
     if invocation_policy is not None and invocation_policy.timeout_seconds is not None:
         effective_timeout = min(effective_timeout, invocation_policy.timeout_seconds)
+    llm_timeout = _model_timeout_seconds
     request_deadline = _invocation_deadline.get()
     if request_deadline is not None:
         remaining_seconds = request_deadline - time.monotonic()
@@ -524,6 +533,7 @@ def invoke(
                 descriptor.name, "shared request deadline was exhausted before invocation", trace_id=get_trace_id()
             )
         effective_timeout = min(effective_timeout, remaining_seconds)
+        llm_timeout = min(llm_timeout, remaining_seconds)
 
     # CrewAI validates `max_execution_time` as an integer. Keep the precise
     # floating-point timeout for deadline and semaphore accounting, but give
@@ -536,9 +546,16 @@ def invoke(
         )
     crewai_timeout_seconds = int(effective_timeout)
 
+    crewai_module = _get_crewai()
+    imported_at = time.monotonic()
+    crewai_tools = _build_crewai_tools(crewai_module, descriptor.name, wrapped_tools, descriptor.tools)
+    tools_built_at = time.monotonic()
+
+    backstory = f"{descriptor.system_prompt}\n\n{UNCLEAR_TASK_PROMPT_INSTRUCTION}"
+
     llm_options = _llm_options(
         descriptor,
-        timeout_seconds=_model_timeout_seconds,
+        timeout_seconds=llm_timeout,
         invocation_policy=invocation_policy,
     )
     llm = _build_or_reuse_llm(crewai_module, descriptor, llm_options)

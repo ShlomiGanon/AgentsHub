@@ -1345,3 +1345,256 @@ examples in transliteration/English ("Dan"/"Danny", "standby squad")
 instead of literal Hebrew text — same explanatory content, no rule
 violation. Reran that test plus the affected unit tests to confirm, then
 the full suite.
+
+## 22. Deadline blocker Phase A: live timeline and root-cause analysis (no behavior change)
+
+Scope was deliberately limited to the first phase of the blocker plan: measure
+one live event end to end, determine where the 180-second budget is spent, and
+document the root cause before changing any timeout or runtime behavior. No
+deadline, routing, model, queue, simulator, or agent code was changed in this
+phase. The active branch was
+`fix/agent-orchestration-and-runtime-stability`; the live stack was
+`profiles.unified_test` (`API_PORT=8905`, `SIMULATOR_PORT=8915`).
+
+### Live specimen
+
+The first `sec001_phase1` message (the readiness-team member reporting reserve
+duty from Sunday through Tuesday evening) was submitted through the real
+simulation-mode bot endpoint into the declared readiness-team supergroup.
+
+- Simulator source ID: `phase-a-4016b1dbaef541b59587f1378f74d415`
+- Event ID: `1dc24312f0154942ae1bed44326b1bda`
+- Trace ID: `a1cbd87029d5493eb27141c646ca7e0c`
+- Times below are UTC on 2026-09-16.
+- The bot returned its queued ACK after 48.691 seconds.
+- The event was classified correctly as `team_attendance_report` and the
+  correct protocol, `record_attendance_response`, was selected.
+- Final outcome: `failed`, with
+  `event deadline exceeded before execution`.
+- No specialist invocation, tool call, protocol step, or team-status state
+  update occurred. `event_steps` contains no row for this event.
+
+The stage starts in the table are reconstructed from each structured
+`stage_finished` timestamp minus its monotonic `duration_seconds`. There can be
+a few milliseconds of wall-clock/monotonic conversion skew at the boundary
+between adjacent stages. Provider latency is taken directly from the CrewAI
+provider event. "Remaining" is relative to the persisted event deadline
+`09:08:07Z`; the pre-event rows correctly show no event budget because that
+budget did not exist yet.
+
+| Stage | Start | End | Duration | Total elapsed from `/Msg` start | Remaining event budget at end | Model call |
+|---|---:|---:|---:|---:|---:|---|
+| API request accepted for processing | 09:04:19.812 | 09:04:19.812 | point event | 0.000 s | not started | no |
+| Group routing to `team_status_agent` | 09:04:19.812 | 09:04:19.823 | 0.010 s | 0.010 s | not started | no |
+| Intent classification | 09:04:19.829 | 09:05:07.329 | 47.500 s | 47.517 s | not started | yes; provider 47.015 s |
+| Event persisted/accepted; deadline starts | 09:05:07.334 | 09:05:07.334 | point event | 47.522 s | 180 s | no |
+| Queue wait | 09:05:07.334 | 09:05:07.336 | effectively 0 s (`queue_wait_seconds=0.0`) | 47.524 s | about 179.664 s | no |
+| Extraction/classification | 09:05:07.336 | 09:05:52.941 | 45.609 s | 93.128 s | 134.059 s | yes; provider 45.085 s |
+| Risk assessment | 09:05:52.949 | 09:06:40.027 | 47.078 s | 140.215 s | 86.973 s | yes; provider 46.618 s |
+| Protocol selection | 09:06:40.028 | 09:07:25.961 | 45.938 s | 186.149 s | 41.039 s | yes; provider 45.462 s |
+| Task formulation | 09:07:25.967 | 09:08:13.263 | 47.296 s | 233.451 s | **-6.263 s** | yes; provider 46.830 s |
+| Failure state + notification row | 09:08:13.264 | 09:08:13.266 | about 0.002 s | 233.454 s | expired | no |
+| Specialist/model execution | not reached | not reached | 0 s | n/a | expired | no |
+| Tool execution | not reached | not reached | 0 s | n/a | expired | no |
+| Domain state update | not reached | not reached | 0 s | n/a | expired | no |
+
+The final failure text was formatted and delivered without another model call.
+Both the real bot and simulation-mode bot fetched notification cursor 165 in
+the same `09:08:13` second in which the notification row was created. As already
+identified by the separate routing blocker, its target was the sender's private
+identity (`9000000000000002`), not the originating group; Phase A did not change
+that behavior.
+
+### Model-call count and duplication audit
+
+Five successful provider calls occurred before the point where tool execution
+would have begun:
+
+1. Intent classification, before the event and its 180-second deadline exist.
+2. Event extraction/classification.
+3. Risk assessment.
+4. Protocol selection.
+5. Task formulation.
+
+There were no retries, JSON-repair calls, provider failures, or accidentally
+duplicated invocations in this trace. The five provider calls alone consumed
+about 230.010 seconds. The four calls inside the event lifecycle consumed about
+183.995 seconds of provider time and about 185.930 seconds of stage time, before
+any specialist or tool could run.
+
+The calls are distinct in the current architecture, but there are two concrete
+Phase-B optimization candidates that require behavioral tests before use:
+
+- Intent classification already receives the complete protocol catalog and its
+  structured schema asks for `matched_protocol_names`. The parser validates
+  those names but returns only `IntentResult(intent, reason)`, so that routing
+  evidence is discarded and protocol selection later calls the model again.
+- `OptimizationPolicy.operational_decision_mode` already supports a `merged`
+  risk-assessment/protocol-selection path, but `profiles.unified_test` currently
+  uses the default `separate` mode. Enabling it would be a behavior/configuration
+  change and was intentionally not done in Phase A.
+
+Extraction's `team_attendance_report` classification alone is not a safe global
+replacement for protocol selection: this profile has both
+`record_attendance_response` and `report_team_availability`, and the generic
+architecture selects protocols by their descriptions rather than by a fixed
+event-type mapping. Any removal or reuse of a model decision therefore needs
+explicit equivalence coverage, not an assumption based on this one message.
+
+### Deadline and queue semantics
+
+The 180-second job deadline starts only after the synchronous intent call has
+finished and the event is created in `api/routes.py`. Consequently:
+
+- the user waited 48.691 seconds for the ACK before the job budget began;
+- end-to-end time to the final failure was about 233.454 seconds, not 180;
+- queue wait consumes the same job budget: both the persisted `deadline_at` and
+  the queue's monotonic deadline are created immediately before submission.
+
+The fresh specimen had no meaningful queue wait, proving that the event fails
+even on an idle serial queue. A second already-recorded live trace demonstrates
+the amplification under back-to-back simulation steps: event
+`3e08e0c4227b4b0392a47244fa1d982f` waited **88.625 seconds** behind the prior
+event, then spent 46.578 seconds in extraction and 45.172 seconds in risk
+assessment. Its deadline expired before protocol selection. Therefore one event
+can consume almost half of the next event's deadline while the next event is
+only waiting in the serial queue.
+
+There is also a deadline-enforcement gap inside a stage. Task formulation began
+with about 41.039 seconds left, but the worker's model invocation still logged
+`timeout_seconds=45.0` and completed 6.263 seconds after the event deadline.
+`_deadline_failure()` checks the persisted deadline between orchestration
+stages; the API request thread's `set_invocation_deadline()` context does not
+propagate to the queue worker, so an in-flight worker invocation is not capped
+to the job's remaining budget. The eventual failure is clean and persisted,
+but it happens only after the over-budget model call returns.
+
+### Phase-A conclusion
+
+The root cause is not a mysterious queue stall and cannot be responsibly fixed
+by merely changing 180 to 600 seconds. With the configured live provider, the
+pre-tool pipeline has four serial, roughly 45-to-47-second model stages inside
+an 180-second deadline; their observed duration already exceeds the budget.
+Serial queue wait can consume the same budget before those stages begin, and an
+individual invocation can overrun the remaining event budget because the job
+deadline is not installed as the worker's invocation deadline.
+
+Phase B should therefore evaluate the smallest behavior-preserving combination
+of (a) eliminating/reusing a demonstrably redundant decision or using the
+existing merged decision mode with equivalence tests, (b) propagating the
+remaining job deadline into worker model invocations, and (c) choosing explicit
+profile/runtime deadline semantics for slow live models. No such choice or
+implementation was made in Phase A.
+
+## 23. Task 1 — enforce the event deadline inside model invocation
+
+### Scope
+
+This change addresses only the in-flight model-invocation deadline blocker.
+The 180-second value, merged/separate mode, model-call count, queue semantics,
+routing, UX, and prompts were left unchanged.
+
+### Root cause
+
+The event deadline was already stored on each queued `WorkItem` and used by
+orchestration between stages, but the request-thread `ContextVar` carrying an
+invocation deadline did not cross the worker-thread boundary. Consequently a
+worker could start a model call with the normal timeout even when only a few
+seconds remained for the event.
+
+### Implementation
+
+`agents.runtime.invocation_deadline()` is a scoped context manager that installs
+and restores the deadline ContextVar. Both `SerialEventQueue` and
+`PolicyAwareEventQueue` now wrap the worker callback with this context, using
+`WorkItem.deadline_monotonic` as the explicit worker payload. A missing deadline
+sets a temporary `None`, preserving the prior no-deadline behavior and avoiding
+deadline leakage between items.
+
+Inside `agents.runtime.invoke()` the remaining budget is read immediately
+before framework setup:
+
+```text
+remaining_budget = event_deadline - time.monotonic()
+effective_timeout = min(existing invocation limits, remaining_budget)
+```
+
+An exhausted budget raises the existing typed `AgentTimeoutError` before a
+CrewAI agent/model is constructed. When a deadline is present, the provider
+LLM timeout is also capped to the remaining budget; without a deadline, the
+existing configured provider timeout is unchanged.
+
+### Tests added
+
+- shortened remaining budget caps both provider timeout and CrewAI execution
+  timeout;
+- an expired deadline prevents agent construction and yields
+  `AgentTimeoutError`;
+- a queued `WorkItem` deadline reaches the worker and shortens its model call;
+- an expired deadline in a worker callback remains a typed, clean failure;
+- existing no-deadline and legacy timeout-construction tests continue to pass.
+
+### Targeted regression results
+
+- `pytest -q tests/test_agent_runtime.py tests/test_response_improvements.py` — **52 passed**
+- `pytest -q tests/test_architecture.py tests/test_orchestrator_flows.py tests/test_integration_serial_processing_under_load.py` — **64 passed**
+- `pytest -q tests/test_profile_simulations.py` (environment-independent subset) — **34 passed**; 3 profile declaration tests were not runnable because `TEST_CORE_MODEL_PROVIDER` is unset.
+
+No additional optimization or behavioral change was made after this task.
+
+## 24. Task 2 — merged risk and protocol decision (unified_test only)
+
+### Investigation and implementation
+
+The existing `make_operational_decision()` path in `orchestrator/reasoning.py`
+already asks the Main Agent for one validated JSON object containing
+`risk_score`, `risk_reason`, `protocol_status`, `protocol_name`,
+`candidate_names`, and `protocol_reason`. It parses and validates that object
+into the same `RiskAssessment` and `ProtocolSelectionResult` types used by the
+separate path. `continue_from_risk_assessment()` invokes this function once in
+`operational_decision_mode="merged"`, then applies the normal downstream
+approval, no-match, precedent, and execution gates.
+
+The shared `_normalize_protocol_selection()` post-processing now validates both
+paths identically and applies the existing high-risk ambiguous-selection rule
+(choose the most critical listed candidate). This closes the only observed
+semantic gap between merged and separate before enabling the mode.
+
+### Equivalence gate
+
+`tests/test_operational_decision_modes.py` compares merged and separate business
+decisions for five `profiles.unified_test` protocol cases:
+
+1. team attendance report;
+2. surveillance report;
+3. no matching protocol;
+4. high-risk protocol requiring approval;
+5. ambiguous input.
+
+Each case compares selected protocol/status, risk level and score, candidate
+list, and approval requirement. The separate path makes exactly two model
+calls; the merged path makes exactly one. All five cases passed equivalence.
+
+### Activation and scope
+
+`profiles.unified_test.OPTIMIZATION_POLICY` now sets
+`operational_decision_mode="merged"`. All other profiles retain the global
+default `"separate"`. No deadline, queue, routing, ACK, intent, formulation,
+specialist, or prompt behavior was changed, and no live run was performed.
+
+### Regression results
+
+- Equivalence cases: **5 passed**.
+- Deadline/runtime, queue, architecture, and operational regressions: **59 passed**.
+- Full targeted set (equivalence, selection, flows, and profile loading) with
+  standard simulated `TEST_*` model variables: **135 passed**.
+- Full `tests/test_profile_simulations.py` with standard simulated `TEST_*`
+  variables: **37 passed**, including the three previously missing tests.
+- Those three previously missing profile simulation tests were rerun with
+  `TEST_CORE_MODEL_PROVIDER=openai`, `TEST_CORE_MODEL_NAME=test-core-model`,
+  `TEST_CORE_MODEL_API_KEY_ENV=CORE_TEST_KEY`,
+  `TEST_CORE_TEST_KEY=fake-core-key`, and the matching `SUB` variables:
+  **3 passed**.
+
+The merged path saves **one model call per event** on the risk-plus-protocol
+segment (two calls become one), without changing the number of calls elsewhere.
