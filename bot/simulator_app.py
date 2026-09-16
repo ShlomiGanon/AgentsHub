@@ -226,6 +226,15 @@ def build_flask_app(runtime: SimulatorRuntime, bot_service_key: str) -> Flask:
             )
             return jsonify({"error": {"message": "the simulation-mode bot process failed handling this message"}}), 500
 
+        # Keep the simulator success contract as a JSON object even when a
+        # runtime completes without returning a value.  A bare JSON ``null``
+        # is not a valid success envelope for the browser.
+        if result is None:
+            result = {
+                "reply_text": None,
+                "watermark": _mark_to_dict(runtime.telegram_client.mark()),
+            }
+
         return jsonify(result)
 
     @app.route("/Simulator-msg/poll", methods=["GET"])

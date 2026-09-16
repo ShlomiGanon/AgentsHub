@@ -599,6 +599,7 @@ MESSAGES = {
     "admin.simulator.steps_completed": "Steps completed:",
     "admin.simulator.poll_timeout": "Stopped polling after {minutes} minutes - check the job later.",
     "admin.simulator.request_failed": "Request failed ({status}): {message}",
+    "admin.simulator.invalid_response": "Invalid simulator response",
     "admin.simulator.network_error": "Network error: {message}",
     "admin.simulator.err_parse": "Could not parse the JSON: {message}",
     "admin.simulator.err_chats_required": "'chats' must be a non-empty list",

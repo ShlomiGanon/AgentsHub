@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from agents import adapter
+from agents import runtime as agent_runtime
 from agents.history import HistoryAgent
 from agents.reference import ReferenceAgent
 from agents.runtime import build_agent_registry
@@ -604,6 +605,37 @@ def test_drone_selection_result_creates_a_resumable_hold(deps, monkeypatch):
     assert hold["missing_fields"] == ["drone_selection"]
     assert hold["waiting_step_ids"] == ["recall-1"]
     assert deps.persistence.fetch_event(event_id)["outcome"] is None
+
+
+def test_protocol_worker_installs_event_metadata_and_authenticated_sender(deps, monkeypatch):
+    original_text = "אני במילואים מראשון עד שלישי בערב, לא זמין ביישוב"
+    event_id = begin_report(
+        deps,
+        original_text,
+        "telegram",
+        "2026-09-16T10:00:00+00:00",
+        "member-1",
+        source_message_id="source-99",
+    )
+    captured = {}
+
+    def fake_execute_steps(*args, **kwargs):
+        captured["sender_identity"] = agent_runtime.get_authenticated_request_identity()
+        captured["metadata"] = agent_runtime._trusted_event_metadata.get()
+        return ProtocolRunResult((), completed=True)
+
+    monkeypatch.setattr(flows_module, "execute_steps", fake_execute_steps)
+    monkeypatch.setattr(flows_module, "_finish_protocol_assessment", lambda *args, **kwargs: "finished")
+
+    result = flows_module._execute_protocol_plan(deps, event_id, object(), object(), _protocols()[0], (), ())
+
+    assert result == "finished"
+    assert captured["sender_identity"] == "member-1"
+    assert captured["metadata"] == {
+        "source_message_id": "source-99",
+        "original_text": original_text,
+        "received_at": "2026-09-16T10:00:00+00:00",
+    }
 
 
 def test_precedent_lookup_still_runs_when_the_target_events_occurred_at_is_unresolved(deps):

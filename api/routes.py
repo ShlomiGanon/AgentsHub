@@ -882,7 +882,12 @@ def protocol_to_dict(protocol: Protocol) -> dict:
     }
 
 
-def _protocol_from_body(request_payload: dict, name_override: str | None = None) -> Protocol:
+def _protocol_from_body(
+    request_payload: dict,
+    name_override: str | None = None,
+    *,
+    deterministic_required_event_fields: tuple[str, ...] | None = None,
+) -> Protocol:
     try:
         return Protocol(
             name=name_override if name_override is not None else request_payload["name"],
@@ -892,6 +897,7 @@ def _protocol_from_body(request_payload: dict, name_override: str | None = None)
             expected_success_output=request_payload["expected_success_output"],
             criticality=CriticalityLevel[str(request_payload["criticality"]).upper()],
             approval_flag=request_payload["approval_flag"],
+            deterministic_required_event_fields=deterministic_required_event_fields,
         )
     except KeyError as exc:
         from messages import get_current_catalog
@@ -940,7 +946,14 @@ def build_protocols_blueprint(ctx: "ApiContext") -> Blueprint:
         require(level, RequestedOperation.UPDATE_PROTOCOL)
 
         request_payload = request.get_json(silent=True) or {}
-        updated_protocol = _protocol_from_body(request_payload, name_override=name)
+        existing_protocol = next((protocol for protocol in ctx.deps.protocol_set.all() if protocol.name == name), None)
+        updated_protocol = _protocol_from_body(
+            request_payload,
+            name_override=name,
+            deterministic_required_event_fields=(
+                existing_protocol.deterministic_required_event_fields if existing_protocol is not None else None
+            ),
+        )
 
         try:
             protocol_edit_message = replace_protocol(ctx.loaded_profile.module_path, ctx.deps.protocol_set.all(), _agents_by_name(), updated_protocol)

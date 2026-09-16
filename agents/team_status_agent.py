@@ -18,6 +18,41 @@ def _aware_datetime(value: str | None) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def normalize_attendance_availability(value: str | None) -> str | None:
+    """Normalize the small, explicit set of attendance status aliases.
+
+    The model-facing contract remains the canonical English enum values.  A
+    Hebrew specialist can nevertheless return an exact Hebrew equivalent;
+    accepting only these enumerated aliases avoids turning validation into
+    fuzzy matching.
+    """
+
+    if not isinstance(value, str):
+        return None
+    normalized = " ".join(value.strip().casefold().split())
+    aliases = {
+        "available": "available",
+        "unavailable": "unavailable",
+        "\u05d6\u05de\u05d9\u05df": "available",
+        "\u05d6\u05de\u05d9\u05e0\u05d4": "available",
+        "\u05d6\u05de\u05d9\u05e0\u05d9\u05dd": "available",
+        "\u05d6\u05de\u05d9\u05e0\u05d5\u05ea": "available",
+        "\u05d0\u05e0\u05d9 \u05d6\u05de\u05d9\u05df": "available",
+        "\u05d0\u05e0\u05d9 \u05d6\u05de\u05d9\u05e0\u05d4": "available",
+        "\u05dc\u05d0 \u05d6\u05de\u05d9\u05df": "unavailable",
+        "\u05dc\u05d0 \u05d6\u05de\u05d9\u05e0\u05d4": "unavailable",
+        "\u05dc\u05d0 \u05d6\u05de\u05d9\u05e0\u05d9\u05dd": "unavailable",
+        "\u05dc\u05d0 \u05d6\u05de\u05d9\u05e0\u05d5\u05ea": "unavailable",
+        "\u05d0\u05d9\u05e0\u05d5 \u05d6\u05de\u05d9\u05df": "unavailable",
+        "\u05d0\u05d9\u05e0\u05d4 \u05d6\u05de\u05d9\u05e0\u05d4": "unavailable",
+        "\u05d0\u05d9\u05e0\u05e0\u05d9 \u05d6\u05de\u05d9\u05df": "unavailable",
+        "\u05d0\u05d9\u05e0\u05e0\u05d9 \u05d6\u05de\u05d9\u05e0\u05d4": "unavailable",
+        "\u05d0\u05e0\u05d9 \u05dc\u05d0 \u05d6\u05de\u05d9\u05df": "unavailable",
+        "\u05d0\u05e0\u05d9 \u05dc\u05d0 \u05d6\u05de\u05d9\u05e0\u05d4": "unavailable",
+    }
+    return aliases.get(normalized)
+
+
 class TeamStatusAgent(Agent):
     """Specialist used only by readiness-team profiles."""
 
@@ -148,7 +183,7 @@ class TeamStatusAgent(Agent):
 
     @tool(
         "record_attendance_response",
-        "Stores one approved-roster member's normalized free-text response; late responses remain pending until a commander reviews them.",
+        "Stores one approved-roster member's attendance response. The availability argument must be exactly 'available' or 'unavailable'; unavailable requires a reason and a positive unavailable_days value. Trusted source_message_id, original_text, and received_at are supplied by the event runtime; do not infer or provide them. Late responses remain pending until a commander reviews them.",
         side_effecting=True,
         idempotent=True,
     )
@@ -174,17 +209,19 @@ class TeamStatusAgent(Agent):
         if not any(m["telegram_identity"] == telegram_identity for m in approved_members):
             return "The attendance response was not stored: requester is not an approved roster member."
 
-        normalized = availability.strip().lower()
-        if normalized not in {"available", "unavailable"}:
+        normalized = normalize_attendance_availability(availability)
+        if normalized is None:
             return "Clarification required: specify whether the member is available or unavailable."
-        if normalized == "unavailable" and not reason.strip():
+        clean_reason = reason.strip() if isinstance(reason, str) else ""
+        valid_days = unavailable_days if type(unavailable_days) is int else 0
+        if normalized == "unavailable" and not clean_reason:
             return "Clarification required: an unavailable member must provide a reason."
-        if normalized == "unavailable" and unavailable_days < 1:
+        if normalized == "unavailable" and valid_days < 1:
             return "Clarification required: specify how many days the member will be unavailable."
 
         unavailable_until = None
         if normalized == "unavailable":
-            unavailable_until = (now + timedelta(days=unavailable_days)).isoformat()
+            unavailable_until = (now + timedelta(days=valid_days)).isoformat()
 
         try:
             response = self.status_store.record_response(
@@ -193,7 +230,7 @@ class TeamStatusAgent(Agent):
                 availability=normalized,
                 original_text=original_text,
                 received_at=now.isoformat(),
-                reason=reason or None,
+                reason=clean_reason or None,
                 unavailable_until=unavailable_until,
             )
         except TeamStatusPersistenceError as exc:

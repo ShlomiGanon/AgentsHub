@@ -1199,6 +1199,77 @@ def test_simulator_script_is_syntactically_valid_javascript(tmp_path, teardown_c
     assert result.returncode == 0, result.stderr
 
 
+def test_simulator_frontend_distinguishes_no_reply_from_contract_failure(tmp_path, teardown_ctx, _admin_env):
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+    page = client.get("/admin/simulator").data.decode("utf-8")
+    api_call = _extract_between(page, "  async function apiCall(method, url, identity, body) {", "  function errorMessage")
+    error_message = _extract_between(page, "  function errorMessage(result) {", "  function simulatorResponseContractError")
+    contract_error = _extract_between(page, "  function simulatorResponseContractError(result) {", "  function jobStatusText")
+
+    driver = f"""
+const cases = [
+  {{ status: 200, body: {{ reply_text: 'bot reply', watermark: {{ status_len: 1, sent_len: 0 }} }} }},
+  {{ status: 200, body: {{ reply_text: null, watermark: {{ status_len: 0, sent_len: 0 }} }} }},
+  {{ status: 200, body: {{}} }},
+  {{ status: 200, parseError: true }},
+  {{ status: 500, body: {{ error: {{ message: 'server failed' }} }} }},
+];
+let current;
+global.fetch = async function () {{
+  return {{
+    status: current.status,
+    json: async function () {{
+      if (current.parseError) throw new Error('invalid json');
+      return current.body;
+    }},
+  }};
+}};
+function t(key, values) {{
+  if (key === 'invalid_response') return 'invalid simulator response';
+  return 'request failed (' + values.status + '): ' + values.message;
+}}
+{api_call}
+{error_message}
+{contract_error}
+
+(async function () {{
+  const outcomes = [];
+  for (const item of cases) {{
+    current = item;
+    const result = await apiCall('POST', '/admin/simulator/bot-msg', null, {{ text: 'x' }});
+    const contract = simulatorResponseContractError(result);
+    const failed = result.status >= 400 || !!contract;
+    outcomes.push({{
+      failed: failed,
+      contract: contract,
+      noReply: !failed && !result.payload.reply_text,
+      rendered: failed ? (contract || errorMessage(result)) : (result.payload.reply_text || 'bot_no_reply'),
+    }});
+  }}
+  console.log(JSON.stringify(outcomes));
+}})();
+"""
+    driver_path = tmp_path / "simulator_response_driver.js"
+    driver_path.write_text(driver, encoding="utf-8")
+    result = subprocess.run([node, str(driver_path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    outcomes = json.loads(result.stdout)
+
+    assert outcomes[0] == {"failed": False, "contract": None, "noReply": False, "rendered": "bot reply"}
+    assert outcomes[1] == {"failed": False, "contract": None, "noReply": True, "rendered": "bot_no_reply"}
+    assert outcomes[2] == {"failed": False, "contract": None, "noReply": True, "rendered": "bot_no_reply"}
+    assert outcomes[3] == {"failed": True, "contract": "invalid simulator response", "noReply": False, "rendered": "invalid simulator response"}
+    assert outcomes[4] == {"failed": True, "contract": None, "noReply": False, "rendered": "request failed (500): server failed"}
+
+
 def _extract_between(script: str, start_marker: str, end_marker: str) -> str:
     start = script.index(start_marker)
     end = script.index(end_marker, start)
@@ -1400,6 +1471,69 @@ def test_simulator_bot_msg_forwards_the_request_and_relays_the_response(tmp_path
         assert text in raw_body
 
 
+def test_simulator_bot_msg_relays_a_success_object_with_no_reply(tmp_path, teardown_ctx, _admin_env, monkeypatch):
+    monkeypatch.setenv("BOT_SERVICE_KEY", "test-service-key")
+    with _fake_simulator_server(
+        status=200,
+        body={"reply_text": None, "watermark": {"status_len": 0, "sent_len": 0}},
+    ) as server:
+        client = _client(tmp_path, teardown_ctx, simulator_port=server.server_address[1])
+        _login(client)
+
+        response = client.post("/admin/simulator/bot-msg", json={"text": "no reply"})
+
+        assert response.status_code == 200
+        assert response.get_json() == {
+            "reply_text": None,
+            "watermark": {"status_len": 0, "sent_len": 0},
+        }
+
+
+@pytest.mark.parametrize("upstream_payload", [None, "not-an-object", ["not", "an", "object"]])
+def test_simulator_bot_msg_rejects_a_non_object_success_response(tmp_path, teardown_ctx, _admin_env, monkeypatch, upstream_payload):
+    """The proxy must turn an invalid 2xx simulator body into an explicit contract error."""
+
+    import api.admin as admin_module
+
+    monkeypatch.setenv("BOT_SERVICE_KEY", "test-service-key")
+
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            return upstream_payload
+
+    monkeypatch.setattr(admin_module.httpx, "request", lambda *args, **kwargs: _Response())
+    client = _client(tmp_path, teardown_ctx, simulator_port=9999)
+    _login(client)
+
+    response = client.post("/admin/simulator/bot-msg", json={"text": "hello"})
+
+    assert response.status_code == 502
+    assert response.get_json() == {"error": {"message": "invalid simulator response"}}
+
+
+def test_simulator_bot_msg_turns_non_json_success_into_a_contract_error(tmp_path, teardown_ctx, _admin_env, monkeypatch):
+    import api.admin as admin_module
+
+    monkeypatch.setenv("BOT_SERVICE_KEY", "test-service-key")
+
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            raise ValueError("not json")
+
+    monkeypatch.setattr(admin_module.httpx, "request", lambda *args, **kwargs: _Response())
+    client = _client(tmp_path, teardown_ctx, simulator_port=9999)
+    _login(client)
+
+    response = client.post("/admin/simulator/bot-msg", json={"text": "hello"})
+
+    assert response.status_code == 502
+    assert response.get_json() == {"error": {"message": "invalid simulator response"}}
+
+
 def test_simulator_bot_msg_relays_a_refusal_status_and_body_unchanged(tmp_path, teardown_ctx, _admin_env, monkeypatch):
     """The simulator process's own identity-allowlist refusal (403) must reach the
     browser exactly as-is — the proxy is pure plumbing, not another decision point."""
@@ -1474,13 +1608,14 @@ def test_simulator_bot_poll_forwards_query_params_and_relays_the_response(tmp_pa
 
 def _extract_claim_and_poll_fns(page: str) -> tuple[str, str]:
     claim_fn = _extract_between(page, "function claimPollGeneration(chatId) {", "const registeredIdentities")
+    contract_fn = _extract_between(page, "function simulatorResponseContractError(result) {", "  function jobStatusText")
     poll_fn = _extract_between(
         page,
         "async function pollSimulatorChat(chatKey, chatId, watermark, myGeneration) {",
         "  async function sendNext",
     )
     assert claim_fn.strip() and poll_fn.strip(), "expected functions not found in the rendered page"
-    return claim_fn, poll_fn
+    return claim_fn, contract_fn + "\n" + poll_fn
 
 
 def test_a_superseded_poll_loop_never_polls_or_renders_anything(tmp_path, teardown_ctx, _admin_env):

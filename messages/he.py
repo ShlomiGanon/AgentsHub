@@ -596,6 +596,7 @@ MESSAGES = {
     "admin.simulator.steps_completed": "צעדים שהושלמו:",
     "admin.simulator.poll_timeout": "הפסקת מעקב אחרי {minutes} דקות - בדוק את המשימה מאוחר יותר.",
     "admin.simulator.request_failed": "הבקשה נכשלה ({status}): {message}",
+    "admin.simulator.invalid_response": "Invalid simulator response",
     "admin.simulator.network_error": "שגיאת רשת: {message}",
     "admin.simulator.err_parse": "לא ניתן לפרסר את ה-JSON: {message}",
     "admin.simulator.err_chats_required": "'chats' חייב להיות רשימה לא ריקה",

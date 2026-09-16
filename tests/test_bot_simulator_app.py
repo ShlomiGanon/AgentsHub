@@ -311,6 +311,31 @@ def test_simulator_msg_dispatches_and_returns_the_real_reply(tmp_path):
         assert set(body["watermark"]) == {"status_len", "sent_len"}
 
 
+def test_simulator_msg_wraps_a_none_runtime_result_in_a_success_object(tmp_path):
+    """A completed dispatch must never be serialized as bare JSON ``null``."""
+
+    with _RunningSimulator(tmp_path) as sim:
+        async def _no_result(_payload):
+            return None
+
+        sim.runtime.handle_message = _no_result
+        response = sim.client.post(
+            "/Simulator-msg",
+            json={
+                "sender_identity": _PERSONA_ID, "chat_id": _PERSONA_ID, "chat_type": "private",
+                "text": "no reply", "source_message_id": "sim-none-result",
+            },
+            headers={"X-Service-Key": "test-key"},
+        )
+
+        assert response.status_code == 200
+        assert response.get_json() == {
+            "reply_text": None,
+            "watermark": {"status_len": 0, "sent_len": 0},
+        }
+        assert response.get_json() is not None
+
+
 def test_simulator_msg_returns_500_on_an_unexpected_handler_failure(tmp_path):
     with _RunningSimulator(tmp_path) as sim:
         async def _boom(payload):

@@ -314,6 +314,19 @@ def _validate_protocol(protocol, agents_by_name: dict) -> list[str]:
                 "which none of its participating agents expose"
             )
 
+    deterministic_fields = getattr(protocol, "deterministic_required_event_fields", None)
+    if deterministic_fields is not None:
+        if len(protocol.participating_agents) != 1:
+            failures.append(
+                f"protocol '{protocol.name}' declares deterministic task formulation but does not have exactly one participating agent"
+            )
+        if not isinstance(deterministic_fields, tuple) or any(
+            field_name not in EVENT_DATA_FIELDS for field_name in deterministic_fields
+        ):
+            failures.append(
+                f"protocol '{protocol.name}' deterministic_required_event_fields must be a tuple containing only supported event fields"
+            )
+
     if not protocol.description:
         failures.append(f"protocol '{protocol.name}' has no description")
 

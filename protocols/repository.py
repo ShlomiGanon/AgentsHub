@@ -74,6 +74,12 @@ def _validate_or_raise(protocol: Protocol, agents_by_name: dict) -> None:
 
 
 def _render_protocol(protocol: Protocol) -> str:
+    deterministic_line = ""
+    if protocol.deterministic_required_event_fields is not None:
+        deterministic_line = (
+            "        deterministic_required_event_fields="
+            f"{tuple(protocol.deterministic_required_event_fields)!r},\n"
+        )
     return (
         "    Protocol(\n"
         f"        name={protocol.name!r},\n"
@@ -83,6 +89,7 @@ def _render_protocol(protocol: Protocol) -> str:
         f"        expected_success_output={protocol.expected_success_output!r},\n"
         f"        criticality=CriticalityLevel.{protocol.criticality.name},\n"
         f"        approval_flag={protocol.approval_flag!r},\n"
+        f"{deterministic_line}"
         "    ),"
     )
 

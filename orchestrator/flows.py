@@ -75,7 +75,7 @@ from orchestrator.group_routing import (  # re-exported: api may only import orc
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
 from protocols import CriticalityLevel, Step, StepOutcome
 from protocols.executor import execute_steps
-from agents import authenticated_request_identity
+from agents import authenticated_request_identity, trusted_event_metadata
 from tools import get_trace_id
 
 if TYPE_CHECKING:
@@ -954,7 +954,13 @@ def _execute_protocol_plan(
         else step
         for step in steps
     )
-    with authenticated_request_identity(event["sender_identity"]):
+    with authenticated_request_identity(event["sender_identity"]), trusted_event_metadata(
+        {
+            "source_message_id": event.get("source_message_id"),
+            "original_text": event.get("raw_text"),
+            "received_at": event.get("received_at"),
+        }
+    ):
         run_result = execute_steps(
             list(execution_steps),
             agents_by_name,

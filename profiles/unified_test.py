@@ -5,6 +5,9 @@ from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+# Keep the attendance status contract shared with the base specialist.  The
+# profile overrides the tool for localized output, so it must apply the same
+# explicit normalization itself.
 from agents import (
     AgentResult,
     FriendlyForcesAgent,
@@ -15,6 +18,7 @@ from agents import (
     make_exact_result_capture,
     tool,
 )
+from agents.team_status_agent import normalize_attendance_availability
 from messages import get_catalog
 from persistence import open_persistence, open_surveillance_persistence, open_team_status_persistence
 from profiles.contracts import AgentSpec, OptimizationPolicy
@@ -628,7 +632,8 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
 
     @tool(
         "record_attendance_response",
-        _catalog_text("unified.team_status.tool.record_attendance"),
+        _catalog_text("unified.team_status.tool.record_attendance")
+        + " The availability argument must be exactly 'available' or 'unavailable'; unavailable requires a reason and a positive unavailable_days value. Trusted source_message_id, original_text, and received_at are supplied by the event runtime.",
         side_effecting=True,
         idempotent=True,
     )
@@ -648,7 +653,19 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
             res = catalog.text("unified.team_status.identity_unavailable")
             _capture_team_result(res)
             return res
-        now_dt = datetime.now(timezone.utc)
+        # The event runtime supplies received_at mechanically.  Use it as the
+        # persistence anchor (with the historical current-time fallback for
+        # direct, non-event calls).
+        if received_at:
+            try:
+                now_dt = datetime.fromisoformat(received_at.replace("Z", "+00:00"))
+                if now_dt.tzinfo is None:
+                    now_dt = now_dt.replace(tzinfo=timezone.utc)
+                now_dt = now_dt.astimezone(timezone.utc)
+            except ValueError:
+                now_dt = datetime.now(timezone.utc)
+        else:
+            now_dt = datetime.now(timezone.utc)
         if not source_message_id:
             source_message_id = f"msg-{int(now_dt.timestamp())}"
         if not original_text:
@@ -660,24 +677,26 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
             _capture_team_result(res)
             return res
 
-        normalized = availability.strip().lower()
-        if normalized not in {"available", "unavailable"}:
+        normalized = normalize_attendance_availability(availability)
+        if normalized is None:
             res = catalog.text("unified.team_status.clarify_availability")
             _capture_team_result(res)
             return res
-        if normalized == "unavailable" and not reason.strip():
+        clean_reason = reason.strip() if isinstance(reason, str) else ""
+        valid_days = unavailable_days if type(unavailable_days) is int else 0
+        if normalized == "unavailable" and not clean_reason:
             res = catalog.text("unified.team_status.clarify_reason")
             _capture_team_result(res)
             return res
-        if normalized == "unavailable" and unavailable_days < 1:
+        if normalized == "unavailable" and valid_days < 1:
             res = catalog.text("unified.team_status.clarify_days")
             _capture_team_result(res)
             return res
 
         unavailable_until = None
         if normalized == "unavailable":
-            unavailable_until = (now_dt + timedelta(days=unavailable_days)).isoformat()
-        stored_reason = reason.strip() if normalized == "unavailable" else None
+            unavailable_until = (now_dt + timedelta(days=valid_days)).isoformat()
+        stored_reason = clean_reason if normalized == "unavailable" else None
 
         try:
             stored_response = self.status_store.record_response(
@@ -699,7 +718,7 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
         elif normalized == "available":
             res = catalog.text("unified.team_status.marked_available", icon=_ICON_CHECK)
         else:
-            res = catalog.text("unified.team_status.marked_unavailable", reason=reason, icon=_ICON_CROSS)
+            res = catalog.text("unified.team_status.marked_unavailable", reason=clean_reason, icon=_ICON_CROSS)
         _capture_team_result(res)
         return res
 
@@ -862,6 +881,7 @@ PROTOCOLS = [
         approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
+        deterministic_required_event_fields=(),
     ),
     Protocol(
         name="query_drone_fleet_status",
@@ -939,6 +959,7 @@ PROTOCOLS = [
         approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
+        deterministic_required_event_fields=("description", "occurred_at"),
     ),
     Protocol(
         name="dispatch_emergency_forces",

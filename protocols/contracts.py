@@ -33,6 +33,10 @@ class Protocol:
     approval_flag: bool
     requires_confirmation: bool = False
     commander_only: bool = False
+    # None means task decomposition remains model-driven.  A tuple (including
+    # an empty tuple) explicitly declares that this is a single deterministic
+    # step and lists the event fields that step cannot execute without.
+    deterministic_required_event_fields: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)

@@ -666,14 +666,22 @@ SIMULATOR_BODY = """
       credentials: 'same-origin',
     });
     let payload = null;
-    try { payload = await response.json(); } catch (error) { payload = null; }
-    return { status: response.status, payload: payload };
+    let parseError = false;
+    try { payload = await response.json(); } catch (error) { parseError = true; }
+    return { status: response.status, payload: payload, parseError: parseError };
   }
 
   function errorMessage(result) {
     const payload = result.payload || {};
     const error = payload.error || {};
     return t('request_failed', { status: result.status, message: error.message || JSON.stringify(payload) });
+  }
+
+  function simulatorResponseContractError(result) {
+    if (result.parseError || result.payload === null || typeof result.payload !== 'object' || Array.isArray(result.payload)) {
+      return t('invalid_response');
+    }
+    return null;
   }
 
   function jobStatusText(job) {
@@ -715,8 +723,9 @@ SIMULATOR_BODY = """
         setBubbleText(bubble, header, t('network_error', { message: error.message }), true);
         return false;
       }
-      if (result.status !== 200 || !result.payload) {
-        setBubbleText(bubble, header, errorMessage(result), true);
+      const contractError = simulatorResponseContractError(result);
+      if (result.status !== 200 || contractError) {
+        setBubbleText(bubble, header, contractError || errorMessage(result), true);
         return true;
       }
       const job = result.payload;
@@ -761,7 +770,7 @@ SIMULATOR_BODY = """
         return; // a network hiccup while quietly watching for a follow-up isn't worth an error bubble
       }
       if (pollGenerationByChatId[chatId] !== myGeneration) return;
-      if (result.status !== 200 || !result.payload) return;
+      if (result.status !== 200 || simulatorResponseContractError(result)) return;
       if (result.payload.watermark) mark = result.payload.watermark;
       if (result.payload.reply_text) {
         appendBubble(chatKey, 'sys', t('system_label'), result.payload.reply_text, null);
@@ -794,8 +803,9 @@ SIMULATOR_BODY = """
       updateGlobalState();
       return;
     }
-    if (result.status >= 400 || !result.payload) {
-      setBubbleText(reply, errorMessage(result), null, true);
+    const contractError = simulatorResponseContractError(result);
+    if (result.status >= 400 || contractError) {
+      setBubbleText(reply, contractError || errorMessage(result), null, true);
       queue.shift();
       state.busy = false;
       updateGlobalState();
@@ -1007,8 +1017,9 @@ SIMULATOR_BODY = """
     profileSimLoadButton.disabled = true;
     try {
       const result = await apiCall('GET', '/Simulations/' + encodeURIComponent(key), DATA.api_identity);
-      if (result.status >= 400 || !result.payload) {
-        showAlert(t('profile_simulation_load_failed', { message: errorMessage(result) }), true);
+      const contractError = simulatorResponseContractError(result);
+      if (result.status >= 400 || contractError) {
+        showAlert(t('profile_simulation_load_failed', { message: contractError || errorMessage(result) }), true);
         return;
       }
       // Always the already-materialized shape (reserved IDs already embedded server-side) — routed

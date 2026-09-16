@@ -42,6 +42,9 @@ _invocation_deadline: ContextVar[float | None] = ContextVar("invocation_deadline
 _authenticated_request_identity: ContextVar[str | None] = ContextVar(
     "authenticated_request_identity", default=None
 )
+_trusted_event_metadata: ContextVar[dict[str, object] | None] = ContextVar(
+    "trusted_event_metadata", default=None
+)
 _tool_class_cache: dict[tuple[type, str, str, int], type] = {}
 _tool_class_cache_lock = threading.Lock()
 _llm_cache: "OrderedDict[tuple[str, str, str], object]" = OrderedDict()
@@ -64,6 +67,23 @@ def authenticated_request_identity(identity: str):
         yield
     finally:
         _authenticated_request_identity.reset(token)
+
+
+@contextmanager
+def trusted_event_metadata(metadata: dict[str, object]):
+    """Make persisted event metadata available to trusted tool bindings.
+
+    The metadata is deliberately kept out of the model's task contract.  A
+    worker installs it around protocol execution, and the runtime injects it
+    into the attendance tool call after the model has supplied only business
+    fields.
+    """
+
+    token = _trusted_event_metadata.set(dict(metadata))
+    try:
+        yield
+    finally:
+        _trusted_event_metadata.reset(token)
 
 
 class ExactResultCapture:
@@ -184,6 +204,18 @@ def invocation_deadline(deadline_monotonic: float | None):
 
 
 def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> Callable:
+    trusted_fields = {"source_message_id", "original_text", "received_at"}
+    hidden_metadata_signature = None
+    if tool_info.name == "record_attendance_response":
+        original_signature = inspect.signature(bound_method)
+        hidden_metadata_signature = original_signature.replace(
+            parameters=[
+                parameter
+                for parameter in original_signature.parameters.values()
+                if parameter.name not in trusted_fields
+            ]
+        )
+
     @wraps(bound_method)
     def _wrapped(*args, **kwargs):
         allowed = _current_allowed_tools.get()
@@ -196,7 +228,19 @@ def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> 
 
         started = time.monotonic()
         try:
-            tool_result = bound_method(*args, **kwargs)
+            metadata = _trusted_event_metadata.get()
+            if tool_info.name == "record_attendance_response" and metadata is not None:
+                # Bind model arguments against the reduced business-only
+                # signature, then overwrite the trusted fields mechanically.
+                business_kwargs = {key: value for key, value in kwargs.items() if key not in trusted_fields}
+                bound = hidden_metadata_signature.bind_partial(*args, **business_kwargs)
+                call_kwargs = dict(bound.arguments)
+                for field_name in trusted_fields:
+                    if field_name in metadata:
+                        call_kwargs[field_name] = metadata[field_name]
+                tool_result = bound_method(**call_kwargs)
+            else:
+                tool_result = bound_method(*args, **kwargs)
         except Exception:
             logger.exception(
                 "tool call failed",
@@ -223,6 +267,11 @@ def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> 
         )
         return tool_result
 
+    if hidden_metadata_signature is not None:
+        # CrewAI derives the tool's args schema from this signature.  The
+        # model must see only business inputs; trusted event metadata is not a
+        # model argument and cannot be guessed or substituted by it.
+        _wrapped.__signature__ = hidden_metadata_signature
     return _wrapped
 
 

@@ -1513,7 +1513,19 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         try:
             body = response.json()
         except ValueError:
-            body = {}
+            logger.warning(
+                "simulation-mode bot process returned a non-JSON response",
+                extra={"event": "admin_simulator_bot_invalid_response", "trace_id": get_trace_id()},
+            )
+            body = None
+
+        # A successful simulator response is an object.  Do not relay a bare
+        # ``null`` (or another primitive) as HTTP 200: the browser cannot
+        # interpret that as a simulator success envelope.
+        if response.status_code < 400 and not isinstance(body, dict):
+            return jsonify({"error": {"message": "invalid simulator response"}}), 502
+        if body is None:
+            body = {"error": {"message": "invalid simulator response"}}
         return jsonify(body), response.status_code
 
     @blueprint.route("/simulator/bot-msg", methods=["POST"])
