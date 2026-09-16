@@ -1306,6 +1306,7 @@ class _FakeSimulatorHandler(http.server.BaseHTTPRequestHandler):
         self.server.received.append({
             "path": self.path,
             "headers": dict(self.headers),
+            "raw_body": body,
             "body": json.loads(body) if body else None,
         })
         self._respond()
@@ -1377,12 +1378,14 @@ def test_simulator_bot_msg_forwards_the_request_and_relays_the_response(tmp_path
         client = _client(tmp_path, teardown_ctx, simulator_port=port)
         _login(client)
 
+        text = "אני במילואים 12–14/9; לא זמין! 🚑 ✅"
+        request_body = {
+            "sender_identity": "9000000000000002", "chat_id": "9000000000000002",
+            "chat_type": "private", "text": text, "source_message_id": "s1",
+        }
         response = client.post(
             "/admin/simulator/bot-msg",
-            json={
-                "sender_identity": "9000000000000002", "chat_id": "9000000000000002",
-                "chat_type": "private", "text": "hi", "source_message_id": "s1",
-            },
+            json=request_body,
         )
 
         assert response.status_code == 200
@@ -1390,10 +1393,11 @@ def test_simulator_bot_msg_forwards_the_request_and_relays_the_response(tmp_path
         assert len(server.received) == 1
         assert server.received[0]["path"] == "/Simulator-msg"
         assert server.received[0]["headers"]["X-Service-Key"] == "test-service-key"
-        assert server.received[0]["body"] == {
-            "sender_identity": "9000000000000002", "chat_id": "9000000000000002",
-            "chat_type": "private", "text": "hi", "source_message_id": "s1",
-        }
+        assert server.received[0]["body"] == request_body
+        assert server.received[0]["headers"]["Content-Type"] == "application/json; charset=utf-8"
+        raw_body = server.received[0]["raw_body"].decode("utf-8")
+        assert json.loads(raw_body) == request_body
+        assert text in raw_body
 
 
 def test_simulator_bot_msg_relays_a_refusal_status_and_body_unchanged(tmp_path, teardown_ctx, _admin_env, monkeypatch):

@@ -363,6 +363,29 @@ def _load_unique_json_object(raw_text: str, label: str) -> dict:
     return payload
 
 
+_INTENT_JSON_FENCE_RE = re.compile(
+    r"\A```(?:json[ \t]*)?\r?\n(?P<body>.*?)\r?\n```[ \t]*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _normalize_intent_json_fence(raw_text: str) -> str:
+    """Remove one complete Markdown JSON fence, and nothing else.
+
+    The anchored shape deliberately accepts only an optional ``json`` language
+    tag, a JSON body, and the closing fence.  Prose before/after the fence or
+    any other language tag remains untouched and is rejected by the existing
+    parser.
+    """
+
+    if not isinstance(raw_text, str):
+        return raw_text
+    match = _INTENT_JSON_FENCE_RE.fullmatch(raw_text.strip())
+    if match is None:
+        return raw_text
+    return match.group("body").strip()
+
+
 def _structured_call_with_one_repair(
     main_agent: MainAgent,
     prompt: str,
@@ -403,7 +426,7 @@ def _normalize_evidence(text: str) -> str:
 
 
 def _parse_structured_intent_response(raw_text: str, message_text: str, protocols: tuple[Protocol, ...]) -> IntentResult:
-    payload = _load_unique_json_object(raw_text, "message intent")
+    payload = _load_unique_json_object(_normalize_intent_json_fence(raw_text), "message intent")
     valid_intents = {"question", "report", "request", "conversational", "needs_clarification"}
     primary_intent = payload.get("primary_intent")
     if primary_intent not in valid_intents:
@@ -519,10 +542,11 @@ def _looks_like_clear_attendance_report(message_text: str) -> bool:
 
 
 def _parse_intent_response(raw_text: str, message_text: str | None = None, protocols: tuple[Protocol, ...] = ()) -> IntentResult:
-    if raw_text.lstrip().startswith("{"):
+    normalized_json = _normalize_intent_json_fence(raw_text)
+    if normalized_json.lstrip().startswith("{"):
         if message_text is None:
             raise OrchestrationParseError("structured intent parsing requires the original message")
-        return _parse_structured_intent_response(raw_text, message_text, protocols)
+        return _parse_structured_intent_response(normalized_json, message_text, protocols)
 
     legacy_match = _LEGACY_INTENT_PATTERN.fullmatch(raw_text)
     if legacy_match is None:

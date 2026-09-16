@@ -41,6 +41,7 @@ reachable from anywhere but localhost, and only then consider also setting
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 import os
 import secrets
@@ -1483,11 +1484,22 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             return jsonify({"error": {"message": _t("admin.simulator.bot_mode_unconfigured")}}), 501
 
         service_key = os.environ.get(BOT_SERVICE_KEY_ENV_VAR) or ""
+        headers = {SERVICE_KEY_HEADER: service_key}
+        # Keep the browser -> admin -> simulator boundary explicit.  `httpx`'s
+        # `json=` helper is normally UTF-8 already, but passing bytes here makes
+        # the wire encoding and charset contract unambiguous for every caller
+        # (including non-browser simulator clients).
+        json_payload = kwargs.pop("json", None)
+        if json_payload is not None:
+            headers["Content-Type"] = "application/json; charset=utf-8"
+            kwargs["content"] = json.dumps(
+                json_payload, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8")
         try:
             response = httpx.request(
                 method,
                 f"http://localhost:{simulator_port}{path}",
-                headers={SERVICE_KEY_HEADER: service_key},
+                headers=headers,
                 timeout=httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=75.0),
                 **kwargs,
             )

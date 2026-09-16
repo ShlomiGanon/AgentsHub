@@ -657,7 +657,7 @@ SIMULATOR_BODY = """
   }
 
   async function apiCall(method, url, identity, body) {
-    const headers = { 'Content-Type': 'application/json' };
+    const headers = { 'Content-Type': 'application/json; charset=utf-8' };
     if (identity) headers['X-Identity'] = identity;
     const response = await fetch(url, {
       method: method,

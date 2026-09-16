@@ -88,7 +88,7 @@ window.AdminApi = (() => {
     setOutput(outputId, 'loading', {{ t('admin.api.sending')|tojson }});
     const options = {method, headers:{'Accept':'application/json', 'X-Identity':identity}};
     if (body !== undefined) {
-      options.headers['Content-Type'] = 'application/json';
+      options.headers['Content-Type'] = 'application/json; charset=utf-8';
       options.body = JSON.stringify(body);
     }
     try {

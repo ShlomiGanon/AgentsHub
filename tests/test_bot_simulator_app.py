@@ -5,9 +5,12 @@ itself, including its thread/asyncio-loop bridge (docs/bot_simulation_mode_desig
 """
 
 import asyncio
+import json
 import threading
+import types
 from types import SimpleNamespace
 
+from agents import adapter
 from profiles import SimulationGroup, SimulationPersona, simulation_group_chat_id, simulation_user_telegram_id
 
 from bot.contracts import BOT_SERVICE_IDENTITY, BotDeps, MessageSubmissionResult
@@ -370,6 +373,105 @@ def test_handle_message_persists_real_state_through_a_real_running_api_server(tm
         result = _run(scenario())
 
     assert result["reply_text"] == "Hello from the real bot handler!"
+
+
+def test_unicode_text_survives_simulator_bot_api_and_event_persistence(tmp_path, monkeypatch):
+    """The complete simulation transport must preserve Unicode byte-for-byte.
+
+    This deliberately crosses the real ``/Simulator-msg`` Flask route, the
+    synthetic Telegram Update and real bot handler, a real HTTP ``/Msg`` call,
+    and the API's SQLite event persistence.  The scripted Main Agent keeps the
+    flow deterministic; the CrewAI shim only prevents a real provider call if
+    the valid extraction proceeds all the way to the reference specialist.
+    """
+
+    monkeypatch.setenv("BOT_SERVICE_KEY", "test-service-key")
+
+    class _FakeOutput:
+        def __init__(self, raw):
+            self.raw = raw
+
+    class _FakeCrewAgent:
+        def __init__(self, **kwargs):
+            pass
+
+        def kickoff(self, text):
+            return _FakeOutput("status nominal, no anomalies")
+
+    fake_crewai = types.SimpleNamespace(
+        Agent=_FakeCrewAgent,
+        LLM=lambda **kwargs: kwargs["model"],
+        tools=types.SimpleNamespace(BaseTool=object),
+    )
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_crewai)
+
+    message = "אני במילואים מראשון עד שלישי בערב, לא זמין ביישוב — 12/14! 🚑 ✅"
+    extraction = json.dumps(
+        {
+            "classification": "fire",
+            "area": "north_sector",
+            "entities": ["gate-3"],
+            "description": "reserve-duty status near gate 3",
+            "severity": "low",
+            "occurred_at": "2026-09-16T10:00:00+00:00",
+        },
+        ensure_ascii=False,
+    )
+    agent = happy_path_agent(intent="report", extraction=extraction)
+    ctx = build_context(
+        tmp_path,
+        main_agent=agent,
+        users=((_PERSONA_ID, "viewer"), (BOT_SERVICE_IDENTITY, "commander")),
+    )
+    ctx.deps.persistence.write_user(_PERSONA_ID, "viewer", "Persona V")
+
+    loop = asyncio.new_event_loop()
+    runtime = SimulatorRuntime(
+        _fake_loaded_profile(tmp_path, simulation_users=(_PERSONA,)),
+        loop,
+        api_client=HttpApiClient("http://127.0.0.1:0", bot_service_key="test-service-key"),
+    )
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    runtime_started = False
+
+    try:
+        with RunningApiServer(ctx) as running:
+            try:
+                runtime.api_client._base_url = running.base_url
+                thread.start()
+                asyncio.run_coroutine_threadsafe(runtime.startup(), loop).result(timeout=10)
+                runtime_started = True
+                simulator = build_flask_app(runtime, "test-service-key")
+
+                body = {
+                    "sender_identity": _PERSONA_ID,
+                    "chat_id": _PERSONA_ID,
+                    "chat_type": "private",
+                    "text": message,
+                    "source_message_id": "unicode-e2e-1",
+                }
+                response = simulator.test_client().post(
+                    "/Simulator-msg",
+                    data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                    headers={
+                        "X-Service-Key": "test-service-key",
+                        "Content-Type": "application/json; charset=utf-8",
+                    },
+                )
+                assert response.status_code == 200
+
+                ctx.queue.wait_until_idle()
+                events = ctx.deps.persistence.fetch_events_range("2000-01-01", "2100-01-01")
+                assert len(events) == 1
+                assert events[0]["raw_text"] == message
+            finally:
+                if runtime_started:
+                    asyncio.run_coroutine_threadsafe(runtime.shutdown(), loop).result(timeout=10)
+    finally:
+        if thread.is_alive():
+            loop.call_soon_threadsafe(loop.stop)
+            thread.join(timeout=10)
+        loop.close()
 
 
 # -- SimulatorRuntime.poll_chat / GET /Simulator-msg/poll: Priority 3 -----------------------

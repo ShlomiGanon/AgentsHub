@@ -65,12 +65,19 @@ def telegram_request_context(chat_id: str, chat_type: str):
 
 def _do_request(url: str, method: str, identity: str, request_payload: dict | None) -> tuple[int, dict]:
     try:
+        headers = {"X-Identity": identity}
+        request_kwargs = {}
+        if request_payload is not None:
+            headers["Content-Type"] = "application/json; charset=utf-8"
+            request_kwargs["content"] = json.dumps(
+                request_payload, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8")
         response = httpx.request(
             method,
             url,
-            headers={"X-Identity": identity},
-            json=request_payload,
+            headers=headers,
             timeout=httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=75.0),
+            **request_kwargs,
         )
         if not response.content:
             return response.status_code, {}
@@ -131,9 +138,17 @@ class HttpApiClient(BotApiClient):
         try:
             for attempt in range(attempts):
                 try:
+                    request_kwargs = {}
+                    if request_payload is not None:
+                        headers["Content-Type"] = "application/json; charset=utf-8"
+                        request_kwargs["content"] = json.dumps(
+                            request_payload, ensure_ascii=False, separators=(",", ":")
+                        ).encode("utf-8")
                     timeout = None if read_timeout is None else httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=read_timeout)
                     with stage_context("bot_http"):
-                        response = await client.request(method, path, headers=headers, json=request_payload, timeout=timeout)
+                        response = await client.request(
+                            method, path, headers=headers, timeout=timeout, **request_kwargs
+                        )
                     try:
                         payload = response.json() if response.content else {}
                     except ValueError:
