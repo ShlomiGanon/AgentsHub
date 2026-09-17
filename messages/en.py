@@ -1089,4 +1089,16 @@ MESSAGES = {
     "orchestrator.picture.recommendation.collect_availability": (
         "Complete availability reporting for the {count} team members who have not reported."
     ),
+    "orchestrator.follow_up.marker.why": "why",
+    "orchestrator.follow_up.marker.what_happened": "what happened",
+    "orchestrator.follow_up.marker.was_executed": "was it done",
+    "orchestrator.follow_up.marker.did_execute": "did it execute",
+    "orchestrator.follow_up.marker.why_failed": "why did it fail",
+    "orchestrator.follow_up.marker.what_now": "what now",
+    "orchestrator.follow_up.marker.yes": "yes",
+    "orchestrator.follow_up.marker.approve": "approve",
+    "orchestrator.follow_up.marker.approved": "approved",
+    "orchestrator.follow_up.prefix.why": "why ",
+    "orchestrator.follow_up.prefix.what": "what ",
+    "orchestrator.follow_up.prefix.this": "",
 }

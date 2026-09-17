@@ -1,5 +1,6 @@
 from persistence import open_persistence
-from orchestrator.follow_up import resolve_follow_up
+from messages import get_catalog, set_current_catalog
+from orchestrator.follow_up import is_context_dependent_follow_up, resolve_follow_up
 
 
 def _event(store, event_id, *, conversation="conversation-1", sender="user-1", received="2026-09-17T10:00:00+00:00", state="failed", outcome="failed", protocol="dispatch_drone_to_incident", reason="drone unavailable", receipts=None):
@@ -140,3 +141,14 @@ def test_correlation_survives_persistence_reload(tmp_path):
     assert result.event.event_id == "event-1"
     assert result.kind == "failed"
     reloaded.close()
+
+
+def test_follow_up_markers_are_loaded_from_both_catalog_locales():
+    set_current_catalog(get_catalog("en"))
+    assert is_context_dependent_follow_up("why?")
+    assert is_context_dependent_follow_up("למה?")
+
+    set_current_catalog(get_catalog("he"))
+    assert is_context_dependent_follow_up("why?")
+    assert is_context_dependent_follow_up("זה בוצע?")
+    assert get_catalog("he").text("api.followup.executed") != get_catalog("en").text("api.followup.executed")

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 
+from messages import get_catalog
 from persistence import ConversationEventLink, PersistenceInterface
 
 
@@ -30,28 +31,51 @@ class FollowUpResolution:
     hold: dict | None = None
 
 
-_FOLLOW_UP_MARKERS = frozenset(
-    {
-        "למה", "מה קרה", "זה בוצע", "למה זה נכשל", "ומה עכשיו",
-        "why", "what happened", "was it done", "did it execute", "why did it fail", "what now",
-    }
+_FOLLOW_UP_MARKER_KEYS = (
+    "orchestrator.follow_up.marker.why",
+    "orchestrator.follow_up.marker.what_happened",
+    "orchestrator.follow_up.marker.was_executed",
+    "orchestrator.follow_up.marker.did_execute",
+    "orchestrator.follow_up.marker.why_failed",
+    "orchestrator.follow_up.marker.what_now",
 )
-_YES_MARKERS = frozenset({"כן", "אישור", "מאשר", "approve", "approved", "yes"})
+_YES_MARKER_KEYS = (
+    "orchestrator.follow_up.marker.yes",
+    "orchestrator.follow_up.marker.approve",
+    "orchestrator.follow_up.marker.approved",
+)
+_FOLLOW_UP_PREFIX_KEYS = (
+    "orchestrator.follow_up.prefix.why",
+    "orchestrator.follow_up.prefix.what",
+    "orchestrator.follow_up.prefix.this",
+)
 
 
 def _normalized(text: str) -> str:
     return " ".join(str(text).strip().casefold().split()).rstrip("?!.")
 
 
+def _localized_markers(keys: tuple[str, ...]) -> frozenset[str]:
+    """Load both supported locales so recognition is independent of response locale."""
+
+    return frozenset(
+        marker.casefold()
+        for language in ("en", "he")
+        for key in keys
+        if (marker := get_catalog(language).text(key))
+    )
+
+
 def is_context_dependent_follow_up(text: str) -> bool:
     """Use linguistic markers only as a candidate signal; state picks the referent."""
 
     normalized = _normalized(text)
-    if normalized in _FOLLOW_UP_MARKERS or normalized in _YES_MARKERS:
+    follow_up_markers = _localized_markers(_FOLLOW_UP_MARKER_KEYS)
+    yes_markers = _localized_markers(_YES_MARKER_KEYS)
+    if normalized in follow_up_markers or normalized in yes_markers:
         return True
-    return len(normalized) <= 40 and any(
-        marker in normalized for marker in ("למה ", "why ", "זה ", "what ", "מה ")
-    )
+    prefixes = _localized_markers(_FOLLOW_UP_PREFIX_KEYS)
+    return len(normalized) <= 40 and any(marker in normalized for marker in prefixes)
 
 
 def _is_recent(candidate: ConversationEventLink, newest: ConversationEventLink) -> bool:
@@ -89,7 +113,7 @@ def resolve_follow_up(
 
     normalized = _normalized(text)
     try:
-        if normalized in _YES_MARKERS:
+        if normalized in _localized_markers(_YES_MARKER_KEYS):
             for hold in persistence.list_held_events("approval"):
                 event = persistence.fetch_event(hold["event_id"])
                 if (

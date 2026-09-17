@@ -125,7 +125,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `orchestrator/capabilities.py` | Production | Private implementation | Builds the role-aware, per-caller Main Agent capability and system context. |
 | `orchestrator/event_queue.py` | Production | Private implementation | Serializes event processing on a dedicated worker. |
 | `orchestrator/flows.py` | Production | Private implementation | Coordinates report, request, hold-resume, protocol, and outcome workflows. |
-| `orchestrator/follow_up.py` | Production | Private implementation | Resolves short follow-up messages against persisted conversation/event state. |
+| `orchestrator/follow_up.py` | Production | Private implementation | Resolves short follow-up messages against persisted conversation/event state using catalog-owned multilingual recognition patterns. |
 | `orchestrator/group_routing.py` | Production | Private implementation | Holds the in-memory, DB-backed Telegram group to agent routing table and scopes flow dependencies per group. |
 | `orchestrator/holds.py` | Production | Private implementation | Creates and resolves clarification and approval holds. |
 | `orchestrator/reasoning.py` | Production | Private implementation | Prompts and parses Main/Insights decisions, questions, selection, formulation, and judgment. |

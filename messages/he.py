@@ -1082,4 +1082,16 @@ MESSAGES = {
     "orchestrator.picture.recommendation.collect_availability": (
         "מומלץ להשלים דיווחי זמינות של {count} חברי הכיתה שטרם דיווחו."
     ),
+    "orchestrator.follow_up.marker.why": "למה",
+    "orchestrator.follow_up.marker.what_happened": "מה קרה",
+    "orchestrator.follow_up.marker.was_executed": "זה בוצע",
+    "orchestrator.follow_up.marker.did_execute": "זה בוצע",
+    "orchestrator.follow_up.marker.why_failed": "למה זה נכשל",
+    "orchestrator.follow_up.marker.what_now": "ומה עכשיו",
+    "orchestrator.follow_up.marker.yes": "כן",
+    "orchestrator.follow_up.marker.approve": "אישור",
+    "orchestrator.follow_up.marker.approved": "מאשר",
+    "orchestrator.follow_up.prefix.why": "למה ",
+    "orchestrator.follow_up.prefix.what": "מה ",
+    "orchestrator.follow_up.prefix.this": "זה ",
 }

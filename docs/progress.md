@@ -3095,3 +3095,22 @@ no CI change was needed.
   passed. The repository-wide Hebrew-literal check still reports the pre-existing
   `orchestrator/follow_up.py` literals from Task 33; Task 36 added no Hebrew to
   production logic. No live run was performed.
+
+## 2026-09-17 - Task 37: catalog-owned Hebrew follow-up recognition
+
+- **Status:** done; no live run performed.
+- **Instruction files read:** root `instructions.md`; the message-catalog
+  contracts in `messages/catalog.py` and `messages/__init__.py`; the Task 33
+  follow-up resolver and the repository's Hebrew-literal hard-rule test.
+- Removed every Hebrew literal from `orchestrator/follow_up.py`. The resolver
+  now reads the unchanged Hebrew and English follow-up/approval markers and
+  prefix markers from parity-checked catalog keys in `messages/he.py` and
+  `messages/en.py`. It loads both supported languages intentionally, so the
+  recognized input language remains independent from the profile's response
+  locale.
+- No correlation, event-selection, ambiguity, permission, approval, receipt,
+  lifecycle, routing, or Fast-Path semantics changed. User-facing follow-up
+  answers remain the existing `api.followup.*` catalog entries.
+- **Verification:** Hebrew leakage, catalog parity, Task 33 correlation, API
+  message/hold, and orchestrator hold regression: 117 passed. No live run was
+  performed.
