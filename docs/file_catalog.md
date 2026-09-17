@@ -62,6 +62,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `docs/IMPROVES/CRITICAL_FIXES_PLAN.MD` | Documentation | Internal | Defines the critical-fixes implementation plan. |
 | `docs/IMPROVES/DIAGNOSTIC_FINDINGS.MD` | Documentation | Internal | Records diagnostic findings from system review. |
 | `docs/IMPROVES/HELP_COMMAND_DESIGN_INPUTS.MD` | Documentation | Internal | Records design inputs for the help command. |
+| `docs/IMPROVES/INTENT_ATTENDANCE_FIX.md` | Documentation | Internal | Records the attendance-intent correction plan and verification notes. |
 | `docs/IMPROVES/REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md` | Documentation | Internal | Records required fields and closed implementation decisions. |
 | `docs/IMPROVES/TELEGRAM_UX_FINDINGS.MD` | Documentation | Internal | Records Telegram user-experience findings. |
 | `docs/IMPROVES/TEST_INTEGRITY_CHECK.MD` | Documentation | Internal | Records test-integrity review findings. |
@@ -108,6 +109,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `fixtures/response_eval_v1.jsonl` | Fixture | Internal | Provides a versioned Hebrew and English response-quality corpus. |
 | `fixtures/seed_events.py` | Fixture | Internal | Provides deterministic historical event fixtures. |
 | `history/__init__.py` | Production | Public facade | Exposes the history facade and compatibility module aliases. |
+| `history/attendance_temporal.py` | Production | Private implementation | Resolves attendance availability periods from trusted received-time context. |
 | `history/contracts.py` | Production | Private implementation | Defines history extraction, query, summary, and persistence-transfer contracts. |
 | `history/event_pipeline.py` | Production | Private implementation | Extracts events, normalizes timestamps, and writes durable history state. |
 | `history/field_catalog.py` | Production | Private implementation | English meanings and narrative/internal category for every persisted event field. |
@@ -129,6 +131,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `orchestrator/group_routing.py` | Production | Private implementation | Holds the in-memory, DB-backed Telegram group to agent routing table and scopes flow dependencies per group. |
 | `orchestrator/holds.py` | Production | Private implementation | Creates and resolves clarification and approval holds. |
 | `orchestrator/reasoning.py` | Production | Private implementation | Prompts and parses Main/Insights decisions, questions, selection, formulation, and judgment. |
+| `orchestrator/response_contract.py` | Production | Private implementation | Defines response provenance and authority validation for user-visible claims. |
 | `orchestrator/situational_picture.py` | Production | Private implementation | Builds the multi-domain picture and defines typed camera/drone/team state, verified operational findings, source provenance, consistency checks, and localized deterministic rendering. |
 | `persistence/__init__.py` | Production | Public facade | Exposes persistence contracts, constructors, and compatibility aliases. |
 | `persistence/contracts.py` | Production | Private implementation | Defines persistence interfaces and domain errors. |
@@ -150,6 +153,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `profiles/sub_agent_team_status.py` | Production | Private implementation | Defines the dedicated readiness-team status deployment and reporting protocol. |
 | `profiles/template.py` | Production | Private implementation | Provides a reference template for authoring deployment profiles. |
 | `profiles/unified_test.py` | Production | Private implementation | Defines the unified test profile for surveillance, readiness team, and friendly forces. |
+| `pyrefly.toml` | Configuration | Internal | Configures static type analysis for the repository. |
 | `protocols/__init__.py` | Production | Public facade | Exposes protocol contracts, execution, repository operations, and aliases. |
 | `protocols/contracts.py` | Production | Private implementation | Defines protocols, steps, criticality, results, and edit errors. |
 | `protocols/executor.py` | Production | Private implementation | Executes protocol steps with retry and idempotency enforcement. |
@@ -163,6 +167,8 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/bot_fakes.py` | Test | Internal | Provides reusable bot API and Telegram fakes for tests. |
 | `tests/helpers.py` | Test | Internal | Provides shared test builders and persistence helpers. |
 | `tests/sanity_check_real_model_call.py` | Test | Internal | Runs an opt-in billed real-model smoke check outside pytest discovery. |
+| `tests/test_action_routing_guard.py` | Test | Internal | Verifies contract-driven action routing, side-effect protocol filtering, and unified-test action-path integration. |
+| `tests/test_action_lifecycle.py` | Test | Internal | Verifies persisted action lifecycle transitions and verified tool receipts. |
 | `tests/test_agent_permission_enforcement.py` | Test | Internal | Verifies agent permission enforcement behavior and edge cases. |
 | `tests/test_agent_registry.py` | Test | Internal | Verifies agent registry behavior and edge cases. |
 | `tests/test_agent_runtime.py` | Test | Internal | Verifies agent construction, invocation, CrewAI adaptation, and output handling. |
@@ -179,6 +185,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_api_situational_picture.py` | Test | Internal | Verifies `/Msg` builds the multi-domain picture from live specialist answers and caller-scoped recent events, by hint or in plain words. |
 | `tests/test_follow_up_correlation.py` | Test | Internal | Verifies deterministic conversation/event follow-up correlation and ambiguity handling. |
 | `tests/test_api_system.py` | Test | Internal | Verifies api system behavior and edge cases. |
+| `tests/test_attendance_temporal.py` | Test | Internal | Verifies attendance temporal-resolution rules and persistence. |
 | `tests/test_api_trace.py` | Test | Internal | Verifies commander-only Deep Debug trace polling, authorization, ordering, and rendering. |
 | `tests/test_api_unified_ingestion.py` | Test | Internal | Verifies api unified ingestion behavior and edge cases. |
 | `tests/test_approvals_queue.py` | Test | Internal | Verifies commander approvals queue API and Telegram interactions. |
@@ -194,7 +201,10 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_bot_transports.py` | Test | Internal | Verifies bot HTTP clients, abstract client behavior, and Telegram transports. |
 | `tests/test_cli_group_admin.py` | Test | Internal | Verifies the Telegram group routing administration command. |
 | `tests/test_demo_profile.py` | Test | Internal | Verifies demo profile behavior and edge cases. |
+| `tests/test_deterministic_fast_path.py` | Test | Internal | Verifies the deterministic operational fast path. |
+| `tests/test_deterministic_task_formulation.py` | Test | Internal | Verifies deterministic task formulation and model fallback behavior. |
 | `tests/test_environment_config.py` | Test | Internal | Verifies environment-backed model and runtime configuration. |
+| `tests/test_event_metadata_propagation.py` | Test | Internal | Verifies trusted event metadata reaches execution without model inference. |
 | `tests/test_file_catalog.py` | Test | Internal | Ensures this catalog exactly matches the first-party repository tree. |
 | `tests/test_friendly_forces_agent.py` | Test | Internal | Verifies friendly forces agent dispatch tools and coordination records. |
 | `tests/test_group_routing.py` | Test | Internal | Verifies the group routing table, staleness refresh, scope resolution, and dependency scoping. |
@@ -218,10 +228,15 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_integration_retry_exhaustion.py` | Test | Internal | Verifies the retry exhaustion scenario across real subsystem boundaries. |
 | `tests/test_integration_serial_processing_under_load.py` | Test | Internal | Verifies the serial processing under load scenario across real subsystem boundaries. |
 | `tests/test_integration_user_administration.py` | Test | Internal | Verifies the user administration scenario across real subsystem boundaries. |
+| `tests/test_intent_attendance.py` | Test | Internal | Verifies clear attendance reports stay on the report path. |
+| `tests/test_intent_json_fence.py` | Test | Internal | Verifies fenced JSON intent responses parse without retries. |
 | `tests/test_legacy_imports.py` | Test | Internal | Verifies supported implementation-path aliases resolve to canonical modules. |
 | `tests/test_migrations.py` | Test | Internal | Verifies migrations behavior and edge cases. |
 | `tests/test_messages.py` | Test | Internal | Verifies language catalogs, key and placeholder parity, strict formatting, and selection. |
 | `tests/test_observability.py` | Test | Internal | Verifies tracing and structured logging behavior. |
+| `tests/test_operational_decision_modes.py` | Test | Internal | Verifies separate and merged operational-decision behavior. |
+| `tests/test_operational_decision_output.py` | Test | Internal | Verifies merged operational-decision output validation and repair handling. |
+| `tests/test_operational_intake_schema.py` | Test | Internal | Verifies structured Single Operational Intake schema validation. |
 | `tests/test_orchestrator_flows.py` | Test | Internal | Verifies orchestrator flows behavior and edge cases. |
 | `tests/test_orchestrator_capabilities.py` | Test | Internal | Verifies role-aware capability descriptor and system-context behavior. |
 | `tests/test_orchestrator_holds.py` | Test | Internal | Verifies orchestrator holds behavior and edge cases. |
@@ -240,6 +255,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_question_answering.py` | Test | Internal | Verifies question routing and read-only specialist/history answers. |
 | `tests/test_reference_agent.py` | Test | Internal | Verifies reference agent behavior and edge cases. |
 | `tests/test_response_improvements.py` | Test | Internal | Verifies conversation retention, long polling, trace propagation, queue ordering, idempotency, and removal of the obsolete stream route. |
+| `tests/test_response_provenance.py` | Test | Internal | Verifies response claims require typed operational evidence. |
 | `tests/test_runtime_cleanup.py` | Test | Internal | Verifies scoped runtime cleanup preserves unified-test seed data and remains idempotent. |
 | `tests/test_run_stack.py` | Test | Internal | Verifies profile-database reset removes only declared databases and known sidecars, and refuses a non-database path. |
 | `tests/test_server_control.py` | Test | Internal | Verifies safe profile discovery and supervisor command and selection persistence. |
@@ -253,6 +269,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_team_status_agent.py` | Test | Internal | Verifies daily attendance, multi-day unavailability, late approval, and protocol execution. |
 | `tests/test_team_status_persistence.py` | Test | Internal | Verifies readiness-team roster approval, message idempotency, late-response isolation, and separate SQLite schemas. |
 | `tests/test_unified_role_and_security.py` | Test | Internal | Verifies unified role-based security, button workflows, and confirmation flows. |
+| `tests/test_unified_attendance_tool.py` | Test | Internal | Verifies attendance tool arguments, trusted metadata, and database persistence. |
 | `tests/test_unsafe_system.py` | Test | Internal | Verifies safe/open Telegram admission, automatic registration, approval, and API isolation. |
 | `tests/test_user_admin.py` | Test | Internal | Verifies user admin behavior and edge cases. |
 | `tools/__init__.py` | Production | Public facade | Exposes shared observability helpers and lazy terminal compatibility aliases. |

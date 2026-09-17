@@ -73,6 +73,23 @@ def test_code_fence_is_the_only_cleanup_and_bad_json_is_an_execution_error():
             lambda prompt: "classification: fire",
         )
 
+
+def test_report_business_fields_are_preserved_for_domain_ingestion():
+    result = extract_event(
+        "camera CAM-08 has intermittent reception",
+        "telegram",
+        "2026-08-20T10:00:00",
+        EventTypeRegistry(("surveillance_report",)),
+        AreaRegistry(("north",)),
+        lambda prompt: _response(
+            classification="surveillance_report",
+            area="north",
+            business_fields={"camera_id": "CAM-08", "camera_status": "degraded"},
+        ),
+    )
+
+    assert result.business_fields == {"camera_id": "CAM-08", "camera_status": "degraded"}
+
 from types import SimpleNamespace
 
 import pytest

@@ -1123,11 +1123,9 @@ def test_resolve_approval_then_continue_after_approval_composes_to_success(deps)
     assert result.outcome == "succeeded"
 
 
-def test_process_report_no_match_selection_writes_a_terminal_outcome_not_a_hold(deps, caplog):
-    # NO_MATCH has no candidate to approve/reject/select, so there is
-    # nothing a hold could ever resolve — it must behave like
-    # uncertain/closed_on_precedent: a real terminal outcome plus a
-    # one-way notification, never a held_events row.
+def test_process_report_without_action_protocol_commits_a_terminal_report(deps, caplog):
+    # A valid report is committed even when no action protocol matches; there
+    # is no approval hold and no tool execution on this path.
     agent = _ScriptedAgent(
         {
             "Extract this operational event": _extraction_response(),
@@ -1140,19 +1138,20 @@ def test_process_report_no_match_selection_writes_a_terminal_outcome_not_a_hold(
     with caplog.at_level("INFO"):
         result = process_report(deps, agent, insights_agent, "an unroutable report", "telegram", "2026-08-20T10:00:00", "viewer-1")
 
-    assert result.outcome == "no_match_protocol"
-    assert result.detail == "no loaded protocol handles this kind of request"
+    assert result.outcome == "succeeded"
+    assert result.detail == "event report committed"
 
     # No approval hold was created for it.
     assert deps.persistence.list_held_events("approval") == []
 
     event = deps.persistence.fetch_event(result.event_id)
-    assert event["outcome"] == "no_match_protocol"
-    assert event["outcome_failure_reason"] == "no loaded protocol handles this kind of request"
+    assert event["outcome"] == "succeeded"
+    assert event["insight_text"] == "event report committed"
     assert event["approval_held"] is False  # never went through the hold path at all
+    assert event["steps"] == []  # report commit is not an action/tool execution
 
     outcome_logs = [r for r in caplog.records if getattr(r, "event", None) == "event_outcome"]
-    assert any(r.outcome == "no_match_protocol" for r in outcome_logs)
+    assert any(r.outcome == "succeeded" for r in outcome_logs)
 
 
 def test_an_ambiguous_selection_hold_resolves_to_a_real_protocol_and_resumes(deps):

@@ -23,6 +23,7 @@ from agents.contracts import (
     AgentModelError,
     AgentOutputParseError,
     AgentResult,
+    ReportIngestionResult,
     AgentTimeoutError,
     AgentToolConstructionError,
     AgentWarmupError,
@@ -385,6 +386,17 @@ class Agent:
 
     def exposed_tools(self) -> tuple[ToolInfo, ...]:
         return self.descriptor.tools
+
+    def ingest_report(self, event: dict) -> ReportIngestionResult | None:
+        """Optionally commit a validated report to this agent's domain store.
+
+        Domain agents override this hook; the default keeps report ingestion a
+        no-op for agents that own no mutable domain state.  It is deliberately
+        separate from ``execute_tool`` so a report commit never fabricates an
+        action receipt.
+        """
+
+        return None
 
     def execute_tool(
         self,

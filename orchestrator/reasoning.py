@@ -75,6 +75,8 @@ class IntentResult:
     intent: Literal["question", "report", "request", "conversational", "needs_clarification"]
     reason: str
     clarification_question: str | None = None
+    requests_action: bool = False
+    matched_protocol_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -517,7 +519,12 @@ def _parse_structured_intent_response(raw_text: str, message_text: str, protocol
         question = analysis.clarification_question or "Could you clarify what you want me to check, record, or do?"
         return IntentResult("needs_clarification", analysis.ambiguity_reason or analysis.reason, question)
 
-    return IntentResult(analysis.primary_intent, analysis.reason)
+    return IntentResult(
+        analysis.primary_intent,
+        analysis.reason,
+        requests_action=analysis.requests_action,
+        matched_protocol_names=analysis.matched_protocol_names,
+    )
 
 
 _ATTENDANCE_REPORT_PATTERNS = (
@@ -554,7 +561,10 @@ def _parse_intent_response(raw_text: str, message_text: str | None = None, proto
     legacy_match = _LEGACY_INTENT_PATTERN.fullmatch(raw_text)
     if legacy_match is None:
         raise OrchestrationParseError(f"could not parse message intent response: {raw_text!r}")
-    return IntentResult(intent=legacy_match.group(1).lower(), reason=legacy_match.group(2).strip())
+    return IntentResult(
+        intent=legacy_match.group(1).lower(),
+        reason=legacy_match.group(2).strip(),
+    )
 
 
 def classify_intent(
@@ -868,10 +878,22 @@ def _operational_intake_business_fields(protocols: tuple[Protocol, ...]) -> dict
     return fields
 
 
+_OPERATIONAL_INTAKE_TOP_LEVEL_FIELDS = (
+    "intent", "classification", "business_fields", "risk", "protocol", "temporal"
+)
+
+
 def _operational_intake_schema(
     event_types: tuple[str, ...],
     protocols: tuple[Protocol, ...],
 ) -> dict:
+    """Build the canonical nested Single Operational Intake contract.
+
+    The same shape is described to the provider and consumed below by the
+    parser.  Keeping the business decision grouped under ``risk`` and
+    ``protocol`` mirrors the typed ``OperationalIntake`` runtime contract and
+    prevents drift between provider output and orchestration code.
+    """
     business_properties = {}
     for field_name, allowed_values in _operational_intake_business_fields(protocols).items():
         business_properties[field_name] = (
@@ -880,54 +902,82 @@ def _operational_intake_schema(
             else {"type": ["string", "number", "boolean", "null"]}
         )
 
+    nullable_string = {"type": ["string", "null"]}
     properties = {
-        "intent": {"type": "string", "enum": ["question", "report", "request", "conversational", "needs_clarification"]},
-        "intent_confident": {"type": "boolean"},
-        "asks_for_information": {"type": "boolean"},
-        "reports_occurrence": {"type": "boolean"},
-        "requests_action": {"type": "boolean"},
-        "social_only": {"type": "boolean"},
-        "is_quoted": {"type": "boolean"},
-        "is_hypothetical": {"type": "boolean"},
-        "intent_evidence": {"type": ["string", "null"]},
-        "classification": {"type": ["string", "null"], "enum": [*event_types, None]},
-        "classification_confident": {"type": "boolean"},
-        "area": {"type": ["string", "null"]},
-        "entities": {"type": "array", "items": {"type": "string"}},
-        "description": {"type": ["string", "null"]},
-        "severity": {"type": ["string", "null"]},
-        "occurred_at": {"type": ["string", "null"]},
-        "availability_start": {"type": "null"},
-        "availability_end": {"type": "null"},
+        "intent": {
+            "type": "object",
+            "properties": {
+                "value": {"type": "string", "enum": ["question", "report", "request", "conversational", "needs_clarification"]},
+                "confident": {"type": "boolean"},
+                "asks_for_information": {"type": "boolean"},
+                "reports_occurrence": {"type": "boolean"},
+                "requests_action": {"type": "boolean"},
+                "social_only": {"type": "boolean"},
+                "is_quoted": {"type": "boolean"},
+                "is_hypothetical": {"type": "boolean"},
+                "evidence": nullable_string,
+            },
+            "required": [
+                "value", "confident", "asks_for_information", "reports_occurrence",
+                "requests_action", "social_only", "is_quoted", "is_hypothetical", "evidence",
+            ],
+            "additionalProperties": False,
+        },
+        "classification": {
+            "type": "object",
+            "properties": {
+                "name": {"type": ["string", "null"], "enum": [*event_types, None]},
+                "confident": {"type": "boolean"},
+                "area": nullable_string,
+                "entities": {"type": "array", "items": {"type": "string"}},
+                "description": nullable_string,
+                "severity": nullable_string,
+                "occurred_at": nullable_string,
+            },
+            "required": ["name", "confident", "entities", "description"],
+            "additionalProperties": False,
+        },
         "business_fields": {
             "type": "object",
             "properties": business_properties,
             "required": list(business_properties),
             "additionalProperties": False,
         },
-        **_OPERATIONAL_DECISION_SCHEMA["properties"],
+        "risk": {
+            "type": "object",
+            "properties": {
+                "risk_score": _OPERATIONAL_DECISION_SCHEMA["properties"]["risk_score"],
+                "risk_reason": _OPERATIONAL_DECISION_SCHEMA["properties"]["risk_reason"],
+            },
+            "required": ["risk_score", "risk_reason"],
+            "additionalProperties": False,
+        },
+        "protocol": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["selected", "ambiguous", "no_match"]},
+                "name": {"type": ["string", "null"]},
+                "candidate_names": {"type": "array", "items": {"type": "string"}},
+                "reason": {"type": "string"},
+            },
+            "required": ["status", "name", "candidate_names", "reason"],
+            "additionalProperties": False,
+        },
+        "temporal": {
+            "type": "object",
+            "properties": {
+                "expression": nullable_string,
+                "availability_start": {"type": "null"},
+                "availability_end": {"type": "null"},
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
     }
-    required_fields = (
-        "intent",
-        "intent_confident",
-        "asks_for_information",
-        "reports_occurrence",
-        "requests_action",
-        "social_only",
-        "is_quoted",
-        "is_hypothetical",
-        "intent_evidence",
-        "classification",
-        "classification_confident",
-        "entities",
-        "description",
-        "business_fields",
-        *_OPERATIONAL_DECISION_SCHEMA["required"],
-    )
     return {
         "type": "object",
         "properties": properties,
-        "required": list(required_fields),
+        "required": list(_OPERATIONAL_INTAKE_TOP_LEVEL_FIELDS),
         "additionalProperties": False,
     }
 
@@ -1022,7 +1072,7 @@ def _validate_operational_intake_schema(payload: dict, schema: dict) -> dict:
         if field_name not in normalized:
             normalized[field_name] = _schema_default(field_schema)
 
-    def validate_value(value: object, value_schema: dict, path: str) -> None:
+    def validate_value(value: object, value_schema: dict, path: str) -> object:
         expected_types = value_schema.get("type")
         if isinstance(expected_types, str):
             expected_types = (expected_types,)
@@ -1061,12 +1111,18 @@ def _validate_operational_intake_schema(payload: dict, schema: dict) -> dict:
                     missing=nested_missing,
                     unknown=nested_unknown,
                 )
+            normalized_object = dict(value)
             for nested_name, nested_schema in nested_properties.items():
-                if nested_name in value:
-                    validate_value(value[nested_name], nested_schema, f"{path}.{nested_name}")
+                if nested_name not in normalized_object:
+                    normalized_object[nested_name] = _schema_default(nested_schema)
+                normalized_object[nested_name] = validate_value(
+                    normalized_object[nested_name], nested_schema, f"{path}.{nested_name}"
+                )
+            return normalized_object
+        return value
 
     for field_name, field_schema in properties.items():
-        validate_value(normalized[field_name], field_schema, field_name)
+        normalized[field_name] = validate_value(normalized[field_name], field_schema, field_name)
     return normalized
 
 
@@ -1082,6 +1138,12 @@ def make_operational_intake(
     """Classify, extract, assess risk, and select a protocol in exactly one model call."""
 
     business_fields = _operational_intake_business_fields(protocols)
+    schema = _operational_intake_schema(event_types, protocols)
+    canonical_fields = {
+        section: tuple(section_schema.get("properties", {}))
+        for section, section_schema in schema["properties"].items()
+        if isinstance(section_schema, dict)
+    }
     protocol_data = [
         {
             "name": protocol.name,
@@ -1100,16 +1162,18 @@ def make_operational_intake(
         for protocol in protocols
     ]
     prompt = (
-        "Return exactly one compact JSON object matching the supplied schema and nothing else. "
+        "Return exactly one compact JSON object matching the supplied canonical schema and nothing else. "
+        "The top-level object has exactly these nested sections: "
+        f"{', '.join(_OPERATIONAL_INTAKE_TOP_LEVEL_FIELDS)}. "
+        f"Canonical nested field names JSON: {json.dumps(canonical_fields, ensure_ascii=False, sort_keys=True)}. "
         "Classify the user's intent; only for a clear operational report, extract event data, assess risk, "
-        "and select a listed protocol. Set intent_confident and classification_confident false rather than guessing. "
-        "Use the intent booleans with their ordinary meanings and copy an exact supporting quote into intent_evidence. "
+        "and select a listed protocol. Set intent.confident and classification.confident false rather than guessing. "
+        "Use the intent booleans with their ordinary meanings and copy an exact supporting quote into intent.evidence. "
         "Intent identifies what the user is doing; missing domain fields do not make a clear report intent ambiguous. "
         "Set unavailable business values to null. Do not invent identity, source_message_id, received_at, or original_text. "
-        "availability_start and availability_end must be null: trusted runtime code resolves final temporal values. "
-        "protocol_status must be selected, ambiguous, or no_match. Keep reasons concise. "
-        "All fields listed as required by the schema must be present. Nullable optional fields may be omitted; "
-        "the runtime treats an omitted optional field as null.\n"
+        "temporal.availability_start and temporal.availability_end must be null: trusted runtime code resolves final temporal values. "
+        "protocol.status must be selected, ambiguous, or no_match. Keep reasons concise. "
+        "All required nested fields must be present; nullable optional fields may be omitted and default to null.\n"
         f"Received-at reference: {received_at}\n"
         f"Event types JSON: {json.dumps(event_types, ensure_ascii=False)}\n"
         f"Areas JSON: {json.dumps(areas, ensure_ascii=False)}\n"
@@ -1117,7 +1181,6 @@ def make_operational_intake(
         f"Protocols JSON: {json.dumps(protocol_data, ensure_ascii=False, sort_keys=True)}\n"
         f"Message JSON: {json.dumps(message_text, ensure_ascii=False)}"
     )
-    schema = _operational_intake_schema(event_types, protocols)
     with stage_context("operational_intake"):
         result = main_agent.process(
             prompt,
@@ -1134,48 +1197,53 @@ def make_operational_intake(
     payload = _load_unique_json_object(_normalize_operational_decision_json(result.text), "operational intake")
     payload = _validate_operational_intake_schema(payload, schema)
 
-    intent = payload["intent"]
+    intent_payload = payload["intent"]
+    classification_payload = payload["classification"]
+    risk_payload = payload["risk"]
+    protocol_payload = payload["protocol"]
+    temporal_payload = payload["temporal"]
+    intent = intent_payload["value"]
     if intent not in {"question", "report", "request", "conversational", "needs_clarification"}:
         raise OrchestrationParseError(f"invalid operational intake intent: {intent!r}")
-    if type(payload["intent_confident"]) is not bool or type(payload["classification_confident"]) is not bool:
+    if type(intent_payload["confident"]) is not bool or type(classification_payload["confident"]) is not bool:
         raise OrchestrationParseError("operational intake confidence fields must be booleans")
 
     intent_flags = (
         "asks_for_information", "reports_occurrence", "requests_action", "social_only", "is_quoted", "is_hypothetical"
     )
-    if any(type(payload[field_name]) is not bool for field_name in intent_flags):
+    if any(type(intent_payload[field_name]) is not bool for field_name in intent_flags):
         raise OrchestrationParseError("operational intake intent flags must be booleans")
 
     intent_result = IntentResult(intent, "single operational intake")
-    if intent != "report" or not payload["intent_confident"] or not payload["classification_confident"]:
+    if intent != "report" or not intent_payload["confident"] or not classification_payload["confident"]:
         return OperationalIntake(intent_result, None, None, False)
-    evidence = payload["intent_evidence"]
+    evidence = intent_payload["evidence"]
     if (
-        not payload["reports_occurrence"]
-        or payload["asks_for_information"]
-        or payload["requests_action"]
-        or payload["social_only"]
-        or payload["is_quoted"]
-        or payload["is_hypothetical"]
+        not intent_payload["reports_occurrence"]
+        or intent_payload["asks_for_information"]
+        or intent_payload["requests_action"]
+        or intent_payload["social_only"]
+        or intent_payload["is_quoted"]
+        or intent_payload["is_hypothetical"]
         or not isinstance(evidence, str)
         or not evidence.strip()
         or _normalize_evidence(evidence) not in _normalize_evidence(message_text)
     ):
         return OperationalIntake(intent_result, None, None, False)
 
-    classification = payload["classification"]
+    classification = classification_payload["name"]
     if classification not in event_types:
         raise OrchestrationParseError(f"operational intake classification is unavailable: {classification!r}")
-    if payload["area"] is not None and payload["area"] not in areas:
-        raise OrchestrationParseError(f"operational intake area is unavailable: {payload['area']!r}")
+    if classification_payload["area"] is not None and classification_payload["area"] not in areas:
+        raise OrchestrationParseError(f"operational intake area is unavailable: {classification_payload['area']!r}")
     for field_name in ("area", "severity", "occurred_at"):
-        if payload[field_name] is not None and not isinstance(payload[field_name], str):
+        if classification_payload[field_name] is not None and not isinstance(classification_payload[field_name], str):
             raise OrchestrationParseError(f"operational intake {field_name} must be a string or null")
-    if not isinstance(payload["entities"], list) or not all(isinstance(item, str) for item in payload["entities"]):
+    if not isinstance(classification_payload["entities"], list) or not all(isinstance(item, str) for item in classification_payload["entities"]):
         raise OrchestrationParseError("operational intake entities must be a list of strings")
-    if not isinstance(payload["description"], str) or not payload["description"].strip():
+    if not isinstance(classification_payload["description"], str) or not classification_payload["description"].strip():
         raise OrchestrationParseError("operational intake report requires a description")
-    if payload["availability_start"] is not None or payload["availability_end"] is not None:
+    if temporal_payload["availability_start"] is not None or temporal_payload["availability_end"] is not None:
         raise OrchestrationParseError("operational intake may not supply trusted availability timestamps")
 
     extracted_business = payload["business_fields"]
@@ -1188,7 +1256,14 @@ def make_operational_intake(
         if allowed_values and value is not None and value not in allowed_values:
             raise OrchestrationParseError(f"operational intake business field {field_name!r} is invalid")
 
-    decision_payload = {name: payload[name] for name in _OPERATIONAL_DECISION_SCHEMA["properties"]}
+    decision_payload = {
+        "risk_score": risk_payload["risk_score"],
+        "risk_reason": risk_payload["risk_reason"],
+        "protocol_status": protocol_payload["status"],
+        "protocol_name": protocol_payload["name"],
+        "candidate_names": protocol_payload["candidate_names"],
+        "protocol_reason": protocol_payload["reason"],
+    }
     decision_payload = _normalize_operational_decision_status(decision_payload)
     _validate_operational_decision_payload(decision_payload)
     risk = RiskAssessment(
@@ -1206,20 +1281,20 @@ def make_operational_intake(
     missing = tuple(
         name
         for name, value in (
-            ("area", payload["area"]),
-            ("severity", payload["severity"]),
-            ("occurred_at", payload["occurred_at"]),
+            ("area", classification_payload["area"]),
+            ("severity", classification_payload["severity"]),
+            ("occurred_at", classification_payload["occurred_at"]),
         )
         if value is None
     )
     extraction = ExtractionResult(
         classification=classification,
         classification_status="resolved",
-        area=payload["area"],
-        entities=tuple(payload["entities"]),
-        description=payload["description"].strip(),
-        severity=payload["severity"],
-        occurred_at=payload["occurred_at"],
+        area=classification_payload["area"],
+        entities=tuple(classification_payload["entities"]),
+        description=classification_payload["description"].strip(),
+        severity=classification_payload["severity"],
+        occurred_at=classification_payload["occurred_at"],
         occurred_at_is_fallback=False,
         missing_fields=missing,
         business_fields={key: value for key, value in extracted_business.items() if value is not None},

@@ -64,6 +64,7 @@ from orchestrator.reasoning import (
     rewrite_task,
     extract_event_data_update,
     select_protocol,
+    IntentResult,
     ProtocolSelectionResult,
     OperationalDecision,
     OperationalIntake,
@@ -74,7 +75,9 @@ from orchestrator.reasoning import answer_question, determine_closure, look_up_p
 from orchestrator.situational_picture import (  # re-exported: api may only import orchestrator.flows
     SituationalPicture,
     build_situational_picture,
+    build_typed_snapshot,
     compose_picture_from_step_outcomes,
+    render_typed_snapshot,
 )
 from orchestrator.follow_up import FollowUpResolution, is_context_dependent_follow_up, resolve_follow_up
 from orchestrator.event_queue import PolicyAwareEventQueue, SerialEventQueue, WorkItem
@@ -92,7 +95,7 @@ from orchestrator.group_routing import (  # re-exported: api may only import orc
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
 from protocols import CriticalityLevel, Step, StepOutcome
 from protocols.executor import execute_steps
-from agents import authenticated_request_identity, trusted_event_metadata, ToolReceipt
+from agents import authenticated_request_identity, trusted_event_metadata, ToolReceipt, ReportIngestionResult
 from tools import get_trace_id
 
 if TYPE_CHECKING:
@@ -420,6 +423,15 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
     if gate_result is not None:
         return gate_result
 
+    # A domain agent may own report ingestion (for example, surveillance
+    # observations). Commit those validated facts before protocol selection so
+    # a report can never be mistaken for a read-only query. Action reports,
+    # such as attendance, continue to their declared protocol/tool path.
+    if resolved_classification != UNCLASSIFIED_TYPE:
+        report_commit = _commit_report_domain_state(deps, event_id)
+        if report_commit is not None:
+            return _complete_committed_report(deps, event_id, report_commit)
+
     return _continue_after_required_fields(deps, event_id, main_agent, insights_agent, raw_text, resolved_classification)
 
 
@@ -506,6 +518,37 @@ def _continue_after_required_fields(
         return FlowResult(event_id, "held_for_clarification")
 
     return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent)
+
+
+def _commit_report_domain_state(deps: "FlowDeps", event_id: str) -> ReportIngestionResult | None:
+    """Commit a report through the owning domain agent, if one declares a hook.
+
+    Event persistence is already the authoritative source for generic
+    intelligence reports.  Domain agents may additionally project validated
+    facts into their own store (for example, a surveillance camera report).
+    This path is deliberately separate from protocol/tool execution, so a
+    committed report never receives a synthetic action receipt.
+    """
+
+    event = deps.persistence.fetch_event(event_id) or {}
+    for agent in deps.registry.all():
+        ingest_report = getattr(agent, "ingest_report", None)
+        if ingest_report is None:
+            continue
+        result = ingest_report(event)
+        if result is not None:
+            return result
+    return None
+
+
+def _complete_committed_report(deps: "FlowDeps", event_id: str, result: ReportIngestionResult) -> FlowResult:
+    if result.committed:
+        record_event_outcome(deps.persistence, event_id, "succeeded", insight_text=result.detail)
+        _log_event_outcome(event_id, "succeeded", stage="report_ingestion", detail=result.detail)
+        return FlowResult(event_id, "succeeded", result.detail)
+    record_event_outcome(deps.persistence, event_id, "failed", failure_reason=result.detail)
+    _log_event_outcome(event_id, "failed", failure_reason=result.detail, stage="report_ingestion")
+    return FlowResult(event_id, "failed", result.detail)
 
 
 def process_report(
@@ -706,7 +749,7 @@ def resolve_approval(
     if answer.status == "approved":
         try:
             protocol = deps.protocol_set.get(answer.hold["selected_protocol_name"])
-            if _protocol_has_side_effects(deps, protocol):
+            if protocol_has_side_effects(deps, protocol):
                 _safe_action_transition(deps, event_id, "approved")
         except KeyError:
             pass
@@ -776,12 +819,58 @@ def _look_up_precedent_if_possible(deps: FlowDeps, event_id: str, event: dict) -
     return look_up_precedent(deps.history_query_service, event_id, event["classification"], event["area"], anchor_time)
 
 
-def _protocol_has_side_effects(deps: FlowDeps, protocol: "Protocol") -> bool:
+def protocol_has_side_effects(deps: FlowDeps, protocol: "Protocol") -> bool:
+    """Read side-effect capability only from registered tool metadata."""
+
     for agent_name in protocol.participating_agents:
         exposed = {tool.name: tool for tool in deps.registry.descriptor_for(agent_name).tools}
         if any(exposed.get(tool_name) is not None and exposed[tool_name].side_effecting for tool_name in protocol.approved_tools):
             return True
     return False
+
+
+def action_protocols_for_request(deps: FlowDeps) -> tuple["Protocol", ...]:
+    """The only protocols an action request may be resolved to.
+
+    The classification comes from the protocol's approved tools and their
+    runtime metadata; protocol names and user wording never define it.
+    """
+
+    return tuple(
+        protocol
+        for protocol in deps.protocol_set.all()
+        if protocol_has_side_effects(deps, protocol)
+    )
+
+
+def enforce_action_routing_guard(deps: FlowDeps, intent: IntentResult) -> IntentResult:
+    """Keep a typed action signal on the action path before response routing.
+
+    A structured intent response may carry a true action flag while naming a
+    non-action primary intent. The flag is grounded in an exact user quote by
+    the existing intent contract, so the safe route is an action event; later
+    protocol resolution still decides whether there is a supported action.
+    """
+
+    if intent.intent == "request" or not intent.requests_action:
+        return intent
+
+    candidate_names = set(intent.matched_protocol_names)
+    side_effect_candidates = {
+        protocol.name
+        for protocol in action_protocols_for_request(deps)
+    }
+    logger.warning(
+        "action intent corrected before response routing",
+        extra={
+            "event": "action_routing_guard_applied",
+            "primary_intent": intent.intent,
+            "matched_protocol_names": sorted(candidate_names),
+            "matched_side_effect_protocol_names": sorted(candidate_names & side_effect_candidates),
+            "trace_id": get_trace_id(),
+        },
+    )
+    return replace(intent, intent="request")
 
 
 def _safe_action_transition(deps: FlowDeps, event_id: str, state: str, *, failure_reason: str | None = None, receipts=()) -> None:
@@ -819,6 +908,13 @@ def continue_from_risk_assessment(
         originated_from_commander = event.get("sender_permission_level") == "commander"
     raw_text, classification, area = event["raw_text"], event["classification"], event["area"]
     description, severity = event["description"], event["severity"]
+    requires_side_effecting_protocol = classification == HUMAN_ACTIVATION_TYPE
+    selectable_protocols = (
+        action_protocols_for_request(deps)
+        if requires_side_effecting_protocol
+        else deps.protocol_set.all()
+    )
+    protocols_by_name = {protocol.name: protocol for protocol in deps.protocol_set.all()}
 
     if selected_protocol is not None:
         risk_level = "high" if selected_protocol.criticality == CriticalityLevel.HIGH else "low"
@@ -834,7 +930,6 @@ def continue_from_risk_assessment(
             candidate_names=(selected_protocol.name,),
             reason="Deterministic button protocol mapping",
         )
-        record_event_state(deps.persistence, event_id, {"selected_protocol": selection.protocol_name, "protocol_reason": selection.reason})
     elif operational_decision is not None:
         risk_assessment = operational_decision.risk
         selection = operational_decision.selection
@@ -843,12 +938,6 @@ def continue_from_risk_assessment(
             event_id,
             {"risk_level": risk_assessment.level, "risk_reason": risk_assessment.reason},
         )
-        if selection.status == "selected":
-            record_event_state(
-                deps.persistence,
-                event_id,
-                {"selected_protocol": selection.protocol_name, "protocol_reason": selection.reason},
-            )
     else:
         operational_mode = deps.optimization_policy.operational_decision_mode
         combined_decision = None
@@ -856,7 +945,7 @@ def continue_from_risk_assessment(
             try:
                 combined_decision = make_operational_decision(
                     main_agent, raw_text, classification, area, description, severity,
-                    deps.protocol_set.all(), deps.settings_store.get_risk_threshold(),
+                    selectable_protocols, deps.settings_store.get_risk_threshold(),
                 )
             except OrchestrationParseError as exc:
                 logger.warning(
@@ -896,15 +985,29 @@ def continue_from_risk_assessment(
             selection = (
                 combined_decision.selection
                 if operational_mode == "merged" and combined_decision is not None
-                else select_protocol(main_agent, raw_text, classification, area, description, deps.protocol_set.all(), risk_assessment.level)
+                else select_protocol(main_agent, raw_text, classification, area, description, selectable_protocols, risk_assessment.level)
             )
         except OrchestrationParseError as exc:
             record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
             _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="protocol_selection")
             return FlowResult(event_id, "failed", str(exc))
 
-        if selection.status == "selected":
-            record_event_state(deps.persistence, event_id, {"selected_protocol": selection.protocol_name, "protocol_reason": selection.reason})
+    if selection.status == "selected":
+        chosen_protocol = protocols_by_name.get(selection.protocol_name)
+        if (
+            requires_side_effecting_protocol
+            and (chosen_protocol is None or not protocol_has_side_effects(deps, chosen_protocol))
+        ):
+            selection = ProtocolSelectionResult(
+                status="no_match",
+                reason="action requests require a side-effecting protocol",
+            )
+        else:
+            record_event_state(
+                deps.persistence,
+                event_id,
+                {"selected_protocol": selection.protocol_name, "protocol_reason": selection.reason},
+            )
 
     logger.info(
         "protocol selection",
@@ -923,7 +1026,6 @@ def continue_from_risk_assessment(
             {"precedent_matched_event_ids": [precedent_match.event_id for precedent_match in precedent_matches]},
         )
 
-    protocols_by_name = {protocol.name: protocol for protocol in deps.protocol_set.all()}
     selected_candidate = protocols_by_name.get(selection.protocol_name) if selection.status == "selected" else None
     direct_capability = selected_candidate.direct_tool_execution if selected_candidate is not None else None
     precedent_closure_blocked = (
@@ -954,8 +1056,15 @@ def continue_from_risk_assessment(
         _log_event_outcome(event_id, "closed_on_precedent", precedent_event_id=closing_event_id)
         return FlowResult(event_id, "closed_on_precedent", f"closed against resolved precedent '{closing_event_id}'")
 
-    # No-match is terminal because there is no actionable hold to resolve.
+    # A valid report without an action protocol is still a committed domain
+    # fact.  Only action requests use no-match as a terminal protocol failure.
     if selection.status == "no_match":
+        if classification != UNCLASSIFIED_TYPE and not requires_side_effecting_protocol:
+            report_commit = _commit_report_domain_state(deps, event_id)
+            if report_commit is not None:
+                return _complete_committed_report(deps, event_id, report_commit)
+            report_commit = ReportIngestionResult(True, "event report committed")
+            return _complete_committed_report(deps, event_id, report_commit)
         record_event_outcome(deps.persistence, event_id, "no_match_protocol", failure_reason=selection.reason)
         _log_event_outcome(event_id, "no_match_protocol", reason=selection.reason)
         return FlowResult(event_id, "no_match_protocol", selection.reason)
@@ -963,7 +1072,7 @@ def continue_from_risk_assessment(
     hold_reason: "HoldReason | None" = determine_approval_hold(selection, protocols_by_name, originated_from_commander)
 
     protocol = protocols_by_name.get(selection.protocol_name) if selection.status == "selected" else None
-    side_effecting_protocol = bool(protocol and _protocol_has_side_effects(deps, protocol))
+    side_effecting_protocol = bool(protocol and protocol_has_side_effects(deps, protocol))
     if side_effecting_protocol and (deps.persistence.fetch_event(event_id) or {}).get("action_state") is None:
         _safe_action_transition(deps, event_id, "requested")
 
@@ -1176,7 +1285,7 @@ def _execute_protocol_plan(
         for step in steps
     )
 
-    side_effecting_protocol = _protocol_has_side_effects(deps, protocol)
+    side_effecting_protocol = protocol_has_side_effects(deps, protocol)
 
     def _lifecycle_callback(state: str, _step: Step) -> None:
         if side_effecting_protocol:
@@ -1307,31 +1416,43 @@ def _finish_protocol_assessment(
                 extra={"event": "final_assessment_invalid", "reason": str(exc), "trace_id": get_trace_id()},
             )
 
-    insight_text = (
-        final_assessment.insight
-        if final_assessment is not None
-        else build_insight(insights_agent, protocol, step_outcomes, comparable_history=precedent_matches)
-    )
+    typed_snapshot = None
     if len(protocol.participating_agents) > 1:
-        # A multi-domain protocol's insight is the live picture composed from what the
-        # specialists just reported plus the recent event log, never a prepared text.
-        # The viewer/commander ownership scope follows the event's persisted role snapshot.
         sender_filter = (
             None
             if persisted_event.get("sender_permission_level") == "commander"
             else persisted_event.get("sender_identity")
         )
+        typed_snapshot = build_typed_snapshot(
+            deps.registry,
+            history_query_service=deps.history_query_service,
+            sender_identity_filter=sender_filter,
+        )
+
+    if typed_snapshot is not None:
+        insight_text = render_typed_snapshot(typed_snapshot)
+    else:
+        insight_text = (
+            final_assessment.insight
+            if final_assessment is not None
+            else build_insight(insights_agent, protocol, step_outcomes, comparable_history=precedent_matches)
+        )
+    if len(protocol.participating_agents) > 1:
+        # A multi-domain protocol uses the typed snapshot whenever authoritative
+        # stores are available. Legacy profiles without those stores retain their
+        # existing specialist composition path.
         try:
-            synthesis = compose_picture_from_step_outcomes(
-                main_agent,
-                protocol,
-                step_outcomes,
-                persisted_event.get("raw_text", ""),
-                deps.history_query_service,
-                sender_identity_filter=sender_filter,
-            )
-            if synthesis:
-                insight_text = synthesis
+            if typed_snapshot is None:
+                synthesis = compose_picture_from_step_outcomes(
+                    main_agent,
+                    protocol,
+                    step_outcomes,
+                    persisted_event.get("raw_text", ""),
+                    deps.history_query_service,
+                    sender_identity_filter=sender_filter,
+                )
+                if synthesis:
+                    insight_text = synthesis
         except Exception as exc:
             logger.warning(
                 "multi-agent synthesis failed: %s", exc, extra={"event": "synthesis_failed", "trace_id": get_trace_id()}

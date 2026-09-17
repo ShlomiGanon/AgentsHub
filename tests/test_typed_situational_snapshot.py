@@ -293,3 +293,57 @@ def test_unified_test_profile_uses_hebrew_findings_renderer(monkeypatch, tmp_pat
     assert "קיימת יכולת אווירית זמינה: 2 רחפנים" in picture.text
     assert "אין כרגע כוח זמין מאושר" in picture.text
     assert "14 טרם דיווחו" in picture.text
+
+
+def test_shared_picture_preserves_camera_states_and_committed_reports():
+    surveillance = FakeSurveillanceStore(
+        [_camera("08", status="degraded"), _camera("03", status="offline")]
+        + [_camera(str(index)) for index in range(1, 4)],
+        [],
+        [],
+    )
+    team = FakeTeamStore(
+        [_team("eli", "unavailable"), _team("michael", "unavailable")]
+        + [_team(f"u-{index}", "awaiting_response") for index in range(13)]
+    )
+
+    class History:
+        def recent_committed_events(self, **kwargs):
+            return (
+                {
+                    "event_id": "internal-event-id",
+                    "classification": "friendly_forces_report",
+                    "description": "דיווח מודיעיני: נגנב טרקטורון והחשודים נעו לאורך הציר.",
+                    "received_at": "2026-09-17T10:00:00+00:00",
+                    "outcome": "succeeded",
+                },
+                {
+                    "event_id": "pending-event",
+                    "classification": "friendly_forces_report",
+                    "description": "לא להציג",
+                    "received_at": "2026-09-17T11:00:00+00:00",
+                    "outcome": "running",
+                },
+            )
+
+    set_current_catalog(get_catalog("he"))
+    snapshot = build_typed_snapshot(
+        _registry(surveillance, team), now=NOW, history_query_service=History()
+    )
+    rendered = render_typed_snapshot(snapshot)
+
+    assert snapshot.cameras.degraded == 1
+    assert snapshot.cameras.offline == 1
+    assert snapshot.cameras.active == 3
+    assert snapshot.team.available == 0
+    assert snapshot.team.unavailable == 2
+    assert snapshot.team.not_reported == 13
+    assert len(snapshot.recent_reports) == 1
+    assert "דיווח מודיעיני" in rendered
+    assert "internal-event-id" not in rendered
+    assert "team_status_agent" not in rendered
+    assert "record_attendance_response" not in rendered
+    assert "לא להציג" not in rendered
+    assert "13 טרם דיווחו" in rendered
+    assert "אין כרגע כוח זמין מאושר" in rendered
+    assert "כל המצלמות פעילות" not in rendered

@@ -218,7 +218,7 @@ def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None
         ]
         if result.failure_reason:
             lines.append(_short_failure_reason(result.failure_reason))
-        elif result.protocol_name == "overall_situational_picture" and result.insight_text and any("\u0590" <= c <= "\u05ea" for c in result.insight_text):
+        elif result.protocol_name == "overall_situational_picture" and result.insight_text:
             lines.append(result.insight_text.strip())
         elif result.protocol_name in _SIDE_EFFECT_PROTOCOLS and result.execution_evidence == ():
             lines.append(messages.text("result.action_unverified"))

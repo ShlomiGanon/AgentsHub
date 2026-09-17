@@ -94,6 +94,17 @@ class CameraSnapshot:
     unknown: int | None
     status: str
     provenance: SnapshotProvenance
+    degraded: int | None = None
+    offline: int | None = None
+
+
+@dataclass(frozen=True)
+class RecentOperationalReport:
+    """A committed report safe for the shared picture (no internal identifiers)."""
+
+    text: str
+    source_ref: str
+    received_at: str
 
 
 @dataclass(frozen=True)
@@ -149,6 +160,7 @@ class SituationalSnapshot:
     inconsistencies: tuple[str, ...]
     generated_at: str
     findings: tuple[OperationalFinding, ...] = ()
+    recent_reports: tuple[RecentOperationalReport, ...] = ()
 
     def provenance(self) -> dict:
         sections = {}
@@ -174,6 +186,13 @@ class SituationalSnapshot:
                     "suggested_action_key": finding.suggested_action_key,
                 }
                 for finding in self.findings
+            ],
+            "recent_reports": [
+                {
+                    "source_ref": report.source_ref,
+                    "received_at": report.received_at,
+                }
+                for report in self.recent_reports
             ],
         }
 
@@ -231,24 +250,26 @@ def _build_camera_snapshot(store, *, now: datetime, area: str | None) -> CameraS
     try:
         cameras = list(store.list_cameras(area=area))
     except Exception:
-        return CameraSnapshot(None, None, None, None, "unknown", provenance)
+        return CameraSnapshot(None, None, None, None, "unknown", provenance, None, None)
 
-    counts = {"active": 0, "inactive": 0, "unknown": 0}
+    counts = {"active": 0, "degraded": 0, "offline": 0, "unknown": 0}
     for camera in cameras:
         status = str(camera.get("status", "")).casefold()
         if status == "active":
             counts["active"] += 1
-        elif status in {"offline", "degraded"}:
-            counts["inactive"] += 1
+        elif status in {"degraded", "offline"}:
+            counts[status] += 1
         else:
             counts["unknown"] += 1
     return CameraSnapshot(
         total=len(cameras),
         active=counts["active"],
-        inactive=counts["inactive"],
+        inactive=counts["degraded"] + counts["offline"],
         unknown=counts["unknown"],
         status="inconsistent" if sum(counts.values()) != len(cameras) else "ok",
         provenance=provenance,
+        degraded=counts["degraded"],
+        offline=counts["offline"],
     )
 
 
@@ -347,7 +368,7 @@ def derive_operational_findings(
 
     if cameras is not None:
         source_refs = (_state_source("cameras", cameras.provenance),)
-        if cameras.status == "unknown":
+        if cameras.status == "unknown" or cameras.unknown:
             findings.append(OperationalFinding(
                 "data_quality", "warning", source_refs, "orchestrator.picture.finding.cameras_unknown"
             ))
@@ -371,10 +392,22 @@ def derive_operational_findings(
                 "orchestrator.picture.finding.cameras_gap",
                 (("active", cameras.active), ("total", cameras.total)),
             ))
+        if cameras.degraded:
+            findings.append(OperationalFinding(
+                "coverage", "warning", source_refs,
+                "orchestrator.picture.finding.cameras_degraded",
+                (("count", cameras.degraded),),
+            ))
+        if cameras.offline:
+            findings.append(OperationalFinding(
+                "coverage", "warning", source_refs,
+                "orchestrator.picture.finding.cameras_offline",
+                (("count", cameras.offline),),
+            ))
 
     if drones is not None:
         source_refs = (_state_source("drones", drones.provenance),)
-        if drones.status == "unknown":
+        if drones.status == "unknown" or drones.unknown:
             findings.append(OperationalFinding(
                 "data_quality", "warning", source_refs, "orchestrator.picture.finding.drones_unknown"
             ))
@@ -430,8 +463,61 @@ def derive_operational_findings(
                     "orchestrator.picture.recommendation.collect_availability",
                     values,
                 ))
+            if team.pending_identity is not None and team.pending_identity > 0:
+                findings.append(OperationalFinding(
+                    "data_quality",
+                    "warning",
+                    source_refs,
+                    "orchestrator.picture.finding.team_pending_identity",
+                    (("count", team.pending_identity),),
+                ))
 
     return tuple(findings)
+
+
+def _recent_committed_reports(
+    history_query_service: "HistoryQueryService | None",
+    *,
+    now: datetime,
+    sender_identity_filter: str | None,
+) -> tuple[RecentOperationalReport, ...]:
+    """Read committed report facts through the history service's public read path."""
+
+    reader = getattr(history_query_service, "recent_committed_events", None)
+    if not callable(reader):
+        return ()
+    try:
+        events = reader(
+            now=now,
+            hours=DEFAULT_RECENT_EVENTS_HOURS,
+            sender_identity_filter=sender_identity_filter,
+            limit=RECENT_EVENTS_LIMIT,
+        )
+    except Exception:
+        logger.warning(
+            "committed report lookup failed for situational picture",
+            extra={"event": "picture_committed_reports_failed", "trace_id": get_trace_id()},
+        )
+        return ()
+
+    reports: list[RecentOperationalReport] = []
+    for event in events:
+        if event.get("outcome") != "succeeded":
+            continue
+        classification = str(event.get("classification") or "").casefold()
+        if not classification.endswith("_report"):
+            continue
+        text = str(event.get("description") or event.get("raw_text") or "").strip()
+        if not text:
+            continue
+        reports.append(
+            RecentOperationalReport(
+                text=text,
+                source_ref=f"event:{event.get('event_id', 'unknown')}",
+                received_at=str(event.get("received_at") or ""),
+            )
+        )
+    return tuple(reports)
 
 
 def build_typed_snapshot(
@@ -439,6 +525,8 @@ def build_typed_snapshot(
     *,
     now: datetime | None = None,
     area: str | None = None,
+    history_query_service: "HistoryQueryService | None" = None,
+    sender_identity_filter: str | None = None,
 ) -> SituationalSnapshot | None:
     """Read authoritative specialist stores and construct a validated snapshot.
 
@@ -466,16 +554,22 @@ def build_typed_snapshot(
         inconsistencies.append("camera status categories do not sum to total")
 
     findings = derive_operational_findings(cameras, drones, team)
+    recent_reports = _recent_committed_reports(
+        history_query_service,
+        now=now,
+        sender_identity_filter=sender_identity_filter,
+    )
 
     return SituationalSnapshot(
         cameras=cameras,
         drones=drones,
         team=team,
-        recent_count=None,
-        relevant_recent_events=(),
+        recent_count=len(recent_reports),
+        relevant_recent_events=tuple(report.text for report in recent_reports),
         inconsistencies=tuple(inconsistencies),
         generated_at=storage_timestamp(now),
         findings=findings,
+        recent_reports=recent_reports,
     )
 
 
@@ -494,7 +588,8 @@ def render_typed_snapshot(snapshot: SituationalSnapshot) -> str:
                 "orchestrator.picture.typed.cameras",
                 total=section.total,
                 active=section.active,
-                inactive=section.inactive,
+                degraded=section.degraded,
+                offline=section.offline,
                 unknown=section.unknown,
             ))
 
@@ -536,6 +631,13 @@ def render_typed_snapshot(snapshot: SituationalSnapshot) -> str:
                 text=catalog.text(finding.message_key, **dict(finding.message_values)),
             )
             for finding in snapshot.findings
+        )
+
+    if snapshot.recent_reports:
+        lines.extend(("", catalog.text("orchestrator.picture.typed.recent_reports_header")))
+        lines.extend(
+            catalog.text("orchestrator.picture.typed.recent_report", text=report.text)
+            for report in snapshot.recent_reports
         )
 
     recommendations = [finding for finding in snapshot.findings if finding.suggested_action_key]
@@ -880,7 +982,12 @@ def build_situational_picture(
     """Plan, collect, and compose one live picture for `raw_text` under `protocol`."""
 
     now = now or datetime.now(timezone.utc)
-    typed_snapshot = build_typed_snapshot(registry, now=now)
+    typed_snapshot = build_typed_snapshot(
+        registry,
+        now=now,
+        history_query_service=history_query_service,
+        sender_identity_filter=sender_identity_filter,
+    )
     if typed_snapshot is not None:
         plan = _default_plan(protocol)
         return SituationalPicture(

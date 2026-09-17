@@ -68,33 +68,42 @@ def _attendance_protocol():
 
 def _payload(**changes):
     payload = {
-        "intent": "report",
-        "intent_confident": True,
-        "asks_for_information": False,
-        "reports_occurrence": True,
-        "requests_action": False,
-        "social_only": False,
-        "is_quoted": False,
-        "is_hypothetical": False,
-        "intent_evidence": MESSAGE,
-        "classification": "team_attendance_report",
-        "classification_confident": True,
-        "area": "readiness_team",
-        "entities": [],
-        "description": "The reporting member is unavailable due to reserve duty.",
-        "severity": "low",
-        "occurred_at": None,
-        "availability_start": None,
-        "availability_end": None,
+        "intent": {
+            "value": "report",
+            "confident": True,
+            "asks_for_information": False,
+            "reports_occurrence": True,
+            "requests_action": False,
+            "social_only": False,
+            "is_quoted": False,
+            "is_hypothetical": False,
+            "evidence": MESSAGE,
+        },
+        "classification": {
+            "name": "team_attendance_report",
+            "confident": True,
+            "area": "readiness_team",
+            "entities": [],
+            "description": "The reporting member is unavailable due to reserve duty.",
+            "severity": "low",
+            "occurred_at": None,
+        },
         "business_fields": {"availability": "unavailable", "reason": "reserve duty"},
-        "risk_score": 0.1,
-        "risk_reason": "Routine attendance update.",
-        "protocol_status": "selected",
-        "protocol_name": "record_attendance_response",
-        "candidate_names": [],
-        "protocol_reason": "The report records member attendance.",
+        "risk": {"risk_score": 0.1, "risk_reason": "Routine attendance update."},
+        "protocol": {
+            "status": "selected",
+            "name": "record_attendance_response",
+            "candidate_names": [],
+            "reason": "The report records member attendance.",
+        },
+        "temporal": {"expression": None, "availability_start": None, "availability_end": None},
     }
-    payload.update(changes)
+    for key, value in changes.items():
+        if "." in key:
+            section, field = key.split(".", 1)
+            payload[section][field] = value
+        else:
+            payload[key] = value
     return payload
 
 
@@ -193,8 +202,7 @@ def test_available_attendance_uses_same_direct_mechanism(tmp_path, monkeypatch):
     specialist, database = _attendance_agent(tmp_path, monkeypatch)
     message = "אני זמין היום"
     intake_agent = _IntakeAgent(_payload(
-        intent_evidence=message,
-        description="The reporting member is available today.",
+        **{"intent.evidence": message, "classification.description": "The reporting member is available today."},
         business_fields={"availability": "available", "reason": None},
     ))
     deps = _deps(specialist)
@@ -226,7 +234,7 @@ def test_missing_reason_and_ambiguous_time_fall_back_without_direct_execution():
     specialist = _AttendanceShapeAgent(model="mock")
     no_reason = _IntakeAgent(_payload(business_fields={"availability": "unavailable", "reason": None}))
     ambiguous_message = "אני לא זמין בקרוב בגלל מילואים"
-    ambiguous_time = _IntakeAgent(_payload(intent_evidence=ambiguous_message))
+    ambiguous_time = _IntakeAgent(_payload(**{"intent.evidence": ambiguous_message}))
 
     assert prepare_fast_path_report(_deps(specialist), no_reason, MESSAGE, RECEIVED_AT, False) is None
     assert prepare_fast_path_report(
@@ -237,9 +245,8 @@ def test_missing_reason_and_ambiguous_time_fall_back_without_direct_execution():
 def test_ambiguous_protocol_approval_dynamic_and_disabled_modes_preserve_fallback():
     specialist = _AttendanceShapeAgent(model="mock")
     ambiguous = _IntakeAgent(_payload(
-        protocol_status="ambiguous",
-        protocol_name=None,
-        candidate_names=["record_attendance_response"],
+        **{"protocol.status": "ambiguous", "protocol.name": None,
+           "protocol.candidate_names": ["record_attendance_response"]},
     ))
     assert prepare_fast_path_report(_deps(specialist), ambiguous, MESSAGE, RECEIVED_AT, False) is None
 

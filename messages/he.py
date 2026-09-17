@@ -1041,7 +1041,7 @@ MESSAGES = {
     "orchestrator.picture.missing_note": "(הערה מבצעית: לא התקבל דיווח מ-{domains})",
     "orchestrator.picture.typed.title": "תמונת מצב כללית",
     "orchestrator.picture.typed.cameras": (
-        "מצלמות: {active}/{total} פעילות; {inactive} לא פעילות; {unknown} במצב לא ידוע."
+        "מצלמות: {active}/{total} פעילות; {degraded} באיכות ירודה; {offline} מושבתות/בתחזוקה; {unknown} במצב לא ידוע."
     ),
     "orchestrator.picture.typed.cameras_unknown": "מצלמות: הנתונים אינם זמינים.",
     "orchestrator.picture.typed.drones": (
@@ -1058,12 +1058,16 @@ MESSAGES = {
     "orchestrator.picture.typed.recommendations_header": "פעולות מומלצות:",
     "orchestrator.picture.typed.finding_line": "- {text}",
     "orchestrator.picture.typed.recommendation_line": "- {text}",
+    "orchestrator.picture.typed.recent_reports_header": "דיווחים מחויבים אחרונים:",
+    "orchestrator.picture.typed.recent_report": "- {text}",
     "orchestrator.picture.finding.cameras_all_active": (
         "כיסוי המצלמות תקין: כל {count} המצלמות פעילות."
     ),
     "orchestrator.picture.finding.cameras_gap": (
         "קיים פער בכיסוי המצלמות: {active} מתוך {total} מצלמות פעילות."
     ),
+    "orchestrator.picture.finding.cameras_degraded": "{count} מצלמות באיכות ירודה; הכיסוי מצומצם.",
+    "orchestrator.picture.finding.cameras_offline": "{count} מצלמות מושבתות או בתחזוקה.",
     "orchestrator.picture.finding.cameras_unknown": "לא ניתן לאמת כרגע את כיסוי המצלמות.",
     "orchestrator.picture.finding.cameras_inconsistent": "קיימת אי-התאמה בנתוני המצלמות.",
     "orchestrator.picture.finding.drones_ready": "קיימת יכולת אווירית זמינה: {count} רחפנים מוכנים לפעולה.",
@@ -1076,6 +1080,7 @@ MESSAGES = {
     "orchestrator.picture.finding.team_no_confirmed": "אין כרגע כוח זמין מאושר.",
     "orchestrator.picture.finding.team_not_reported": "חסרים דיווחי זמינות מ-{count} חברי כיתה.",
     "orchestrator.picture.finding.team_unknown": "לא ניתן לאמת כרגע את זמינות כיתת הכוננות.",
+    "orchestrator.picture.finding.team_pending_identity": "הזמינות של {count} חברי כיתה ממתינה לאימות זהות.",
     "orchestrator.picture.finding.team_inconsistent": (
         "קיימת אי-התאמה בנתוני זמינות הכיתה; לא מוסקת מסקנת כשירות."
     ),

@@ -286,6 +286,34 @@ class HistoryQueryService:
             "risk_levels": sorted(_RISK_LEVELS),
         }
 
+    def recent_committed_events(
+        self,
+        *,
+        now: datetime,
+        hours: int = 12,
+        sender_identity_filter: str | None = None,
+        limit: int = 8,
+    ) -> tuple[dict, ...]:
+        """Return committed event records for typed operational-picture rendering.
+
+        This is a read-only, persistence-backed path.  Callers must still apply
+        their own user-visible field contract; no model-generated narrative is
+        involved here.
+        """
+
+        bounded_hours = max(1, min(72, int(hours)))
+        criteria = EventSearchCriteria(
+            time_start=storage_timestamp(now - timedelta(hours=bounded_hours)),
+            time_end=storage_timestamp(now),
+            time_basis="received_at",
+            outcomes=("succeeded",),
+            order="newest",
+            limit=max(1, min(100, int(limit))),
+            sender_identity=sender_identity_filter,
+        )
+        events = self._persistence.search_events(criteria)
+        return tuple(event for event in events if event.get("outcome") == "succeeded")
+
     def _resolve_bounds(self, time_start: str | None, time_end: str | None) -> tuple[datetime, datetime]:
         end = parse_timestamp(time_end) if time_end is not None else self._clock()
 

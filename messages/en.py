@@ -1048,7 +1048,7 @@ MESSAGES = {
     "orchestrator.picture.missing_note": "(Operational note: no report was received from {domains})",
     "orchestrator.picture.typed.title": "Situational picture",
     "orchestrator.picture.typed.cameras": (
-        "Cameras: {active}/{total} active; {inactive} inactive; {unknown} unknown."
+        "Cameras: {active}/{total} active; {degraded} degraded; {offline} offline; {unknown} unknown."
     ),
     "orchestrator.picture.typed.cameras_unknown": "Cameras: data unavailable.",
     "orchestrator.picture.typed.drones": (
@@ -1065,12 +1065,16 @@ MESSAGES = {
     "orchestrator.picture.typed.recommendations_header": "Recommended next actions:",
     "orchestrator.picture.typed.finding_line": "- {text}",
     "orchestrator.picture.typed.recommendation_line": "- {text}",
+    "orchestrator.picture.typed.recent_reports_header": "Recent committed reports:",
+    "orchestrator.picture.typed.recent_report": "- {text}",
     "orchestrator.picture.finding.cameras_all_active": (
         "Camera coverage is normal: all {count} cameras are active."
     ),
     "orchestrator.picture.finding.cameras_gap": (
         "Camera coverage has a gap: {active} of {total} cameras are active."
     ),
+    "orchestrator.picture.finding.cameras_degraded": "{count} camera(s) are degraded; coverage is reduced.",
+    "orchestrator.picture.finding.cameras_offline": "{count} camera(s) are offline or in maintenance.",
     "orchestrator.picture.finding.cameras_unknown": "Camera coverage cannot currently be verified.",
     "orchestrator.picture.finding.cameras_inconsistent": "Camera state data is inconsistent.",
     "orchestrator.picture.finding.drones_ready": "Air capability is available: {count} drones are ready.",
@@ -1083,6 +1087,7 @@ MESSAGES = {
     "orchestrator.picture.finding.team_no_confirmed": "There is currently no confirmed available team member.",
     "orchestrator.picture.finding.team_not_reported": "Availability reports are missing from {count} team members.",
     "orchestrator.picture.finding.team_unknown": "Team availability cannot currently be verified.",
+    "orchestrator.picture.finding.team_pending_identity": "Availability for {count} team member(s) is pending identity verification.",
     "orchestrator.picture.finding.team_inconsistent": (
         "Team availability data is inconsistent; readiness is not inferred."
     ),

@@ -2,6 +2,7 @@ from agents import SurveillanceAgent
 from agents import runtime as agent_runtime
 from contextvars import copy_context
 from concurrent.futures import ThreadPoolExecutor
+from profiles import unified_test
 
 
 class _TestSurveillanceAgent(SurveillanceAgent):
@@ -136,6 +137,61 @@ def test_update_camera_observation_and_overview(tmp_path):
     overview = _call_tool(agent, "get_surveillance_overview", area="east_fence")
     assert "Tactical Surveillance Overview" in overview
     assert "Fence vibration sensor" in overview
+
+
+def test_validated_surveillance_report_commits_authoritative_camera_state(tmp_path):
+    agent = _agent(tmp_path)
+    result = agent.ingest_report(
+        {
+            "classification": "surveillance_report",
+            "entities": ("CAM-03",),
+            "description": "Intermittent reception interference reported.",
+            "business_fields": {"camera_status": "degraded"},
+            "received_at": "2026-08-20T10:00:00+00:00",
+        }
+    )
+
+    assert result.committed is True
+    camera = agent.surveillance_store.get_camera("CAM-03")
+    assert camera["status"] == "degraded"
+    assert camera["feed_summary"] == "Intermittent reception interference reported."
+
+
+def test_maintenance_report_preserves_observation_and_uses_existing_offline_state(tmp_path):
+    agent = _agent(tmp_path)
+    result = agent.ingest_report(
+        {
+            "classification": "surveillance_report",
+            "business_fields": {"camera_id": "CAM-03", "camera_status": "maintenance"},
+            "entities": (),
+            "description": "Camera intentionally offline for a two-hour software update.",
+            "received_at": "2026-08-20T10:00:00+00:00",
+        }
+    )
+
+    assert result.committed is True
+    camera = agent.surveillance_store.get_camera("CAM-03")
+    assert camera["status"] == "offline"
+    assert "software update" in camera["feed_summary"]
+
+
+def test_unified_test_profile_uses_authoritative_report_ingestion(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "unified-surveillance.db")
+    monkeypatch.setattr(unified_test.UnifiedSurveillanceAgent, "surveillance_db_path", db_path)
+    agent = unified_test.UnifiedSurveillanceAgent(model="mock")
+
+    result = agent.ingest_report(
+        {
+            "classification": "surveillance_report",
+            "entities": ("CAM-03",),
+            "description": "Intermittent reception interference reported.",
+            "business_fields": {"camera_status": "degraded"},
+            "received_at": "2026-08-20T10:00:00+00:00",
+        }
+    )
+
+    assert result.committed is True
+    assert agent.surveillance_store.get_camera("CAM-03")["status"] == "degraded"
 
 
 def test_return_single_active_drone_without_identifier(tmp_path):

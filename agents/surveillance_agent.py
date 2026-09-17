@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 
-from agents.contracts import AgentResult, InvocationPolicy
+from agents.contracts import AgentResult, InvocationPolicy, ReportIngestionResult
 from agents.runtime import Agent, make_exact_result_capture, tool
 from persistence import (
     SurveillancePersistenceError,
@@ -120,6 +121,55 @@ class SurveillanceAgent(Agent):
         if invocation_policy is None:
             invocation_policy = InvocationPolicy(max_output_tokens=220, reasoning_effort="none")
         return _recall_capture.run(super().process, text, allowed_tools, invocation_policy=invocation_policy)
+
+    def ingest_report(self, event: dict) -> ReportIngestionResult | None:
+        """Commit a validated surveillance observation to the owning store.
+
+        The event extractor supplies typed business fields; this hook never
+        asks the model to perform the write and never emits an action receipt.
+        """
+
+        if event.get("classification") != "surveillance_report":
+            return None
+
+        business_fields = event.get("business_fields") or {}
+        unknown_fields = set(business_fields) - {"camera_id", "camera_status", "status"}
+        if unknown_fields:
+            return ReportIngestionResult(False, "surveillance report contains unsupported domain fields")
+        camera_id = business_fields.get("camera_id")
+        if not isinstance(camera_id, str) or not camera_id.strip():
+            camera_id = next(
+                (entity for entity in (event.get("entities") or ())
+                 if isinstance(entity, str) and re.fullmatch(r"CAM-[A-Za-z0-9_-]+", entity.strip(), re.IGNORECASE)),
+                None,
+            )
+        if not camera_id:
+            return ReportIngestionResult(False, "surveillance report has no camera identifier")
+
+        observation = event.get("description")
+        if not isinstance(observation, str) or not observation.strip():
+            return ReportIngestionResult(False, "surveillance report has no observation")
+
+        requested_status = business_fields.get("camera_status", business_fields.get("status"))
+        if requested_status is not None and not isinstance(requested_status, str):
+            return ReportIngestionResult(False, "surveillance camera status is invalid")
+        status = requested_status.strip().lower() if isinstance(requested_status, str) else None
+        # The shared camera contract has no separate maintenance enum. Keep
+        # the persisted observation verbatim while representing maintenance as
+        # the existing unavailable/offline state.
+        if status == "maintenance":
+            status = "offline"
+        if status not in {None, "active", "degraded", "offline"}:
+            return ReportIngestionResult(False, "surveillance camera status is invalid")
+
+        try:
+            updated = self.surveillance_store.update_camera_feed(
+                camera_id.strip(), observation.strip(), status=status,
+                updated_at=event.get("received_at"),
+            )
+        except SurveillancePersistenceError as exc:
+            return ReportIngestionResult(False, str(exc))
+        return ReportIngestionResult(True, f"camera {updated['camera_id']} committed")
 
     def _recall(self, drone_or_mission_id: str) -> dict:
         """Resolve one recall request against the store — the state-machine step behind

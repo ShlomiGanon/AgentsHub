@@ -3114,3 +3114,131 @@ no CI change was needed.
 - **Verification:** Hebrew leakage, catalog parity, Task 33 correlation, API
   message/hold, and orchestrator hold regression: 117 passed. No live run was
   performed.
+
+## 2026-09-17 - Task 38: action routing guard and unified-test integration
+
+- **Status:** done; tests only, no live run performed.
+- **Instruction files read:** root `instructions.md`; `docs/work_plan.md`,
+  `docs/Next_Plan.md`, `docs/work_process.md`, `docs/profile_spec.md`,
+  `docs/api_spec.md`, `docs/allowed_calls.md`, and
+  `docs/unified_command_guide.md`; routing, intent, protocol, capability,
+  approval, execution, and unified-profile contracts.
+- Reused the existing structured-intent and protocol-execution seams. Intent
+  now retains its typed action signal and matched protocol names. The `/Msg`
+  path upgrades a contradictory non-action primary intent to `request` only
+  when that typed signal is true; it never uses message keywords.
+- Request events may select only protocols whose approved registered tools are
+  marked `side_effecting`. A selected read-only protocol is converted to the
+  existing `no_match_protocol` terminal result before precedent closure,
+  approval, lifecycle, formulation, or a tool can run. Side-effecting execution
+  continues through the unchanged approval, lifecycle, Tool Runtime, and
+  receipt paths.
+- Added real `profiles.unified_test` integration coverage for emergency
+  dispatch, drone dispatch, and drone recall. Each enters
+  `held_for_approval` with `pending_approval` lifecycle state, while the real
+  camera, drone-status, team-status, and snapshot protocols remain excluded
+  from action candidates. Fast Path remains active for the profile but refuses
+  typed action input, leaving it to the guarded fallback path.
+- **Verification:** Task 38 action-routing suite plus intent, API-message, and
+  deterministic-fast-path regression: 97 passed. `py_compile` and
+  `git diff --check` passed. No live run was performed.
+
+### Task 38 verification addendum
+
+- Expanded focused regression (action routing, API messages, holds, Fast Path,
+  lifecycle/receipts, follow-up, typed snapshot, localization, and file
+  catalog): 137 passed. A broader architecture/profile command also exposed
+  pre-existing environment configuration absence (`TEST_CORE_MODEL_*` and
+  `TEST_SUB_MODEL_*`) plus an unrelated existing boundary violation in
+  `history/event_pipeline.py`; neither was changed in this routing-only task.
+
+## 2026-09-17 - Task 39: history/protocol import-boundary repair
+
+- **Status:** done; no live run performed.
+- **Instruction files read:** root `instructions.md`, `docs/allowed_calls.md`,
+  `tests/test_architecture.py`, and the relevant `history`/`protocols` facade
+  and dependency-direction definitions.
+- Root cause was a type dependency in `history/event_pipeline.py` importing
+  `ActionLifecycleState` from the private `protocols.contracts` module. The
+  `protocols` public facade already exports that exact type, so the dependency
+  crossed the declared boundary unnecessarily.
+- Replaced the private import with `from protocols import ActionLifecycleState`.
+  No event semantics, lifecycle behavior, persistence behavior, or runtime
+  execution path changed; no duplicate type, dynamic import, suppression, or
+  architecture-test exclusion was added.
+- **Verification:** with explicit fake `TEST_CORE_MODEL_*` and
+  `TEST_SUB_MODEL_*` variables, architecture, profile loading, history event
+  pipeline, deterministic Fast Path, Action Routing Guard, unified-role,
+  typed-snapshot, follow-up, and lifecycle suites passed (155 tests total).
+  `py_compile` and `git diff --check` passed. No live run was performed.
+
+## 2026-09-17 - Task 41: canonical Single Operational Intake contract
+
+- **Status:** implementation and tests complete; no live run performed.
+- **Instruction files read:** root `instructions.md`; the Single Intake,
+  structured-output, Fast Path, protocol, temporal, and persistence contracts
+  used by `orchestrator/reasoning.py`, `orchestrator/flows.py`,
+  `protocols/contracts.py`, and `profiles/unified_test.py`.
+- **Root cause:** the provider returned the architecturally natural nested
+  sections (`intent`, `classification`, `business_fields`, `risk`, `protocol`,
+  `temporal`) while the schema, prompt, and parser still used a flat set of
+  top-level fields. A valid structured response therefore failed validation
+  and disabled Fast Path.
+- Made the nested six-section shape canonical and strict (`additionalProperties`
+  remains false). Prompt wording, generated schema, recursive validator, and
+  parser now consume the same contract; nullable nested fields receive safe
+  defaults, while required fields, enums, types, and trusted temporal-null
+  rules remain enforced. No flat-schema compatibility or post-hoc guessing was
+  added, and `PrecedentMatch` serialization was not changed.
+- **Verification:** canonical Single Intake and deterministic Fast Path tests
+  passed (17 tests); the complete selected regression covering Single Intake,
+  Fast Path, attendance, temporal, protocol decisions, Action Routing Guard,
+  unified ingestion, and architecture passed (96 tests). A separate broader
+  run still exposes one unrelated pre-existing `test_intent_attendance`
+  expectation failure. `py_compile` and `git diff --check` passed.
+
+## 2026-09-17 - Task 42: report ingestion to authoritative domain state
+
+- **Status:** implementation and tests complete; no live run performed.
+- **Instruction files read:** root `instructions.md`; report/event ingestion,
+  team-status, surveillance, friendly-forces, persistence, protocol, and
+  domain-state contracts used by the changed paths.
+- **Root cause:** report ingestion persisted the generic Event and returned an
+  ACK, but there was no domain-agent commit seam. A valid report with no action
+  protocol was also terminally labeled `no_match_protocol`, so authoritative
+  state could remain stale or appear rejected.
+- Added the public `ReportIngestionResult` contract and an optional
+  `Agent.ingest_report()` extension point. The surveillance agent now commits
+  validated camera observations through its existing persistence interface;
+  maintenance is represented with the existing `offline` state while the
+  original observation remains preserved. Extraction now carries validated
+  scalar `business_fields` into the event.
+- Reports owned by a domain ingestion hook commit before protocol selection.
+  Generic valid reports with no matching action protocol commit through the
+  Event persistence path and finish as `succeeded`; action requests and
+  unclassified reports retain their existing no-match/hold behavior. Attendance
+  remains on its existing tool/runtime path, so no synthetic action receipt is
+  created for report ingestion.
+- **Verification:** report/history, orchestration, team status, surveillance,
+  friendly forces, attendance, Fast Path, Action Routing Guard, typed snapshot,
+  situational picture, unified ingestion, and architecture suites passed:
+  **195 passed**. `py_compile` and `git diff --check` passed. No live run was
+  performed.
+
+## Task 43 — Shared operational picture and Main Agent output boundary
+
+- **Status:** implementation and tests complete; no live run performed.
+- **Instruction files read:** root `instructions.md`; situational-picture,
+  history/events, response-provenance, localization, team-status, surveillance,
+  and profile contracts used by the changed paths.
+- Extended the existing typed `SituationalSnapshot` with degraded/offline camera
+  counts and committed report references. Recent reports are read through the
+  public history persistence path and only committed report descriptions are
+  rendered; pending/failed events are excluded. Rendering remains catalog-based.
+- Multi-domain flow completion now prefers the authoritative typed snapshot when
+  specialist stores exist, preventing model prose from becoming state. The
+  overall-picture bot path displays this trusted output for both locales.
+- **Verification:** situational snapshot/picture, unified profile, response
+  provenance, API picture, role/security, and bot formatting suites passed:
+  **115 passed**. `py_compile` and `git diff --check` passed. No live run was
+  performed.

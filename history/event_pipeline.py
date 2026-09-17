@@ -6,7 +6,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Callable
 
 from history.contracts import ExtractionExecutionError, ExtractionResult, InitialEventEnvelope, StepExecutionEnvelope
-from protocols.contracts import ActionLifecycleState
+from protocols import ActionLifecycleState
 from tools import stage_context
 
 
@@ -19,10 +19,11 @@ def _prompt(raw_text: str, source: str, received_at: str, event_types, areas) ->
 
     return (
         "Extract this operational event into one JSON object with exactly these keys: "
-        "classification, area, entities, description, severity, occurred_at. "
+        "classification, area, entities, description, severity, occurred_at, business_fields. "
         f"classification must be one of {list(event_types)} or null. "
         f"area must be one of {list(areas)} or null. "
         "entities must be an array of strings. Do not guess missing values. "
+        "business_fields is an object containing only explicitly observed domain facts; use {} when none are present. "
         f"{timestamp_rule}\nEvent text:\n{raw_text}"
     )
 
@@ -87,6 +88,17 @@ def extract_event(
     if not isinstance(payload, dict):
         raise ExtractionExecutionError("model response must be one JSON object")
 
+    business_fields_value = payload.get("business_fields")
+    if business_fields_value is None:
+        business_fields = {}
+    elif isinstance(business_fields_value, dict) and all(
+        isinstance(key, str) and (type(value) in {str, int, float, bool} or value is None)
+        for key, value in business_fields_value.items()
+    ):
+        business_fields = dict(business_fields_value)
+    else:
+        raise ExtractionExecutionError("extraction field 'business_fields' must be an object of scalar values")
+
     classification = _optional_string(payload, "classification")
     area = _optional_string(payload, "area")
     description = _optional_string(payload, "description")
@@ -139,6 +151,7 @@ def extract_event(
         occurred_at=occurred_at,
         occurred_at_is_fallback=False,
         missing_fields=tuple(missing),
+        business_fields=business_fields,
     )
 
 

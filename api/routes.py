@@ -47,6 +47,7 @@ from orchestrator.flows import (
     begin_report,
     begin_request,
     classify_intent,
+    enforce_action_routing_guard,
     build_situational_picture,
     plan_message,
     protocol_requires_approval,
@@ -796,6 +797,11 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                         f"state:{section}:{metadata['source']}"
                         for section, metadata in snapshot_provenance.items()
                     )
+                source_refs += tuple(
+                    report["source_ref"]
+                    for report in picture_provenance.get("snapshot", {}).get("recent_reports", ())
+                    if report.get("source_ref")
+                )
                 picture_text = render_response(
                     informational_response(
                         picture.text,
@@ -949,6 +955,8 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             )
         except OrchestrationParseError as exc:
             raise RunFailureError(str(exc)) from exc
+
+        intent = enforce_action_routing_guard(ctx.deps, intent)
 
         logger.info(
             "intent classified",

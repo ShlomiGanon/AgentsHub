@@ -104,6 +104,19 @@ class AgentResult:
 
 
 @dataclass(frozen=True)
+class ReportIngestionResult:
+    """Authoritative domain-store result for a validated report.
+
+    Report ingestion is distinct from action/tool execution: a committed
+    report has no synthetic ``ToolReceipt``.  ``committed`` is set only by the
+    owning domain agent after its persistence operation succeeds.
+    """
+
+    committed: bool
+    detail: str = ""
+
+
+@dataclass(frozen=True)
 class ToolReceipt:
     """Safe, runtime-authenticated evidence of one tool invocation.
 
