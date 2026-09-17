@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS events (
 
     occurred_at TEXT,
     occurred_at_is_fallback INTEGER NOT NULL DEFAULT 0,
+    availability_start TEXT,
+    availability_end TEXT,
+    business_fields TEXT,
 
     raw_text TEXT NOT NULL,
 
@@ -80,6 +83,8 @@ CREATE TABLE IF NOT EXISTS event_steps (
     allowed_tools TEXT NOT NULL,
     result_text TEXT,
     attempt_count INTEGER NOT NULL DEFAULT 0,
+    direct_tool_name TEXT,
+    direct_tool_arguments TEXT,
     PRIMARY KEY (event_id, step_index)
 );
 """
@@ -262,7 +267,74 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "ALTER TABLE users ADD COLUMN auto_register INTEGER NOT NULL DEFAULT 0 CHECK (auto_register IN (0, 1));"
         "ALTER TABLE telegram_groups ADD COLUMN auto_register INTEGER NOT NULL DEFAULT 0 CHECK (auto_register IN (0, 1));",
     ),
+    (
+        20,
+        "add attendance availability interval fields to events",
+        "ALTER TABLE events ADD COLUMN availability_start TEXT;"
+        "ALTER TABLE events ADD COLUMN availability_end TEXT;",
+    ),
+    (
+        21,
+        "add fast-path event and step contracts",
+        "ALTER TABLE events ADD COLUMN business_fields TEXT;"
+        "ALTER TABLE event_steps ADD COLUMN direct_tool_name TEXT;"
+        "ALTER TABLE event_steps ADD COLUMN direct_tool_arguments TEXT;",
+    ),
 ]
+
+
+_REQUIRED_COLUMNS_BY_VERSION = (
+    (
+        20,
+        "events",
+        (
+            ("availability_start", "TEXT"),
+            ("availability_end", "TEXT"),
+        ),
+    ),
+    (
+        21,
+        "events",
+        (("business_fields", "TEXT"),),
+    ),
+    (
+        21,
+        "event_steps",
+        (
+            ("direct_tool_name", "TEXT"),
+            ("direct_tool_arguments", "TEXT"),
+        ),
+    ),
+)
+
+_REQUIRED_TABLE_DDL = {
+    "events": EVENTS_TABLE_DDL,
+    "event_steps": EVENT_STEPS_TABLE_DDL,
+}
+
+
+def _repair_required_columns(connection: sqlite3.Connection, schema_version: int) -> bool:
+    repaired = False
+
+    for required_version, table_name, required_columns in _REQUIRED_COLUMNS_BY_VERSION:
+        if schema_version < required_version:
+            continue
+
+        columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()}
+        if not columns:
+            connection.execute(_REQUIRED_TABLE_DDL[table_name])
+            columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()}
+            repaired = True
+
+        for column_name, column_ddl in required_columns:
+            if column_name in columns:
+                continue
+
+            connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_ddl}")
+            columns.add(column_name)
+            repaired = True
+
+    return repaired
 
 
 def run_migrations(db_path: str) -> None:
@@ -311,13 +383,21 @@ def run_migrations(db_path: str) -> None:
                         "ALTER TABLE telegram_groups ADD COLUMN auto_register INTEGER NOT NULL DEFAULT 0 "
                         "CHECK (auto_register IN (0, 1))"
                     )
+            elif version in {20, 21}:
+                _repair_required_columns(connection, version)
             else:
                 connection.executescript(sql)
 
             connection.execute(f"PRAGMA user_version = {version}")
             connection.commit()
             migrated = True
-        if migrated:
+
+        schema_version = connection.execute("PRAGMA user_version").fetchone()[0]
+        repaired = _repair_required_columns(connection, schema_version)
+        if repaired:
+            connection.commit()
+
+        if migrated or repaired:
             connection.execute("ANALYZE")
             connection.commit()
     finally:

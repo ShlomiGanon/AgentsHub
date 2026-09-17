@@ -36,6 +36,8 @@ def test_event_metadata_is_injected_and_sender_identity_is_authenticated(tmp_pat
         "source_message_id": "event-source-42",
         "original_text": original_text,
         "received_at": received_at,
+        "availability_start": "2026-09-19T21:00:00+00:00",
+        "availability_end": "2026-09-22T17:00:00+00:00",
     }
     _open_approved_cycle(agent, opened_at)
 
@@ -50,8 +52,10 @@ def test_event_metadata_is_injected_and_sender_identity_is_authenticated(tmp_pat
                 source_message_id="model-invented-id",
                 availability="unavailable",
                 original_text="model-invented-text",
-                reason="מילואים",
-                unavailable_days=3,
+            reason="מילואים",
+            unavailable_days=3,
+            availability_start="2020-01-01T00:00:00+00:00",
+            availability_end="2020-01-02T00:00:00+00:00",
                 received_at="2020-01-01T00:00:00+00:00",
             )
     finally:
@@ -61,11 +65,18 @@ def test_event_metadata_is_injected_and_sender_identity_is_authenticated(tmp_pat
     with sqlite3.connect(agent.status_db_path) as connection:
         row = connection.execute(
             """
-            SELECT source_message_id, telegram_identity, original_text, received_at
+            SELECT source_message_id, telegram_identity, original_text, received_at, availability_start, availability_end
             FROM attendance_responses
             """
         ).fetchone()
-    assert row == ("event-source-42", "member-1", original_text, received_at)
+    assert row == (
+        "event-source-42",
+        "member-1",
+        original_text,
+        received_at,
+        "2026-09-19T21:00:00+00:00",
+        "2026-09-22T17:00:00+00:00",
+    )
 
 
 def test_attendance_tool_schema_exposes_business_fields_only(tmp_path):

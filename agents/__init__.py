@@ -54,7 +54,7 @@ sys.modules[f"{__name__}.registry"] = runtime
 
 from agents import standard_agents
 from agents.standard_agents import HistoryAgent, ReferenceAgent
-from agents.team_status_agent import TeamStatusAgent
+from agents.team_status_agent import TeamStatusAgent, normalize_attendance_availability, verified_availability_period
 from agents.surveillance_agent import SurveillanceAgent
 from agents.friendly_forces_agent import FriendlyForcesAgent
 
@@ -94,6 +94,8 @@ __all__ = [
     "ProviderCapabilities",
     "ReferenceAgent",
     "TeamStatusAgent",
+    "normalize_attendance_availability",
+    "verified_availability_period",
     "SurveillanceAgent",
     "FriendlyForcesAgent",
     "ToolInfo",

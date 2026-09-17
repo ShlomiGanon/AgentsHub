@@ -83,7 +83,8 @@ def test_attendance_protocol_builds_declared_step_without_task_formulation_model
         event_data={
             "classification": "team_attendance_report",
             "description": description,
-            "occurred_at": "2026-09-20T00:00:00+00:00",
+            "availability_start": "2026-09-19T21:00:00+00:00",
+            "availability_end": "2026-09-22T17:00:00+00:00",
             "source_message_id": "must-not-enter-task",
             "received_at": "2026-09-16T12:46:21+00:00",
             "sender_identity": "must-not-enter-task",
@@ -97,9 +98,11 @@ def test_attendance_protocol_builds_declared_step_without_task_formulation_model
     step = result.steps[0]
     assert step.agent_name == "team_status_agent"
     assert step.allowed_tools == ("record_attendance_response",)
-    assert step.required_event_fields == ("description", "occurred_at")
+    assert step.required_event_fields == ("description", "availability_start", "availability_end")
     assert step.step_id == "1"
     assert step.depends_on == ()
+    assert step.direct_tool_name is None
+    assert step.direct_tool_arguments is None
     assert description in step.task_text
     assert "unavailable" in step.task_text and "reserve duty" in step.task_text
     assert "source_message_id" not in step.task_text
@@ -119,7 +122,7 @@ def test_available_attendance_report_uses_the_same_deterministic_business_contex
         "team_attendance_report",
         None,
         description,
-        event_data={"description": description, "occurred_at": "2026-09-16T06:00:00+00:00"},
+        event_data={"description": description},
     )
 
     assert result.success

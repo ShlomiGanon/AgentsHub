@@ -52,6 +52,8 @@ from orchestrator.flows import (
     protocol_requires_approval,
     WorkItem,
     continue_from_risk_assessment,
+    continue_fast_path_report,
+    prepare_fast_path_report,
     run_report_extraction,
     resume_after_event_data,
 )
@@ -699,6 +701,77 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             _remember("assistant", answer)
             return jsonify({"taken_as": "conversational", "answer": answer})
 
+        received_at = _now()
+        fast_path_plan = None
+        if (
+            optimization_policy.operational_intake_mode == "single"
+            and optimization_policy.deterministic_execution_mode == "direct"
+        ):
+            try:
+                fast_path_plan = prepare_fast_path_report(
+                    ctx.deps,
+                    ctx.main_agent,
+                    str(text),
+                    received_at,
+                    level >= PermissionLevel.COMMANDER,
+                )
+            except OrchestrationParseError as exc:
+                logger.warning(
+                    "single operational intake failed validation; using legacy pipeline",
+                    extra={"event": "operational_intake_invalid", "reason": str(exc), "trace_id": trace_id},
+                )
+
+        if fast_path_plan is not None:
+            require(level, RequestedOperation.REPORT_EVENT)
+            reservation = ctx.queue.reserve(False)
+            if reservation is None:
+                raise ServiceUnavailableError(messages.text("api.queue_full"))
+            deadline_at = storage_timestamp(
+                datetime.now(timezone.utc) + timedelta(seconds=optimization_policy.job_deadline_seconds)
+            )
+            try:
+                event_id = begin_report(
+                    ctx.deps,
+                    text,
+                    "telegram",
+                    received_at,
+                    sender_identity,
+                    source_message_id,
+                    conversation_id=conversation_id,
+                    deadline_at=deadline_at,
+                    sender_permission_level=level.name.lower(),
+                )
+            except Exception:
+                ctx.queue.release_reservation(reservation)
+                raise
+
+            def _fast_work() -> None:
+                with trace_context(trace_id):
+                    continue_fast_path_report(
+                        ctx.deps,
+                        event_id,
+                        ctx.main_agent,
+                        ctx.insights_agent,
+                        fast_path_plan,
+                    )
+
+            ctx.queue.submit(
+                WorkItem(
+                    (event_id, _fast_work),
+                    trace_id=trace_id,
+                    deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
+                    concurrency_keys=(f"sender:{sender_identity}",),
+                ),
+                reservation,
+            )
+            _remember("assistant", messages.text("api.queued_report_debug", task_id=event_id), event_id)
+            return jsonify({
+                "taken_as": "report",
+                "event_id": event_id,
+                "status": "queued",
+                "answer": _queued_answer_text(messages, "report", event_id),
+            }), 202
+
         message_plan = None
         planner_mode = optimization_policy.planner_mode
         if planner_mode in {"shadow", "merged"}:
@@ -733,8 +806,6 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             "intent classified",
             extra={"event": "intent_classified", "intent": intent.intent, "reason": intent.reason, "trace_id": get_trace_id()},
         )
-
-        received_at = _now()
 
         if intent.intent == "needs_clarification":
             answer = intent.clarification_question or messages.text("api.clarify_action")

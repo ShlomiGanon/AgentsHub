@@ -65,7 +65,14 @@ def execute_step_with_retry(
                 side_effect_lock.acquire()
             try:
                 with stage_context("step_execution"):
-                    agent_result = agent.process(current_task_text, list(step.allowed_tools))
+                    if step.direct_tool_name is not None:
+                        agent_result = agent.execute_tool(
+                            step.direct_tool_name,
+                            dict(step.direct_tool_arguments or {}),
+                            list(step.allowed_tools),
+                        )
+                    else:
+                        agent_result = agent.process(current_task_text, list(step.allowed_tools))
             finally:
                 for side_effect_lock in reversed(side_effect_locks):
                     side_effect_lock.release()

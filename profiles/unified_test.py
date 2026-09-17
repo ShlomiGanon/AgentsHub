@@ -16,14 +16,15 @@ from agents import (
     SurveillanceAgent,
     TeamStatusAgent,
     make_exact_result_capture,
+    normalize_attendance_availability,
     tool,
+    verified_availability_period,
 )
-from agents.team_status_agent import normalize_attendance_availability
 from messages import get_catalog
 from persistence import open_persistence, open_surveillance_persistence, open_team_status_persistence
 from profiles.contracts import AgentSpec, OptimizationPolicy
 from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
-from protocols import CriticalityLevel, Protocol
+from protocols import CriticalityLevel, DirectToolExecution, Protocol
 
 DEFAULT_LANGUAGE = "he"
 
@@ -633,7 +634,7 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
     @tool(
         "record_attendance_response",
         _catalog_text("unified.team_status.tool.record_attendance")
-        + " The availability argument must be exactly 'available' or 'unavailable'; unavailable requires a reason and a positive unavailable_days value. Trusted source_message_id, original_text, and received_at are supplied by the event runtime.",
+        + " The availability argument must be exactly 'available' or 'unavailable'; unavailable requires a reason. Trusted source_message_id, original_text, received_at, availability_start, and availability_end are supplied by the event runtime.",
         side_effecting=True,
         idempotent=True,
     )
@@ -645,6 +646,8 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
         reason: str = "",
         unavailable_days: int = 0,
         received_at: str = "",
+        availability_start: str = "",
+        availability_end: str = "",
     ) -> str:
         from datetime import datetime, timedelta, timezone
         catalog = get_catalog(DEFAULT_LANGUAGE)
@@ -683,19 +686,21 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
             _capture_team_result(res)
             return res
         clean_reason = reason.strip() if isinstance(reason, str) else ""
-        valid_days = unavailable_days if type(unavailable_days) is int else 0
         if normalized == "unavailable" and not clean_reason:
             res = catalog.text("unified.team_status.clarify_reason")
             _capture_team_result(res)
             return res
-        if normalized == "unavailable" and valid_days < 1:
+        period = verified_availability_period(availability_start, availability_end) if normalized == "unavailable" else None
+        if period is None and normalized == "unavailable" and type(unavailable_days) is int and unavailable_days > 0:
+            period = (now_dt.isoformat(), (now_dt + timedelta(days=unavailable_days)).isoformat())
+        if normalized == "unavailable" and period is None:
             res = catalog.text("unified.team_status.clarify_days")
             _capture_team_result(res)
             return res
 
-        unavailable_until = None
-        if normalized == "unavailable":
-            unavailable_until = (now_dt + timedelta(days=valid_days)).isoformat()
+        availability_start_value = period[0] if period is not None else None
+        availability_end_value = period[1] if period is not None else None
+        unavailable_until = availability_end_value
         stored_reason = clean_reason if normalized == "unavailable" else None
 
         try:
@@ -707,6 +712,8 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
                 received_at=now_dt.isoformat(),
                 reason=stored_reason,
                 unavailable_until=unavailable_until,
+                availability_start=availability_start_value,
+                availability_end=availability_end_value,
             )
         except Exception as exc:
             res = catalog.text("unified.team_status.record_failed", error=str(exc))
@@ -959,7 +966,17 @@ PROTOCOLS = [
         approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
-        deterministic_required_event_fields=("description", "occurred_at"),
+        deterministic_required_event_fields=("description", "availability_start", "availability_end"),
+        direct_tool_execution=DirectToolExecution(
+            tool_name="record_attendance_response",
+            argument_sources=(
+                ("availability", "business_fields.availability"),
+                ("reason", "business_fields.reason"),
+            ),
+            required_arguments=("availability",),
+            required_when=(("reason", "availability", "unavailable"),),
+            business_field_enums=(("availability", ("available", "unavailable")),),
+        ),
     ),
     Protocol(
         name="dispatch_emergency_forces",
@@ -1024,7 +1041,12 @@ LOOKBACK_WINDOW_DAYS = 30
 TIMEZONE = "Asia/Jerusalem"
 CONVERSATION_HISTORY_TURNS = 6
 CONVERSATION_HISTORY_TTL_HOURS = 24
-OPTIMIZATION_POLICY = OptimizationPolicy(operational_decision_mode="merged")
+OPTIMIZATION_POLICY = OptimizationPolicy(
+    operational_decision_mode="merged",
+    operational_intake_mode="single",
+    deterministic_execution_mode="direct",
+    structured_output_mode="auto",
+)
 
 COMMANDER_KEYBOARD = (
     (

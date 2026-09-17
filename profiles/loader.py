@@ -27,7 +27,7 @@ from profiles.contracts import (
     protocol_missing_attrs,
 )
 from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
-from protocols import CriticalityLevel, EVENT_DATA_FIELDS
+from protocols import CriticalityLevel, DirectToolExecution, EVENT_DATA_FIELDS
 
 
 def build_area_registry(loaded_profile: "LoadedProfile") -> AreaRegistry:
@@ -133,6 +133,10 @@ def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> lis
             failures.append("OPTIMIZATION_POLICY.planner_mode is invalid")
         if policy.operational_decision_mode not in {"separate", "shadow", "merged"}:
             failures.append("OPTIMIZATION_POLICY.operational_decision_mode is invalid")
+        if policy.operational_intake_mode not in {"separate", "single"}:
+            failures.append("OPTIMIZATION_POLICY.operational_intake_mode is invalid")
+        if policy.deterministic_execution_mode not in {"specialist", "direct"}:
+            failures.append("OPTIMIZATION_POLICY.deterministic_execution_mode is invalid")
         if policy.final_assessment_mode not in {"separate", "low_risk_merged"}:
             failures.append("OPTIMIZATION_POLICY.final_assessment_mode is invalid")
         if policy.structured_output_mode not in {"off", "auto", "required"}:
@@ -326,6 +330,38 @@ def _validate_protocol(protocol, agents_by_name: dict) -> list[str]:
             failures.append(
                 f"protocol '{protocol.name}' deterministic_required_event_fields must be a tuple containing only supported event fields"
             )
+
+    direct_execution = getattr(protocol, "direct_tool_execution", None)
+    if direct_execution is not None:
+        if not isinstance(direct_execution, DirectToolExecution):
+            failures.append(f"protocol '{protocol.name}' direct_tool_execution has an invalid contract")
+            direct_execution = None
+    if direct_execution is not None:
+        if deterministic_fields is None or len(protocol.participating_agents) != 1:
+            failures.append(
+                f"protocol '{protocol.name}' direct tool execution requires deterministic single-agent formulation"
+            )
+        if direct_execution.tool_name not in protocol.approved_tools:
+            failures.append(
+                f"protocol '{protocol.name}' direct tool must be listed in approved_tools"
+            )
+        argument_names = [name for name, _source in direct_execution.argument_sources]
+        source_paths = [source for _name, source in direct_execution.argument_sources]
+        if len(argument_names) != len(set(argument_names)) or any(
+            not isinstance(name, str) or not name for name in argument_names
+        ):
+            failures.append(f"protocol '{protocol.name}' direct tool argument names must be unique non-empty strings")
+        if any(not source.startswith("business_fields.") for source in source_paths):
+            failures.append(
+                f"protocol '{protocol.name}' direct tool sources must use validated business_fields"
+            )
+        if any(name not in argument_names for name in direct_execution.required_arguments):
+            failures.append(f"protocol '{protocol.name}' direct required arguments must be declared mappings")
+        if any(
+            required_name not in argument_names or controlling_name not in argument_names
+            for required_name, controlling_name, _value in direct_execution.required_when
+        ):
+            failures.append(f"protocol '{protocol.name}' conditional direct arguments must be declared mappings")
 
     if not protocol.description:
         failures.append(f"protocol '{protocol.name}' has no description")

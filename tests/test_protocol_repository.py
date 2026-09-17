@@ -379,6 +379,8 @@ def test_step_fields_include_dependencies_and_required_event_data():
         "step_id",
         "depends_on",
         "required_event_fields",
+        "direct_tool_name",
+        "direct_tool_arguments",
     }
     assert step.step_id == ""
     assert step.depends_on == ()

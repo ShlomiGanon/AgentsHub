@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 from agents import Agent, HistoryAgent, InvocationPolicy
 from config import BaseConfig
-from history import EVENT_FIELD_CATALOG, HistoryQuerySpec, PrecedentMatch
+from history import EVENT_FIELD_CATALOG, ExtractionResult, HistoryQuerySpec, PrecedentMatch
 from history.query import HistoryQueryError
 from messages.model_messages import (
     CONVERSATIONAL_REPLY_INSTRUCTION,
@@ -521,9 +521,9 @@ def _parse_structured_intent_response(raw_text: str, message_text: str, protocol
 
 
 _ATTENDANCE_REPORT_PATTERNS = (
-    re.compile(r"\bאני\s+(?:לא\s+)?זמי(?:ן|נה|נים|נות)\b", re.IGNORECASE),
-    re.compile(r"\bלא\s+אוכל\s+להשתתף\b", re.IGNORECASE),
-    re.compile(r"\bאני\b[^?\n]{0,40}\bבמילואים\b", re.IGNORECASE),
+    re.compile(r"\b\u05d0\u05e0\u05d9\s+(?:\u05dc\u05d0\s+)?\u05d6\u05de\u05d9(?:\u05df|\u05e0\u05d4|\u05e0\u05d9\u05dd|\u05e0\u05d5\u05ea)\b", re.IGNORECASE),
+    re.compile(r"\b\u05dc\u05d0\s+\u05d0\u05d5\u05db\u05dc\s+\u05dc\u05d4\u05e9\u05ea\u05ea\u05e3\b", re.IGNORECASE),
+    re.compile(r"\b\u05d0\u05e0\u05d9\b[^?\n]{0,40}\b\u05d1\u05de\u05d9\u05dc\u05d5\u05d0\u05d9\u05dd\b", re.IGNORECASE),
     re.compile(r"\b(?:i\s+am|i['’]m|i\s+will\s+be|i\s+won['’]t\s+be)\s+(?:un)?available\b", re.IGNORECASE),
     re.compile(r"\b(?:i\s+am|i['’]m)\s+(?:on\s+)?reserve\s+duty\b", re.IGNORECASE),
 )
@@ -847,6 +847,230 @@ def make_operational_decision(
     return OperationalDecision(risk, _normalize_protocol_selection(selection, protocols, risk.level))
 
 
+def _operational_intake_business_fields(protocols: tuple[Protocol, ...]) -> dict[str, tuple[str, ...]]:
+    fields: dict[str, tuple[str, ...]] = {}
+    for protocol in protocols:
+        direct = protocol.direct_tool_execution
+        if direct is None:
+            continue
+        enum_by_name = dict(direct.business_field_enums)
+        for _argument_name, source_path in direct.argument_sources:
+            if not source_path.startswith("business_fields."):
+                continue
+            field_name = source_path.split(".", 1)[1]
+            allowed_values = tuple(enum_by_name.get(field_name, ()))
+            if field_name not in fields:
+                fields[field_name] = allowed_values
+            elif fields[field_name] and allowed_values:
+                fields[field_name] = tuple(dict.fromkeys((*fields[field_name], *allowed_values)))
+            else:
+                fields[field_name] = ()
+    return fields
+
+
+def _operational_intake_schema(
+    event_types: tuple[str, ...],
+    protocols: tuple[Protocol, ...],
+) -> dict:
+    business_properties = {}
+    for field_name, allowed_values in _operational_intake_business_fields(protocols).items():
+        business_properties[field_name] = (
+            {"type": ["string", "null"], "enum": [*allowed_values, None]}
+            if allowed_values
+            else {"type": ["string", "number", "boolean", "null"]}
+        )
+
+    properties = {
+        "intent": {"type": "string", "enum": ["question", "report", "request", "conversational", "needs_clarification"]},
+        "intent_confident": {"type": "boolean"},
+        "asks_for_information": {"type": "boolean"},
+        "reports_occurrence": {"type": "boolean"},
+        "requests_action": {"type": "boolean"},
+        "social_only": {"type": "boolean"},
+        "is_quoted": {"type": "boolean"},
+        "is_hypothetical": {"type": "boolean"},
+        "intent_evidence": {"type": ["string", "null"]},
+        "classification": {"type": ["string", "null"], "enum": [*event_types, None]},
+        "classification_confident": {"type": "boolean"},
+        "area": {"type": ["string", "null"]},
+        "entities": {"type": "array", "items": {"type": "string"}},
+        "description": {"type": ["string", "null"]},
+        "severity": {"type": ["string", "null"]},
+        "occurred_at": {"type": ["string", "null"]},
+        "availability_start": {"type": "null"},
+        "availability_end": {"type": "null"},
+        "business_fields": {
+            "type": "object",
+            "properties": business_properties,
+            "required": list(business_properties),
+            "additionalProperties": False,
+        },
+        **_OPERATIONAL_DECISION_SCHEMA["properties"],
+    }
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+
+
+def make_operational_intake(
+    main_agent: MainAgent,
+    message_text: str,
+    received_at: str,
+    event_types: tuple[str, ...],
+    areas: tuple[str, ...],
+    protocols: tuple[Protocol, ...],
+    risk_threshold: float,
+) -> "OperationalIntake":
+    """Classify, extract, assess risk, and select a protocol in exactly one model call."""
+
+    business_fields = _operational_intake_business_fields(protocols)
+    protocol_data = [
+        {
+            "name": protocol.name,
+            "description": protocol.description,
+            "criticality": int(protocol.criticality),
+            "business_fields": sorted(
+                source_path.split(".", 1)[1]
+                for _argument_name, source_path in (
+                    protocol.direct_tool_execution.argument_sources
+                    if protocol.direct_tool_execution is not None
+                    else ()
+                )
+                if source_path.startswith("business_fields.")
+            ),
+        }
+        for protocol in protocols
+    ]
+    prompt = (
+        "Return exactly one compact JSON object matching the supplied schema and nothing else. "
+        "Classify the user's intent; only for a clear operational report, extract event data, assess risk, "
+        "and select a listed protocol. Set intent_confident and classification_confident false rather than guessing. "
+        "Use the intent booleans with their ordinary meanings and copy an exact supporting quote into intent_evidence. "
+        "Intent identifies what the user is doing; missing domain fields do not make a clear report intent ambiguous. "
+        "Set unavailable business values to null. Do not invent identity, source_message_id, received_at, or original_text. "
+        "availability_start and availability_end must be null: trusted runtime code resolves final temporal values. "
+        "protocol_status must be selected, ambiguous, or no_match. Keep reasons concise.\n"
+        f"Received-at reference: {received_at}\n"
+        f"Event types JSON: {json.dumps(event_types, ensure_ascii=False)}\n"
+        f"Areas JSON: {json.dumps(areas, ensure_ascii=False)}\n"
+        f"Requested business fields JSON: {json.dumps(business_fields, ensure_ascii=False, sort_keys=True)}\n"
+        f"Protocols JSON: {json.dumps(protocol_data, ensure_ascii=False, sort_keys=True)}\n"
+        f"Message JSON: {json.dumps(message_text, ensure_ascii=False)}"
+    )
+    schema = _operational_intake_schema(event_types, protocols)
+    with stage_context("operational_intake"):
+        result = main_agent.process(
+            prompt,
+            [],
+            invocation_policy=InvocationPolicy(
+                max_output_tokens=900,
+                timeout_seconds=60.0,
+                reasoning_effort="none",
+                response_schema={"name": "operational_intake", "schema": schema},
+            ),
+        )
+    if result.status != "success":
+        raise OrchestrationParseError(f"operational intake was refused or unusable: {result.text}")
+    payload = _load_unique_json_object(_normalize_operational_decision_json(result.text), "operational intake")
+    if set(payload) != set(schema["properties"]):
+        raise OrchestrationParseError("operational intake schema has missing or unknown fields")
+
+    intent = payload["intent"]
+    if intent not in {"question", "report", "request", "conversational", "needs_clarification"}:
+        raise OrchestrationParseError(f"invalid operational intake intent: {intent!r}")
+    if type(payload["intent_confident"]) is not bool or type(payload["classification_confident"]) is not bool:
+        raise OrchestrationParseError("operational intake confidence fields must be booleans")
+
+    intent_flags = (
+        "asks_for_information", "reports_occurrence", "requests_action", "social_only", "is_quoted", "is_hypothetical"
+    )
+    if any(type(payload[field_name]) is not bool for field_name in intent_flags):
+        raise OrchestrationParseError("operational intake intent flags must be booleans")
+
+    intent_result = IntentResult(intent, "single operational intake")
+    if intent != "report" or not payload["intent_confident"] or not payload["classification_confident"]:
+        return OperationalIntake(intent_result, None, None, False)
+    evidence = payload["intent_evidence"]
+    if (
+        not payload["reports_occurrence"]
+        or payload["asks_for_information"]
+        or payload["requests_action"]
+        or payload["social_only"]
+        or payload["is_quoted"]
+        or payload["is_hypothetical"]
+        or not isinstance(evidence, str)
+        or not evidence.strip()
+        or _normalize_evidence(evidence) not in _normalize_evidence(message_text)
+    ):
+        return OperationalIntake(intent_result, None, None, False)
+
+    classification = payload["classification"]
+    if classification not in event_types:
+        raise OrchestrationParseError(f"operational intake classification is unavailable: {classification!r}")
+    if payload["area"] is not None and payload["area"] not in areas:
+        raise OrchestrationParseError(f"operational intake area is unavailable: {payload['area']!r}")
+    for field_name in ("area", "severity", "occurred_at"):
+        if payload[field_name] is not None and not isinstance(payload[field_name], str):
+            raise OrchestrationParseError(f"operational intake {field_name} must be a string or null")
+    if not isinstance(payload["entities"], list) or not all(isinstance(item, str) for item in payload["entities"]):
+        raise OrchestrationParseError("operational intake entities must be a list of strings")
+    if not isinstance(payload["description"], str) or not payload["description"].strip():
+        raise OrchestrationParseError("operational intake report requires a description")
+    if payload["availability_start"] is not None or payload["availability_end"] is not None:
+        raise OrchestrationParseError("operational intake may not supply trusted availability timestamps")
+
+    extracted_business = payload["business_fields"]
+    if not isinstance(extracted_business, dict) or set(extracted_business) != set(business_fields):
+        raise OrchestrationParseError("operational intake business_fields schema is invalid")
+    for field_name, allowed_values in business_fields.items():
+        value = extracted_business[field_name]
+        if value is not None and type(value) not in {str, int, float, bool}:
+            raise OrchestrationParseError(f"operational intake business field {field_name!r} must be a scalar")
+        if allowed_values and value is not None and value not in allowed_values:
+            raise OrchestrationParseError(f"operational intake business field {field_name!r} is invalid")
+
+    decision_payload = {name: payload[name] for name in _OPERATIONAL_DECISION_SCHEMA["properties"]}
+    decision_payload = _normalize_operational_decision_status(decision_payload)
+    _validate_operational_decision_payload(decision_payload)
+    risk = RiskAssessment(
+        float(decision_payload["risk_score"]),
+        "high" if float(decision_payload["risk_score"]) >= risk_threshold else "low",
+        decision_payload["risk_reason"].strip(),
+    )
+    selection = ProtocolSelectionResult(
+        decision_payload["protocol_status"],
+        protocol_name=decision_payload["protocol_name"],
+        candidate_names=tuple(decision_payload["candidate_names"]),
+        reason=decision_payload["protocol_reason"].strip(),
+    )
+    selection = _normalize_protocol_selection(selection, protocols, risk.level)
+    missing = tuple(
+        name
+        for name, value in (
+            ("area", payload["area"]),
+            ("severity", payload["severity"]),
+            ("occurred_at", payload["occurred_at"]),
+        )
+        if value is None
+    )
+    extraction = ExtractionResult(
+        classification=classification,
+        classification_status="resolved",
+        area=payload["area"],
+        entities=tuple(payload["entities"]),
+        description=payload["description"].strip(),
+        severity=payload["severity"],
+        occurred_at=payload["occurred_at"],
+        occurred_at_is_fallback=False,
+        missing_fields=missing,
+        business_fields={key: value for key, value in extracted_business.items() if value is not None},
+    )
+    return OperationalIntake(intent_result, extraction, OperationalDecision(risk, selection), True)
+
+
 def _build_formulation_prompt(
     protocol: Protocol,
     descriptors: list[AgentDescriptor],
@@ -908,6 +1132,7 @@ def _deterministic_formulation(
     precedent_context: tuple,
     event_data: dict | None,
     required_fields_floor: tuple[str, ...],
+    allow_direct_execution: bool,
 ) -> FormulationResult | None:
     """Build an explicitly-declared single-step protocol without an LLM.
 
@@ -952,6 +1177,32 @@ def _deterministic_formulation(
         f"Execution contract JSON: {json.dumps(task_payload, ensure_ascii=False, sort_keys=True)}"
     )
     required_fields = tuple(dict.fromkeys((*declared_fields, *required_fields_floor)))
+    direct_tool_name = None
+    direct_tool_arguments = None
+    direct_execution = protocol.direct_tool_execution
+    if allow_direct_execution and direct_execution is not None:
+        source_data = dict(event_data or {})
+        projected: dict[str, object] = {}
+        for argument_name, source_path in direct_execution.argument_sources:
+            value: object = source_data
+            for component in source_path.split("."):
+                value = value.get(component) if isinstance(value, dict) else None
+            if value is not None and value != "":
+                projected[argument_name] = value
+
+        missing = [name for name in direct_execution.required_arguments if name not in projected]
+        for required_name, controlling_name, controlling_value in direct_execution.required_when:
+            if projected.get(controlling_name) == controlling_value and required_name not in projected:
+                missing.append(required_name)
+
+        exposed_names = {tool.name for tool in descriptor.tools}
+        if (
+            not missing
+            and direct_execution.tool_name in protocol.approved_tools
+            and direct_execution.tool_name in exposed_names
+        ):
+            direct_tool_name = direct_execution.tool_name
+            direct_tool_arguments = projected
     logger.info(
         "task formulation resolved deterministically",
         extra={
@@ -968,6 +1219,8 @@ def _deterministic_formulation(
         step_id="1",
         depends_on=(),
         required_event_fields=required_fields,
+        direct_tool_name=direct_tool_name,
+        direct_tool_arguments=direct_tool_arguments,
     ),))
 
 
@@ -982,6 +1235,7 @@ def formulate_tasks(
     precedent_context: tuple = (),
     event_data: dict | None = None,
     required_fields_floor: tuple[str, ...] = (),
+    allow_direct_execution: bool = False,
 ) -> FormulationResult:
     """... `required_fields_floor` is the event type's statically-declared
     required fields (`profiles.EVENT_TYPE_REQUIRED_FIELDS`, looked up via
@@ -1006,6 +1260,7 @@ def formulate_tasks(
         precedent_context,
         event_data,
         required_fields_floor,
+        allow_direct_execution,
     )
     if deterministic is not None:
         return deterministic
@@ -1430,6 +1685,14 @@ class AgentSelectionResult:
 class OperationalDecision:
     risk: RiskAssessment
     selection: ProtocolSelectionResult
+
+
+@dataclass(frozen=True)
+class OperationalIntake:
+    intent: IntentResult
+    extraction: ExtractionResult | None
+    decision: OperationalDecision | None
+    confident: bool
 
 
 @dataclass(frozen=True)

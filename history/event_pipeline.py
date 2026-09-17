@@ -229,7 +229,18 @@ STATE_UPDATE_FIELDS = frozenset(
 )
 
 EVENT_DATA_UPDATE_FIELDS = frozenset(
-    {"classification", "area", "entities", "description", "severity", "occurred_at", "occurred_at_is_fallback"}
+    {
+        "classification",
+        "area",
+        "entities",
+        "description",
+        "severity",
+        "occurred_at",
+        "occurred_at_is_fallback",
+        "availability_start",
+        "availability_end",
+        "business_fields",
+    }
 )
 
 
@@ -269,6 +280,9 @@ def record_extracted_fields(
             "severity": extraction_result.severity,
             "occurred_at": extraction_result.occurred_at,
             "occurred_at_is_fallback": extraction_result.occurred_at_is_fallback,
+            "availability_start": extraction_result.availability_start,
+            "availability_end": extraction_result.availability_end,
+            "business_fields": extraction_result.business_fields,
         },
     )
 

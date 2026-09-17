@@ -18,6 +18,19 @@ def _aware_datetime(value: str | None) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def verified_availability_period(start: str | None, end: str | None) -> tuple[str, str] | None:
+    if not start or not end:
+        return None
+    try:
+        start_at = _aware_datetime(start)
+        end_at = _aware_datetime(end)
+    except ValueError:
+        return None
+    if end_at <= start_at:
+        return None
+    return start_at.isoformat(), end_at.isoformat()
+
+
 def normalize_attendance_availability(value: str | None) -> str | None:
     """Normalize the small, explicit set of attendance status aliases.
 
@@ -183,7 +196,7 @@ class TeamStatusAgent(Agent):
 
     @tool(
         "record_attendance_response",
-        "Stores one approved-roster member's attendance response. The availability argument must be exactly 'available' or 'unavailable'; unavailable requires a reason and a positive unavailable_days value. Trusted source_message_id, original_text, and received_at are supplied by the event runtime; do not infer or provide them. Late responses remain pending until a commander reviews them.",
+        "Stores one approved-roster member's attendance response. The availability argument must be exactly 'available' or 'unavailable'; unavailable requires a reason. Trusted source_message_id, original_text, received_at, availability_start, and availability_end are supplied by the event runtime; do not infer or provide them. Late responses remain pending until a commander reviews them.",
         side_effecting=True,
         idempotent=True,
     )
@@ -195,6 +208,8 @@ class TeamStatusAgent(Agent):
         reason: str = "",
         unavailable_days: int = 0,
         received_at: str = "",
+        availability_start: str = "",
+        availability_end: str = "",
     ) -> str:
         telegram_identity = get_authenticated_request_identity()
         if not telegram_identity:
@@ -213,15 +228,20 @@ class TeamStatusAgent(Agent):
         if normalized is None:
             return "Clarification required: specify whether the member is available or unavailable."
         clean_reason = reason.strip() if isinstance(reason, str) else ""
-        valid_days = unavailable_days if type(unavailable_days) is int else 0
         if normalized == "unavailable" and not clean_reason:
             return "Clarification required: an unavailable member must provide a reason."
-        if normalized == "unavailable" and valid_days < 1:
+        period = verified_availability_period(availability_start, availability_end) if normalized == "unavailable" else None
+        if period is None and normalized == "unavailable" and type(unavailable_days) is int and unavailable_days > 0:
+            # Direct callers predating the trusted event-time contract supplied
+            # only a day count. Preserve that public call shape, but normalize
+            # it immediately into the absolute storage contract.
+            period = (now.isoformat(), (now + timedelta(days=unavailable_days)).isoformat())
+        if normalized == "unavailable" and period is None:
             return "Clarification required: specify how many days the member will be unavailable."
 
-        unavailable_until = None
-        if normalized == "unavailable":
-            unavailable_until = (now + timedelta(days=valid_days)).isoformat()
+        availability_start_value = period[0] if period is not None else None
+        availability_end_value = period[1] if period is not None else None
+        unavailable_until = availability_end_value
 
         try:
             response = self.status_store.record_response(
@@ -232,6 +252,8 @@ class TeamStatusAgent(Agent):
                 received_at=now.isoformat(),
                 reason=clean_reason or None,
                 unavailable_until=unavailable_until,
+                availability_start=availability_start_value,
+                availability_end=availability_end_value,
             )
         except TeamStatusPersistenceError as exc:
             return f"The attendance response was not stored: {exc}"

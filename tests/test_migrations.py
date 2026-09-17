@@ -50,6 +50,20 @@ def test_event_steps_include_resumable_event_data_wait_columns(tmp_path):
         connection.close()
 
     assert {"required_event_fields", "missing_event_fields", "status", "failure_reason"} <= columns
+    assert {"direct_tool_name", "direct_tool_arguments"} <= columns
+
+
+def test_events_include_fast_path_business_fields(tmp_path):
+    db_path = str(tmp_path / "fast-path-fields.db")
+    run_migrations(db_path)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+    finally:
+        connection.close()
+
+    assert "business_fields" in columns
 
 
 def test_migration_seventeen_adds_safe_sender_permission_snapshot_to_legacy_events(tmp_path):
@@ -133,6 +147,100 @@ def test_migration_nineteen_marks_existing_users_and_groups_as_manually_approved
         connection.close()
     assert user == ("Dana Levi", 0)
     assert group == ("main_agent", 0)
+
+
+def test_migration_twenty_adds_attendance_interval_columns_to_existing_events(tmp_path):
+    db_path = str(tmp_path / "version-nineteen.db")
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "CREATE TABLE events (event_id TEXT PRIMARY KEY, received_at TEXT NOT NULL, source TEXT NOT NULL, "
+            "sender_identity TEXT NOT NULL, raw_text TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO events(event_id, received_at, source, sender_identity, raw_text) "
+            "VALUES ('legacy-attendance', '2026-01-01', 'telegram', '42', 'legacy report')"
+        )
+        connection.execute("PRAGMA user_version = 19")
+        connection.commit()
+    finally:
+        connection.close()
+
+    run_migrations(db_path)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+        legacy_event = connection.execute(
+            "SELECT event_id, raw_text FROM events WHERE event_id = 'legacy-attendance'"
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert {"availability_start", "availability_end"} <= columns
+    assert legacy_event == ("legacy-attendance", "legacy report")
+
+
+def test_schema_integrity_repairs_version_twenty_one_drift_without_losing_events(tmp_path):
+    from persistence import open_persistence
+
+    db_path = str(tmp_path / "drifted-version-twenty-one.db")
+    run_migrations(db_path)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "INSERT INTO events(event_id, received_at, source, sender_identity, raw_text) "
+            "VALUES ('existing-event', '2026-01-01', 'telegram', '42', 'preserve me')"
+        )
+        connection.execute("ALTER TABLE events DROP COLUMN availability_start")
+        connection.execute("ALTER TABLE events DROP COLUMN availability_end")
+        connection.execute("PRAGMA user_version = 21")
+        connection.commit()
+
+        drifted_columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+        assert "business_fields" in drifted_columns
+        assert "availability_start" not in drifted_columns
+        assert "availability_end" not in drifted_columns
+    finally:
+        connection.close()
+
+    run_migrations(db_path)
+    run_migrations(db_path)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        repaired_version = connection.execute("PRAGMA user_version").fetchone()[0]
+        repaired_columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+        existing_event = connection.execute(
+            "SELECT event_id, raw_text FROM events WHERE event_id = 'existing-event'"
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert repaired_version == MIGRATIONS[-1][0]
+    assert {"availability_start", "availability_end", "business_fields"} <= repaired_columns
+    assert existing_event == ("existing-event", "preserve me")
+
+    persistence = open_persistence(db_path)
+    try:
+        new_event_id = persistence.append_event({
+            "received_at": "2026-01-02T10:00:00+00:00",
+            "source": "telegram",
+            "sender_identity": "43",
+            "raw_text": "new report",
+            "availability_start": "2026-01-04T00:00:00+02:00",
+            "availability_end": "2026-01-06T20:00:00+02:00",
+            "business_fields": {"availability": "unavailable"},
+        })
+        inserted = persistence.fetch_event(new_event_id)
+    finally:
+        persistence.close()
+
+    assert inserted is not None
+    assert inserted["availability_start"] == "2026-01-04T00:00:00+02:00"
+    assert inserted["availability_end"] == "2026-01-06T20:00:00+02:00"
+    assert inserted["business_fields"] == {"availability": "unavailable"}
 
 
 def test_history_query_indexes_are_present_on_a_fresh_database(tmp_path):

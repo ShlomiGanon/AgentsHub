@@ -36,7 +36,7 @@ def _row(agent):
     with sqlite3.connect(agent.status_db_path) as connection:
         return connection.execute(
             "SELECT source_message_id, telegram_identity, availability, reason, "
-            "unavailable_until, original_text, received_at FROM attendance_responses"
+            "availability_start, availability_end, unavailable_until, original_text, received_at FROM attendance_responses"
         ).fetchone()
 
 
@@ -49,24 +49,30 @@ def test_explicit_unavailable_report_is_normalized_and_written_with_trusted_meta
             "source_message_id": "event-message-16",
             "original_text": MESSAGE,
             "received_at": received_at,
+            "availability_start": "2026-09-19T21:00:00+00:00",
+            "availability_end": "2026-09-22T17:00:00+00:00",
         },
         # Hebrew is the localized model output seen in the live run.  The
         # runtime still exposes the canonical enum to persistence.
         availability="לא זמין",
         reason="שירות מילואים",
         unavailable_days=3,
+        availability_start="2026-09-19T21:00:00+00:00",
+        availability_end="2026-09-22T17:00:00+00:00",
         source_message_id="forged-by-model",
         original_text="forged text",
         received_at="2020-01-01T00:00:00+00:00",
     )
 
     assert "הבהרה" not in result
-    source_id, identity, availability, reason, until, original_text, stored_at = _row(agent)
+    source_id, identity, availability, reason, start, end, until, original_text, stored_at = _row(agent)
     assert source_id == "event-message-16"
     assert identity == "member-1"
     assert availability == "unavailable"
     assert reason == "שירות מילואים"
-    assert datetime.fromisoformat(until) == datetime.fromisoformat(received_at) + timedelta(days=3)
+    assert datetime.fromisoformat(start) == datetime(2026, 9, 19, 21, 0, tzinfo=timezone.utc)
+    assert datetime.fromisoformat(end) == datetime(2026, 9, 22, 17, 0, tzinfo=timezone.utc)
+    assert until == end
     assert original_text == MESSAGE
     assert stored_at == received_at
 
@@ -105,9 +111,11 @@ def test_available_report_remains_available_and_discards_stale_unavailability_fi
     )
 
     assert "הבהרה" not in result
-    _, _, availability, reason, until, _, stored_at = _row(agent)
+    _, _, availability, reason, start, end, until, _, stored_at = _row(agent)
     assert availability == "available"
     assert reason is None
+    assert start is None
+    assert end is None
     assert until is None
     assert stored_at == received_at
 

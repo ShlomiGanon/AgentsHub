@@ -80,6 +80,9 @@ def _render_protocol(protocol: Protocol) -> str:
             "        deterministic_required_event_fields="
             f"{tuple(protocol.deterministic_required_event_fields)!r},\n"
         )
+    direct_line = ""
+    if protocol.direct_tool_execution is not None:
+        direct_line = f"        direct_tool_execution={protocol.direct_tool_execution!r},\n"
     return (
         "    Protocol(\n"
         f"        name={protocol.name!r},\n"
@@ -90,6 +93,7 @@ def _render_protocol(protocol: Protocol) -> str:
         f"        criticality=CriticalityLevel.{protocol.criticality.name},\n"
         f"        approval_flag={protocol.approval_flag!r},\n"
         f"{deterministic_line}"
+        f"{direct_line}"
         "    ),"
     )
 

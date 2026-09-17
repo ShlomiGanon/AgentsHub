@@ -35,6 +35,9 @@ _EVENT_COLUMNS = (
     "source_message_id",
     "occurred_at",
     "occurred_at_is_fallback",
+    "availability_start",
+    "availability_end",
+    "business_fields",
     "raw_text",
     "classification",
     "area",
@@ -64,7 +67,7 @@ _EVENT_COLUMNS = (
     "ingestion_key",
 )
 
-_EVENT_JSON_COLUMNS = {"entities", "precedent_matched_event_ids"}
+_EVENT_JSON_COLUMNS = {"entities", "precedent_matched_event_ids", "business_fields"}
 _EVENT_BOOL_COLUMNS = {"occurred_at_is_fallback", "clarification_held", "approval_held"}
 
 _EVENT_IMMUTABLE_COLUMNS = {
@@ -114,6 +117,8 @@ def _decode_step_row(step_row: sqlite3.Row) -> dict:
     for column in ("required_event_fields", "missing_event_fields"):
         if decoded.get(column) is not None:
             decoded[column] = json.loads(decoded[column])
+    if decoded.get("direct_tool_arguments") is not None:
+        decoded["direct_tool_arguments"] = json.loads(decoded["direct_tool_arguments"])
     return decoded
 
 
@@ -144,16 +149,24 @@ def _upsert_steps(connection: sqlite3.Connection, event_id: str, steps: list[dic
             "missing_event_fields": json.dumps(step.get("missing_event_fields", [])),
             "status": status,
             "failure_reason": step.get("failure_reason"),
+            "direct_tool_name": step.get("direct_tool_name"),
+            "direct_tool_arguments": (
+                json.dumps(step.get("direct_tool_arguments"))
+                if step.get("direct_tool_arguments") is not None
+                else None
+            ),
         }
         connection.execute(
             """
             INSERT INTO event_steps (
                 event_id, step_index, agent_name, task_text, allowed_tools, result_text, attempt_count,
-                step_id, depends_on, required_event_fields, missing_event_fields, status, failure_reason
+                step_id, depends_on, required_event_fields, missing_event_fields, status, failure_reason,
+                direct_tool_name, direct_tool_arguments
             )
             VALUES (
                 :event_id, :step_index, :agent_name, :task_text, :allowed_tools, :result_text, :attempt_count,
-                :step_id, :depends_on, :required_event_fields, :missing_event_fields, :status, :failure_reason
+                :step_id, :depends_on, :required_event_fields, :missing_event_fields, :status, :failure_reason,
+                :direct_tool_name, :direct_tool_arguments
             )
             ON CONFLICT(event_id, step_index) DO UPDATE SET
                 agent_name = excluded.agent_name,
@@ -166,7 +179,9 @@ def _upsert_steps(connection: sqlite3.Connection, event_id: str, steps: list[dic
                 required_event_fields = excluded.required_event_fields,
                 missing_event_fields = excluded.missing_event_fields,
                 status = excluded.status,
-                failure_reason = excluded.failure_reason
+                failure_reason = excluded.failure_reason,
+                direct_tool_name = excluded.direct_tool_name,
+                direct_tool_arguments = excluded.direct_tool_arguments
             """,
             payload,
         )

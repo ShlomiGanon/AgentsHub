@@ -2,7 +2,8 @@
 
 import sys
 
-from history import contracts, event_pipeline, field_catalog, query, summaries
+from history import attendance_temporal, contracts, event_pipeline, field_catalog, query, summaries
+from history.attendance_temporal import AvailabilityPeriod, resolve_availability_period
 from history.field_catalog import EVENT_FIELD_CATALOG
 from history.contracts import (
     ExtractionExecutionError,
@@ -38,18 +39,21 @@ from history.summaries import SummaryScheduler, generate_summary
 events = event_pipeline
 extraction = event_pipeline
 time_utils = event_pipeline
+attendance_time = attendance_temporal
 write = event_pipeline
 scheduler = summaries
 interface = sys.modules[__name__]
 sys.modules[f"{__name__}.events"] = event_pipeline
 sys.modules[f"{__name__}.extraction"] = event_pipeline
 sys.modules[f"{__name__}.time_utils"] = event_pipeline
+sys.modules[f"{__name__}.attendance_time"] = attendance_temporal
 sys.modules[f"{__name__}.write"] = event_pipeline
 sys.modules[f"{__name__}.scheduler"] = summaries
 sys.modules[f"{__name__}.interface"] = sys.modules[__name__]
 
 __all__ = [
     "ExtractionExecutionError",
+    "AvailabilityPeriod",
     "EVENT_FIELD_CATALOG",
     "ExtractionResult",
     "HistoryAnswer",
@@ -73,6 +77,7 @@ __all__ = [
     "record_extracted_fields",
     "record_initial_event",
     "record_step_execution",
+    "resolve_availability_period",
     "retrieve_range",
     "storage_timestamp",
 ]

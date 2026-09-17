@@ -44,6 +44,9 @@ it).
 | `received_at` | `datetime` | no |
 | `occurred_at` | `datetime` | no |
 | `occurred_at_is_fallback` | `bool` | no |
+| `availability_start` | `datetime` | yes — attendance only; the inclusive start of a declared availability interval |
+| `availability_end` | `datetime` | yes — attendance only; the exclusive end of a declared availability interval |
+| `business_fields` | `dict[str, JSON scalar]` | yes — validated protocol-specific values; never transport identity or trusted runtime metadata |
 | `source` | `str` (`"sensor"` \| `"telegram"`) | no |
 | `sender_identity` | `str` | no |
 | `raw_text` | `str` | no |
@@ -62,6 +65,23 @@ it).
 | `steps` | `list[Step]` (with results) | yes |
 | `insight` | `str` | yes |
 | `outcome` | `str` (`succeeded` \| `failed` \| `uncertain` \| `closed_on_precedent` \| `declined`) | yes until the run ends |
+
+### Attendance temporal contract
+
+Attendance reports use `availability_start` and `availability_end`; they do
+not repurpose `occurred_at`. Both values are absolute UTC timestamps and form
+a half-open interval `[availability_start, availability_end)`. Relative
+attendance wording is resolved deterministically from the trusted
+`received_at` instant in the active profile's timezone. In `unified_test`,
+that timezone is `Asia/Jerusalem`: `today` is the local calendar day,
+`tomorrow` its successor, and a weekday is the nearest such weekday that has
+not passed. A weekday range ends on its named end day; `evening` means 20:00
+local time. Expressions outside those rules remain unresolved and require an
+event-data clarification.
+
+`occurred_at` remains the time an operational event is believed to have
+occurred. Its history and precedent semantics do not change for other event
+types.
 
 ## Message
 
@@ -100,6 +120,8 @@ reading descriptions.
 | `expected_success_output` | `str` | no |
 | `criticality` | `str`/`int` | no — breaks ties between candidates only |
 | `approval_flag` | `bool` | no — must be explicitly set, never defaulted |
+| `deterministic_required_event_fields` | `tuple[str, ...]` | yes — declares a single deterministic step instead of model decomposition |
+| `direct_tool_execution` | `DirectToolExecution` | yes — maps validated business fields to one approved tool through the normal runtime |
 
 ## Agent
 

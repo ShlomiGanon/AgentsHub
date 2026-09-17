@@ -41,6 +41,8 @@ class StageModelPolicy:
 class OptimizationPolicy:
     planner_mode: Literal["legacy", "shadow", "merged"] = "legacy"
     operational_decision_mode: Literal["separate", "shadow", "merged"] = "separate"
+    operational_intake_mode: Literal["separate", "single"] = "separate"
+    deterministic_execution_mode: Literal["specialist", "direct"] = "specialist"
     final_assessment_mode: Literal["separate", "low_risk_merged"] = "separate"
     structured_output_mode: Literal["off", "auto", "required"] = "off"
     event_queue_mode: Literal["serial", "policy"] = "serial"

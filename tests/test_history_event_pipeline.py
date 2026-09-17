@@ -135,16 +135,38 @@ def test_history_write_path_is_incremental(store):
         occurred_at="2026-08-19T22:00:00",
         occurred_at_is_fallback=False,
         missing_fields=(),
+        availability_start="2026-08-19T00:00:00+00:00",
+        availability_end="2026-08-20T00:00:00+00:00",
+        business_fields={"availability": "unavailable", "reason": "reserve duty"},
     )
 
     record_extracted_fields(store, event_id, result)
-    record_step_execution(store, event_id, StepExecutionEnvelope(0, "a", "check", ["read"], "ok", 1))
+    record_step_execution(
+        store,
+        event_id,
+        StepExecutionEnvelope(
+            0,
+            "a",
+            "check",
+            ["read"],
+            "ok",
+            1,
+            direct_tool_name="read",
+            direct_tool_arguments={"query": "status"},
+        ),
+    )
     record_event_outcome(store, event_id, "succeeded", insight_text="resolved")
 
     [event] = store.fetch_events_range("2026-08-19T00:00:00", "2026-08-20T00:00:00")
     assert event["raw_text"] == "smoke yesterday"
     assert event["classification"] == "fire"
+    assert event["occurred_at"] == "2026-08-19T22:00:00"
+    assert event["availability_start"] == "2026-08-19T00:00:00+00:00"
+    assert event["availability_end"] == "2026-08-20T00:00:00+00:00"
+    assert event["business_fields"] == {"availability": "unavailable", "reason": "reserve duty"}
     assert event["steps"][0]["result_text"] == "ok"
+    assert event["steps"][0]["direct_tool_name"] == "read"
+    assert event["steps"][0]["direct_tool_arguments"] == {"query": "status"}
     assert event["outcome"] == "succeeded"
 
 

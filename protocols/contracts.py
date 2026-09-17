@@ -11,7 +11,21 @@ EVENT_DATA_FIELDS = (
     "description",
     "severity",
     "occurred_at",
+    "availability_start",
+    "availability_end",
+    "business_fields",
 )
+
+
+@dataclass(frozen=True)
+class DirectToolExecution:
+    """Protocol-declared projection from validated event data to one tool call."""
+
+    tool_name: str
+    argument_sources: tuple[tuple[str, str], ...] = ()
+    required_arguments: tuple[str, ...] = ()
+    required_when: tuple[tuple[str, str, object], ...] = ()
+    business_field_enums: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 class CriticalityLevel(IntEnum):
@@ -37,6 +51,7 @@ class Protocol:
     # an empty tuple) explicitly declares that this is a single deterministic
     # step and lists the event fields that step cannot execute without.
     deterministic_required_event_fields: tuple[str, ...] | None = None
+    direct_tool_execution: DirectToolExecution | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +64,8 @@ class Step:
     step_id: str = ""
     depends_on: tuple[str, ...] = ()
     required_event_fields: tuple[str, ...] = ()
+    direct_tool_name: str | None = None
+    direct_tool_arguments: dict[str, object] | None = None
 
 
 class ProtocolEditError(Exception):

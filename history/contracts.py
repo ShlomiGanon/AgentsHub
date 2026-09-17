@@ -19,6 +19,9 @@ class ExtractionResult:
     occurred_at: str | None
     occurred_at_is_fallback: bool
     missing_fields: tuple[str, ...]
+    availability_start: str | None = None
+    availability_end: str | None = None
+    business_fields: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -33,6 +36,9 @@ class InitialEventEnvelope:
     sender_permission_level: str = "viewer"
     source_message_id: str | None = None
     occurred_at: str | None = None
+    availability_start: str | None = None
+    availability_end: str | None = None
+    business_fields: dict[str, object] | None = None
     occurred_at_is_fallback: bool = False
     event_id: str | None = None
     trace_id: str | None = None
@@ -54,6 +60,8 @@ class StepExecutionEnvelope:
     missing_event_fields: tuple[str, ...] = ()
     status: str = "auto"
     failure_reason: str | None = None
+    direct_tool_name: str | None = None
+    direct_tool_arguments: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)

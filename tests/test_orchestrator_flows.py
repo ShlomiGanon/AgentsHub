@@ -635,6 +635,8 @@ def test_protocol_worker_installs_event_metadata_and_authenticated_sender(deps, 
         "source_message_id": "source-99",
         "original_text": original_text,
         "received_at": "2026-09-16T10:00:00+00:00",
+        "availability_start": None,
+        "availability_end": None,
     }
 
 

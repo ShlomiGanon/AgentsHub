@@ -204,7 +204,13 @@ def invocation_deadline(deadline_monotonic: float | None):
 
 
 def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> Callable:
-    trusted_fields = {"source_message_id", "original_text", "received_at"}
+    trusted_fields = {
+        "source_message_id",
+        "original_text",
+        "received_at",
+        "availability_start",
+        "availability_end",
+    }
     hidden_metadata_signature = None
     if tool_info.name == "record_attendance_response":
         original_signature = inspect.signature(bound_method)
@@ -308,6 +314,55 @@ class Agent:
 
     def exposed_tools(self) -> tuple[ToolInfo, ...]:
         return self.descriptor.tools
+
+    def execute_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, object],
+        allowed_tools: list[str],
+    ) -> AgentResult:
+        """Execute one explicitly selected tool through the normal runtime boundary."""
+
+        allowed = frozenset(allowed_tools)
+        exposed_by_name = {tool_info.name: tool_info for tool_info in self.descriptor.tools}
+        unknown = sorted(allowed - exposed_by_name.keys())
+        if unknown:
+            raise AgentInvocationError(
+                self.name,
+                f"task allows tools not exposed by this agent: {', '.join(unknown)}",
+                trace_id=get_trace_id(),
+            )
+        if tool_name not in allowed:
+            raise AgentInvocationError(
+                self.name,
+                f"tool '{tool_name}' is not permitted for this task",
+                trace_id=get_trace_id(),
+            )
+        if not isinstance(arguments, dict):
+            raise AgentInvocationError(
+                self.name,
+                "direct tool arguments must be an object",
+                trace_id=get_trace_id(),
+            )
+
+        wrapped = self._wrapped_tools[tool_name]
+        try:
+            inspect.signature(wrapped).bind(**arguments)
+        except TypeError as exc:
+            raise AgentInvocationError(
+                self.name,
+                f"tool '{tool_name}' arguments failed schema validation: {exc}",
+                trace_id=get_trace_id(),
+                cause=exc,
+            ) from exc
+
+        token = _current_allowed_tools.set(allowed)
+        try:
+            result = wrapped(**arguments)
+        finally:
+            _current_allowed_tools.reset(token)
+
+        return AgentResult(status="success", text=str(result))
 
     def process(self, text: str, allowed_tools: list[str], *, invocation_policy: InvocationPolicy | None = None) -> AgentResult:
         allowed = frozenset(allowed_tools)

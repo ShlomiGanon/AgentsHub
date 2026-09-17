@@ -51,6 +51,22 @@ optional per-stage `StageModelPolicy` entries. Shadow modes can be measured
 without affecting the user. `profiles/demo.py` and the authoring template keep
 six turns for 24 hours.
 
+The deterministic fast path is separately opt-in. Setting
+`operational_intake_mode="single"` permits one structured call to combine
+intent, event extraction, risk, and protocol selection. Setting
+`deterministic_execution_mode="direct"` permits a protocol with an explicit
+`DirectToolExecution` capability to execute its one approved tool through the
+normal agent/tool runtime without a specialist model call. Both defaults keep
+the existing stages. Ambiguity, missing inputs, approval, dynamic formulation,
+or an invalid structured response falls back to the established pipeline.
+
+`DirectToolExecution` maps validated `business_fields.*` values to tool
+arguments and may declare unconditional or conditional required arguments.
+It never maps sender identity, message IDs, original text, or timestamps;
+those remain trusted runtime metadata. A direct protocol must also declare
+single-agent deterministic formulation, and its tool must remain in
+`approved_tools`.
+
 Conversation history is isolated by exact `conversation_id`, resolves
 references only, and is never authoritative for facts, permissions, protocols,
 tool outcomes, or approvals.
@@ -73,7 +89,8 @@ It defaults to `{}` — no event type requires anything — which is fully
 backward compatible: a profile that doesn't declare it (every profile
 before this) behaves identically to today. Each field name must be one of
 the fixed event-data fields (`classification`, `area`, `entities`,
-`description`, `severity`, `occurred_at` — `protocols.EVENT_DATA_FIELDS`);
+`description`, `severity`, `occurred_at`, `availability_start`,
+`availability_end`, `business_fields` — `protocols.EVENT_DATA_FIELDS`);
 an unknown field name, or a key naming an event type not in `EVENT_TYPES`,
 fails profile loading (`profiles.loader.validate_profile`). `unclassified`
 may not be declared here — its required fields are fixed in core code

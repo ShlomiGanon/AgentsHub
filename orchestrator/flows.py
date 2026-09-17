@@ -3,7 +3,7 @@
 import functools
 import json
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal
 
@@ -19,6 +19,7 @@ from history import (
     record_extracted_fields,
     record_initial_event,
     record_step_execution,
+    resolve_availability_period,
     storage_timestamp,
 )
 from orchestrator.holds import (
@@ -46,11 +47,14 @@ from orchestrator.reasoning import (
     formulate_event_data_question,
     judge_success,
     make_operational_decision,
+    make_operational_intake,
     plan_message,
     rewrite_task,
     extract_event_data_update,
     select_protocol,
     ProtocolSelectionResult,
+    OperationalDecision,
+    OperationalIntake,
     RiskAssessment,
     run_parallel_specialists,
 )
@@ -144,6 +148,7 @@ class FlowDeps:
     area_registry: "AreaRegistry"
     history_query_service: "HistoryQueryService"
     optimization_policy: OptimizationPolicy = OptimizationPolicy()
+    timezone_name: str = "UTC"
     conversation_history_turns: int = 0
     conversation_history_ttl_hours: int = 24
 
@@ -166,6 +171,13 @@ class EventDataReplyResult:
     ambiguous_event_ids: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class FastPathPlan:
+    extraction: object
+    decision: OperationalDecision
+    protocol: "Protocol"
+
+
 def _model_invoker_for(main_agent: "MainAgent"):
     def _invoke(prompt: str) -> str:
         agent_result = main_agent.process(prompt, [])
@@ -174,6 +186,124 @@ def _model_invoker_for(main_agent: "MainAgent"):
         return agent_result.text
 
     return _invoke
+
+
+def _apply_attendance_temporal_fields(
+    extraction_result, raw_text: str, received_at: str, timezone_name: str
+):
+    if extraction_result.classification != "team_attendance_report":
+        return extraction_result
+
+    period = resolve_availability_period(raw_text, received_at, timezone_name)
+    if period is not None:
+        return replace(
+            extraction_result,
+            availability_start=period.availability_start,
+            availability_end=period.availability_end,
+        )
+
+    missing = tuple(dict.fromkeys((*extraction_result.missing_fields, "availability_start", "availability_end")))
+    return replace(extraction_result, missing_fields=missing)
+
+
+def prepare_fast_path_report(
+    deps: FlowDeps,
+    main_agent: "MainAgent",
+    raw_text: str,
+    received_at: str,
+    originated_from_commander: bool,
+) -> FastPathPlan | None:
+    """Return a validated direct-execution plan, or leave the legacy flow untouched."""
+
+    policy = deps.optimization_policy
+    if policy.operational_intake_mode != "single" or policy.deterministic_execution_mode != "direct":
+        return None
+
+    intake: OperationalIntake = make_operational_intake(
+        main_agent,
+        raw_text,
+        received_at,
+        tuple(deps.event_type_registry.types),
+        tuple(deps.area_registry.areas),
+        deps.protocol_set.all(),
+        deps.settings_store.get_risk_threshold(),
+    )
+    if not intake.confident or intake.extraction is None or intake.decision is None:
+        return None
+    if intake.intent.intent != "report" or intake.decision.selection.status != "selected":
+        return None
+
+    extraction = _apply_attendance_temporal_fields(
+        intake.extraction,
+        raw_text,
+        received_at,
+        deps.timezone_name,
+    )
+    if extraction.occurred_at is not None:
+        try:
+            parse_timestamp(extraction.occurred_at)
+        except (TypeError, ValueError):
+            return None
+    protocol = deps.protocol_set.get(intake.decision.selection.protocol_name)
+    if protocol.deterministic_required_event_fields is None or protocol.direct_tool_execution is None:
+        return None
+
+    hold_reason = determine_approval_hold(
+        intake.decision.selection,
+        {candidate.name: candidate for candidate in deps.protocol_set.all()},
+        originated_from_commander,
+    )
+    if hold_reason is not None:
+        return None
+
+    event_data = asdict(extraction)
+    required_fields = tuple(dict.fromkeys((
+        *deps.event_type_registry.required_fields_for(extraction.classification),
+        *protocol.deterministic_required_event_fields,
+    )))
+    if any(
+        event_data.get(field_name) is None or event_data.get(field_name) == ""
+        for field_name in required_fields
+    ):
+        return None
+
+    formulation = formulate_tasks(
+        main_agent,
+        protocol,
+        deps.registry,
+        raw_text,
+        extraction.classification,
+        extraction.area,
+        extraction.description,
+        event_data=event_data,
+        required_fields_floor=deps.event_type_registry.required_fields_for(extraction.classification),
+        allow_direct_execution=True,
+    )
+    if (
+        not formulation.success
+        or len(formulation.steps) != 1
+        or formulation.steps[0].direct_tool_name is None
+    ):
+        return None
+
+    return FastPathPlan(extraction, intake.decision, protocol)
+
+
+def continue_fast_path_report(
+    deps: FlowDeps,
+    event_id: str,
+    main_agent: "MainAgent",
+    insights_agent: "InsightsAgent",
+    plan: FastPathPlan,
+) -> FlowResult:
+    record_extracted_fields(deps.persistence, event_id, plan.extraction)
+    return continue_from_risk_assessment(
+        deps,
+        event_id,
+        main_agent,
+        insights_agent,
+        operational_decision=plan.decision,
+    )
 
 
 def _now() -> str:
@@ -242,6 +372,10 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
         record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
         _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="extraction")
         return FlowResult(event_id, "failed", str(exc))
+
+    extraction_result = _apply_attendance_temporal_fields(
+        extraction_result, raw_text, received_at, deps.timezone_name
+    )
 
     logger.info(
         "extraction result",
@@ -628,6 +762,7 @@ def continue_from_risk_assessment(
     insights_agent: "InsightsAgent",
     originated_from_commander: bool | None = None,
     selected_protocol: "Protocol | None" = None,
+    operational_decision: OperationalDecision | None = None,
 ) -> FlowResult:
     deadline_failure = _deadline_failure(deps, event_id, "risk_assessment")
     if deadline_failure is not None:
@@ -656,6 +791,20 @@ def continue_from_risk_assessment(
             reason="Deterministic button protocol mapping",
         )
         record_event_state(deps.persistence, event_id, {"selected_protocol": selection.protocol_name, "protocol_reason": selection.reason})
+    elif operational_decision is not None:
+        risk_assessment = operational_decision.risk
+        selection = operational_decision.selection
+        record_event_state(
+            deps.persistence,
+            event_id,
+            {"risk_level": risk_assessment.level, "risk_reason": risk_assessment.reason},
+        )
+        if selection.status == "selected":
+            record_event_state(
+                deps.persistence,
+                event_id,
+                {"selected_protocol": selection.protocol_name, "protocol_reason": selection.reason},
+            )
     else:
         operational_mode = deps.optimization_policy.operational_decision_mode
         combined_decision = None
@@ -730,13 +879,18 @@ def continue_from_risk_assessment(
             {"precedent_matched_event_ids": [precedent_match.event_id for precedent_match in precedent_matches]},
         )
 
-    # A precedent can answer an informational report, but it cannot stand in for
-    # executing a fresh attendance write.  Repeated availability reports must
-    # still reach TeamStatusAgent so the authenticated member's current response
-    # is persisted and acknowledged.
+    protocols_by_name = {protocol.name: protocol for protocol in deps.protocol_set.all()}
+    selected_candidate = protocols_by_name.get(selection.protocol_name) if selection.status == "selected" else None
+    direct_capability = selected_candidate.direct_tool_execution if selected_candidate is not None else None
     precedent_closure_blocked = (
         selection.status == "selected" and selection.protocol_name == "record_attendance_response"
     )
+    if direct_capability is not None and len(selected_candidate.participating_agents) == 1:
+        descriptor = deps.registry.descriptor_for(selected_candidate.participating_agents[0])
+        precedent_closure_blocked = any(
+            tool.name == direct_capability.tool_name and tool.side_effecting
+            for tool in descriptor.tools
+        )
     closing_event_id = (
         None
         if precedent_closure_blocked
@@ -762,7 +916,6 @@ def continue_from_risk_assessment(
         _log_event_outcome(event_id, "no_match_protocol", reason=selection.reason)
         return FlowResult(event_id, "no_match_protocol", selection.reason)
 
-    protocols_by_name = {protocol.name: protocol for protocol in deps.protocol_set.all()}
     hold_reason: "HoldReason | None" = determine_approval_hold(selection, protocols_by_name, originated_from_commander)
 
     if hold_reason is not None:
@@ -801,6 +954,7 @@ def _run_protocol(
         # required_event_fields regardless of what the model declares — see
         # formulate_tasks' docstring.
         required_fields_floor=deps.event_type_registry.required_fields_for(classification),
+        allow_direct_execution=deps.optimization_policy.deterministic_execution_mode == "direct",
     )
     if not formulation.success:
         record_event_outcome(deps.persistence, event_id, "failed", failure_reason=formulation.failure_reason)
@@ -827,6 +981,8 @@ def _persist_step_plan(deps: FlowDeps, event_id: str, steps: tuple[Step, ...]) -
                 depends_on=step.depends_on,
                 required_event_fields=step.required_event_fields,
                 status="pending",
+                direct_tool_name=step.direct_tool_name,
+                direct_tool_arguments=step.direct_tool_arguments,
             ),
         )
 
@@ -839,6 +995,8 @@ def _step_from_row(row: dict) -> Step:
         step_id=row.get("step_id") or str(row["step_index"]),
         depends_on=tuple(row.get("depends_on") or ()),
         required_event_fields=tuple(row.get("required_event_fields") or ()),
+        direct_tool_name=row.get("direct_tool_name"),
+        direct_tool_arguments=row.get("direct_tool_arguments"),
     )
 
 
@@ -918,6 +1076,8 @@ def _persist_step_outcomes(
                 missing_event_fields=outcome.missing_event_fields,
                 status=outcome.status,
                 failure_reason=outcome.failure_reason,
+                direct_tool_name=persisted_step.direct_tool_name,
+                direct_tool_arguments=persisted_step.direct_tool_arguments,
             ),
         )
 
@@ -959,6 +1119,8 @@ def _execute_protocol_plan(
             "source_message_id": event.get("source_message_id"),
             "original_text": event.get("raw_text"),
             "received_at": event.get("received_at"),
+            "availability_start": event.get("availability_start"),
+            "availability_end": event.get("availability_end"),
         }
     ):
         run_result = execute_steps(

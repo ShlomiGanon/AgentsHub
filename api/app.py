@@ -136,6 +136,7 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
         area_registry=build_area_registry(loaded_profile),
         history_query_service=history_query_service,
         optimization_policy=loaded_profile.optimization_policy,
+        timezone_name=loaded_profile.timezone_name,
         conversation_history_turns=loaded_profile.conversation_history_turns,
         conversation_history_ttl_hours=loaded_profile.conversation_history_ttl_hours,
     )

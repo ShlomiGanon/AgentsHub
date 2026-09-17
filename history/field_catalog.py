@@ -26,6 +26,21 @@ EVENT_FIELD_CATALOG: tuple[EventFieldDefinition, ...] = (
         "narrative",
     ),
     EventFieldDefinition(
+        "availability_start", "Availability starts",
+        "The beginning of a reporter's declared availability or unavailability interval. This is attendance data, not an event occurrence time.",
+        "narrative",
+    ),
+    EventFieldDefinition(
+        "availability_end", "Availability ends",
+        "The exclusive end of a reporter's declared availability or unavailability interval. This is attendance data, not an event occurrence time.",
+        "narrative",
+    ),
+    EventFieldDefinition(
+        "business_fields", "Extracted business fields",
+        "Protocol-specific business values validated from the report; transport identity and trusted runtime metadata are excluded.",
+        "narrative",
+    ),
+    EventFieldDefinition(
         "occurred_at_is_fallback", "Occurrence time is a fallback",
         "True means no occurrence time could be extracted from the report, so the received time was substituted — "
         "say so if asked when it happened, never present it as a confirmed occurrence time.",
