@@ -2989,3 +2989,109 @@ no CI change was needed.
 - **Safe observability:** schema failures emit only schema name, expected/returned key names, missing/unknown key names, and a validation category; raw model output and field values are never logged.
 - **Tests:** added `tests/test_operational_intake_schema.py` covering the full valid attendance payload, omitted nullable fields, required/nested-required omissions, unknown keys, invalid enum/type, malformed JSON, and one-call behavior. Existing Fast Path/orchestrator regressions remain green.
 - **Verification:** 10 new schema tests, plus the focused Fast Path/orchestrator set (78 tests) and architecture/leakage/Fast Path set (17 tests) passed; only the existing OpenTelemetry deprecation warning appeared.
+
+## 2026-09-17 - Task 32: scoped unified_test runtime-context cleanup
+
+- **Status:** done; no live scenario was run.
+- **Instruction files read:** root `instructions.md`; persistence/schema and
+  profile simulation/seed contracts in `persistence/schema.py`,
+  `persistence/contracts.py`, `persistence/surveillance_store.py`,
+  `persistence/team_status_store.py`, `profiles/unified_test.py`,
+  `profiles/simulation_provisioning.py`, and
+  `docs/profile_simulations_design.md`.
+- Added the persistence maintenance seam
+  `persistence.runtime_cleanup.clean_unified_test_runtime`, scoped by exact
+  profile module and `data/unified_test` path. It clears runtime history,
+  event/step/hold/conversation/notification/log/summary rows, runtime drone
+  missions, attendance responses and non-seed attendance cycles, and removes
+  run metadata/cursor artifacts. It preserves schema, migrations, settings,
+  users, groups, roster approval/members, and simulation baseline snapshots.
+- Surveillance cleanup restores camera/drone mutable fields from the
+  authoritative persistence seed constants; attendance cleanup keeps the
+  oldest profile-created cycle and preserves the roster.
+- **Verification:** actual inventory before cleanup was 178 events, 79 steps,
+  67 holds, 107 conversation messages, 207 notifications, 91,070 log rows,
+  7 summaries, 63 missions, 13 attendance responses, and 5 cycles. Afterward
+  all runtime tables are empty, one seed attendance cycle remains, and seed
+ counts are unchanged (34 users, 6 groups, 15 team members, approved roster,
+ 5 cameras, 3 drones). Profile `ensure_seed_data()` was rerun successfully
+ and remained idempotent. Three scoped cleanup tests passed.
+
+## 2026-09-17 - Task 33: deterministic follow-up/event correlation
+
+- **Status:** implementation and tests complete; no live run performed.
+- **Instruction files read:** root `instructions.md`; architecture and workflow
+  guidance in `docs/work_plan.md`, `docs/Next_Plan.md`, and `docs/work_process.md`;
+  conversation/history, event-pipeline, routing, notification, capability,
+  permission, execution, and simulation contracts in
+  `persistence/contracts.py`, `persistence/schema.py`, `history/event_pipeline.py`,
+  `orchestrator/flows.py`, `orchestrator/group_routing.py`,
+  `orchestrator/response_contract.py`, `orchestrator/capabilities.py`,
+  `orchestrator/holds.py`, `protocols/contracts.py`, `protocols/executor.py`,
+  `agents/runtime.py`, `bot/contracts.py`, `bot/background_services.py`, and
+  `docs/profile_simulations_design.md`.
+- Added typed `ConversationEventLink` retrieval from persisted events, scoped
+  by conversation and authenticated sender. It exposes lifecycle, outcome,
+  verified failure reason, timestamp, protocol, and safe tool-receipt metadata;
+  no model output or reasoning is stored.
+- Added `orchestrator.follow_up.resolve_follow_up` and the `/Msg` pre-routing
+  seam. Short context-dependent questions now resolve to the single recent
+  operational event, return persisted failure/status evidence, or return an
+  explicit ambiguity response. Approval continuations require authenticated
+  commander permission and reuse the existing approval/queue path; no follow-up
+  invokes a tool directly.
+- **Verification:** focused correlation/API/message/persistence regression
+  suite: 71 passed; holds/jobs/background-service regression: 158 passed.
+  `py_compile` and `git diff --check` passed. No live run was performed.
+
+## 2026-09-17 - Task 34: typed situational snapshot and consistency invariants
+
+- **Status:** implementation and tests complete; no live run performed.
+- **Instruction files read:** root `instructions.md`; `docs/work_plan.md`,
+  `docs/Next_Plan.md`, `docs/work_process.md`, and
+  `docs/profile_simulations_design.md`; relevant situational-picture,
+  surveillance, team-status, drone/mission, history, and response-contract
+  source modules.
+- Extended the existing `orchestrator.situational_picture` seam with typed
+  camera, drone, team, and section-provenance contracts. Counts are read from
+  the specialist persistence interfaces, not model prose. Team
+  `awaiting_response` is represented as `not_reported`, and drone/mission
+  conflicts are represented as typed `inconsistent` state.
+- The production picture path uses deterministic rendering whenever the
+  authoritative surveillance and team stores are available; profiles without
+  those stores retain the existing specialist/report fallback. API response
+  provenance now points to the typed state sections when that path is used.
+  No routing, follow-up, tool-runtime, lifecycle, or permission behavior was
+  changed.
+- **Verification:** 7 typed-snapshot tests and the existing situational-picture,
+  API, and unified-role regression set (45 tests total) passed; no live run was
+  performed.
+
+## 2026-09-17 - Task 36: Hebrew situational rendering and verified operational findings
+
+- **Status:** implementation and tests complete; no live run performed.
+- **Instruction files read:** root `instructions.md`; architecture/workflow and
+  profile guidance in `docs/work_plan.md`, `docs/Next_Plan.md`,
+  `docs/work_process.md`, and `docs/profile_spec.md`; the message catalog,
+  situational-picture, profile locale, API request-locale, and response
+  provenance contracts.
+- Reused the request-scoped `MessageCatalog` selected from the loaded profile's
+  `DEFAULT_LANGUAGE`. All typed snapshot labels, findings, and recommendations
+  now come from matching English/Hebrew catalog keys; no Hebrew was added to
+  production logic and no technical timestamp is shown. Emoji were deliberately
+  omitted because the repository's catalog contract explicitly forbids them.
+- Added typed `OperationalFinding` values with finding type, severity, verified
+  `state:` source references, localized message key/values, and an optional
+  recommendation key. Rules cover complete/partial camera coverage, ready/no
+  ready drones, confirmed/no confirmed team availability, missing attendance
+  reports, and unknown/inconsistent source state.
+- Recommendations are presentation-only fields and never carry a tool name,
+  action receipt, or execution transition. `profiles.unified_test` uses the
+  localized deterministic path and its real seeded stores in the new integration
+  test; the baseline is rendered with 5/5 cameras active, 2 drones ready, 1
+  charging, 0 available, 1 unavailable, and 14 not reported.
+- **Verification:** 10 focused typed-snapshot/localization tests; combined
+  messages, situational-picture, API-message, and unified-role regression: 81
+  passed. The repository-wide Hebrew-literal check still reports the pre-existing
+  `orchestrator/follow_up.py` literals from Task 33; Task 36 added no Hebrew to
+  production logic. No live run was performed.

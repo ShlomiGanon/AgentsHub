@@ -2,6 +2,10 @@
 
 from dataclasses import dataclass
 from enum import IntEnum
+from typing import Literal, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agents import ToolReceipt
 
 
 EVENT_DATA_FIELDS = (
@@ -15,6 +19,15 @@ EVENT_DATA_FIELDS = (
     "availability_end",
     "business_fields",
 )
+
+ActionLifecycleState = Literal[
+    "requested",
+    "pending_approval",
+    "approved",
+    "executing",
+    "executed",
+    "failed",
+]
 
 
 @dataclass(frozen=True)
@@ -81,6 +94,8 @@ class StepOutcome:
     failure_reason: str | None = None
     status: str = "succeeded"
     missing_event_fields: tuple[str, ...] = ()
+    action_state: ActionLifecycleState | None = None
+    tool_receipts: tuple["ToolReceipt", ...] = ()
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,7 @@ from history import (
     record_event_data_update,
     record_event_outcome,
     record_event_state,
+    record_action_lifecycle,
     record_extracted_fields,
     record_initial_event,
     record_step_execution,
@@ -75,6 +76,7 @@ from orchestrator.situational_picture import (  # re-exported: api may only impo
     build_situational_picture,
     compose_picture_from_step_outcomes,
 )
+from orchestrator.follow_up import FollowUpResolution, is_context_dependent_follow_up, resolve_follow_up
 from orchestrator.event_queue import PolicyAwareEventQueue, SerialEventQueue, WorkItem
 from orchestrator.group_routing import (  # re-exported: api may only import orchestrator.flows
     GROUP_CHAT_TYPES,
@@ -90,7 +92,7 @@ from orchestrator.group_routing import (  # re-exported: api may only import orc
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
 from protocols import CriticalityLevel, Step, StepOutcome
 from protocols.executor import execute_steps
-from agents import authenticated_request_identity, trusted_event_metadata
+from agents import authenticated_request_identity, trusted_event_metadata, ToolReceipt
 from tools import get_trace_id
 
 if TYPE_CHECKING:
@@ -701,6 +703,14 @@ def resolve_approval(
         },
     )
 
+    if answer.status == "approved":
+        try:
+            protocol = deps.protocol_set.get(answer.hold["selected_protocol_name"])
+            if _protocol_has_side_effects(deps, protocol):
+                _safe_action_transition(deps, event_id, "approved")
+        except KeyError:
+            pass
+
     logger.info(
         "approval hold resolved",
         extra={
@@ -764,6 +774,29 @@ def _look_up_precedent_if_possible(deps: FlowDeps, event_id: str, event: dict) -
         return ()
     anchor_time = event["occurred_at"] or event["received_at"]
     return look_up_precedent(deps.history_query_service, event_id, event["classification"], event["area"], anchor_time)
+
+
+def _protocol_has_side_effects(deps: FlowDeps, protocol: "Protocol") -> bool:
+    for agent_name in protocol.participating_agents:
+        exposed = {tool.name: tool for tool in deps.registry.descriptor_for(agent_name).tools}
+        if any(exposed.get(tool_name) is not None and exposed[tool_name].side_effecting for tool_name in protocol.approved_tools):
+            return True
+    return False
+
+
+def _safe_action_transition(deps: FlowDeps, event_id: str, state: str, *, failure_reason: str | None = None, receipts=()) -> None:
+    current = (deps.persistence.fetch_event(event_id) or {}).get("action_state")
+    if current == state and not receipts and failure_reason is None:
+        return
+    if current in {"executed", "failed"} and current != state:
+        return
+    try:
+        record_action_lifecycle(deps.persistence, event_id, state, failure_reason=failure_reason, receipts=tuple(receipts))
+    except ValueError:
+        logger.warning(
+            "action lifecycle transition ignored",
+            extra={"event": "action_lifecycle_transition_invalid", "event_id": event_id, "from_state": current, "to_state": state, "trace_id": get_trace_id()},
+        )
 
 
 def continue_from_risk_assessment(
@@ -929,16 +962,26 @@ def continue_from_risk_assessment(
 
     hold_reason: "HoldReason | None" = determine_approval_hold(selection, protocols_by_name, originated_from_commander)
 
+    protocol = protocols_by_name.get(selection.protocol_name) if selection.status == "selected" else None
+    side_effecting_protocol = bool(protocol and _protocol_has_side_effects(deps, protocol))
+    if side_effecting_protocol and (deps.persistence.fetch_event(event_id) or {}).get("action_state") is None:
+        _safe_action_transition(deps, event_id, "requested")
+
     if hold_reason is not None:
         create_approval_hold(deps.persistence, event_id, hold_reason, selection, risk_assessment)
         record_event_state(deps.persistence, event_id, {"approval_held": True, "approval_reason": hold_reason})
+        if side_effecting_protocol:
+            _safe_action_transition(deps, event_id, "pending_approval")
         logger.info(
             "hold created",
             extra={"event": "hold_created", "hold_kind": "approval", "event_id": event_id, "reason": hold_reason, "trace_id": get_trace_id()},
         )
         return FlowResult(event_id, "held_for_approval", hold_reason)
 
-    protocol = protocols_by_name[selection.protocol_name]
+    if side_effecting_protocol:
+        _safe_action_transition(deps, event_id, "approved")
+    if protocol is None:
+        return FlowResult(event_id, "failed", "selected protocol is missing")
     return _run_protocol(deps, event_id, main_agent, insights_agent, protocol, precedent_matches, raw_text, classification, area, description)
 
 
@@ -1025,6 +1068,11 @@ def _prior_outcomes(rows: list[dict], steps: tuple[Step, ...]) -> tuple[StepOutc
                 failure_reason=row.get("failure_reason"),
                 status=row.get("status", "pending"),
                 missing_event_fields=tuple(row.get("missing_event_fields") or ()),
+                action_state=row.get("action_state"),
+                tool_receipts=tuple(
+                    ToolReceipt(**receipt) if isinstance(receipt, dict) else receipt
+                    for receipt in (row.get("tool_receipts") or ())
+                ),
             )
         )
     return tuple(outcomes)
@@ -1089,6 +1137,8 @@ def _persist_step_outcomes(
                 failure_reason=outcome.failure_reason,
                 direct_tool_name=persisted_step.direct_tool_name,
                 direct_tool_arguments=persisted_step.direct_tool_arguments,
+                action_state=outcome.action_state,
+                tool_receipts=outcome.tool_receipts,
             ),
         )
 
@@ -1125,6 +1175,13 @@ def _execute_protocol_plan(
         else step
         for step in steps
     )
+
+    side_effecting_protocol = _protocol_has_side_effects(deps, protocol)
+
+    def _lifecycle_callback(state: str, _step: Step) -> None:
+        if side_effecting_protocol:
+            _safe_action_transition(deps, event_id, state)
+
     with authenticated_request_identity(event["sender_identity"]), trusted_event_metadata(
         {
             "source_message_id": event.get("source_message_id"),
@@ -1141,6 +1198,8 @@ def _execute_protocol_plan(
             task_rewriter=functools.partial(rewrite_task, main_agent),
             event_data=event,
             prior_outcomes=prior,
+            event_id=event_id,
+            lifecycle_callback=_lifecycle_callback,
         )
     if run_result.waiting_for_event_data and not persisted_rows:
         _persist_step_plan(deps, event_id, steps)
@@ -1184,6 +1243,8 @@ def _execute_protocol_plan(
         return FlowResult(event_id, "waiting_for_event_data", question)
 
     if not run_result.completed:
+        if side_effecting_protocol:
+            _safe_action_transition(deps, event_id, "failed", failure_reason=run_result.failure_cause)
         record_event_outcome(deps.persistence, event_id, "failed", failure_reason=run_result.failure_cause)
         _log_event_outcome(
             event_id, "failed", failure_reason=run_result.failure_cause, stage="execution",
@@ -1208,6 +1269,11 @@ def _execute_protocol_plan(
             tuple(outcome.step.step_id for outcome in run_result.step_outcomes),
         )
         return FlowResult(event_id, "waiting_for_drone_selection", recall_selection)
+
+    if side_effecting_protocol:
+        receipts = tuple(receipt for outcome in run_result.step_outcomes for receipt in outcome.tool_receipts)
+        if receipts:
+            _safe_action_transition(deps, event_id, "executed", receipts=receipts)
 
     return _finish_protocol_assessment(
         deps, event_id, main_agent, insights_agent, protocol, run_result.step_outcomes, precedent_matches,

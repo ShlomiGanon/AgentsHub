@@ -33,6 +33,21 @@ class EventSearchCriteria:
     limit: int = 50
 
 
+@dataclass(frozen=True)
+class ConversationEventLink:
+    """Typed, persisted operational referent for a conversation follow-up."""
+
+    conversation_id: str
+    event_id: str
+    action_state: str | None
+    outcome: str | None
+    latest_user_visible_result: str | None
+    failure_reason: str | None
+    timestamp: str
+    protocol_name: str | None
+    tool_receipts: tuple[dict, ...] = ()
+
+
 class PersistenceInterface(ABC):
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -131,6 +146,13 @@ class PersistenceInterface(ABC):
     @abstractmethod
     def fetch_conversation_messages(self, conversation_id: str, limit: int) -> list[dict]:
         """Return bounded conversation messages in chronological order."""
+
+    def list_conversation_event_links(
+        self, conversation_id: str, sender_identity: str, limit: int = 20
+    ) -> list[ConversationEventLink]:
+        """Return persisted operational events owned by this conversation/sender."""
+
+        raise NotImplementedError
 
     @abstractmethod
     def read_user(self, telegram_identity: str) -> dict | None:
@@ -232,6 +254,16 @@ class PersistenceInterface(ABC):
         self, trace_id: str, since: int, timeout_seconds: float
     ) -> list[dict]:
         """Wait up to 30 seconds for trace entries newer than the cursor."""
+
+    def clear_runtime_history(self) -> dict[str, int]:
+        """Remove profile-owned runtime history while preserving seed entities.
+
+        This maintenance operation is intentionally outside the normal event
+        workflow. Concrete backends may implement it for an explicitly scoped
+        test/demo reset; it must never drop schema or touch users/groups.
+        """
+
+        raise NotImplementedError
 
 
 def open_persistence(db_path: str) -> PersistenceInterface:

@@ -67,6 +67,22 @@ _SECTOR_BASE_ETA = {
     "west_hill": 210,
 }
 
+# Authoritative immutable demo baseline.  ``last_updated`` is runtime
+# metadata and is refreshed when rows are seeded or restored.
+DEMO_CAMERA_SEED = (
+    ("CAM-01", "Gate North Optical PTZ", "north_gate", "active", 15, "Clear view of North Perimeter Gate and approach road. Gate closed, perimeter fence secure. No suspicious activity detected."),
+    ("CAM-02", "South Sector Long-Range Thermal", "south_sector", "active", 180, "Thermal sweep active across southern tree line. Stationary agricultural vehicles identified with low heat signatures; normal operational picture."),
+    ("CAM-03", "East Fence Line Starlight", "east_fence", "active", 90, "Optimal visibility along eastern security fence sensor line. Zero breach or perimeter vibration alerts reported."),
+    ("CAM-04", "Central Compound Dome", "central_hub", "active", 270, "Wide-angle surveillance of HQ depot and vehicle parking zone. Logistics vehicles parked, regular security personnel patrols visible."),
+    ("CAM-05", "West Hill High Overlook", "west_hill", "active", 285, "Panoramic overlook of western wadi and approach trail. Visibility excellent (8km). No unauthorized movements detected."),
+)
+
+DEMO_DRONE_SEED = (
+    ("DRONE-01", "Eagle-1", "Matrice 350 RTK", "ready", 96, "central_hub"),
+    ("DRONE-02", "Falcon-2", "Skydio X2D Autonomous", "ready", 84, "north_gate"),
+    ("DRONE-03", "Hawk-3", "Mavic 3 Thermal Tac", "charging", 42, "central_hub"),
+)
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -121,13 +137,7 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
         cursor = conn.execute("SELECT COUNT(*) FROM cameras")
         if cursor.fetchone()[0] == 0:
             now = _utc_now()
-            cameras_seed = [
-                ("CAM-01", "Gate North Optical PTZ", "north_gate", "active", 15, "Clear view of North Perimeter Gate and approach road. Gate closed, perimeter fence secure. No suspicious activity detected.", now),
-                ("CAM-02", "South Sector Long-Range Thermal", "south_sector", "active", 180, "Thermal sweep active across southern tree line. Stationary agricultural vehicles identified with low heat signatures; normal operational picture.", now),
-                ("CAM-03", "East Fence Line Starlight", "east_fence", "active", 90, "Optimal visibility along eastern security fence sensor line. Zero breach or perimeter vibration alerts reported.", now),
-                ("CAM-04", "Central Compound Dome", "central_hub", "active", 270, "Wide-angle surveillance of HQ depot and vehicle parking zone. Logistics vehicles parked, regular security personnel patrols visible.", now),
-                ("CAM-05", "West Hill High Overlook", "west_hill", "active", 285, "Panoramic overlook of western wadi and approach trail. Visibility excellent (8km). No unauthorized movements detected.", now),
-            ]
+            cameras_seed = [(*seed, now) for seed in DEMO_CAMERA_SEED]
             conn.executemany(
                 """
                 INSERT INTO cameras (camera_id, name, area, status, azimuth_degrees, feed_summary, last_updated)
@@ -139,11 +149,7 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
         drone_cursor = conn.execute("SELECT COUNT(*) FROM drones")
         if drone_cursor.fetchone()[0] == 0:
             now = _utc_now()
-            drones_seed = [
-                ("DRONE-01", "Eagle-1", "Matrice 350 RTK", "ready", 96, "central_hub", None, now),
-                ("DRONE-02", "Falcon-2", "Skydio X2D Autonomous", "ready", 84, "north_gate", None, now),
-                ("DRONE-03", "Hawk-3", "Mavic 3 Thermal Tac", "charging", 42, "central_hub", None, now),
-            ]
+            drones_seed = [(*seed, None, now) for seed in DEMO_DRONE_SEED]
             conn.executemany(
                 """
                 INSERT INTO drones (drone_id, callsign, model, status, battery_percent, current_area, assigned_mission_id, last_updated)
@@ -151,6 +157,33 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
                 """,
                 drones_seed,
             )
+
+    def clear_runtime_state(self) -> dict[str, int]:
+        """Remove missions and restore mutable camera/drone state to demo seed."""
+
+        now = _utc_now()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            missions = int(conn.execute("SELECT COUNT(*) FROM drone_missions").fetchone()[0])
+            conn.execute("DELETE FROM drone_missions")
+
+            for camera_id, _name, _area, status, azimuth, feed_summary in DEMO_CAMERA_SEED:
+                conn.execute(
+                    """UPDATE cameras SET status = ?, azimuth_degrees = ?, feed_summary = ?, last_updated = ?
+                       WHERE camera_id = ?""",
+                    (status, azimuth, feed_summary, now, camera_id),
+                )
+
+            for drone_id, _callsign, _model, status, battery, area in DEMO_DRONE_SEED:
+                conn.execute(
+                    """UPDATE drones SET status = ?, battery_percent = ?, current_area = ?,
+                       assigned_mission_id = NULL, last_updated = ? WHERE drone_id = ?""",
+                    (status, battery, area, now, drone_id),
+                )
+
+            conn.commit()
+
+        return {"drone_missions": missions}
 
     def list_cameras(self, area: str | None = None, status: str | None = None) -> list[dict]:
         query = "SELECT * FROM cameras WHERE 1=1"

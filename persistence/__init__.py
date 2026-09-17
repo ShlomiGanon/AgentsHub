@@ -3,7 +3,14 @@
 import sys
 
 from persistence import contracts
-from persistence.contracts import EventSearchCriteria, NotFoundError, PersistenceError, PersistenceInterface, open_persistence
+from persistence.contracts import (
+    ConversationEventLink,
+    EventSearchCriteria,
+    NotFoundError,
+    PersistenceError,
+    PersistenceInterface,
+    open_persistence,
+)
 
 exceptions = contracts
 interface = contracts
@@ -25,6 +32,7 @@ from persistence.surveillance_contracts import (
     SurveillancePersistenceInterface,
     open_surveillance_persistence,
 )
+from persistence.runtime_cleanup import CleanupReport, clean_unified_test_runtime
 
 sqlite = sqlite_store
 sqlite_backend = sqlite_store
@@ -33,6 +41,7 @@ sys.modules[f"{__name__}.sqlite_backend"] = sqlite_store
 
 __all__ = [
     "EventSearchCriteria",
+    "ConversationEventLink",
     "NotFoundError",
     "PersistenceError",
     "PersistenceInterface",
@@ -47,4 +56,6 @@ __all__ = [
     "SurveillancePersistenceError",
     "SurveillancePersistenceInterface",
     "open_surveillance_persistence",
+    "CleanupReport",
+    "clean_unified_test_runtime",
 ]

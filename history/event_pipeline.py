@@ -6,6 +6,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Callable
 
 from history.contracts import ExtractionExecutionError, ExtractionResult, InitialEventEnvelope, StepExecutionEnvelope
+from protocols.contracts import ActionLifecycleState
 from tools import stage_context
 
 
@@ -225,6 +226,10 @@ STATE_UPDATE_FIELDS = frozenset(
         "approval_answered_at",
         "precedent_matched_event_ids",
         "precedent_closed_by_event_id",
+        "action_state",
+        "action_state_updated_at",
+        "action_failure_reason",
+        "action_tool_receipts",
     }
 )
 
@@ -318,6 +323,47 @@ def record_event_state(persistence, event_id: str, updates: dict) -> None:
     if rejected:
         raise ValueError(f"event state update contains forbidden field(s): {', '.join(sorted(rejected))}")
     persistence.update_event(event_id, dict(updates))
+
+
+_ACTION_TRANSITIONS = {
+    None: {"requested"},
+    "requested": {"pending_approval", "approved", "executing", "failed"},
+    "pending_approval": {"approved", "failed"},
+    "approved": {"executing", "failed"},
+    "executing": {"executed", "failed"},
+    "executed": set(),
+    "failed": set(),
+}
+
+
+def record_action_lifecycle(
+    persistence,
+    event_id: str,
+    state: ActionLifecycleState,
+    *,
+    failure_reason: str | None = None,
+    receipts: tuple[object, ...] = (),
+) -> None:
+    """Persist a validated action transition and optional safe receipts."""
+
+    event = persistence.fetch_event(event_id) or {}
+    previous = event.get("action_state")
+    if state not in _ACTION_TRANSITIONS:
+        raise ValueError(f"invalid action lifecycle state: {state!r}")
+    if previous != state and state not in _ACTION_TRANSITIONS.get(previous, set()):
+        raise ValueError(f"invalid action lifecycle transition: {previous!r} -> {state!r}")
+    now = datetime.now(timezone.utc).isoformat()
+    updates = {
+        "action_state": state,
+        "action_state_updated_at": now,
+        "action_failure_reason": failure_reason,
+    }
+    if receipts:
+        updates["action_tool_receipts"] = [
+            asdict(receipt) if hasattr(receipt, "__dataclass_fields__") else receipt
+            for receipt in receipts
+        ]
+    record_event_state(persistence, event_id, updates)
 
 
 def record_event_data_update(persistence, event_id: str, updates: dict) -> None:

@@ -1,7 +1,8 @@
 """Immutable agent descriptors and tool declaration primitives."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
+import uuid
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,30 @@ UNCLEAR_TASK_PROMPT_INSTRUCTION = (
 class AgentResult:
     status: Literal["success", "unclear_task"]
     text: str
+    tool_receipts: tuple["ToolReceipt", ...] = ()
+
+
+@dataclass(frozen=True)
+class ToolReceipt:
+    """Safe, runtime-authenticated evidence of one tool invocation.
+
+    Arguments and model text are deliberately absent.  ``state_verified`` is
+    tri-state: ``True`` means a caller supplied a postcondition verifier,
+    ``False`` means verification failed, and ``None`` means no verifier exists.
+    """
+
+    tool_name: str
+    status: Literal["succeeded", "failed"]
+    success: bool
+    started_at: str
+    completed_at: str
+    event_id: str | None = None
+    step_id: str | None = None
+    side_effecting: bool = False
+    failure_kind: str | None = None
+    state_verified: bool | None = None
+    verification_source: str | None = None
+    receipt_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
 
 def parse_agent_output(raw_text: str) -> AgentResult:
@@ -113,6 +138,7 @@ class AgentInvocationError(Exception):
         self.agent_name = agent_name
         self.trace_id = trace_id
         self.cause = cause
+        self.tool_receipts: tuple[ToolReceipt, ...] = ()
         super().__init__(f"[{agent_name}] {message}" + (f" (trace={trace_id})" if trace_id else ""))
 
 

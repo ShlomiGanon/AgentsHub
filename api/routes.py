@@ -59,6 +59,8 @@ from orchestrator.flows import (
     ResponseEnvelope,
     informational_response,
     render_response,
+    resolve_follow_up,
+    is_context_dependent_follow_up,
 )
 
 from protocols import CriticalityLevel, Protocol, ProtocolEditError, add_protocol, remove_protocol, replace_protocol
@@ -220,6 +222,27 @@ def _is_approval_policy_question(text: str) -> bool:
     return any(word in normalized for word in ("\u05d0\u05d9\u05e9\u05d5\u05e8", "\u05dc\u05d0\u05e9\u05e8", "\u05de\u05d0\u05e9\u05e8")) and any(
         term in normalized for term in ("\u05de\u05d9", "\u05d0\u05d9\u05e4\u05d4", "\u05d0\u05de\u05d5\u05e8", "\u05e6\u05e8\u05d9\u05da", "\u05de\u05d0\u05e9\u05e8")
     )
+
+
+def _follow_up_answer(messages, resolution) -> str:
+    if resolution.kind == "failed":
+        reason = resolution.event.failure_reason if resolution.event is not None else None
+        return messages.text("api.followup.failed", reason=reason or messages.text("api.followup.unknown_reason"))
+    if resolution.kind == "executed":
+        return messages.text("api.followup.executed")
+    if resolution.kind == "pending_approval":
+        return messages.text("api.followup.pending_approval")
+    if resolution.kind == "approved":
+        return messages.text("api.followup.approved")
+    if resolution.kind == "executing":
+        return messages.text("api.followup.executing")
+    if resolution.kind == "requested":
+        return messages.text("api.followup.requested")
+    if resolution.kind == "unverified":
+        return messages.text("api.followup.unverified")
+    if resolution.kind == "ambiguous":
+        return messages.text("api.followup.ambiguous")
+    return messages.text("api.followup.unknown")
 
 
 def _is_pending_report_cancellation(text: str) -> bool:
@@ -408,6 +431,26 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 raise InvalidInputError(messages.text("api.event_data_reply_not_pending"))
             pending_hold = candidate
 
+        if (
+            pending_hold is None
+            and conversation_id
+            and prior_messages
+            and any(message.get("role") == "assistant" for message in prior_messages)
+            and not is_context_dependent_follow_up(str(text))
+        ):
+            owned_event_data_holds = []
+            for hold in ctx.deps.persistence.list_held_events("event_data"):
+                held_event = ctx.deps.persistence.fetch_event(hold["event_id"])
+                if (
+                    held_event is not None
+                    and not hold.get("resolved")
+                    and held_event.get("conversation_id") == conversation_id
+                    and held_event.get("sender_identity") == caller_identity
+                ):
+                    owned_event_data_holds.append(hold)
+            if len(owned_event_data_holds) == 1:
+                pending_hold = owned_event_data_holds[0]
+
         # A drone-choice reply is operational input, not free-form missing event
         # data. Resolve it deterministically before any planner/model call.
         drone_selection_hold = (
@@ -562,6 +605,79 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 ), 202
             ctx.queue.release_reservation(reservation)
 
+        follow_up = resolve_follow_up(ctx.deps.persistence, conversation_id, caller_identity, str(text))
+        if follow_up.kind != "none":
+            if follow_up.hold is not None:
+                if level < PermissionLevel.COMMANDER:
+                    answer = messages.text("api.followup.pending_approval")
+                    _remember("assistant", answer, follow_up.hold["event_id"])
+                    return jsonify({
+                        "taken_as": "clarification",
+                        "event_id": follow_up.hold["event_id"],
+                        "status": "held_for_approval",
+                        "answer": answer,
+                    })
+
+                require(level, RequestedOperation.APPROVE_RUN)
+                reservation = ctx.queue.reserve(True)
+                if reservation is None:
+                    raise ServiceUnavailableError(messages.text("api.queue_full"))
+                answer_hold = resolve_approval(
+                    ctx.deps,
+                    follow_up.hold["hold_id"],
+                    caller_identity,
+                    level,
+                    "approved",
+                )
+                if answer_hold.status != "approved":
+                    ctx.queue.release_reservation(reservation)
+                    raise InvalidInputError(answer_hold.message or messages.text("api.followup.pending_approval"))
+
+                event_id = answer_hold.hold["event_id"]
+                selected_protocol_name = answer_hold.hold["selected_protocol_name"]
+
+                def _resume_approved_follow_up() -> None:
+                    with trace_context(trace_id):
+                        continue_after_approval(
+                            ctx.deps,
+                            event_id,
+                            ctx.main_agent,
+                            ctx.insights_agent,
+                            selected_protocol_name,
+                        )
+
+                ctx.queue.submit(
+                    WorkItem(
+                        (event_id, _resume_approved_follow_up),
+                        trace_id=trace_id,
+                        priority=0,
+                        deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
+                        concurrency_keys=(f"sender:{caller_identity}",),
+                    ),
+                    reservation,
+                )
+                answer = messages.text("api.followup.approved")
+                _remember("assistant", answer, event_id)
+                return jsonify({
+                    "taken_as": "event_update",
+                    "event_id": event_id,
+                    "status": "queued",
+                    "answer": answer,
+                }), 202
+
+            answer = _follow_up_answer(messages, follow_up)
+            _remember("assistant", answer, follow_up.event.event_id if follow_up.event else None)
+            payload = {
+                "taken_as": "question" if follow_up.kind != "ambiguous" else "clarification",
+                "status": follow_up.kind,
+                "answer": answer,
+            }
+            if follow_up.event is not None:
+                payload["event_id"] = follow_up.event.event_id
+            if follow_up.candidate_event_ids:
+                payload["candidate_event_ids"] = list(follow_up.candidate_event_ids)
+            return jsonify(payload)
+
         # Fast Path for known buttons / deterministic protocol selection
         # button -> known protocol -> RBAC -> approval if required -> agent -> approved tool
         matched_protocol_name = request_payload.get("protocol_hint") or KNOWN_BUTTON_PROTOCOLS.get(str(text).strip())
@@ -668,14 +784,22 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     caller_identity=caller_identity,
                     sender_identity_filter=None if is_commander else caller_identity,
                 )
+                picture_provenance = picture.provenance()
+                source_refs = tuple(
+                    f"agent:{domain['domain']}"
+                    for domain in picture_provenance["domains"]
+                    if domain["succeeded"]
+                )
+                snapshot_provenance = picture_provenance.get("snapshot", {}).get("sections", {})
+                if snapshot_provenance:
+                    source_refs += tuple(
+                        f"state:{section}:{metadata['source']}"
+                        for section, metadata in snapshot_provenance.items()
+                    )
                 picture_text = render_response(
                     informational_response(
                         picture.text,
-                        tuple(
-                            f"agent:{domain['domain']}"
-                            for domain in picture.provenance()["domains"]
-                            if domain["succeeded"]
-                        ),
+                        source_refs,
                     ),
                     fallback=messages.text("api.unsupported_response"),
                 )
@@ -684,7 +808,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     "taken_as": "question",
                     "answer": picture_text,
                     "protocol": matched_protocol.name,
-                    "provenance": picture.provenance(),
+                    "provenance": picture_provenance,
                 })
 
             ag_name = matched_protocol.participating_agents[0]
@@ -1630,20 +1754,19 @@ def _failed_step_agent_name(event: dict) -> str | None:
 
 
 def _verified_execution_evidence(event: dict) -> list[str]:
-    """Return only application-owned receipts for direct tool execution.
+    """Return only runtime-issued tool receipts, never agent prose."""
 
-    A successful model step is not evidence that a side effect happened.  A
-    persisted succeeded step with an explicit direct tool is the narrow proof
-    currently available without introducing the full action lifecycle.
-    """
-
-    return [
-        f"tool:{step['direct_tool_name']}"
-        for step in event.get("steps", [])
-        if step.get("status") == "succeeded"
-        and step.get("direct_tool_name")
-        and step.get("result_text") is not None
-    ]
+    evidence: list[str] = []
+    for step in event.get("steps", []):
+        for receipt in step.get("tool_receipts", ()) or ():
+            if isinstance(receipt, dict) and receipt.get("status") == "succeeded" and receipt.get("success"):
+                evidence.append(f"tool:{receipt.get('tool_name')}:{receipt.get('receipt_id', '')}")
+    for receipt in event.get("action_tool_receipts", ()) or ():
+        if isinstance(receipt, dict) and receipt.get("status") == "succeeded" and receipt.get("success"):
+            marker = f"tool:{receipt.get('tool_name')}:{receipt.get('receipt_id', '')}"
+            if marker not in evidence:
+                evidence.append(marker)
+    return evidence
 
 
 def job_status(ctx: "ApiContext", event_id: str) -> dict | None:
@@ -1660,6 +1783,8 @@ def job_status(ctx: "ApiContext", event_id: str) -> dict | None:
         if steps_completed:
             response_payload["steps_completed"] = steps_completed
         response_payload["execution_evidence"] = _verified_execution_evidence(event)
+        if event.get("action_state") is not None:
+            response_payload["action_state"] = event["action_state"]
 
         if event["outcome"] == "failed":
             if event.get("outcome_failure_reason"):
@@ -1676,7 +1801,10 @@ def job_status(ctx: "ApiContext", event_id: str) -> dict | None:
 
     approval_hold = ctx.deps.persistence.fetch_held_event("approval", event_id)
     if approval_hold is not None and not approval_hold["resolved"]:
-        return {"event_id": event_id, "status": "held_for_approval", "reason": approval_hold["reason"]}
+        payload = {"event_id": event_id, "status": "held_for_approval", "reason": approval_hold["reason"]}
+        if event.get("action_state") is not None:
+            payload["action_state"] = event["action_state"]
+        return payload
 
     clarification_hold = ctx.deps.persistence.fetch_held_event("clarification", event_id)
     if clarification_hold is not None and not clarification_hold["resolved"]:

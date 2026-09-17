@@ -212,6 +212,16 @@ MESSAGES = {
     "api.queued_request": "Got it — I've logged this as an action request. I'm working on it now and I'll follow up right here once it's done.",
     "api.queued_request_debug": "Got it — I've logged this as an action request. I'm working on it now.\nTask ID: {task_id}\nI'll follow up right here once it's done.",
     "api.missing_required_field": "Missing required field: {field}.",
+    "api.followup.failed": "The action failed: {reason}",
+    "api.followup.unknown_reason": "the persisted failure reason is unavailable",
+    "api.followup.executed": "The action was executed according to the verified tool receipt.",
+    "api.followup.pending_approval": "The action is waiting for authenticated commander approval.",
+    "api.followup.approved": "Approval was recorded; the action has not executed yet.",
+    "api.followup.executing": "The action is currently executing.",
+    "api.followup.requested": "The action was requested and has not executed yet.",
+    "api.followup.unverified": "The system cannot verify that the action executed; no execution receipt was recorded.",
+    "api.followup.ambiguous": "More than one operational event could match this follow-up; please specify which one.",
+    "api.followup.unknown": "No linked operational event was found for this follow-up.",
     "api.malformed_protocol": "The protocol body is malformed: {reason}",
     "api.profile_field_restart": (
         "'{field}' belongs to the profile and takes effect only after a restart."
@@ -1036,4 +1046,47 @@ MESSAGES = {
     "orchestrator.picture.domain_unavailable": "No report was received from {domain}.",
     "orchestrator.picture.fallback_header": "Situational picture as of {time}:",
     "orchestrator.picture.missing_note": "(Operational note: no report was received from {domains})",
+    "orchestrator.picture.typed.title": "Situational picture",
+    "orchestrator.picture.typed.cameras": (
+        "Cameras: {active}/{total} active; {inactive} inactive; {unknown} unknown."
+    ),
+    "orchestrator.picture.typed.cameras_unknown": "Cameras: data unavailable.",
+    "orchestrator.picture.typed.drones": (
+        "Drones: {ready} ready; {airborne} airborne; {charging} charging; "
+        "{maintenance} in maintenance; {unknown} unknown; {active_missions} active missions; {total} total."
+    ),
+    "orchestrator.picture.typed.drones_unknown": "Drones: data unavailable.",
+    "orchestrator.picture.typed.team": (
+        "Readiness team: {available} available; {unavailable} unavailable; "
+        "{not_reported} not reported; {pending_identity} pending identity; {total} total."
+    ),
+    "orchestrator.picture.typed.team_unknown": "Readiness team: data unavailable.",
+    "orchestrator.picture.typed.findings_header": "Operational findings:",
+    "orchestrator.picture.typed.recommendations_header": "Recommended next actions:",
+    "orchestrator.picture.typed.finding_line": "- {text}",
+    "orchestrator.picture.typed.recommendation_line": "- {text}",
+    "orchestrator.picture.finding.cameras_all_active": (
+        "Camera coverage is normal: all {count} cameras are active."
+    ),
+    "orchestrator.picture.finding.cameras_gap": (
+        "Camera coverage has a gap: {active} of {total} cameras are active."
+    ),
+    "orchestrator.picture.finding.cameras_unknown": "Camera coverage cannot currently be verified.",
+    "orchestrator.picture.finding.cameras_inconsistent": "Camera state data is inconsistent.",
+    "orchestrator.picture.finding.drones_ready": "Air capability is available: {count} drones are ready.",
+    "orchestrator.picture.finding.drones_none_ready": "No drone is currently marked ready.",
+    "orchestrator.picture.finding.drones_unknown": "Drone readiness cannot currently be verified.",
+    "orchestrator.picture.finding.drones_inconsistent": (
+        "Drone and active-mission data are inconsistent; operational readiness is not inferred."
+    ),
+    "orchestrator.picture.finding.team_available": "Confirmed available team members: {count}.",
+    "orchestrator.picture.finding.team_no_confirmed": "There is currently no confirmed available team member.",
+    "orchestrator.picture.finding.team_not_reported": "Availability reports are missing from {count} team members.",
+    "orchestrator.picture.finding.team_unknown": "Team availability cannot currently be verified.",
+    "orchestrator.picture.finding.team_inconsistent": (
+        "Team availability data is inconsistent; readiness is not inferred."
+    ),
+    "orchestrator.picture.recommendation.collect_availability": (
+        "Complete availability reporting for the {count} team members who have not reported."
+    ),
 }

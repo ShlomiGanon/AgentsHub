@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from typing import TYPE_CHECKING, Callable
 
-from agents import AgentInvocationError
+from agents import AgentInvocationError, tool_execution_context
 from protocols.contracts import ProtocolRunResult, Step, StepOutcome
 from tools import get_trace_id, stage_context
 
@@ -42,6 +43,11 @@ def _can_retry(step: Step, agent: Agent) -> bool:
     return True
 
 
+def _side_effecting_step(agent: Agent, step: Step) -> bool:
+    exposed = {tool.name: tool for tool in agent.exposed_tools()}
+    return any(exposed.get(name) is not None and exposed[name].side_effecting for name in step.allowed_tools)
+
+
 def execute_step_with_retry(
     agent: Agent,
     step: Step,
@@ -50,6 +56,9 @@ def execute_step_with_retry(
     task_rewriter: Callable[[Step, str], str] | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
     backoff_seconds: float = 1.0,
+    event_id: str | None = None,
+    lifecycle_callback: Callable[[str, Step], None] | None = None,
+    postcondition_verifier: Callable[[object], object] | None = None,
 ) -> StepOutcome:
     current_task_text = step.task_text
     attempts = 0
@@ -60,11 +69,13 @@ def execute_step_with_retry(
         attempts += 1
 
         try:
+            if lifecycle_callback is not None and _side_effecting_step(agent, step) and step.direct_tool_name is not None:
+                lifecycle_callback("executing", step)
             side_effect_locks = _locks_for_step(agent, step)
             for side_effect_lock in side_effect_locks:
                 side_effect_lock.acquire()
             try:
-                with stage_context("step_execution"):
+                with stage_context("step_execution"), tool_execution_context(event_id, step.step_id or None):
                     if step.direct_tool_name is not None:
                         agent_result = agent.execute_tool(
                             step.direct_tool_name,
@@ -84,9 +95,13 @@ def execute_step_with_retry(
             )
 
             if attempts >= attempt_limit or not _can_retry(step, agent):
+                if lifecycle_callback is not None and _side_effecting_step(agent, step):
+                    lifecycle_callback("failed", step)
                 return StepOutcome(
                     step=step, result_text=None, attempt_count=attempts, succeeded=False,
                     failure_reason=last_failure_reason, status="failed",
+                    action_state="failed" if _side_effecting_step(agent, step) else None,
+                    tool_receipts=tuple(getattr(exc, "tool_receipts", ()) or ()),
                 )
 
             logger.info("retrying step", extra={"event": "step_retry", "agent": step.agent_name, "attempt": attempts + 1, "cause": last_failure_reason, "trace_id": get_trace_id()})
@@ -104,12 +119,14 @@ def execute_step_with_retry(
                 return StepOutcome(
                     step=step, result_text=None, attempt_count=attempts, succeeded=False,
                     failure_reason=f"{last_failure_reason} (no task rewriter available)", status="failed",
+                    action_state="failed" if _side_effecting_step(agent, step) else None,
                 )
 
             if attempts >= attempt_limit or not _can_retry(step, agent):
                 return StepOutcome(
                     step=step, result_text=None, attempt_count=attempts, succeeded=False,
                     failure_reason=last_failure_reason, status="failed",
+                    action_state="failed" if _side_effecting_step(agent, step) else None,
                 )
 
             current_task_text = task_rewriter(step, agent_result.text)
@@ -117,7 +134,50 @@ def execute_step_with_retry(
             sleep_fn(backoff_seconds)
             continue
 
-        return StepOutcome(step=step, result_text=agent_result.text, attempt_count=attempts, succeeded=True)
+        receipts = tuple(agent_result.tool_receipts)
+        if receipts and postcondition_verifier is not None:
+            verified = []
+            for receipt in receipts:
+                result = postcondition_verifier(receipt)
+                if isinstance(result, bool):
+                    result = replace(receipt, state_verified=result)
+                verified.append(result)
+            receipts = tuple(verified)
+        side_effecting = _side_effecting_step(agent, step)
+        if side_effecting and not receipts:
+            # A model may return prose without invoking a tool.  Preserve the
+            # legacy step result for non-direct plans, but deliberately emit
+            # no lifecycle state: prose is not execution evidence.
+            if step.direct_tool_name is not None:
+                reason = "side-effecting step produced no tool receipt"
+                if lifecycle_callback is not None:
+                    lifecycle_callback("failed", step)
+                return StepOutcome(
+                    step=step, result_text=None, attempt_count=attempts, succeeded=False,
+                    failure_reason=reason, status="failed", action_state="failed",
+                )
+            return StepOutcome(
+                step=step, result_text=agent_result.text, attempt_count=attempts,
+                succeeded=True, action_state=None, tool_receipts=(),
+            )
+        if side_effecting and receipts and any(receipt.state_verified is False for receipt in receipts):
+            reason = "tool receipt postcondition verification failed"
+            if lifecycle_callback is not None:
+                lifecycle_callback("failed", step)
+            return StepOutcome(
+                step=step, result_text=None, attempt_count=attempts, succeeded=False,
+                failure_reason=reason, status="failed", action_state="failed", tool_receipts=receipts,
+            )
+        if lifecycle_callback is not None and side_effecting and receipts:
+            lifecycle_callback("executed", step)
+        return StepOutcome(
+            step=step,
+            result_text=agent_result.text,
+            attempt_count=attempts,
+            succeeded=True,
+            action_state="executed" if side_effecting else None,
+            tool_receipts=receipts,
+        )
 
 
 def _missing_event_fields(step: Step, event_data: dict | None) -> tuple[str, ...]:
@@ -149,15 +209,25 @@ def execute_steps(
     sleep_fn: Callable[[float], None] = time.sleep,
     event_data: dict | None = None,
     prior_outcomes: tuple[StepOutcome, ...] = (),
+    event_id: str | None = None,
+    lifecycle_callback: Callable[[str, Step], None] | None = None,
+    postcondition_verifier: Callable[[object], object] | None = None,
 ) -> ProtocolRunResult:
     if any(step.step_id or step.depends_on for step in steps):
         return _execute_dependency_steps(
             steps, agents_by_name, settings_store, task_rewriter=task_rewriter, sleep_fn=sleep_fn,
-            event_data=event_data, prior_outcomes=prior_outcomes,
+            event_data=event_data, prior_outcomes=prior_outcomes, event_id=event_id,
+            lifecycle_callback=lifecycle_callback, postcondition_verifier=postcondition_verifier,
         )
 
     outcomes: list[StepOutcome] = []
-    prior_by_index = {index: outcome for index, outcome in enumerate(prior_outcomes) if outcome.status == "succeeded"}
+    prior_by_index = {
+        index: outcome
+        for index, outcome in enumerate(prior_outcomes)
+        if outcome.status == "succeeded"
+        or outcome.action_state == "executed"
+        or any(receipt.success for receipt in outcome.tool_receipts)
+    }
 
     for index, step in enumerate(steps):
         if index in prior_by_index:
@@ -187,7 +257,11 @@ def execute_steps(
             extra={"event": "step_start", "agent": step.agent_name, "step_index": index, "task_text": step.task_text, "trace_id": get_trace_id()},
         )
 
-        outcome = execute_step_with_retry(agent, step, settings_store, task_rewriter=task_rewriter, sleep_fn=sleep_fn)
+        outcome = execute_step_with_retry(
+            agent, step, settings_store, task_rewriter=task_rewriter, sleep_fn=sleep_fn,
+            event_id=event_id, lifecycle_callback=lifecycle_callback,
+            postcondition_verifier=postcondition_verifier,
+        )
         outcomes.append(outcome)
 
         logger.info(
@@ -224,6 +298,9 @@ def _execute_dependency_steps(
     sleep_fn: Callable[[float], None],
     event_data: dict | None,
     prior_outcomes: tuple[StepOutcome, ...],
+    event_id: str | None,
+    lifecycle_callback: Callable[[str, Step], None] | None,
+    postcondition_verifier: Callable[[object], object] | None,
 ) -> ProtocolRunResult:
     step_ids = [step.step_id or str(index) for index, step in enumerate(steps)]
     if len(set(step_ids)) != len(step_ids):
@@ -236,6 +313,8 @@ def _execute_dependency_steps(
         step_ids[index]: outcome
         for index, outcome in enumerate(prior_outcomes[:len(step_ids)])
         if outcome.status == "succeeded"
+        or outcome.action_state == "executed"
+        or any(receipt.success for receipt in outcome.tool_receipts)
     }
     pending = set(step_ids) - set(completed)
     index_by_id = {step_id: index for index, step_id in enumerate(step_ids)}
@@ -281,6 +360,8 @@ def _execute_dependency_steps(
             outcome = execute_step_with_retry(
                 agents_by_name[step.agent_name], step, settings_store,
                 task_rewriter=task_rewriter, sleep_fn=sleep_fn,
+                event_id=event_id, lifecycle_callback=lifecycle_callback,
+                postcondition_verifier=postcondition_verifier,
             )
             return step_id, outcome
 

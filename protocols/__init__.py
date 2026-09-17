@@ -12,6 +12,7 @@ from protocols.contracts import (
     ProtocolRunResult,
     Step,
     StepOutcome,
+    ActionLifecycleState,
 )
 
 model = contracts
@@ -47,6 +48,7 @@ __all__ = [
     "ProtocolSet",
     "Step",
     "StepOutcome",
+    "ActionLifecycleState",
     "add_protocol",
     "execute_step_with_retry",
     "execute_steps",

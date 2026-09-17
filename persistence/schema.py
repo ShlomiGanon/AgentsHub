@@ -70,7 +70,12 @@ CREATE TABLE IF NOT EXISTS events (
 
     insight_text TEXT,
     outcome TEXT,
-    outcome_failure_reason TEXT
+    outcome_failure_reason TEXT,
+
+    action_state TEXT,
+    action_state_updated_at TEXT,
+    action_failure_reason TEXT,
+    action_tool_receipts TEXT
 );
 """
 
@@ -85,6 +90,8 @@ CREATE TABLE IF NOT EXISTS event_steps (
     attempt_count INTEGER NOT NULL DEFAULT 0,
     direct_tool_name TEXT,
     direct_tool_arguments TEXT,
+    action_state TEXT,
+    tool_receipts TEXT,
     PRIMARY KEY (event_id, step_index)
 );
 """
@@ -280,6 +287,16 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "ALTER TABLE event_steps ADD COLUMN direct_tool_name TEXT;"
         "ALTER TABLE event_steps ADD COLUMN direct_tool_arguments TEXT;",
     ),
+    (
+        22,
+        "add typed action lifecycle and tool receipts",
+        "ALTER TABLE events ADD COLUMN action_state TEXT;"
+        "ALTER TABLE events ADD COLUMN action_state_updated_at TEXT;"
+        "ALTER TABLE events ADD COLUMN action_failure_reason TEXT;"
+        "ALTER TABLE events ADD COLUMN action_tool_receipts TEXT;"
+        "ALTER TABLE event_steps ADD COLUMN action_state TEXT;"
+        "ALTER TABLE event_steps ADD COLUMN tool_receipts TEXT;",
+    ),
 ]
 
 
@@ -304,6 +321,21 @@ _REQUIRED_COLUMNS_BY_VERSION = (
             ("direct_tool_name", "TEXT"),
             ("direct_tool_arguments", "TEXT"),
         ),
+    ),
+    (
+        22,
+        "events",
+        (
+            ("action_state", "TEXT"),
+            ("action_state_updated_at", "TEXT"),
+            ("action_failure_reason", "TEXT"),
+            ("action_tool_receipts", "TEXT"),
+        ),
+    ),
+    (
+        22,
+        "event_steps",
+        (("action_state", "TEXT"), ("tool_receipts", "TEXT")),
     ),
 )
 
@@ -383,7 +415,7 @@ def run_migrations(db_path: str) -> None:
                         "ALTER TABLE telegram_groups ADD COLUMN auto_register INTEGER NOT NULL DEFAULT 0 "
                         "CHECK (auto_register IN (0, 1))"
                     )
-            elif version in {20, 21}:
+            elif version in {20, 21, 22}:
                 _repair_required_columns(connection, version)
             else:
                 connection.executescript(sql)

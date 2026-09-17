@@ -220,6 +220,7 @@ def test_schema_integrity_repairs_version_twenty_one_drift_without_losing_events
 
     assert repaired_version == MIGRATIONS[-1][0]
     assert {"availability_start", "availability_end", "business_fields"} <= repaired_columns
+    assert {"action_state", "action_state_updated_at", "action_failure_reason", "action_tool_receipts"} <= repaired_columns
     assert existing_event == ("existing-event", "preserve me")
 
     persistence = open_persistence(db_path)

@@ -192,6 +192,37 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             ).fetchone()
         return dict(row) if row is not None else None
 
+    def clear_runtime_state(self) -> dict[str, int]:
+        """Keep the original (oldest) seed cycle and remove runtime records."""
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            responses = int(connection.execute("SELECT COUNT(*) FROM attendance_responses").fetchone()[0])
+            seed_cycle = connection.execute(
+                "SELECT cycle_id FROM attendance_cycles ORDER BY opened_at ASC LIMIT 1"
+            ).fetchone()
+            connection.execute("DELETE FROM attendance_responses")
+            if seed_cycle is None:
+                removed_cycles = 0
+            else:
+                removed_cycles = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM attendance_cycles WHERE cycle_id <> ?",
+                        (seed_cycle[0],),
+                    ).fetchone()[0]
+                )
+                connection.execute(
+                    "DELETE FROM attendance_cycles WHERE cycle_id <> ?",
+                    (seed_cycle[0],),
+                )
+            connection.commit()
+
+        return {
+            "attendance_responses": responses,
+            "attendance_cycles": removed_cycles,
+            "runtime_cycles_removed": removed_cycles,
+        }
+
     def record_response(
         self,
         *,

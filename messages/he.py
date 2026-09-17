@@ -212,6 +212,16 @@ MESSAGES = {
     "api.queued_request_debug": "התקבל, ונרשם כבקשת פעולה. אני מטפל/ת בזה עכשיו.\nמזהה משימה: {task_id}\nאעדכן כאן ברגע שיסתיים.",
     "api.missing_required_field": "חסר שדה חובה: {field}.",
     "api.malformed_protocol": "מבנה הפרוטוקול אינו תקין: {reason}",
+    "api.followup.failed": "\u05d4\u05e4\u05e2\u05d5\u05dc\u05d4 \u05e0\u05db\u05e9\u05dc\u05d4: {reason}",
+    "api.followup.unknown_reason": "\u05e1\u05d9\u05d1\u05ea \u05d4\u05db\u05e9\u05dc \u05d0\u05d9\u05e0\u05d4 \u05d6\u05de\u05d9\u05e0\u05d4",
+    "api.followup.executed": "\u05d4\u05e4\u05e2\u05d5\u05dc\u05d4 \u05d1\u05d5\u05e6\u05e2\u05d4 \u05dc\u05e4\u05d9 \u05e7\u05d1\u05dc\u05ea \u05db\u05dc\u05d9 \u05de\u05d0\u05d5\u05de\u05ea\u05ea.",
+    "api.followup.pending_approval": "\u05d4\u05e4\u05e2\u05d5\u05dc\u05d4 \u05de\u05de\u05ea\u05d9\u05e0\u05d4 \u05dc\u05d0\u05d9\u05e9\u05d5\u05e8 \u05de\u05e4\u05e7\u05d3 \u05de\u05d0\u05d5\u05de\u05ea\u05ea.",
+    "api.followup.approved": "\u05d4\u05d0\u05d9\u05e9\u05d5\u05e8 \u05e0\u05e8\u05e9\u05dd; \u05d4\u05e4\u05e2\u05d5\u05dc\u05d4 \u05e2\u05d3\u05d9\u05d9\u05df \u05dc\u05d0 \u05d1\u05d5\u05e6\u05e2\u05d4.",
+    "api.followup.executing": "\u05d4\u05e4\u05e2\u05d5\u05dc\u05d4 \u05de\u05ea\u05d1\u05e6\u05e2\u05ea \u05db\u05e8\u05d2\u05e2.",
+    "api.followup.requested": "\u05d4\u05d1\u05e7\u05e9\u05d4 \u05dc\u05e4\u05e2\u05d5\u05dc\u05d4 \u05e0\u05e7\u05dc\u05d8\u05d4 \u05d5\u05d4\u05e4\u05e2\u05d5\u05dc\u05d4 \u05e2\u05d3\u05d9\u05d9\u05df \u05dc\u05d0 \u05d1\u05d5\u05e6\u05e2\u05d4.",
+    "api.followup.unverified": "\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05d0\u05de\u05ea \u05e9\u05d4\u05e4\u05e2\u05d5\u05dc\u05d4 \u05d1\u05d5\u05e6\u05e2\u05d4; \u05dc\u05d0 \u05e0\u05e9\u05de\u05e8\u05d4 \u05e7\u05d1\u05dc\u05d4 \u05de\u05d4\u05db\u05dc\u05d9.",
+    "api.followup.ambiguous": "\u05e9\u05e0\u05d9 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05ea\u05e4\u05e2\u05d5\u05dc\u05d9\u05d9\u05dd \u05e2\u05e9\u05d5\u05d9\u05d9\u05dd \u05dc\u05d4\u05ea\u05d0\u05d9\u05dd; \u05e6\u05d9\u05d9\u05df \u05dc\u05d0\u05d9\u05d6\u05d4 \u05d4\u05ea\u05db\u05d5\u05d5\u05e0\u05ea.",
+    "api.followup.unknown": "\u05dc\u05d0 \u05e0\u05de\u05e6\u05d0 \u05d0\u05d9\u05e8\u05d5\u05e2 \u05ea\u05e4\u05e2\u05d5\u05dc\u05d9 \u05de\u05e7\u05d5\u05e9\u05e8 \u05dc\u05e9\u05d0\u05dc\u05d4.",
     "api.profile_field_restart": (
         "השדה '{field}' שייך לפרופיל וייכנס לתוקף רק לאחר הפעלה מחדש."
     ),
@@ -1029,4 +1039,47 @@ MESSAGES = {
     "orchestrator.picture.domain_unavailable": "לא התקבל דיווח מ-{domain}.",
     "orchestrator.picture.fallback_header": "תמונת מצב נכון ל-{time}:",
     "orchestrator.picture.missing_note": "(הערה מבצעית: לא התקבל דיווח מ-{domains})",
+    "orchestrator.picture.typed.title": "תמונת מצב כללית",
+    "orchestrator.picture.typed.cameras": (
+        "מצלמות: {active}/{total} פעילות; {inactive} לא פעילות; {unknown} במצב לא ידוע."
+    ),
+    "orchestrator.picture.typed.cameras_unknown": "מצלמות: הנתונים אינם זמינים.",
+    "orchestrator.picture.typed.drones": (
+        "רחפנים: {ready} מוכנים; {airborne} באוויר; {charging} בטעינה; "
+        "{maintenance} בתחזוקה; {unknown} במצב לא ידוע; {active_missions} משימות פעילות; {total} בסך הכול."
+    ),
+    "orchestrator.picture.typed.drones_unknown": "רחפנים: הנתונים אינם זמינים.",
+    "orchestrator.picture.typed.team": (
+        "כיתת כוננות: {available} זמינים; {unavailable} לא זמינים; "
+        "{not_reported} טרם דיווחו; {pending_identity} ממתינים לזיהוי; {total} בסך הכול."
+    ),
+    "orchestrator.picture.typed.team_unknown": "כיתת כוננות: הנתונים אינם זמינים.",
+    "orchestrator.picture.typed.findings_header": "מסקנות מבצעיות:",
+    "orchestrator.picture.typed.recommendations_header": "פעולות מומלצות:",
+    "orchestrator.picture.typed.finding_line": "- {text}",
+    "orchestrator.picture.typed.recommendation_line": "- {text}",
+    "orchestrator.picture.finding.cameras_all_active": (
+        "כיסוי המצלמות תקין: כל {count} המצלמות פעילות."
+    ),
+    "orchestrator.picture.finding.cameras_gap": (
+        "קיים פער בכיסוי המצלמות: {active} מתוך {total} מצלמות פעילות."
+    ),
+    "orchestrator.picture.finding.cameras_unknown": "לא ניתן לאמת כרגע את כיסוי המצלמות.",
+    "orchestrator.picture.finding.cameras_inconsistent": "קיימת אי-התאמה בנתוני המצלמות.",
+    "orchestrator.picture.finding.drones_ready": "קיימת יכולת אווירית זמינה: {count} רחפנים מוכנים לפעולה.",
+    "orchestrator.picture.finding.drones_none_ready": "אין כרגע רחפן שמסומן כמוכן לפעולה.",
+    "orchestrator.picture.finding.drones_unknown": "לא ניתן לאמת כרגע את מוכנות הרחפנים.",
+    "orchestrator.picture.finding.drones_inconsistent": (
+        "קיימת אי-התאמה בין נתוני הרחפנים למשימות הפעילות; לא מוסקת מסקנת כשירות."
+    ),
+    "orchestrator.picture.finding.team_available": "מספר חברי הכיתה שזמינותם מאושרת: {count}.",
+    "orchestrator.picture.finding.team_no_confirmed": "אין כרגע כוח זמין מאושר.",
+    "orchestrator.picture.finding.team_not_reported": "חסרים דיווחי זמינות מ-{count} חברי כיתה.",
+    "orchestrator.picture.finding.team_unknown": "לא ניתן לאמת כרגע את זמינות כיתת הכוננות.",
+    "orchestrator.picture.finding.team_inconsistent": (
+        "קיימת אי-התאמה בנתוני זמינות הכיתה; לא מוסקת מסקנת כשירות."
+    ),
+    "orchestrator.picture.recommendation.collect_availability": (
+        "מומלץ להשלים דיווחי זמינות של {count} חברי הכיתה שטרם דיווחו."
+    ),
 }

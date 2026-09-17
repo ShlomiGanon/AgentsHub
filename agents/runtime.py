@@ -10,6 +10,7 @@ import uuid
 from collections import OrderedDict
 from contextlib import contextmanager
 from contextvars import ContextVar
+from datetime import datetime, timezone
 from functools import lru_cache, wraps
 from typing import Callable
 
@@ -26,6 +27,7 @@ from agents.contracts import (
     AgentToolConstructionError,
     AgentWarmupError,
     ToolInfo,
+    ToolReceipt,
     UNCLEAR_TASK_PROMPT_INSTRUCTION,
     exposed_tools_for,
     parse_agent_output,
@@ -45,6 +47,12 @@ _authenticated_request_identity: ContextVar[str | None] = ContextVar(
 _trusted_event_metadata: ContextVar[dict[str, object] | None] = ContextVar(
     "trusted_event_metadata", default=None
 )
+_tool_receipt_buffer: ContextVar[list[ToolReceipt] | None] = ContextVar("tool_receipt_buffer", default=None)
+_tool_execution_correlation: ContextVar[tuple[str | None, str | None] | None] = ContextVar(
+    "tool_execution_correlation", default=None
+)
+_cross_thread_receipts: dict[str, list[ToolReceipt]] = {}
+_cross_thread_receipts_lock = threading.Lock()
 _tool_class_cache: dict[tuple[type, str, str, int], type] = {}
 _tool_class_cache_lock = threading.Lock()
 _llm_cache: "OrderedDict[tuple[str, str, str], object]" = OrderedDict()
@@ -84,6 +92,41 @@ def trusted_event_metadata(metadata: dict[str, object]):
         yield
     finally:
         _trusted_event_metadata.reset(token)
+
+
+@contextmanager
+def tool_execution_context(event_id: str | None = None, step_id: str | None = None):
+    """Capture runtime receipts and correlate them to a persisted event step."""
+
+    receipts_token = _tool_receipt_buffer.set([])
+    correlation_token = _tool_execution_correlation.set((event_id, step_id))
+    try:
+        yield
+    finally:
+        _tool_execution_correlation.reset(correlation_token)
+        _tool_receipt_buffer.reset(receipts_token)
+
+
+def _record_tool_receipt(receipt: ToolReceipt) -> None:
+    buffer = _tool_receipt_buffer.get()
+    if buffer is not None:
+        buffer.append(receipt)
+    trace_id = get_trace_id()
+    if trace_id:
+        with _cross_thread_receipts_lock:
+            _cross_thread_receipts.setdefault(trace_id, []).append(receipt)
+
+
+def _consume_tool_receipts() -> tuple[ToolReceipt, ...]:
+    buffer = _tool_receipt_buffer.get()
+    return tuple(buffer or ())
+
+
+def _take_cross_thread_receipts(trace_id: str | None) -> tuple[ToolReceipt, ...]:
+    if not trace_id:
+        return ()
+    with _cross_thread_receipts_lock:
+        return tuple(_cross_thread_receipts.pop(trace_id, ()))
 
 
 class ExactResultCapture:
@@ -143,7 +186,7 @@ class ExactResultCapture:
             with self._lock:
                 exact = self._results.pop(key, None)
             if exact is not None:
-                return AgentResult(status="success", text=exact)
+                return AgentResult(status="success", text=exact, tool_receipts=model_result.tool_receipts)
             return model_result
         finally:
             with self._lock:
@@ -233,6 +276,8 @@ def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> 
             return f"Tool '{tool_info.name}' is not permitted for this task."
 
         started = time.monotonic()
+        started_at = datetime.now(timezone.utc).isoformat()
+        correlation = _tool_execution_correlation.get() or (None, None)
         try:
             metadata = _trusted_event_metadata.get()
             if tool_info.name == "record_attendance_response" and metadata is not None:
@@ -247,7 +292,21 @@ def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> 
                 tool_result = bound_method(**call_kwargs)
             else:
                 tool_result = bound_method(*args, **kwargs)
-        except Exception:
+        except Exception as exc:
+            completed_at = datetime.now(timezone.utc).isoformat()
+            _record_tool_receipt(
+                ToolReceipt(
+                    tool_name=tool_info.name,
+                    status="failed",
+                    success=False,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    event_id=correlation[0],
+                    step_id=correlation[1],
+                    side_effecting=tool_info.side_effecting,
+                    failure_kind=type(exc).__name__,
+                )
+            )
             logger.exception(
                 "tool call failed",
                 extra={
@@ -270,6 +329,18 @@ def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> 
                 "duration_seconds": time.monotonic() - started,
                 "trace_id": get_trace_id(),
             },
+        )
+        _record_tool_receipt(
+            ToolReceipt(
+                tool_name=tool_info.name,
+                status="succeeded",
+                success=True,
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc).isoformat(),
+                event_id=correlation[0],
+                step_id=correlation[1],
+                side_effecting=tool_info.side_effecting,
+            )
         )
         return tool_result
 
@@ -357,12 +428,34 @@ class Agent:
             ) from exc
 
         token = _current_allowed_tools.set(allowed)
+        receipt_token = _tool_receipt_buffer.set([])
+        trace_key = get_trace_id()
+        _take_cross_thread_receipts(trace_key)
+        invocation_error = None
         try:
-            result = wrapped(**arguments)
+            try:
+                result = wrapped(**arguments)
+            except AgentInvocationError as exc:
+                invocation_error = exc
+            except Exception as exc:
+                invocation_error = AgentInvocationError(
+                    self.name,
+                    f"tool '{tool_name}' invocation failed: {exc}",
+                    trace_id=get_trace_id(),
+                    cause=exc,
+                )
         finally:
+            receipts = _consume_tool_receipts()
+            cross_thread = _take_cross_thread_receipts(trace_key)
+            receipts = tuple({receipt.receipt_id: receipt for receipt in (*receipts, *cross_thread)}.values())
+            _tool_receipt_buffer.reset(receipt_token)
             _current_allowed_tools.reset(token)
 
-        return AgentResult(status="success", text=str(result))
+        if invocation_error is not None:
+            invocation_error.tool_receipts = receipts
+            raise invocation_error from invocation_error.cause
+
+        return AgentResult(status="success", text=str(result), tool_receipts=receipts)
 
     def process(self, text: str, allowed_tools: list[str], *, invocation_policy: InvocationPolicy | None = None) -> AgentResult:
         allowed = frozenset(allowed_tools)
@@ -390,13 +483,32 @@ class Agent:
         invocation_tools = {name: wrapped for name, wrapped in self._wrapped_tools.items() if name in allowed}
 
         token = _current_allowed_tools.set(allowed)
+        receipt_token = _tool_receipt_buffer.set([])
+        trace_key = get_trace_id()
+        _take_cross_thread_receipts(trace_key)
+        invocation_error = None
         try:
-            if invocation_policy is None:
-                raw_text = invoke(invocation_descriptor, invocation_tools, text, self.timeout_seconds)
-            else:
-                raw_text = invoke(invocation_descriptor, invocation_tools, text, self.timeout_seconds, invocation_policy)
-            return parse_agent_output(raw_text)
+            try:
+                if invocation_policy is None:
+                    raw_text = invoke(invocation_descriptor, invocation_tools, text, self.timeout_seconds)
+                else:
+                    raw_text = invoke(invocation_descriptor, invocation_tools, text, self.timeout_seconds, invocation_policy)
+            except AgentInvocationError as exc:
+                invocation_error = exc
+            except Exception as exc:
+                invocation_error = AgentModelError(
+                    self.name, f"model invocation failed: {exc}", trace_id=get_trace_id(), cause=exc
+                )
+            local_receipts = _consume_tool_receipts()
+            cross_thread = _take_cross_thread_receipts(trace_key)
+            receipts = tuple({receipt.receipt_id: receipt for receipt in (*local_receipts, *cross_thread)}.values())
+            if invocation_error is not None:
+                invocation_error.tool_receipts = receipts
+                raise invocation_error from invocation_error.cause
+            result = parse_agent_output(raw_text)
+            return AgentResult(status=result.status, text=result.text, tool_receipts=receipts)
         finally:
+            _tool_receipt_buffer.reset(receipt_token)
             _current_allowed_tools.reset(token)
 
 

@@ -4,11 +4,18 @@ import json
 import sqlite3
 import threading
 import uuid
+from dataclasses import asdict, is_dataclass
 from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
 from queue import SimpleQueue
 
-from persistence.contracts import EventSearchCriteria, NotFoundError, PersistenceError, PersistenceInterface
+from persistence.contracts import (
+    ConversationEventLink,
+    EventSearchCriteria,
+    NotFoundError,
+    PersistenceError,
+    PersistenceInterface,
+)
 from persistence.schema import SUMMARY_TABLE_NAMES, run_migrations
 from tools import telemetry_span
 
@@ -65,9 +72,13 @@ _EVENT_COLUMNS = (
     "conversation_id",
     "deadline_at",
     "ingestion_key",
+    "action_state",
+    "action_state_updated_at",
+    "action_failure_reason",
+    "action_tool_receipts",
 )
 
-_EVENT_JSON_COLUMNS = {"entities", "precedent_matched_event_ids", "business_fields"}
+_EVENT_JSON_COLUMNS = {"entities", "precedent_matched_event_ids", "business_fields", "action_tool_receipts"}
 _EVENT_BOOL_COLUMNS = {"occurred_at_is_fallback", "clarification_held", "approval_held"}
 
 _EVENT_IMMUTABLE_COLUMNS = {
@@ -119,6 +130,8 @@ def _decode_step_row(step_row: sqlite3.Row) -> dict:
             decoded[column] = json.loads(decoded[column])
     if decoded.get("direct_tool_arguments") is not None:
         decoded["direct_tool_arguments"] = json.loads(decoded["direct_tool_arguments"])
+    if decoded.get("tool_receipts") is not None:
+        decoded["tool_receipts"] = json.loads(decoded["tool_receipts"])
     return decoded
 
 
@@ -155,18 +168,27 @@ def _upsert_steps(connection: sqlite3.Connection, event_id: str, steps: list[dic
                 if step.get("direct_tool_arguments") is not None
                 else None
             ),
+            "action_state": step.get("action_state"),
+            "tool_receipts": (
+                json.dumps(
+                    [asdict(receipt) if is_dataclass(receipt) else receipt for receipt in step.get("tool_receipts")],
+                    ensure_ascii=False,
+                )
+                if step.get("tool_receipts") is not None
+                else None
+            ),
         }
         connection.execute(
             """
             INSERT INTO event_steps (
                 event_id, step_index, agent_name, task_text, allowed_tools, result_text, attempt_count,
                 step_id, depends_on, required_event_fields, missing_event_fields, status, failure_reason,
-                direct_tool_name, direct_tool_arguments
+                direct_tool_name, direct_tool_arguments, action_state, tool_receipts
             )
             VALUES (
                 :event_id, :step_index, :agent_name, :task_text, :allowed_tools, :result_text, :attempt_count,
                 :step_id, :depends_on, :required_event_fields, :missing_event_fields, :status, :failure_reason,
-                :direct_tool_name, :direct_tool_arguments
+                :direct_tool_name, :direct_tool_arguments, :action_state, :tool_receipts
             )
             ON CONFLICT(event_id, step_index) DO UPDATE SET
                 agent_name = excluded.agent_name,
@@ -181,7 +203,9 @@ def _upsert_steps(connection: sqlite3.Connection, event_id: str, steps: list[dic
                 status = excluded.status,
                 failure_reason = excluded.failure_reason,
                 direct_tool_name = excluded.direct_tool_name,
-                direct_tool_arguments = excluded.direct_tool_arguments
+                direct_tool_arguments = excluded.direct_tool_arguments,
+                action_state = excluded.action_state,
+                tool_receipts = excluded.tool_receipts
             """,
             payload,
         )
@@ -288,6 +312,42 @@ class SQLitePersistence(PersistenceInterface):
             self._read_generation += 1
         for connection in connections:
             connection.close()
+
+    def clear_runtime_history(self) -> dict[str, int]:
+        """Clear non-seed history rows for an explicitly scoped demo reset.
+
+        Identity, routing, schema, and migration state are deliberately not
+        part of this allowlist.  Deletion order follows the two declared event
+        foreign keys so no orphaned steps or conversation links can remain.
+        """
+
+        tables = (
+            "event_steps",
+            "conversation_messages",
+            "held_events",
+            "events",
+            "notification_log",
+            "log_entries",
+            "daily_summaries",
+            "monthly_summaries",
+            "yearly_summaries",
+        )
+
+        def clear(connection: sqlite3.Connection) -> dict[str, int]:
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("BEGIN IMMEDIATE")
+            counts = {
+                table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                for table in tables
+            }
+
+            for table in tables:
+                connection.execute(f"DELETE FROM {table}")
+
+            connection.commit()
+            return counts
+
+        return self._submit_write(clear)
 
 
     def _run_writer(self) -> None:
@@ -1135,5 +1195,48 @@ class SQLitePersistence(PersistenceInterface):
                 (conversation_id, limit),
             ).fetchall()
             return [dict(row) for row in rows]
+        finally:
+            connection.close()
+
+    def list_conversation_event_links(
+        self, conversation_id: str, sender_identity: str, limit: int = 20
+    ) -> list[ConversationEventLink]:
+        if not conversation_id or not sender_identity or limit <= 0:
+            return []
+
+        connection = self._read_connection()
+        try:
+            rows = connection.execute(
+                """
+                SELECT conversation_id, event_id, action_state, outcome,
+                       insight_text, outcome_failure_reason, action_failure_reason,
+                       received_at, selected_protocol, action_tool_receipts
+                FROM events
+                WHERE conversation_id = ? AND sender_identity = ?
+                ORDER BY received_at DESC, event_id DESC
+                LIMIT ?
+                """,
+                (conversation_id, sender_identity, int(limit)),
+            ).fetchall()
+
+            links: list[ConversationEventLink] = []
+            for row in rows:
+                receipts = json.loads(row["action_tool_receipts"]) if row["action_tool_receipts"] else []
+                failure_reason = row["action_failure_reason"] or row["outcome_failure_reason"]
+                latest_result = row["insight_text"] or failure_reason or row["outcome"]
+                links.append(
+                    ConversationEventLink(
+                        conversation_id=row["conversation_id"],
+                        event_id=row["event_id"],
+                        action_state=row["action_state"],
+                        outcome=row["outcome"],
+                        latest_user_visible_result=latest_result,
+                        failure_reason=failure_reason,
+                        timestamp=row["received_at"],
+                        protocol_name=row["selected_protocol"],
+                        tool_receipts=tuple(receipts) if isinstance(receipts, list) else (),
+                    )
+                )
+            return links
         finally:
             connection.close()

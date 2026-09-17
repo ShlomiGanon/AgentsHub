@@ -62,6 +62,11 @@ class TeamStatusPersistenceInterface(ABC):
     @abstractmethod
     def availability_snapshot(self, as_of: str) -> list[dict]: ...
 
+    def clear_runtime_state(self) -> dict[str, int]:
+        """Remove runtime attendance responses/cycles while preserving roster seed."""
+
+        raise NotImplementedError
+
 
 def open_team_status_persistence(db_path: str) -> TeamStatusPersistenceInterface:
     from persistence.team_status_store import SQLiteTeamStatusPersistence

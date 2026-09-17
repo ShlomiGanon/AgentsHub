@@ -1,7 +1,10 @@
 """Passive contracts shared by history event, query, and summary services."""
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agents import ToolReceipt
 
 
 class ExtractionExecutionError(Exception):
@@ -62,6 +65,8 @@ class StepExecutionEnvelope:
     failure_reason: str | None = None
     direct_tool_name: str | None = None
     direct_tool_arguments: dict[str, object] | None = None
+    action_state: str | None = None
+    tool_receipts: tuple["ToolReceipt", ...] = ()
 
 
 @dataclass(frozen=True)

@@ -104,6 +104,11 @@ class SurveillancePersistenceInterface(ABC):
     @abstractmethod
     def surveillance_overview(self, area: str | None = None) -> dict: ...
 
+    def clear_runtime_state(self) -> dict[str, int]:
+        """Remove runtime missions and restore mutable demo state."""
+
+        raise NotImplementedError
+
 
 def open_surveillance_persistence(db_path: str) -> SurveillancePersistenceInterface:
     from persistence.surveillance_store import SQLiteSurveillancePersistence

@@ -18,7 +18,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Literal
 
 from agents import InvocationPolicy, authenticated_request_identity
 from history import HistoryQuerySpec, storage_timestamp
@@ -78,14 +78,116 @@ class DomainReport:
 
 
 @dataclass(frozen=True)
+class SnapshotProvenance:
+    """Typed source metadata attached to one snapshot section."""
+
+    source: str
+    as_of: str
+    scope: str = "global"
+
+
+@dataclass(frozen=True)
+class CameraSnapshot:
+    total: int | None
+    active: int | None
+    inactive: int | None
+    unknown: int | None
+    status: str
+    provenance: SnapshotProvenance
+
+
+@dataclass(frozen=True)
+class DroneSnapshot:
+    total: int | None
+    ready: int | None
+    airborne: int | None
+    charging: int | None
+    maintenance: int | None
+    unknown: int | None
+    active_missions: int | None
+    status: str
+    provenance: SnapshotProvenance
+
+
+@dataclass(frozen=True)
+class TeamSnapshot:
+    total: int | None
+    available: int | None
+    unavailable: int | None
+    not_reported: int | None
+    pending_identity: int | None
+    status: str
+    provenance: SnapshotProvenance
+
+
+FindingType = Literal["coverage", "readiness", "availability", "data_quality"]
+FindingSeverity = Literal["info", "warning", "critical"]
+
+
+@dataclass(frozen=True)
+class OperationalFinding:
+    """Deterministic implication derived from verified snapshot fields."""
+
+    finding_type: FindingType
+    severity: FindingSeverity
+    source_refs: tuple[str, ...]
+    message_key: str
+    message_values: tuple[tuple[str, object], ...] = ()
+    suggested_action_key: str | None = None
+    suggested_action_values: tuple[tuple[str, object], ...] = ()
+
+
+@dataclass(frozen=True)
+class SituationalSnapshot:
+    """Authoritative, structured state used by situational-picture rendering."""
+
+    cameras: CameraSnapshot | None
+    drones: DroneSnapshot | None
+    team: TeamSnapshot | None
+    recent_count: int | None
+    relevant_recent_events: tuple[str, ...]
+    inconsistencies: tuple[str, ...]
+    generated_at: str
+    findings: tuple[OperationalFinding, ...] = ()
+
+    def provenance(self) -> dict:
+        sections = {}
+        for name in ("cameras", "drones", "team"):
+            section = getattr(self, name)
+            if section is not None:
+                sections[name] = {
+                    "source": section.provenance.source,
+                    "as_of": section.provenance.as_of,
+                    "scope": section.provenance.scope,
+                    "status": section.status,
+                }
+        return {
+            "generated_at": self.generated_at,
+            "sections": sections,
+            "inconsistencies": list(self.inconsistencies),
+            "findings": [
+                {
+                    "finding_type": finding.finding_type,
+                    "severity": finding.severity,
+                    "source_refs": list(finding.source_refs),
+                    "message_key": finding.message_key,
+                    "suggested_action_key": finding.suggested_action_key,
+                }
+                for finding in self.findings
+            ],
+        }
+
+
+@dataclass(frozen=True)
 class SituationalPicture:
     text: str
     reports: tuple[DomainReport, ...]
     generated_at: str
     plan: PicturePlan
+    snapshot: SituationalSnapshot | None = None
 
     def provenance(self) -> dict:
-        return {
+        payload = {
             "generated_at": self.generated_at,
             "recent_events_hours": self.plan.recent_events_hours,
             "planned_by_model": self.plan.planned_by_model,
@@ -94,6 +196,9 @@ class SituationalPicture:
                 for report in self.reports
             ],
         }
+        if self.snapshot is not None:
+            payload["snapshot"] = self.snapshot.provenance()
+        return payload
 
 
 def _current_time_label(history_query_service: "HistoryQueryService | None", now: datetime) -> str:
@@ -108,6 +213,346 @@ def _current_time_label(history_query_service: "HistoryQueryService | None", now
         except Exception:  # pragma: no cover - a broken clock must not block the picture
             pass
     return now.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def _registry_agent(registry: "AgentRegistry", name: str):
+    try:
+        return registry.get(name)
+    except Exception:
+        return None
+
+
+def _section_provenance(source: str, now: datetime, scope: str = "global") -> SnapshotProvenance:
+    return SnapshotProvenance(source=source, as_of=storage_timestamp(now), scope=scope)
+
+
+def _build_camera_snapshot(store, *, now: datetime, area: str | None) -> CameraSnapshot:
+    provenance = _section_provenance("surveillance_store.list_cameras", now, area or "global")
+    try:
+        cameras = list(store.list_cameras(area=area))
+    except Exception:
+        return CameraSnapshot(None, None, None, None, "unknown", provenance)
+
+    counts = {"active": 0, "inactive": 0, "unknown": 0}
+    for camera in cameras:
+        status = str(camera.get("status", "")).casefold()
+        if status == "active":
+            counts["active"] += 1
+        elif status in {"offline", "degraded"}:
+            counts["inactive"] += 1
+        else:
+            counts["unknown"] += 1
+    return CameraSnapshot(
+        total=len(cameras),
+        active=counts["active"],
+        inactive=counts["inactive"],
+        unknown=counts["unknown"],
+        status="inconsistent" if sum(counts.values()) != len(cameras) else "ok",
+        provenance=provenance,
+    )
+
+
+def _build_drone_snapshot(store, *, now: datetime, area: str | None) -> DroneSnapshot:
+    provenance = _section_provenance("surveillance_store.list_drones+get_active_missions", now, area or "global")
+    try:
+        drones = list(store.list_drones())
+        missions = list(store.get_active_missions())
+        if area:
+            normalized_area = area.casefold()
+            drones = [drone for drone in drones if str(drone.get("current_area", "")).casefold() == normalized_area]
+            missions = [mission for mission in missions if str(mission.get("target_area", "")).casefold() == normalized_area]
+    except Exception:
+        return DroneSnapshot(None, None, None, None, None, None, None, "unknown", provenance)
+
+    counts = {"ready": 0, "airborne": 0, "charging": 0, "maintenance": 0, "unknown": 0}
+    by_id = {}
+    for drone in drones:
+        drone_id = drone.get("drone_id")
+        if drone_id:
+            by_id[str(drone_id)] = drone
+        status = str(drone.get("status", "")).casefold()
+        key = {
+            "in_flight": "airborne",
+            "ready": "ready",
+            "charging": "charging",
+            "maintenance": "maintenance",
+        }.get(status, "unknown")
+        counts[key] += 1
+
+    active_ids = {str(mission.get("mission_id")) for mission in missions if mission.get("mission_id")}
+    inconsistencies = []
+    for drone in drones:
+        assigned = drone.get("assigned_mission_id")
+        if str(drone.get("status", "")).casefold() == "in_flight" and assigned and str(assigned) not in active_ids:
+            inconsistencies.append("airborne drone references a mission absent from the active mission store")
+    for mission in missions:
+        drone = by_id.get(str(mission.get("drone_id")))
+        if drone is None or str(drone.get("status", "")).casefold() != "in_flight":
+            inconsistencies.append("active mission references a drone that is not airborne")
+
+    return DroneSnapshot(
+        total=len(drones),
+        ready=counts["ready"],
+        airborne=counts["airborne"],
+        charging=counts["charging"],
+        maintenance=counts["maintenance"],
+        unknown=counts["unknown"],
+        active_missions=len(missions),
+        status="inconsistent" if inconsistencies else "ok",
+        provenance=provenance,
+    )
+
+
+def _build_team_snapshot(store, *, now: datetime) -> TeamSnapshot:
+    provenance = _section_provenance("team_status_store.availability_snapshot", now)
+    try:
+        entries = list(store.availability_snapshot(storage_timestamp(now)))
+    except Exception:
+        return TeamSnapshot(None, None, None, None, None, "unknown", provenance)
+
+    counts = {"available": 0, "unavailable": 0, "not_reported": 0, "pending_identity": 0}
+    for entry in entries:
+        status = str(entry.get("availability", "")).casefold()
+        if status == "awaiting_response":
+            counts["not_reported"] += 1
+        elif status in counts:
+            counts[status] += 1
+        else:
+            counts["pending_identity"] += 1
+    total = len(entries)
+    consistent = sum(counts.values()) == total
+    return TeamSnapshot(
+        total=total,
+        available=counts["available"],
+        unavailable=counts["unavailable"],
+        not_reported=counts["not_reported"],
+        pending_identity=counts["pending_identity"],
+        status="ok" if consistent else "inconsistent",
+        provenance=provenance,
+    )
+
+
+def _state_source(section_name: str, provenance: SnapshotProvenance) -> str:
+    return f"state:{section_name}:{provenance.source}"
+
+
+def derive_operational_findings(
+    cameras: CameraSnapshot | None,
+    drones: DroneSnapshot | None,
+    team: TeamSnapshot | None,
+) -> tuple[OperationalFinding, ...]:
+    """Derive only implications licensed by verified counts and section state."""
+
+    findings: list[OperationalFinding] = []
+
+    if cameras is not None:
+        source_refs = (_state_source("cameras", cameras.provenance),)
+        if cameras.status == "unknown":
+            findings.append(OperationalFinding(
+                "data_quality", "warning", source_refs, "orchestrator.picture.finding.cameras_unknown"
+            ))
+        elif cameras.status == "inconsistent":
+            findings.append(OperationalFinding(
+                "data_quality", "warning", source_refs, "orchestrator.picture.finding.cameras_inconsistent"
+            ))
+        elif cameras.total and cameras.active == cameras.total:
+            findings.append(OperationalFinding(
+                "coverage",
+                "info",
+                source_refs,
+                "orchestrator.picture.finding.cameras_all_active",
+                (("count", cameras.total),),
+            ))
+        elif cameras.total is not None and cameras.active is not None:
+            findings.append(OperationalFinding(
+                "coverage",
+                "warning",
+                source_refs,
+                "orchestrator.picture.finding.cameras_gap",
+                (("active", cameras.active), ("total", cameras.total)),
+            ))
+
+    if drones is not None:
+        source_refs = (_state_source("drones", drones.provenance),)
+        if drones.status == "unknown":
+            findings.append(OperationalFinding(
+                "data_quality", "warning", source_refs, "orchestrator.picture.finding.drones_unknown"
+            ))
+        elif drones.status == "inconsistent":
+            findings.append(OperationalFinding(
+                "data_quality", "warning", source_refs, "orchestrator.picture.finding.drones_inconsistent"
+            ))
+        elif drones.ready is not None and drones.ready >= 1:
+            findings.append(OperationalFinding(
+                "readiness",
+                "info",
+                source_refs,
+                "orchestrator.picture.finding.drones_ready",
+                (("count", drones.ready),),
+            ))
+        elif drones.ready == 0:
+            findings.append(OperationalFinding(
+                "readiness", "warning", source_refs, "orchestrator.picture.finding.drones_none_ready"
+            ))
+
+    if team is not None:
+        source_refs = (_state_source("team", team.provenance),)
+        if team.status == "unknown":
+            findings.append(OperationalFinding(
+                "data_quality", "warning", source_refs, "orchestrator.picture.finding.team_unknown"
+            ))
+        elif team.status == "inconsistent":
+            findings.append(OperationalFinding(
+                "data_quality", "warning", source_refs, "orchestrator.picture.finding.team_inconsistent"
+            ))
+        else:
+            if team.available == 0:
+                findings.append(OperationalFinding(
+                    "availability", "warning", source_refs, "orchestrator.picture.finding.team_no_confirmed"
+                ))
+            elif team.available is not None:
+                findings.append(OperationalFinding(
+                    "availability",
+                    "info",
+                    source_refs,
+                    "orchestrator.picture.finding.team_available",
+                    (("count", team.available),),
+                ))
+
+            if team.not_reported is not None and team.not_reported > 0:
+                values = (("count", team.not_reported),)
+                findings.append(OperationalFinding(
+                    "availability",
+                    "warning",
+                    source_refs,
+                    "orchestrator.picture.finding.team_not_reported",
+                    values,
+                    "orchestrator.picture.recommendation.collect_availability",
+                    values,
+                ))
+
+    return tuple(findings)
+
+
+def build_typed_snapshot(
+    registry: "AgentRegistry",
+    *,
+    now: datetime | None = None,
+    area: str | None = None,
+) -> SituationalSnapshot | None:
+    """Read authoritative specialist stores and construct a validated snapshot.
+
+    Missing stores return ``None`` so existing profiles with specialist fakes can
+    continue using the legacy report pipeline; no model output is parsed as state.
+    """
+
+    now = now or datetime.now(timezone.utc)
+    surveillance_agent = _registry_agent(registry, "surveillance_agent")
+    team_agent = _registry_agent(registry, "team_status_agent")
+    surveillance_store = getattr(surveillance_agent, "surveillance_store", None)
+    team_store = getattr(team_agent, "status_store", None)
+    if surveillance_store is None and team_store is None:
+        return None
+
+    cameras = _build_camera_snapshot(surveillance_store, now=now, area=area) if surveillance_store else None
+    drones = _build_drone_snapshot(surveillance_store, now=now, area=area) if surveillance_store else None
+    team = _build_team_snapshot(team_store, now=now) if team_store else None
+    inconsistencies: list[str] = []
+    if drones is not None and drones.status == "inconsistent":
+        inconsistencies.append("drone and mission stores disagree")
+    if team is not None and team.status == "inconsistent":
+        inconsistencies.append("team availability categories do not sum to total")
+    if cameras is not None and cameras.status == "inconsistent":
+        inconsistencies.append("camera status categories do not sum to total")
+
+    findings = derive_operational_findings(cameras, drones, team)
+
+    return SituationalSnapshot(
+        cameras=cameras,
+        drones=drones,
+        team=team,
+        recent_count=None,
+        relevant_recent_events=(),
+        inconsistencies=tuple(inconsistencies),
+        generated_at=storage_timestamp(now),
+        findings=findings,
+    )
+
+
+def render_typed_snapshot(snapshot: SituationalSnapshot) -> str:
+    """Render localized facts and findings without model-authored claims."""
+
+    catalog = get_current_catalog()
+    lines = [catalog.text("orchestrator.picture.typed.title")]
+
+    if snapshot.cameras is not None:
+        section = snapshot.cameras
+        if section.status == "unknown":
+            lines.append(catalog.text("orchestrator.picture.typed.cameras_unknown"))
+        else:
+            lines.append(catalog.text(
+                "orchestrator.picture.typed.cameras",
+                total=section.total,
+                active=section.active,
+                inactive=section.inactive,
+                unknown=section.unknown,
+            ))
+
+    if snapshot.drones is not None:
+        section = snapshot.drones
+        if section.status == "unknown":
+            lines.append(catalog.text("orchestrator.picture.typed.drones_unknown"))
+        else:
+            lines.append(catalog.text(
+                "orchestrator.picture.typed.drones",
+                total=section.total,
+                ready=section.ready,
+                airborne=section.airborne,
+                charging=section.charging,
+                maintenance=section.maintenance,
+                unknown=section.unknown,
+                active_missions=section.active_missions,
+            ))
+
+    if snapshot.team is not None:
+        section = snapshot.team
+        if section.status == "unknown":
+            lines.append(catalog.text("orchestrator.picture.typed.team_unknown"))
+        else:
+            lines.append(catalog.text(
+                "orchestrator.picture.typed.team",
+                total=section.total,
+                available=section.available,
+                unavailable=section.unavailable,
+                not_reported=section.not_reported,
+                pending_identity=section.pending_identity,
+            ))
+
+    if snapshot.findings:
+        lines.extend(("", catalog.text("orchestrator.picture.typed.findings_header")))
+        lines.extend(
+            catalog.text(
+                "orchestrator.picture.typed.finding_line",
+                text=catalog.text(finding.message_key, **dict(finding.message_values)),
+            )
+            for finding in snapshot.findings
+        )
+
+    recommendations = [finding for finding in snapshot.findings if finding.suggested_action_key]
+    if recommendations:
+        lines.extend(("", catalog.text("orchestrator.picture.typed.recommendations_header")))
+        lines.extend(
+            catalog.text(
+                "orchestrator.picture.typed.recommendation_line",
+                text=catalog.text(
+                    finding.suggested_action_key,
+                    **dict(finding.suggested_action_values),
+                ),
+            )
+            for finding in recommendations
+        )
+
+    return "\n".join(lines)
 
 
 def _readable_tools(agent, protocol: "Protocol") -> list[str]:
@@ -435,6 +880,17 @@ def build_situational_picture(
     """Plan, collect, and compose one live picture for `raw_text` under `protocol`."""
 
     now = now or datetime.now(timezone.utc)
+    typed_snapshot = build_typed_snapshot(registry, now=now)
+    if typed_snapshot is not None:
+        plan = _default_plan(protocol)
+        return SituationalPicture(
+            text=render_typed_snapshot(typed_snapshot),
+            reports=(),
+            generated_at=typed_snapshot.generated_at,
+            plan=plan,
+            snapshot=typed_snapshot,
+        )
+
     current_time = _current_time_label(history_query_service, now)
     plan = plan_situational_picture(main_agent, protocol, registry, raw_text, current_time=current_time)
     reports = collect_domain_reports(
