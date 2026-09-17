@@ -653,6 +653,14 @@ SIMULATOR_BODY = """
       // same id still gets /Msg's existing dedup-on-source_message_id behavior.
       source_message_id: step.source_message_id || ('sim-' + state.runId + '-' + step.step),
     };
+    // Trusted simulator metadata; bot.simulator_app validates these against
+    // the profile-declared scenario before forwarding them to /Msg.  A legacy
+    // ad-hoc simulation without an official timestamp remains wall-clock only.
+    if (state.scenario.id && step.timestamp) {
+      body.scenario_id = state.scenario.id;
+      body.scenario_step = step.step;
+      body.scenario_time = step.timestamp;
+    }
     return { url: '/admin/simulator/bot-msg', body: body, identity: null };
   }
 

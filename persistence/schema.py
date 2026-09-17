@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS events (
     sender_identity TEXT NOT NULL,
     sender_permission_level TEXT NOT NULL DEFAULT 'viewer',
     source_message_id TEXT,
+    scenario_id TEXT,
+    scenario_step INTEGER,
+    scenario_time TEXT,
 
     occurred_at TEXT,
     occurred_at_is_fallback INTEGER NOT NULL DEFAULT 0,
@@ -297,6 +300,13 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "ALTER TABLE event_steps ADD COLUMN action_state TEXT;"
         "ALTER TABLE event_steps ADD COLUMN tool_receipts TEXT;",
     ),
+    (
+        23,
+        "add trusted simulation step metadata",
+        "ALTER TABLE events ADD COLUMN scenario_id TEXT;"
+        "ALTER TABLE events ADD COLUMN scenario_step INTEGER;"
+        "ALTER TABLE events ADD COLUMN scenario_time TEXT;",
+    ),
 ]
 
 
@@ -336,6 +346,11 @@ _REQUIRED_COLUMNS_BY_VERSION = (
         22,
         "event_steps",
         (("action_state", "TEXT"), ("tool_receipts", "TEXT")),
+    ),
+    (
+        23,
+        "events",
+        (("scenario_id", "TEXT"), ("scenario_step", "INTEGER"), ("scenario_time", "TEXT")),
     ),
 )
 
@@ -415,7 +430,7 @@ def run_migrations(db_path: str) -> None:
                         "ALTER TABLE telegram_groups ADD COLUMN auto_register INTEGER NOT NULL DEFAULT 0 "
                         "CHECK (auto_register IN (0, 1))"
                     )
-            elif version in {20, 21, 22}:
+            elif version in {20, 21, 22, 23}:
                 _repair_required_columns(connection, version)
             else:
                 connection.executescript(sql)

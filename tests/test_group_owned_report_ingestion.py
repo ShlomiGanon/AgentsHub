@@ -89,6 +89,27 @@ def test_owner_scope_never_falls_through_to_another_domain():
     assert result.status == "not_applicable"
 
 
+def test_owner_ingestion_without_typed_result_is_explicit_failure():
+    class _Owner:
+        name = "friendly_forces_agent"
+
+        def ingest_report(self, event):
+            return None
+
+    class _Persistence:
+        def fetch_event(self, event_id):
+            return {"event_id": event_id, "classification": "friendly_forces_report"}
+
+    deps = FlowDeps(
+        persistence=_Persistence(), settings_store=None,
+        registry=AgentRegistry({"friendly_forces_agent": _Owner()}),
+        protocol_set=None, event_type_registry=None, area_registry=None,
+        history_query_service=None, group_owner="friendly_forces_agent",
+    )
+    result = _commit_report_domain_state(deps, "e1")
+    assert result.status == "failed"
+
+
 def test_report_ingestion_status_preserves_legacy_boolean_constructor():
     from agents import ReportIngestionResult
 

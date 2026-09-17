@@ -52,6 +52,8 @@ _TELEGRAM_REQUEST_CONTEXT: ContextVar[tuple[str, str] | None] = ContextVar(
     "telegram_request_context", default=None
 )
 
+_SIMULATION_CONTEXT: ContextVar[object | None] = ContextVar("simulation_context", default=None)
+
 
 @contextmanager
 def telegram_request_context(chat_id: str, chat_type: str):
@@ -62,6 +64,19 @@ def telegram_request_context(chat_id: str, chat_type: str):
         yield
     finally:
         _TELEGRAM_REQUEST_CONTEXT.reset(token)
+
+
+@contextmanager
+def simulation_request_context(context):
+    token = _SIMULATION_CONTEXT.set(context)
+    try:
+        yield
+    finally:
+        _SIMULATION_CONTEXT.reset(token)
+
+
+def current_simulation_context():
+    return _SIMULATION_CONTEXT.get()
 
 def _do_request(url: str, method: str, identity: str, request_payload: dict | None) -> tuple[int, dict]:
     try:
@@ -133,6 +148,12 @@ class HttpApiClient(BotApiClient):
         telegram_context = _TELEGRAM_REQUEST_CONTEXT.get()
         if telegram_context is not None:
             headers["X-Telegram-Chat-ID"], headers["X-Telegram-Chat-Type"] = telegram_context
+        simulation_context = _SIMULATION_CONTEXT.get()
+        if simulation_context is not None:
+            headers["X-Simulation-Mode"] = "true"
+            headers["X-Simulation-ID"] = str(simulation_context.scenario_id)
+            headers["X-Simulation-Step"] = str(simulation_context.scenario_step)
+            headers["X-Simulation-Time"] = str(simulation_context.scenario_time)
         attempts = 3 if method == "GET" else 1
 
         try:

@@ -1,6 +1,8 @@
 """Unified command-and-control profile for readiness team, surveillance, and tactical forces."""
 
+import json
 import re
+from dataclasses import replace
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1608,3 +1610,35 @@ SIMULATIONS.append(SimulationScenario(
         ],
     },
 ))
+
+
+_OFFICIAL_FIXTURES = {
+    "SEC_001_PHASE_1": "\u05db\u05d9\u05ea\u05ea \u05db\u05d5\u05e0\u05e0\u05ea - \u05d7\u05dc\u05e7 1.json",
+    "SEC_001_PHASE_2": "\u05db\u05d9\u05ea\u05ea \u05db\u05d5\u05e0\u05e0\u05ea - \u05d7\u05dc\u05e7 2.json",
+    "SEC_001_PHASE_3": "\u05db\u05d9\u05ea\u05ea \u05db\u05d5\u05e0\u05e0\u05ea - \u05d7\u05dc\u05e7 3.json",
+    "FIRE_002_PHASE_1": "\u05de\u05db\u05d1\u05d9 \u05d0\u05e9 - \u05d7\u05dc\u05e7 1.json",
+    "FIRE_002_PHASE_2": "\u05de\u05db\u05d1\u05d9 \u05d0\u05e9 - \u05d7\u05dc\u05e7 2.json",
+    "FIRE_002_PHASE_3": "\u05de\u05db\u05d1\u05d9 \u05d0\u05e9 - \u05d7\u05dc\u05e7 3.json",
+}
+
+
+def _load_official_metadata(scenario_id: str) -> dict:
+    filename = _OFFICIAL_FIXTURES.get(scenario_id)
+    if filename is None:
+        return {}
+    fixture_path = Path(__file__).resolve().parent.parent / "fixtures" / "admin_scenarios" / filename
+    try:
+        with fixture_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"official simulation fixture cannot be loaded: {fixture_path}") from exc
+    metadata = dict(payload.get("scenario_metadata") or {})
+    metadata["event_stream"] = tuple(payload.get("event_stream") or ())
+    metadata["expected_agent_actions"] = tuple(payload.get("expected_agent_actions") or ())
+    return metadata
+
+
+SIMULATIONS = [
+    replace(scenario, official_metadata=_load_official_metadata(scenario.scenario_id))
+    for scenario in SIMULATIONS
+]

@@ -5,6 +5,7 @@ import importlib
 import importlib.util
 import os
 import math
+from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType, ModuleType
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -254,6 +255,72 @@ def _validate_simulation_declarations(loaded: "LoadedProfile") -> list[str]:
             continue
 
         chats_by_key = {chat.get("key"): chat for chat in raw["chats"] if isinstance(chat, dict)}
+        source_chat_aliases = {
+            "TELEGRAM_GROUP_RESPONSE_TEAM": "response_team",
+            "TELEGRAM_GROUP_CAMERAS": "cameras",
+            "TELEGRAM_GROUP_EXTERNAL_FORCES": "external_forces",
+            "TELEGRAM_DIRECT_COMMANDER": "commander_dm",
+        }
+        known_source_chats = set(chats_by_key)
+        known_source_chats.update(
+            str(chat.get("telegram_chat_id"))
+            for chat in raw["chats"]
+            if isinstance(chat, dict) and chat.get("telegram_chat_id") is not None
+        )
+
+        # Official migrated scenarios carry a canonical event stream alongside
+        # the legacy admin shape.  Validate it without changing the manual
+        # simulator contract; old ad-hoc test scenarios remain valid when no
+        # official metadata is declared.
+        official = getattr(scenario, "official_metadata", {}) or {}
+        event_stream = official.get("event_stream", ())
+        if event_stream:
+            seen_steps: set[int] = set()
+            previous_timestamp: datetime | None = None
+            for entry in event_stream:
+                if not isinstance(entry, dict):
+                    failures.append(f"simulation '{scenario.key}' event_stream entry must be an object")
+                    continue
+                try:
+                    step_number = int(entry["step"])
+                except (KeyError, TypeError, ValueError):
+                    failures.append(f"simulation '{scenario.key}' event_stream has invalid step")
+                    continue
+                if step_number in seen_steps:
+                    failures.append(f"simulation '{scenario.key}' has duplicate event_stream step {step_number}")
+                seen_steps.add(step_number)
+                timestamp = entry.get("timestamp")
+                try:
+                    parsed_timestamp = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+                except (TypeError, ValueError):
+                    failures.append(f"simulation '{scenario.key}' step {step_number} has invalid timestamp")
+                    continue
+                if previous_timestamp is not None and parsed_timestamp < previous_timestamp:
+                    failures.append(f"simulation '{scenario.key}' timestamps must be non-decreasing")
+                previous_timestamp = parsed_timestamp
+                source_chat = str(entry.get("source_chat") or "")
+                alias_matches = False
+                if not source_chat:
+                    failures.append(f"simulation '{scenario.key}' step {step_number} has no source_chat")
+                else:
+                    alias_target = source_chat_aliases.get(source_chat)
+                    alias_matches = alias_target in known_source_chats or any(
+                        str(key).endswith(f"_{alias_target}") for key in known_source_chats
+                    )
+                if source_chat and source_chat not in known_source_chats and not alias_matches:
+                    failures.append(
+                        f"simulation '{scenario.key}' step {step_number} has unknown source_chat {source_chat!r}"
+                    )
+                payload = entry.get("payload")
+                if not isinstance(payload, dict) or not str(payload.get("message") or "").strip():
+                    failures.append(f"simulation '{scenario.key}' step {step_number} has no event message")
+
+            expected_actions = official.get("expected_agent_actions", ())
+            for action in expected_actions:
+                if not isinstance(action, dict) or not action.get("action_type") or not action.get("trigger_step"):
+                    failures.append(f"simulation '{scenario.key}' has malformed expected_agent_actions metadata")
+
+        group_agents = {group.key: group.agent_name for group in simulation_groups}
 
         for chat in raw["chats"]:
             if not isinstance(chat, dict):
@@ -268,8 +335,15 @@ def _validate_simulation_declarations(loaded: "LoadedProfile") -> list[str]:
                         f"{chat_id_key!r} which is not a key in SIMULATION_GROUPS"
                     )
 
+        raw_step_numbers: list[int] = []
         for step in raw["steps"]:
             if not isinstance(step, dict):
+                continue
+            try:
+                step_number = int(step.get("step"))
+                raw_step_numbers.append(step_number)
+            except (TypeError, ValueError):
+                failures.append(f"simulation '{scenario.key}' has invalid step number")
                 continue
             chat = chats_by_key.get(step.get("chat"))
             if chat is None or chat.get("kind", "message") != "message":
@@ -279,6 +353,32 @@ def _validate_simulation_declarations(loaded: "LoadedProfile") -> list[str]:
                 failures.append(
                     f"simulation '{scenario.key}' step {step.get('step')} names sender_identity "
                     f"{sender_key!r} which is not a key in SIMULATION_USERS"
+                )
+
+        if len(raw_step_numbers) != len(set(raw_step_numbers)):
+            failures.append(f"simulation '{scenario.key}' has duplicate step numbers")
+        if raw_step_numbers != sorted(raw_step_numbers):
+            failures.append(f"simulation '{scenario.key}' step numbers must be non-decreasing")
+
+        for canonical_step in scenario.canonical_raw().get("steps", ()):
+            if not isinstance(canonical_step, dict):
+                continue
+            target_agent = canonical_step.get("target_agent")
+            chat = chats_by_key.get(canonical_step.get("chat"))
+            if not target_agent or chat is None or chat.get("telegram_chat_type") == "private":
+                continue
+            group_key = chat.get("telegram_chat_id")
+            current_owner = group_agents.get(group_key)
+            legacy_owner = {
+                "personnel_agent": "team_status_agent",
+                "vision_agent": "surveillance_agent",
+                "external_comm_agent": "friendly_forces_agent",
+                "main_orchestrator": "main_agent",
+            }.get(str(target_agent), str(target_agent))
+            if current_owner is not None and legacy_owner != current_owner:
+                failures.append(
+                    f"simulation '{scenario.key}' step {canonical_step.get('step')} legacy target_agent "
+                    f"{target_agent!r} conflicts with trusted group owner {current_owner!r}"
                 )
 
     return failures

@@ -75,6 +75,10 @@ DEMO_CAMERA_SEED = (
     ("CAM-03", "East Fence Line Starlight", "east_fence", "active", 90, "Optimal visibility along eastern security fence sensor line. Zero breach or perimeter vibration alerts reported."),
     ("CAM-04", "Central Compound Dome", "central_hub", "active", 270, "Wide-angle surveillance of HQ depot and vehicle parking zone. Logistics vehicles parked, regular security personnel patrols visible."),
     ("CAM-05", "West Hill High Overlook", "west_hill", "active", 285, "Panoramic overlook of western wadi and approach trail. Visibility excellent (8km). No unauthorized movements detected."),
+    # Official SEC_001 fixtures refer to this canonical simulation camera.
+    # The fixture supplies only its south-corner location; no hardware or
+    # capability claims are added here.
+    ("CAM-08", "CAM-08", "south_sector", "active", 0, "Fixture reference: south sector."),
 )
 
 DEMO_DRONE_SEED = (

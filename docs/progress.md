@@ -3242,3 +3242,53 @@ no CI change was needed.
   provenance, API picture, role/security, and bot formatting suites passed:
   **115 passed**. `py_compile` and `git diff --check` passed. No live run was
   performed.
+
+### Task 47 — Canonical Scenario, Entity and Simulation-Time Contract
+- **Status:** done
+- **Deviations:** No live run, scenario execution, Telegram message, scheduler,
+  resource/incident model, or evaluator was added. CAM-08 was added to the
+  authoritative surveillance demo seed because the official SEC-001 fixtures
+  reference it. One pre-existing intent-attendance assertion still expects
+  protocol candidates to be cleared for a report; Task 47 intentionally did
+  not change intent semantics.
+- **Implementation:** Official fixture metadata (including event streams and
+  expected actions) is preserved on `SimulationScenario` and materialized
+  canonically. Loader validation now checks stream ordering/timestamps,
+  declared chats, duplicate steps, and legacy target-agent ownership. Exact
+  entity resolution is explicit and never fuzzy. Trusted simulation step time
+  flows from the manual simulator through authenticated headers into Event
+  metadata (`scenario_id`, `scenario_step`, `scenario_time`); production
+  `/Msg` requests remain wall-clock-only. Event schema migration 23 and
+  immutable persistence columns preserve this metadata without changing
+  `received_at` or deadline timing.
+- **Verification:** scenario/profile/simulator/migration/API/cleanup/domain/
+  architecture suites: **367 passed**; latest focused contract/profile/temporal
+  suite: **114 passed**;
+  architecture,
+  lifecycle, Fast Path, routing and localization suite: **26 passed**;
+  domain/report/attendance/snapshot suite: **97 passed**; simulator/API
+  integration suite: **47 passed**. `py_compile` and `git diff --check` passed.
+  A full unpartitioned pytest run exceeded the 120-second command limit; no
+  live run was performed.
+
+### Task 48 — Canonical Domain Report Projection
+- **Status:** done
+- **Deviations:** No live run, scenario execution, Telegram message, Incident/
+  Evidence model, scheduler, or Main Agent rendering changes. Attendance cycle
+  and approval semantics remain unchanged; direct attendance persistence still
+  uses its existing typed tool path.
+- **Implementation:** Extended the existing `ReportIngestionResult` seam with
+  `DomainReportProjection` (with explicit `authoritative_state` vs
+  `operational_fact` kind), preserving event/source/area/entity/temporal and
+  trusted scenario metadata without raw model text. Friendly-forces reports
+  now return a typed committed projection while continuing to use the persisted
+  Event as their authoritative operational record. Surveillance ingestion now
+  resolves only declared camera aliases (including CAM-08), rejects unknown
+  cameras without mutation, and returns typed projection facts. A missing typed
+  ingestion result is an explicit failure rather than ambiguous `None` control
+  flow.
+- **Verification:** Required report, history, surveillance, scenario, profile,
+  attendance, Fast Path, routing, lifecycle, snapshot, architecture and
+  localization suites: **419 passed**. `py_compile` and `git diff --check`
+  passed. The known unrelated `tests/test_intent_attendance.py` expectation
+  remains separately failing as documented in Task 47.

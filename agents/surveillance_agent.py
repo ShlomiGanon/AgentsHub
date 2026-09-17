@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import re
 
-from agents.contracts import AgentResult, InvocationPolicy, ReportIngestionResult
+from agents.contracts import AgentResult, InvocationPolicy, ReportIngestionResult, project_report_facts
 from agents.runtime import Agent, make_exact_result_capture, tool
 from persistence import (
     SurveillancePersistenceError,
@@ -150,6 +150,10 @@ class SurveillanceAgent(Agent):
         if not camera_id:
             return ReportIngestionResult("rejected", "surveillance report has no camera identifier")
 
+        camera_id = self._resolve_camera_reference(camera_id)
+        if camera_id is None:
+            return ReportIngestionResult("rejected", "surveillance report references an unknown camera")
+
         observation = event.get("description")
         if not isinstance(observation, str) or not observation.strip():
             return ReportIngestionResult("rejected", "surveillance report has no observation")
@@ -173,7 +177,30 @@ class SurveillanceAgent(Agent):
             )
         except SurveillancePersistenceError as exc:
             return ReportIngestionResult("failed", str(exc))
-        return ReportIngestionResult("committed", f"camera {updated['camera_id']} committed")
+        projection = project_report_facts(
+            event,
+            domain="surveillance",
+            facts={
+                "camera_id": updated["camera_id"],
+                "camera_status": updated["status"],
+            },
+        )
+        return ReportIngestionResult(
+            "committed", f"camera {updated['camera_id']} committed", projection=projection
+        )
+
+    def _resolve_camera_reference(self, reference: str) -> str | None:
+        """Resolve a canonical camera ID or an explicitly supported alias."""
+
+        normalized = " ".join(reference.strip().split()).casefold()
+        for camera in self.surveillance_store.list_cameras():
+            camera_id = str(camera["camera_id"])
+            canonical = camera_id.casefold()
+            numeric = canonical.removeprefix("cam-")
+            aliases = {canonical, numeric, f"cam-{numeric}", f"camera {numeric}"}
+            if normalized in aliases:
+                return camera_id
+        return None
 
     def _recall(self, drone_or_mission_id: str) -> dict:
         """Resolve one recall request against the store — the state-machine step behind

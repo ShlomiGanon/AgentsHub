@@ -65,7 +65,7 @@ def materialize_simulation(
     user_ids_by_key = {persona.key: simulation_user_telegram_id(persona.offset) for persona in simulation_users}
     group_ids_by_key = {group.key: simulation_group_chat_id(group.offset) for group in simulation_groups}
 
-    materialized = copy.deepcopy(dict(scenario.raw))
+    materialized = scenario.canonical_raw()
 
     for chat in materialized.get("chats", []):
         chat_id_key = chat.get("telegram_chat_id")

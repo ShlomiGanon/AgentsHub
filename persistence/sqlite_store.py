@@ -40,6 +40,9 @@ _EVENT_COLUMNS = (
     "sender_identity",
     "sender_permission_level",
     "source_message_id",
+    "scenario_id",
+    "scenario_step",
+    "scenario_time",
     "occurred_at",
     "occurred_at_is_fallback",
     "availability_start",
@@ -85,6 +88,7 @@ _EVENT_IMMUTABLE_COLUMNS = {
     "event_id", "received_at", "source", "sender_identity", "sender_permission_level",
     "source_message_id", "raw_text",
     "trace_id", "conversation_id", "deadline_at", "ingestion_key",
+    "scenario_id", "scenario_step", "scenario_time",
 }
 _UPDATABLE_EVENT_COLUMNS = frozenset(_EVENT_COLUMNS) - _EVENT_IMMUTABLE_COLUMNS
 

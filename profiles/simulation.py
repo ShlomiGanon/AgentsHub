@@ -15,6 +15,7 @@ needs a database round trip to compute them.
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Callable, Mapping
 
 # Chosen so a simulation ID is always:
@@ -135,3 +136,193 @@ class SimulationScenario:
     raw: Mapping
     description: str = ""
     tags: tuple[str, ...] = ()
+    # Optional metadata imported from an official fixture.  Keeping this
+    # separate from ``raw`` lets profile declarations remain compatible with
+    # the original admin-simulator shape while exposing one canonical contract
+    # to API/UI/runtime consumers.
+    official_metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def scenario_id(self) -> str:
+        metadata = self.official_metadata
+        scenario = self.raw.get("scenario", {}) if isinstance(self.raw, Mapping) else {}
+        return str(metadata.get("scenario_id") or scenario.get("id") or self.key)
+
+    @property
+    def domain(self) -> str | None:
+        value = self.official_metadata.get("domain")
+        return str(value) if value is not None else None
+
+    @property
+    def phase(self) -> str | None:
+        value = self.official_metadata.get("phase")
+        return str(value) if value is not None else None
+
+    def canonical_raw(self) -> dict:
+        """Return the admin-simulator contract enriched with official metadata.
+
+        ``raw`` remains the backwards-compatible declaration.  Canonical
+        scenario metadata is merged at the one server-side materialization
+        boundary so expected actions and event-stream fields cannot disappear
+        between fixtures, profiles and the browser.
+        """
+
+        import copy
+
+        result = copy.deepcopy(dict(self.raw))
+        scenario = result.setdefault("scenario", {})
+        if not isinstance(scenario, dict):
+            scenario = {}
+            result["scenario"] = scenario
+        if self.scenario_id:
+            scenario.setdefault("id", self.scenario_id)
+        if self.domain is not None:
+            scenario["domain"] = self.domain
+        if self.phase is not None:
+            scenario["phase"] = self.phase
+        for key in ("title", "description"):
+            if self.official_metadata.get(key) is not None:
+                scenario.setdefault(key, self.official_metadata[key])
+        expected = self.official_metadata.get("expected_agent_actions")
+        if expected is not None:
+            scenario["expected_agent_actions"] = copy.deepcopy(list(expected))
+
+        official_stream = self.official_metadata.get("event_stream")
+        if official_stream is not None:
+            result["event_stream"] = copy.deepcopy(list(official_stream))
+
+        stream_by_step = {
+            int(entry["step"]): entry
+            for entry in self.official_metadata.get("event_stream", ())
+            if isinstance(entry, Mapping) and str(entry.get("step", "")).isdigit()
+        }
+        for step in result.get("steps", ()):
+            if not isinstance(step, dict):
+                continue
+            entry = stream_by_step.get(int(step.get("step", -1)))
+            if entry is None:
+                continue
+            payload = entry.get("payload") if isinstance(entry.get("payload"), Mapping) else {}
+            step.setdefault("timestamp", entry.get("timestamp"))
+            step.setdefault("source_chat", entry.get("source_chat"))
+            step.setdefault("target_agent", entry.get("target_agent"))
+            step.setdefault("message", payload.get("message", step.get("text")))
+
+        return result
+
+
+@dataclass(frozen=True)
+class SimulationStepContext:
+    """Trusted metadata attached to one manually released simulation step."""
+
+    scenario_id: str
+    scenario_step: int
+    scenario_time: str
+
+    def __post_init__(self) -> None:
+        if not self.scenario_id or not isinstance(self.scenario_id, str):
+            raise ValueError("scenario_id must be a non-empty string")
+        if type(self.scenario_step) is not int or self.scenario_step < 1:
+            raise ValueError("scenario_step must be a positive integer")
+        if not isinstance(self.scenario_time, str) or not self.scenario_time:
+            raise ValueError("scenario_time must be a non-empty ISO-8601 string")
+        try:
+            datetime.fromisoformat(self.scenario_time.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("scenario_time must be ISO-8601") from exc
+
+
+@dataclass(frozen=True)
+class SimulationEntityResolution:
+    reference: str
+    canonical_id: str | None
+    status: str
+    domain: str
+
+
+def resolve_simulation_entity(
+    reference: str,
+    *,
+    domain: str,
+    canonical_ids: tuple[str, ...] | list[str],
+    aliases: Mapping[str, str] | None = None,
+) -> SimulationEntityResolution:
+    """Resolve an exact canonical ID or declared alias; never fuzzy-match."""
+
+    if not isinstance(reference, str) or not reference.strip():
+        return SimulationEntityResolution(str(reference), None, "unresolved", domain)
+    canonical = {str(item).casefold(): str(item) for item in canonical_ids}
+    normalized = " ".join(reference.strip().split()).casefold()
+    resolved = canonical.get(normalized)
+    if resolved is None and aliases:
+        normalized_aliases = {
+            " ".join(str(key).strip().split()).casefold(): str(value)
+            for key, value in aliases.items()
+        }
+        resolved_alias = normalized_aliases.get(normalized)
+        if resolved_alias is not None:
+            resolved = canonical.get(str(resolved_alias).casefold())
+    if resolved is None:
+        return SimulationEntityResolution(reference, None, "unresolved", domain)
+    return SimulationEntityResolution(reference, resolved, "resolved", domain)
+
+
+def resolve_simulation_step(
+    scenarios: tuple[SimulationScenario, ...] | list[SimulationScenario],
+    groups: tuple[SimulationGroup, ...] | list[SimulationGroup],
+    *,
+    users: tuple[SimulationPersona, ...] | list[SimulationPersona] = (),
+    scenario_id: str,
+    scenario_step: int,
+    sender_identity: str,
+    chat_id: str,
+    chat_type: str,
+) -> SimulationStepContext:
+    """Resolve and authenticate a step against profile-declared simulation data.
+
+    The caller supplies only the identifiers carried by the trusted simulator
+    process.  The timestamp is accepted only when it is read from the matching
+    declared step, never from an HTTP/body value.
+    """
+
+    for scenario in scenarios:
+        if scenario.scenario_id != scenario_id:
+            continue
+        canonical = scenario.canonical_raw()
+        chats = {str(chat.get("key")): chat for chat in canonical.get("chats", ()) if isinstance(chat, Mapping)}
+        steps = {
+            int(step.get("step")): step
+            for step in canonical.get("steps", ())
+            if isinstance(step, Mapping) and str(step.get("step", "")).isdigit()
+        }
+        step = steps.get(scenario_step)
+        if step is None:
+            break
+        chat = chats.get(str(step.get("chat")))
+        if chat is None:
+            break
+        declared_sender = str(step.get("sender_identity") or "")
+        if users and declared_sender:
+            persona = next((item for item in users if item.key == declared_sender), None)
+            if persona is None or simulation_user_telegram_id(persona.offset) != sender_identity:
+                break
+        expected_type = str(chat.get("telegram_chat_type") or "private")
+        expected_chat = str(chat.get("telegram_chat_id") or "")
+        if expected_type == "private":
+            expected_chat = sender_identity
+        else:
+            group_key = chat.get("telegram_chat_id")
+            group = next((item for item in groups if item.key == group_key), None)
+            if group is None:
+                break
+            expected_chat = simulation_group_chat_id(group.offset)
+        if expected_type != chat_type or (expected_type == "private" and expected_chat != sender_identity):
+            break
+        if expected_type != "private" and expected_chat != chat_id:
+            break
+        timestamp = step.get("timestamp")
+        if not isinstance(timestamp, str) or not timestamp:
+            raise ValueError(f"simulation step {scenario_id}/{scenario_step} has no timestamp")
+        return SimulationStepContext(scenario_id, scenario_step, timestamp)
+
+    raise ValueError("simulation step does not match a declared profile scenario")

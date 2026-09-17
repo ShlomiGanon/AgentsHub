@@ -38,6 +38,9 @@ class InitialEventEnvelope:
     # data or resolves a hold.
     sender_permission_level: str = "viewer"
     source_message_id: str | None = None
+    scenario_id: str | None = None
+    scenario_step: int | None = None
+    scenario_time: str | None = None
     occurred_at: str | None = None
     availability_start: str | None = None
     availability_end: str | None = None

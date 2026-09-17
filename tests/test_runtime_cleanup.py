@@ -77,7 +77,7 @@ def test_cleanup_preserves_seed_and_clears_runtime_state(tmp_path):
     assert report.after["telegram_groups"] == report.before["telegram_groups"] == 1
     assert report.after["team_status.team_members"] == report.before["team_status.team_members"] == 1
     assert report.after["team_status.roster_approval"] == report.before["team_status.roster_approval"] == 1
-    assert report.after["surveillance.cameras"] == report.before["surveillance.cameras"] == 5
+    assert report.after["surveillance.cameras"] == report.before["surveillance.cameras"] == 6
     assert report.after["surveillance.drones"] == report.before["surveillance.drones"] == 3
     assert (root / "simulation_runs" / "run-1" / "baseline.json").exists()
     assert not (root / "simulation_runs" / "run-1" / "run.json").exists()

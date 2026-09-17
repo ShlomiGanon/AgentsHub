@@ -1,6 +1,6 @@
 """The Friendly Forces dispatch-coordination agent (profiles/friendly_forces.py)."""
 
-from agents.contracts import ReportIngestionResult
+from agents.contracts import ReportIngestionResult, project_report_facts
 from agents.runtime import Agent, tool
 
 
@@ -38,7 +38,12 @@ class FriendlyForcesAgent(Agent):
             return ReportIngestionResult("rejected", "friendly-forces report has no description")
         # Generic intelligence facts are already durably stored as the event
         # before this hook runs.  No dispatch is implied by a report.
-        return ReportIngestionResult("committed", "friendly-forces report committed")
+        projection = project_report_facts(
+            event, domain="friendly_forces", projection_kind="operational_fact"
+        )
+        return ReportIngestionResult(
+            "committed", "friendly-forces report committed", projection=projection
+        )
 
     @tool(
         "dispatch_ambulance",

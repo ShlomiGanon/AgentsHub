@@ -104,6 +104,66 @@ class AgentResult:
 
 
 ReportIngestionStatus = Literal["committed", "rejected", "not_applicable", "failed"]
+DomainProjectionStatus = Literal["committed", "rejected", "failed"]
+DomainProjectionKind = Literal["authoritative_state", "operational_fact"]
+
+
+@dataclass(frozen=True)
+class DomainReportProjection:
+    """Typed, non-LLM projection of one committed report.
+
+    Domain stores remain the source of current state.  This value carries the
+    safe facts that explain what was projected; it intentionally contains no
+    raw model output or sensitive arguments.
+    """
+
+    domain: str
+    status: DomainProjectionStatus
+    projection_kind: DomainProjectionKind
+    event_id: str | None
+    source: str
+    source_message_id: str | None
+    area: str | None
+    entities: tuple[str, ...]
+    description: str
+    occurred_at: str | None
+    scenario_id: str | None = None
+    scenario_step: int | None = None
+    scenario_time: str | None = None
+    facts: dict[str, object] = field(default_factory=dict)
+
+
+def project_report_facts(
+    event: dict,
+    *,
+    domain: str,
+    status: DomainProjectionStatus = "committed",
+    projection_kind: DomainProjectionKind = "authoritative_state",
+    facts: dict[str, object] | None = None,
+) -> DomainReportProjection:
+    """Build a projection from persisted event facts and trusted metadata."""
+
+    if status not in {"committed", "rejected", "failed"}:
+        raise ValueError(f"invalid domain projection status: {status!r}")
+    if projection_kind not in {"authoritative_state", "operational_fact"}:
+        raise ValueError(f"invalid domain projection kind: {projection_kind!r}")
+
+    return DomainReportProjection(
+        domain=domain,
+        status=status,
+        projection_kind=projection_kind,
+        event_id=event.get("event_id"),
+        source=str(event.get("source") or ""),
+        source_message_id=event.get("source_message_id"),
+        area=event.get("area"),
+        entities=tuple(item for item in (event.get("entities") or ()) if isinstance(item, str)),
+        description=str(event.get("description") or ""),
+        occurred_at=event.get("occurred_at"),
+        scenario_id=event.get("scenario_id"),
+        scenario_step=event.get("scenario_step"),
+        scenario_time=event.get("scenario_time"),
+        facts=dict(facts or event.get("business_fields") or {}),
+    )
 
 
 @dataclass(frozen=True, init=False)
@@ -120,6 +180,7 @@ class ReportIngestionResult:
 
     status: ReportIngestionStatus
     detail: str = ""
+    projection: DomainReportProjection | None = None
 
     def __init__(
         self,
@@ -128,6 +189,7 @@ class ReportIngestionResult:
         *,
         status: ReportIngestionStatus | None = None,
         committed: bool | None = None,
+        projection: DomainReportProjection | None = None,
     ):
         if committed is not None:
             if committed_or_status is not None:
@@ -148,6 +210,7 @@ class ReportIngestionResult:
             raise ValueError(f"invalid report ingestion status: {resolved!r}")
         object.__setattr__(self, "status", resolved)
         object.__setattr__(self, "detail", detail)
+        object.__setattr__(self, "projection", projection)
 
     @property
     def committed(self) -> bool:

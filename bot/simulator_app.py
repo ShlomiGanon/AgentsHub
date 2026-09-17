@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import logging
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -27,9 +28,9 @@ from bot.app import register_handlers
 from bot.background_services import SingleInstanceLock
 from bot.contracts import BotDeps, BotStartupError, resolve_bot_service_key
 from bot.simulator_transport import FakeBotRequest, SimulatorTelegramClient, build_synthetic_text_update
-from bot.transports import HttpApiClient
+from bot.transports import HttpApiClient, simulation_request_context
 from config import ModelTierError, TierModel, resolve_tier_model_from_env
-from profiles import simulation_group_chat_id, simulation_user_telegram_id
+from profiles import resolve_simulation_step, simulation_group_chat_id, simulation_user_telegram_id
 from profiles.loader import ProfileLoadError, ProfileValidationError, load_profile
 from tools import configure_logging
 
@@ -125,6 +126,9 @@ class SimulatorRuntime:
         chat_type = payload.get("chat_type")
         text = payload.get("text")
         source_message_id = str(payload.get("source_message_id") or "")
+        scenario_id = payload.get("scenario_id")
+        scenario_step = payload.get("scenario_step")
+        supplied_scenario_time = payload.get("scenario_time")
 
         if sender_identity not in self._allowed_users:
             raise SimulatorRequestRefused(
@@ -145,6 +149,24 @@ class SimulatorRuntime:
         if not source_message_id:
             raise SimulatorRequestRefused("source_message_id is required")
 
+        simulation_context = None
+        if scenario_id is not None or scenario_step is not None or supplied_scenario_time is not None:
+            try:
+                simulation_context = resolve_simulation_step(
+                    tuple(getattr(self.loaded_profile, "simulations", ())),
+                    tuple(getattr(self.loaded_profile, "simulation_groups", ())),
+                    users=tuple(getattr(self.loaded_profile, "simulation_users", ())),
+                    scenario_id=str(scenario_id or ""),
+                    scenario_step=int(scenario_step),
+                    sender_identity=sender_identity,
+                    chat_id=chat_id,
+                    chat_type=str(chat_type),
+                )
+            except (TypeError, ValueError) as exc:
+                raise SimulatorRequestRefused(str(exc)) from exc
+            if supplied_scenario_time is not None and str(supplied_scenario_time) != simulation_context.scenario_time:
+                raise SimulatorRequestRefused("scenario_time does not match the declared scenario step")
+
         mark = self.telegram_client.mark()
         update = build_synthetic_text_update(
             update_id=self._next_id(),
@@ -154,8 +176,16 @@ class SimulatorRuntime:
             chat_type=chat_type,
             text=text,
             bot=self.bot,
+            date=(
+                datetime.fromisoformat(
+                    simulation_context.scenario_time.replace("Z", "+00:00")
+                ).timestamp()
+                if simulation_context is not None
+                else None
+            ),
         )
-        await self.application.process_update(update)
+        with simulation_request_context(simulation_context):
+            await self.application.process_update(update)
         reply_text = self.telegram_client.reply_since(mark, chat_id)
         return {"reply_text": reply_text, "watermark": _mark_to_dict(self.telegram_client.mark())}
 

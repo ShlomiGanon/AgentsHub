@@ -208,12 +208,15 @@ def _model_invoker_for(main_agent: "MainAgent"):
 
 
 def _apply_attendance_temporal_fields(
-    extraction_result, raw_text: str, received_at: str, timezone_name: str
+    extraction_result, raw_text: str, received_at: str, timezone_name: str,
+    reference_time: str | None = None,
 ):
     if extraction_result.classification != "team_attendance_report":
         return extraction_result
 
-    period = resolve_availability_period(raw_text, received_at, timezone_name)
+    # Simulation steps carry a trusted scenario reference; production keeps
+    # the real receive timestamp as the temporal basis.
+    period = resolve_availability_period(raw_text, reference_time or received_at, timezone_name)
     if period is not None:
         return replace(
             extraction_result,
@@ -231,6 +234,7 @@ def prepare_fast_path_report(
     raw_text: str,
     received_at: str,
     originated_from_commander: bool,
+    reference_time: str | None = None,
 ) -> FastPathPlan | None:
     """Return a validated direct-execution plan, or leave the legacy flow untouched."""
 
@@ -264,6 +268,7 @@ def prepare_fast_path_report(
         raw_text,
         received_at,
         deps.timezone_name,
+        reference_time,
     )
     owner_classification = _owner_report_classification(deps, extraction.classification or UNCLASSIFIED_TYPE)
     if owner_classification != extraction.classification:
@@ -358,6 +363,7 @@ def begin_report(
     conversation_id: str | None = None,
     deadline_at: str | None = None,
     sender_permission_level: str = "viewer",
+    simulation_context=None,
 ) -> str:
     """The synchronous prefix of a report: write the raw text and return the event ID, before any model call runs (§7.2's own requirement — "before any processing begins")."""
 
@@ -367,6 +373,9 @@ def begin_report(
             raw_text=raw_text, source=source, received_at=received_at, sender_identity=sender_identity,
             sender_permission_level=sender_permission_level,
             source_message_id=source_message_id,
+            scenario_id=getattr(simulation_context, "scenario_id", None),
+            scenario_step=getattr(simulation_context, "scenario_step", None),
+            scenario_time=getattr(simulation_context, "scenario_time", None),
             trace_id=get_trace_id() or None, conversation_id=conversation_id, deadline_at=deadline_at,
         ),
     )
@@ -403,7 +412,8 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
         return FlowResult(event_id, "failed", str(exc))
 
     extraction_result = _apply_attendance_temporal_fields(
-        extraction_result, raw_text, received_at, deps.timezone_name
+        extraction_result, raw_text, received_at, deps.timezone_name,
+        event.get("scenario_time"),
     )
 
     logger.info(
@@ -594,10 +604,8 @@ def _commit_report_domain_state(deps: "FlowDeps", event_id: str) -> ReportIngest
         if ingest_report is None:
             continue
         result = ingest_report(event)
-        # Keep compatibility with older domain agents while all built-in
-        # agents now return the typed result.
         if result is None:
-            continue
+            return ReportIngestionResult("failed", "domain report ingestion returned no typed result")
         if result.status != "not_applicable":
             return result
     if owner_name:
@@ -643,6 +651,7 @@ def begin_request(
     conversation_id: str | None = None,
     deadline_at: str | None = None,
     sender_permission_level: str = "viewer",
+    simulation_context=None,
 ) -> str:
     """The synchronous prefix of a request: write the raw text, already classified `human_activation` (§6.13 — there is nothing to extract), and return the event ID."""
 
@@ -652,6 +661,9 @@ def begin_request(
             raw_text=raw_text, source="telegram", received_at=received_at, sender_identity=sender_identity,
             sender_permission_level=sender_permission_level,
             source_message_id=source_message_id, occurred_at=received_at, occurred_at_is_fallback=False,
+            scenario_id=getattr(simulation_context, "scenario_id", None),
+            scenario_step=getattr(simulation_context, "scenario_step", None),
+            scenario_time=getattr(simulation_context, "scenario_time", None),
             trace_id=get_trace_id() or None, conversation_id=conversation_id, deadline_at=deadline_at,
         ),
     )

@@ -283,13 +283,14 @@ def test_unified_test_profile_uses_hebrew_findings_renderer(monkeypatch, tmp_pat
         NoModel(), protocol, registry, object(), "picture", caller_identity="viewer_user", sender_identity_filter=None
     )
 
-    assert picture.snapshot.cameras.active == 5
+    # unified_test's official SEC001 fixture includes CAM-08 (Task 47).
+    assert picture.snapshot.cameras.active == 6
     assert picture.snapshot.drones.ready == 2
     assert picture.snapshot.drones.charging == 1
     assert picture.snapshot.team.available == 0
     assert picture.snapshot.team.unavailable == 1
     assert picture.snapshot.team.not_reported == 14
-    assert "מצלמות: 5/5 פעילות" in picture.text
+    assert "מצלמות: 6/6 פעילות" in picture.text
     assert "קיימת יכולת אווירית זמינה: 2 רחפנים" in picture.text
     assert "אין כרגע כוח זמין מאושר" in picture.text
     assert "14 טרם דיווחו" in picture.text

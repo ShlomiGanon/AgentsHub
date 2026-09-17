@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from flask import Blueprint, jsonify, request
 
-from api.request_boundary import BOT_SERVICE_IDENTITY, AuthorizationError, ConflictError, InvalidInputError, NotFoundError, RunFailureError, ServiceUnavailableError, authenticate, require
+from api.request_boundary import BOT_SERVICE_IDENTITY, AuthorizationError, ConflictError, InvalidInputError, NotFoundError, RunFailureError, ServiceUnavailableError, authenticate, is_authenticated_bot_request, require
 from history import record_event_outcome, storage_timestamp
 
 from orchestrator.flows import begin_report, run_report_extraction
@@ -66,7 +66,7 @@ from orchestrator.flows import (
 
 from protocols import CriticalityLevel, Protocol, ProtocolEditError, add_protocol, remove_protocol, replace_protocol
 from profiles.loader import hash_profile_file
-from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy
+from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, resolve_simulation_step
 from persistence import NotFoundError as PersistenceNotFoundError
 from api.simulations import find_simulation_scenario, materialize_simulation, simulation_catalog_payload
 
@@ -78,6 +78,49 @@ if TYPE_CHECKING:
 
 def _now() -> str:
     return storage_timestamp(datetime.now(timezone.utc))
+
+
+def _simulation_context_from_request(ctx, sender_identity: str, chat_id: str | None, chat_type: str | None):
+    """Accept simulation metadata only from the authenticated simulator service.
+
+    Ordinary /Msg callers never receive a scenario context.  A simulator step
+    must match the loaded profile's canonical scenario, sender and group; the
+    timestamp is then read from that declaration rather than trusted from the
+    request body.
+    """
+
+    marker = request.headers.get("X-Simulation-Mode")
+    supplied = any(
+        request.headers.get(name) is not None
+        for name in ("X-Simulation-ID", "X-Simulation-Step", "X-Simulation-Time")
+    )
+    if marker is None and not supplied:
+        return None
+    if marker != "true" or not is_authenticated_bot_request():
+        raise AuthorizationError("simulation metadata requires an authenticated simulator service")
+    scenario_id = request.headers.get("X-Simulation-ID") or ""
+    step_value = request.headers.get("X-Simulation-Step") or ""
+    try:
+        scenario_step = int(step_value)
+    except (TypeError, ValueError):
+        raise InvalidInputError("X-Simulation-Step must be a positive integer", field="X-Simulation-Step") from None
+    try:
+        context = resolve_simulation_step(
+            tuple(getattr(ctx.loaded_profile, "simulations", ())),
+            tuple(getattr(ctx.loaded_profile, "simulation_groups", ())),
+            users=tuple(getattr(ctx.loaded_profile, "simulation_users", ())),
+            scenario_id=scenario_id,
+            scenario_step=scenario_step,
+            sender_identity=str(sender_identity),
+            chat_id=str(chat_id or ""),
+            chat_type=str(chat_type or "private"),
+        )
+        supplied_time = request.headers.get("X-Simulation-Time")
+        if supplied_time != context.scenario_time:
+            raise InvalidInputError("X-Simulation-Time does not match the declared scenario step", field="X-Simulation-Time")
+        return context
+    except ValueError as exc:
+        raise InvalidInputError(str(exc), field="X-Simulation-ID") from exc
 
 
 def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
@@ -349,6 +392,13 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             not isinstance(event_data_event_id, str) or not event_data_event_id.strip()
         ):
             raise InvalidInputError(messages.text("api.event_data_event_id_invalid"), field="event_data_event_id")
+
+        simulation_context = _simulation_context_from_request(
+            ctx,
+            str(sender_identity),
+            str(telegram_chat_id) if telegram_chat_id is not None else None,
+            str(telegram_chat_type) if telegram_chat_type is not None else None,
+        )
 
         trace_id = get_trace_id() or new_trace_id()
         set_trace_id(trace_id)
@@ -725,6 +775,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                         ctx.deps, text, received_at, sender_identity, source_message_id,
                         conversation_id=conversation_id, deadline_at=deadline_at,
                         sender_permission_level=level.name.lower(),
+                        simulation_context=simulation_context,
                     )
                 except Exception:
                     ctx.queue.release_reservation(reservation)
@@ -875,6 +926,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     str(text),
                     received_at,
                     level >= PermissionLevel.COMMANDER,
+                    getattr(simulation_context, "scenario_time", None),
                 )
             except OrchestrationParseError as exc:
                 logger.warning(
@@ -901,6 +953,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     conversation_id=conversation_id,
                     deadline_at=deadline_at,
                     sender_permission_level=level.name.lower(),
+                    simulation_context=simulation_context,
                 )
             except Exception:
                 ctx.queue.release_reservation(reservation)
@@ -1050,6 +1103,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     ctx.deps, text, "telegram", received_at, sender_identity, source_message_id,
                     conversation_id=conversation_id, deadline_at=deadline_at,
                     sender_permission_level=level.name.lower(),
+                    simulation_context=simulation_context,
                 )
             except Exception:
                 ctx.queue.release_reservation(reservation)
@@ -1087,6 +1141,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 ctx.deps, text, received_at, sender_identity, source_message_id,
                 conversation_id=conversation_id, deadline_at=deadline_at,
                 sender_permission_level=level.name.lower(),
+                simulation_context=simulation_context,
             )
         except Exception:
             ctx.queue.release_reservation(reservation)
