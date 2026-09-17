@@ -309,7 +309,14 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
         except GroupNotRegisteredError as exc:
             raise AuthorizationError(messages.text("api.group_not_registered", chat_id=exc.chat_id)) from exc
         if is_scoped_target(scoped_agent):
-            ctx = dataclasses.replace(app_ctx, deps=scope_deps(app_ctx.deps, scoped_agent))
+            scoped_deps = scope_deps(app_ctx.deps, scoped_agent)
+            # Preserve the persisted group binding as trusted runtime context
+            # for queued workers.  The classifier may refine a report only
+            # within this owner's domain; it can never override this value.
+            ctx = dataclasses.replace(
+                app_ctx,
+                deps=dataclasses.replace(scoped_deps, group_owner=scoped_agent),
+            )
             logger.info(
                 "message scoped to group agent",
                 extra={"event": "group_scope_applied", "chat_id": str(telegram_chat_id), "agent": scoped_agent, "trace_id": get_trace_id()},

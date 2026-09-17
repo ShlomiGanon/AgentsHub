@@ -167,6 +167,9 @@ class FlowDeps:
     timezone_name: str = "UTC"
     conversation_history_turns: int = 0
     conversation_history_ttl_hours: int = 24
+    # Trusted routing context set by /Msg for a registered Telegram group.
+    # This value comes from the persisted group binding, never from model text.
+    group_owner: str | None = None
 
 
 @dataclass(frozen=True)
@@ -246,7 +249,14 @@ def prepare_fast_path_report(
     )
     if not intake.confident or intake.extraction is None or intake.decision is None:
         return None
-    if intake.intent.intent != "report" or intake.decision.selection.status != "selected":
+    # A report explicitly asking for an action belongs to the action pipeline;
+    # the deterministic report fast path must never turn an action into a
+    # silent domain-ingestion success.
+    if (
+        intake.intent.intent != "report"
+        or intake.intent.requests_action
+        or intake.decision.selection.status != "selected"
+    ):
         return None
 
     extraction = _apply_attendance_temporal_fields(
@@ -255,6 +265,9 @@ def prepare_fast_path_report(
         received_at,
         deps.timezone_name,
     )
+    owner_classification = _owner_report_classification(deps, extraction.classification or UNCLASSIFIED_TYPE)
+    if owner_classification != extraction.classification:
+        extraction = replace(extraction, classification=owner_classification, classification_status="resolved")
     if extraction.occurred_at is not None:
         try:
             parse_timestamp(extraction.occurred_at)
@@ -415,9 +428,17 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
     # not an event type) (REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 /
     # item #6). `determine_clarification_hold` still keys off the *original*
     # extraction result, unchanged — this only affects what gets persisted.
-    if determine_clarification_hold(extraction_result):
-        record_event_state(deps.persistence, event_id, {"classification": UNCLASSIFIED_TYPE})
     resolved_classification = extraction_result.classification or UNCLASSIFIED_TYPE
+    owner_classification = _owner_report_classification(deps, resolved_classification)
+    if owner_classification != resolved_classification:
+        record_event_state(deps.persistence, event_id, {"classification": owner_classification})
+        resolved_classification = owner_classification
+
+    # A trusted group owner may refine an otherwise unresolved/misclassified
+    # report into its own declared domain.  Unscoped/private messages retain
+    # the legacy clarification behavior.
+    if determine_clarification_hold(extraction_result) and not getattr(deps, "group_owner", None):
+        record_event_state(deps.persistence, event_id, {"classification": UNCLASSIFIED_TYPE})
 
     gate_result = _apply_required_fields_gate(deps, event_id, main_agent, resolved_classification)
     if gate_result is not None:
@@ -429,7 +450,7 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
     # such as attendance, continue to their declared protocol/tool path.
     if resolved_classification != UNCLASSIFIED_TYPE:
         report_commit = _commit_report_domain_state(deps, event_id)
-        if report_commit is not None:
+        if report_commit.status != "not_applicable":
             return _complete_committed_report(deps, event_id, report_commit)
 
     return _continue_after_required_fields(deps, event_id, main_agent, insights_agent, raw_text, resolved_classification)
@@ -520,7 +541,35 @@ def _continue_after_required_fields(
     return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent)
 
 
-def _commit_report_domain_state(deps: "FlowDeps", event_id: str) -> ReportIngestionResult | None:
+def _owner_report_classification(deps: "FlowDeps", classification: str) -> str:
+    """Constrain report classification to trusted group ownership.
+
+    Agents declare the event types they can ingest.  A classifier may refine a
+    report within that set, but cannot move a group-owned report into another
+    domain.  If the owner has no declared report type in the active profile,
+    the original classification is retained so legacy/private behavior stays
+    unchanged.
+    """
+
+    owner_name = getattr(deps, "group_owner", None)
+    if not owner_name:
+        return classification
+    try:
+        owner = deps.registry.get(owner_name)
+    except KeyError:
+        return classification
+    owned_types = tuple(getattr(owner, "owned_report_types", ()))
+    registry = deps.event_type_registry
+    is_valid = getattr(registry, "is_valid", lambda value: True)
+    if classification in owned_types and is_valid(classification):
+        return classification
+    default_type = getattr(owner, "default_report_type", None)
+    if isinstance(default_type, str) and default_type in owned_types and is_valid(default_type):
+        return default_type
+    return classification
+
+
+def _commit_report_domain_state(deps: "FlowDeps", event_id: str) -> ReportIngestionResult:
     """Commit a report through the owning domain agent, if one declares a hook.
 
     Event persistence is already the authoritative source for generic
@@ -531,14 +580,33 @@ def _commit_report_domain_state(deps: "FlowDeps", event_id: str) -> ReportIngest
     """
 
     event = deps.persistence.fetch_event(event_id) or {}
-    for agent in deps.registry.all():
+    owner_name = getattr(deps, "group_owner", None)
+    if owner_name:
+        try:
+            agents = (deps.registry.get(owner_name),)
+        except KeyError:
+            return ReportIngestionResult("failed", "group owner is not available for report ingestion")
+    else:
+        agents = deps.registry.all()
+
+    for agent in agents:
         ingest_report = getattr(agent, "ingest_report", None)
         if ingest_report is None:
             continue
         result = ingest_report(event)
-        if result is not None:
+        # Keep compatibility with older domain agents while all built-in
+        # agents now return the typed result.
+        if result is None:
+            continue
+        if result.status != "not_applicable":
             return result
-    return None
+    if owner_name:
+        # ``not_applicable`` is an intentional outcome for owners such as the
+        # team-status agent whose attendance reports continue through their
+        # declared attendance protocol/tool.  The registry is already scoped,
+        # so this cannot fall through to an unrelated domain.
+        return ReportIngestionResult("not_applicable")
+    return ReportIngestionResult("not_applicable")
 
 
 def _complete_committed_report(deps: "FlowDeps", event_id: str, result: ReportIngestionResult) -> FlowResult:
@@ -1061,7 +1129,7 @@ def continue_from_risk_assessment(
     if selection.status == "no_match":
         if classification != UNCLASSIFIED_TYPE and not requires_side_effecting_protocol:
             report_commit = _commit_report_domain_state(deps, event_id)
-            if report_commit is not None:
+            if report_commit.status != "not_applicable":
                 return _complete_committed_report(deps, event_id, report_commit)
             report_commit = ReportIngestionResult(True, "event report committed")
             return _complete_committed_report(deps, event_id, report_commit)

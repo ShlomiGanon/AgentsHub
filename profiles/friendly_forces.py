@@ -67,7 +67,7 @@ PROTOCOLS = [
     ),
 ]
 
-EVENT_TYPES = ["fire", "medical", "crime", "military_threat"]
+EVENT_TYPES = ["fire", "medical", "crime", "military_threat", "friendly_forces_report"]
 AREAS = ["north_sector", "south_sector"]
 
 _FRIENDLY_FORCES_DATA_DIR = Path(__file__).resolve().parent.parent / "data"

@@ -1214,7 +1214,11 @@ def make_operational_intake(
     if any(type(intent_payload[field_name]) is not bool for field_name in intent_flags):
         raise OrchestrationParseError("operational intake intent flags must be booleans")
 
-    intent_result = IntentResult(intent, "single operational intake")
+    intent_result = IntentResult(
+        intent,
+        "single operational intake",
+        requests_action=bool(intent_payload["requests_action"]),
+    )
     if intent != "report" or not intent_payload["confident"] or not classification_payload["confident"]:
         return OperationalIntake(intent_result, None, None, False)
     evidence = intent_payload["evidence"]

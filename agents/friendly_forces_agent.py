@@ -1,10 +1,16 @@
 """The Friendly Forces dispatch-coordination agent (profiles/friendly_forces.py)."""
 
+from agents.contracts import ReportIngestionResult
 from agents.runtime import Agent, tool
 
 
 class FriendlyForcesAgent(Agent):
     name = "friendly_forces_agent"
+    # Friendly-forces groups own intelligence reports.  The event itself is
+    # the authoritative persisted report; this hook makes that terminal
+    # outcome explicit without fabricating an action/tool receipt.
+    owned_report_types = ("friendly_forces_report",)
+    default_report_type = "friendly_forces_report"
     role = (
         "A dispatch-coordination specialist agent that records requests to send ambulance, police, "
         "firefighter, or military response units to a named location. Every dispatch is recorded as "
@@ -24,6 +30,15 @@ class FriendlyForcesAgent(Agent):
     def __init__(self, model: str, api_key: str | None = None):
         self.dispatches_recorded: list[str] = []
         super().__init__(model, api_key)
+
+    def ingest_report(self, event: dict) -> ReportIngestionResult:
+        if event.get("classification") != self.default_report_type:
+            return ReportIngestionResult("not_applicable")
+        if not str(event.get("description") or "").strip():
+            return ReportIngestionResult("rejected", "friendly-forces report has no description")
+        # Generic intelligence facts are already durably stored as the event
+        # before this hook runs.  No dispatch is implied by a report.
+        return ReportIngestionResult("committed", "friendly-forces report committed")
 
     @tool(
         "dispatch_ambulance",

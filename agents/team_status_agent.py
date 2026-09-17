@@ -70,6 +70,8 @@ class TeamStatusAgent(Agent):
     """Specialist used only by readiness-team profiles."""
 
     name = "team_status_agent"
+    owned_report_types = ("team_availability", "team_attendance_report")
+    default_report_type = "team_attendance_report"
     role = (
         "Maintains the approved readiness-team roster and its current attendance picture. "
         "It opens the daily attendance cycle, records normalized available or unavailable "

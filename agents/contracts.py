@@ -103,17 +103,55 @@ class AgentResult:
     tool_receipts: tuple["ToolReceipt", ...] = ()
 
 
-@dataclass(frozen=True)
-class ReportIngestionResult:
-    """Authoritative domain-store result for a validated report.
+ReportIngestionStatus = Literal["committed", "rejected", "not_applicable", "failed"]
 
-    Report ingestion is distinct from action/tool execution: a committed
-    report has no synthetic ``ToolReceipt``.  ``committed`` is set only by the
-    owning domain agent after its persistence operation succeeds.
+
+@dataclass(frozen=True, init=False)
+class ReportIngestionResult:
+    """Typed outcome of a domain report-ingestion attempt.
+
+    The first positional argument intentionally remains compatible with the
+    historical ``ReportIngestionResult(True/False, detail)`` constructor while
+    allowing domain agents to report the previously ambiguous ``not_applicable``
+    and ``failed`` outcomes explicitly.  ``committed`` is a derived property,
+    true only after authoritative persistence succeeds; reports never receive a
+    synthetic :class:`ToolReceipt`.
     """
 
-    committed: bool
+    status: ReportIngestionStatus
     detail: str = ""
+
+    def __init__(
+        self,
+        committed_or_status: bool | str | None = None,
+        detail: str = "",
+        *,
+        status: ReportIngestionStatus | None = None,
+        committed: bool | None = None,
+    ):
+        if committed is not None:
+            if committed_or_status is not None:
+                raise TypeError("specify either positional status or committed, not both")
+            committed_or_status = committed
+        if committed_or_status is None and status is None:
+            raise TypeError("report ingestion result requires a status")
+        if status is None:
+            if isinstance(committed_or_status, bool):
+                resolved: ReportIngestionStatus = "committed" if committed_or_status else "rejected"
+            elif isinstance(committed_or_status, str):
+                resolved = committed_or_status  # type: ignore[assignment]
+            else:
+                raise TypeError("report ingestion status must be bool or a supported status string")
+        else:
+            resolved = status
+        if resolved not in {"committed", "rejected", "not_applicable", "failed"}:
+            raise ValueError(f"invalid report ingestion status: {resolved!r}")
+        object.__setattr__(self, "status", resolved)
+        object.__setattr__(self, "detail", detail)
+
+    @property
+    def committed(self) -> bool:
+        return self.status == "committed"
 
 
 @dataclass(frozen=True)

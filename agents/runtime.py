@@ -387,16 +387,16 @@ class Agent:
     def exposed_tools(self) -> tuple[ToolInfo, ...]:
         return self.descriptor.tools
 
-    def ingest_report(self, event: dict) -> ReportIngestionResult | None:
+    def ingest_report(self, event: dict) -> ReportIngestionResult:
         """Optionally commit a validated report to this agent's domain store.
 
-        Domain agents override this hook; the default keeps report ingestion a
-        no-op for agents that own no mutable domain state.  It is deliberately
-        separate from ``execute_tool`` so a report commit never fabricates an
-        action receipt.
+        Domain agents override this hook; the default reports an explicit
+        ``not_applicable`` outcome for agents that own no mutable domain state.
+        It is deliberately separate from ``execute_tool`` so a report commit
+        never fabricates an action receipt.
         """
 
-        return None
+        return ReportIngestionResult("not_applicable")
 
     def execute_tool(
         self,

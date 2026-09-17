@@ -1009,6 +1009,7 @@ EVENT_TYPES = [
     "drone_mission_query",
     "team_availability",
     "team_attendance_report",
+    "friendly_forces_report",
     "emergency_dispatch",
     "historical_query",
 ]
