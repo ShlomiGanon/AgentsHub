@@ -907,12 +907,167 @@ def _operational_intake_schema(
         },
         **_OPERATIONAL_DECISION_SCHEMA["properties"],
     }
+    required_fields = (
+        "intent",
+        "intent_confident",
+        "asks_for_information",
+        "reports_occurrence",
+        "requests_action",
+        "social_only",
+        "is_quoted",
+        "is_hypothetical",
+        "intent_evidence",
+        "classification",
+        "classification_confident",
+        "entities",
+        "description",
+        "business_fields",
+        *_OPERATIONAL_DECISION_SCHEMA["required"],
+    )
     return {
         "type": "object",
         "properties": properties,
-        "required": list(properties),
+        "required": list(required_fields),
         "additionalProperties": False,
     }
+
+
+def _schema_type_matches(value: object, expected_type: str) -> bool:
+    if expected_type == "null":
+        return value is None
+    if expected_type == "boolean":
+        return type(value) is bool
+    if expected_type == "integer":
+        return type(value) is int
+    if expected_type == "number":
+        return type(value) in {int, float}
+    if expected_type == "string":
+        return isinstance(value, str)
+    if expected_type == "array":
+        return isinstance(value, list)
+    if expected_type == "object":
+        return isinstance(value, dict)
+    return False
+
+
+def _schema_default(schema: dict) -> object:
+    if "default" in schema:
+        return schema["default"]
+
+    expected_type = schema.get("type")
+    if isinstance(expected_type, list) and "null" in expected_type:
+        return None
+    if expected_type == "null":
+        return None
+    if expected_type == "array":
+        return []
+    if expected_type == "object":
+        return {}
+    raise OrchestrationParseError("operational intake schema has an optional field without a safe default")
+
+
+def _operational_intake_schema_failure(
+    schema: dict,
+    payload: object,
+    *,
+    category: str,
+    missing: tuple[str, ...] = (),
+    unknown: tuple[str, ...] = (),
+) -> OrchestrationParseError:
+    expected_keys = tuple(sorted(str(key) for key in schema.get("properties", {})))
+    returned_keys = tuple(sorted(str(key) for key in payload)) if isinstance(payload, dict) else ()
+    logger.warning(
+        "structured response schema validation failed",
+        extra={
+            "event": "structured_schema_validation_failed",
+            "schema_name": "operational_intake",
+            "expected_keys": expected_keys,
+            "returned_keys": returned_keys,
+            "missing_keys": missing,
+            "unknown_keys": unknown,
+            "schema_validation_category": category,
+        },
+    )
+
+    details = [f"category: {category}"]
+    if missing:
+        details.append(f"missing fields: {', '.join(missing)}")
+    if unknown:
+        details.append(f"unknown fields: {', '.join(unknown)}")
+    message = (
+        "operational intake schema has missing or unknown fields"
+        if category.startswith("object_keys")
+        else "operational intake schema validation failed"
+    )
+    return OrchestrationParseError(message + " (" + "; ".join(details) + ")")
+
+
+def _validate_operational_intake_schema(payload: dict, schema: dict) -> dict:
+    properties = schema.get("properties", {})
+    required = set(schema.get("required", ()))
+    returned = set(payload)
+    missing = tuple(sorted(required - returned))
+    unknown = tuple(sorted(returned - set(properties))) if schema.get("additionalProperties") is False else ()
+    if missing or unknown:
+        raise _operational_intake_schema_failure(
+            schema,
+            payload,
+            category="object_keys",
+            missing=missing,
+            unknown=unknown,
+        )
+
+    normalized = dict(payload)
+    for field_name, field_schema in properties.items():
+        if field_name not in normalized:
+            normalized[field_name] = _schema_default(field_schema)
+
+    def validate_value(value: object, value_schema: dict, path: str) -> None:
+        expected_types = value_schema.get("type")
+        if isinstance(expected_types, str):
+            expected_types = (expected_types,)
+        if expected_types and not any(_schema_type_matches(value, type_name) for type_name in expected_types):
+            raise _operational_intake_schema_failure(schema, payload, category=f"type:{path}")
+
+        if "enum" in value_schema and value not in value_schema["enum"]:
+            raise _operational_intake_schema_failure(schema, payload, category=f"enum:{path}")
+
+        if isinstance(value, (int, float)) and type(value) is not bool:
+            minimum = value_schema.get("minimum")
+            maximum = value_schema.get("maximum")
+            if minimum is not None and value < minimum:
+                raise _operational_intake_schema_failure(schema, payload, category=f"minimum:{path}")
+            if maximum is not None and value > maximum:
+                raise _operational_intake_schema_failure(schema, payload, category=f"maximum:{path}")
+
+        if isinstance(value, list) and isinstance(value_schema.get("items"), dict):
+            for index, item in enumerate(value):
+                validate_value(item, value_schema["items"], f"{path}[{index}]")
+
+        if isinstance(value, dict):
+            nested_properties = value_schema.get("properties", {})
+            nested_required = set(value_schema.get("required", ()))
+            nested_missing = tuple(sorted(nested_required - set(value)))
+            nested_unknown = (
+                tuple(sorted(set(value) - set(nested_properties)))
+                if value_schema.get("additionalProperties") is False
+                else ()
+            )
+            if nested_missing or nested_unknown:
+                raise _operational_intake_schema_failure(
+                    schema,
+                    payload,
+                    category=f"object_keys:{path}",
+                    missing=nested_missing,
+                    unknown=nested_unknown,
+                )
+            for nested_name, nested_schema in nested_properties.items():
+                if nested_name in value:
+                    validate_value(value[nested_name], nested_schema, f"{path}.{nested_name}")
+
+    for field_name, field_schema in properties.items():
+        validate_value(normalized[field_name], field_schema, field_name)
+    return normalized
 
 
 def make_operational_intake(
@@ -952,7 +1107,9 @@ def make_operational_intake(
         "Intent identifies what the user is doing; missing domain fields do not make a clear report intent ambiguous. "
         "Set unavailable business values to null. Do not invent identity, source_message_id, received_at, or original_text. "
         "availability_start and availability_end must be null: trusted runtime code resolves final temporal values. "
-        "protocol_status must be selected, ambiguous, or no_match. Keep reasons concise.\n"
+        "protocol_status must be selected, ambiguous, or no_match. Keep reasons concise. "
+        "All fields listed as required by the schema must be present. Nullable optional fields may be omitted; "
+        "the runtime treats an omitted optional field as null.\n"
         f"Received-at reference: {received_at}\n"
         f"Event types JSON: {json.dumps(event_types, ensure_ascii=False)}\n"
         f"Areas JSON: {json.dumps(areas, ensure_ascii=False)}\n"
@@ -975,8 +1132,7 @@ def make_operational_intake(
     if result.status != "success":
         raise OrchestrationParseError(f"operational intake was refused or unusable: {result.text}")
     payload = _load_unique_json_object(_normalize_operational_decision_json(result.text), "operational intake")
-    if set(payload) != set(schema["properties"]):
-        raise OrchestrationParseError("operational intake schema has missing or unknown fields")
+    payload = _validate_operational_intake_schema(payload, schema)
 
     intent = payload["intent"]
     if intent not in {"question", "report", "request", "conversational", "needs_clarification"}:
@@ -2166,7 +2322,10 @@ def answer_question_from_plan(
     sub_answers = run_parallel_specialists(task_runners, max_workers=max_fanout, timeout_per_specialist=25.0)
 
     if len(sub_answers) == 1:
-        return QuestionAnswer(next(iter(sub_answers.values())))
+        return QuestionAnswer(
+            next(iter(sub_answers.values())),
+            {"source_refs": [f"agent:{name}" for name in sub_answers]},
+        )
     with stage_context("question_composition"):
         composed = main_agent.process(
             _build_compose_prompt(question, sub_answers),
@@ -2176,14 +2335,23 @@ def answer_question_from_plan(
     if composed.status != "success":
         valid_items = [txt for txt in sub_answers.values() if not txt.startswith("(\u05d7\u05e8\u05d9\u05d2\u05ea \u05d6\u05de\u05df") and not txt.startswith("(\u05e9\u05d2\u05d9\u05d0\u05d4")]
         if valid_items:
-            return QuestionAnswer("\n".join(f"• {item}" for item in valid_items))
+            return QuestionAnswer(
+                "\n".join(f"• {item}" for item in valid_items),
+                {"source_refs": [f"agent:{name}" for name in sub_answers]},
+            )
         raise OrchestrationParseError(f"answer composition did not produce a usable response: {composed.text}")
 
     failed_agents = [name for name, txt in sub_answers.items() if txt.startswith("(\u05d7\u05e8\u05d9\u05d2\u05ea \u05d6\u05de\u05df") or txt.startswith("(\u05e9\u05d2\u05d9\u05d0\u05d4")]
     if failed_agents:
-        return QuestionAnswer(f"{composed.text.strip()}\n(\u05d4\u05e2\u05e8\u05d4: \u05dc\u05d0 \u05d4\u05ea\u05e7\u05d1\u05dc \u05d3\u05d9\u05d5\u05d5\u05d7 \u05de-{', '.join(failed_agents)})")
+        return QuestionAnswer(
+            f"{composed.text.strip()}\n(\u05d4\u05e2\u05e8\u05d4: \u05dc\u05d0 \u05d4\u05ea\u05e7\u05d1\u05dc \u05d3\u05d9\u05d5\u05d5\u05d7 \u05de-{', '.join(failed_agents)})",
+            {"source_refs": [f"agent:{name}" for name in sub_answers]},
+        )
 
-    return QuestionAnswer(composed.text)
+    return QuestionAnswer(
+        composed.text,
+        {"source_refs": [f"agent:{name}" for name in sub_answers]},
+    )
 
 
 def _build_compose_prompt(question: str, sub_answers: dict[str, str]) -> str:

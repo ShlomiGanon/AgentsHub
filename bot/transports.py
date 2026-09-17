@@ -446,6 +446,7 @@ class HttpApiClient(BotApiClient):
             steps_completed=tuple(response_payload.get("steps_completed", ())),
             failure_reason=response_payload.get("detail") if outcome == "failed" else None,
             failed_step_agent_name=response_payload.get("failed_step_agent_name"),
+            execution_evidence=tuple(response_payload.get("execution_evidence", ())),
         )
 
     async def poll_pending_notifications(self, since: int, wait_seconds: int = 0) -> tuple[tuple[BotNotification, ...], int]:
@@ -549,6 +550,7 @@ class HttpApiClient(BotApiClient):
                 protocol_name=payload.get("protocol_name"),
                 risk_level=payload.get("risk_level"),
                 protocol_reason=payload.get("protocol_reason"),
+                execution_evidence=tuple(payload.get("execution_evidence", ())),
             )
         if kind == "job_failed":
             return FailureNotice(

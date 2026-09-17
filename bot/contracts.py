@@ -150,6 +150,9 @@ class JobResult:
     protocol_name: str | None = None
     risk_level: str | None = None
     protocol_reason: str | None = None
+    # Ephemeral evidence that a side-effecting action reached the Tool Runtime.
+    # The API derives this from persisted step state; it is never model supplied.
+    execution_evidence: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)

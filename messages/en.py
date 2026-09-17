@@ -57,6 +57,7 @@ MESSAGES = {
     "result.what_was_done": "What was done:",
     "result.insight": "Insight:",
     "result.protocol_suffix": "Protocol: {protocol_name} ({risk_level}, {reason})",
+    "result.action_unverified": "Action status could not be verified; no execution receipt was recorded.",
     "failure.failed_step": "Failed step: {agent}",
     "failure.reason": "Reason: {reason}",
     "failure.completed_before": "Completed before the failure:",
@@ -200,6 +201,7 @@ MESSAGES = {
         "the older one first, then reply again."
     ),
     "api.clarify_check_record_do": "Could you clarify what you want me to check, record, or do?",
+    "api.unsupported_response": "I cannot verify that response from the system's authorized sources.",
     "api.clarify_action": "Could you clarify what you want me to do?",
     "api.drone_selection_invalid": "No matching drone was identified. Choose a name or ID from this list:\n{choices}\nYou can also reply: all",
     "api.drone_recall_none": "There are no active drone missions; no state was changed.",

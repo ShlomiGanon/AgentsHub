@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
 from messages import MessageCatalog, MessageCatalogError, get_catalog
+from orchestrator.flows import ResponseClaim, ResponseEnvelope, render_response
 
 from typing import TYPE_CHECKING
 
@@ -41,6 +42,42 @@ MessageKind = Literal[
     "declined",
     "event_data_needed",
 ]
+
+_SIDE_EFFECT_PROTOCOLS = frozenset(
+    {
+        "dispatch_response",
+        "dispatch_drone_to_incident",
+        "return_drone_to_base",
+        "recall_drone_to_base",
+        "dispatch_emergency_forces",
+        "update_camera_observation",
+        "record_attendance_response",
+    }
+)
+
+
+def _guard_job_text(result: "JobResult", text: str, messages: MessageCatalog) -> str:
+    """Apply the shared authority boundary to action-result delivery."""
+
+    if result.protocol_name not in _SIDE_EFFECT_PROTOCOLS or result.execution_evidence is None:
+        return text
+
+    if result.outcome != "succeeded":
+        return text
+
+    if not result.execution_evidence:
+        return messages.text("result.action_unverified")
+
+    receipt = result.execution_evidence[0]
+    envelope = ResponseEnvelope(
+        text,
+        "action_status",
+        claims=(
+            ResponseClaim("action_status", "executed", receipt),
+            ResponseClaim("tool_execution", "receipt", receipt),
+        ),
+    )
+    return render_response(envelope, fallback=messages.text("result.action_unverified"))
 
 _HEADER_KEYS: dict[MessageKind, str] = {
     "clarification_needed": "header.clarification_needed",
@@ -183,6 +220,8 @@ def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None
             lines.append(_short_failure_reason(result.failure_reason))
         elif result.protocol_name == "overall_situational_picture" and result.insight_text and any("\u0590" <= c <= "\u05ea" for c in result.insight_text):
             lines.append(result.insight_text.strip())
+        elif result.protocol_name in _SIDE_EFFECT_PROTOCOLS and result.execution_evidence == ():
+            lines.append(messages.text("result.action_unverified"))
         elif result.steps_completed:
             compact_lines: list[str] = []
             for step in result.steps_completed:
@@ -197,7 +236,7 @@ def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None
             lines.extend(compact_lines)
         else:
             lines.append(messages.text("result.verdict", outcome=_outcome_word(result.outcome, messages)))
-        return "\n".join(lines)
+        return _guard_job_text(result, "\n".join(lines), messages)
 
     kind: MessageKind = "result" if result.outcome != "declined" else "declined"
     lines = [format_header(kind, messages), "", messages.text("result.verdict", outcome=_outcome_word(result.outcome, messages))]
@@ -231,7 +270,7 @@ def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None
             ),
         ]
 
-    return "\n".join(lines)
+    return _guard_job_text(result, "\n".join(lines), messages)
 
 
 def format_failure_notice(notice: "FailureNotice", catalog: MessageCatalog | None = None) -> str:

@@ -39,6 +39,17 @@ sys.modules[insights.__name__] = insights
 from orchestrator import flows
 from orchestrator.flows import FlowDeps, FlowResult, assemble_core_agents, process_message
 from orchestrator.group_routing import GroupBinding, GroupNotRegisteredError, GroupRoutingTable, resolve_scope, scope_deps
+from orchestrator.response_contract import (
+    ResponseAuthorityError,
+    ResponseClaim,
+    ResponseEnvelope,
+    capability_response,
+    permission_response,
+    informational_response,
+    render_response,
+    refusal_response,
+    validate_response,
+)
 
 __all__ = [
     "FlowDeps",
@@ -55,4 +66,13 @@ __all__ = [
     "process_message",
     "resolve_scope",
     "scope_deps",
+    "ResponseAuthorityError",
+    "ResponseClaim",
+    "ResponseEnvelope",
+    "capability_response",
+    "permission_response",
+    "informational_response",
+    "render_response",
+    "refusal_response",
+    "validate_response",
 ]

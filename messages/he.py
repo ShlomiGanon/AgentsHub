@@ -56,6 +56,7 @@ MESSAGES = {
     "risk.low": "נמוך",
     "result.what_was_done": "מה בוצע:",
     "result.insight": "תובנה:",
+    "result.action_unverified": "לא ניתן לאמת את ביצוע הפעולה; לא נשמר אישור ביצוע.",
     "result.protocol_suffix": "פרוטוקול: {protocol_name} ({risk_level}, {reason})",
     "failure.failed_step": "השלב שנכשל: {agent}",
     "failure.reason": "סיבה: {reason}",
@@ -199,6 +200,7 @@ MESSAGES = {
         "ולאחר מכן ניתן להשיב שוב."
     ),
     "api.clarify_check_record_do": "נא להבהיר מה ברצונך שאבדוק, אתעד או אבצע.",
+    "api.unsupported_response": "לא ניתן לאמת את התשובה ממקורות המערכת המורשים.",
     "api.clarify_action": "נא להבהיר מה ברצונך שאבצע.",
     "api.drone_selection_invalid": "לא זיהיתי רחפן מתאים. בחר שם או מזהה מהרשימה:\n{choices}\nאפשר גם לכתוב: כולם",
     "api.drone_recall_none": "אין כרגע רחפנים במשימה; לא בוצע שינוי.",

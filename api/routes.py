@@ -56,6 +56,9 @@ from orchestrator.flows import (
     prepare_fast_path_report,
     run_report_extraction,
     resume_after_event_data,
+    ResponseEnvelope,
+    informational_response,
+    render_response,
 )
 
 from protocols import CriticalityLevel, Protocol, ProtocolEditError, add_protocol, remove_protocol, replace_protocol
@@ -636,6 +639,16 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     answer = history_ans.answer
                 except Exception as exc:
                     answer = f"\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05e9\u05dc\u05d9\u05e4\u05ea \u05d4\u05d9\u05e1\u05d8\u05d5\u05e8\u05d9\u05d4: {exc}"
+                else:
+                    source_refs = tuple(
+                        f"event:{source.source_id}"
+                        for source in getattr(history_ans, "sources_used", ())
+                    )
+                    if source_refs:
+                        answer = render_response(
+                            informational_response(answer, source_refs),
+                            fallback=messages.text("api.unsupported_response"),
+                        )
                 _remember("assistant", answer)
                 return jsonify({"taken_as": "question", "answer": answer, "protocol": matched_protocol.name})
 
@@ -655,10 +668,21 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     caller_identity=caller_identity,
                     sender_identity_filter=None if is_commander else caller_identity,
                 )
-                _remember("assistant", picture.text)
+                picture_text = render_response(
+                    informational_response(
+                        picture.text,
+                        tuple(
+                            f"agent:{domain['domain']}"
+                            for domain in picture.provenance()["domains"]
+                            if domain["succeeded"]
+                        ),
+                    ),
+                    fallback=messages.text("api.unsupported_response"),
+                )
+                _remember("assistant", picture_text)
                 return jsonify({
                     "taken_as": "question",
-                    "answer": picture.text,
+                    "answer": picture_text,
                     "protocol": matched_protocol.name,
                     "provenance": picture.provenance(),
                 })
@@ -825,6 +849,10 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 )
             except OrchestrationParseError as exc:
                 raise RunFailureError(str(exc)) from exc
+            reply = render_response(
+                ResponseEnvelope(reply, "conversational"),
+                fallback=messages.text("api.unsupported_response"),
+            )
             _remember("assistant", reply)
             return jsonify({"taken_as": "conversational", "answer": reply})
 
@@ -858,6 +886,14 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     provenance = None
             except OrchestrationParseError as exc:
                 raise RunFailureError(str(exc)) from exc
+            if provenance is not None:
+                source_refs = tuple(provenance.get("source_refs", ()))
+                source_refs += tuple(f"event:{source_id}" for source_id in provenance.get("source_ids", ()))
+                if source_refs:
+                    answer = render_response(
+                        informational_response(answer, source_refs),
+                        fallback=messages.text("api.unsupported_response"),
+                    )
             _remember("assistant", answer)
             response_payload = {"taken_as": "question", "answer": answer}
             if provenance is not None:
@@ -1593,6 +1629,23 @@ def _failed_step_agent_name(event: dict) -> str | None:
     return None
 
 
+def _verified_execution_evidence(event: dict) -> list[str]:
+    """Return only application-owned receipts for direct tool execution.
+
+    A successful model step is not evidence that a side effect happened.  A
+    persisted succeeded step with an explicit direct tool is the narrow proof
+    currently available without introducing the full action lifecycle.
+    """
+
+    return [
+        f"tool:{step['direct_tool_name']}"
+        for step in event.get("steps", [])
+        if step.get("status") == "succeeded"
+        and step.get("direct_tool_name")
+        and step.get("result_text") is not None
+    ]
+
+
 def job_status(ctx: "ApiContext", event_id: str) -> dict | None:
     event = ctx.deps.persistence.fetch_event(event_id)
     if event is None:
@@ -1606,6 +1659,7 @@ def job_status(ctx: "ApiContext", event_id: str) -> dict | None:
         steps_completed = _steps_completed(event)
         if steps_completed:
             response_payload["steps_completed"] = steps_completed
+        response_payload["execution_evidence"] = _verified_execution_evidence(event)
 
         if event["outcome"] == "failed":
             if event.get("outcome_failure_reason"):
@@ -1936,6 +1990,7 @@ def _job_payload(ctx: "ApiContext", event_id: str) -> dict:
         "protocol_name": event.get("selected_protocol"),
         "risk_level": event.get("risk_level"),
         "protocol_reason": event.get("protocol_reason"),
+        "execution_evidence": _verified_execution_evidence(event),
     }
 
 
