@@ -112,11 +112,20 @@ class SurveillanceAgent(Agent):
     )
 
     surveillance_db_path = ""
+    # Kept enabled for backwards-compatible specialist fixtures. Deployment
+    # profiles that use a real operational registry must explicitly disable
+    # demo provisioning on their concrete agent class.
+    surveillance_seed_enabled = True
+    surveillance_seed_profile = ""
 
     def __init__(self, model: str, api_key: str | None = None):
         if not self.surveillance_db_path:
             raise TypeError("SurveillanceAgent requires a class-level surveillance_db_path")
-        self.surveillance_store = open_surveillance_persistence(self.surveillance_db_path)
+        self.surveillance_store = open_surveillance_persistence(
+            self.surveillance_db_path,
+            seed_demo_data=self.surveillance_seed_enabled,
+            seed_profile=self.surveillance_seed_profile,
+        )
         super().__init__(model, api_key)
 
     def process(

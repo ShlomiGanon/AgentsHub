@@ -1105,5 +1105,9 @@ MESSAGES = {
     "orchestrator.follow_up.marker.approved": "approved",
     "orchestrator.follow_up.prefix.why": "why ",
     "orchestrator.follow_up.prefix.what": "what ",
+    "failure.deadline_expired": "The event expired before processing could finish.",
+    "failure.approval_expired": "The approval window expired; the action was not executed.",
+    "failure.required_event_data_expired": "The event-data window expired; the event was not executed.",
+    "failure.clarification_expired": "The clarification window expired; the event was not executed.",
     "orchestrator.follow_up.prefix.this": "",
 }

@@ -16,6 +16,17 @@ class SurveillancePersistenceError(Exception):
 
 
 @dataclass(frozen=True)
+class SeedReconciliationResult:
+    """Compact outcome of an additive canonical surveillance-seed pass."""
+
+    examined: int
+    inserted: int
+    preserved: int
+    skipped: int
+    errors: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class CameraInfo:
     camera_id: str
     name: str
@@ -54,6 +65,9 @@ class DroneMission:
 
 
 class SurveillancePersistenceInterface(ABC):
+    @abstractmethod
+    def reconcile_camera_seed(self, seed: tuple[tuple, ...] | None = None) -> SeedReconciliationResult: ...
+
     @abstractmethod
     def list_cameras(self, area: str | None = None, status: str | None = None) -> list[dict]: ...
 
@@ -110,7 +124,16 @@ class SurveillancePersistenceInterface(ABC):
         raise NotImplementedError
 
 
-def open_surveillance_persistence(db_path: str) -> SurveillancePersistenceInterface:
+def open_surveillance_persistence(
+    db_path: str,
+    *,
+    seed_demo_data: bool = True,
+    seed_profile: str = "",
+) -> SurveillancePersistenceInterface:
     from persistence.surveillance_store import SQLiteSurveillancePersistence
 
-    return SQLiteSurveillancePersistence(db_path)
+    return SQLiteSurveillancePersistence(
+        db_path,
+        seed_demo_data=seed_demo_data,
+        seed_profile=seed_profile,
+    )

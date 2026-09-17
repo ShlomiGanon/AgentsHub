@@ -1098,5 +1098,9 @@ MESSAGES = {
     "orchestrator.follow_up.marker.approved": "מאשר",
     "orchestrator.follow_up.prefix.why": "למה ",
     "orchestrator.follow_up.prefix.what": "מה ",
+    "failure.deadline_expired": "\u05ea\u05d5\u05e7\u05e3 \u05d4\u05d0\u05d9\u05e8\u05d5\u05e2 \u05e4\u05d2; \u05d4\u05e2\u05d9\u05d1\u05d5\u05d3 \u05dc\u05d0 \u05d4\u05e1\u05ea\u05d9\u05d9\u05dd \u05d1\u05d6\u05de\u05df.",
+    "failure.approval_expired": "\u05e4\u05e7\u05e2 \u05d6\u05de\u05df \u05d4\u05d0\u05d9\u05e9\u05d5\u05e8; \u05d4\u05e4\u05e2\u05d5\u05dc\u05d4 \u05dc\u05d0 \u05d1\u05d5\u05e6\u05e2\u05d4.",
+    "failure.required_event_data_expired": "\u05e4\u05e7\u05e2 \u05d6\u05de\u05df \u05d4\u05e0\u05ea\u05d5\u05e0\u05d9\u05dd; \u05d4\u05d0\u05d9\u05e8\u05d5\u05e2 \u05dc\u05d0 \u05d1\u05d5\u05e6\u05e2.",
+    "failure.clarification_expired": "\u05e4\u05e7\u05e2 \u05d6\u05de\u05df \u05d4\u05d4\u05d1\u05d4\u05e8\u05d4; \u05d4\u05d0\u05d9\u05e8\u05d5\u05e2 \u05dc\u05d0 \u05d1\u05d5\u05e6\u05e2.",
     "orchestrator.follow_up.prefix.this": "זה ",
 }

@@ -5,6 +5,7 @@ import sys
 from persistence import contracts
 from persistence.contracts import (
     ConversationEventLink,
+    EventFinalization,
     EventSearchCriteria,
     NotFoundError,
     PersistenceError,
@@ -28,6 +29,7 @@ from persistence.surveillance_contracts import (
     CameraInfo,
     DroneInfo,
     DroneMission,
+    SeedReconciliationResult,
     SurveillancePersistenceError,
     SurveillancePersistenceInterface,
     open_surveillance_persistence,
@@ -42,6 +44,7 @@ sys.modules[f"{__name__}.sqlite_backend"] = sqlite_store
 __all__ = [
     "EventSearchCriteria",
     "ConversationEventLink",
+    "EventFinalization",
     "NotFoundError",
     "PersistenceError",
     "PersistenceInterface",
@@ -53,6 +56,7 @@ __all__ = [
     "CameraInfo",
     "DroneInfo",
     "DroneMission",
+    "SeedReconciliationResult",
     "SurveillancePersistenceError",
     "SurveillancePersistenceInterface",
     "open_surveillance_persistence",

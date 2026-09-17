@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from persistence.surveillance_contracts import (
     CameraStatus,
     DroneStatus,
     MissionStatus,
+    SeedReconciliationResult,
     SurveillancePersistenceError,
     SurveillancePersistenceInterface,
 )
@@ -57,6 +59,8 @@ CREATE INDEX IF NOT EXISTS idx_cameras_area ON cameras(area);
 CREATE INDEX IF NOT EXISTS idx_drones_status ON drones(status);
 CREATE INDEX IF NOT EXISTS idx_missions_status ON drone_missions(status);
 """
+
+logger = logging.getLogger(__name__)
 
 # Realistic travel times (seconds) between sectors for demo simulation
 _SECTOR_BASE_ETA = {
@@ -121,8 +125,16 @@ _DRONE_STATUS_SYNONYMS = {
 
 
 class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
-    def __init__(self, db_path: str):
+    def __init__(
+        self,
+        db_path: str,
+        *,
+        seed_demo_data: bool = True,
+        seed_profile: str = "",
+    ):
         self.db_path = db_path
+        self.seed_demo_data = seed_demo_data
+        self.seed_profile = seed_profile or "unspecified"
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -135,23 +147,18 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
     def _init_db(self) -> None:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
-            self._seed_demo_data_if_empty(conn)
+            result = self._seed_demo_data_if_empty(conn)
 
-    def _seed_demo_data_if_empty(self, conn: sqlite3.Connection) -> None:
-        cursor = conn.execute("SELECT COUNT(*) FROM cameras")
-        if cursor.fetchone()[0] == 0:
-            now = _utc_now()
-            cameras_seed = [(*seed, now) for seed in DEMO_CAMERA_SEED]
-            conn.executemany(
-                """
-                INSERT INTO cameras (camera_id, name, area, status, azimuth_degrees, feed_summary, last_updated)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                cameras_seed,
-            )
+        self._log_reconciliation(result)
+
+    def _seed_demo_data_if_empty(self, conn: sqlite3.Connection) -> SeedReconciliationResult:
+        if self.seed_demo_data:
+            result = self._reconcile_camera_seed(conn, DEMO_CAMERA_SEED)
+        else:
+            result = SeedReconciliationResult(0, 0, 0, 1)
 
         drone_cursor = conn.execute("SELECT COUNT(*) FROM drones")
-        if drone_cursor.fetchone()[0] == 0:
+        if self.seed_demo_data and drone_cursor.fetchone()[0] == 0:
             now = _utc_now()
             drones_seed = [(*seed, None, now) for seed in DEMO_DRONE_SEED]
             conn.executemany(
@@ -161,6 +168,97 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
                 """,
                 drones_seed,
             )
+
+        return result
+
+    def reconcile_camera_seed(
+        self,
+        seed: tuple[tuple, ...] | None = None,
+    ) -> SeedReconciliationResult:
+        """Add missing canonical cameras without changing existing rows."""
+
+        if not self.seed_demo_data:
+            result = SeedReconciliationResult(0, 0, 0, 1)
+            self._log_reconciliation(result)
+            return result
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result = self._reconcile_camera_seed(conn, seed or DEMO_CAMERA_SEED)
+
+        self._log_reconciliation(result)
+        return result
+
+    def _log_reconciliation(self, result: SeedReconciliationResult) -> None:
+        logger.info(
+            "surveillance seed reconciliation complete",
+            extra={
+                "event": "surveillance_seed_reconciliation",
+                "profile": self.seed_profile,
+                "domain": "surveillance",
+                "examined": result.examined,
+                "inserted": result.inserted,
+                "preserved": result.preserved,
+                "skipped": result.skipped,
+                "errors": len(result.errors),
+            },
+        )
+
+    def _reconcile_camera_seed(
+        self,
+        conn: sqlite3.Connection,
+        seed: tuple[tuple, ...],
+    ) -> SeedReconciliationResult:
+        examined = 0
+        inserted = 0
+        preserved = 0
+        skipped = 0
+        errors: list[str] = []
+        seen_ids: set[str] = set()
+        now = _utc_now()
+
+        for record in seed:
+            examined += 1
+
+            if (
+                not isinstance(record, (tuple, list))
+                or len(record) != 6
+                or not isinstance(record[0], str)
+                or not record[0].strip()
+            ):
+                skipped += 1
+                errors.append(f"invalid camera seed record at index {examined - 1}")
+                continue
+
+            camera_id = record[0].strip()
+            if camera_id in seen_ids:
+                skipped += 1
+                errors.append(f"duplicate canonical camera id '{camera_id}'")
+                continue
+            seen_ids.add(camera_id)
+
+            existing = conn.execute(
+                "SELECT 1 FROM cameras WHERE camera_id = ?",
+                (camera_id,),
+            ).fetchone()
+            if existing is not None:
+                preserved += 1
+                continue
+
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO cameras (camera_id, name, area, status, azimuth_degrees, feed_summary, last_updated)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (*record, now),
+                )
+            except sqlite3.Error as exc:
+                errors.append(f"camera '{camera_id}' could not be inserted: {exc}")
+                continue
+            inserted += 1
+
+        return SeedReconciliationResult(examined, inserted, preserved, skipped, tuple(errors))
 
     def clear_runtime_state(self) -> dict[str, int]:
         """Remove missions and restore mutable camera/drone state to demo seed."""

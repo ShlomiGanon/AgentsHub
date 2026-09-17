@@ -206,6 +206,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_environment_config.py` | Test | Internal | Verifies environment-backed model and runtime configuration. |
 | `tests/test_event_metadata_propagation.py` | Test | Internal | Verifies trusted event metadata reaches execution without model inference. |
 | `tests/test_file_catalog.py` | Test | Internal | Ensures this catalog exactly matches the first-party repository tree. |
+| `tests/test_expiry_finalization.py` | Test | Internal | Verifies canonical Event/Hold expiry finalization, recovery idempotency, queue expiry handling, and scheduler maintenance. |
 | `tests/test_friendly_forces_agent.py` | Test | Internal | Verifies friendly forces agent dispatch tools and coordination records. |
 | `tests/test_group_routing.py` | Test | Internal | Verifies the group routing table, staleness refresh, scope resolution, and dependency scoping. |
 | `tests/test_history_agent.py` | Test | Internal | Verifies history agent behavior and edge cases. |
@@ -266,6 +267,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_sub_agent_team_status_profile.py` | Test | Internal | Verifies the readiness-team profile, isolated database configuration, agent, and protocol declaration. |
 | `tests/test_surveillance_agent.py` | Test | Internal | Verifies camera, drone, dispatch, mission, and overview tools. |
 | `tests/test_surveillance_persistence.py` | Test | Internal | Verifies surveillance database initialization, updates, dispatch, and mission state. |
+| `tests/test_surveillance_seed_reconciliation.py` | Test | Internal | Verifies additive canonical camera-seed reconciliation, runtime-state preservation, idempotency, unknown-entity retention, and production isolation. |
 | `tests/test_team_status_agent.py` | Test | Internal | Verifies daily attendance, multi-day unavailability, late approval, and protocol execution. |
 | `tests/test_team_status_persistence.py` | Test | Internal | Verifies readiness-team roster approval, message idempotency, late-response isolation, and separate SQLite schemas. |
 | `tests/test_unified_role_and_security.py` | Test | Internal | Verifies unified role-based security, button workflows, and confirmation flows. |

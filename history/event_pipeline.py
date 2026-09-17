@@ -325,9 +325,11 @@ def record_event_outcome(
 ) -> None:
     if outcome not in VALID_OUTCOMES:
         raise ValueError(f"invalid event outcome: '{outcome}'")
-    persistence.update_event(
+    persistence.finalize_event_if_open(
         event_id,
-        {"outcome": outcome, "outcome_failure_reason": failure_reason, "insight_text": insight_text},
+        outcome,
+        failure_reason=failure_reason,
+        insight_text=insight_text,
     )
 
 
@@ -361,6 +363,8 @@ def record_action_lifecycle(
 
     event = persistence.fetch_event(event_id) or {}
     previous = event.get("action_state")
+    if event.get("outcome") is not None and previous != state:
+        raise ValueError("cannot change action lifecycle after event is terminal")
     if state not in _ACTION_TRANSITIONS:
         raise ValueError(f"invalid action lifecycle state: {state!r}")
     if previous != state and state not in _ACTION_TRANSITIONS.get(previous, set()):

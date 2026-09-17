@@ -48,6 +48,17 @@ class ConversationEventLink:
     tool_receipts: tuple[dict, ...] = ()
 
 
+@dataclass(frozen=True)
+class EventFinalization:
+    """Atomic result of an event-terminalization attempt."""
+
+    event_id: str
+    event_changed: bool
+    previous_outcome: str | None
+    outcome: str | None
+    resolved_hold_ids: tuple[str, ...] = ()
+
+
 class PersistenceInterface(ABC):
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -68,6 +79,32 @@ class PersistenceInterface(ABC):
     @abstractmethod
     def fetch_event_by_source_message(self, source: str, sender_identity: str, source_message_id: str) -> dict | None:
         """Return an idempotently ingested event, if present."""
+
+    @abstractmethod
+    def list_expired_events(self, now: str, limit: int = 100) -> list[dict]:
+        """Return bounded, deterministic candidates whose open outcome deadline has passed."""
+
+    @abstractmethod
+    def finalize_event_if_open(
+        self,
+        event_id: str,
+        outcome: str,
+        failure_reason: str | None = None,
+        *,
+        insight_text: str | None = None,
+        action_state: str | None = None,
+        action_failure_reason: str | None = None,
+        resolved_by: str | None = None,
+        resolution: dict | None = None,
+        finalized_at: str | None = None,
+        emit_notification: bool = True,
+    ) -> EventFinalization:
+        """Atomically finalize an open event and optionally resolve its holds.
+
+        The write is compare-and-set against ``outcome IS NULL``.  A terminal
+        event is never overwritten, while an attached unresolved hold may
+        still be resolved in the same transaction when requested.
+        """
 
     @abstractmethod
     def fetch_events_range(self, start: Any, end: Any) -> list[dict]:

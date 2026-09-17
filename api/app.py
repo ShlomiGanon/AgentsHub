@@ -4,6 +4,7 @@ import os
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from flask import Flask, g, request
@@ -22,7 +23,15 @@ from config import ModelTierError, SettingsStore, TierModel, load_base_config, r
 from history import SummaryScheduler
 from messages import set_current_catalog
 from history.query import HistoryQueryService
-from orchestrator.flows import FlowDeps, GroupRoutingTable, PolicyAwareEventQueue, SerialEventQueue, assemble_core_agents
+from orchestrator.flows import (
+    FlowDeps,
+    GroupRoutingTable,
+    PolicyAwareEventQueue,
+    SerialEventQueue,
+    assemble_core_agents,
+    finalize_expired_event,
+    finalize_expired_events,
+)
 from persistence import open_persistence
 from profiles import build_area_registry, build_event_type_registry, ensure_simulation_entities
 from profiles.loader import load_profile
@@ -141,6 +150,63 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
         conversation_history_ttl_hours=loaded_profile.conversation_history_ttl_hours,
     )
 
+    startup_recovery = finalize_expired_events(
+        deps,
+        datetime.now(timezone.utc),
+        recovery_mode=True,
+        limit=100,
+    )
+    startup_skipped = [item for item in startup_recovery if item.status == "skipped" and item.skip_reason not in {"already_reconciled"}]
+    if startup_skipped:
+        try:
+            persistence.close()
+        finally:
+            raise RuntimeError(
+                "startup expiry recovery left events unresolved: "
+                + ", ".join(f"{item.event_id} ({item.skip_reason})" for item in startup_skipped)
+            )
+    logger.info(
+        "expired work startup recovery complete",
+        extra={
+            "event": "expired_work_startup_recovery",
+            "finalized": sum(item.status == "finalized" for item in startup_recovery),
+            "examined": len(startup_recovery),
+            "recovery_mode": True,
+        },
+    )
+
+    def _on_expired_queue_item(payload: object) -> None:
+        event_id = payload[0] if isinstance(payload, tuple) and payload and isinstance(payload[0], str) else None
+        if event_id is None:
+            logger.warning(
+                "expired queue item has no event identity",
+                extra={"event": "queue_expiry_identity_missing", "item": repr(payload)},
+            )
+            return
+        finalization = finalize_expired_event(deps, event_id)
+        if finalization.status == "skipped" and finalization.skip_reason not in {"already_reconciled", "active_processing"}:
+            logger.error(
+                "expired queued event could not be finalized",
+                extra={"event": "queue_expiry_finalization_skipped", "event_id": event_id, "reason": finalization.skip_reason},
+            )
+
+    def _run_expiry_sweep(now: datetime) -> None:
+        results = finalize_expired_events(
+            deps,
+            now,
+            active_event_ids=queue.active_event_ids(),
+            limit=100,
+        )
+        unresolved = [item for item in results if item.status == "skipped" and item.skip_reason not in {"already_reconciled", "active_processing"}]
+        if unresolved:
+            logger.error(
+                "runtime expiry sweep left events unresolved",
+                extra={
+                    "event": "runtime_expiry_sweep_unresolved",
+                    "event_ids": [item.event_id for item in unresolved],
+                },
+            )
+
     queue_policy = loaded_profile.optimization_policy
     if queue_policy.event_queue_mode == "policy":
         queue = PolicyAwareEventQueue(
@@ -148,12 +214,13 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
             workers=queue_policy.event_workers,
             max_size=queue_policy.event_queue_size,
             reserved_continuation_percent=queue_policy.reserved_continuation_percent,
+            expired_item_callback=_on_expired_queue_item,
         )
     else:
-        queue = SerialEventQueue(_dispatch_queue_item)
+        queue = SerialEventQueue(_dispatch_queue_item, expired_item_callback=_on_expired_queue_item)
     queue.start()
 
-    scheduler = SummaryScheduler(persistence, history_agent)
+    scheduler = SummaryScheduler(persistence, history_agent, maintenance_callback=_run_expiry_sweep)
     scheduler.start()
 
     group_routing = build_group_routing(persistence, registry)

@@ -27,6 +27,8 @@ class SubAgentSurveillanceAgent(SurveillanceAgent):
     """Binds the reusable specialist to this profile's isolated surveillance DB."""
 
     surveillance_db_path = SURVEILLANCE_DB_PATH
+    surveillance_seed_enabled = False
+    surveillance_seed_profile = "profiles.sub_agent_surveillance"
 
 
 AGENTS = [

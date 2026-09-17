@@ -11,6 +11,7 @@ from queue import SimpleQueue
 
 from persistence.contracts import (
     ConversationEventLink,
+    EventFinalization,
     EventSearchCriteria,
     NotFoundError,
     PersistenceError,
@@ -477,6 +478,25 @@ class SQLitePersistence(PersistenceInterface):
         steps = updates.get("steps") or []
         column_updates = {key: value for key, value in updates.items() if key != "steps"}
 
+        if "outcome" in column_updates:
+            outcome = column_updates.pop("outcome")
+            if outcome is None:
+                raise PersistenceError("event outcome cannot be cleared")
+            failure_reason = column_updates.pop("outcome_failure_reason", None)
+            insight_text = column_updates.pop("insight_text", None)
+            if column_updates or steps:
+                other_updates = dict(column_updates)
+                if steps:
+                    other_updates["steps"] = steps
+                self.update_event(event_id, other_updates)
+            self.finalize_event_if_open(
+                event_id,
+                str(outcome),
+                failure_reason=failure_reason,
+                insight_text=insight_text,
+            )
+            return
+
         unknown_columns = set(column_updates) - _UPDATABLE_EVENT_COLUMNS
         if unknown_columns:
             raise PersistenceError(f"cannot update event column(s): {', '.join(sorted(unknown_columns))}")
@@ -496,23 +516,138 @@ class SQLitePersistence(PersistenceInterface):
                 if steps:
                     _upsert_steps(connection, event_id, steps)
 
-                outcome = column_updates.get("outcome")
-                notification_kinds = (
-                    _OUTCOME_TO_NOTIFICATION_KINDS.get(outcome, ())
-                    if outcome is not None and outcome != existing["outcome"]
-                    else ()
-                )
+                connection.commit()
+            except sqlite3.Error as exc:
+                connection.rollback()
+                raise PersistenceError(f"failed to update event '{event_id}': {exc}") from exc
+
+        self._submit_write(_do)
+
+    def list_expired_events(self, now: str, limit: int = 100) -> list[dict]:
+        if not isinstance(limit, int) or limit <= 0:
+            raise PersistenceError("expired event limit must be a positive integer")
+
+        connection = self._read_connection()
+        try:
+            event_rows = connection.execute(
+                "SELECT * FROM events "
+                "WHERE outcome IS NULL AND deadline_at IS NOT NULL "
+                "AND julianday(deadline_at) <= julianday(?) "
+                "ORDER BY julianday(deadline_at), event_id LIMIT ?",
+                (now, limit),
+            ).fetchall()
+            events = [_decode_event_row(event_row) for event_row in event_rows]
+            return self._attach_steps_many(connection, events)
+        finally:
+            connection.close()
+
+    def finalize_event_if_open(
+        self,
+        event_id: str,
+        outcome: str,
+        failure_reason: str | None = None,
+        *,
+        insight_text: str | None = None,
+        action_state: str | None = None,
+        action_failure_reason: str | None = None,
+        resolved_by: str | None = None,
+        resolution: dict | None = None,
+        finalized_at: str | None = None,
+        emit_notification: bool = True,
+    ) -> EventFinalization:
+        finalized_timestamp = finalized_at or datetime.now(timezone.utc).isoformat()
+        resolution_payload = dict(resolution or {})
+
+        def _do(connection: sqlite3.Connection) -> EventFinalization:
+            notification_kinds: tuple[str, ...] = ()
+
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                existing = connection.execute(
+                    "SELECT outcome FROM events WHERE event_id = ?", (event_id,)
+                ).fetchone()
+                if existing is None:
+                    raise NotFoundError(f"no such event: '{event_id}'")
+
+                previous_outcome = existing["outcome"]
+                event_changed = previous_outcome is None
+                if event_changed:
+                    updates = {
+                        "outcome": outcome,
+                        "outcome_failure_reason": failure_reason,
+                        "insight_text": insight_text,
+                    }
+                    set_parts = [f"{column} = :{column}" for column in updates]
+                    parameters = {
+                        column: _encode_event_value(column, value)
+                        for column, value in updates.items()
+                    }
+                    if action_state is not None:
+                        set_parts.extend(("action_state = :action_state", "action_state_updated_at = :action_state_updated_at"))
+                        parameters["action_state"] = action_state
+                        parameters["action_state_updated_at"] = finalized_timestamp
+                    if action_failure_reason is not None:
+                        set_parts.append("action_failure_reason = :action_failure_reason")
+                        parameters["action_failure_reason"] = action_failure_reason
+                    parameters["event_id"] = event_id
+                    event_update = connection.execute(
+                        f"UPDATE events SET {', '.join(set_parts)} "
+                        "WHERE event_id = :event_id AND outcome IS NULL",
+                        parameters,
+                    )
+                    event_changed = event_update.rowcount == 1
+                    if event_changed and emit_notification:
+                        notification_kinds = _OUTCOME_TO_NOTIFICATION_KINDS.get(outcome, ())
+                    if not event_changed:
+                        latest = connection.execute(
+                            "SELECT outcome FROM events WHERE event_id = ?", (event_id,)
+                        ).fetchone()
+                        previous_outcome = latest["outcome"] if latest is not None else previous_outcome
+
+                resolved_hold_ids: list[str] = []
+                if resolution is not None:
+                    hold_rows = connection.execute(
+                        "SELECT hold_id FROM held_events "
+                        "WHERE event_id = ? AND resolved = 0 ORDER BY created_at, hold_id",
+                        (event_id,),
+                    ).fetchall()
+                    for hold_row in hold_rows:
+                        hold_update = connection.execute(
+                            "UPDATE held_events SET resolved = 1, resolved_by = ?, "
+                            "resolved_at = ?, resolution = ? "
+                            "WHERE hold_id = ? AND resolved = 0",
+                            (
+                                resolved_by,
+                                finalized_timestamp,
+                                json.dumps(resolution_payload, ensure_ascii=False),
+                                hold_row["hold_id"],
+                            ),
+                        )
+                        if hold_update.rowcount == 1:
+                            resolved_hold_ids.append(hold_row["hold_id"])
+
                 for notification_kind in notification_kinds:
                     _insert_notification(connection, notification_kind, event_id)
 
                 connection.commit()
                 if notification_kinds:
                     self._wake_notification_waiters()
+
+                return EventFinalization(
+                    event_id=event_id,
+                    event_changed=event_changed,
+                    previous_outcome=previous_outcome,
+                    outcome=outcome if event_changed else previous_outcome,
+                    resolved_hold_ids=tuple(resolved_hold_ids),
+                )
             except sqlite3.Error as exc:
                 connection.rollback()
-                raise PersistenceError(f"failed to update event '{event_id}': {exc}") from exc
+                raise PersistenceError(f"failed to finalize event '{event_id}': {exc}") from exc
+            except BaseException:
+                connection.rollback()
+                raise
 
-        self._submit_write(_do)
+        return self._submit_write(_do)
 
     def fetch_event(self, event_id: str) -> dict | None:
         connection = self._read_connection()

@@ -3292,3 +3292,99 @@ no CI change was needed.
   localization suites: **419 passed**. `py_compile` and `git diff --check`
   passed. The known unrelated `tests/test_intent_attendance.py` expectation
   remains separately failing as documented in Task 47.
+
+### Task 49 ג€” Event / Hold Expiry Finalization and Recovery
+- **Status:** done
+- **Deviations:** No CAM-08 reconciliation, surveillance/team-status mutation,
+  simulator auto-advance, auto-send, auto-approval, side-effect replay,
+  Main Agent/SITREP change, or destructive DB reset/reseed was performed.
+  `pyrefly` was unavailable in the environment. An unpartitioned full pytest
+  command exceeded the 120-second execution limit; the focused regression set
+  passed completely.
+- **Implementation:** Added one canonical persistence CAS operation,
+  `finalize_event_if_open`, which terminalizes an open Event, optionally
+  resolves all attached unresolved holds in the same transaction, and emits
+  outcome notifications only for a newly terminalized Event. Direct legacy
+  outcome writes are routed through that operation. Expiry decisions are
+  centralized in `orchestrator.flows`: deadlines are checked with UTC-aware
+  parsing, approval/event-data/clarification holds receive explicit bounded
+  failure reasons, and only persisted successful ToolReceipt evidence can
+  reconcile an expired executing action as succeeded. No new ToolReceipt or
+  external action is created by recovery. Invalid or unsafe stale states are
+  skipped and surfaced for startup/runtime investigation.
+- **Runtime wiring:** Startup performs bounded recovery in `api.app` with
+  recovery notifications suppressed. The summary scheduler runs the bounded
+  expiry sweeper, excluding currently processing and pending queue Event IDs.
+  Queue items whose monotonic deadline expires invoke the same finalizer and do
+  not run their work function. Late action-lifecycle transitions cannot
+  overwrite a terminal Event. User-facing expiry reasons are catalog-localized
+  in English and Hebrew.
+- **Controlled unified_test recovery:** Using `profiles.unified_test.DB_PATH`
+  and the official finalizer path, baseline was 58 Events, 21 unresolved
+  holds (17 event-data, 4 approval), 62 notifications, and 0 ToolReceipts.
+  The first pass finalized **25 Events** and resolved **21 holds**, emitted no
+  notifications, and changed neither surveillance nor team-status DB hashes.
+  No unsafe stale candidate remained. The second pass examined 0 candidates
+  and finalized 0, demonstrating idempotent recovery. The active DB now has 0
+  unresolved holds and 0 open expired Events.
+- **Verification:** Focused expiry, API wiring, persistence, lifecycle,
+  orchestration, history and scheduler suites: **162 passed**. `compileall`
+  and `git diff --check` passed. Full pytest was attempted with the required
+  test-model environment: **1640 passed, 4 pre-existing/unrelated failures**
+  (two minimal-fixture approval tests, the known Task 47 intent-attendance
+  expectation, and the pre-existing file-catalog drift for three older test
+  files).
+
+### Task 50 — Canonical Simulation Seed Reconciliation
+- **Status:** done
+- **Deviations:** Scope remained limited to surveillance camera seed
+  reconciliation. Drones retain their separate insert-only-when-empty bootstrap
+  and were audited but not refactored; team/personnel provisioning likewise
+  remains on its existing roster/bootstrap paths. No report extraction,
+  DomainReportProjection, CAM-03, temporal attendance, Main Agent, SITREP,
+  simulator sequencing, scenario execution, Task 49 lifecycle behavior,
+  destructive DB operation, or `pyrefly.toml` change was made.
+- **Implementation:** Added the public `SeedReconciliationResult` contract and
+  `reconcile_camera_seed()` to the surveillance persistence interface. The
+  existing SQLite initialization path now compares the authoritative
+  `DEMO_CAMERA_SEED` by exact canonical `camera_id`, inserts only absent
+  cameras, preserves existing rows byte-for-byte at the operational-field
+  level, and never deletes unknown persisted cameras. Seed identity/configuration
+  is the canonical ID plus the seed's initial name, area, azimuth, and
+  baseline feed/status; because the current schema does not separate static
+  configuration from runtime state, every already-persisted row is authoritative
+  and no seed metadata is overwritten. Initialization and explicit passes emit
+  profile/domain/count/error structured logs. `seed_demo_data=False` is an
+  explicit non-demo/production boundary; `profiles.unified_test` opts in to the
+  canonical simulation seed.
+- **Focused verification:** Fresh DBs contain exactly the current seed
+  inventory CAM-01, CAM-02, CAM-03, CAM-04, CAM-05, CAM-08. An old five-camera
+  inventory received only CAM-08; offline/degraded statuses, descriptions, and
+  timestamps remained unchanged; unknown CAM-99 remained present; the second
+  pass inserted zero rows. Production-disabled persistence created no demo
+  cameras. The focused surveillance, Task 47/48, profile/startup, and Task 49
+  suites passed: **89 passed** in the combined focused run. `compileall` and
+  `git diff --check` passed.
+- **Controlled unified_test reconciliation:** Read-only baseline was 5
+  cameras (CAM-08 absent), 58 history Events, 62 notifications, 15 team
+  members, 2 attendance cycles, and 7 attendance responses. Opening the active
+  `profiles.unified_test` surveillance DB through the official persistence
+  factory inserted CAM-08 with its canonical identity (`CAM-08`, south_sector,
+  active, azimuth 0, fixture-reference feed). The resulting inventory is 6;
+  CAM-01..05 retained their prior status, descriptions, and timestamps. Two
+  explicit subsequent reconciliation passes returned `inserted=0`,
+  `preserved=6`, `errors=()`. History and team counts remained unchanged,
+  including no new Event or notification; existing ToolReceipt-bearing steps
+  remained unchanged. Task 49 remained clean with 0 expired open Events and 0
+  unresolved Holds.
+- **Regression:** Full pytest with the required test-model environment yielded
+  **1646 passed, 4 pre-existing/unrelated failures**: two minimal-fixture
+  approval tests whose selected protocol is absent from that fixture, the
+  pre-existing file-catalog drift for three older test files, and the known
+  Task 47 intent-attendance expectation. The same four failures were present in
+  the Task 49 baseline run.
+- **Remaining known gaps:** CAM-08 extraction/business_fields contract,
+  CAM-03 unsupported projection fields, Michael's temporal hold, Main Agent
+  Step 5 routing, scenario-run history contamination, the simulator's manual
+  processing gate/status, and bounded Main Agent SITREP reasoning remain open
+  and were not treated as fixed by this task.

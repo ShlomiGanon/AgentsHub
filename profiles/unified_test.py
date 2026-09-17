@@ -106,6 +106,8 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
     """Binds the visual surveillance specialist with Hebrew tactical tools."""
 
     surveillance_db_path = UNIFIED_SURVEILLANCE_DB_PATH
+    surveillance_seed_enabled = True
+    surveillance_seed_profile = "profiles.unified_test"
     role = _catalog_text("unified.surveillance.role")
     system_prompt = _catalog_text("unified.surveillance.system_prompt")
 
@@ -813,7 +815,10 @@ def _seed_mock_data() -> None:
     finally:
         hist_store.close()
 
-    open_surveillance_persistence(UNIFIED_SURVEILLANCE_DB_PATH)
+    open_surveillance_persistence(
+        UNIFIED_SURVEILLANCE_DB_PATH,
+        seed_profile="profiles.unified_test",
+    )
 
     team_store = open_team_status_persistence(UNIFIED_TEAM_STATUS_DB_PATH)
     now_dt = datetime.now(timezone.utc)

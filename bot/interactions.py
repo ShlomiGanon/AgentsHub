@@ -157,8 +157,13 @@ def split_message(text: str, limit: int = TELEGRAM_MESSAGE_LIMIT) -> list[str]:
 _FAILURE_REASON_DISPLAY_LIMIT = 240
 
 
-def _short_failure_reason(failure_reason: str) -> str:
+def _short_failure_reason(failure_reason: str, catalog: MessageCatalog | None = None) -> str:
     stripped = failure_reason.strip()
+    if catalog is not None:
+        try:
+            return catalog.text(f"failure.{stripped}")
+        except MessageCatalogError:
+            pass
     if len(stripped) <= _FAILURE_REASON_DISPLAY_LIMIT:
         return stripped
     return stripped[:_FAILURE_REASON_DISPLAY_LIMIT].rstrip() + "…"
@@ -217,7 +222,7 @@ def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None
             messages.text("result.job_id", job_id=result.job_id),
         ]
         if result.failure_reason:
-            lines.append(_short_failure_reason(result.failure_reason))
+            lines.append(_short_failure_reason(result.failure_reason, messages))
         elif result.protocol_name == "overall_situational_picture" and result.insight_text:
             lines.append(result.insight_text.strip())
         elif result.protocol_name in _SIDE_EFFECT_PROTOCOLS and result.execution_evidence == ():
@@ -242,7 +247,7 @@ def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None
     lines = [format_header(kind, messages), "", messages.text("result.verdict", outcome=_outcome_word(result.outcome, messages))]
 
     if result.failure_reason:
-        lines += ["", _short_failure_reason(result.failure_reason)]
+        lines += ["", _short_failure_reason(result.failure_reason, messages)]
 
     if result.steps_completed:
         lines += ["", messages.text("result.what_was_done")]
@@ -280,7 +285,7 @@ def format_failure_notice(notice: "FailureNotice", catalog: MessageCatalog | Non
         format_header("failed", messages),
         "",
         messages.text("failure.failed_step", agent=agent),
-        messages.text("failure.reason", reason=_short_failure_reason(notice.failure_reason)),
+        messages.text("failure.reason", reason=_short_failure_reason(notice.failure_reason, messages)),
     ]
 
     if notice.steps_completed_before_failure:

@@ -112,11 +112,19 @@ def _is_newer(left: str, right: str) -> bool:
 
 
 class SummaryScheduler:
-    def __init__(self, persistence, history_agent, clock=None, poll_interval_seconds: float = 60.0):
+    def __init__(
+        self,
+        persistence,
+        history_agent,
+        clock=None,
+        poll_interval_seconds: float = 60.0,
+        maintenance_callback=None,
+    ):
         self._persistence = persistence
         self._history_agent = history_agent
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._poll_interval_seconds = poll_interval_seconds
+        self._maintenance_callback = maintenance_callback
         self._wake_event = threading.Event()
         self._stop_event = threading.Event()
         self._thread = None
@@ -239,6 +247,8 @@ class SummaryScheduler:
             if self._stop_event.is_set():
                 return
             try:
+                if self._maintenance_callback is not None:
+                    self._maintenance_callback(self._clock().astimezone(timezone.utc))
                 self.reconcile()
                 self._last_run_ok = True
                 self._last_run_error = None

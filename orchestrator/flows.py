@@ -114,6 +114,259 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class ExpiryFinalizationResult:
+    """Auditable result of one canonical expiry reconciliation attempt."""
+
+    event_id: str
+    status: Literal["finalized", "skipped"]
+    previous_outcome: str | None
+    outcome: str | None
+    finalization_reason: str | None
+    recovery_mode: bool
+    hold_kinds: tuple[str, ...] = ()
+    resolved_hold_ids: tuple[str, ...] = ()
+    recovery_evidence: tuple[str, ...] = ()
+    skip_reason: str | None = None
+
+
+_EXPIRY_FINALIZER_IDENTITY = "system:expiry_finalizer"
+_EXPIRY_HOLD_REASONS = {
+    "approval": "approval_expired",
+    "event_data": "required_event_data_expired",
+    "clarification": "clarification_expired",
+}
+_ACTION_STATES_FAILED_BY_EXPIRY = frozenset({"requested", "pending_approval", "approved", "executing"})
+
+
+def _expiry_timestamp(value: datetime | None) -> datetime:
+    current = value or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        return current.replace(tzinfo=timezone.utc)
+    return current.astimezone(timezone.utc)
+
+
+def _event_deadline_has_expired(event: dict, now: datetime) -> bool | None:
+    deadline_at = event.get("deadline_at")
+    if not deadline_at:
+        return False
+
+    try:
+        return parse_timestamp(str(deadline_at)) <= now
+    except (TypeError, ValueError):
+        return None
+
+
+def _unresolved_hold_kinds(persistence, event_id: str) -> tuple[str, ...]:
+    kinds = []
+    for kind in ("approval", "event_data", "clarification"):
+        if any(hold.get("event_id") == event_id for hold in persistence.list_held_events(kind)):
+            kinds.append(kind)
+    return tuple(kinds)
+
+
+def _successful_receipts(event: dict) -> tuple[str, ...]:
+    markers: list[str] = []
+    seen_receipt_ids: set[str] = set()
+    sources = [event.get("action_tool_receipts") or ()]
+    sources.extend(step.get("tool_receipts") or () for step in event.get("steps", ()))
+
+    for receipts in sources:
+        for receipt in receipts:
+            if not isinstance(receipt, dict):
+                continue
+            if receipt.get("status") != "succeeded" or receipt.get("success") is not True:
+                continue
+            tool_name = receipt.get("tool_name")
+            receipt_id = receipt.get("receipt_id")
+            if not tool_name or not receipt_id or receipt_id in seen_receipt_ids:
+                continue
+            seen_receipt_ids.add(receipt_id)
+            markers.append(f"tool:{tool_name}:{receipt_id}")
+
+    return tuple(markers)
+
+
+def finalize_expired_event(
+    deps: "FlowDeps",
+    event_id: str,
+    now: datetime | None = None,
+    *,
+    recovery_mode: bool = False,
+    active_event_ids: tuple[str, ...] = (),
+) -> ExpiryFinalizationResult:
+    """Finalize one expired event through the atomic persistence CAS path."""
+
+    event = deps.persistence.fetch_event(event_id)
+    current = _expiry_timestamp(now)
+    if event is None:
+        return ExpiryFinalizationResult(
+            event_id, "skipped", None, None, None, recovery_mode, skip_reason="event_not_found"
+        )
+
+    if event_id in set(active_event_ids):
+        return ExpiryFinalizationResult(
+            event_id,
+            "skipped",
+            event.get("outcome"),
+            event.get("outcome"),
+            None,
+            recovery_mode,
+            skip_reason="active_processing",
+        )
+
+    expired = _event_deadline_has_expired(event, current)
+    if expired is False:
+        return ExpiryFinalizationResult(
+            event_id,
+            "skipped",
+            event.get("outcome"),
+            event.get("outcome"),
+            None,
+            recovery_mode,
+            skip_reason="deadline_not_expired",
+        )
+    if expired is None:
+        return ExpiryFinalizationResult(
+            event_id,
+            "skipped",
+            event.get("outcome"),
+            event.get("outcome"),
+            None,
+            recovery_mode,
+            skip_reason="invalid_deadline",
+        )
+
+    hold_kinds = _unresolved_hold_kinds(deps.persistence, event_id)
+    recovery_evidence = _successful_receipts(event)
+    action_state = event.get("action_state")
+    if action_state == "executed" and not recovery_evidence:
+        return ExpiryFinalizationResult(
+            event_id,
+            "skipped",
+            event.get("outcome"),
+            event.get("outcome"),
+            None,
+            recovery_mode,
+            hold_kinds=hold_kinds,
+            skip_reason="executed_state_without_successful_receipt",
+        )
+
+    if recovery_evidence and action_state not in {"executing", "executed"}:
+        return ExpiryFinalizationResult(
+            event_id,
+            "skipped",
+            event.get("outcome"),
+            event.get("outcome"),
+            None,
+            recovery_mode,
+            hold_kinds=hold_kinds,
+            recovery_evidence=recovery_evidence,
+            skip_reason="receipt_without_executing_lifecycle",
+        )
+
+    recovered_successfully = bool(recovery_evidence)
+    finalization_reason = (
+        None
+        if recovered_successfully
+        else _EXPIRY_HOLD_REASONS.get(hold_kinds[0], "deadline_expired") if hold_kinds else "deadline_expired"
+    )
+    final_outcome = "succeeded" if recovered_successfully else "failed"
+    resolved_action_state = "executed" if recovered_successfully and action_state == "executing" else None
+    failed_action_state = (
+        "failed"
+        if not recovered_successfully and action_state in _ACTION_STATES_FAILED_BY_EXPIRY
+        else resolved_action_state
+    )
+    resolution_reason = finalization_reason or "reconciled_after_execution_evidence"
+    persistence_result = deps.persistence.finalize_event_if_open(
+        event_id,
+        final_outcome,
+        failure_reason=finalization_reason,
+        action_state=failed_action_state,
+        action_failure_reason=finalization_reason,
+        resolved_by=_EXPIRY_FINALIZER_IDENTITY,
+        resolution={
+            "decision": "reconciled" if recovered_successfully else "expired",
+            "finalization_reason": resolution_reason,
+            "recovery_mode": recovery_mode,
+        },
+        finalized_at=storage_timestamp(current),
+        emit_notification=not recovery_mode,
+    )
+
+    changed = persistence_result.event_changed or bool(persistence_result.resolved_hold_ids)
+    if changed:
+        logger.info(
+            "expired event finalized",
+            extra={
+                "event": "expired_event_finalized",
+                "event_id": event_id,
+                "outcome": persistence_result.outcome,
+                "finalization_reason": resolution_reason,
+                "recovery_mode": recovery_mode,
+                "recovery_evidence": list(recovery_evidence),
+                "resolved_hold_ids": list(persistence_result.resolved_hold_ids),
+                "trace_id": event.get("trace_id") or get_trace_id(),
+            },
+        )
+
+    return ExpiryFinalizationResult(
+        event_id,
+        "finalized" if changed else "skipped",
+        persistence_result.previous_outcome,
+        persistence_result.outcome,
+        finalization_reason,
+        recovery_mode,
+        hold_kinds=hold_kinds,
+        resolved_hold_ids=persistence_result.resolved_hold_ids,
+        recovery_evidence=recovery_evidence,
+        skip_reason=None if changed else "already_reconciled",
+    )
+
+
+def finalize_expired_events(
+    deps: "FlowDeps",
+    now: datetime | None = None,
+    *,
+    recovery_mode: bool = False,
+    active_event_ids: tuple[str, ...] = (),
+    limit: int = 100,
+) -> tuple[ExpiryFinalizationResult, ...]:
+    """Run one bounded, deterministic expiry reconciliation pass."""
+
+    current = _expiry_timestamp(now)
+    candidates = {
+        event["event_id"]: event
+        for event in deps.persistence.list_expired_events(storage_timestamp(current), limit)
+    }
+
+    for kind in ("approval", "event_data", "clarification"):
+        for hold in deps.persistence.list_held_events(kind):
+            event_id = hold.get("event_id")
+            if not event_id or event_id in candidates:
+                continue
+            event = deps.persistence.fetch_event(event_id)
+            if event is None or _event_deadline_has_expired(event, current) is not True:
+                continue
+            candidates[event_id] = event
+
+    ordered = sorted(
+        candidates.values(),
+        key=lambda event: (str(event.get("deadline_at") or ""), event["event_id"]),
+    )[:limit]
+    return tuple(
+        finalize_expired_event(
+            deps,
+            event["event_id"],
+            current,
+            recovery_mode=recovery_mode,
+            active_event_ids=active_event_ids,
+        )
+        for event in ordered
+    )
+
+
 def _deadline_failure(deps: "FlowDeps", event_id: str, next_stage: str) -> "FlowResult | None":
     event = deps.persistence.fetch_event(event_id)
     deadline_at = event.get("deadline_at") if event is not None else None
@@ -127,10 +380,11 @@ def _deadline_failure(deps: "FlowDeps", event_id: str, next_stage: str) -> "Flow
         deadline = deadline.replace(tzinfo=timezone.utc)
     if datetime.now(timezone.utc) < deadline:
         return None
-    reason = f"event deadline exceeded before {next_stage}"
-    record_event_outcome(deps.persistence, event_id, "failed", failure_reason=reason)
-    _log_event_outcome(event_id, "failed", failure_reason=reason, stage=next_stage)
-    return FlowResult(event_id, "failed", reason)
+    finalization = finalize_expired_event(deps, event_id)
+    reason = finalization.finalization_reason or f"event deadline exceeded before {next_stage}"
+    if finalization.status == "finalized":
+        _log_event_outcome(event_id, finalization.outcome or "failed", failure_reason=reason, stage=next_stage)
+    return FlowResult(event_id, finalization.outcome or "failed", reason)
 
 FlowOutcome = Literal[
     "closed_on_precedent", "declined", "succeeded", "failed", "uncertain", "no_match_protocol",
