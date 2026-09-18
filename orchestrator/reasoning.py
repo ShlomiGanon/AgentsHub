@@ -857,7 +857,11 @@ def make_operational_decision(
     return OperationalDecision(risk, _normalize_protocol_selection(selection, protocols, risk.level))
 
 
-def _operational_intake_business_fields(protocols: tuple[Protocol, ...]) -> dict[str, tuple[str, ...]]:
+def _operational_intake_business_fields(
+    protocols: tuple[Protocol, ...],
+    event_types: tuple[str, ...] = (),
+    event_type_business_fields=None,
+) -> dict[str, tuple[str, ...]]:
     fields: dict[str, tuple[str, ...]] = {}
     for protocol in protocols:
         direct = protocol.direct_tool_execution
@@ -875,6 +879,14 @@ def _operational_intake_business_fields(protocols: tuple[Protocol, ...]) -> dict
                 fields[field_name] = tuple(dict.fromkeys((*fields[field_name], *allowed_values)))
             else:
                 fields[field_name] = ()
+    declarations = event_type_business_fields or {}
+    for event_type in event_types:
+        for field_name, allowed_values in (declarations.get(event_type, {}) or {}).items():
+            if field_name not in fields:
+                fields[field_name] = tuple(allowed_values)
+            elif fields[field_name] and allowed_values:
+                fields[field_name] = tuple(dict.fromkeys((*fields[field_name], *allowed_values)))
+
     return fields
 
 
@@ -886,6 +898,7 @@ _OPERATIONAL_INTAKE_TOP_LEVEL_FIELDS = (
 def _operational_intake_schema(
     event_types: tuple[str, ...],
     protocols: tuple[Protocol, ...],
+    event_type_business_fields=None,
 ) -> dict:
     """Build the canonical nested Single Operational Intake contract.
 
@@ -895,7 +908,9 @@ def _operational_intake_schema(
     prevents drift between provider output and orchestration code.
     """
     business_properties = {}
-    for field_name, allowed_values in _operational_intake_business_fields(protocols).items():
+    for field_name, allowed_values in _operational_intake_business_fields(
+        protocols, event_types, event_type_business_fields
+    ).items():
         business_properties[field_name] = (
             {"type": ["string", "null"], "enum": [*allowed_values, None]}
             if allowed_values
@@ -940,8 +955,9 @@ def _operational_intake_schema(
         "business_fields": {
             "type": "object",
             "properties": business_properties,
-            "required": list(business_properties),
+            "required": [] if event_type_business_fields else list(business_properties),
             "additionalProperties": False,
+            "allow_sparse": bool(event_type_business_fields),
         },
         "risk": {
             "type": "object",
@@ -1114,6 +1130,8 @@ def _validate_operational_intake_schema(payload: dict, schema: dict) -> dict:
             normalized_object = dict(value)
             for nested_name, nested_schema in nested_properties.items():
                 if nested_name not in normalized_object:
+                    if value_schema.get("allow_sparse"):
+                        continue
                     normalized_object[nested_name] = _schema_default(nested_schema)
                 normalized_object[nested_name] = validate_value(
                     normalized_object[nested_name], nested_schema, f"{path}.{nested_name}"
@@ -1134,11 +1152,14 @@ def make_operational_intake(
     areas: tuple[str, ...],
     protocols: tuple[Protocol, ...],
     risk_threshold: float,
+    event_type_business_fields=None,
 ) -> "OperationalIntake":
     """Classify, extract, assess risk, and select a protocol in exactly one model call."""
 
-    business_fields = _operational_intake_business_fields(protocols)
-    schema = _operational_intake_schema(event_types, protocols)
+    business_fields = _operational_intake_business_fields(
+        protocols, event_types, event_type_business_fields
+    )
+    schema = _operational_intake_schema(event_types, protocols, event_type_business_fields)
     canonical_fields = {
         section: tuple(section_schema.get("properties", {}))
         for section, section_schema in schema["properties"].items()
@@ -1171,6 +1192,7 @@ def make_operational_intake(
         "Use the intent booleans with their ordinary meanings and copy an exact supporting quote into intent.evidence. "
         "Intent identifies what the user is doing; missing domain fields do not make a clear report intent ambiguous. "
         "Set unavailable business values to null. Do not invent identity, source_message_id, received_at, or original_text. "
+        "Keep every business_fields value scalar; represent an uncertain possible cause with a scalar unverified status and scalar text, never an object or array and never a verified cause. "
         "temporal.availability_start and temporal.availability_end must be null: trusted runtime code resolves final temporal values. "
         "protocol.status must be selected, ambiguous, or no_match. Keep reasons concise. "
         "All required nested fields must be present; nullable optional fields may be omitted and default to null.\n"
@@ -1251,9 +1273,26 @@ def make_operational_intake(
         raise OrchestrationParseError("operational intake may not supply trusted availability timestamps")
 
     extracted_business = payload["business_fields"]
-    if not isinstance(extracted_business, dict) or set(extracted_business) != set(business_fields):
+    selected_protocol = next(
+        (
+            candidate
+            for candidate in protocols
+            if candidate.name == protocol_payload["name"]
+        ),
+        None,
+    )
+    expected_business_fields = (
+        _operational_intake_business_fields(
+            (selected_protocol,),
+            (classification,),
+            event_type_business_fields,
+        )
+        if protocol_payload["status"] == "selected" and selected_protocol is not None
+        else business_fields
+    )
+    if not isinstance(extracted_business, dict) or set(extracted_business) != set(expected_business_fields):
         raise OrchestrationParseError("operational intake business_fields schema is invalid")
-    for field_name, allowed_values in business_fields.items():
+    for field_name, allowed_values in expected_business_fields.items():
         value = extracted_business[field_name]
         if value is not None and type(value) not in {str, int, float, bool}:
             raise OrchestrationParseError(f"operational intake business field {field_name!r} must be a scalar")

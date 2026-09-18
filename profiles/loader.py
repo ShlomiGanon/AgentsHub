@@ -8,6 +8,7 @@ import math
 from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType, ModuleType
+from typing import Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from agents import HistoryAgent
@@ -166,6 +167,33 @@ def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> lis
                 failures.append(f"stage model policy {stage_name!r} requires positive token and timeout budgets")
 
     failures.extend(_validate_simulation_declarations(loaded))
+    failures.extend(_validate_event_type_business_fields(loaded))
+
+    return failures
+
+
+def _validate_event_type_business_fields(loaded: "LoadedProfile") -> list[str]:
+    declarations = getattr(loaded, "event_type_business_fields", {})
+    failures: list[str] = []
+
+    if not isinstance(declarations, Mapping):
+        return ["EVENT_TYPE_BUSINESS_FIELDS must be a mapping"]
+
+    declared_types = set(getattr(loaded, "event_types", ()))
+    for event_type, fields in declarations.items():
+        if event_type not in declared_types:
+            failures.append(f"EVENT_TYPE_BUSINESS_FIELDS references undeclared event type '{event_type}'")
+            continue
+        if not isinstance(fields, Mapping) or not fields:
+            failures.append(f"EVENT_TYPE_BUSINESS_FIELDS['{event_type}'] must be a non-empty mapping")
+            continue
+        for field_name, allowed_values in fields.items():
+            if not isinstance(field_name, str) or not field_name.strip():
+                failures.append(f"EVENT_TYPE_BUSINESS_FIELDS['{event_type}'] has an invalid field name")
+            if not isinstance(allowed_values, tuple) or any(not isinstance(value, str) for value in allowed_values):
+                failures.append(
+                    f"EVENT_TYPE_BUSINESS_FIELDS['{event_type}']['{field_name}'] must contain string enum values"
+                )
 
     return failures
 
@@ -622,6 +650,14 @@ def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) 
             {
                 event_type: tuple(fields)
                 for event_type, fields in getattr(profile_module, "EVENT_TYPE_REQUIRED_FIELDS", {}).items()
+            }
+        ),
+        event_type_business_fields=MappingProxyType(
+            {
+                event_type: MappingProxyType(
+                    {field_name: tuple(allowed_values) for field_name, allowed_values in fields.items()}
+                )
+                for event_type, fields in getattr(profile_module, "EVENT_TYPE_BUSINESS_FIELDS", {}).items()
             }
         ),
         simulation_users=tuple(getattr(profile_module, "SIMULATION_USERS", ())),

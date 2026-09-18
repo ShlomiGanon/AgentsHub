@@ -3388,3 +3388,62 @@ no CI change was needed.
   Step 5 routing, scenario-run history contamination, the simulator's manual
   processing gate/status, and bounded Main Agent SITREP reasoning remain open
   and were not treated as fixed by this task.
+
+### Task 51 — Canonical Surveillance Report Extraction Contract
+- **Status:** done
+- **Purpose:** Make the official SEC_001_PHASE_1 Step 2 surveillance report
+  produce the existing nested Single Operational Intake shape and a closed,
+  domain-compatible scalar `business_fields` payload, so typed surveillance
+  ingestion can update authoritative camera state without entering an action
+  lifecycle.
+- **Root cause:** The prior extraction path accepted only an object whose values
+  were JSON scalars, but the model's CAM-08 report shape represented the
+  possible cause as structured/multiple-cause data (a nested object/array).
+  That violated the scalar-value check before `DomainReportProjection` was
+  reached. The invalid shape is now rejected explicitly rather than being
+  persisted or normalized into arbitrary JSON.
+- **Implementation:** Added optional profile-level
+  `EVENT_TYPE_BUSINESS_FIELDS` declarations. `unified_test` declares the
+  closed surveillance fields `camera_id`, `camera_status`, `cause_status`,
+  and `possible_cause`; enum tuples constrain status and the empty tuple means
+  any scalar. The Single Operational Intake schema, prompt, recursive
+  validator, and legacy extraction boundary now use the same declaration.
+  Selected protocols use only their own declared fields; ambiguous/no-match
+  decisions retain the compatible protocol-field union. Nested dictionaries
+  and arrays remain invalid.
+- **Uncertainty and identity:** Uncertain causes are represented as scalar
+  `cause_status="unverified"` plus scalar `possible_cause` text. Verified
+  cause values are rejected by surveillance ingestion. Camera identity uses
+  exact canonical/declared aliases (`CAM-08`, `camera 08`, `מצלמה 08`, and
+  existing numeric aliases); there is no fuzzy or location-only substitution.
+  The implementation is generic across known cameras and rejects unknown
+  cameras before mutation.
+- **Projection and lifecycle:** A valid report preserves the useful report
+  description in the event/camera feed, commits a typed surveillance
+  `DomainReportProjection` with `projection_kind="authoritative_state"`,
+  and completes the Event as `succeeded`. The report path remains separate
+  from protocol/tool execution: no approval, ActionLifecycle execution, or
+  ToolReceipt is created. User-facing completion remains concise and does not
+  expose business fields, protocol names, projection objects, or debug data.
+- **Tests:** Added `tests/test_surveillance_report_extraction.py`, covering
+  the exact official Step 2 message, scalar/uncertainty validation, exact
+  aliases, generic known-camera degradation, unknown-camera rejection,
+  terminal ingestion, projection, and legacy-boundary alignment. Focused
+  Task 41/45/47/48/49/50 and surveillance regression: **153 passed**.
+  `compileall` and `git diff --check` passed. Full pytest: **1653 passed,
+  4 pre-existing/unrelated failures** (two minimal-fixture approval tests,
+  file-catalog drift for three older tests, and the Task 47
+  intent-attendance expectation).
+- **Controlled unified_test verification:** Through the official profile
+  factories and canonical report path, CAM-08 was confirmed present and
+  initially `active`; the exact Step 2 report changed it to `degraded` while
+  the inventory remained exactly six cameras and the other five camera rows
+  were unchanged. The Event was `succeeded`, with no action state, steps,
+  ToolReceipt, approval hold, or event-data hold. Task 49 remained clean:
+  **0 expired open Events and 0 unresolved Holds**. No scenario was run and
+  no simulator auto-send/auto-next behavior was added.
+- **Remaining known gaps:** CAM-03 unsupported projection fields, Michael's
+  temporal hold, Danny's scenario expectation conflict, Step 5 Main Agent
+  routing, scenario-run history contamination, simulator processing
+  gate/status, terminal notification UI persistence, bounded Main Agent/SITREP
+  reasoning, and the unrelated pre-existing test failures remain open.

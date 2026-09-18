@@ -148,6 +148,7 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
         timezone_name=loaded_profile.timezone_name,
         conversation_history_turns=loaded_profile.conversation_history_turns,
         conversation_history_ttl_hours=loaded_profile.conversation_history_ttl_hours,
+        event_type_business_fields=loaded_profile.event_type_business_fields,
     )
 
     startup_recovery = finalize_expired_events(

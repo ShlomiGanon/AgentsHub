@@ -146,9 +146,16 @@ class SurveillanceAgent(Agent):
             return ReportIngestionResult("not_applicable")
 
         business_fields = event.get("business_fields") or {}
-        unknown_fields = set(business_fields) - {"camera_id", "camera_status", "status"}
+        unknown_fields = set(business_fields) - {
+            "camera_id", "camera_status", "status", "cause_status", "possible_cause"
+        }
         if unknown_fields:
             return ReportIngestionResult("rejected", "surveillance report contains unsupported domain fields")
+        if any(
+            value is not None and type(value) not in {str, int, float, bool}
+            for value in business_fields.values()
+        ):
+            return ReportIngestionResult("rejected", "surveillance report business fields must be scalar")
         camera_id = business_fields.get("camera_id")
         if not isinstance(camera_id, str) or not camera_id.strip():
             camera_id = next(
@@ -178,6 +185,12 @@ class SurveillanceAgent(Agent):
             status = "offline"
         if status not in {None, "active", "degraded", "offline"}:
             return ReportIngestionResult("rejected", "surveillance camera status is invalid")
+        cause_status = business_fields.get("cause_status")
+        if cause_status is not None and cause_status != "unverified":
+            return ReportIngestionResult("rejected", "surveillance report cause is not verified")
+        possible_cause = business_fields.get("possible_cause")
+        if possible_cause is not None and not isinstance(possible_cause, str):
+            return ReportIngestionResult("rejected", "surveillance report possible cause is invalid")
 
         try:
             updated = self.surveillance_store.update_camera_feed(
@@ -192,6 +205,11 @@ class SurveillanceAgent(Agent):
             facts={
                 "camera_id": updated["camera_id"],
                 "camera_status": updated["status"],
+                **{
+                    field_name: business_fields[field_name]
+                    for field_name in ("cause_status", "possible_cause")
+                    if business_fields.get(field_name) is not None
+                },
             },
         )
         return ReportIngestionResult(
@@ -206,7 +224,13 @@ class SurveillanceAgent(Agent):
             camera_id = str(camera["camera_id"])
             canonical = camera_id.casefold()
             numeric = canonical.removeprefix("cam-")
-            aliases = {canonical, numeric, f"cam-{numeric}", f"camera {numeric}"}
+            aliases = {
+                canonical,
+                numeric,
+                f"cam-{numeric}",
+                f"camera {numeric}",
+                f"\u05de\u05e6\u05dc\u05de\u05d4 {numeric}",
+            }
             if normalized in aliases:
                 return camera_id
         return None

@@ -1626,6 +1626,15 @@ _OFFICIAL_FIXTURES = {
     "FIRE_002_PHASE_3": "\u05de\u05db\u05d1\u05d9 \u05d0\u05e9 - \u05d7\u05dc\u05e7 3.json",
 }
 
+EVENT_TYPE_BUSINESS_FIELDS = {
+    "surveillance_report": {
+        "camera_id": (),
+        "camera_status": ("active", "degraded", "offline"),
+        "cause_status": ("unverified",),
+        "possible_cause": (),
+    },
+}
+
 
 def _load_official_metadata(scenario_id: str) -> dict:
     filename = _OFFICIAL_FIXTURES.get(scenario_id)

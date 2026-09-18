@@ -10,7 +10,14 @@ from protocols import ActionLifecycleState
 from tools import stage_context
 
 
-def _prompt(raw_text: str, source: str, received_at: str, event_types, areas) -> str:
+def _prompt(
+    raw_text: str,
+    source: str,
+    received_at: str,
+    event_types,
+    areas,
+    event_type_business_fields=None,
+) -> str:
     timestamp_rule = (
         "Set occurred_at to null; the caller supplies the sensor occurrence time."
         if source == "sensor"
@@ -23,7 +30,9 @@ def _prompt(raw_text: str, source: str, received_at: str, event_types, areas) ->
         f"classification must be one of {list(event_types)} or null. "
         f"area must be one of {list(areas)} or null. "
         "entities must be an array of strings. Do not guess missing values. "
-        "business_fields is an object containing only explicitly observed domain facts; use {} when none are present. "
+        "business_fields is an object containing only explicitly observed domain facts; use scalar string, number, boolean, or null values only. "
+        "Represent uncertain possible causes with scalar text and an unverified status; never use an object or array and never turn a hypothesis into a verified fact. "
+        f"For declared event-type fields, return exactly these canonical scalar keys: {event_type_business_fields or {}}. "
         f"{timestamp_rule}\nEvent text:\n{raw_text}"
     )
 
@@ -56,6 +65,7 @@ def extract_event(
     event_type_registry,
     area_registry,
     model_invoker: Callable[[str], str] | None = None,
+    event_type_business_fields=None,
 ) -> ExtractionResult:
     if source not in {"sensor", "telegram"}:
         raise ValueError("source must be 'sensor' or 'telegram'")
@@ -69,6 +79,7 @@ def extract_event(
         received_at,
         getattr(event_type_registry, "types", ()),
         getattr(area_registry, "areas", ()),
+        event_type_business_fields,
     )
 
     try:
@@ -118,6 +129,23 @@ def extract_event(
 
     if area is not None and not area_registry.is_valid(area):
         area = None
+
+    declared_fields = (event_type_business_fields or {}).get(classification, {}) if classification else {}
+    if declared_fields and set(business_fields) != set(declared_fields):
+        raise ExtractionExecutionError(
+            f"extraction field 'business_fields' must contain exactly the declared fields for {classification}"
+        )
+    if declared_fields:
+        for field_name, allowed_values in declared_fields.items():
+            value = business_fields[field_name]
+            if value is not None and type(value) not in {str, int, float, bool}:
+                raise ExtractionExecutionError(
+                    f"extraction business field '{field_name}' must be scalar"
+                )
+            if allowed_values and value is not None and value not in allowed_values:
+                raise ExtractionExecutionError(
+                    f"extraction business field '{field_name}' is invalid"
+                )
 
     occurred_at = received_at if source == "sensor" else model_occurred_at
 

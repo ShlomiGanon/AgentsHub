@@ -267,6 +267,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_sub_agent_team_status_profile.py` | Test | Internal | Verifies the readiness-team profile, isolated database configuration, agent, and protocol declaration. |
 | `tests/test_surveillance_agent.py` | Test | Internal | Verifies camera, drone, dispatch, mission, and overview tools. |
 | `tests/test_surveillance_persistence.py` | Test | Internal | Verifies surveillance database initialization, updates, dispatch, and mission state. |
+| `tests/test_surveillance_report_extraction.py` | Test | Internal | Verifies the canonical scalar surveillance-report extraction contract, uncertainty handling, aliases, projections, terminal report ingestion, and unknown-camera rejection. |
 | `tests/test_surveillance_seed_reconciliation.py` | Test | Internal | Verifies additive canonical camera-seed reconciliation, runtime-state preservation, idempotency, unknown-entity retention, and production isolation. |
 | `tests/test_team_status_agent.py` | Test | Internal | Verifies daily attendance, multi-day unavailability, late approval, and protocol execution. |
 | `tests/test_team_status_persistence.py` | Test | Internal | Verifies readiness-team roster approval, message idempotency, late-response isolation, and separate SQLite schemas. |

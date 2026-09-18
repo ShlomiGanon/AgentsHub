@@ -18,6 +18,7 @@ module-level names. All are required unless noted.
 | `EVENT_TYPES` | `list[str]` | Must not include `"human_activation"` — that type is added automatically and a profile declaring it is a validation error. |
 | `AREAS` | `list[str]` | |
 | `EVENT_TYPE_REQUIRED_FIELDS` | `dict[str, list[str]]` | Optional, defaults to `{}`. Fields (from `EVENT_TYPES` events, `EVENT_DATA_FIELDS` names) that must be resolved before an event of that type proceeds past intake. See "Event-type required fields", below. |
+| `EVENT_TYPE_BUSINESS_FIELDS` | `dict[str, dict[str, tuple[str, ...]]]` | Optional, defaults to `{}`. Canonical scalar report fields by event type; each tuple is the allowed string enum, or empty for any scalar value. The nested `business_fields` section remains strict and closed. |
 | `DB_PATH` | `str` | No default — two profiles running at once must not collide. |
 | `RESETTABLE_DATABASES` | non-empty tuple of database paths | Every database owned by the profile. New profiles must declare it and include `DB_PATH`; the loader retains a `DB_PATH`-only fallback for legacy external profiles. The stack supervisor exposes a profile only when the declaration is explicit and deletes only these exact files and their known SQLite/application sidecars. |
 | `API_PORT` | `int` | No default, same reason. |

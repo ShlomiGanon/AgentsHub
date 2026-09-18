@@ -421,6 +421,7 @@ class FlowDeps:
     timezone_name: str = "UTC"
     conversation_history_turns: int = 0
     conversation_history_ttl_hours: int = 24
+    event_type_business_fields: object = None
     # Trusted routing context set by /Msg for a registered Telegram group.
     # This value comes from the persisted group binding, never from model text.
     group_owner: str | None = None
@@ -504,6 +505,7 @@ def prepare_fast_path_report(
         tuple(deps.area_registry.areas),
         deps.protocol_set.all(),
         deps.settings_store.get_risk_threshold(),
+        getattr(deps, "event_type_business_fields", None),
     )
     if not intake.confident or intake.extraction is None or intake.decision is None:
         return None
@@ -659,6 +661,7 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
         extraction_result = extract_event(
             raw_text, source, received_at, deps.event_type_registry, deps.area_registry,
             model_invoker=_model_invoker_for(main_agent),
+            event_type_business_fields=getattr(deps, "event_type_business_fields", None),
         )
     except ExtractionExecutionError as exc:
         record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
