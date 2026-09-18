@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Callable, Literal
 from agents import InvocationPolicy, authenticated_request_identity, get_active_provider_diagnostic_trace
 from history import HistoryQuerySpec, storage_timestamp
 from history.query import HistoryQueryError
+from persistence import OperationalScope, operational_scope_context, resolve_operational_scope
 from messages import get_current_catalog
 from messages.model_messages import (
     SITUATIONAL_PICTURE_COMPOSE_INSTRUCTION,
@@ -338,6 +339,7 @@ class SnapshotProvenance:
     source: str
     as_of: str
     scope: str = "global"
+    operational_scope: str = "LIVE"
 
 
 @dataclass(frozen=True)
@@ -710,6 +712,7 @@ class SituationalSnapshot:
                     "source": section.provenance.source,
                     "as_of": section.provenance.as_of,
                     "scope": section.provenance.scope,
+                    "operational_scope": section.provenance.operational_scope,
                     "status": section.status,
                 }
         return {
@@ -785,14 +788,26 @@ def _registry_agent(registry: "AgentRegistry", name: str):
         return None
 
 
-def _section_provenance(source: str, now: datetime, scope: str = "global") -> SnapshotProvenance:
-    return SnapshotProvenance(source=source, as_of=storage_timestamp(now), scope=scope)
+def _section_provenance(source: str, now: datetime, scope: str = "global", operational_scope: str = "LIVE") -> SnapshotProvenance:
+    return SnapshotProvenance(source=source, as_of=storage_timestamp(now), scope=scope, operational_scope=operational_scope)
 
 
-def _build_camera_snapshot(store, *, now: datetime, area: str | None) -> CameraSnapshot:
-    provenance = _section_provenance("surveillance_store.list_cameras", now, area or "global")
+def _read_scoped(store, method_name: str, *args, scope: OperationalScope, **kwargs):
+    """Call a scoped store while retaining compatibility with read-only test doubles."""
+
+    method = getattr(store, method_name)
     try:
-        cameras = list(store.list_cameras(area=area))
+        return method(*args, scope=scope, **kwargs)
+    except TypeError as exc:
+        if "scope" not in str(exc):
+            raise
+        return method(*args, **kwargs)
+
+
+def _build_camera_snapshot(store, *, now: datetime, area: str | None, operational_scope: OperationalScope) -> CameraSnapshot:
+    provenance = _section_provenance("surveillance_store.list_cameras", now, area or "global", operational_scope.key)
+    try:
+        cameras = list(_read_scoped(store, "list_cameras", area=area, scope=operational_scope))
     except Exception:
         return CameraSnapshot(None, None, None, None, "unknown", provenance, None, None)
 
@@ -833,11 +848,11 @@ def _build_camera_snapshot(store, *, now: datetime, area: str | None) -> CameraS
     )
 
 
-def _build_drone_snapshot(store, *, now: datetime, area: str | None) -> DroneSnapshot:
-    provenance = _section_provenance("surveillance_store.list_drones+get_active_missions", now, area or "global")
+def _build_drone_snapshot(store, *, now: datetime, area: str | None, operational_scope: OperationalScope) -> DroneSnapshot:
+    provenance = _section_provenance("surveillance_store.list_drones+get_active_missions", now, area or "global", operational_scope.key)
     try:
-        drones = list(store.list_drones())
-        missions = list(store.get_active_missions())
+        drones = list(_read_scoped(store, "list_drones", scope=operational_scope))
+        missions = list(_read_scoped(store, "get_active_missions", scope=operational_scope))
         if area:
             normalized_area = area.casefold()
             drones = [drone for drone in drones if str(drone.get("current_area", "")).casefold() == normalized_area]
@@ -884,10 +899,10 @@ def _build_drone_snapshot(store, *, now: datetime, area: str | None) -> DroneSna
     )
 
 
-def _build_team_snapshot(store, *, now: datetime) -> TeamSnapshot:
-    provenance = _section_provenance("team_status_store.availability_snapshot", now)
+def _build_team_snapshot(store, *, now: datetime, operational_scope: OperationalScope) -> TeamSnapshot:
+    provenance = _section_provenance("team_status_store.availability_snapshot", now, "global", operational_scope.key)
     try:
-        entries = list(store.availability_snapshot(storage_timestamp(now)))
+        entries = list(_read_scoped(store, "availability_snapshot", storage_timestamp(now), scope=operational_scope))
     except Exception:
         return TeamSnapshot(None, None, None, None, None, "unknown", provenance)
 
@@ -903,7 +918,7 @@ def _build_team_snapshot(store, *, now: datetime) -> TeamSnapshot:
     total = len(entries)
     consistent = sum(counts.values()) == total
     try:
-        operational_state = store.operational_state()
+        operational_state = _read_scoped(store, "operational_state", scope=operational_scope)
     except Exception:
         operational_state = None
     operational_manpower = operational_state.get("manpower_count") if isinstance(operational_state, dict) else None
@@ -1148,6 +1163,7 @@ def build_typed_snapshot(
     scenario_run_id: str | None = None,
     scenario_time: str | None = None,
     scope: SituationalQueryScope | None = None,
+    operational_scope: OperationalScope | None = None,
 ) -> SituationalSnapshot | None:
     """Read authoritative specialist stores and construct a validated snapshot.
 
@@ -1163,6 +1179,9 @@ def build_typed_snapshot(
             now = None
     now = now or datetime.now(timezone.utc)
     effective_scope = scope or SituationalQueryScope.overall_scope()
+    if operational_scope is None and (scenario_id is not None or scenario_run_id is not None):
+        operational_scope = OperationalScope.simulation(str(scenario_id or ""), str(scenario_run_id or ""))
+    resolved_operational_scope = resolve_operational_scope(operational_scope)
     surveillance_agent = _registry_agent(registry, "surveillance_agent")
     team_agent = _registry_agent(registry, "team_status_agent")
     surveillance_store = getattr(surveillance_agent, "surveillance_store", None)
@@ -1171,17 +1190,17 @@ def build_typed_snapshot(
         return None
 
     cameras = (
-        _build_camera_snapshot(surveillance_store, now=now, area=area)
+        _build_camera_snapshot(surveillance_store, now=now, area=area, operational_scope=resolved_operational_scope)
         if surveillance_store and (effective_scope.overall or effective_scope.surveillance)
         else None
     )
     drones = (
-        _build_drone_snapshot(surveillance_store, now=now, area=area)
+        _build_drone_snapshot(surveillance_store, now=now, area=area, operational_scope=resolved_operational_scope)
         if surveillance_store and (effective_scope.overall or effective_scope.drones)
         else None
     )
     team = (
-        _build_team_snapshot(team_store, now=now)
+        _build_team_snapshot(team_store, now=now, operational_scope=resolved_operational_scope)
         if team_store and (effective_scope.overall or effective_scope.team)
         else None
     )
@@ -1199,8 +1218,8 @@ def build_typed_snapshot(
             history_query_service,
             now=now,
             sender_identity_filter=sender_identity_filter,
-            scenario_id=scenario_id,
-            scenario_run_id=scenario_run_id,
+            scenario_id=resolved_operational_scope.scenario_id,
+            scenario_run_id=resolved_operational_scope.scenario_run_id,
         )
         if effective_scope.overall or effective_scope.external_reports
         else ()
@@ -1979,18 +1998,20 @@ def collect_domain_reports(
     caller_identity: str | None,
     sender_identity_filter: str | None,
     now: datetime,
+    operational_scope: OperationalScope | None = None,
     timeout_per_specialist: float = SPECIALIST_TIMEOUT_SECONDS,
 ) -> tuple[DomainReport, ...]:
     """Put every planned question to its specialist and pull the recent events, all concurrently."""
 
     outcomes: dict[str, tuple[str, bool]] = {}
+    resolved_operational_scope = resolve_operational_scope(operational_scope)
 
     def _specialist_runner(briefing: DomainBriefing) -> Callable[[], tuple[str, str]]:
         def _run() -> tuple[str, str]:
             agent = registry.get(briefing.agent_name)
             tools = _readable_tools(agent, protocol)
             try:
-                with authenticated_request_identity(caller_identity), stage_context("picture_specialist"):
+                with authenticated_request_identity(caller_identity), operational_scope_context(resolved_operational_scope), stage_context("picture_specialist"):
                     result = agent.process(briefing.query, tools)
             except Exception as exc:
                 outcomes[briefing.agent_name] = (str(exc), False)
@@ -2003,7 +2024,9 @@ def collect_domain_reports(
 
     def _history_runner() -> tuple[str, str]:
         report = collect_recent_events(
-            history_query_service, hours=plan.recent_events_hours, now=now, sender_identity_filter=sender_identity_filter
+            history_query_service, hours=plan.recent_events_hours, now=now, sender_identity_filter=sender_identity_filter,
+            scenario_id=resolved_operational_scope.scenario_id,
+            scenario_run_id=resolved_operational_scope.scenario_run_id,
         )
         outcomes[RECENT_EVENTS_DOMAIN] = (report.text, report.succeeded)
         return RECENT_EVENTS_DOMAIN, report.text
@@ -2128,6 +2151,7 @@ def build_situational_picture(
     scenario_time: str | None = None,
     now: datetime | None = None,
     scope: SituationalQueryScope | None = None,
+    operational_scope: OperationalScope | None = None,
 ) -> SituationalPicture:
     """Plan, collect, and compose one live picture for `raw_text` under `protocol`."""
 
@@ -2139,6 +2163,9 @@ def build_situational_picture(
             now = None
     now = now or datetime.now(timezone.utc)
     effective_scope = scope or SituationalQueryScope.overall_scope()
+    if operational_scope is None and (scenario_id is not None or scenario_run_id is not None):
+        operational_scope = OperationalScope.simulation(str(scenario_id or ""), str(scenario_run_id or ""))
+    resolved_operational_scope = resolve_operational_scope(operational_scope)
     total_started = time.perf_counter()
     snapshot_started = time.perf_counter()
     typed_snapshot = build_typed_snapshot(
@@ -2150,6 +2177,7 @@ def build_situational_picture(
         scenario_run_id=scenario_run_id,
         scenario_time=scenario_time,
         scope=effective_scope,
+        operational_scope=resolved_operational_scope,
     )
     if typed_snapshot is not None:
         snapshot_seconds = time.perf_counter() - snapshot_started
@@ -2212,6 +2240,7 @@ def build_situational_picture(
         caller_identity=caller_identity,
         sender_identity_filter=sender_identity_filter,
         now=now,
+        operational_scope=resolved_operational_scope,
     )
     text = compose_situational_picture(
         main_agent,

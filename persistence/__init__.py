@@ -35,6 +35,14 @@ from persistence.surveillance_contracts import (
     open_surveillance_persistence,
 )
 from persistence.runtime_cleanup import CleanupReport, clean_unified_test_runtime
+from persistence.operational_scope import (
+    OperationalScope,
+    current_operational_scope,
+    operational_scope_context,
+    resolve_operational_scope,
+    scope_from_event,
+    scope_from_simulation_context,
+)
 
 sqlite = sqlite_store
 sqlite_backend = sqlite_store
@@ -62,4 +70,10 @@ __all__ = [
     "open_surveillance_persistence",
     "CleanupReport",
     "clean_unified_test_runtime",
+    "OperationalScope",
+    "current_operational_scope",
+    "operational_scope_context",
+    "resolve_operational_scope",
+    "scope_from_event",
+    "scope_from_simulation_context",
 ]

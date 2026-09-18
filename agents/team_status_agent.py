@@ -7,8 +7,8 @@ from zoneinfo import ZoneInfo
 import re
 
 from agents.contracts import ReportIngestionResult, project_report_facts
-from agents.runtime import Agent, get_authenticated_request_identity, tool
-from persistence import AttendanceCycle, TeamStatusPersistenceError, open_team_status_persistence
+from agents.runtime import Agent, get_authenticated_request_identity, get_trusted_operational_scope, tool
+from persistence import AttendanceCycle, OperationalScope, TeamStatusPersistenceError, current_operational_scope, open_team_status_persistence, scope_from_event
 
 
 def _aware_datetime(value: str | None) -> datetime:
@@ -100,6 +100,12 @@ class TeamStatusAgent(Agent):
         self.status_store = open_team_status_persistence(self.status_db_path)
         super().__init__(model, api_key)
 
+    def ensure_operational_scope(self, scope: OperationalScope, baseline=None) -> None:
+        self.status_store.ensure_scope(scope, baseline=baseline)
+
+    def _operational_scope(self) -> OperationalScope:
+        return get_trusted_operational_scope() or current_operational_scope()
+
     def extract_report(self, raw_text: str, *, received_at: str, scenario_time: str | None = None, **_) -> ExtractionResult | None:
         """Extract trusted, typed readiness reports received in the owned group."""
         from history import ExtractionResult
@@ -121,7 +127,9 @@ class TeamStatusAgent(Agent):
             return ExtractionResult("team_attendance_report", "trusted", "readiness_team", (), text, "low", scenario_time or received_at, False, ("availability_start", "availability_end"), business_fields={"availability": "unavailable", "reason": "routine medical checkup"})
         return None
 
-    def ingest_report(self, event: dict) -> ReportIngestionResult:
+    def ingest_report(self, event: dict, *, scope: OperationalScope | None = None) -> ReportIngestionResult:
+        scope = scope or scope_from_event(event)
+        self.ensure_operational_scope(scope)
         classification = event.get("classification")
         fields = event.get("business_fields") or {}
         if classification == "team_resource_report":
@@ -138,6 +146,7 @@ class TeamStatusAgent(Agent):
                 manpower_count=count, resources=resources, source_event_id=event.get("event_id"),
                 received_at=event.get("received_at") or datetime.now(timezone.utc).isoformat(),
                 scenario_id=event.get("scenario_id"), scenario_run_id=event.get("scenario_run_id"), scenario_time=event.get("scenario_time"),
+                scope=scope,
             )
             return ReportIngestionResult("committed", "team operational state committed", projection=project_report_facts(event, domain="team", projection_kind="authoritative_state", facts={"manpower_count": count, "resources": resources}))
         if classification != "team_attendance_report":
@@ -149,17 +158,18 @@ class TeamStatusAgent(Agent):
         if not start or not end:
             return ReportIngestionResult("rejected", "attendance report is missing its bounded interval")
         identity = str(event.get("sender_identity") or "")
-        cycle = self.status_store.latest_cycle()
+        cycle = self.status_store.latest_cycle(scope=scope)
         if cycle is None:
             opened = event.get("scenario_time") or event.get("received_at")
             opened_at = _aware_datetime(opened).isoformat()
-            self.status_store.open_cycle(opened_at[:10], opened_at, (_aware_datetime(opened) + timedelta(hours=1)).isoformat())
+            self.status_store.open_cycle(opened_at[:10], opened_at, (_aware_datetime(opened) + timedelta(hours=1)).isoformat(), scope=scope)
         try:
             response = self.status_store.record_response(
                 telegram_identity=identity, source_message_id=str(event.get("source_message_id") or event.get("event_id")),
                 availability="unavailable", original_text=str(event.get("raw_text") or event.get("description") or ""),
                 received_at=event.get("received_at") or datetime.now(timezone.utc).isoformat(), reason=str(fields["reason"]),
                 unavailable_until=end, availability_start=start, availability_end=end,
+                scope=scope,
             )
         except Exception as exc:
             return ReportIngestionResult("rejected", f"attendance report was not accepted: {exc}")
@@ -168,12 +178,12 @@ class TeamStatusAgent(Agent):
     def register_member(self, telegram_identity: str, full_name: str, registered_at: str | None = None) -> None:
         """Register one name/Telegram-ID pair before whole-roster approval."""
 
-        self.status_store.register_member(telegram_identity, full_name, registered_at)
+        self.status_store.register_member(telegram_identity, full_name, registered_at, scope=self._operational_scope())
 
     def approve_roster(self, commander_identity: str, approved_at: str | None = None) -> int:
         """Approve every currently registered member in one commander action."""
 
-        return self.status_store.approve_roster(commander_identity, approved_at)
+        return self.status_store.approve_roster(commander_identity, approved_at, scope=self._operational_scope())
 
     def review_late_response(
         self,
@@ -190,6 +200,7 @@ class TeamStatusAgent(Agent):
             approved=approved,
             reviewed_by=commander_identity,
             reviewed_at=reviewed_at,
+            scope=self._operational_scope(),
         )
 
     def attendance_check_due(self, now_iso: str | None = None) -> bool:
@@ -198,13 +209,13 @@ class TeamStatusAgent(Agent):
         now = _aware_datetime(now_iso).astimezone(ZoneInfo(self.timezone_name))
         if now.hour < self.attendance_check_hour:
             return False
-        latest = self.status_store.latest_cycle()
+        latest = self.status_store.latest_cycle(scope=self._operational_scope())
         return latest is None or latest["cycle_key"] != now.date().isoformat()
 
     def run_scheduled_attendance_check(self, now_iso: str | None = None) -> str | None:
         """System scheduler hook: open one due cycle and return its outbound text."""
 
-        if not self.status_store.roster_is_approved() or not self.attendance_check_due(now_iso):
+        if not self.status_store.roster_is_approved(scope=self._operational_scope()) or not self.attendance_check_due(now_iso):
             return None
         return self.start_daily_attendance_check(now_iso or "")
 
@@ -217,7 +228,7 @@ class TeamStatusAgent(Agent):
         (`cycle_key`, `opened_at`, `deadline_at`, `members_required`) carries no
         user-facing text: the transport renders the prompt from its own catalog."""
 
-        if not self.status_store.roster_is_approved():
+        if not self.status_store.roster_is_approved(scope=self._operational_scope()):
             return None
         if not force and not self.attendance_check_due(now_iso):
             return None
@@ -239,8 +250,9 @@ class TeamStatusAgent(Agent):
             local_now.date().isoformat(),
             now.isoformat(),
             deadline.isoformat(),
+            scope=self._operational_scope(),
         )
-        snapshot = self.status_store.availability_snapshot(now.isoformat())
+        snapshot = self.status_store.availability_snapshot(now.isoformat(), scope=self._operational_scope())
         requested = [entry["full_name"] for entry in snapshot if entry["availability"] != "unavailable"]
         return cycle, requested
 
@@ -289,7 +301,7 @@ class TeamStatusAgent(Agent):
         if not original_text:
             original_text = f"availability report: {availability}"
 
-        approved_members = self.status_store.list_members(approved_only=True)
+        approved_members = self.status_store.list_members(approved_only=True, scope=self._operational_scope())
         if not any(m["telegram_identity"] == telegram_identity for m in approved_members):
             return "The attendance response was not stored: requester is not an approved roster member."
 
@@ -323,6 +335,7 @@ class TeamStatusAgent(Agent):
                 unavailable_until=unavailable_until,
                 availability_start=availability_start_value,
                 availability_end=availability_end_value,
+                scope=self._operational_scope(),
             )
         except TeamStatusPersistenceError as exc:
             return f"The attendance response was not stored: {exc}"
@@ -338,7 +351,7 @@ class TeamStatusAgent(Agent):
     )
     def report_team_availability(self, as_of_iso: str = "") -> str:
         now = _aware_datetime(as_of_iso or None)
-        snapshot = self.status_store.availability_snapshot(now.isoformat())
+        snapshot = self.status_store.availability_snapshot(now.isoformat(), scope=self._operational_scope())
         if not snapshot:
             return "The readiness-team roster is empty or has not been approved."
 

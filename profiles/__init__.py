@@ -45,7 +45,12 @@ from profiles.simulation import (
     simulation_group_chat_id,
     simulation_user_telegram_id,
 )
-from profiles.simulation_provisioning import ProvisioningResult, ensure_simulation_entities
+from profiles.simulation_provisioning import (
+    ProvisioningResult,
+    ensure_simulation_entities,
+    initialize_operational_scope,
+    operational_baseline_for_scenario,
+)
 
 example = template
 reference = template
@@ -85,4 +90,6 @@ __all__ = [
     "simulation_user_telegram_id",
     "ProvisioningResult",
     "ensure_simulation_entities",
+    "initialize_operational_scope",
+    "operational_baseline_for_scenario",
 ]

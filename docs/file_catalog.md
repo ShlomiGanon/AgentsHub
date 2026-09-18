@@ -140,6 +140,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `persistence/sqlite_store.py` | Production | Private implementation | Implements serialized SQLite persistence, transactions, and row conversion. |
 | `persistence/runtime_cleanup.py` | Production | Private implementation | Provides the scoped unified-test runtime-history cleanup maintenance operation. |
 | `persistence/surveillance_contracts.py` | Production | Private implementation | Defines camera, drone, and surveillance-mission persistence contracts. |
+| `persistence/operational_scope.py` | Production | Private implementation | Defines the canonical LIVE and simulation-run identity used by current authoritative state. |
 | `persistence/surveillance_store.py` | Production | Private implementation | Implements the isolated SQLite surveillance store. |
 | `persistence/team_status_contracts.py` | Production | Private implementation | Defines the database-agnostic readiness-team status persistence contract and constructor. |
 | `persistence/team_status_store.py` | Production | Private implementation | Implements the isolated SQLite store for readiness-team roster and attendance state. |
@@ -247,6 +248,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_operational_decision_output.py` | Test | Internal | Verifies merged operational-decision output validation and repair handling. |
 | `tests/test_operational_intake_schema.py` | Test | Internal | Verifies structured Single Operational Intake schema validation. |
 | `tests/test_orchestrator_flows.py` | Test | Internal | Verifies orchestrator flows behavior and edge cases. |
+| `tests/test_operational_scope.py` | Test | Internal | Verifies generic current-state isolation, LIVE preservation, run resume, and fresh-run baselines. |
 | `tests/test_orchestrator_capabilities.py` | Test | Internal | Verifies role-aware capability descriptor and system-context behavior. |
 | `tests/test_orchestrator_holds.py` | Test | Internal | Verifies orchestrator holds behavior and edge cases. |
 | `tests/test_orchestrator_insights.py` | Test | Internal | Verifies orchestrator insights behavior and edge cases. |

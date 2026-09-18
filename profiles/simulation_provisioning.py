@@ -18,8 +18,10 @@ label or promoted chat ID) survive every subsequent restart.
 """
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from copy import deepcopy
+from typing import TYPE_CHECKING, Any
 
+from persistence import OperationalScope
 from profiles.simulation import simulation_group_chat_id, simulation_user_telegram_id
 
 if TYPE_CHECKING:
@@ -36,8 +38,7 @@ class ProvisioningResult:
 
 
 def ensure_simulation_entities(persistence: "PersistenceInterface", loaded_profile: "LoadedProfile") -> ProvisioningResult:
-    """Create any of `loaded_profile`'s declared simulation users/groups that don't exist yet,
-    then register+approve any of them a persona's `pre_approved_rosters` names.
+    """Create declared simulation users/groups without touching operational LIVE state.
 
     Every simulation user/group is written with `auto_register=False` (via
     `persistence.ensure_user_exists`/`ensure_group_exists`), so safe mode never
@@ -56,14 +57,47 @@ def ensure_simulation_entities(persistence: "PersistenceInterface", loaded_profi
         if persistence.ensure_group_exists(chat_id, group.agent_name, group.label):
             created_groups.append(chat_id)
 
-    registered_roster_members, newly_approved_rosters = _ensure_roster_memberships(loaded_profile)
-
     return ProvisioningResult(
         created_users=tuple(created_users),
         created_groups=tuple(created_groups),
-        registered_roster_members=registered_roster_members,
-        newly_approved_rosters=newly_approved_rosters,
+        registered_roster_members=(),
+        newly_approved_rosters=(),
     )
+
+
+def operational_baseline_for_scenario(loaded_profile: "LoadedProfile", scenario_id: str) -> dict[str, Any]:
+    """Materialize declared scenario data into a generic store baseline."""
+
+    scenario = next(
+        (item for item in loaded_profile.simulations if item.scenario_id == str(scenario_id)),
+        None,
+    )
+    baseline = deepcopy(dict(getattr(scenario, "operational_baseline", {}) or {})) if scenario else {}
+    team = baseline.setdefault("team", {})
+    if isinstance(team, dict):
+        persona_keys = team.pop("member_personas", ())
+        if persona_keys:
+            personas = {persona.key: persona for persona in loaded_profile.simulation_users}
+            members = list(team.get("members", ())) if isinstance(team.get("members", ()), (list, tuple)) else []
+            for key in persona_keys:
+                persona = personas.get(str(key))
+                if persona is not None:
+                    members.append({
+                        "telegram_identity": simulation_user_telegram_id(persona.offset),
+                        "full_name": persona.full_name or persona.key,
+                    })
+            team["members"] = members
+    return baseline
+
+
+def initialize_operational_scope(loaded_profile: "LoadedProfile", registry, scope: OperationalScope) -> None:
+    """Create one isolated operational world through agent-declared stores."""
+
+    baseline = operational_baseline_for_scenario(loaded_profile, scope.scenario_id or "") if scope.is_simulation else {}
+    for agent in registry.all():
+        initializer = getattr(agent, "ensure_operational_scope", None)
+        if callable(initializer):
+            initializer(scope, baseline=baseline)
 
 
 def _ensure_roster_memberships(

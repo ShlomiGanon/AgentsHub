@@ -99,6 +99,14 @@ def trusted_event_metadata(metadata: dict[str, object]):
         _trusted_event_metadata.reset(token)
 
 
+def get_trusted_operational_scope():
+    """Return the server-derived operational scope for the active event/tool."""
+
+    metadata = _trusted_event_metadata.get() or {}
+    scope = metadata.get("operational_scope")
+    return scope
+
+
 @contextmanager
 def tool_execution_context(event_id: str | None = None, step_id: str | None = None):
     """Capture runtime receipts and correlate them to a persisted event step."""
@@ -391,7 +399,7 @@ class Agent:
     def exposed_tools(self) -> tuple[ToolInfo, ...]:
         return self.descriptor.tools
 
-    def ingest_report(self, event: dict) -> ReportIngestionResult:
+    def ingest_report(self, event: dict, *, scope=None) -> ReportIngestionResult:
         """Optionally commit a validated report to this agent's domain store.
 
         Domain agents override this hook; the default reports an explicit

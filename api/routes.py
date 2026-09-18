@@ -67,8 +67,8 @@ from orchestrator.flows import (
 
 from protocols import CriticalityLevel, Protocol, ProtocolEditError, add_protocol, remove_protocol, replace_protocol
 from profiles.loader import hash_profile_file
-from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, resolve_simulation_step
-from persistence import NotFoundError as PersistenceNotFoundError
+from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, initialize_operational_scope, resolve_simulation_step
+from persistence import NotFoundError as PersistenceNotFoundError, scope_from_simulation_context
 from api.simulations import find_simulation_scenario, materialize_simulation, simulation_catalog_payload
 
 from orchestrator.flows import continue_after_approval, continue_after_clarification, decline, resolve_approval, resolve_clarification
@@ -128,6 +128,12 @@ def _simulation_context_from_request(ctx, sender_identity: str, chat_id: str | N
         raise InvalidInputError(str(exc), field="X-Simulation-ID") from exc
 
 
+def _initialize_request_operational_scope(ctx, simulation_context):
+    scope = scope_from_simulation_context(simulation_context)
+    initialize_operational_scope(ctx.loaded_profile, ctx.deps.registry, scope)
+    return scope
+
+
 def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
     blueprint = Blueprint("events", __name__)
     messages = ctx.loaded_profile.message_catalog
@@ -163,6 +169,7 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
             None,
             "event",
         )
+        operational_scope = _initialize_request_operational_scope(ctx, simulation_context)
         if source_message_id:
             existing_event = ctx.deps.persistence.fetch_event_by_source_message(
                 "sensor", str(sender_identity), str(source_message_id)
@@ -420,6 +427,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             str(telegram_chat_id) if telegram_chat_id is not None else None,
             str(telegram_chat_type) if telegram_chat_type is not None else None,
         )
+        operational_scope = _initialize_request_operational_scope(ctx, simulation_context)
 
         trace_id = get_trace_id() or new_trace_id()
         set_trace_id(trace_id)
@@ -868,6 +876,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     scenario_run_id=getattr(simulation_context, "scenario_run_id", None),
                     scenario_time=getattr(simulation_context, "scenario_time", None),
                     scope=situational_scope,
+                    operational_scope=operational_scope,
                 )
                 picture_provenance = picture.provenance()
                 source_refs = tuple(
@@ -953,6 +962,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     received_at,
                     level >= PermissionLevel.COMMANDER,
                     getattr(simulation_context, "scenario_time", None),
+                    operational_scope,
                 )
             except OrchestrationParseError as exc:
                 logger.warning(

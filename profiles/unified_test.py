@@ -128,9 +128,9 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
         cleaned = status_filter.strip().lower()
         if cleaned in {"all", "*"}:
             cleaned = ""
-        drones = self.surveillance_store.list_drones(status=cleaned or None)
+        drones = self.surveillance_store.list_drones(status=cleaned or None, scope=self._operational_scope())
         if not drones:
-            all_drones = self.surveillance_store.list_drones()
+            all_drones = self.surveillance_store.list_drones(scope=self._operational_scope())
             drones = all_drones if all_drones else []
         if not drones:
             res = catalog.text("unified.surveillance.no_drones")
@@ -183,7 +183,7 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
     )
     def get_active_missions(self) -> str:
         catalog = get_catalog(DEFAULT_LANGUAGE)
-        missions = self.surveillance_store.get_active_missions()
+        missions = self.surveillance_store.get_active_missions(scope=self._operational_scope())
         if not missions:
             res = catalog.text("unified.surveillance.no_missions")
             _capture_surv_result(res)
@@ -214,10 +214,10 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
     def get_camera_feeds(self, area: str = "", camera_id: str = "") -> str:
         catalog = get_catalog(DEFAULT_LANGUAGE)
         if camera_id.strip():
-            c = self.surveillance_store.get_camera(camera_id.strip())
+            c = self.surveillance_store.get_camera(camera_id.strip(), scope=self._operational_scope())
             cameras = [c] if c else []
         else:
-            cameras = self.surveillance_store.list_cameras(area=area.strip() or None)
+            cameras = self.surveillance_store.list_cameras(area=area.strip() or None, scope=self._operational_scope())
         if not cameras:
             res = catalog.text("unified.surveillance.no_cameras")
             _capture_surv_result(res)
@@ -252,7 +252,7 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
     )
     def get_surveillance_overview(self, area: str = "") -> str:
         catalog = get_catalog(DEFAULT_LANGUAGE)
-        overview = self.surveillance_store.surveillance_overview(area=area.strip() or None)
+        overview = self.surveillance_store.surveillance_overview(area=area.strip() or None, scope=self._operational_scope())
         lines = [
             catalog.text("unified.surveillance.overview_header", icon=_ICON_CHART),
             catalog.text(
@@ -376,6 +376,7 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
                 mission_type=mission_type.strip() or "recon",
                 dispatched_by=dispatched_by.strip() or "commander",
                 specific_drone_id=cleaned_drone_id or None,
+                scope=self._operational_scope(),
             )
         except Exception as exc:
             res = catalog.text("unified.surveillance.dispatch_failed", error=str(exc))
@@ -412,6 +413,7 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
                 camera_id.strip(),
                 feed_summary=observation_note.strip() or None,
                 status=status.strip().lower() or None,
+                scope=self._operational_scope(),
             )
             res = catalog.text(
                 "unified.surveillance.camera_update_done",
@@ -537,7 +539,7 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
         from datetime import datetime, timezone
         catalog = get_catalog(DEFAULT_LANGUAGE)
         now_iso = as_of_iso or datetime.now(timezone.utc).isoformat()
-        snapshot = self.status_store.availability_snapshot(now_iso)
+        snapshot = self.status_store.availability_snapshot(now_iso, scope=self._operational_scope())
         avail = [e for e in snapshot if e["availability"] == "available"]
         unavail = [e for e in snapshot if e["availability"] == "unavailable"]
         awaiting = [e for e in snapshot if e["availability"] in {"awaiting_response", "pending"}]
@@ -678,7 +680,7 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
         if not original_text:
             original_text = catalog.text("unified.team_status.default_original_text", availability=availability)
 
-        approved_members = self.status_store.list_members(approved_only=True)
+        approved_members = self.status_store.list_members(approved_only=True, scope=self._operational_scope())
         if not any(m["telegram_identity"] == telegram_identity for m in approved_members):
             res = catalog.text("unified.team_status.not_approved")
             _capture_team_result(res)
@@ -718,6 +720,7 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
                 unavailable_until=unavailable_until,
                 availability_start=availability_start_value,
                 availability_end=availability_end_value,
+                scope=self._operational_scope(),
             )
         except Exception as exc:
             res = catalog.text("unified.team_status.record_failed", error=str(exc))
@@ -1218,11 +1221,21 @@ SEC001_CHATS = (
     {"key": "commander_dm", "kind": "message", "label": _catalog_text("unified.simulation.sec001.chat.commander_dm.label"), "telegram_chat_type": "private"},
 )
 
+# Scenario-declared operational baselines.  The persistence layer only sees
+# this generic data; it does not know the scenario names or domains.
+SEC001_OPERATIONAL_BASELINE = {
+    "team": {"member_personas": (
+        "eli_response_team", "danny_response_team", "michael_response_team",
+        "yuval_response_team", "gil_response_team", "dan_response_team",
+    )}
+}
+
 SIMULATIONS.append(SimulationScenario(
     key="sec001_phase1",
     title=_catalog_text("unified.simulation.sec001.phase1.title"),
     description=_catalog_text("unified.simulation.sec001.phase1.description"),
     tags=("sec001", "phase1"),
+    operational_baseline=SEC001_OPERATIONAL_BASELINE,
     raw={
         "scenario": {
             "id": "SEC_001_PHASE_1",
@@ -1286,6 +1299,7 @@ SIMULATIONS.append(SimulationScenario(
     title=_catalog_text("unified.simulation.sec001.phase2.title"),
     description=_catalog_text("unified.simulation.sec001.phase2.description"),
     tags=("sec001", "phase2"),
+    operational_baseline=SEC001_OPERATIONAL_BASELINE,
     raw={
         "scenario": {
             "id": "SEC_001_PHASE_2",
@@ -1349,6 +1363,7 @@ SIMULATIONS.append(SimulationScenario(
     title=_catalog_text("unified.simulation.sec001.phase3.title"),
     description=_catalog_text("unified.simulation.sec001.phase3.description"),
     tags=("sec001", "phase3"),
+    operational_baseline=SEC001_OPERATIONAL_BASELINE,
     raw={
         "scenario": {
             "id": "SEC_001_PHASE_3",
@@ -1449,11 +1464,18 @@ FIRE002_CHATS = (
     {"key": "fire_commander_dm", "kind": "message", "label": _catalog_text("unified.simulation.fire002.chat.fire_commander_dm.label"), "telegram_chat_type": "private"},
 )
 
+FIRE002_OPERATIONAL_BASELINE = {
+    "team": {"member_personas": (
+        "lahav_avi_shift_commander", "omri_firefighter", "yuval_ashed3_commander",
+    )}
+}
+
 SIMULATIONS.append(SimulationScenario(
     key="fire002_phase1",
     title=_catalog_text("unified.simulation.fire002.phase1.title"),
     description=_catalog_text("unified.simulation.fire002.phase1.description"),
     tags=("fire002", "phase1"),
+    operational_baseline=FIRE002_OPERATIONAL_BASELINE,
     raw={
         "scenario": {
             "id": "FIRE_002_PHASE_1",
@@ -1507,6 +1529,7 @@ SIMULATIONS.append(SimulationScenario(
     title=_catalog_text("unified.simulation.fire002.phase2.title"),
     description=_catalog_text("unified.simulation.fire002.phase2.description"),
     tags=("fire002", "phase2"),
+    operational_baseline=FIRE002_OPERATIONAL_BASELINE,
     raw={
         "scenario": {
             "id": "FIRE_002_PHASE_2",
@@ -1560,6 +1583,7 @@ SIMULATIONS.append(SimulationScenario(
     title=_catalog_text("unified.simulation.fire002.phase3.title"),
     description=_catalog_text("unified.simulation.fire002.phase3.description"),
     tags=("fire002", "phase3"),
+    operational_baseline=FIRE002_OPERATIONAL_BASELINE,
     raw={
         "scenario": {
             "id": "FIRE_002_PHASE_3",

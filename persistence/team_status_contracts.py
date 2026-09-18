@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from persistence.operational_scope import OperationalScope
 
 
 class TeamStatusPersistenceError(Exception):
@@ -19,22 +20,25 @@ class AttendanceCycle:
 
 class TeamStatusPersistenceInterface(ABC):
     @abstractmethod
-    def register_member(self, telegram_identity: str, full_name: str, registered_at: str | None = None) -> None: ...
+    def ensure_scope(self, scope: OperationalScope, baseline: dict | None = None) -> None: ...
 
     @abstractmethod
-    def approve_roster(self, approved_by: str, approved_at: str | None = None) -> int: ...
+    def register_member(self, telegram_identity: str, full_name: str, registered_at: str | None = None, *, scope: OperationalScope | None = None) -> None: ...
 
     @abstractmethod
-    def roster_is_approved(self) -> bool: ...
+    def approve_roster(self, approved_by: str, approved_at: str | None = None, *, scope: OperationalScope | None = None) -> int: ...
 
     @abstractmethod
-    def list_members(self, *, approved_only: bool = True) -> list[dict]: ...
+    def roster_is_approved(self, *, scope: OperationalScope | None = None) -> bool: ...
 
     @abstractmethod
-    def open_cycle(self, cycle_key: str, opened_at: str, deadline_at: str) -> AttendanceCycle: ...
+    def list_members(self, *, approved_only: bool = True, scope: OperationalScope | None = None) -> list[dict]: ...
 
     @abstractmethod
-    def latest_cycle(self) -> dict | None: ...
+    def open_cycle(self, cycle_key: str, opened_at: str, deadline_at: str, *, scope: OperationalScope | None = None) -> AttendanceCycle: ...
+
+    @abstractmethod
+    def latest_cycle(self, *, scope: OperationalScope | None = None) -> dict | None: ...
 
     @abstractmethod
     def record_response(
@@ -49,20 +53,21 @@ class TeamStatusPersistenceInterface(ABC):
         unavailable_until: str | None = None,
         availability_start: str | None = None,
         availability_end: str | None = None,
+        scope: OperationalScope | None = None,
     ) -> dict: ...
 
     @abstractmethod
     def review_late_response(
-        self, response_id: str, *, approved: bool, reviewed_by: str, reviewed_at: str | None = None
+        self, response_id: str, *, approved: bool, reviewed_by: str, reviewed_at: str | None = None, scope: OperationalScope | None = None
     ) -> dict: ...
 
     @abstractmethod
-    def pending_late_responses(self) -> list[dict]: ...
+    def pending_late_responses(self, *, scope: OperationalScope | None = None) -> list[dict]: ...
 
     @abstractmethod
-    def availability_snapshot(self, as_of: str) -> list[dict]: ...
+    def availability_snapshot(self, as_of: str, *, scope: OperationalScope | None = None) -> list[dict]: ...
 
-    def clear_runtime_state(self) -> dict[str, int]:
+    def clear_runtime_state(self, *, scope: OperationalScope | None = None) -> dict[str, int]:
         """Remove runtime attendance responses/cycles while preserving roster seed."""
 
         raise NotImplementedError

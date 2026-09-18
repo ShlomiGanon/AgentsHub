@@ -6,7 +6,8 @@ below, the same "declare, don't construct" convention `profiles.spec.AgentSpec`
 already uses. `profiles.loader.load_profile` reads them (defaulting to `()`
 when a profile declares none, so every existing profile is unaffected) and
 `profiles.simulation_provisioning.ensure_simulation_entities` is the one place
-they turn into real `users`/`telegram_groups` rows.
+they turn into real `users`/`telegram_groups` rows. Operational current state
+is initialized separately inside an `OperationalScope`.
 
 Every simulation Telegram ID is a pure function of `(base, offset)` — never
 random, never read back from storage — so the same profile always provisions
@@ -86,7 +87,13 @@ class SimulationGroup:
 
 @dataclass(frozen=True)
 class SimulationRoster:
-    """One agent-owned approved-roster store a profile wants simulation personas
+    """Legacy agent-owned roster declaration; operational simulation membership
+    is now seeded inside an isolated scope rather than written to LIVE.
+
+    A profile may retain this declaration for compatibility, but generic
+    baseline data is the authoritative initialization path.
+
+    One agent-owned approved-roster store a profile wants simulation personas
     pre-registered and pre-approved on, declared once and referenced by key from
     any `SimulationPersona.pre_approved_rosters` that needs it.
 
@@ -141,6 +148,7 @@ class SimulationScenario:
     # the original admin-simulator shape while exposing one canonical contract
     # to API/UI/runtime consumers.
     official_metadata: Mapping[str, Any] = field(default_factory=dict)
+    operational_baseline: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def scenario_id(self) -> str:

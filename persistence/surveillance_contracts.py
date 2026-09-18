@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Literal
+from persistence.operational_scope import OperationalScope
 
 CameraStatus = Literal["active", "offline", "degraded"]
 DroneStatus = Literal["ready", "in_flight", "charging", "maintenance"]
@@ -66,24 +67,32 @@ class DroneMission:
 
 class SurveillancePersistenceInterface(ABC):
     @abstractmethod
-    def reconcile_camera_seed(self, seed: tuple[tuple, ...] | None = None) -> SeedReconciliationResult: ...
+    def ensure_scope(self, scope: OperationalScope, baseline: dict | None = None) -> None: ...
 
     @abstractmethod
-    def list_cameras(self, area: str | None = None, status: str | None = None) -> list[dict]: ...
+    def reconcile_camera_seed(
+        self, seed: tuple[tuple, ...] | None = None, *, scope: OperationalScope | None = None
+    ) -> SeedReconciliationResult: ...
 
     @abstractmethod
-    def get_camera(self, camera_id: str) -> dict | None: ...
+    def list_cameras(
+        self, area: str | None = None, status: str | None = None, *, scope: OperationalScope | None = None
+    ) -> list[dict]: ...
+
+    @abstractmethod
+    def get_camera(self, camera_id: str, *, scope: OperationalScope | None = None) -> dict | None: ...
 
     @abstractmethod
     def update_camera_feed(
-        self, camera_id: str, feed_summary: str, status: str | None = None, updated_at: str | None = None
+        self, camera_id: str, feed_summary: str, status: str | None = None, updated_at: str | None = None,
+        *, scope: OperationalScope | None = None
     ) -> dict: ...
 
     @abstractmethod
-    def list_drones(self, status: str | None = None) -> list[dict]: ...
+    def list_drones(self, status: str | None = None, *, scope: OperationalScope | None = None) -> list[dict]: ...
 
     @abstractmethod
-    def get_drone(self, drone_id: str) -> dict | None: ...
+    def get_drone(self, drone_id: str, *, scope: OperationalScope | None = None) -> dict | None: ...
 
     @abstractmethod
     def dispatch_drone(
@@ -95,16 +104,17 @@ class SurveillancePersistenceInterface(ABC):
         dispatched_by: str = "commander",
         specific_drone_id: str | None = None,
         now_iso: str | None = None,
+        scope: OperationalScope | None = None,
     ) -> dict: ...
 
     @abstractmethod
-    def get_active_missions(self) -> list[dict]: ...
+    def get_active_missions(self, *, scope: OperationalScope | None = None) -> list[dict]: ...
 
     @abstractmethod
-    def recall_drone(self, identifier: str | None = None, now_iso: str | None = None) -> dict: ...
+    def recall_drone(self, identifier: str | None = None, now_iso: str | None = None, *, scope: OperationalScope | None = None) -> dict: ...
 
     @abstractmethod
-    def recall_all_drones(self, now_iso: str | None = None) -> dict: ...
+    def recall_all_drones(self, now_iso: str | None = None, *, scope: OperationalScope | None = None) -> dict: ...
 
     @abstractmethod
     def update_mission_status(
@@ -113,12 +123,13 @@ class SurveillancePersistenceInterface(ABC):
         status: MissionStatus,
         notes: str | None = None,
         updated_at: str | None = None,
+        *, scope: OperationalScope | None = None,
     ) -> dict: ...
 
     @abstractmethod
-    def surveillance_overview(self, area: str | None = None) -> dict: ...
+    def surveillance_overview(self, area: str | None = None, *, scope: OperationalScope | None = None) -> dict: ...
 
-    def clear_runtime_state(self) -> dict[str, int]:
+    def clear_runtime_state(self, *, scope: OperationalScope | None = None) -> dict[str, int]:
         """Remove runtime missions and restore mutable demo state."""
 
         raise NotImplementedError

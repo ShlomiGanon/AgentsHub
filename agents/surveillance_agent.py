@@ -6,10 +6,13 @@ from datetime import datetime, timezone
 import re
 
 from agents.contracts import AgentResult, InvocationPolicy, ReportIngestionResult, project_report_facts
-from agents.runtime import Agent, make_exact_result_capture, tool
+from agents.runtime import Agent, get_trusted_operational_scope, make_exact_result_capture, tool
 from persistence import (
+    OperationalScope,
     SurveillancePersistenceError,
+    current_operational_scope,
     open_surveillance_persistence,
+    scope_from_event,
 )
 
 
@@ -128,6 +131,12 @@ class SurveillanceAgent(Agent):
         )
         super().__init__(model, api_key)
 
+    def ensure_operational_scope(self, scope: OperationalScope, baseline=None) -> None:
+        self.surveillance_store.ensure_scope(scope, baseline=baseline)
+
+    def _operational_scope(self) -> OperationalScope:
+        return get_trusted_operational_scope() or current_operational_scope()
+
     def process(
         self, text: str, allowed_tools: list[str], *, invocation_policy: InvocationPolicy | None = None
     ) -> AgentResult:
@@ -135,7 +144,7 @@ class SurveillanceAgent(Agent):
             invocation_policy = InvocationPolicy(max_output_tokens=220, reasoning_effort="none")
         return _recall_capture.run(super().process, text, allowed_tools, invocation_policy=invocation_policy)
 
-    def extract_report(self, raw_text: str, *, received_at: str, scenario_time: str | None = None, **_) -> ExtractionResult | None:
+    def extract_report(self, raw_text: str, *, received_at: str, scenario_time: str | None = None, scope: OperationalScope | None = None, **_) -> ExtractionResult | None:
         from history import ExtractionResult
         text = str(raw_text or "")
         normalized = text.casefold()
@@ -152,20 +161,22 @@ class SurveillanceAgent(Agent):
             canonical = self._resolve_camera_reference(reference)
             if canonical is None:
                 return None
-            area = next((str(camera.get("area")) for camera in self.surveillance_store.list_cameras() if camera.get("camera_id") == canonical), None)
+            area = next((str(camera.get("area")) for camera in self.surveillance_store.list_cameras(scope=scope or self._operational_scope()) if camera.get("camera_id") == canonical), None)
             return ExtractionResult(
                 "surveillance_report", "trusted", area, (canonical,), text, "low", occurrence, False, (),
                 business_fields={"camera_id": canonical, "camera_status": "offline", "shutdown_type": "planned_maintenance", "downtime_duration_hours": None, "reason": "fresh lens cleaning", "sector": area, "cause_status": None, "possible_cause": None},
             )
         return None
 
-    def ingest_report(self, event: dict) -> ReportIngestionResult:
+    def ingest_report(self, event: dict, *, scope: OperationalScope | None = None) -> ReportIngestionResult:
         """Commit a validated surveillance observation to the owning store.
 
         The event extractor supplies typed business fields; this hook never
         asks the model to perform the write and never emits an action receipt.
         """
 
+        scope = scope or scope_from_event(event)
+        self.ensure_operational_scope(scope)
         if event.get("classification") == "operational_condition_report":
             fields = event.get("business_fields") or {}
             if fields.get("condition_type") != "heat_alert" or fields.get("severity_label") != "low":
@@ -242,6 +253,7 @@ class SurveillanceAgent(Agent):
             updated = self.surveillance_store.update_camera_feed(
                 camera_id.strip(), observation.strip(), status=status,
                 updated_at=event.get("received_at"),
+                scope=scope,
             )
         except SurveillancePersistenceError as exc:
             return ReportIngestionResult("failed", str(exc))
@@ -269,7 +281,7 @@ class SurveillanceAgent(Agent):
         """Resolve a canonical camera ID or an explicitly supported alias."""
 
         normalized = " ".join(reference.strip().split()).casefold()
-        for camera in self.surveillance_store.list_cameras():
+        for camera in self.surveillance_store.list_cameras(scope=self._operational_scope()):
             camera_id = str(camera["camera_id"])
             canonical = camera_id.casefold()
             numeric = canonical.removeprefix("cam-")
@@ -293,10 +305,10 @@ class SurveillanceAgent(Agent):
         requested = drone_or_mission_id.strip()
         normalized = requested.casefold()
         if _wants_all_drones(normalized):
-            return self.surveillance_store.recall_all_drones()
+            return self.surveillance_store.recall_all_drones(scope=self._operational_scope())
         if normalized in _RECALL_TARGET_SENTINELS:
             requested = ""
-        return self.surveillance_store.recall_drone(requested or None)
+        return self.surveillance_store.recall_drone(requested or None, scope=self._operational_scope())
 
     @tool(
         "get_camera_feeds",
@@ -305,12 +317,12 @@ class SurveillanceAgent(Agent):
     )
     def get_camera_feeds(self, area: str = "", camera_id: str = "") -> str:
         if camera_id.strip():
-            camera = self.surveillance_store.get_camera(camera_id.strip())
+            camera = self.surveillance_store.get_camera(camera_id.strip(), scope=self._operational_scope())
             if not camera:
                 return f"Camera '{camera_id}' was not found in the surveillance registry."
             cameras = [camera]
         else:
-            cameras = self.surveillance_store.list_cameras(area=area.strip() or None)
+            cameras = self.surveillance_store.list_cameras(area=area.strip() or None, scope=self._operational_scope())
 
         if not cameras:
             scope = f"in area '{area}'" if area.strip() else "in the surveillance registry"
@@ -333,7 +345,7 @@ class SurveillanceAgent(Agent):
         if requested:
             normalized = requested.casefold()
             drones = [
-                drone for drone in self.surveillance_store.list_drones()
+                drone for drone in self.surveillance_store.list_drones(scope=self._operational_scope())
                 if str(drone["drone_id"]).casefold() == normalized
                 or str(drone["callsign"]).casefold() == normalized
             ]
@@ -345,10 +357,10 @@ class SurveillanceAgent(Agent):
         if cleaned in {"all", "*"}:
             cleaned = ""
         if not requested:
-            drones = self.surveillance_store.list_drones(status=cleaned or None)
+            drones = self.surveillance_store.list_drones(status=cleaned or None, scope=self._operational_scope())
         if not drones:
             # An unsupported status filter should not make the real fleet disappear.
-            all_drones = self.surveillance_store.list_drones()
+            all_drones = self.surveillance_store.list_drones(scope=self._operational_scope())
             if all_drones:
                 drones = all_drones
             else:
@@ -401,6 +413,7 @@ class SurveillanceAgent(Agent):
                 mission_type=mission_type.strip() or "recon",
                 dispatched_by=dispatched_by.strip() or "commander",
                 specific_drone_id=cleaned_drone_id or None,
+                scope=self._operational_scope(),
             )
         except SurveillancePersistenceError as exc:
             return f"Drone dispatch failed: {exc}"
@@ -428,7 +441,7 @@ class SurveillanceAgent(Agent):
         side_effecting=False,
     )
     def get_active_missions(self) -> str:
-        missions = self.surveillance_store.get_active_missions()
+        missions = self.surveillance_store.get_active_missions(scope=self._operational_scope())
         if not missions:
             return "No active drone missions currently in flight."
 
@@ -499,7 +512,7 @@ class SurveillanceAgent(Agent):
         side_effecting=False,
     )
     def get_surveillance_overview(self, area: str = "") -> str:
-        overview = self.surveillance_store.surveillance_overview(area=area.strip() or None)
+        overview = self.surveillance_store.surveillance_overview(area=area.strip() or None, scope=self._operational_scope())
         target = f"Sector '{area}'" if area.strip() else "All Sectors"
 
         lines = [
@@ -554,6 +567,7 @@ class SurveillanceAgent(Agent):
                 camera_id=camera_id.strip(),
                 feed_summary=new_observation.strip(),
                 status=status.strip() or None,
+                scope=self._operational_scope(),
             )
         except SurveillancePersistenceError as exc:
             return f"Failed to update camera feed: {exc}"

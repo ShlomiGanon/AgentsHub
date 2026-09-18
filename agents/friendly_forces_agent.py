@@ -54,7 +54,7 @@ class FriendlyForcesAgent(Agent):
             return ExtractionResult("friendly_forces_report", "trusted", "central_hub", (), text, "low", scenario_time or received_at, False, (), business_fields=fields)
         return None
 
-    def ingest_report(self, event: dict) -> ReportIngestionResult:
+    def ingest_report(self, event: dict, *, scope=None) -> ReportIngestionResult:
         if event.get("classification") != self.default_report_type:
             return ReportIngestionResult("not_applicable")
         if not str(event.get("description") or "").strip():

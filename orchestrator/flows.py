@@ -108,6 +108,7 @@ from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYP
 from protocols import CriticalityLevel, Step, StepOutcome
 from protocols.executor import execute_steps
 from agents import authenticated_request_identity, trusted_event_metadata, ToolReceipt, ReportIngestionResult
+from persistence import scope_from_event
 from tools import get_trace_id
 
 if TYPE_CHECKING:
@@ -496,7 +497,7 @@ def _apply_attendance_temporal_fields(
     return replace(extraction_result, missing_fields=missing)
 
 
-def _trusted_group_extraction(deps: FlowDeps, raw_text: str, received_at: str, reference_time: str | None):
+def _trusted_group_extraction(deps: FlowDeps, raw_text: str, received_at: str, reference_time: str | None, scope=None):
     owner_name = getattr(deps, "group_owner", None)
     if not owner_name:
         return None
@@ -512,6 +513,7 @@ def _trusted_group_extraction(deps: FlowDeps, raw_text: str, received_at: str, r
         received_at=received_at,
         scenario_time=reference_time,
         timezone_name=deps.timezone_name,
+        scope=scope,
     )
     if result is None:
         return None
@@ -533,6 +535,7 @@ def prepare_fast_path_report(
     received_at: str,
     originated_from_commander: bool,
     reference_time: str | None = None,
+    operational_scope=None,
 ) -> FastPathPlan | None:
     """Return a validated direct-execution plan, or leave the legacy flow untouched."""
 
@@ -540,7 +543,7 @@ def prepare_fast_path_report(
     if policy.operational_intake_mode != "single" or policy.deterministic_execution_mode != "direct":
         return None
 
-    trusted_extraction = _trusted_group_extraction(deps, raw_text, received_at, reference_time)
+    trusted_extraction = _trusted_group_extraction(deps, raw_text, received_at, reference_time, operational_scope)
     if trusted_extraction is not None:
         if trusted_extraction.classification != "team_attendance_report":
             return FastPathPlan(trusted_extraction, domain_only=True)
@@ -915,7 +918,7 @@ def _commit_report_domain_state(deps: "FlowDeps", event_id: str) -> ReportIngest
         ingest_report = getattr(agent, "ingest_report", None)
         if ingest_report is None:
             continue
-        result = ingest_report(event)
+        result = ingest_report(event, scope=scope_from_event(event))
         if result is None:
             return ReportIngestionResult("failed", "domain report ingestion returned no typed result")
         if result.status != "not_applicable":
@@ -1691,6 +1694,7 @@ def _execute_protocol_plan(
             "received_at": event.get("received_at"),
             "availability_start": event.get("availability_start"),
             "availability_end": event.get("availability_end"),
+            "operational_scope": scope_from_event(event),
         }
     ):
         run_result = execute_steps(
@@ -1822,6 +1826,7 @@ def _finish_protocol_assessment(
             sender_identity_filter=sender_filter,
             scenario_id=persisted_event.get("scenario_id"),
             scenario_run_id=persisted_event.get("scenario_run_id"),
+            operational_scope=scope_from_event(persisted_event),
         )
 
     if typed_snapshot is not None:
