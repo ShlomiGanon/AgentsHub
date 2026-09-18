@@ -42,6 +42,7 @@ _EVENT_COLUMNS = (
     "sender_permission_level",
     "source_message_id",
     "scenario_id",
+    "scenario_run_id",
     "scenario_step",
     "scenario_time",
     "occurred_at",
@@ -89,7 +90,7 @@ _EVENT_IMMUTABLE_COLUMNS = {
     "event_id", "received_at", "source", "sender_identity", "sender_permission_level",
     "source_message_id", "raw_text",
     "trace_id", "conversation_id", "deadline_at", "ingestion_key",
-    "scenario_id", "scenario_step", "scenario_time",
+    "scenario_id", "scenario_run_id", "scenario_step", "scenario_time",
 }
 _UPDATABLE_EVENT_COLUMNS = frozenset(_EVENT_COLUMNS) - _EVENT_IMMUTABLE_COLUMNS
 
@@ -285,6 +286,13 @@ def _search_where(criteria: EventSearchCriteria) -> tuple[str, list[object], str
     if criteria.sender_identity is not None:
         clauses.append("sender_identity = ?")
         parameters.append(criteria.sender_identity)
+
+    if criteria.scenario_id is not None:
+        clauses.append("scenario_id = ?")
+        parameters.append(criteria.scenario_id)
+    if criteria.scenario_run_id is not None:
+        clauses.append("scenario_run_id = ?")
+        parameters.append(criteria.scenario_run_id)
 
     return (" AND ".join(clauses) if clauses else "1 = 1"), parameters, time_column
 

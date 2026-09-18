@@ -74,8 +74,10 @@ from orchestrator.reasoning import (
 from orchestrator.reasoning import answer_question, determine_closure, look_up_precedent
 from orchestrator.situational_picture import (  # re-exported: api may only import orchestrator.flows
     SituationalPicture,
+    SituationalQueryScope,
     build_situational_picture,
     build_typed_snapshot,
+    classify_situational_query,
     compose_picture_from_step_outcomes,
     render_typed_snapshot,
 )
@@ -630,6 +632,7 @@ def begin_report(
             sender_permission_level=sender_permission_level,
             source_message_id=source_message_id,
             scenario_id=getattr(simulation_context, "scenario_id", None),
+            scenario_run_id=getattr(simulation_context, "scenario_run_id", None),
             scenario_step=getattr(simulation_context, "scenario_step", None),
             scenario_time=getattr(simulation_context, "scenario_time", None),
             trace_id=get_trace_id() or None, conversation_id=conversation_id, deadline_at=deadline_at,
@@ -919,6 +922,7 @@ def begin_request(
             sender_permission_level=sender_permission_level,
             source_message_id=source_message_id, occurred_at=received_at, occurred_at_is_fallback=False,
             scenario_id=getattr(simulation_context, "scenario_id", None),
+            scenario_run_id=getattr(simulation_context, "scenario_run_id", None),
             scenario_step=getattr(simulation_context, "scenario_step", None),
             scenario_time=getattr(simulation_context, "scenario_time", None),
             trace_id=get_trace_id() or None, conversation_id=conversation_id, deadline_at=deadline_at,
@@ -1764,6 +1768,8 @@ def _finish_protocol_assessment(
             deps.registry,
             history_query_service=deps.history_query_service,
             sender_identity_filter=sender_filter,
+            scenario_id=persisted_event.get("scenario_id"),
+            scenario_run_id=persisted_event.get("scenario_run_id"),
         )
 
     if typed_snapshot is not None:
@@ -1787,6 +1793,8 @@ def _finish_protocol_assessment(
                     persisted_event.get("raw_text", ""),
                     deps.history_query_service,
                     sender_identity_filter=sender_filter,
+                    scenario_id=persisted_event.get("scenario_id"),
+                    scenario_run_id=persisted_event.get("scenario_run_id"),
                 )
                 if synthesis:
                     insight_text = synthesis

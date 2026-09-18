@@ -17,6 +17,7 @@ from bot.api_client import (
     AttendanceCheckResult,
     BotApiClient,
     BotNotification,
+    EventSubmissionResult,
     GroupBindingView,
     HoldAnswerOutcome,
     JobResult,
@@ -219,6 +220,10 @@ class FakeBotApiClient(BotApiClient):
             self.calls.append(("submit_message_chat", telegram_chat_id, telegram_chat_type))
         assert self.message_submission_result is not None, "test must set message_submission_result"
         return self.message_submission_result
+
+    async def submit_event(self, text: str, sender_identity: str, source_message_id: str) -> EventSubmissionResult:
+        self.calls.append(("submit_event", text, sender_identity, source_message_id))
+        return EventSubmissionResult(event_id=source_message_id, status="queued")
 
     async def answer_clarification_hold(self, event_id: str, chosen_classification: str, answering_identity: str) -> HoldAnswerOutcome:
         self.calls.append(("answer_clarification_hold", event_id, chosen_classification, answering_identity))

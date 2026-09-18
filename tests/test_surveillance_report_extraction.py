@@ -52,6 +52,10 @@ def _intake_payload(message=STEP_2_MESSAGE, *, business_fields=None):
         "business_fields": business_fields or {
             "camera_id": "CAM-08",
             "camera_status": "degraded",
+            "shutdown_type": None,
+            "downtime_duration_hours": None,
+            "reason": None,
+            "sector": None,
             "cause_status": "unverified",
             "possible_cause": "branch obstruction or focus problem",
         },
@@ -89,7 +93,10 @@ def test_exact_sec_step_2_passes_single_intake_with_scalar_uncertainty_fields():
         "cause_status": "unverified",
         "possible_cause": "branch obstruction or focus problem",
     }
-    assert all(type(value) in {str, int, float, bool} for value in intake.extraction.business_fields.values())
+    assert all(
+        value is None or type(value) in {str, int, float, bool}
+        for value in intake.extraction.business_fields.values()
+    )
     assert len(agent.calls) == 1
 
 

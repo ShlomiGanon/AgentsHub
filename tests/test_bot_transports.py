@@ -22,6 +22,7 @@ _DUMMY_ARGS = {
     "list_groups": (),
     "run_attendance_check": (),
     "submit_message": ("text", "u1", "m1"),
+    "submit_event": ("text", "sensor-1", "event-1"),
     "answer_clarification_hold": ("h1", "fire", "u1"),
     "answer_approval_hold": ("h1", "approved", "u1"),
     "fetch_pending_holds": ("u1",),

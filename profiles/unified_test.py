@@ -1630,6 +1630,10 @@ EVENT_TYPE_BUSINESS_FIELDS = {
     "surveillance_report": {
         "camera_id": (),
         "camera_status": ("active", "degraded", "offline"),
+        "shutdown_type": ("planned_maintenance",),
+        "downtime_duration_hours": (),
+        "reason": (),
+        "sector": (),
         "cause_status": ("unverified",),
         "possible_cause": (),
     },

@@ -48,6 +48,146 @@ RECENT_EVENTS_LIMIT = 8
 SPECIALIST_TIMEOUT_SECONDS = 25.0
 PICTURE_MAX_LINES = 8
 
+
+@dataclass(frozen=True)
+class SituationalQueryScope:
+    """Typed request scope for an operational current-state query."""
+
+    team: bool = False
+    surveillance: bool = False
+    drones: bool = False
+    external_reports: bool = False
+    overall: bool = False
+
+    @classmethod
+    def overall_scope(cls) -> "SituationalQueryScope":
+        return cls(team=True, surveillance=True, drones=True, external_reports=True, overall=True)
+
+    def as_dict(self) -> dict[str, bool]:
+        return {
+            "team": self.team,
+            "surveillance": self.surveillance,
+            "drones": self.drones,
+            "external_reports": self.external_reports,
+            "overall": self.overall,
+        }
+
+
+_SITUATIONAL_PICTURE_TERMS = (
+    "\u05ea\u05de\u05d5\u05e0\u05ea \u05de\u05e6\u05d1",
+    "\u05ea\u05de\u05d5\u05e0\u05ea \u05d4\u05de\u05e6\u05d1",
+    "situational picture",
+    "situation picture",
+    "sector situational picture",
+    "\u05de\u05e6\u05d1 \u05d4\u05d2\u05d6\u05e8\u05d4",
+    "\u05e1\u05d8\u05d8\u05d5\u05e1 \u05d4\u05d2\u05d6\u05e8\u05d4",
+    "sector status",
+    "overall picture",
+)
+_TEAM_SCOPE_TERMS = (
+    "\u05e1\u05d3\u05db",
+    "\u05db\u05d5\u05d7",
+    "\u05db\u05d5\u05e0\u05e0\u05d5\u05ea",
+    "\u05d6\u05de\u05d9\u05e0",
+    "\u05d7\u05e1\u05e8",
+    "roster",
+    "manpower",
+    "personnel",
+    "readiness team",
+    "available",
+    "missing",
+)
+_SURVEILLANCE_SCOPE_TERMS = (
+    "\u05de\u05e6\u05dc\u05de",
+    "\u05ea\u05e6\u05e4",
+    "\u05d2\u05d3\u05e8",
+    "camera",
+    "surveillance",
+    "perimeter",
+    "observation",
+)
+_DRONE_SCOPE_TERMS = (
+    "\u05e8\u05d7\u05e4\u05e0",
+    "drone",
+    "uav",
+)
+_EXTERNAL_REPORT_SCOPE_TERMS = (
+    "\u05d3\u05d9\u05d5\u05d5\u05d7",
+    "recent reports",
+    "recent events",
+)
+_CURRENT_STATE_TERMS = (
+    "\u05de\u05e6\u05d1",
+    "\u05e1\u05d8\u05d8\u05d5\u05e1",
+    "\u05e1\u05d9\u05db\u05d5\u05dd",
+    "\u05ea\u05e6\u05d9\u05d2",
+    "\u05ea\u05df",
+    "\u05ea\u05e4\u05d9\u05e7",
+    "status",
+    "state",
+    "summary",
+    "show",
+    "give",
+    "what",
+    "who",
+)
+_FOLLOW_UP_STATUS_TERMS = (
+    "\u05e4\u05e2\u05d5\u05dc\u05d4",
+    "\u05d1\u05e7\u05e9\u05d4",
+    "\u05d0\u05d9\u05e9\u05d5\u05e8",
+    "\u05d0\u05d9\u05e8\u05d5\u05e2 \u05e7\u05d5\u05d3\u05dd",
+    "action",
+    "request",
+    "approval",
+    "previous event",
+)
+
+
+def _normalize_query_terms(text: str) -> str:
+    normalized = str(text or "").casefold()
+    normalized = re.sub(r"[\"'\u05f3\u05f4]", "", normalized)
+    return " ".join(re.sub(r"[^\w\u0590-\u05ff]+", " ", normalized).split())
+
+
+def _contains_query_term(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term in text for term in terms)
+
+
+def classify_situational_query(text: str) -> SituationalQueryScope | None:
+    """Recognize supported operational state questions and derive their scope.
+
+    This is intentionally limited to supported state domains and excludes
+    lifecycle/follow-up status questions before any protocol is selected.
+    """
+
+    normalized = _normalize_query_terms(text)
+    if not normalized:
+        return None
+
+    has_picture_phrase = _contains_query_term(normalized, _SITUATIONAL_PICTURE_TERMS)
+    has_team = _contains_query_term(normalized, _TEAM_SCOPE_TERMS)
+    has_surveillance = _contains_query_term(normalized, _SURVEILLANCE_SCOPE_TERMS)
+    has_drones = _contains_query_term(normalized, _DRONE_SCOPE_TERMS)
+    has_external_reports = _contains_query_term(normalized, _EXTERNAL_REPORT_SCOPE_TERMS)
+    has_current_state = _contains_query_term(normalized, _CURRENT_STATE_TERMS) or "?" in str(text)
+
+    if _contains_query_term(normalized, _FOLLOW_UP_STATUS_TERMS) and not has_picture_phrase:
+        return None
+
+    if not any((has_team, has_surveillance, has_drones, has_external_reports)):
+        return SituationalQueryScope.overall_scope() if has_picture_phrase else None
+
+    if not has_current_state and not has_picture_phrase:
+        return None
+
+    return SituationalQueryScope(
+        team=has_team,
+        surveillance=has_surveillance,
+        drones=has_drones,
+        external_reports=has_external_reports,
+        overall=False,
+    )
+
 _PLAN_POLICY = InvocationPolicy(max_output_tokens=400, timeout_seconds=30.0, reasoning_effort="none")
 _COMPOSE_POLICY = InvocationPolicy(max_output_tokens=450, timeout_seconds=45.0, reasoning_effort="none")
 
@@ -65,6 +205,7 @@ class PicturePlan:
     briefings: tuple[DomainBriefing, ...]
     recent_events_hours: int
     planned_by_model: bool
+    scope: SituationalQueryScope | None = None
 
 
 @dataclass(frozen=True)
@@ -215,6 +356,8 @@ class SituationalPicture:
                 for report in self.reports
             ],
         }
+        if self.plan.scope is not None:
+            payload["query_scope"] = self.plan.scope.as_dict()
         if self.snapshot is not None:
             payload["snapshot"] = self.snapshot.provenance()
         return payload
@@ -480,6 +623,8 @@ def _recent_committed_reports(
     *,
     now: datetime,
     sender_identity_filter: str | None,
+    scenario_id: str | None,
+    scenario_run_id: str | None,
 ) -> tuple[RecentOperationalReport, ...]:
     """Read committed report facts through the history service's public read path."""
 
@@ -491,6 +636,8 @@ def _recent_committed_reports(
             now=now,
             hours=DEFAULT_RECENT_EVENTS_HOURS,
             sender_identity_filter=sender_identity_filter,
+            scenario_id=scenario_id,
+            scenario_run_id=scenario_run_id,
             limit=RECENT_EVENTS_LIMIT,
         )
     except Exception:
@@ -527,6 +674,9 @@ def build_typed_snapshot(
     area: str | None = None,
     history_query_service: "HistoryQueryService | None" = None,
     sender_identity_filter: str | None = None,
+    scenario_id: str | None = None,
+    scenario_run_id: str | None = None,
+    scope: SituationalQueryScope | None = None,
 ) -> SituationalSnapshot | None:
     """Read authoritative specialist stores and construct a validated snapshot.
 
@@ -535,6 +685,7 @@ def build_typed_snapshot(
     """
 
     now = now or datetime.now(timezone.utc)
+    effective_scope = scope or SituationalQueryScope.overall_scope()
     surveillance_agent = _registry_agent(registry, "surveillance_agent")
     team_agent = _registry_agent(registry, "team_status_agent")
     surveillance_store = getattr(surveillance_agent, "surveillance_store", None)
@@ -542,9 +693,21 @@ def build_typed_snapshot(
     if surveillance_store is None and team_store is None:
         return None
 
-    cameras = _build_camera_snapshot(surveillance_store, now=now, area=area) if surveillance_store else None
-    drones = _build_drone_snapshot(surveillance_store, now=now, area=area) if surveillance_store else None
-    team = _build_team_snapshot(team_store, now=now) if team_store else None
+    cameras = (
+        _build_camera_snapshot(surveillance_store, now=now, area=area)
+        if surveillance_store and (effective_scope.overall or effective_scope.surveillance)
+        else None
+    )
+    drones = (
+        _build_drone_snapshot(surveillance_store, now=now, area=area)
+        if surveillance_store and (effective_scope.overall or effective_scope.drones)
+        else None
+    )
+    team = (
+        _build_team_snapshot(team_store, now=now)
+        if team_store and (effective_scope.overall or effective_scope.team)
+        else None
+    )
     inconsistencies: list[str] = []
     if drones is not None and drones.status == "inconsistent":
         inconsistencies.append("drone and mission stores disagree")
@@ -554,10 +717,16 @@ def build_typed_snapshot(
         inconsistencies.append("camera status categories do not sum to total")
 
     findings = derive_operational_findings(cameras, drones, team)
-    recent_reports = _recent_committed_reports(
-        history_query_service,
-        now=now,
-        sender_identity_filter=sender_identity_filter,
+    recent_reports = (
+        _recent_committed_reports(
+            history_query_service,
+            now=now,
+            sender_identity_filter=sender_identity_filter,
+            scenario_id=scenario_id,
+            scenario_run_id=scenario_run_id,
+        )
+        if effective_scope.overall or effective_scope.external_reports
+        else ()
     )
 
     return SituationalSnapshot(
@@ -573,7 +742,7 @@ def build_typed_snapshot(
     )
 
 
-def render_typed_snapshot(snapshot: SituationalSnapshot) -> str:
+def render_typed_snapshot(snapshot: SituationalSnapshot, *, include_findings: bool = True) -> str:
     """Render localized facts and findings without model-authored claims."""
 
     catalog = get_current_catalog()
@@ -623,7 +792,7 @@ def render_typed_snapshot(snapshot: SituationalSnapshot) -> str:
                 pending_identity=section.pending_identity,
             ))
 
-    if snapshot.findings:
+    if include_findings and snapshot.findings:
         lines.extend(("", catalog.text("orchestrator.picture.typed.findings_header")))
         lines.extend(
             catalog.text(
@@ -640,7 +809,7 @@ def render_typed_snapshot(snapshot: SituationalSnapshot) -> str:
             for report in snapshot.recent_reports
         )
 
-    recommendations = [finding for finding in snapshot.findings if finding.suggested_action_key]
+    recommendations = [finding for finding in snapshot.findings if finding.suggested_action_key] if include_findings else []
     if recommendations:
         lines.extend(("", catalog.text("orchestrator.picture.typed.recommendations_header")))
         lines.extend(
@@ -691,6 +860,29 @@ def _default_plan(protocol: "Protocol") -> PicturePlan:
         briefings=tuple(DomainBriefing(agent_name, default_query) for agent_name in protocol.participating_agents),
         recent_events_hours=DEFAULT_RECENT_EVENTS_HOURS,
         planned_by_model=False,
+    )
+
+
+def _scoped_plan(protocol: "Protocol", scope: SituationalQueryScope) -> PicturePlan:
+    if scope.overall:
+        selected_agents = protocol.participating_agents
+    else:
+        selected_agents = tuple(
+            agent_name
+            for agent_name in protocol.participating_agents
+            if (
+                agent_name == "team_status_agent" and scope.team
+            )
+            or (
+                agent_name == "surveillance_agent" and (scope.surveillance or scope.drones)
+            )
+        )
+    default_query = get_current_catalog().text("orchestrator.picture.default_domain_query")
+    return PicturePlan(
+        briefings=tuple(DomainBriefing(agent_name, default_query) for agent_name in selected_agents),
+        recent_events_hours=DEFAULT_RECENT_EVENTS_HOURS if (scope.overall or scope.external_reports) else 0,
+        planned_by_model=False,
+        scope=scope,
     )
 
 
@@ -788,6 +980,8 @@ def collect_recent_events(
     hours: int,
     now: datetime,
     sender_identity_filter: str | None,
+    scenario_id: str | None = None,
+    scenario_run_id: str | None = None,
     limit: int = RECENT_EVENTS_LIMIT,
 ) -> DomainReport:
     """Ask history for what was recorded in the last `hours` hours (newest first, by receipt time)."""
@@ -799,6 +993,8 @@ def collect_recent_events(
         time_start=storage_timestamp(now - timedelta(hours=hours)),
         time_end=storage_timestamp(now),
         time_basis="received_at",
+        scenario_id=scenario_id,
+        scenario_run_id=scenario_run_id,
         order="newest",
         limit=limit,
     )
@@ -977,21 +1173,28 @@ def build_situational_picture(
     *,
     caller_identity: str | None,
     sender_identity_filter: str | None,
+    scenario_id: str | None = None,
+    scenario_run_id: str | None = None,
     now: datetime | None = None,
+    scope: SituationalQueryScope | None = None,
 ) -> SituationalPicture:
     """Plan, collect, and compose one live picture for `raw_text` under `protocol`."""
 
     now = now or datetime.now(timezone.utc)
+    effective_scope = scope or SituationalQueryScope.overall_scope()
     typed_snapshot = build_typed_snapshot(
         registry,
         now=now,
         history_query_service=history_query_service,
         sender_identity_filter=sender_identity_filter,
+        scenario_id=scenario_id,
+        scenario_run_id=scenario_run_id,
+        scope=effective_scope,
     )
     if typed_snapshot is not None:
-        plan = _default_plan(protocol)
+        plan = _scoped_plan(protocol, effective_scope)
         return SituationalPicture(
-            text=render_typed_snapshot(typed_snapshot),
+            text=render_typed_snapshot(typed_snapshot, include_findings=effective_scope.overall),
             reports=(),
             generated_at=typed_snapshot.generated_at,
             plan=plan,
@@ -1036,6 +1239,8 @@ def compose_picture_from_step_outcomes(
     history_query_service: "HistoryQueryService",
     *,
     sender_identity_filter: str | None,
+    scenario_id: str | None = None,
+    scenario_run_id: str | None = None,
     now: datetime | None = None,
 ) -> str:
     """The queued-pipeline variant: the specialists already ran their formulated tasks, so only
@@ -1058,6 +1263,8 @@ def compose_picture_from_step_outcomes(
             hours=DEFAULT_RECENT_EVENTS_HOURS,
             now=now,
             sender_identity_filter=sender_identity_filter,
+            scenario_id=scenario_id,
+            scenario_run_id=scenario_run_id,
         )
     )
     return compose_situational_picture(

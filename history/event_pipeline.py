@@ -23,6 +23,11 @@ def _prompt(
         if source == "sensor"
         else f"Resolve occurred_at relative to received_at={received_at}; use null if it cannot be resolved."
     )
+    maintenance_rule = (
+        "For planned surveillance downtime, use shutdown_type='planned_maintenance' and camera_status='offline'; keep duration as numeric hours, and preserve reason and sector as scalar report metadata without using sector to infer camera identity. "
+        if any("shutdown_type" in fields for fields in (event_type_business_fields or {}).values())
+        else ""
+    )
 
     return (
         "Extract this operational event into one JSON object with exactly these keys: "
@@ -33,7 +38,8 @@ def _prompt(
         "business_fields is an object containing only explicitly observed domain facts; use scalar string, number, boolean, or null values only. "
         "Represent uncertain possible causes with scalar text and an unverified status; never use an object or array and never turn a hypothesis into a verified fact. "
         f"For declared event-type fields, return exactly these canonical scalar keys: {event_type_business_fields or {}}. "
-        f"{timestamp_rule}\nEvent text:\n{raw_text}"
+        + maintenance_rule
+        + f"{timestamp_rule}\nEvent text:\n{raw_text}"
     )
 
 

@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS events (
     sender_permission_level TEXT NOT NULL DEFAULT 'viewer',
     source_message_id TEXT,
     scenario_id TEXT,
+    scenario_run_id TEXT,
     scenario_step INTEGER,
     scenario_time TEXT,
 
@@ -149,6 +150,7 @@ CREATE INDEX IF NOT EXISTS idx_events_outcome_occurred_at
 CREATE INDEX IF NOT EXISTS idx_events_protocol_occurred_at
     ON events(selected_protocol, occurred_at);
 CREATE INDEX IF NOT EXISTS idx_events_received_at ON events(received_at);
+CREATE INDEX IF NOT EXISTS idx_events_scenario_run_id ON events(scenario_id, scenario_run_id, scenario_step);
 """
 
 
@@ -307,6 +309,12 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "ALTER TABLE events ADD COLUMN scenario_step INTEGER;"
         "ALTER TABLE events ADD COLUMN scenario_time TEXT;",
     ),
+    (
+        24,
+        "add trusted simulation run identity",
+        "ALTER TABLE events ADD COLUMN scenario_run_id TEXT;"
+        "CREATE INDEX IF NOT EXISTS idx_events_scenario_run_id ON events(scenario_id, scenario_run_id, scenario_step);",
+    ),
 ]
 
 
@@ -351,6 +359,11 @@ _REQUIRED_COLUMNS_BY_VERSION = (
         23,
         "events",
         (("scenario_id", "TEXT"), ("scenario_step", "INTEGER"), ("scenario_time", "TEXT")),
+    ),
+    (
+        24,
+        "events",
+        (("scenario_run_id", "TEXT"),),
     ),
 )
 
@@ -430,8 +443,13 @@ def run_migrations(db_path: str) -> None:
                         "ALTER TABLE telegram_groups ADD COLUMN auto_register INTEGER NOT NULL DEFAULT 0 "
                         "CHECK (auto_register IN (0, 1))"
                     )
-            elif version in {20, 21, 22, 23}:
+            elif version in {20, 21, 22, 23, 24}:
                 _repair_required_columns(connection, version)
+                if version == 24:
+                    connection.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_events_scenario_run_id "
+                        "ON events(scenario_id, scenario_run_id, scenario_step)"
+                    )
             else:
                 connection.executescript(sql)
 

@@ -49,6 +49,7 @@ from orchestrator.flows import (
     classify_intent,
     enforce_action_routing_guard,
     build_situational_picture,
+    classify_situational_query,
     plan_message,
     protocol_requires_approval,
     WorkItem,
@@ -94,6 +95,7 @@ def _simulation_context_from_request(ctx, sender_identity: str, chat_id: str | N
         request.headers.get(name) is not None
         for name in ("X-Simulation-ID", "X-Simulation-Step", "X-Simulation-Time")
     )
+    supplied = supplied or request.headers.get("X-Simulation-Run-ID") is not None
     if marker is None and not supplied:
         return None
     if marker != "true" or not is_authenticated_bot_request():
@@ -118,6 +120,9 @@ def _simulation_context_from_request(ctx, sender_identity: str, chat_id: str | N
         supplied_time = request.headers.get("X-Simulation-Time")
         if supplied_time != context.scenario_time:
             raise InvalidInputError("X-Simulation-Time does not match the declared scenario step", field="X-Simulation-Time")
+        supplied_run_id = request.headers.get("X-Simulation-Run-ID")
+        if supplied_run_id is not None:
+            context = dataclasses.replace(context, scenario_run_id=supplied_run_id)
         return context
     except ValueError as exc:
         raise InvalidInputError(str(exc), field="X-Simulation-ID") from exc
@@ -137,6 +142,7 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
         request_payload = request.get_json(silent=True) or {}
         text = request_payload.get("text")
         sender_identity = request_payload.get("sender_identity")
+        source_message_id = request_payload.get("source_message_id")
 
         if not text:
             raise InvalidInputError(messages.text("api.field_required", field="text"), field="text")
@@ -146,6 +152,27 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
             )
         if sender_identity != caller_identity:
             raise AuthorizationError(messages.text("api.sender_identity_mismatch"))
+        if source_message_id is not None and (
+            not isinstance(source_message_id, str) or not source_message_id.strip()
+        ):
+            raise InvalidInputError("source_message_id must be a non-empty string", field="source_message_id")
+
+        simulation_context = _simulation_context_from_request(
+            ctx,
+            str(sender_identity),
+            None,
+            "event",
+        )
+        if source_message_id:
+            existing_event = ctx.deps.persistence.fetch_event_by_source_message(
+                "sensor", str(sender_identity), str(source_message_id)
+            )
+            if existing_event is not None:
+                return jsonify({
+                    "event_id": existing_event["event_id"],
+                    "status": "queued" if existing_event.get("outcome") is None else existing_event["outcome"],
+                    "duplicate": True,
+                }), 202
         reservation = ctx.queue.reserve(False)
         if reservation is None:
             raise ServiceUnavailableError(messages.text("api.queue_full"))
@@ -160,8 +187,10 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
                 "sensor",
                 _now(),
                 sender_identity,
+                source_message_id=source_message_id,
                 deadline_at=deadline_at,
                 sender_permission_level=level.name.lower(),
+                simulation_context=simulation_context,
             )
         except Exception:
             ctx.queue.release_reservation(reservation)
@@ -216,21 +245,9 @@ SITUATIONAL_PICTURE_PROTOCOL = "overall_situational_picture"
 # `_is_team_roster_query` below does. Matching one of these routes the message
 # deterministically to the live multi-domain picture instead of leaving the
 # choice to general question routing.
-_SITUATIONAL_PICTURE_TERMS = (
-    "\u05ea\u05de\u05d5\u05e0\u05ea \u05de\u05e6\u05d1",  # (Hebrew) situational picture
-    "\u05ea\u05de\u05d5\u05e0\u05ea \u05d4\u05de\u05e6\u05d1",  # (Hebrew) the situational picture
-    "\u05ea\u05de\u05d5\u05e0\u05ea-\u05de\u05e6\u05d1",  # (Hebrew) situational-picture
-    "\u05de\u05e6\u05d1 \u05d4\u05d2\u05d6\u05e8\u05d4",  # (Hebrew) the sector's state
-    "\u05e1\u05d8\u05d8\u05d5\u05e1 \u05d2\u05d6\u05e8\u05d4",  # (Hebrew) sector status
-    "situational picture",
-    "situation picture",
-    "sector status",
-)
-
-
 def _is_situational_picture_query(text: str) -> bool:
-    normalized = " ".join(text.strip().casefold().split())
-    return any(term in normalized for term in _SITUATIONAL_PICTURE_TERMS)
+    scope = classify_situational_query(text)
+    return bool(scope and scope.overall)
 
 
 def _is_team_roster_query(text: str, prior_messages: tuple[dict, ...]) -> bool:
@@ -751,7 +768,8 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 messages.text("api.protocol_out_of_group_scope", protocol=matched_protocol_name, agent=scoped_agent),
                 field="protocol_hint",
             )
-        if matched_protocol_name is None and _is_situational_picture_query(str(text)):
+        situational_scope = classify_situational_query(str(text))
+        if matched_protocol_name is None and situational_scope is not None:
             matched_protocol_name = SITUATIONAL_PICTURE_PROTOCOL
         if matched_protocol_name is None and _is_team_roster_query(str(text), prior_messages):
             matched_protocol_name = "report_team_availability"
@@ -842,6 +860,9 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     str(text),
                     caller_identity=caller_identity,
                     sender_identity_filter=None if is_commander else caller_identity,
+                    scenario_id=getattr(simulation_context, "scenario_id", None),
+                    scenario_run_id=getattr(simulation_context, "scenario_run_id", None),
+                    scope=situational_scope,
                 )
                 picture_provenance = picture.provenance()
                 source_refs = tuple(

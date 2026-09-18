@@ -29,6 +29,8 @@ class EventSearchCriteria:
     # applies no such restriction — existing callers are unaffected. No schema
     # change: `sender_identity` is an existing `events` column (persistence/schema.py).
     sender_identity: str | None = None
+    scenario_id: str | None = None
+    scenario_run_id: str | None = None
     order: Literal["newest", "oldest"] = "newest"
     limit: int = 50
 

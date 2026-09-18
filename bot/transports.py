@@ -19,6 +19,7 @@ from bot.contracts import (
     AttendanceCheckResult,
     BOT_SERVICE_IDENTITY,
     BotApiClient,
+    EventSubmissionResult,
     GroupBindingView,
     BotNotification,
     EventDataNeededNotice,
@@ -154,6 +155,8 @@ class HttpApiClient(BotApiClient):
             headers["X-Simulation-ID"] = str(simulation_context.scenario_id)
             headers["X-Simulation-Step"] = str(simulation_context.scenario_step)
             headers["X-Simulation-Time"] = str(simulation_context.scenario_time)
+            if getattr(simulation_context, "scenario_run_id", None) is not None:
+                headers["X-Simulation-Run-ID"] = str(simulation_context.scenario_run_id)
         attempts = 3 if method == "GET" else 1
 
         try:
@@ -332,6 +335,22 @@ class HttpApiClient(BotApiClient):
             kind=response_payload["taken_as"],
             answer_text=response_payload.get("answer"),
             job_id=response_payload.get("event_id"),
+        )
+
+    async def submit_event(
+        self, text: str, sender_identity: str, source_message_id: str
+    ) -> EventSubmissionResult:
+        status, response_payload = await self._call(
+            "POST",
+            "/Event",
+            sender_identity,
+            {"text": text, "sender_identity": sender_identity, "source_message_id": source_message_id},
+        )
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+        return EventSubmissionResult(
+            event_id=str(response_payload["event_id"]),
+            status=str(response_payload.get("status") or "queued"),
         )
 
     async def answer_clarification_hold(self, event_id: str, chosen_classification: str, answering_identity: str) -> HoldAnswerOutcome:

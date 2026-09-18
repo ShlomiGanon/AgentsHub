@@ -3447,3 +3447,261 @@ no CI change was needed.
   routing, scenario-run history contamination, simulator processing
   gate/status, terminal notification UI persistence, bounded Main Agent/SITREP
   reasoning, and the unrelated pre-existing test failures remain open.
+
+### Task 52 — Canonical Surveillance Maintenance / Planned Downtime Projection
+- **Status:** done
+- **Purpose:** Make the official SEC_001_PHASE_1 Step 7 planned-maintenance
+  report project into the existing authoritative surveillance state without
+  introducing a new camera status, an automatic restoration path, or an action
+  lifecycle.
+- **Root cause:** The existing surveillance projection allowlist accepted only
+  `camera_id`, `camera_status`, `status`, `cause_status`, and `possible_cause`.
+  The valid Step 7 payload also contained `shutdown_type`,
+  `downtime_duration_hours`, `reason`, and `sector`, so it was rejected as an
+  unsupported domain-field shape before CAM-03 could be updated.
+- **Canonical representation:** The audited camera model and SQLite CHECK
+  constraint support only `active`, `degraded`, and `offline`. Planned
+  maintenance therefore uses `camera_status="offline"` with scalar metadata
+  `shutdown_type="planned_maintenance"`, numeric
+  `downtime_duration_hours`, scalar `reason`, and scalar `sector`. The
+  duration is observational metadata only; no timer, scheduler, or automatic
+  restoration was added.
+- **Implementation:** Extended the unified surveillance event-field contract,
+  extraction prompts/validation, and `SurveillanceAgent`'s closed allowlist
+  with the four maintenance fields. Validation requires the planned-maintenance
+  enum, offline status, positive numeric duration, and non-empty scalar reason
+  and sector. Sector is preserved as report metadata and never resolves camera
+  identity; exact canonical IDs/aliases remain the only identity path. Static
+  camera name/area remain persisted configuration, and the report description
+  remains the feed summary.
+- **Projection/lifecycle:** Valid reports continue to use
+  `DomainReportProjection` with `projection_kind="authoritative_state"` and
+  scenario metadata. The path is report-only: the Event becomes `succeeded`
+  without approval, action state, protocol execution, or `ToolReceipt`.
+  Unknown cameras, arbitrary fields, and invalid maintenance/status regressions
+  are rejected before mutation. Generic known-camera maintenance was tested;
+  no CAM-03 special case was introduced.
+- **Tests:** Added focused maintenance projection coverage for the exact Step 7
+  intake, generic known-camera behavior, sector/identity separation, offline
+  semantics, degraded/active regressions, rejection safety, and terminal
+  report behavior. Focused Task 52/51/41/48/49/50 and snapshot coverage:
+  **142 passed**. `compileall` and `git diff --check` passed.
+- **Controlled unified_test verification:** Through the official profile
+  factories and exact SEC_001_PHASE_1 Step 7 message, CAM-03 changed from
+  `active` to `offline`; the inventory remained six cameras and CAM-08
+  remained `degraded`. Persisted business fields included the planned type,
+  duration `2`, reason, and sector, with the official scenario ID, step, and
+  simulation time. The Event succeeded with no action state, steps,
+  `ToolReceipt`, approval hold, or event-data hold. Task 49 remained clean with
+  zero expired open Events and zero unresolved Holds. The controlled DB was
+  intentionally left in this verified state; no auto-restore or manual reset
+  was performed.
+- **Regression:** Full coverage was run in bounded groups: **1660 passed** and
+  the same 4 pre-existing/unrelated failures remained (two minimal-fixture
+  approval tests, file-catalog drift for three older tests, and the known Task
+  47 intent-attendance expectation). The single ungrouped `pytest -q` attempt
+  exceeded the 300-second command window without failure output; grouped
+  execution completed the full test-file set, including **39 integration tests**.
+- **Remaining known gaps:** CAM-03 is now supported for the canonical planned
+  maintenance shape. Main Agent Step 5 routing/reasoning, scenario-run history
+  filtering and balancing, simulator processing-gate/status work, terminal
+  notification UI persistence, and the unrelated pre-existing test failures
+  remain open. No unrelated gaps were changed by this task.
+
+### Task 53 — Canonical Main Agent Situational Query Routing
+- **Status:** implementation and tests complete; controlled query path passed.
+  The active unified history DB currently contains two already-expired open
+  Events and two unresolved event-data Holds discovered during read-only
+  cleanliness verification. They were not finalized here because doing so
+  would mutate existing lifecycle state and cross the explicit Michael/Task 49
+  boundary; the query itself caused no Event or Hold change.
+- **Purpose:** Route supported operational current-state questions through one
+  canonical, scoped Typed Situational Picture path instead of generic question
+  routing and specialist prose composition.
+- **Root cause:** `_is_situational_picture_query` recognized only explicit
+  “situational picture” phrases. The official SEC_001_PHASE_1 Step 5 request
+  asked for nightly manpower gaps and perimeter-camera status, so it fell
+  through Single Operational Intake, generic question routing, specialist
+  calls, and model composition. That path returned partial/old state and
+  unrelated drones.
+- **Routing contract:** Added typed `SituationalQueryScope` with `team`,
+  `surveillance`, `drones`, `external_reports`, and `overall` fields. A small
+  semantic classifier recognizes supported current-state formulations and
+  excludes lifecycle/follow-up status questions and unrelated informational
+  questions. It does not match the official Step 5 sentence as a special case
+  and preserves the existing conservative overall-picture predicate.
+- **Scope behavior:** Step 5 resolves to `team=True, surveillance=True` and
+  explicitly excludes drones and recent reports. Step 9 resolves to
+  `overall=True`. Team-only, surveillance-only, drone-only, and combined
+  supported variants select only their requested typed sections.
+- **Authoritative path:** `build_typed_snapshot` now accepts the query scope
+  and reads only the requested authoritative stores. Narrow queries skip drone
+  and mission reads and skip recent committed-report history. The deterministic
+  renderer emits only selected sections; scoped responses omit findings and
+  recommendations so this task does not introduce Main Agent reasoning,
+  `OperationalAssessment`, or `RecommendedAction` synthesis.
+- **Specialist bypass/provenance:** When the requested stores are available,
+  `build_situational_picture` returns the typed snapshot without planner,
+  composer, or specialist calls. Provenance includes the typed query scope and
+  state-section sources. Existing profiles without authoritative stores retain
+  the existing fallback path.
+- **Regression coverage:** Added
+  `tests/test_main_agent_situational_query_routing.py` covering exact Step 5,
+  Step 9, team-only, surveillance-only, combined variants, negative approval
+  and action follow-ups, unrelated questions, authoritative read counts,
+  specialist/Main-Agent bypass, concise rendering, and no Event mutation.
+  Updated the file catalog. `compileall` and `git diff --check` passed.
+- **Focused verification:** Main Agent routing, Typed Situational Picture,
+  Task 34/36 snapshot, Task 43 picture/provenance, scenario, follow-up,
+  lifecycle, Task 50/51/52 and unified-role coverage: **183 passed**.
+- **Controlled unified_test verification:** Through the official unified
+  surveillance/team agents, protocol registry, current stores, and canonical
+  `build_situational_picture` path, Step 5 produced team plus surveillance
+  sections only. Current state was 4 active, 1 degraded, 1 offline camera;
+  CAM-08 was degraded and CAM-03 offline. Drones, recent reports, specialist
+  reports, Main Agent calls, Event creation, approvals, and ToolReceipts were
+  absent. The read-only query left Event and Hold counts unchanged.
+- **Regression:** Grouped broad coverage completed with **1446 passed** in the
+  remaining non-integration set and **39 passed** in integration tests, plus
+  the 183 focused tests. The same 4 pre-existing/unrelated failures remain:
+  two minimal-fixture approval tests, three missing file-catalog entries for
+  older tests, and the known Task 47 intent-attendance expectation.
+- **Remaining known gaps:** Task 49 cleanup of the two currently stale active
+  DB Events/Holds, Michael temporal handling, scenario-run history filtering,
+  simulator gate/status, bounded Main Agent reasoning, SITREP conclusions and
+  recommendations, notification UI persistence, and the unrelated failures
+  remain open. No changes were made to those areas.
+
+### Task 54 — Runtime Expiry Recovery Verification and Repair
+- **Status:** complete. The Task 49 expiry finalizer and runtime maintenance
+  wiring were inspected before any mutation. No production-code repair was
+  required: the stale state was caused by the absence of a running API/worker
+  process, not by a failing selector or finalization path.
+- **Required reading and source of truth:** `instructions.md`, this progress
+  log, the relevant architecture/contracts, current source, and the active
+  unified-test history DB were read. No context outside those sources was
+  assumed. `pyrefly.toml` was left untouched.
+- **Forensic records:** The two open expired Events were
+  `a10e84cb38df41f1ad4a8c32eeeab2ab` (Step 4, missing `entities`) and
+  `d58ba23c32eb480885664d94b42e5454` (Step 6, missing
+  `availability_start`/`availability_end`). Their Holds were
+  `794efd5333b54741b1ce9508494ae872` and
+  `196a8996df9f43f0af97f111e6e0263f`. Both were eligible: deadline expired,
+  outcome was NULL, no successful ToolReceipt existed, and no legitimate
+  active processing was present.
+- **Runtime audit:** `api.app.build_context` performs startup recovery in
+  `recovery_mode=True`. The API-owned `SummaryScheduler` runs the canonical
+  `finalize_expired_events` maintenance callback every 60 seconds, passes
+  active queue Event IDs for race protection, includes expired approval/event
+  data/clarification Holds, and catches maintenance exceptions while keeping
+  the scheduler alive. The queue expiry callback uses the same canonical
+  finalizer. No active process was running during the initial diagnosis, so
+  the deployed Task 49 code was not executing.
+- **Official recovery:** The official `build_context` startup path was run
+  after diagnosis. It finalized exactly the two stale Events as `failed` with
+  `required_event_data_expired`, resolved both Holds by
+  `system:expiry_finalizer`, and emitted no recovery notifications. No manual
+  SQL update/delete/reset or fake outcome was used.
+- **Safety results:** Michael's missing temporal fields were not inferred or
+  changed. No new ToolReceipt, action execution, domain mutation, auto-send,
+  or auto-next behavior occurred. The recovery path is idempotent: a second
+  pass found nothing to finalize, and notification count remained unchanged.
+- **Runtime proof without restart:** Added focused tests proving a short-lived
+  event-data Hold is finalized by the live scheduler, active Event IDs are
+  skipped until released, a single maintenance exception does not kill the
+  scheduler, and the scheduler does not duplicate finalization or
+  notification side effects.
+- **Tests:** `tests/test_expiry_finalization.py` now has 10 passing tests,
+  including startup idempotency/silence and no-restart runtime recovery.
+  The focused Task 53/54 and related contract/projection suite passed
+  **109 tests**. Full `pytest -q` passed **1668 tests** with the same four
+  unrelated pre-existing failures: two minimal-fixture approval tests, file
+  catalog drift for three older tests, and the known Task 47
+  intent-attendance expectation. `compileall` and `git diff --check` passed.
+- **Final active DB state:** zero expired open Events, zero unresolved Holds,
+  28 ToolReceipt entries, and 70 notifications. Task 53 routing and its
+  authoritative Typed Situational Picture behavior were not changed.
+- **Remaining gaps:** Michael temporal semantics, bounded Main Agent
+  reasoning after authoritative facts, scenario-run history filtering and
+  balancing, simulator gate/status, notification UI persistence, and the four
+  unrelated test failures remain open.
+
+### Task 55 ג€” Canonical Scenario Run Context and History Scoping
+- **Status:** complete. The implementation is narrow and limited to trusted
+  scenario execution identity, propagation, persistence, current-run history
+  scoping, exact source-message deduplication, and simulator resume behavior.
+  No bounded Main Agent reasoning, SITREP synthesis, domain balancing, camera
+  behavior, Michael temporal inference, ToolReceipt behavior, side effects,
+  automatic scenario execution, or automatic next-step behavior was added.
+- **Canonical contract:** A manual simulator execution now has one opaque
+  `scenario_run_id`, generated by the trusted simulator runtime and reused by
+  every message/event step in that execution. A replay receives a new ID.
+  The canonical provenance tuple is now
+  `(scenario_id, scenario_run_id, scenario_step, scenario_time)`; the run ID
+  is nullable for legacy production/history rows and is never inferred from a
+  scenario ID alone.
+- **Trust boundary:** Run creation and step validation are simulator-runtime
+  operations behind the authenticated simulator service key. The runtime
+  accepts only profile-declared scenario IDs and exact declared step identity,
+  timestamp, sender, and chat/event kind. Production `/Msg` and `/Event` do
+  not trust body-supplied scenario metadata. Simulation headers are accepted
+  only with the existing bot service proof; a body/header spoof cannot inject a
+  run context into production traffic.
+- **Propagation:** `SimulationStepContext`, bot transport headers,
+  `InitialEventEnvelope`, persisted Events, `DomainReportProjection`, typed
+  situational-picture calls, and the event/message simulator paths all carry
+  `scenario_run_id`. Sensor events use the same trusted runtime path as
+  message steps for official scenarios; legacy ad-hoc event behavior remains
+  available without canonical simulation metadata.
+- **Persistence/migration:** Added nullable `events.scenario_run_id`, the
+  canonical `(scenario_id, scenario_run_id, scenario_step)` lookup index, and
+  idempotent schema migration 24. Existing rows remain unchanged, including
+  NULL run IDs; no history rewrite, delete, reset, or synthetic run ID was
+  performed.
+- **History contract:** When both `scenario_id` and `scenario_run_id` are
+  present, recent committed history filters by the exact pair, excludes
+  legacy NULL-run rows and other executions, keeps only `succeeded` Events,
+  orders by scenario chronology (`scenario_step`, then scenario time and
+  receipt tie-breakers), and applies the requested limit after filtering.
+  Exact duplicate source messages are removed only by
+  `(source, sender_identity, source_message_id)`. There is no semantic
+  deduplication, domain balancing, or cross-run fallback. Production callers
+  without run context retain the prior behavior.
+- **Situational-picture behavior:** Step 5 remains the typed authoritative
+  state path without recent history. Step 9/current overall simulation
+  queries receive only current-run committed reports. The existing production
+  no-run path is preserved, and all report provenance retains the run ID.
+- **Simulator lifecycle/UI:** The browser creates a run through the trusted
+  simulator endpoint on the first official step, sends the run ID with every
+  official step, and persists the in-progress scenario/queue in
+  `sessionStorage`. A page refresh explicitly attempts to resume the same run;
+  if the simulator process no longer recognizes the token, the UI reports the
+  refusal instead of silently creating a new execution. Manual reset clears
+  only UI/session state and does not alter DB history.
+- **Tests:** Added
+  `tests/test_scenario_run_context.py` covering current-run contamination,
+  NULL-run exclusion, failed-event exclusion, exact source-message
+  deduplication, projection provenance, run generation/resume/replay,
+  message/event propagation, production body spoof rejection, and simulation
+  service-proof rejection. Updated the bot transport contract test for the
+  new `submit_event` interface and cataloged the new test.
+- **Focused verification:** Task55 plus migration, simulator, API,
+  situational-picture, typed-snapshot, routing, and transport coverage passed
+  **169 tests** in the final focused runs (101 before the transport contract
+  assertion and 68 after it). Python compilation and `git diff --check`
+  passed.
+- **Controlled unified_test verification:** The official
+  `SEC_001_PHASE_1` catalog was used through the simulator runtime path. The
+  first run resumed with the same ID, while a replay received a different ID;
+  no scenario step was auto-sent. The active unified history DB was opened via
+  the official persistence factory after migration: 37 Events, zero expired
+  open Events, and zero unresolved approval/clarification/event-data Holds.
+  No lifecycle or domain rows were manually changed.
+- **Regression:** Full `pytest -q` completed with **1,677 passed** and the
+  same four pre-existing/unrelated failures: two minimal-fixture approval
+  tests, three older missing file-catalog entries, and the known Task47
+  intent-attendance expectation. No new Task55 failure remains.
+- **Remaining gaps:** bounded Main Agent reasoning after authoritative facts,
+  SITREP conclusions/recommendations, notification UI persistence, Michael's
+  temporal semantics, and the four unrelated baseline failures remain open.
+  The simulator remains strictly manual.

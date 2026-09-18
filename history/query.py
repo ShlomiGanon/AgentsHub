@@ -292,6 +292,8 @@ class HistoryQueryService:
         now: datetime,
         hours: int = 12,
         sender_identity_filter: str | None = None,
+        scenario_id: str | None = None,
+        scenario_run_id: str | None = None,
         limit: int = 8,
     ) -> tuple[dict, ...]:
         """Return committed event records for typed operational-picture rendering.
@@ -302,17 +304,52 @@ class HistoryQueryService:
         """
 
         bounded_hours = max(1, min(72, int(hours)))
+        simulation_scoped = scenario_id is not None or scenario_run_id is not None
+        if simulation_scoped and (not scenario_id or not scenario_run_id):
+            raise HistoryQueryError("simulation history requires both scenario_id and scenario_run_id")
+
         criteria = EventSearchCriteria(
             time_start=storage_timestamp(now - timedelta(hours=bounded_hours)),
             time_end=storage_timestamp(now),
             time_basis="received_at",
             outcomes=("succeeded",),
-            order="newest",
-            limit=max(1, min(100, int(limit))),
+            scenario_id=scenario_id if simulation_scoped else None,
+            scenario_run_id=scenario_run_id if simulation_scoped else None,
+            order="oldest" if simulation_scoped else "newest",
+            limit=100 if simulation_scoped else max(1, min(100, int(limit))),
             sender_identity=sender_identity_filter,
         )
         events = self._persistence.search_events(criteria)
-        return tuple(event for event in events if event.get("outcome") == "succeeded")
+        committed = [event for event in events if event.get("outcome") == "succeeded"]
+        if not simulation_scoped:
+            return tuple(committed)
+
+        ordered = sorted(
+            committed,
+            key=lambda event: (
+                event.get("scenario_step") if isinstance(event.get("scenario_step"), int) else 10**9,
+                event.get("scenario_time") or event.get("received_at") or "",
+                event.get("received_at") or "",
+                event.get("event_id") or "",
+            ),
+        )
+        unique: list[dict] = []
+        seen_source_messages: set[tuple[str, str, str]] = set()
+        for event in ordered:
+            source_message_id = event.get("source_message_id")
+            if source_message_id is not None:
+                dedup_key = (
+                    str(event.get("source") or ""),
+                    str(event.get("sender_identity") or ""),
+                    str(source_message_id),
+                )
+                if dedup_key in seen_source_messages:
+                    continue
+                seen_source_messages.add(dedup_key)
+            unique.append(event)
+            if len(unique) >= max(1, min(100, int(limit))):
+                break
+        return tuple(unique)
 
     def _resolve_bounds(self, time_start: str | None, time_end: str | None) -> tuple[datetime, datetime]:
         end = parse_timestamp(time_end) if time_end is not None else self._clock()
@@ -354,6 +391,8 @@ class HistoryQueryService:
             raise HistoryQueryError("event_details requires at least one event_id")
         if spec.operation in {"aggregate", "compare"} and spec.group_by == "none":
             raise HistoryQueryError(f"{spec.operation} requires a group_by field")
+        if (spec.scenario_id is None) != (spec.scenario_run_id is None):
+            raise HistoryQueryError("simulation history requires both scenario_id and scenario_run_id")
 
         return HistoryQuerySpec(
             operation=spec.operation,
@@ -373,6 +412,8 @@ class HistoryQueryService:
             protocol_names=tuple(dict.fromkeys(spec.protocol_names)),
             event_ids=tuple(dict.fromkeys(spec.event_ids)),
             risk_levels=tuple(dict.fromkeys(spec.risk_levels)),
+            scenario_id=spec.scenario_id,
+            scenario_run_id=spec.scenario_run_id,
             order="newest" if spec.operation == "latest" else spec.order,
             group_by=spec.group_by,
             limit=spec.limit,
@@ -391,6 +432,8 @@ class HistoryQueryService:
             event_ids=spec.event_ids,
             risk_levels=spec.risk_levels,
             sender_identity=sender_identity,
+            scenario_id=spec.scenario_id,
+            scenario_run_id=spec.scenario_run_id,
             order=spec.order,
             limit=limit if limit is not None else spec.limit,
         )

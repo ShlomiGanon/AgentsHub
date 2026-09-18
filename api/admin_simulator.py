@@ -363,7 +363,38 @@ SIMULATOR_BODY = """
 
   // ---- scenario model -------------------------------------------------------------------
 
-  const state = { scenario: null, chats: [], chatsByKey: {}, queues: {}, runId: null, busy: false };
+  const state = {
+    scenario: null, rawScenario: null, chats: [], chatsByKey: {}, queues: {},
+    runId: null, resumeRunId: null, clientRunId: null, busy: false,
+  };
+  const RUN_STORAGE_KEY = 'gtca.simulator.run.v1';
+
+  function clearPersistedRun() {
+    try { sessionStorage.removeItem(RUN_STORAGE_KEY); } catch (error) { /* storage is optional */ }
+  }
+
+  function saveRunState() {
+    if (!state.rawScenario) return;
+    try {
+      sessionStorage.setItem(RUN_STORAGE_KEY, JSON.stringify({
+        raw: state.rawScenario,
+        run_id: state.runId,
+        resume_run_id: state.resumeRunId,
+        client_run_id: state.clientRunId,
+        queues: state.queues,
+      }));
+    } catch (error) { /* storage is optional and must not block manual stepping */ }
+  }
+
+  function readPersistedRun() {
+    try {
+      const value = sessionStorage.getItem(RUN_STORAGE_KEY);
+      return value ? JSON.parse(value) : null;
+    } catch (error) {
+      clearPersistedRun();
+      return null;
+    }
+  }
   // Non-null while #mapping-panel is open for a manually-pasted/uploaded scenario missing IDs
   // (docs/profile_simulations_design.md) — {groupsNeedingId, personaValues}; null when closed.
   let mappingMode = null;
@@ -446,20 +477,26 @@ SIMULATOR_BODY = """
     };
   }
 
-  function loadScenario(raw) {
+  function loadScenario(raw, resumedRunId, resumedQueues, resumedClientRunId) {
     // A scenario about to load always supersedes any pending mapping prompt — no matter which
     // entry point got us here (paste, drop, or a profile-driven simulation), so no leftover
     // panel from a different path can stay on screen (docs/profile_simulations_design.md).
     closeMappingPanel();
     const parsed = validateScenario(raw);
+    state.rawScenario = JSON.parse(JSON.stringify(raw));
     state.scenario = parsed.scenario;
     state.chats = parsed.chats;
     state.chatsByKey = parsed.chatsByKey;
     state.queues = {};
     state.busy = false;
-    state.runId = Date.now().toString(36);
-    parsed.chats.forEach(function (chat) { state.queues[chat.key] = []; });
-    parsed.steps.forEach(function (step) { state.queues[step.chat].push(step); });
+    state.runId = resumedRunId ? String(resumedRunId) : null;
+    state.resumeRunId = state.runId;
+    state.clientRunId = resumedClientRunId ? String(resumedClientRunId) : Date.now().toString(36);
+    parsed.chats.forEach(function (chat) {
+      const savedQueue = resumedQueues && Array.isArray(resumedQueues[chat.key]) ? resumedQueues[chat.key] : null;
+      state.queues[chat.key] = savedQueue ? savedQueue.slice() : [];
+    });
+    if (!resumedQueues) parsed.steps.forEach(function (step) { state.queues[step.chat].push(step); });
 
     document.getElementById('scenario-title').textContent = parsed.scenario.title;
     document.getElementById('scenario-desc').textContent = parsed.scenario.description;
@@ -484,6 +521,7 @@ SIMULATOR_BODY = """
     renderCards();
     document.getElementById('reset-view').disabled = false;
     showAlert(t('loaded', { title: parsed.scenario.title }), false);
+    saveRunState();
   }
 
   // ---- routing / preflight (mirrors what the API will decide, from the embedded live data) --
@@ -631,10 +669,50 @@ SIMULATOR_BODY = """
 
   // ---- dispatch (the bot's own requests, made from the browser) --------------------------
 
+  async function ensureScenarioRun(step) {
+    if (!state.scenario || !state.scenario.id || !step.timestamp) return true;
+    if (state.runId && !state.resumeRunId) return true;
+    let result;
+    try {
+      const body = { scenario_id: state.scenario.id };
+      if (state.resumeRunId) body.resume_run_id = state.resumeRunId;
+      result = await apiCall('POST', '/admin/simulator/run', null, body);
+    } catch (error) {
+      showAlert(t('request_failed', { status: 'network', message: error.message }), true);
+      return false;
+    }
+    if (result.status >= 400 || simulatorResponseContractError(result)) {
+      showAlert(errorMessage(result), true);
+      return false;
+    }
+    state.runId = String(result.payload.scenario_run_id || '');
+    state.resumeRunId = null;
+    if (!state.runId) {
+      showAlert(t('invalid_response'), true);
+      return false;
+    }
+    saveRunState();
+    return true;
+  }
+
   function buildRequest(chat, step) {
     if (chat.kind === 'event') {
-      // Sensors have no Telegram identity and were never bot traffic — unchanged
-      // (docs/bot_simulation_mode_design.md §2 decision 3).
+      if (state.scenario.id && state.runId && step.timestamp) {
+        return {
+          url: '/admin/simulator/event',
+          body: {
+            text: step.text,
+            sender_identity: step.sender_identity,
+            source_message_id: step.source_message_id || ('sim-' + state.clientRunId + '-' + step.step),
+            scenario_id: state.scenario.id,
+            scenario_step: step.step,
+            scenario_time: step.timestamp,
+            scenario_run_id: state.runId,
+          },
+          identity: null,
+        };
+      }
+      // Legacy ad-hoc sensor scenarios remain on the original direct path.
       return { url: '/Event', body: { text: step.text, sender_identity: step.sender_identity }, identity: step.sender_identity };
     }
     // Proxied to bot.simulator_app through api/admin.py (docs/bot_simulation_mode_design.md
@@ -651,7 +729,7 @@ SIMULATOR_BODY = """
       // A unique id per run unless the scenario pins one — the real bot handler re-derives
       // its own numeric message_id from this string, deterministically, so a re-run with the
       // same id still gets /Msg's existing dedup-on-source_message_id behavior.
-      source_message_id: step.source_message_id || ('sim-' + state.runId + '-' + step.step),
+      source_message_id: step.source_message_id || ('sim-' + state.clientRunId + '-' + step.step),
     };
     // Trusted simulator metadata; bot.simulator_app validates these against
     // the profile-declared scenario before forwarding them to /Msg.  A legacy
@@ -660,6 +738,7 @@ SIMULATOR_BODY = """
       body.scenario_id = state.scenario.id;
       body.scenario_step = step.step;
       body.scenario_time = step.timestamp;
+      body.scenario_run_id = state.runId;
     }
     return { url: '/admin/simulator/bot-msg', body: body, identity: null };
   }
@@ -797,6 +876,12 @@ SIMULATOR_BODY = """
     appendBubble(chatKey, null, step.sender_name, step.text, step.step);
     const reply = appendBubble(chatKey, 'sys', t('system_label'), t('sending'), null);
 
+    if (!(await ensureScenarioRun(step))) {
+      setBubbleText(reply, t('request_failed', { status: 'run', message: 'scenario run could not be established' }), null, true);
+      state.busy = false;
+      updateGlobalState();
+      return;
+    }
     const request = buildRequest(chat, step);
     // §20: claimed here, synchronously, before the POST (and its own real send/edit cycle)
     // even starts — see pollGenerationByChatId's own comment for why. Event-kind steps never
@@ -815,6 +900,7 @@ SIMULATOR_BODY = """
     if (result.status >= 400 || contractError) {
       setBubbleText(reply, contractError || errorMessage(result), null, true);
       queue.shift();
+      saveRunState();
       state.busy = false;
       updateGlobalState();
       return;
@@ -826,6 +912,7 @@ SIMULATOR_BODY = """
       setBubbleText(reply, header, jobStatusText({ status: payload.status }), false);
       const completed = await pollJob(payload.event_id, step.sender_identity, reply, header);
       if (completed) queue.shift();
+      if (completed) saveRunState();
       state.busy = false;
       updateGlobalState();
       return;
@@ -841,6 +928,7 @@ SIMULATOR_BODY = """
     // background, without blocking this step's queue.
     setBubbleText(reply, payload.reply_text || t('bot_no_reply'), null, false);
     queue.shift();
+    saveRunState();
     state.busy = false;
     updateGlobalState();
     pollSimulatorChat(chatKey, request.body.chat_id, payload.watermark, myGeneration);
@@ -1019,6 +1107,22 @@ SIMULATOR_BODY = """
     setProfileSimAvailability(true, '');
   }
 
+  function restorePersistedRun() {
+    const saved = readPersistedRun();
+    if (!saved || !saved.raw) return;
+    try {
+      loadScenario(
+        saved.raw,
+        saved.resume_run_id || saved.run_id || null,
+        saved.queues || null,
+        saved.client_run_id || null,
+      );
+    } catch (error) {
+      clearPersistedRun();
+      showAlert(t('request_failed', { status: 'resume', message: error.message }), true);
+    }
+  }
+
   profileSimLoadButton.addEventListener('click', async function () {
     const key = profileSimSelect.value;
     if (!key) return;
@@ -1041,6 +1145,7 @@ SIMULATOR_BODY = """
     }
   });
 
+  restorePersistedRun();
   loadProfileSimulationCatalog();
 
   // ---- wiring --------------------------------------------------------------------------------
@@ -1098,7 +1203,9 @@ SIMULATOR_BODY = """
   });
   document.getElementById('reset-view').addEventListener('click', function () {
     // View only: clears the cards and the queues. Nothing already sent is undone on the server.
-    state.scenario = null; state.chats = []; state.chatsByKey = {}; state.queues = {}; state.runId = null; state.busy = false;
+    state.scenario = null; state.rawScenario = null; state.chats = []; state.chatsByKey = {}; state.queues = {};
+    state.runId = null; state.resumeRunId = null; state.clientRunId = null; state.busy = false;
+    clearPersistedRun();
     document.getElementById('chats-container').innerHTML = '';
     document.getElementById('scenario-title').textContent = t('no_scenario');
     document.getElementById('scenario-desc').textContent = '';

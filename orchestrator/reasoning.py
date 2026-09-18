@@ -1159,6 +1159,11 @@ def make_operational_intake(
     business_fields = _operational_intake_business_fields(
         protocols, event_types, event_type_business_fields
     )
+    maintenance_rule = (
+        "For planned surveillance downtime, use shutdown_type='planned_maintenance' and camera_status='offline'; keep duration as numeric hours, and preserve reason and sector as scalar report metadata without using sector to infer camera identity. "
+        if any("shutdown_type" in fields for fields in (event_type_business_fields or {}).values())
+        else ""
+    )
     schema = _operational_intake_schema(event_types, protocols, event_type_business_fields)
     canonical_fields = {
         section: tuple(section_schema.get("properties", {}))
@@ -1193,7 +1198,8 @@ def make_operational_intake(
         "Intent identifies what the user is doing; missing domain fields do not make a clear report intent ambiguous. "
         "Set unavailable business values to null. Do not invent identity, source_message_id, received_at, or original_text. "
         "Keep every business_fields value scalar; represent an uncertain possible cause with a scalar unverified status and scalar text, never an object or array and never a verified cause. "
-        "temporal.availability_start and temporal.availability_end must be null: trusted runtime code resolves final temporal values. "
+        + maintenance_rule
+        + "temporal.availability_start and temporal.availability_end must be null: trusted runtime code resolves final temporal values. "
         "protocol.status must be selected, ambiguous, or no_match. Keep reasons concise. "
         "All required nested fields must be present; nullable optional fields may be omitted and default to null.\n"
         f"Received-at reference: {received_at}\n"

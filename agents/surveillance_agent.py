@@ -147,7 +147,8 @@ class SurveillanceAgent(Agent):
 
         business_fields = event.get("business_fields") or {}
         unknown_fields = set(business_fields) - {
-            "camera_id", "camera_status", "status", "cause_status", "possible_cause"
+            "camera_id", "camera_status", "status", "shutdown_type",
+            "downtime_duration_hours", "reason", "sector", "cause_status", "possible_cause"
         }
         if unknown_fields:
             return ReportIngestionResult("rejected", "surveillance report contains unsupported domain fields")
@@ -185,6 +186,22 @@ class SurveillanceAgent(Agent):
             status = "offline"
         if status not in {None, "active", "degraded", "offline"}:
             return ReportIngestionResult("rejected", "surveillance camera status is invalid")
+        shutdown_type = business_fields.get("shutdown_type")
+        if shutdown_type is not None and shutdown_type != "planned_maintenance":
+            return ReportIngestionResult("rejected", "surveillance shutdown type is invalid")
+        duration_hours = business_fields.get("downtime_duration_hours")
+        if duration_hours is not None and (
+            type(duration_hours) not in {int, float} or duration_hours <= 0
+        ):
+            return ReportIngestionResult("rejected", "surveillance downtime duration is invalid")
+        reason = business_fields.get("reason")
+        if reason is not None and (not isinstance(reason, str) or not reason.strip()):
+            return ReportIngestionResult("rejected", "surveillance maintenance reason is invalid")
+        sector = business_fields.get("sector")
+        if sector is not None and (not isinstance(sector, str) or not sector.strip()):
+            return ReportIngestionResult("rejected", "surveillance sector is invalid")
+        if shutdown_type == "planned_maintenance" and status != "offline":
+            return ReportIngestionResult("rejected", "planned maintenance must use offline camera status")
         cause_status = business_fields.get("cause_status")
         if cause_status is not None and cause_status != "unverified":
             return ReportIngestionResult("rejected", "surveillance report cause is not verified")
@@ -207,7 +224,10 @@ class SurveillanceAgent(Agent):
                 "camera_status": updated["status"],
                 **{
                     field_name: business_fields[field_name]
-                    for field_name in ("cause_status", "possible_cause")
+                    for field_name in (
+                        "shutdown_type", "downtime_duration_hours", "reason", "sector",
+                        "cause_status", "possible_cause",
+                    )
                     if business_fields.get(field_name) is not None
                 },
             },

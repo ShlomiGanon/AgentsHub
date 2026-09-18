@@ -218,6 +218,7 @@ class SimulationStepContext:
     scenario_id: str
     scenario_step: int
     scenario_time: str
+    scenario_run_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.scenario_id or not isinstance(self.scenario_id, str):
@@ -230,6 +231,10 @@ class SimulationStepContext:
             datetime.fromisoformat(self.scenario_time.replace("Z", "+00:00"))
         except ValueError as exc:
             raise ValueError("scenario_time must be ISO-8601") from exc
+        if self.scenario_run_id is not None and (
+            not isinstance(self.scenario_run_id, str) or not self.scenario_run_id.strip()
+        ):
+            raise ValueError("scenario_run_id must be a non-empty string when supplied")
 
 
 @dataclass(frozen=True)
@@ -302,6 +307,14 @@ def resolve_simulation_step(
         if chat is None:
             break
         declared_sender = str(step.get("sender_identity") or "")
+        scenario_kind = str(chat.get("kind") or "message")
+        if scenario_kind == "event":
+            if chat_type != "event" or sender_identity != declared_sender:
+                break
+            timestamp = step.get("timestamp")
+            if not isinstance(timestamp, str) or not timestamp:
+                raise ValueError(f"simulation step {scenario_id}/{scenario_step} has no timestamp")
+            return SimulationStepContext(scenario_id, scenario_step, timestamp)
         if users and declared_sender:
             persona = next((item for item in users if item.key == declared_sender), None)
             if persona is None or simulation_user_telegram_id(persona.offset) != sender_identity:

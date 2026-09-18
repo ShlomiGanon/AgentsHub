@@ -261,6 +261,8 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_run_stack.py` | Test | Internal | Verifies profile-database reset removes only declared databases and known sidecars, and refuses a non-database path. |
 | `tests/test_server_control.py` | Test | Internal | Verifies safe profile discovery and supervisor command and selection persistence. |
 | `tests/test_situational_picture.py` | Test | Internal | Verifies picture planning, per-domain live questioning, recent-events window and scope, unavailable-domain handling, and composition fallbacks. |
+| `tests/test_main_agent_situational_query_routing.py` | Test | Internal | Verifies scoped operational-state detection, authoritative team/surveillance routing, specialist bypass, Step 5/9 behavior, and negative follow-up routing. |
+| `tests/test_scenario_run_context.py` | Test | Internal | Verifies trusted scenario-run generation and propagation, nullable legacy metadata, exact current-run history scoping/deduplication, provenance, and spoof protection. |
 | `tests/test_typed_situational_snapshot.py` | Test | Internal | Verifies typed counts, finding provenance, scope, inconsistency handling, Hebrew/English rendering, and unified-test integration. |
 | `tests/test_sqlite_store.py` | Test | Internal | Verifies SQLite serialization, concurrency, and user persistence. |
 | `tests/test_sub_agent_surveillance_profile.py` | Test | Internal | Verifies the surveillance profile, isolated databases, agent, and protocol declarations. |
@@ -268,6 +270,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_surveillance_agent.py` | Test | Internal | Verifies camera, drone, dispatch, mission, and overview tools. |
 | `tests/test_surveillance_persistence.py` | Test | Internal | Verifies surveillance database initialization, updates, dispatch, and mission state. |
 | `tests/test_surveillance_report_extraction.py` | Test | Internal | Verifies the canonical scalar surveillance-report extraction contract, uncertainty handling, aliases, projections, terminal report ingestion, and unknown-camera rejection. |
+| `tests/test_surveillance_maintenance_projection.py` | Test | Internal | Verifies planned-maintenance scalar fields, offline projection, duration/reason/sector preservation, generic behavior, regressions, terminal report semantics, and rejection safety. |
 | `tests/test_surveillance_seed_reconciliation.py` | Test | Internal | Verifies additive canonical camera-seed reconciliation, runtime-state preservation, idempotency, unknown-entity retention, and production isolation. |
 | `tests/test_team_status_agent.py` | Test | Internal | Verifies daily attendance, multi-day unavailability, late approval, and protocol execution. |
 | `tests/test_team_status_persistence.py` | Test | Internal | Verifies readiness-team roster approval, message idempotency, late-response isolation, and separate SQLite schemas. |

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import time
 
@@ -162,6 +162,147 @@ def test_summary_scheduler_runs_maintenance_callback_before_reconcile(tmp_path):
                 break
             time.sleep(0.01)
         assert calls
+    finally:
+        if scheduler is not None:
+            scheduler.stop()
+        store.close()
+
+
+def test_runtime_sweeper_finalizes_event_data_hold_without_restart(tmp_path):
+    store = SQLitePersistence(str(tmp_path / "runtime-expiry.db"))
+    scheduler = None
+    try:
+        event_id = store.append_event(
+            _event(deadline_at=(datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat())
+        )
+        hold_id = store.store_held_event(
+            "event_data",
+            {"event_id": event_id, "missing_fields": ["entities"]},
+        )
+        deps = _deps(store)
+        queue = SimpleNamespace(active_event_ids=lambda: ())
+        calls = []
+
+        def sweep(now):
+            calls.extend(
+                finalize_expired_events(
+                    deps,
+                    now,
+                    active_event_ids=queue.active_event_ids(),
+                )
+            )
+
+        scheduler = SummaryScheduler(
+            store,
+            SimpleNamespace(process=lambda _prompt, _allowed_tools: SimpleNamespace(status="success", text="ok")),
+            poll_interval_seconds=0.02,
+            maintenance_callback=sweep,
+        )
+        scheduler.start()
+        scheduler._wake_event.set()
+
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline and store.fetch_event(event_id)["outcome"] is None:
+            time.sleep(0.02)
+
+        event = store.fetch_event(event_id)
+        hold = store.fetch_held_event("event_data", event_id)
+        failed_notifications = [
+            item for item in store.fetch_notifications_since(0)
+            if item["event_id"] == event_id and item["kind"] == "job_failed"
+        ]
+
+        assert calls
+        assert scheduler._thread is not None and scheduler._thread.is_alive()
+        assert scheduler.last_run_status()["last_run_ok"] is True
+        assert event["outcome"] == "failed"
+        assert event["outcome_failure_reason"] == "required_event_data_expired"
+        assert event["action_tool_receipts"] is None
+        assert hold["resolved"] is True
+        assert hold["hold_id"] == hold_id
+        assert hold["resolved_by"] == "system:expiry_finalizer"
+        assert len(failed_notifications) == 1
+
+        time.sleep(0.08)
+        failed_notifications_after = [
+            item for item in store.fetch_notifications_since(0)
+            if item["event_id"] == event_id and item["kind"] == "job_failed"
+        ]
+        assert len(failed_notifications_after) == 1
+    finally:
+        if scheduler is not None:
+            scheduler.stop()
+        store.close()
+
+
+def test_expiry_sweep_preserves_active_event_then_finalizes_after_release(tmp_path):
+    store = SQLitePersistence(str(tmp_path / "active-expiry.db"))
+    try:
+        event_id = store.append_event(_event())
+        deps = _deps(store)
+
+        protected = finalize_expired_events(deps, NOW, active_event_ids=(event_id,))
+        assert protected[0].status == "skipped"
+        assert protected[0].skip_reason == "active_processing"
+        assert store.fetch_event(event_id)["outcome"] is None
+
+        released = finalize_expired_events(deps, NOW)
+        assert released[0].status == "finalized"
+        assert store.fetch_event(event_id)["outcome"] == "failed"
+    finally:
+        store.close()
+
+
+def test_startup_recovery_pass_is_silent_and_idempotent(tmp_path):
+    store = SQLitePersistence(str(tmp_path / "startup-expiry.db"))
+    try:
+        event_id = store.append_event(_event())
+        store.store_held_event("event_data", {"event_id": event_id, "missing_fields": ["entities"]})
+        before = len(store.fetch_notifications_since(0))
+
+        first = finalize_expired_events(_deps(store), NOW, recovery_mode=True)
+        second = finalize_expired_events(_deps(store), NOW, recovery_mode=True)
+
+        assert first[0].status == "finalized"
+        assert second == ()
+        assert len(store.fetch_notifications_since(0)) == before
+        assert [item["kind"] for item in store.fetch_notifications_since(0)] == ["event_data_hold"]
+        assert store.fetch_event(event_id)["outcome"] == "failed"
+    finally:
+        store.close()
+
+
+def test_runtime_sweeper_survives_one_maintenance_exception(tmp_path):
+    store = SQLitePersistence(str(tmp_path / "sweeper-retry.db"))
+    scheduler = None
+    try:
+        event_id = store.append_event(_event())
+        deps = _deps(store)
+        attempts = []
+
+        def flaky_sweep(now):
+            attempts.append(now)
+            if len(attempts) == 1:
+                raise RuntimeError("transient maintenance failure")
+            finalize_expired_events(deps, now)
+
+        scheduler = SummaryScheduler(
+            store,
+            SimpleNamespace(process=lambda _prompt, _allowed_tools: SimpleNamespace(status="success", text="ok")),
+            poll_interval_seconds=0.02,
+            maintenance_callback=flaky_sweep,
+        )
+        scheduler.start()
+        scheduler._wake_event.set()
+
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and store.fetch_event(event_id)["outcome"] is None:
+            time.sleep(0.02)
+
+        assert len(attempts) >= 2
+        assert scheduler._thread is not None and scheduler._thread.is_alive()
+        assert scheduler.last_run_status()["last_run_ok"] is True
+        assert store.fetch_event(event_id)["outcome"] == "failed"
     finally:
         if scheduler is not None:
             scheduler.stop()

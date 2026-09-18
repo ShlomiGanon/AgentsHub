@@ -128,6 +128,7 @@ class DomainReportProjection:
     description: str
     occurred_at: str | None
     scenario_id: str | None = None
+    scenario_run_id: str | None = None
     scenario_step: int | None = None
     scenario_time: str | None = None
     facts: dict[str, object] = field(default_factory=dict)
@@ -160,6 +161,7 @@ def project_report_facts(
         description=str(event.get("description") or ""),
         occurred_at=event.get("occurred_at"),
         scenario_id=event.get("scenario_id"),
+        scenario_run_id=event.get("scenario_run_id"),
         scenario_step=event.get("scenario_step"),
         scenario_time=event.get("scenario_time"),
         facts=dict(facts or event.get("business_fields") or {}),

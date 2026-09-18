@@ -98,6 +98,12 @@ class MessageSubmissionResult:
 
 
 @dataclass(frozen=True)
+class EventSubmissionResult:
+    event_id: str
+    status: str
+
+
+@dataclass(frozen=True)
 class TracePollResult:
     messages: tuple[str, ...]
     next_cursor: int
@@ -353,6 +359,12 @@ class BotApiClient(ABC):
         server scope a group's message to the agent the group is bound to; a private chat sends
         `chat_type="private"` and is never scoped."""
 
+    @abstractmethod
+    async def submit_event(
+        self, text: str, sender_identity: str, source_message_id: str
+    ) -> EventSubmissionResult:
+        """Submit one simulator sensor Event through the authenticated API transport."""
+
 
     @abstractmethod
     async def answer_clarification_hold(
@@ -451,6 +463,11 @@ class UnimplementedApiClient(BotApiClient):
         telegram_chat_id: str | None = None, telegram_chat_type: str | None = None,
     ) -> MessageSubmissionResult:
         raise ApiNotImplementedError("submit_message", "§7.4 (POST /Msg)")
+
+    async def submit_event(
+        self, text: str, sender_identity: str, source_message_id: str
+    ) -> EventSubmissionResult:
+        raise ApiNotImplementedError("submit_event", "§7.3 (POST /Event)")
 
     async def answer_clarification_hold(
         self, event_id: str, chosen_classification: str, answering_identity: str

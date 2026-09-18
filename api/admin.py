@@ -1554,6 +1554,22 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         payload = request.get_json(silent=True) or {}
         return _forward_to_simulator("POST", "/Simulator-msg", json=payload)
 
+    @blueprint.route("/simulator/run", methods=["POST"])
+    def simulator_run():
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        payload = request.get_json(silent=True) or {}
+        return _forward_to_simulator("POST", "/Simulator-msg/run", json=payload)
+
+    @blueprint.route("/simulator/event", methods=["POST"])
+    def simulator_event():
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        payload = request.get_json(silent=True) or {}
+        return _forward_to_simulator("POST", "/Simulator-msg/event", json=payload)
+
     @blueprint.route("/simulator/bot-poll", methods=["GET"])
     def simulator_bot_poll():
         """Proxies to `bot.simulator_app`'s `GET /Simulator-msg/poll` (Priority 3,

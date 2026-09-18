@@ -16,6 +16,8 @@ import argparse
 import asyncio
 import logging
 import threading
+import uuid
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -87,6 +89,7 @@ class SimulatorRuntime:
         self._allowed_groups = {
             simulation_group_chat_id(group.offset) for group in loaded_profile.simulation_groups
         }
+        self._scenario_runs: dict[str, str] = {}
 
     async def startup(self) -> None:
         """`initialize -> post_init -> start`, in that order — the same order
@@ -115,6 +118,58 @@ class SimulatorRuntime:
         self._next_update_id += 1
         return self._next_update_id
 
+    async def start_scenario_run(self, scenario_id: str, resume_run_id: str | None = None) -> dict:
+        scenario_id = str(scenario_id or "")
+        if not any(item.scenario_id == scenario_id for item in self.loaded_profile.simulations):
+            raise SimulatorRequestRefused("scenario_id is not declared by this simulator profile")
+
+        if resume_run_id is not None:
+            resume_run_id = str(resume_run_id)
+            if self._scenario_runs.get(resume_run_id) != scenario_id:
+                raise SimulatorRequestRefused("scenario_run_id cannot be resumed by this simulator process")
+            return {"scenario_id": scenario_id, "scenario_run_id": resume_run_id, "resumed": True}
+
+        scenario_run_id = uuid.uuid4().hex
+        self._scenario_runs[scenario_run_id] = scenario_id
+        return {"scenario_id": scenario_id, "scenario_run_id": scenario_run_id, "resumed": False}
+
+    def _simulation_context_from_payload(
+        self,
+        payload: dict,
+        *,
+        sender_identity: str,
+        chat_id: str,
+        chat_type: str,
+    ):
+        scenario_id = payload.get("scenario_id")
+        scenario_step = payload.get("scenario_step")
+        supplied_scenario_time = payload.get("scenario_time")
+        scenario_run_id = payload.get("scenario_run_id")
+        supplied = any(value is not None for value in (scenario_id, scenario_step, supplied_scenario_time, scenario_run_id))
+        if not supplied:
+            return None
+        if scenario_id is None or scenario_step is None or supplied_scenario_time is None or scenario_run_id is None:
+            raise SimulatorRequestRefused("scenario metadata requires scenario_id, scenario_step, scenario_time and scenario_run_id")
+        scenario_run_id = str(scenario_run_id)
+        if self._scenario_runs.get(scenario_run_id) != str(scenario_id):
+            raise SimulatorRequestRefused("scenario_run_id is unknown or belongs to another scenario")
+        try:
+            context = resolve_simulation_step(
+                tuple(getattr(self.loaded_profile, "simulations", ())),
+                tuple(getattr(self.loaded_profile, "simulation_groups", ())),
+                users=tuple(getattr(self.loaded_profile, "simulation_users", ())),
+                scenario_id=str(scenario_id),
+                scenario_step=int(scenario_step),
+                sender_identity=sender_identity,
+                chat_id=chat_id,
+                chat_type=chat_type,
+            )
+        except (TypeError, ValueError) as exc:
+            raise SimulatorRequestRefused(str(exc)) from exc
+        if str(supplied_scenario_time) != context.scenario_time:
+            raise SimulatorRequestRefused("scenario_time does not match the declared scenario step")
+        return replace(context, scenario_run_id=scenario_run_id)
+
     async def handle_message(self, payload: dict) -> dict:
         """Validate, gate, dispatch, and read back one simulated text message
         (§4.3). Raises `SimulatorRequestRefused` for anything not exactly a
@@ -126,9 +181,6 @@ class SimulatorRuntime:
         chat_type = payload.get("chat_type")
         text = payload.get("text")
         source_message_id = str(payload.get("source_message_id") or "")
-        scenario_id = payload.get("scenario_id")
-        scenario_step = payload.get("scenario_step")
-        supplied_scenario_time = payload.get("scenario_time")
 
         if sender_identity not in self._allowed_users:
             raise SimulatorRequestRefused(
@@ -149,23 +201,12 @@ class SimulatorRuntime:
         if not source_message_id:
             raise SimulatorRequestRefused("source_message_id is required")
 
-        simulation_context = None
-        if scenario_id is not None or scenario_step is not None or supplied_scenario_time is not None:
-            try:
-                simulation_context = resolve_simulation_step(
-                    tuple(getattr(self.loaded_profile, "simulations", ())),
-                    tuple(getattr(self.loaded_profile, "simulation_groups", ())),
-                    users=tuple(getattr(self.loaded_profile, "simulation_users", ())),
-                    scenario_id=str(scenario_id or ""),
-                    scenario_step=int(scenario_step),
-                    sender_identity=sender_identity,
-                    chat_id=chat_id,
-                    chat_type=str(chat_type),
-                )
-            except (TypeError, ValueError) as exc:
-                raise SimulatorRequestRefused(str(exc)) from exc
-            if supplied_scenario_time is not None and str(supplied_scenario_time) != simulation_context.scenario_time:
-                raise SimulatorRequestRefused("scenario_time does not match the declared scenario step")
+        simulation_context = self._simulation_context_from_payload(
+            payload,
+            sender_identity=sender_identity,
+            chat_id=chat_id,
+            chat_type=str(chat_type),
+        )
 
         mark = self.telegram_client.mark()
         update = build_synthetic_text_update(
@@ -188,6 +229,28 @@ class SimulatorRuntime:
             await self.application.process_update(update)
         reply_text = self.telegram_client.reply_since(mark, chat_id)
         return {"reply_text": reply_text, "watermark": _mark_to_dict(self.telegram_client.mark())}
+
+    async def handle_event(self, payload: dict) -> dict:
+        sender_identity = str(payload.get("sender_identity") or "")
+        text = payload.get("text")
+        if not sender_identity or not text or not isinstance(text, str):
+            raise SimulatorRequestRefused("event requires sender_identity and text")
+
+        simulation_context = self._simulation_context_from_payload(
+            payload,
+            sender_identity=sender_identity,
+            chat_id="",
+            chat_type="event",
+        )
+        if simulation_context is None:
+            raise SimulatorRequestRefused("simulator Events require trusted scenario metadata")
+
+        source_message_id = str(payload.get("source_message_id") or "")
+        if not source_message_id:
+            source_message_id = f"sim-{simulation_context.scenario_run_id}-{simulation_context.scenario_step}"
+        with simulation_request_context(simulation_context):
+            result = await self.api_client.submit_event(text, sender_identity, source_message_id)
+        return {"event_id": result.event_id, "status": result.status}
 
     def poll_chat(self, chat_id: str, since: tuple[int, int]) -> dict:
         """Anything sent to `chat_id` since `since` (a watermark from `handle_message`
@@ -265,6 +328,42 @@ def build_flask_app(runtime: SimulatorRuntime, bot_service_key: str) -> Flask:
                 "watermark": _mark_to_dict(runtime.telegram_client.mark()),
             }
 
+        return jsonify(result)
+
+    @app.route("/Simulator-msg/run", methods=["POST"])
+    def simulator_run():
+        refused = _check_service_key()
+        if refused is not None:
+            return refused
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": {"message": "request body must be a JSON object"}}), 400
+        future = asyncio.run_coroutine_threadsafe(
+            runtime.start_scenario_run(payload.get("scenario_id", ""), payload.get("resume_run_id")),
+            runtime.loop,
+        )
+        try:
+            result = future.result(timeout=30)
+        except SimulatorRequestRefused as exc:
+            return jsonify({"error": {"message": str(exc)}}), 403
+        return jsonify(result)
+
+    @app.route("/Simulator-msg/event", methods=["POST"])
+    def simulator_event():
+        refused = _check_service_key()
+        if refused is not None:
+            return refused
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": {"message": "request body must be a JSON object"}}), 400
+        future = asyncio.run_coroutine_threadsafe(runtime.handle_event(payload), runtime.loop)
+        try:
+            result = future.result(timeout=120)
+        except SimulatorRequestRefused as exc:
+            return jsonify({"error": {"message": str(exc)}}), 403
+        except Exception:
+            logger.exception("bot.simulator_app failed handling a simulated event", extra={"event": "bot_simulator_event_failed"})
+            return jsonify({"error": {"message": "the simulation-mode bot process failed handling this event"}}), 500
         return jsonify(result)
 
     @app.route("/Simulator-msg/poll", methods=["GET"])

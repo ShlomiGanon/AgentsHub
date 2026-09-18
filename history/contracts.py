@@ -39,6 +39,7 @@ class InitialEventEnvelope:
     sender_permission_level: str = "viewer"
     source_message_id: str | None = None
     scenario_id: str | None = None
+    scenario_run_id: str | None = None
     scenario_step: int | None = None
     scenario_time: str | None = None
     occurred_at: str | None = None
@@ -127,6 +128,8 @@ class HistoryQuerySpec:
     protocol_names: tuple[str, ...] = ()
     event_ids: tuple[str, ...] = ()
     risk_levels: tuple[str, ...] = ()
+    scenario_id: str | None = None
+    scenario_run_id: str | None = None
     order: HistoryOrder = "newest"
     group_by: HistoryGroupBy = "none"
     limit: int = 50
