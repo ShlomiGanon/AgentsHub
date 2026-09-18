@@ -206,7 +206,10 @@ def test_overall_step9_keeps_the_existing_typed_picture_scope():
     assert surveillance.store.drone_reads == 1
     assert surveillance.store.mission_reads == 1
     assert picture.plan.recent_events_hours > 0
-    assert main_agent.calls == []
+    assert len(main_agent.calls) == 1
+    assert picture.reasoning is not None
+    assert picture.reasoning.model_call_count == 1
+    assert picture.reasoning.fallback is True
 
 
 def test_api_routes_step5_through_typed_picture_without_event_or_specialist_calls(tmp_path):

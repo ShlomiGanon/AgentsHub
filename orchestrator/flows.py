@@ -34,7 +34,12 @@ from orchestrator.holds import (
     determine_clarification_hold,
     protocol_requires_approval,
 )
-from orchestrator.capabilities import CapabilityDescriptor, build_role_aware_system_context, visible_capabilities
+from orchestrator.capabilities import (
+    CAPABILITY_DESCRIPTORS,
+    CapabilityDescriptor,
+    build_role_aware_system_context,
+    visible_capabilities,
+)
 from orchestrator.response_contract import (
     ResponseAuthorityError,
     ResponseClaim,
@@ -48,6 +53,7 @@ from orchestrator.response_contract import (
 )
 from orchestrator.reasoning import build_insight, construct_insights_agent
 from orchestrator.reasoning import (
+    MainAgent,
     OrchestrationParseError,
     answer_conversationally,
     answer_question_from_plan,
@@ -73,8 +79,11 @@ from orchestrator.reasoning import (
 )
 from orchestrator.reasoning import answer_question, determine_closure, look_up_precedent
 from orchestrator.situational_picture import (  # re-exported: api may only import orchestrator.flows
+    OperationalContext,
+    OperationalReasoning,
     SituationalPicture,
     SituationalQueryScope,
+    build_operational_context,
     build_situational_picture,
     build_typed_snapshot,
     classify_situational_query,

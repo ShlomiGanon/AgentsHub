@@ -261,6 +261,8 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_run_stack.py` | Test | Internal | Verifies profile-database reset removes only declared databases and known sidecars, and refuses a non-database path. |
 | `tests/test_server_control.py` | Test | Internal | Verifies safe profile discovery and supervisor command and selection persistence. |
 | `tests/test_situational_picture.py` | Test | Internal | Verifies picture planning, per-domain live questioning, recent-events window and scope, unavailable-domain handling, and composition fallbacks. |
+| `tests/test_situational_reasoning.py` | Test | Internal | Verifies compact operational context, bounded evidence-grounded reasoning, source-reference validation, uncertainty preservation, deterministic fallback, current-run isolation, and recommendation safety. |
+| `tests/test_sitrep_quality_evaluation.py` | Test | Internal | Verifies the opt-in Task 57 SITREP evaluator's deterministic hard gates, soft checks, lifecycle guard, one-call budget, and disabled-provider path. |
 | `tests/test_main_agent_situational_query_routing.py` | Test | Internal | Verifies scoped operational-state detection, authoritative team/surveillance routing, specialist bypass, Step 5/9 behavior, and negative follow-up routing. |
 | `tests/test_scenario_run_context.py` | Test | Internal | Verifies trusted scenario-run generation and propagation, nullable legacy metadata, exact current-run history scoping/deduplication, provenance, and spoof protection. |
 | `tests/test_typed_situational_snapshot.py` | Test | Internal | Verifies typed counts, finding provenance, scope, inconsistency handling, Hebrew/English rendering, and unified-test integration. |
@@ -281,6 +283,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tools/__init__.py` | Production | Public facade | Exposes shared observability helpers and lazy terminal compatibility aliases. |
 | `tools/observability.py` | Production | Private implementation | Provides trace contexts, structured logging, and human/JSON output. |
 | `tools/evaluate_response_pipeline.py` | Production | Public entry point | Runs versioned offline response evals and opt-in billed live evaluation. |
+| `tools/evaluate_sitrep_quality.py` | Production | Public entry point | Builds isolated typed SITREP evaluation cases and runs a bounded opt-in real-provider quality gate without persisting prompts or responses. |
 | `tools/simulator.py` | Production | Public entry point | Provides the event-simulator executable entry point. |
 | `tools/terminal_client_commander.py` | Production | Public entry point | Provides the commander terminal-client executable workflow. |
 | `tools/terminal_client_viewer.py` | Production | Public entry point | Provides the viewer terminal-client executable workflow. |

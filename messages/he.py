@@ -1060,6 +1060,11 @@ MESSAGES = {
     "orchestrator.picture.typed.recommendation_line": "- {text}",
     "orchestrator.picture.typed.recent_reports_header": "דיווחים מחויבים אחרונים:",
     "orchestrator.picture.typed.recent_report": "- {text}",
+    "orchestrator.picture.reasoned.title": "תמצית מפקדים",
+    "orchestrator.picture.reasoned.facts_header": "עובדות מאומתות:",
+    "orchestrator.picture.reasoned.assessments_header": "הערכה מבצעית:",
+    "orchestrator.picture.reasoned.recommendations_header": "המלצות להמשך:",
+    "orchestrator.picture.reasoning.execution_markers": "בוצע|בוצעה|שוגר|שלחתי|הפעלתי|אישרתי",
     "orchestrator.picture.finding.cameras_all_active": (
         "כיסוי המצלמות תקין: כל {count} המצלמות פעילות."
     ),

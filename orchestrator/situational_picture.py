@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Callable, Literal
@@ -27,6 +28,7 @@ from messages import get_current_catalog
 from messages.model_messages import (
     SITUATIONAL_PICTURE_COMPOSE_INSTRUCTION,
     SITUATIONAL_PICTURE_PLAN_INSTRUCTION,
+    SITUATIONAL_PICTURE_REASONING_INSTRUCTION,
 )
 from orchestrator.reasoning import run_parallel_specialists
 from tools import get_trace_id, stage_context
@@ -47,6 +49,9 @@ MAX_RECENT_EVENTS_HOURS = 72
 RECENT_EVENTS_LIMIT = 8
 SPECIALIST_TIMEOUT_SECONDS = 25.0
 PICTURE_MAX_LINES = 8
+REASONING_MAX_FACTS = 5
+REASONING_MAX_ASSESSMENTS = 3
+REASONING_MAX_RECOMMENDATIONS = 3
 
 
 @dataclass(frozen=True)
@@ -190,6 +195,75 @@ def classify_situational_query(text: str) -> SituationalQueryScope | None:
 
 _PLAN_POLICY = InvocationPolicy(max_output_tokens=400, timeout_seconds=30.0, reasoning_effort="none")
 _COMPOSE_POLICY = InvocationPolicy(max_output_tokens=450, timeout_seconds=45.0, reasoning_effort="none")
+_REASONING_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "facts": {
+            "type": "array",
+            "maxItems": REASONING_MAX_FACTS,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "source_refs": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+                },
+                "required": ["text", "source_refs"],
+                "additionalProperties": False,
+            },
+        },
+        "assessments": {
+            "type": "array",
+            "maxItems": REASONING_MAX_ASSESSMENTS,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "conclusion": {"type": "string"},
+                    "supporting_source_refs": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+                    "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "qualification": {"type": "string"},
+                    "affected_domains": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["team", "surveillance", "drones", "external_reports", "cross_domain"]},
+                    },
+                    "priority": {"type": "string", "enum": ["low", "medium", "high"]},
+                },
+                "required": [
+                    "conclusion", "supporting_source_refs", "confidence", "qualification",
+                    "affected_domains", "priority",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "recommendations": {
+            "type": "array",
+            "maxItems": REASONING_MAX_RECOMMENDATIONS,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "rationale": {"type": "string"},
+                    "supporting_source_refs": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+                    "priority": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "possible_capability": {"type": ["string", "null"]},
+                    "requires_approval": {"type": "boolean"},
+                },
+                "required": [
+                    "description", "rationale", "supporting_source_refs", "priority",
+                    "possible_capability", "requires_approval",
+                ],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["facts", "assessments", "recommendations"],
+    "additionalProperties": False,
+}
+_REASONING_POLICY = InvocationPolicy(
+    max_output_tokens=650,
+    timeout_seconds=45.0,
+    reasoning_effort="none",
+    response_schema={"name": "operational_sitrep", "schema": _REASONING_SCHEMA},
+)
 
 
 @dataclass(frozen=True)
@@ -228,6 +302,15 @@ class SnapshotProvenance:
 
 
 @dataclass(frozen=True)
+class CameraOperationalFact:
+    """The bounded camera detail needed to explain an abnormal state."""
+
+    camera_id: str
+    area: str | None
+    status: str
+
+
+@dataclass(frozen=True)
 class CameraSnapshot:
     total: int | None
     active: int | None
@@ -237,6 +320,7 @@ class CameraSnapshot:
     provenance: SnapshotProvenance
     degraded: int | None = None
     offline: int | None = None
+    abnormal_cameras: tuple[CameraOperationalFact, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -287,6 +371,166 @@ class OperationalFinding:
     message_values: tuple[tuple[str, object], ...] = ()
     suggested_action_key: str | None = None
     suggested_action_values: tuple[tuple[str, object], ...] = ()
+
+
+AssessmentPriority = Literal["low", "medium", "high"]
+AssessmentConfidence = Literal["low", "medium", "high"]
+ReasoningDomain = Literal["team", "surveillance", "drones", "external_reports", "cross_domain"]
+
+
+@dataclass(frozen=True)
+class OperationalAssessment:
+    """A model-derived conclusion grounded in supplied source references."""
+
+    conclusion: str
+    supporting_source_refs: tuple[str, ...]
+    confidence: AssessmentConfidence
+    qualification: str
+    affected_domains: tuple[ReasoningDomain, ...]
+    priority: AssessmentPriority
+
+
+@dataclass(frozen=True)
+class RecommendedAction:
+    """A display-only recommendation; it is not an execution request."""
+
+    description: str
+    rationale: str
+    supporting_source_refs: tuple[str, ...]
+    priority: AssessmentPriority
+    possible_capability: str | None
+    requires_approval: bool
+
+
+@dataclass(frozen=True)
+class OperationalContext:
+    """A bounded, typed input to one overall-picture reasoning call."""
+
+    query_scope: SituationalQueryScope
+    current_time: str
+    cameras: CameraSnapshot | None
+    drones: DroneSnapshot | None
+    team: TeamSnapshot | None
+    recent_reports: tuple[RecentOperationalReport, ...]
+    findings: tuple[OperationalFinding, ...]
+    inconsistencies: tuple[str, ...]
+    source_refs: tuple[str, ...]
+
+    def prompt_payload(self) -> dict:
+        catalog = get_current_catalog()
+        payload: dict[str, object] = {
+            "query_scope": self.query_scope.as_dict(),
+            "current_time": self.current_time,
+            "authoritative_facts": {},
+            "current_run_operational_reports": [],
+            "deterministic_findings": [],
+            "uncertainties": list(self.inconsistencies),
+            "source_refs": list(self.source_refs),
+        }
+        facts = payload["authoritative_facts"]
+        assert isinstance(facts, dict)
+
+        if self.cameras is not None:
+            facts["surveillance"] = {
+                "status": self.cameras.status,
+                "total": self.cameras.total,
+                "active": self.cameras.active,
+                "degraded": self.cameras.degraded,
+                "offline": self.cameras.offline,
+                "unknown": self.cameras.unknown,
+                "abnormal_entities": [
+                    {
+                        "camera_id": camera.camera_id,
+                        "area": camera.area,
+                        "status": camera.status,
+                    }
+                    for camera in self.cameras.abnormal_cameras
+                ],
+                "source_refs": [_state_source("cameras", self.cameras.provenance)],
+            }
+        if self.drones is not None:
+            facts["drones"] = {
+                "status": self.drones.status,
+                "total": self.drones.total,
+                "ready": self.drones.ready,
+                "airborne": self.drones.airborne,
+                "charging": self.drones.charging,
+                "maintenance": self.drones.maintenance,
+                "unknown": self.drones.unknown,
+                "active_missions": self.drones.active_missions,
+                "source_refs": [_state_source("drones", self.drones.provenance)],
+            }
+        if self.team is not None:
+            facts["team"] = {
+                "status": self.team.status,
+                "total": self.team.total,
+                "available": self.team.available,
+                "unavailable": self.team.unavailable,
+                "not_reported": self.team.not_reported,
+                "pending_identity": self.team.pending_identity,
+                "source_refs": [_state_source("team", self.team.provenance)],
+            }
+
+        reports = payload["current_run_operational_reports"]
+        assert isinstance(reports, list)
+        reports.extend(
+            {
+                "text": report.text,
+                "received_at": report.received_at,
+                "source_ref": report.source_ref,
+            }
+            for report in self.recent_reports
+        )
+
+        findings = payload["deterministic_findings"]
+        assert isinstance(findings, list)
+        findings.extend(
+            {
+                "text": catalog.text(finding.message_key, **dict(finding.message_values)),
+                "severity": finding.severity,
+                "finding_type": finding.finding_type,
+                "source_refs": list(finding.source_refs),
+            }
+            for finding in self.findings
+        )
+        return payload
+
+
+@dataclass(frozen=True)
+class OperationalReasoning:
+    """Validated reasoning output plus non-user-facing execution metadata."""
+
+    facts: tuple[tuple[str, tuple[str, ...]], ...]
+    assessments: tuple[OperationalAssessment, ...]
+    recommendations: tuple[RecommendedAction, ...]
+    model_call_count: int
+    fallback: bool = False
+    rejected_claim_count: int = 0
+    failure_kind: str | None = None
+
+    def provenance(self) -> dict:
+        return {
+            "model_call_count": self.model_call_count,
+            "fallback": self.fallback,
+            "rejected_claim_count": self.rejected_claim_count,
+            "accepted_fact_count": len(self.facts),
+            "accepted_assessment_count": len(self.assessments),
+            "accepted_recommendation_count": len(self.recommendations),
+            "accepted_source_refs": sorted({
+                source_ref
+                for _, refs in self.facts
+                for source_ref in refs
+            } | {
+                source_ref
+                for assessment in self.assessments
+                for source_ref in assessment.supporting_source_refs
+            } | {
+                source_ref
+                for recommendation in self.recommendations
+                for source_ref in recommendation.supporting_source_refs
+            }),
+            "failure_kind": self.failure_kind,
+        }
 
 
 @dataclass(frozen=True)
@@ -345,6 +589,7 @@ class SituationalPicture:
     generated_at: str
     plan: PicturePlan
     snapshot: SituationalSnapshot | None = None
+    reasoning: OperationalReasoning | None = None
 
     def provenance(self) -> dict:
         payload = {
@@ -360,6 +605,8 @@ class SituationalPicture:
             payload["query_scope"] = self.plan.scope.as_dict()
         if self.snapshot is not None:
             payload["snapshot"] = self.snapshot.provenance()
+        if self.reasoning is not None:
+            payload["reasoning"] = self.reasoning.provenance()
         return payload
 
 
@@ -396,14 +643,29 @@ def _build_camera_snapshot(store, *, now: datetime, area: str | None) -> CameraS
         return CameraSnapshot(None, None, None, None, "unknown", provenance, None, None)
 
     counts = {"active": 0, "degraded": 0, "offline": 0, "unknown": 0}
+    abnormal_cameras: list[CameraOperationalFact] = []
     for camera in cameras:
         status = str(camera.get("status", "")).casefold()
         if status == "active":
             counts["active"] += 1
         elif status in {"degraded", "offline"}:
             counts[status] += 1
+            abnormal_cameras.append(
+                CameraOperationalFact(
+                    camera_id=str(camera.get("camera_id") or "unknown"),
+                    area=str(camera.get("area")) if camera.get("area") is not None else None,
+                    status=status,
+                )
+            )
         else:
             counts["unknown"] += 1
+            abnormal_cameras.append(
+                CameraOperationalFact(
+                    camera_id=str(camera.get("camera_id") or "unknown"),
+                    area=str(camera.get("area")) if camera.get("area") is not None else None,
+                    status="unknown",
+                )
+            )
     return CameraSnapshot(
         total=len(cameras),
         active=counts["active"],
@@ -413,6 +675,7 @@ def _build_camera_snapshot(store, *, now: datetime, area: str | None) -> CameraS
         provenance=provenance,
         degraded=counts["degraded"],
         offline=counts["offline"],
+        abnormal_cameras=tuple(abnormal_cameras),
     )
 
 
@@ -628,6 +891,7 @@ def _recent_committed_reports(
 ) -> tuple[RecentOperationalReport, ...]:
     """Read committed report facts through the history service's public read path."""
 
+    history_started = time.perf_counter()
     reader = getattr(history_query_service, "recent_committed_events", None)
     if not callable(reader):
         return ()
@@ -643,7 +907,11 @@ def _recent_committed_reports(
     except Exception:
         logger.warning(
             "committed report lookup failed for situational picture",
-            extra={"event": "picture_committed_reports_failed", "trace_id": get_trace_id()},
+            extra={
+                "event": "picture_committed_reports_failed",
+                "history_seconds": round(time.perf_counter() - history_started, 6),
+                "trace_id": get_trace_id(),
+            },
         )
         return ()
 
@@ -664,6 +932,15 @@ def _recent_committed_reports(
                 received_at=str(event.get("received_at") or ""),
             )
         )
+    logger.info(
+        "committed report context built",
+        extra={
+            "event": "picture_committed_reports_built",
+            "history_seconds": round(time.perf_counter() - history_started, 6),
+            "report_count": len(reports),
+            "trace_id": get_trace_id(),
+        },
+    )
     return tuple(reports)
 
 
@@ -742,7 +1019,281 @@ def build_typed_snapshot(
     )
 
 
-def render_typed_snapshot(snapshot: SituationalSnapshot, *, include_findings: bool = True) -> str:
+def build_operational_context(
+    snapshot: SituationalSnapshot,
+    *,
+    query_scope: SituationalQueryScope,
+    current_time: str,
+) -> OperationalContext:
+    """Select only bounded typed facts and committed current-run reports."""
+
+    source_refs: list[str] = []
+    for section_name in ("cameras", "drones", "team"):
+        section = getattr(snapshot, section_name)
+        if section is not None:
+            source_refs.append(_state_source(section_name, section.provenance))
+    for report in snapshot.recent_reports:
+        source_refs.append(report.source_ref)
+    for finding in snapshot.findings:
+        source_refs.extend(finding.source_refs)
+
+    return OperationalContext(
+        query_scope=query_scope,
+        current_time=current_time,
+        cameras=snapshot.cameras,
+        drones=snapshot.drones,
+        team=snapshot.team,
+        recent_reports=snapshot.recent_reports,
+        findings=snapshot.findings,
+        inconsistencies=snapshot.inconsistencies,
+        source_refs=tuple(dict.fromkeys(source_refs)),
+    )
+
+
+def _reasoning_source_refs(context: OperationalContext) -> set[str]:
+    return set(context.source_refs)
+
+
+def _compact_text(value: object, *, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"reasoning field {field_name!r} must be a non-empty string")
+    return " ".join(value.split())
+
+
+def _execution_markers() -> tuple[str, ...]:
+    markers: list[str] = []
+    for language in ("en", "he"):
+        from messages import get_catalog
+
+        markers.extend(
+            marker.strip().casefold()
+            for marker in get_catalog(language).text(
+                "orchestrator.picture.reasoning.execution_markers"
+            ).split("|")
+            if marker.strip()
+        )
+    return tuple(dict.fromkeys(markers))
+
+
+def _contains_execution_claim(text: str) -> bool:
+    normalized = " ".join(text.casefold().split())
+    return any(marker in normalized for marker in _execution_markers())
+
+
+def _validate_reasoning_refs(raw_refs: object, *, field_name: str, allowed: set[str]) -> tuple[str, ...]:
+    if not isinstance(raw_refs, list) or not raw_refs or not all(isinstance(item, str) for item in raw_refs):
+        raise ValueError(f"{field_name} must contain at least one source_ref")
+    refs = tuple(dict.fromkeys(item.strip() for item in raw_refs if item.strip()))
+    if not refs or any(item not in allowed for item in refs):
+        raise ValueError(f"{field_name} contains an unknown source_ref")
+    return refs
+
+
+def _reject_internal_reference_leak(text: str, refs: tuple[str, ...]) -> None:
+    if any(source_ref in text for source_ref in refs):
+        raise ValueError("reasoning output exposes an internal source_ref")
+
+
+def _validate_reasoning_payload(payload: dict, context: OperationalContext) -> OperationalReasoning:
+    allowed_refs = _reasoning_source_refs(context)
+    facts_payload = payload.get("facts")
+    assessments_payload = payload.get("assessments")
+    recommendations_payload = payload.get("recommendations")
+    if not all(isinstance(value, list) for value in (facts_payload, assessments_payload, recommendations_payload)):
+        raise ValueError("reasoning output arrays are required")
+    if not facts_payload and not assessments_payload and not recommendations_payload:
+        raise ValueError("reasoning output contains no grounded content")
+
+    facts: list[tuple[str, tuple[str, ...]]] = []
+    for index, item in enumerate(facts_payload):
+        if not isinstance(item, dict):
+            raise ValueError(f"fact {index} is not an object")
+        text = _compact_text(item.get("text"), field_name=f"facts[{index}].text")
+        if _contains_execution_claim(text):
+            raise ValueError("fact contains an unsupported execution claim")
+        refs = _validate_reasoning_refs(item.get("source_refs"), field_name=f"facts[{index}].source_refs", allowed=allowed_refs)
+        _reject_internal_reference_leak(text, refs)
+        facts.append((text, refs))
+
+    assessments: list[OperationalAssessment] = []
+    for index, item in enumerate(assessments_payload):
+        if not isinstance(item, dict):
+            raise ValueError(f"assessment {index} is not an object")
+        conclusion = _compact_text(item.get("conclusion"), field_name=f"assessments[{index}].conclusion")
+        qualification = item.get("qualification")
+        if not isinstance(qualification, str):
+            raise ValueError(f"assessment {index}.qualification must be a string")
+        if _contains_execution_claim(conclusion):
+            raise ValueError("assessment contains an unsupported execution claim")
+        refs = _validate_reasoning_refs(
+            item.get("supporting_source_refs"),
+            field_name=f"assessments[{index}].supporting_source_refs",
+            allowed=allowed_refs,
+        )
+        _reject_internal_reference_leak(conclusion, refs)
+        _reject_internal_reference_leak(qualification, refs)
+        domains = item.get("affected_domains")
+        if not isinstance(domains, list) or not all(isinstance(domain, str) for domain in domains):
+            raise ValueError(f"assessment {index}.affected_domains must be a list")
+        if not all(domain in {"team", "surveillance", "drones", "external_reports", "cross_domain"} for domain in domains):
+            raise ValueError(f"assessment {index}.affected_domains contains an unknown domain")
+        confidence = item.get("confidence")
+        priority = item.get("priority")
+        if confidence not in {"low", "medium", "high"} or priority not in {"low", "medium", "high"}:
+            raise ValueError(f"assessment {index} has an invalid confidence or priority")
+        assessments.append(
+            OperationalAssessment(
+                conclusion=conclusion,
+                supporting_source_refs=refs,
+                confidence=confidence,
+                qualification=" ".join(qualification.split()),
+                affected_domains=tuple(dict.fromkeys(domains)),
+                priority=priority,
+            )
+        )
+
+    recommendations: list[RecommendedAction] = []
+    for index, item in enumerate(recommendations_payload):
+        if not isinstance(item, dict):
+            raise ValueError(f"recommendation {index} is not an object")
+        description = _compact_text(item.get("description"), field_name=f"recommendations[{index}].description")
+        rationale = _compact_text(item.get("rationale"), field_name=f"recommendations[{index}].rationale")
+        if _contains_execution_claim(description) or _contains_execution_claim(rationale):
+            raise ValueError("recommendation contains an unsupported execution claim")
+        refs = _validate_reasoning_refs(
+            item.get("supporting_source_refs"),
+            field_name=f"recommendations[{index}].supporting_source_refs",
+            allowed=allowed_refs,
+        )
+        _reject_internal_reference_leak(description, refs)
+        _reject_internal_reference_leak(rationale, refs)
+        priority = item.get("priority")
+        requires_approval = item.get("requires_approval")
+        possible_capability = item.get("possible_capability")
+        if priority not in {"low", "medium", "high"} or type(requires_approval) is not bool:
+            raise ValueError(f"recommendation {index} has an invalid priority or approval flag")
+        if possible_capability is not None and (
+            not isinstance(possible_capability, str) or not possible_capability.strip()
+        ):
+            raise ValueError(f"recommendation {index}.possible_capability must be a string or null")
+        if possible_capability:
+            from orchestrator.capabilities import CAPABILITY_DESCRIPTORS
+
+            descriptor_by_name = {descriptor.name: descriptor for descriptor in CAPABILITY_DESCRIPTORS}
+            descriptor = descriptor_by_name.get(possible_capability.strip())
+            if descriptor is None:
+                raise ValueError(f"recommendation {index}.possible_capability is unknown")
+            if (descriptor.has_side_effects or descriptor.requires_human_review) and not requires_approval:
+                raise ValueError(f"recommendation {index}.possible_capability requires approval")
+        recommendations.append(
+            RecommendedAction(
+                description=description,
+                rationale=rationale,
+                supporting_source_refs=refs,
+                priority=priority,
+                possible_capability=possible_capability.strip() if possible_capability else None,
+                requires_approval=requires_approval,
+            )
+        )
+
+    return OperationalReasoning(
+        facts=tuple(facts),
+        assessments=tuple(assessments),
+        recommendations=tuple(recommendations),
+        model_call_count=1,
+    )
+
+
+def reason_over_operational_context(
+    main_agent: "MainAgent",
+    context: OperationalContext,
+    *,
+    raw_text: str,
+) -> OperationalReasoning:
+    """Make exactly one bounded call and return validated output or fallback metadata."""
+
+    prompt = SITUATIONAL_PICTURE_REASONING_INSTRUCTION.format(
+        request_json=json.dumps(raw_text or "", ensure_ascii=False),
+        context_json=json.dumps(context.prompt_payload(), ensure_ascii=False, sort_keys=True),
+        max_facts=REASONING_MAX_FACTS,
+        max_assessments=REASONING_MAX_ASSESSMENTS,
+        max_recommendations=REASONING_MAX_RECOMMENDATIONS,
+    )
+    started = time.perf_counter()
+    try:
+        with stage_context("situational_picture_reasoning"):
+            result = main_agent.process(prompt, [], invocation_policy=_REASONING_POLICY)
+        if result.status != "success":
+            raise ValueError("model returned an unusable reasoning result")
+        payload = _extract_json_object(result.text)
+        reasoning = _validate_reasoning_payload(payload, context)
+        logger.info(
+            "bounded situational reasoning completed",
+            extra={
+                "event": "situational_reasoning_completed",
+                "model_call_count": 1,
+                "reasoning_seconds": round(time.perf_counter() - started, 6),
+                "accepted_assessments": len(reasoning.assessments),
+                "accepted_recommendations": len(reasoning.recommendations),
+                "trace_id": get_trace_id(),
+            },
+        )
+        return reasoning
+    except Exception as exc:
+        logger.warning(
+            "bounded situational reasoning failed; using deterministic fallback",
+            extra={
+                "event": "situational_reasoning_fallback",
+                "reason": str(exc),
+                "reasoning_seconds": round(time.perf_counter() - started, 6),
+                "trace_id": get_trace_id(),
+            },
+        )
+        return OperationalReasoning(
+            facts=(),
+            assessments=(),
+            recommendations=(),
+            model_call_count=1,
+            fallback=True,
+            rejected_claim_count=1,
+            failure_kind="invalid_or_unavailable_model_output",
+        )
+
+
+def _render_reasoned_picture(context: OperationalContext, reasoning: OperationalReasoning) -> str:
+    catalog = get_current_catalog()
+    lines = [catalog.text("orchestrator.picture.reasoned.title")]
+    if reasoning.facts:
+        lines.append(catalog.text("orchestrator.picture.reasoned.facts_header"))
+        lines.extend(f"- {text}" for text, _ in reasoning.facts)
+    if reasoning.assessments:
+        lines.append(catalog.text("orchestrator.picture.reasoned.assessments_header"))
+        lines.extend(
+            f"- {assessment.conclusion}{(' ' + assessment.qualification) if assessment.qualification else ''}"
+            for assessment in reasoning.assessments
+        )
+    if reasoning.recommendations:
+        lines.append(catalog.text("orchestrator.picture.reasoned.recommendations_header"))
+        lines.extend(f"- {recommendation.description}" for recommendation in reasoning.recommendations)
+    return "\n".join(line for line in lines if line)
+
+
+def _render_reasoning_fallback(snapshot: SituationalSnapshot) -> str:
+    return render_typed_snapshot(
+        snapshot,
+        include_findings=True,
+        include_recent_reports=False,
+        include_recommendations=False,
+    )
+
+
+def render_typed_snapshot(
+    snapshot: SituationalSnapshot,
+    *,
+    include_findings: bool = True,
+    include_recent_reports: bool = True,
+    include_recommendations: bool = True,
+) -> str:
     """Render localized facts and findings without model-authored claims."""
 
     catalog = get_current_catalog()
@@ -802,14 +1353,18 @@ def render_typed_snapshot(snapshot: SituationalSnapshot, *, include_findings: bo
             for finding in snapshot.findings
         )
 
-    if snapshot.recent_reports:
+    if include_recent_reports and snapshot.recent_reports:
         lines.extend(("", catalog.text("orchestrator.picture.typed.recent_reports_header")))
         lines.extend(
             catalog.text("orchestrator.picture.typed.recent_report", text=report.text)
             for report in snapshot.recent_reports
         )
 
-    recommendations = [finding for finding in snapshot.findings if finding.suggested_action_key] if include_findings else []
+    recommendations = (
+        [finding for finding in snapshot.findings if finding.suggested_action_key]
+        if include_findings and include_recommendations
+        else []
+    )
     if recommendations:
         lines.extend(("", catalog.text("orchestrator.picture.typed.recommendations_header")))
         lines.extend(
@@ -1182,6 +1737,8 @@ def build_situational_picture(
 
     now = now or datetime.now(timezone.utc)
     effective_scope = scope or SituationalQueryScope.overall_scope()
+    total_started = time.perf_counter()
+    snapshot_started = time.perf_counter()
     typed_snapshot = build_typed_snapshot(
         registry,
         now=now,
@@ -1192,13 +1749,51 @@ def build_situational_picture(
         scope=effective_scope,
     )
     if typed_snapshot is not None:
+        snapshot_seconds = time.perf_counter() - snapshot_started
         plan = _scoped_plan(protocol, effective_scope)
+        current_time = _current_time_label(history_query_service, now)
+        context_started = time.perf_counter()
+        operational_context = build_operational_context(
+            typed_snapshot,
+            query_scope=effective_scope,
+            current_time=current_time,
+        )
+        context_seconds = time.perf_counter() - context_started
+        reasoning = None
+        if effective_scope.overall:
+            reasoning = reason_over_operational_context(
+                main_agent,
+                operational_context,
+                raw_text=raw_text,
+            )
+            picture_text = (
+                _render_reasoned_picture(operational_context, reasoning)
+                if not reasoning.fallback
+                else _render_reasoning_fallback(typed_snapshot)
+            )
+        else:
+            picture_text = render_typed_snapshot(typed_snapshot, include_findings=True)
+        logger.info(
+            "typed situational picture completed",
+            extra={
+                "event": "typed_picture_completed",
+                "overall_reasoning": bool(effective_scope.overall),
+                "snapshot_seconds": round(snapshot_seconds, 6),
+                "context_seconds": round(context_seconds, 6),
+                "reasoning_seconds": round(
+                    time.perf_counter() - context_started - context_seconds, 6
+                ) if reasoning is not None else 0.0,
+                "total_seconds": round(time.perf_counter() - total_started, 6),
+                "trace_id": get_trace_id(),
+            },
+        )
         return SituationalPicture(
-            text=render_typed_snapshot(typed_snapshot, include_findings=effective_scope.overall),
+            text=picture_text,
             reports=(),
             generated_at=typed_snapshot.generated_at,
             plan=plan,
             snapshot=typed_snapshot,
+            reasoning=reasoning,
         )
 
     current_time = _current_time_label(history_query_service, now)

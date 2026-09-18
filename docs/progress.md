@@ -3705,3 +3705,217 @@ no CI change was needed.
   SITREP conclusions/recommendations, notification UI persistence, Michael's
   temporal semantics, and the four unrelated baseline failures remain open.
   The simulator remains strictly manual.
+
+### Task 56 ג€” Evidence-Grounded Main Agent Reasoning and Concise Commander SITREP
+- **Status:** implementation and controlled verification complete; broad
+  regression remains to be run after the final focused checks.
+- **Purpose:** Add one bounded, read-only Main Agent reasoning stage after the
+  authoritative typed snapshot for overall/SITREP queries. The model is not an
+  authority for state, does not receive raw DB rows or an unrestricted history
+  dump, and does not replace Task 53's deterministic narrow-query behavior.
+- **OperationalContext:** Added a compact typed context composed from the
+  existing `SituationalSnapshot`, its verified findings, selected abnormal
+  camera entities, the query scope/current time, and committed operational
+  reports already filtered by Task 55's exact current-run contract. Context
+  serialization includes only bounded typed fields and exact allowed
+  `source_refs`; authoritative state and current-run report context are kept
+  as distinct sections, with explicit state-wins instructions.
+- **Reasoning contracts:** Added typed `OperationalAssessment` and
+  display-only `RecommendedAction` values, plus validated `OperationalReasoning`
+  metadata. Assessments require conclusion, source refs, confidence,
+  qualification, affected domains, and priority. Recommendations require
+  description, rationale, source refs, priority, optional known capability,
+  and an approval flag. No chain-of-thought is requested, stored, or exposed.
+- **Validation boundary:** The Main Agent receives one strict structured JSON
+  schema. Every fact, assessment, and recommendation must have at least one
+  source ref from the exact supplied set; unknown refs, missing refs, leaked
+  internal refs, malformed fields, unsupported execution claims, and unknown
+  capabilities invalidate the reasoning result. Side-effecting or
+  human-review capabilities cannot be marked as approval-free.
+- **Reasoning trigger:** Overall typed SITREP requests invoke exactly one
+  bounded Main Agent call with no tools and no repair/retry call. There is no
+  specialist fan-out, planner call, legacy composer call, auto-approval,
+  action request, ToolReceipt, Event write, Hold resolution, or domain-state
+  mutation. Narrow Step 5/team/surveillance queries remain deterministic and
+  do not call the reasoning model.
+- **Rendering:** Accepted output is rendered as a concise commander brief
+  with localized facts, assessments, and recommendations. Internal source
+  refs, priorities, confidence enums, capabilities, protocol names, agent
+  names, and JSON are not rendered. Recommendations remain suggestions; a
+  later commander execution request must enter the normal Task 31 lifecycle.
+- **Fallback:** Model timeout/error, malformed structured output, invalid
+  source refs, unsupported execution claims, or validation failure produce a
+  concise deterministic typed response. The fallback remains truthful,
+  excludes the raw recent-report section, does not claim model-generated
+  recommendations, and preserves authoritative state access.
+- **Uncertainty/state semantics:** The context preserves `not_reported` as
+  distinct from `unavailable`, carries deterministic qualifications, and gives
+  authoritative current state precedence over historical prose. Previous
+  runs, legacy NULL-run reports, failed Events, unresolved Holds, and rejected
+  projections cannot enter a simulation-scoped reasoning context.
+- **Performance instrumentation:** Added ephemeral structured timing for
+  snapshot/history context construction, context construction, reasoning call,
+  and total typed-picture completion. Raw prompts and model responses are not
+  persisted.
+- **Tests:** Added `tests/test_situational_reasoning.py` covering typed context
+  selection, abnormal-entity compaction, valid cross-domain output,
+  uncertainty/not-reported preservation, valid and invalid source refs,
+  malformed/model-failure fallback, hallucinated execution rejection,
+  recommendation/action separation, one-call budget, current-run isolation,
+  and no specialist calls. Updated the Step 9 regression to expect one
+  bounded call with deterministic fallback when its fake model refuses.
+- **Focused verification:** Reasoning plus situational picture, typed
+  snapshot, Task 53 routing, API picture, response provenance, Action
+  Lifecycle/ToolReceipt, Task 49 expiry, Task 55 run context, localization,
+  and architecture suites passed **89 tests**. Python compilation and
+  `git diff --check` passed.
+- **Controlled unified_test verification:** Used the official
+  `UnifiedSurveillanceAgent`, `UnifiedTeamStatusAgent`, protocol registry, and
+  active history DB. No scenario step, live message, reset, or fake live
+  ingestion was performed. The bounded mock Main Agent made exactly one call;
+  one assessment and one recommendation passed validation; the reasoning
+  context contained authoritative state refs and zero legacy NULL-run reports.
+  The final user-facing output was Hebrew and concise. Events remained 37
+  before/after; approval, event-data, and clarification Holds remained zero.
+- **Remaining gaps:** This task does not fix Michael's temporal semantics,
+  add new authoritative domain state, implement notification UI persistence,
+  or repair the four unrelated baseline test failures. The simulator remains
+  manual with no auto-run, auto-next, or auto-send.
+
+### Task 56 verification addendum
+- **Broad regression:** Full `pytest -q` completed with **1,688 passed** and
+  the same four baseline failures: two minimal-fixture approval tests caused
+  by a missing protocol in the fixture, the file-catalog completeness test
+  reporting three older unlisted test files, and the known Task47
+  intent-attendance expectation. No Task56 test failed.
+- **Final hygiene:** The Task56 focused suite, Python compilation, and
+  `git diff --check` remain clean. No `pyrefly.toml` change was made, and no
+  simulator or active-DB lifecycle mutation was introduced by verification.
+
+### Task 57 — Real-Provider SITREP Evaluation and Quality Gate
+- **Status:** evaluation infrastructure and offline verification complete;
+  the explicit real-provider run was safely skipped because no core provider,
+  model, or credential configuration was present in the environment. No
+  production reasoning prompt, schema, renderer, recommendation policy, or
+  simulator behavior was tuned.
+- **Provider path audited:** `profiles.unified_test` uses the configured core
+  tier for `MainAgent`. Task 56 supplies `reasoning_effort=none`, a strict
+  `operational_sitrep` schema when the provider supports it, `650` maximum
+  output tokens, and a `45` second timeout. Runtime provider requests use
+  `max_retries=0`; the profile's retry setting is separate orchestration
+  configuration. No secret values were logged or persisted.
+- **Evaluation architecture:** Added
+  `tools/evaluate_sitrep_quality.py`, an explicit `--real` opt-in CLI that
+  builds six isolated typed cases through `build_typed_snapshot` and
+  `build_operational_context`, invokes the canonical overall-picture path,
+  records each run separately, and can write a machine-readable JSONL
+  metrics artifact without prompts, responses, secrets, or chain-of-thought.
+  Temporary SQLite histories are used only for the evaluator and are removed
+  after each case. No active DB, simulator run, Event, Hold, approval, or
+  ToolReceipt is used or changed.
+- **Corpus:** Cases cover routine/low-risk restraint, SEC Phase 1 supported
+  facts, conflicting uncertainty, capability limitation, no confirmed
+  available manpower with `not_reported` members, and a critical multi-domain
+  picture. Official SEC/FIRE fixtures were read; unsupported future
+  correction, incident-lifecycle, deployment, arrival, and restoration
+  semantics were not fabricated into the typed context.
+- **Hard gates:** Deterministic checks cover exact source-reference subset,
+  unsupported entity identifiers, uncertainty promotion, `not_reported`
+  semantics, degraded/offline promotion, execution claims without a receipt,
+  unknown or approval-free capabilities, internal leakage, previous-run
+  contamination, one-call budget, and lifecycle immutability. Safe provider
+  fallback is recorded rather than treated as an unsafe claim.
+- **Soft checks:** Output character/word bounds, raw-report repetition,
+  excessive headings, routine alarmism, Hebrew rendering, and cross-domain
+  synthesis are tracked separately from hard safety failures.
+- **Tests:** Added 13 evaluator tests covering the required hard-failure
+  categories, raw-report dump detection, lifecycle mutation, typed one-call
+  execution, current-run isolation, and disabled/opt-in provider behavior.
+  Focused Task 57 plus Task 56/55/53/49, localization, provenance, and typed
+  snapshot coverage passed **77 tests**. The evaluator, architecture, and
+  Hebrew-leakage checks passed **16 tests**. Python compilation passed.
+- **Controlled real-provider run:** `python -m tools.evaluate_sitrep_quality
+  --real --runs 3` returned `status=skipped` because the core provider
+  configuration was unavailable. Therefore real-provider calls: **0**;
+  structured validity, hard-gate pass rate, fallback rate, and latency
+  distribution for the real provider are **not evaluated**, not zero-quality
+  claims. Task 56's existing mock/provider-controlled results remain the only
+  available comparison baseline.
+- **Regression:** Full `pytest -q` completed with **1,702 passed** and the
+  same four pre-existing/unrelated failures: two minimal-fixture approval
+  tests, three older missing file-catalog entries, and the known Task47
+  intent-attendance expectation. No Task57 evaluator failure remains.
+- **Remaining gap / next task:** A real-provider baseline still requires
+  explicit non-secret environment configuration and bounded execution. The
+  next recommended task is **Task 58 — controlled real-provider baseline run
+  and quality-gate report after provider configuration is available**. No
+  prompt tuning is recommended before that baseline.
+
+### Task 58 — Controlled Real-Provider SITREP Baseline
+- **Status:** complete. The approved `.env` loader exposed a configured
+  non-secret provider/model presence check; no secret value was printed,
+  persisted, or added to source/docs. The run used the existing Task 56
+  overall-picture path and the Task 57 six-case corpus with exactly three
+  runs per case: **18 real provider calls**, no manual retries, no
+  cherry-picking, no simulator/auto-next/auto-send behavior, and no active
+  DB/Event/Hold/ToolReceipt lifecycle mutation.
+- **Frozen run configuration:** provider `openrouter`, configured model
+  `anthropic/claude-sonnet-4.6`, structured-output mode `auto`, reasoning
+  effort `none`, maximum output `650` tokens, timeout `45` seconds, runtime
+  request retries `0` (profile retry setting remained `2`). The pre-run
+  fingerprints were recorded for the Task 56 reasoning path and evaluator;
+  no production prompt, schema, renderer, context, temperature, or reasoning
+  policy was tuned before the calls.
+- **Provider result:** 18 requests returned through the canonical path; 1/18
+  produced valid structured operational reasoning and 17/18 entered the
+  existing deterministic fallback with the safe reason
+  `invalid_or_unavailable_model_output`. The log contained 17 bounded
+  reasoning-fallback warnings, no detected provider-error/timeout category,
+  and no secret-marker output. The baseline therefore measures unreliable
+  usable model output rather than a confirmed transport outage.
+- **Corrected offline scoring:** The raw artifact initially showed 4/18 hard
+  passes because the evaluator incorrectly interpreted authoritative fallback
+  count lines such as `0 offline` and `0 degraded` as semantic state claims.
+  A deterministic evaluator-only repair was made and regression-tested; the
+  original provider artifact was not rerun or overwritten. Re-scoring the
+  captured final outputs gives **18/18 hard-gate passes**, **0 unsupported
+  entity claims**, **0 uncertainty/not-reported/execution/lifecycle
+  violations**, and **18/18 unchanged lifecycle snapshots**.
+- **Quality result:** structured validity **1/18 (5.56%)**; fallback **17/18
+  (94.44%)**; fallback reason count **17**; assessments present in **1/18**
+  and recommendations in **1/18**. Output size was 416–567 characters and
+  67–94 words (median 490 characters / 79 words). Latency was **13.241–23.305
+  seconds**, median **14.587 seconds**, nearest-rank p95 **23.305 seconds**.
+  The corrected classification is **C — model output unreliable but
+  contained**: the deterministic fallback remained authoritative and safe,
+  but the real model did not reliably deliver the bounded reasoning contract.
+- **Localization/evaluator finding:** The captured run was started before the
+  evaluator set the configured `profiles.unified_test` Hebrew catalog, so the
+  17 fallback renderings were English and received a localization soft finding;
+  the single accepted model rendering was Hebrew. The evaluator now sets the
+  profile catalog explicitly for future runs. This is recorded as a harness
+  fidelity issue, not as a provider-language conclusion from the accepted
+  structured run.
+- **Case matrix after offline re-score:** A routine low-risk: 3/3 hard pass,
+  1/3 structured, 2/3 fallback; B SEC Phase 1 supported: 3/3 hard pass,
+  0/3 structured, 3/3 fallback; C conflicting uncertainty: 3/3, 0/3, 3/3;
+  D capability limitation: 3/3, 0/3, 3/3; E no confirmed manpower: 3/3,
+  0/3, 3/3; F critical multi-domain: 3/3, 0/3, 3/3. Cross-domain synthesis
+  remained a soft gap in the fallback-only B and F cases. Current-run
+  isolation checks passed; no prior-run report entered the tested context.
+- **Representative outputs:** The accepted A-run output was a concise Hebrew
+  SITREP with authoritative camera/team facts, qualified drone uncertainty,
+  two source-grounded assessments, and one approval-bearing display-only
+  recommendation. Fallback outputs were concise authoritative snapshots but
+  contained no Main Agent assessment/recommendation stage. No user-facing
+  chain-of-thought, prompt, raw provider response, or internal schema leakage
+  was persisted.
+- **Verification:** Focused evaluator suite now passes **15 tests**;
+  `py_compile` and `git diff --check` pass. The temporary provider artifact and
+  log remain outside the repository under the system temp directory for audit;
+  no secret-bearing file was added to the repo.
+- **Remaining gap / next task:** **Task 59 — narrow real-provider structured
+  output reliability repair for the configured OpenRouter path**, preserving
+  the bounded one-call contract, authoritative fallback, Hebrew profile
+  locale, and existing hard gates. Do not broaden the prompt or add retries
+  before isolating the provider/schema compatibility failure.

@@ -1067,6 +1067,11 @@ MESSAGES = {
     "orchestrator.picture.typed.recommendation_line": "- {text}",
     "orchestrator.picture.typed.recent_reports_header": "Recent committed reports:",
     "orchestrator.picture.typed.recent_report": "- {text}",
+    "orchestrator.picture.reasoned.title": "Commander SITREP",
+    "orchestrator.picture.reasoned.facts_header": "Verified facts:",
+    "orchestrator.picture.reasoned.assessments_header": "Operational assessment:",
+    "orchestrator.picture.reasoned.recommendations_header": "Recommended actions:",
+    "orchestrator.picture.reasoning.execution_markers": "executed|completed|dispatched|activated|sent|approved",
     "orchestrator.picture.finding.cameras_all_active": (
         "Camera coverage is normal: all {count} cameras are active."
     ),
