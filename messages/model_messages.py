@@ -64,16 +64,9 @@ Recent events log: {recent_events}
 
 Respond with only the picture text."""
 
-SITUATIONAL_PICTURE_REASONING_INSTRUCTION = """Produce one bounded, evidence-grounded commander SITREP from the typed operational context below.
-
-The authoritative_facts object is the authority for current state. current_run_operational_reports are committed context only: they never override authoritative_facts and they must be scoped to the current scenario execution. deterministic_findings are safe inputs, not additional authority. Preserve not_reported as not reported, and preserve uncertainty or unverified causes exactly as qualified. Do not infer missing people, causes, identities, capabilities, locations, or executions.
-
-Return only one JSON object with exactly the requested fields. Every fact, assessment, and recommendation must include one or more source_refs copied exactly from the supplied source_refs list. Do not invent or expose source references in the user-facing text. Facts and assessments must be conclusions about supplied evidence, never claims that an action was executed. Recommendations are display-only suggestions: they do not request, approve, or execute anything. Use possible_capability only when it is a known capability; otherwise use null. Set requires_approval true whenever a suggestion would need human review. Do not include chain-of-thought, analysis, markdown, database fields, agent names, or protocol names. All text values must be concise natural Hebrew.
-
-For routine situations keep the result short. Prefer at most {max_facts} selected facts, {max_assessments} assessments, and {max_recommendations} recommendations. Prioritize cross-domain operational significance and uncertainty. If the evidence does not support a conclusion or recommendation, omit it.
-
-Request JSON: {request_json}
-Operational context JSON: {context_json}
-
-Return exactly:
-{{"facts":[{{"text":"...","source_refs":["..."]}}],"assessments":[{{"conclusion":"...","supporting_source_refs":["..."],"confidence":"low|medium|high","qualification":"...","affected_domains":["team|surveillance|drones|external_reports|cross_domain"],"priority":"low|medium|high"}}],"recommendations":[{{"description":"...","rationale":"...","supporting_source_refs":["..."],"priority":"low|medium|high","possible_capability":"... or null","requires_approval":false}}]}}"""
+SITUATIONAL_PICTURE_REASONING_INSTRUCTION = """Return a concise evidence-grounded commander SITREP as one JSON object.
+Use only context JSON. t=time; s=authoritative state; r=current-run reports; f=findings; u=uncertainty; v=valid source aliases. State wins. Preserve not_reported/uncertainty. Never invent facts, actions, causes, identities, locations, capabilities, or chain-of-thought.
+Wire keys only: f=facts(t,s), a=assessment(c,s,v,q?,d,p), r=recommendation(d,r,s,p,c,a). Every source alias must be in v. Facts/assessments are not execution. Recommendations are display-only; a=true means human review. Hebrew, short text, no markdown or extra keys. Use at most {max_facts} facts, {max_assessments} assessment, {max_recommendations} recommendation; omit unsupported items.
+Request: {request_json}
+Context: {context_json}
+Return only the JSON object."""

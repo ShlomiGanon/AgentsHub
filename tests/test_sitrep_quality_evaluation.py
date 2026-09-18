@@ -194,11 +194,11 @@ def test_harness_one_call_budget_uses_typed_context(cases):
     case = cases[0]
     ref = case.context.source_refs[0]
     payload = json.dumps(
-        {
-            "facts": [{"text": "המערכות זמינות", "source_refs": [ref]}],
-            "assessments": [],
-            "recommendations": [],
-        },
+            {
+                "f": [{"t": "המערכות זמינות", "s": ["S1"]}],
+                "a": [],
+                "r": [],
+            },
         ensure_ascii=False,
     )
     agent = _OneCallAgent(payload)

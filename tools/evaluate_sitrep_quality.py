@@ -38,6 +38,7 @@ from orchestrator.flows import (
     build_situational_picture,
     build_typed_snapshot,
 )
+from orchestrator.flows import REASONING_OUTPUT_TOKEN_BUDGET
 from persistence import EventSearchCriteria, open_persistence
 from protocols import CriticalityLevel, Protocol
 
@@ -238,7 +239,7 @@ def provider_configuration(environ: dict[str, str] | None = None) -> ProviderCon
         provider=model.model.split("/", 1)[0],
         model=model.model,
         structured_output_mode="auto",
-        max_output_tokens=650,
+        max_output_tokens=REASONING_OUTPUT_TOKEN_BUDGET,
         timeout_seconds=45.0,
         reasoning_effort="none",
         request_max_retries=0,
@@ -683,7 +684,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--artifact", type=Path, help="optional JSONL metrics artifact; never contains prompts or responses")
     parser.add_argument(
         "--diagnostic-case",
-        choices=("B-sec-phase1-supported",),
+        choices=("A-routine-low-risk", "B-sec-phase1-supported", "F-critical-multi-domain-supported"),
         help="run exactly one opt-in non-secret provider diagnostic call for the selected case",
     )
     parser.add_argument(

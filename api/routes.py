@@ -286,6 +286,10 @@ def _is_approval_policy_question(text: str) -> bool:
 
 
 def _follow_up_answer(messages, resolution) -> str:
+    if resolution.kind == "context_failure":
+        return messages.text("api.followup.context_failed")
+    if resolution.kind == "context_question":
+        return messages.text("api.followup.context_question")
     if resolution.kind == "failed":
         reason = resolution.event.failure_reason if resolution.event is not None else None
         return messages.text("api.followup.failed", reason=reason or messages.text("api.followup.unknown_reason"))
@@ -862,6 +866,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     sender_identity_filter=None if is_commander else caller_identity,
                     scenario_id=getattr(simulation_context, "scenario_id", None),
                     scenario_run_id=getattr(simulation_context, "scenario_run_id", None),
+                    scenario_time=getattr(simulation_context, "scenario_time", None),
                     scope=situational_scope,
                 )
                 picture_provenance = picture.provenance()

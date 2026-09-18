@@ -21,6 +21,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `unsafe_system.md` | Documentation | Internal | Defines the approved safe/open Telegram admission design, implementation stages, and verification criteria. |
 | `agents/__init__.py` | Production | Public facade | Exposes the public agent facade and compatibility module aliases. |
 | `agents/contracts.py` | Production | Private implementation | Defines agent results, descriptors, tool metadata, parsing, and typed errors. |
+| `agents/diagnostics.py` | Production | Private implementation | Records bounded non-secret provider diagnostics and structured-output stage telemetry. |
 | `agents/friendly_forces_agent.py` | Production | Private implementation | Implements the tactical coordination and dispatch specialist for friendly forces. |
 | `agents/provider_telemetry.py` | Production | Private implementation | Correlates CrewAI provider-call events with AgentsHub traces, stages, latency, and usage. |
 | `agents/runtime.py` | Production | Private implementation | Constructs and invokes agents, enforces tools, adapts CrewAI, and owns the runtime registry. |
@@ -186,6 +187,9 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_follow_up_correlation.py` | Test | Internal | Verifies deterministic conversation/event follow-up correlation and ambiguity handling. |
 | `tests/test_api_system.py` | Test | Internal | Verifies api system behavior and edge cases. |
 | `tests/test_attendance_temporal.py` | Test | Internal | Verifies attendance temporal-resolution rules and persistence. |
+| `tests/test_canonical_domain_projection.py` | Test | Internal | Verifies canonical typed domain projections and provenance. |
+| `tests/test_compact_reasoning_wire.py` | Test | Internal | Verifies the bounded closed structured reasoning wire. |
+| `tests/test_structured_output_transport.py` | Test | Internal | Verifies structured-output provider transport behavior. |
 | `tests/test_api_trace.py` | Test | Internal | Verifies commander-only Deep Debug trace polling, authorization, ordering, and rendering. |
 | `tests/test_api_unified_ingestion.py` | Test | Internal | Verifies api unified ingestion behavior and edge cases. |
 | `tests/test_approvals_queue.py` | Test | Internal | Verifies commander approvals queue API and Telegram interactions. |
@@ -208,12 +212,16 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_file_catalog.py` | Test | Internal | Ensures this catalog exactly matches the first-party repository tree. |
 | `tests/test_expiry_finalization.py` | Test | Internal | Verifies canonical Event/Hold expiry finalization, recovery idempotency, queue expiry handling, and scheduler maintenance. |
 | `tests/test_friendly_forces_agent.py` | Test | Internal | Verifies friendly forces agent dispatch tools and coordination records. |
+| `tests/test_group_owned_report_ingestion.py` | Test | Internal | Verifies trusted group-owner report ingestion and terminal outcomes. |
 | `tests/test_group_routing.py` | Test | Internal | Verifies the group routing table, staleness refresh, scope resolution, and dependency scoping. |
 | `tests/test_history_agent.py` | Test | Internal | Verifies history agent behavior and edge cases. |
 | `tests/test_history_event_pipeline.py` | Test | Internal | Verifies extraction, time normalization, and durable history writes. |
 | `tests/test_history_logging.py` | Test | Internal | Verifies history logging behavior and edge cases. |
 | `tests/test_history_precedent.py` | Test | Internal | Verifies history precedent behavior and edge cases. |
 | `tests/test_history_query.py` | Test | Internal | Verifies history query behavior and edge cases. |
+| `tests/test_provider_diagnostics.py` | Test | Internal | Verifies non-secret provider diagnostic stage capture. |
+| `tests/test_scenario_contract.py` | Test | Internal | Verifies canonical simulation scenario and run context contracts. |
+| `tests/test_task63_fire_end_to_end.py` | Test | Internal | Verifies FIRE_002 phase-one trusted intake, projections, and run-scoped context. |
 | `tests/test_hebrew_leakage.py` | Test | Internal | Verifies Hebrew responses do not leak unintended internal content. |
 | `tests/test_integration_cost_and_latency_review.py` | Test | Internal | Verifies the cost and latency review scenario across real subsystem boundaries. |
 | `tests/test_integration_deployment.py` | Test | Internal | Verifies the deployment scenario across real subsystem boundaries. |

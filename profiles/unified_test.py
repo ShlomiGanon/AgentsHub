@@ -1011,6 +1011,8 @@ PROTOCOLS = [
 
 EVENT_TYPES = [
     "surveillance_report",
+    "operational_condition_report",
+    "team_resource_report",
     "drone_dispatch",
     "drone_recall",
     "drone_mission_query",
@@ -1636,6 +1638,18 @@ EVENT_TYPE_BUSINESS_FIELDS = {
         "sector": (),
         "cause_status": ("unverified",),
         "possible_cause": (),
+    },
+    "operational_condition_report": {
+        "condition_type": (), "observation_source": (), "location": (),
+        "severity_label": ("low", "medium", "high"), "qualification": (),
+    },
+    "team_resource_report": {
+        "manpower_count": (), "resources_count": (),
+    },
+    "friendly_forces_report": {
+        "advisory_kind": (), "applies_to": (), "patrols": (), "status": (),
+        "active_due_to": (), "incident_kind": (), "size": (), "location": (),
+        "possible_cause": (), "cause_status": ("unverified",), "responding_unit": (), "building_risk": (),
     },
 }
 

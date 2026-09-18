@@ -89,6 +89,7 @@ from orchestrator.situational_picture import (  # re-exported: api may only impo
     classify_situational_query,
     compose_picture_from_step_outcomes,
     render_typed_snapshot,
+    REASONING_OUTPUT_TOKEN_BUDGET,
 )
 from orchestrator.follow_up import FollowUpResolution, is_context_dependent_follow_up, resolve_follow_up
 from orchestrator.event_queue import PolicyAwareEventQueue, SerialEventQueue, WorkItem
@@ -459,8 +460,9 @@ class EventDataReplyResult:
 @dataclass(frozen=True)
 class FastPathPlan:
     extraction: object
-    decision: OperationalDecision
-    protocol: "Protocol"
+    decision: OperationalDecision | None = None
+    protocol: "Protocol | None" = None
+    domain_only: bool = False
 
 
 def _model_invoker_for(main_agent: "MainAgent"):
@@ -494,6 +496,36 @@ def _apply_attendance_temporal_fields(
     return replace(extraction_result, missing_fields=missing)
 
 
+def _trusted_group_extraction(deps: FlowDeps, raw_text: str, received_at: str, reference_time: str | None):
+    owner_name = getattr(deps, "group_owner", None)
+    if not owner_name:
+        return None
+    try:
+        owner = deps.registry.get(owner_name)
+    except KeyError:
+        return None
+    extractor = getattr(owner, "extract_report", None)
+    if not callable(extractor):
+        return None
+    result = extractor(
+        raw_text,
+        received_at=received_at,
+        scenario_time=reference_time,
+        timezone_name=deps.timezone_name,
+    )
+    if result is None:
+        return None
+    result = _apply_attendance_temporal_fields(result, raw_text, received_at, deps.timezone_name, reference_time)
+    classification = _owner_report_classification(deps, result.classification or UNCLASSIFIED_TYPE)
+    if classification != result.classification:
+        result = replace(result, classification=classification, classification_status="trusted")
+    if result.classification == UNCLASSIFIED_TYPE or result.area is None and result.classification == "team_attendance_report":
+        return None
+    if not result.description or not result.severity or not result.occurred_at:
+        return None
+    return result
+
+
 def prepare_fast_path_report(
     deps: FlowDeps,
     main_agent: "MainAgent",
@@ -507,6 +539,14 @@ def prepare_fast_path_report(
     policy = deps.optimization_policy
     if policy.operational_intake_mode != "single" or policy.deterministic_execution_mode != "direct":
         return None
+
+    trusted_extraction = _trusted_group_extraction(deps, raw_text, received_at, reference_time)
+    if trusted_extraction is not None:
+        if trusted_extraction.classification != "team_attendance_report":
+            return FastPathPlan(trusted_extraction, domain_only=True)
+        # Attendance reports are committed by the owning roster store.  The
+        # event/hold/audit path remains the same; no action receipt is made.
+        return FastPathPlan(trusted_extraction, domain_only=True)
 
     intake: OperationalIntake = make_operational_intake(
         main_agent,
@@ -598,6 +638,9 @@ def continue_fast_path_report(
     plan: FastPathPlan,
 ) -> FlowResult:
     record_extracted_fields(deps.persistence, event_id, plan.extraction)
+    if plan.domain_only:
+        report_commit = _commit_report_domain_state(deps, event_id)
+        return _complete_committed_report(deps, event_id, report_commit)
     return continue_from_risk_assessment(
         deps,
         event_id,
@@ -1099,7 +1142,7 @@ def resolve_approval(
     if answer.status == "approved":
         try:
             protocol = deps.protocol_set.get(answer.hold["selected_protocol_name"])
-            if protocol_has_side_effects(deps, protocol):
+            if protocol is not None and protocol_has_side_effects(deps, protocol):
                 _safe_action_transition(deps, event_id, "approved")
         except KeyError:
             pass

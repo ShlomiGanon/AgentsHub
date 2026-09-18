@@ -63,6 +63,17 @@ ON attendance_responses(telegram_identity, received_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_attendance_responses_cycle
 ON attendance_responses(cycle_id, telegram_identity, received_at DESC);
+
+CREATE TABLE IF NOT EXISTS operational_team_state (
+    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+    manpower_count INTEGER NOT NULL,
+    resources_json TEXT NOT NULL,
+    source_event_id TEXT,
+    received_at TEXT NOT NULL,
+    scenario_id TEXT,
+    scenario_run_id TEXT,
+    scenario_time TEXT
+);
 """
 
 
@@ -202,6 +213,8 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
                 "SELECT cycle_id FROM attendance_cycles ORDER BY opened_at ASC LIMIT 1"
             ).fetchone()
             connection.execute("DELETE FROM attendance_responses")
+            operational_state = int(connection.execute("SELECT COUNT(*) FROM operational_team_state").fetchone()[0])
+            connection.execute("DELETE FROM operational_team_state")
             if seed_cycle is None:
                 removed_cycles = 0
             else:
@@ -221,7 +234,54 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             "attendance_responses": responses,
             "attendance_cycles": removed_cycles,
             "runtime_cycles_removed": removed_cycles,
+            "operational_team_state": operational_state,
         }
+
+    def record_operational_state(
+        self,
+        *,
+        manpower_count: int,
+        resources: list[dict],
+        source_event_id: str | None,
+        received_at: str,
+        scenario_id: str | None = None,
+        scenario_run_id: str | None = None,
+        scenario_time: str | None = None,
+    ) -> dict:
+        if type(manpower_count) is not int or manpower_count < 0:
+            raise TeamStatusPersistenceError("manpower count must be a non-negative integer")
+        _parse_timestamp(received_at)
+        import json
+        payload = json.dumps(resources, ensure_ascii=False, sort_keys=True)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO operational_team_state(
+                    singleton_id, manpower_count, resources_json, source_event_id, received_at,
+                    scenario_id, scenario_run_id, scenario_time
+                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(singleton_id) DO UPDATE SET
+                    manpower_count=excluded.manpower_count, resources_json=excluded.resources_json,
+                    source_event_id=excluded.source_event_id, received_at=excluded.received_at,
+                    scenario_id=excluded.scenario_id, scenario_run_id=excluded.scenario_run_id,
+                    scenario_time=excluded.scenario_time
+                """,
+                (manpower_count, payload, source_event_id, received_at, scenario_id, scenario_run_id, scenario_time),
+            )
+            row = connection.execute("SELECT * FROM operational_team_state WHERE singleton_id = 1").fetchone()
+        result = dict(row)
+        result["resources"] = json.loads(result.pop("resources_json"))
+        return result
+
+    def operational_state(self) -> dict | None:
+        import json
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM operational_team_state WHERE singleton_id = 1").fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["resources"] = json.loads(result.pop("resources_json"))
+        return result
 
     def record_response(
         self,

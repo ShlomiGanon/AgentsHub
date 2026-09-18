@@ -222,6 +222,8 @@ MESSAGES = {
     "api.followup.unverified": "The system cannot verify that the action executed; no execution receipt was recorded.",
     "api.followup.ambiguous": "More than one operational event could match this follow-up; please specify which one.",
     "api.followup.unknown": "No linked operational event was found for this follow-up.",
+    "api.followup.context_failed": "The previous situational request did not complete, so there is no current result to explain. You can ask for the current picture again.",
+    "api.followup.context_question": "The previous situational request returned the current operational picture. Ask what part you want clarified.",
     "api.malformed_protocol": "The protocol body is malformed: {reason}",
     "api.profile_field_restart": (
         "'{field}' belongs to the profile and takes effect only after a restart."
@@ -1114,5 +1116,9 @@ MESSAGES = {
     "failure.approval_expired": "The approval window expired; the action was not executed.",
     "failure.required_event_data_expired": "The event-data window expired; the event was not executed.",
     "failure.clarification_expired": "The clarification window expired; the event was not executed.",
+    "failure.structured_unavailable": "The structured response was unavailable, so no operational state was changed.",
+    "failure.unknown_entity": "The referenced operational entity was not found, so no state was changed.",
+    "failure.missing_details": "Required operational details are missing, so the report was not committed.",
+    "failure.validation": "The report did not pass operational validation, so no state was changed.",
     "orchestrator.follow_up.prefix.this": "",
 }

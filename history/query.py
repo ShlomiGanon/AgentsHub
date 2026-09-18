@@ -309,8 +309,12 @@ class HistoryQueryService:
             raise HistoryQueryError("simulation history requires both scenario_id and scenario_run_id")
 
         criteria = EventSearchCriteria(
-            time_start=storage_timestamp(now - timedelta(hours=bounded_hours)),
-            time_end=storage_timestamp(now),
+            # A canonical simulation run is its own bounded history scope. Its
+            # transport receipt may be wall-clock days after the declared
+            # scenario time, so scenario_id/run_id—not receipt time—provides
+            # the boundary for this read.
+            time_start=None if simulation_scoped else storage_timestamp(now - timedelta(hours=bounded_hours)),
+            time_end=None if simulation_scoped else storage_timestamp(now),
             time_basis="received_at",
             outcomes=("succeeded",),
             scenario_id=scenario_id if simulation_scoped else None,

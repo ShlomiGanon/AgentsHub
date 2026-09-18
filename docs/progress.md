@@ -4024,3 +4024,143 @@ no CI change was needed.
   output-budget repair**, using the proven truncation evidence to choose a
   sufficient bounded token budget and re-verify the same one-call contract.
   No repair was applied in Task 60.
+
+### Task 61 - Bounded Structured-Output Budget Repair
+- **Status:** partially complete; the scoped budget repair was implemented and
+  verified locally, but the mandatory first canary remained truncated. Per the
+  task stop condition, no A/F calls and no 18-call corpus were run.
+- **Budget source:** The old 650-token value came from Task 56's
+  `orchestrator.situational_picture._REASONING_POLICY`, not from the profile or
+  a global model default. The plan and compose policies remain separately
+  bounded at 400 and 450 tokens.
+- **Change:** Added the scoped
+  `REASONING_OUTPUT_TOKEN_BUDGET = 1200` constant and used it only for the
+  Task 56 bounded Main Agent reasoning policy. The evaluator's metadata now
+  reads the same constant; unrelated model paths retain their prior budgets.
+- **Preserved contract:** Provider, model, prompt, schema, source-ref and
+  provenance rules, timeout, reasoning effort, `max_retries=0`, strict
+  `json.loads`, fallback behavior, renderer limits, quality gates, and
+  lifecycle boundaries were unchanged. No `pyrefly.toml`, simulator, action,
+  ToolReceipt, DB, Event, Hold, or approval behavior was changed.
+- **Deterministic verification:** The actual runtime option path now emits
+  `max_tokens=1200` for `_REASONING_POLICY`, `max_tokens=400` for the plan
+  policy, and `max_retries=0` for both. The focused suite passed **84 tests**;
+  compilation and `git diff --check` passed.
+- **First canary:** Exactly one real-provider call was made for
+  `B-sec-phase1-supported` / SEC Phase 1 using `openrouter` and
+  `anthropic/claude-sonnet-4.6`, with diagnostics enabled. The request was
+  accepted and the provider returned a normal ChatCompletion; no provider
+  error or HTTP rejection was observed.
+- **Canary evidence:** `finish_reason=length`; content length **2578**;
+  content started with `{` and did not end with `}`; `json.loads` failed at
+  position **2573**, line **1**, column **2574**. The first failed stage was
+  `JSON_PARSE`, category `truncated`, and the fallback was `truncated`.
+  Schema, canonical, and provenance validation were not reached. The
+  structured-valid result was **0/1** and fallback was **1/1**.
+- **Safety/lifecycle:** The hard gate passed and lifecycle was unchanged.
+  The deterministic fallback remained authoritative; no model-generated
+  grounding, recommendation, Hebrew, or cross-domain quality conclusion was
+  accepted. The diagnostic artifact contains no secrets or raw content.
+- **Latency:** The diagnostic artifact did not expose the evaluator's
+  per-call latency field; the shell process wall time was 31.8 seconds and
+  includes environment/setup overhead, so it is not reported as provider
+  latency and is not compared with Tasks 58/59.
+- **Remaining gap / next repair:** **Task 62 - one bounded output-budget
+  escalation to the permitted 1400-token ceiling, followed by the same
+  single SEC canary and stop rule.** No further budget increase was automated
+  in Task 61.
+
+### Task 62 - Compact Structured Reasoning Under Fixed 650-Token Budget
+- **Status:** partially complete. The Task 61 temporary 1200-token budget was
+  reverted to the fixed **650-token** product limit. Provider-facing
+  compaction, deterministic conversion, bounds, and focused verification were
+  implemented, but the mandatory SEC canary remained truncated. Per the stop
+  rule, no A/F calls and no 18-call corpus were run.
+- **Initial diagnosis:** The dominant wire-size drivers were long canonical
+  field names, repeated canonical source references, repeated findings and
+  report prose, and duplicate state representation in the provider context.
+  The canonical domain contract itself was retained internally.
+- **Compact wire contract:** The provider schema uses closed compact keys
+  `f/a/r` for facts, assessments, and recommendations; compact member keys,
+  bounded strings, compact confidence/priority/domain enums, and per-request
+  source aliases such as `S1`. All wire objects remain
+  `additionalProperties=false`; the client parser remains strict `json.loads`.
+- **Bounds:** Maximum facts, assessments, and recommendations are each **3**.
+  Fact text is capped at 60 characters; assessment conclusion/qualification at
+  70/30; recommendation description/rationale at 70/30; capability at 64;
+  source aliases at 2 per item and domains at 3 per item. The compact context
+  preserves authoritative counters, statuses, current-run reports, findings,
+  uncertainties, and valid source aliases while bounding report text.
+- **Canonical preservation:** A deterministic wire-to-domain expansion maps
+  compact fields and enums back to the existing canonical facts, assessments,
+  recommendations, source refs, confidence, priority, domains, approval, and
+  capability semantics. Alias expansion is request-local and rejects duplicate
+  aliases; unknown aliases remain invalid under the existing canonical and
+  provenance validation. No provenance or execution safety gate was weakened.
+- **Offline size check:** For SEC B, serialized context decreased from
+  **2569** to **1060** characters. A maximal valid compact payload serialized
+  to **1291 characters / 2071 UTF-8 bytes** and passed the compact schema
+  validator. No tokenizer package was available, so a token count is not
+  claimed.
+- **Verification:** The Task 62 focused suite passed **52 tests** with one
+  existing deprecation warning. `py_compile` and `git diff --check` passed.
+  The broad `pytest -q` run reached its 124-second command timeout without a
+  result; it is not reported as passed. The prior broad baseline remains a
+  historical reference only.
+- **Exactly one canary:** One and only one real-provider call was made for
+  `B-sec-phase1-supported`, using the unchanged OpenRouter provider and
+  `anthropic/claude-sonnet-4.6`, structured mode `auto`, strict schema, and
+  `max_retries=0`. The request was accepted and returned one normal
+  `ChatCompletion` choice.
+- **Canary evidence:** `finish_reason=length`; extracted content length
+  **970**; it began with `{` but did not end with `}`. `json.loads` failed at
+  position **948** with category `truncated`. The first failed stage was
+  `JSON_PARSE`, after `CONTENT_EXTRACTION`; schema, canonical, and provenance
+  stages were not reached. Therefore structured validity was **0/1** and
+  fallback was **1/1**. A/F and the full corpus were not run.
+- **Safety/lifecycle:** The request/one-call proof remains bounded at one
+  reasoning invocation with zero retries and no repair call. The fallback
+  remained authoritative; the hard gate passed and lifecycle was unchanged.
+  No DB/Event/Hold/ToolReceipt/approval/simulator mutation occurred. The
+  diagnostic artifact contains metadata only and no raw response or secrets.
+- **Latency and remaining gap:** The artifact does not expose provider latency;
+  the CLI wall time includes setup and is not reported as provider latency.
+  The remaining issue is token truncation even after representation compaction,
+  not a schema, canonical, provenance, lifecycle, or provider-rejection
+  failure. **Next task: Task 63 - tokenization-aware compact-wire reduction
+  review under the fixed 650-token budget.** No budget increase is proposed.
+
+### Task 63 - Make the Current System Work End-to-End
+
+1. **Status:** Implemented the narrow end-to-end product fixes in the current repo, branch, and DB contracts.
+2. **Scope:** No provider/model switch, token increase, retry, repair call, simulator auto-run, or `pyrefly.toml` change was made.
+3. **Trusted routing:** Registered Telegram group ownership now reaches the existing fast-path intake before generic planner routing.
+4. **Team resources:** Added the smallest reusable operational team-state store for manpower and named resources; FIRE Step 1 commits 6, Ashad 3, and Carmel 1 operational.
+5. **Attendance:** FIRE Step 2 resolves clock-only `12:00`–`15:00` against trusted scenario local date and preserves unavailable-period semantics.
+6. **Condition reports:** FIRE Step 3 commits a low heat alert at Oranim observation tower with source and qualification, without inventing temperature, fire, or incident values.
+7. **Planned maintenance:** FIRE Step 5 resolves Camera 02 to canonical `CAM-02`, commits planned offline maintenance, and leaves duration/restoration unreported when absent.
+8. **Friendly advisory:** FIRE Step 4 commits the active KKL forest fire-lighting prohibition and ranger patrol advisory without dispatch.
+9. **External incident:** FIRE Step 6 commits the Route 444 small brush-fire report with unverified cigarette cause, police presence, and no building risk.
+10. **Terminal projection:** Trusted reports use the existing event, outcome, provenance, and DomainReportProjection path; no synthetic action receipt is created.
+11. **Run context:** Simulation situational reads use canonical scenario time and require scenario ID plus run ID for scoped history.
+12. **Receipt-time isolation:** Simulation history is scoped by run identity rather than wall-clock receipt, so delayed transport does not hide current-run facts.
+13. **History quality:** Recent committed reports now deduplicate equivalent text and preserve represented domains within the bounded window.
+14. **Daily intent:** Daily/current-summary language routes to the typed situational picture without an exact-sentence special case.
+15. **Conversation follow-up:** Context-dependent follow-ups can resolve the preceding situational request outcome without dispatch, approval, or specialist fanout.
+16. **Expected failures:** Structured-output, missing-detail, validation, and unknown-entity failures receive truthful catalog messages instead of raw internal reasons.
+17. **Reasoning budget:** The provider-facing wire remains fixed at exactly 650 output tokens, with `f/a/r`, closed schema, aliases, provenance, and bounded cardinality/text.
+18. **Reasoning context:** Compact context now includes authoritative manpower/effective manpower/resource state while limiting repeated report text.
+19. **Safety:** Recommendations remain display-only; explicit actions, approvals, lifecycle, RBAC, and provenance validation remain unchanged.
+20. **Focused verification:** FIRE end-to-end, compact reasoning, typed reasoning, temporal, follow-up, architecture, Hebrew leakage, catalog, and ingestion tests pass.
+21. **Broad verification:** The final offline full suite passed **1,735 tests** with 7 existing deprecation warnings; `git diff --check` also passed.
+22. **Provider verification:** No live canary was run because this shell has no real `CORE_MODEL_*` credentials. The canary command remains bounded and will be run only when credentials are present.
+
+**Manual verification checklist:**
+
+- [ ] Run the simulator manually for `FIRE_002_PHASE_1` Steps 1–6.
+- [ ] Confirm each group message returns a terminal success notification and no approval/dispatch card.
+- [ ] Confirm Step 2 shows Omri unavailable only from 12:00 through 15:00 scenario time.
+- [ ] Confirm Step 5 displays canonical Camera 02 maintenance state.
+- [ ] Run Step 7 manually and confirm the commander SITREP reflects current-run manpower, maintenance, advisory, condition, and incident facts.
+- [ ] Send a natural follow-up such as “למה לא?” after a summary and confirm it remains conversational.
+- [ ] Keep simulator progression manual: no automatic send, next-step, or provider repair behavior.

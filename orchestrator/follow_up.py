@@ -20,6 +20,8 @@ FollowUpKind = Literal[
     "executing",
     "requested",
     "unverified",
+    "context_failure",
+    "context_question",
 ]
 
 
@@ -100,6 +102,42 @@ def _verified_receipt(event: ConversationEventLink) -> bool:
     )
 
 
+def _conversation_context_follow_up(persistence, conversation_id: str, text: str) -> FollowUpResolution | None:
+    """Resolve discourse follow-ups without treating prior prose as facts."""
+    try:
+        messages = persistence.fetch_conversation_messages(conversation_id, 12)
+    except (AttributeError, NotImplementedError):
+        return None
+    users = [message for message in messages if message.get("role") == "user"]
+    if len(users) < 2:
+        return None
+    current = users[-1]
+    if _normalized(str(current.get("content") or "")) != _normalized(text):
+        return None
+    prior = users[-2]
+    prior_text = str(prior.get("content") or "")
+    try:
+        from orchestrator.situational_picture import classify_situational_query
+        is_picture = classify_situational_query(prior_text) is not None
+    except Exception:
+        is_picture = False
+    if not is_picture:
+        normalized_prior = _normalized(prior_text)
+        is_picture = any(term in normalized_prior for term in (
+            "summary", "today", "situational", "\u05e1\u05d9\u05db\u05d5\u05dd", "\u05d4\u05d9\u05d5\u05dd", "\u05ea\u05de\u05d5\u05e0\u05ea \u05de\u05e6\u05d1",
+        ))
+    if not is_picture:
+        return None
+    prior_index = messages.index(prior)
+    assistant_text = " ".join(
+        str(message.get("content") or "")
+        for message in messages[prior_index + 1:]
+        if message.get("role") == "assistant"
+    ).casefold()
+    failed = any(term in assistant_text for term in ("error", "failed", "failure", "\u05e9\u05d2\u05d9\u05d0", "\u05e0\u05db\u05e9\u05dc", "\u05dc\u05d0 \u05d4\u05e6\u05dc\u05d7"))
+    return FollowUpResolution("context_failure" if failed else "context_question")
+
+
 def resolve_follow_up(
     persistence: PersistenceInterface,
     conversation_id: str | None,
@@ -167,6 +205,10 @@ def resolve_follow_up(
             return FollowUpResolution("executing", event=event)
         if event.action_state == "requested":
             return FollowUpResolution("requested", event=event)
+
+    context_resolution = _conversation_context_follow_up(persistence, conversation_id, text)
+    if context_resolution is not None:
+        return context_resolution
 
     return FollowUpResolution("none")
 

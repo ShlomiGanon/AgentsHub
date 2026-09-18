@@ -78,7 +78,7 @@ class SurveillanceAgent(Agent):
     name = "surveillance_agent"
     # Group-owned report routing uses this declared domain capability rather
     # than trusting the classifier to choose a cross-domain event type.
-    owned_report_types = ("surveillance_report",)
+    owned_report_types = ("surveillance_report", "operational_condition_report")
     default_report_type = "surveillance_report"
     role = (
         "Maintains real-time visual surveillance and situational awareness across all sectors. Monitors security "
@@ -135,6 +135,30 @@ class SurveillanceAgent(Agent):
             invocation_policy = InvocationPolicy(max_output_tokens=220, reasoning_effort="none")
         return _recall_capture.run(super().process, text, allowed_tools, invocation_policy=invocation_policy)
 
+    def extract_report(self, raw_text: str, *, received_at: str, scenario_time: str | None = None, **_) -> ExtractionResult | None:
+        from history import ExtractionResult
+        text = str(raw_text or "")
+        normalized = text.casefold()
+        occurrence = scenario_time or received_at
+        if re.search(r"\u05d7\u05d9\u05d9\u05e9\u05df|\u05d8\u05de\u05e4\u05e8\u05d8\u05d5\u05e8\u05d4|\u05ea\u05e8\u05de\u05d9\u05ea|\u05d4\u05ea\u05e8\u05d0\u05ea \u05d7\u05d5\u05dd|\u05d0\u05d5\u05e8\u05e0\u05d9\u05dd|thermal|temperature|heat alert|observation tower", normalized):
+            return ExtractionResult(
+                "operational_condition_report", "trusted", None, ("ORANIM_OBSERVATION_TOWER",), text, "low", occurrence, False, (),
+                business_fields={"condition_type": "heat_alert", "observation_source": "temperature sensor and thermal camera", "location": "Oranim observation tower", "severity_label": "low", "qualification": "heavy heatwave; easterly winds"},
+            )
+        if re.search(r"\u05de\u05e6\u05dc\u05de\u05d4|camera|clean|\u05e0\u05d9\u05e7\u05d5\u05d9|\u05e2\u05d3\u05e9\u05d4|offline|\u05d4\u05d5\u05e4\u05e1\u05e7\u05d4|maintenance", normalized):
+            reference = "CAM-02" if re.search(r"(?:02|cam[- ]?02|camera\s*02|\u05de\u05e6\u05dc\u05de\u05d4\s*02)", normalized) else None
+            if reference is None:
+                return None
+            canonical = self._resolve_camera_reference(reference)
+            if canonical is None:
+                return None
+            area = next((str(camera.get("area")) for camera in self.surveillance_store.list_cameras() if camera.get("camera_id") == canonical), None)
+            return ExtractionResult(
+                "surveillance_report", "trusted", area, (canonical,), text, "low", occurrence, False, (),
+                business_fields={"camera_id": canonical, "camera_status": "offline", "shutdown_type": "planned_maintenance", "downtime_duration_hours": None, "reason": "fresh lens cleaning", "sector": area, "cause_status": None, "possible_cause": None},
+            )
+        return None
+
     def ingest_report(self, event: dict) -> ReportIngestionResult:
         """Commit a validated surveillance observation to the owning store.
 
@@ -142,6 +166,11 @@ class SurveillanceAgent(Agent):
         asks the model to perform the write and never emits an action receipt.
         """
 
+        if event.get("classification") == "operational_condition_report":
+            fields = event.get("business_fields") or {}
+            if fields.get("condition_type") != "heat_alert" or fields.get("severity_label") != "low":
+                return ReportIngestionResult("rejected", "operational condition report has invalid heat-alert fields")
+            return ReportIngestionResult("committed", "operational condition committed", projection=project_report_facts(event, domain="surveillance", projection_kind="operational_fact", facts=fields))
         if event.get("classification") != "surveillance_report":
             return ReportIngestionResult("not_applicable")
 

@@ -523,7 +523,7 @@ def _parse_structured_intent_response(raw_text: str, message_text: str, protocol
         analysis.primary_intent,
         analysis.reason,
         requests_action=analysis.requests_action,
-        matched_protocol_names=analysis.matched_protocol_names,
+        matched_protocol_names=() if analysis.ambiguity_reason else analysis.matched_protocol_names,
     )
 
 

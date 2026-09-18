@@ -40,6 +40,7 @@ _EXPLICIT_DATE_PATTERN = re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)")
 _WEEKDAY_PATTERN = re.compile(rf"(?:{_DAY}\s+)?(?P<day>{_DAY_TOKEN})")
 
 _EVENING_END = time(hour=20)
+_CLOCK_RANGE_PATTERN = re.compile(r"(?<!\d)(?P<start>\d{1,2}:\d{2})(?!\d).*?(?P<end>\d{1,2}:\d{2})(?!\d)")
 
 
 @dataclass(frozen=True)
@@ -144,6 +145,22 @@ def _resolve_explicit_range(text: str, zone: ZoneInfo) -> AvailabilityPeriod | N
     return AvailabilityPeriod(_local_midnight(resolved, zone), _local_midnight(resolved + timedelta(days=1), zone))
 
 
+def _resolve_clock_range(text: str, reference: datetime, zone: ZoneInfo) -> AvailabilityPeriod | None:
+    match = _CLOCK_RANGE_PATTERN.search(text)
+    if match is None:
+        return None
+    try:
+        start_clock = time.fromisoformat(match.group("start"))
+        end_clock = time.fromisoformat(match.group("end"))
+    except ValueError:
+        return None
+    start = datetime.combine(reference.date(), start_clock, tzinfo=zone)
+    end = datetime.combine(reference.date(), end_clock, tzinfo=zone)
+    if end <= start:
+        return None
+    return AvailabilityPeriod(start, end)
+
+
 def resolve_availability_period(raw_text: str, received_at: str, timezone_name: str) -> AvailabilityPeriod | None:
     """Resolve an unambiguous Hebrew availability period from trusted receipt time.
 
@@ -161,6 +178,9 @@ def resolve_availability_period(raw_text: str, received_at: str, timezone_name: 
         return None
 
     normalized = " ".join(raw_text.split())
+    period = _resolve_clock_range(normalized, reference, reference.tzinfo)
+    if period is not None:
+        return period
     period = _resolve_explicit_range(normalized, reference.tzinfo)
     if period is not None:
         return period

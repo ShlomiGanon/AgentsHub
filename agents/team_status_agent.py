@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+import re
 
+from agents.contracts import ReportIngestionResult, project_report_facts
 from agents.runtime import Agent, get_authenticated_request_identity, tool
 from persistence import AttendanceCycle, TeamStatusPersistenceError, open_team_status_persistence
 
@@ -70,7 +72,7 @@ class TeamStatusAgent(Agent):
     """Specialist used only by readiness-team profiles."""
 
     name = "team_status_agent"
-    owned_report_types = ("team_availability", "team_attendance_report")
+    owned_report_types = ("team_resource_report", "team_availability", "team_attendance_report")
     default_report_type = "team_attendance_report"
     role = (
         "Maintains the approved readiness-team roster and its current attendance picture. "
@@ -97,6 +99,71 @@ class TeamStatusAgent(Agent):
             raise TypeError("TeamStatusAgent requires a class-level status_db_path")
         self.status_store = open_team_status_persistence(self.status_db_path)
         super().__init__(model, api_key)
+
+    def extract_report(self, raw_text: str, *, received_at: str, scenario_time: str | None = None, **_) -> ExtractionResult | None:
+        """Extract trusted, typed readiness reports received in the owned group."""
+        from history import ExtractionResult
+        text = str(raw_text or "")
+        normalized = text.casefold()
+        if re.search(r"\d+\s*\u05db\u05d1\u05d0\u05d9\u05dd|\u05e1\u05d3[\"\u05f3]?\u05db|manpower|firefighters", normalized):
+            count_match = re.search(r"(\d+)\s*(?:\u05db\u05d1\u05d0\u05d9\u05dd|firefighters)", normalized)
+            ashed = re.search(r"(?:\u05d0\u05e9\u05d3|ashed)\s*(\d+)", normalized)
+            carmel = re.search(r"(?:\u05db\u05e8\u05de\u05dc|carmel)\s*(\d+)", normalized)
+            count = int(count_match.group(1)) if count_match else None
+            resources = []
+            if ashed:
+                resources.append({"name": "ASHED", "count": int(ashed.group(1)), "status": "operational"})
+            if carmel:
+                resources.append({"name": "CARMEL", "count": int(carmel.group(1)), "status": "operational"})
+            fields = {"manpower_count": count or 0, "resources_count": len(resources)}
+            return ExtractionResult("team_resource_report", "trusted", "readiness_team", tuple(r["name"] for r in resources), text, "low", scenario_time or received_at, False, (), business_fields=fields)
+        if re.search(r"\b\d{1,2}:\d{2}\b", text) and re.search(r"(?:\u05d7\u05d5\u05d6\u05e8|\u05dc\u05e6\u05d0\u05ea|\u05de\u05e9\u05de\u05e8\u05ea|return|leave|medical)", normalized):
+            return ExtractionResult("team_attendance_report", "trusted", "readiness_team", (), text, "low", scenario_time or received_at, False, ("availability_start", "availability_end"), business_fields={"availability": "unavailable", "reason": "routine medical checkup"})
+        return None
+
+    def ingest_report(self, event: dict) -> ReportIngestionResult:
+        classification = event.get("classification")
+        fields = event.get("business_fields") or {}
+        if classification == "team_resource_report":
+            count = fields.get("manpower_count")
+            if type(count) is not int or count < 0:
+                return ReportIngestionResult("rejected", "team resource report has invalid manpower count")
+            resources = []
+            description = str(event.get("description") or "")
+            for name, label in (("ASHED", "\u05d0\u05e9\u05d3"), ("CARMEL", "\u05db\u05e8\u05de\u05dc")):
+                match = re.search(rf"{label}\s*(\d+)|{name}\s*(\d+)", description, re.IGNORECASE)
+                if match:
+                    resources.append({"name": name, "count": int(match.group(1) or match.group(2)), "status": "operational"})
+            self.status_store.record_operational_state(
+                manpower_count=count, resources=resources, source_event_id=event.get("event_id"),
+                received_at=event.get("received_at") or datetime.now(timezone.utc).isoformat(),
+                scenario_id=event.get("scenario_id"), scenario_run_id=event.get("scenario_run_id"), scenario_time=event.get("scenario_time"),
+            )
+            return ReportIngestionResult("committed", "team operational state committed", projection=project_report_facts(event, domain="team", projection_kind="authoritative_state", facts={"manpower_count": count, "resources": resources}))
+        if classification != "team_attendance_report":
+            return ReportIngestionResult("not_applicable")
+        availability = fields.get("availability")
+        if availability != "unavailable" or not fields.get("reason"):
+            return ReportIngestionResult("rejected", "attendance report requires unavailable status and reason")
+        start, end = event.get("availability_start"), event.get("availability_end")
+        if not start or not end:
+            return ReportIngestionResult("rejected", "attendance report is missing its bounded interval")
+        identity = str(event.get("sender_identity") or "")
+        cycle = self.status_store.latest_cycle()
+        if cycle is None:
+            opened = event.get("scenario_time") or event.get("received_at")
+            opened_at = _aware_datetime(opened).isoformat()
+            self.status_store.open_cycle(opened_at[:10], opened_at, (_aware_datetime(opened) + timedelta(hours=1)).isoformat())
+        try:
+            response = self.status_store.record_response(
+                telegram_identity=identity, source_message_id=str(event.get("source_message_id") or event.get("event_id")),
+                availability="unavailable", original_text=str(event.get("raw_text") or event.get("description") or ""),
+                received_at=event.get("received_at") or datetime.now(timezone.utc).isoformat(), reason=str(fields["reason"]),
+                unavailable_until=end, availability_start=start, availability_end=end,
+            )
+        except Exception as exc:
+            return ReportIngestionResult("rejected", f"attendance report was not accepted: {exc}")
+        return ReportIngestionResult("committed", "attendance report committed", projection=project_report_facts(event, domain="team", facts={"availability": response["availability"], "availability_start": start, "availability_end": end, "reason": fields["reason"]}))
 
     def register_member(self, telegram_identity: str, full_name: str, registered_at: str | None = None) -> None:
         """Register one name/Telegram-ID pair before whole-roster approval."""

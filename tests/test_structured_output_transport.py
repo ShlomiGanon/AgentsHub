@@ -8,7 +8,12 @@ from types import SimpleNamespace
 import pytest
 
 from agents import AgentResult, InvocationPolicy, adapter
-from orchestrator.situational_picture import _parse_reasoning_json
+from orchestrator.situational_picture import (
+    REASONING_OUTPUT_TOKEN_BUDGET,
+    _PLAN_POLICY,
+    _REASONING_POLICY,
+    _parse_reasoning_json,
+)
 
 
 _MODEL = "openrouter/anthropic/claude-sonnet-4.6"
@@ -91,6 +96,30 @@ def test_openrouter_structured_request_is_not_sent_as_crewai_direct_json_schema(
         adapter.configure_structured_output_mode("off")
 
 
+def test_task56_reasoning_budget_is_scoped_and_reaches_runtime_configuration():
+    adapter.configure_structured_output_mode("auto")
+    try:
+        reasoning_options = adapter._llm_options(
+            _descriptor(),
+            timeout_seconds=45.0,
+            invocation_policy=_REASONING_POLICY,
+        )
+        plan_options = adapter._llm_options(
+            _descriptor(),
+            timeout_seconds=30.0,
+            invocation_policy=_PLAN_POLICY,
+        )
+
+        assert REASONING_OUTPUT_TOKEN_BUDGET == 650
+        assert reasoning_options["max_tokens"] == REASONING_OUTPUT_TOKEN_BUDGET
+        assert plan_options["max_tokens"] == 400
+        assert reasoning_options["max_retries"] == 0
+        assert plan_options["max_retries"] == 0
+        assert reasoning_options["additional_params"]["response_format"]["json_schema"]["strict"] is True
+    finally:
+        adapter.configure_structured_output_mode("off")
+
+
 class _FakeCompletions:
     def __init__(self, content: str | None = None, error: Exception | None = None):
         self.content = content
@@ -132,8 +161,8 @@ def _llm_with_response(content: str | None = None, error: Exception | None = Non
 @pytest.mark.parametrize(
     "content",
     (
-        '{"facts":[],"assessments":[],"recommendations":[]}',
-        '{"facts":[{"text":"x"}],"assessments":[],"recommendations":[]}',
+        '{"f":[],"a":[],"r":[]}',
+        '{"f":[{"t":"x","s":["S1"]}],"a":[],"r":[]}',
         '{"facts":[',
         "not json",
     ),
@@ -175,8 +204,8 @@ def test_provider_error_stays_an_error_at_the_provider_boundary():
 def test_valid_transport_payload_still_enters_the_existing_agent_result_boundary():
     result = AgentResult(
         status="success",
-        text='{"facts":[],"assessments":[],"recommendations":[]}',
+        text='{"f":[],"a":[],"r":[]}',
     )
 
     assert result.status == "success"
-    assert _parse_reasoning_json(result.text)["facts"] == []
+    assert _parse_reasoning_json(result.text)["f"] == []

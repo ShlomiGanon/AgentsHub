@@ -164,6 +164,15 @@ def _short_failure_reason(failure_reason: str, catalog: MessageCatalog | None = 
             return catalog.text(f"failure.{stripped}")
         except MessageCatalogError:
             pass
+    normalized = stripped.casefold()
+    if any(term in normalized for term in ("model invocation", "invalid json", "structured", "schema", "model response", "provider")):
+        return catalog.text("failure.structured_unavailable") if catalog is not None else "structured response unavailable"
+    if any(term in normalized for term in ("unknown camera", "unknown entity", "no camera identifier")):
+        return catalog.text("failure.unknown_entity") if catalog is not None else "the referenced entity was not found"
+    if any(term in normalized for term in ("missing", "required", "availability")):
+        return catalog.text("failure.missing_details") if catalog is not None else "required details are missing"
+    if any(term in normalized for term in ("invalid", "rejected", "validation")):
+        return catalog.text("failure.validation") if catalog is not None else "the report did not pass validation"
     if len(stripped) <= _FAILURE_REASON_DISPLAY_LIMIT:
         return stripped
     return stripped[:_FAILURE_REASON_DISPLAY_LIMIT].rstrip() + "…"

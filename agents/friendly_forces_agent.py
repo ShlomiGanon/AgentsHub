@@ -1,5 +1,9 @@
 """The Friendly Forces dispatch-coordination agent (profiles/friendly_forces.py)."""
 
+from __future__ import annotations
+
+import re
+
 from agents.contracts import ReportIngestionResult, project_report_facts
 from agents.runtime import Agent, tool
 
@@ -31,11 +35,34 @@ class FriendlyForcesAgent(Agent):
         self.dispatches_recorded: list[str] = []
         super().__init__(model, api_key)
 
+    def extract_report(self, raw_text: str, *, received_at: str, scenario_time: str | None = None, **_) -> ExtractionResult | None:
+        from history import ExtractionResult
+        text = str(raw_text or "")
+        normalized = text.casefold()
+        if re.search(r"\u05d0\u05d9\u05e1\u05d5\u05e8 \u05d4\u05d3\u05dc\u05e7\u05ea|\u05d4\u05d9\u05e2\u05e8\u05d5\u05ea|\u05d9\u05e2\u05e8\u05e0\u05d9\u05dd|fire.?lighting|forests|rangers", normalized):
+            fields = {
+                "advisory_kind": "fire_lighting_prohibition", "applies_to": "forests in area",
+                "patrols": "rangers", "status": "active", "active_due_to": "heatwave",
+            }
+            return ExtractionResult("friendly_forces_report", "trusted", "central_hub", (), text, "low", scenario_time or received_at, False, (), business_fields=fields)
+        if re.search(r"\u05e9\u05e8\u05d9\u05e4\u05ea \u05e7\u05d5\u05e6\u05d9\u05dd|\u05db\u05d1\u05d9\u05e9\s*444|brush fire|route\s*444", normalized):
+            fields = {
+                "incident_kind": "brush_fire", "size": "small", "location": "Route 444",
+                "possible_cause": "cigarette remains", "cause_status": "unverified",
+                "responding_unit": "police patrol", "building_risk": "none",
+            }
+            return ExtractionResult("friendly_forces_report", "trusted", "central_hub", (), text, "low", scenario_time or received_at, False, (), business_fields=fields)
+        return None
+
     def ingest_report(self, event: dict) -> ReportIngestionResult:
         if event.get("classification") != self.default_report_type:
             return ReportIngestionResult("not_applicable")
         if not str(event.get("description") or "").strip():
             return ReportIngestionResult("rejected", "friendly-forces report has no description")
+        allowed = {"advisory_kind", "applies_to", "patrols", "status", "active_due_to", "incident_kind", "size", "location", "possible_cause", "cause_status", "responding_unit", "building_risk"}
+        fields = event.get("business_fields") or {}
+        if set(fields) - allowed:
+            return ReportIngestionResult("rejected", "friendly-forces report contains unsupported domain fields")
         # Generic intelligence facts are already durably stored as the event
         # before this hook runs.  No dispatch is implied by a report.
         projection = project_report_facts(

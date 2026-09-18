@@ -164,6 +164,32 @@ def _payload(source_refs, *, recommendation=False, text=None):
     )
 
 
+def _payload(source_refs, *, recommendation=False, text=None):
+    aliases = {source_ref: f"S{index}" for index, source_ref in enumerate(source_refs, start=1)}
+    return json.dumps(
+        {
+            "f": [{"t": text or "CAM-03 offline; CAM-08 degraded.", "s": [aliases[source_refs[0]]]}],
+            "a": [{
+                "c": "Cross-domain readiness is reduced.",
+                "s": [aliases[source_ref] for source_ref in source_refs[:2]],
+                "v": "h",
+                "q": "Partial evidence.",
+                "d": ["x"],
+                "p": "h",
+            }],
+            "r": ([{
+                "d": "Review the degraded camera.",
+                "r": "Needs attention.",
+                "s": [aliases[source_refs[-1]]],
+                "p": "m",
+                "c": None,
+                "a": False,
+            }] if recommendation else []),
+        },
+        ensure_ascii=False,
+    )
+
+
 def _snapshot_and_context():
     snapshot = build_typed_snapshot(_registry(), now=NOW, history_query_service=_NoHistory())
     return snapshot, build_operational_context(
@@ -234,6 +260,7 @@ def test_overall_picture_uses_one_reasoning_call_after_typed_snapshot():
 def test_unknown_source_ref_falls_back_without_exposing_model_output():
     _, context = _snapshot_and_context()
     invalid = _payload(("state:cameras:surveillance_store.list_cameras", "event:not-real"))
+    invalid = json.dumps({"f": [{"t": "unknown", "s": ["S99"]}], "a": [], "r": []})
     agent = _ReasoningAgent(invalid)
 
     result = reason_over_operational_context(agent, context, raw_text="picture")
@@ -247,6 +274,7 @@ def test_missing_source_ref_falls_back():
     _, context = _snapshot_and_context()
     invalid = json.dumps({"facts": [{"text": "׳¢׳•׳‘׳“׳”", "source_refs": []}], "assessments": [], "recommendations": []})
 
+    invalid = json.dumps({"f": [{"t": "missing refs", "s": []}], "a": [], "r": []})
     result = reason_over_operational_context(_ReasoningAgent(invalid), context, raw_text="picture")
 
     assert result.fallback is True
