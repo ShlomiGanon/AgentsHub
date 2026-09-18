@@ -53,6 +53,7 @@ from agents.runtime import (
     set_invocation_deadline,
 )
 from agents.provider_telemetry import install_crewai_provider_telemetry
+from agents.diagnostics import ProviderDiagnosticTrace, provider_diagnostic_trace
 
 adapter = runtime
 base = runtime
@@ -100,6 +101,8 @@ __all__ = [
     "tool_execution_context",
     "get_authenticated_request_identity",
     "install_crewai_provider_telemetry",
+    "ProviderDiagnosticTrace",
+    "provider_diagnostic_trace",
     "initialize_agent_runtime",
     "invocation_deadline",
     "set_invocation_deadline",

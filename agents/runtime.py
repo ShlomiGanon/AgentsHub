@@ -35,6 +35,10 @@ from agents.contracts import (
     tool,
     tool_info_of,
 )
+from agents.diagnostics import (
+    get_active_provider_diagnostic_trace,
+    install_provider_client_diagnostics,
+)
 from tools import deep_debug_enabled, get_current_stage, get_trace_id, log_ai_interaction, stage_context, trace_context
 
 logger = logging.getLogger(__name__)
@@ -575,10 +579,14 @@ def _llm_options(
         if capabilities.strict_json_schema:
             schema_name = str(invocation_policy.response_schema.get("name", "agentshub_output"))
             schema = invocation_policy.response_schema.get("schema", invocation_policy.response_schema)
-            options["response_format"] = {
+            response_format = {
                 "type": "json_schema",
                 "json_schema": {"name": schema_name, "strict": True, "schema": schema},
             }
+            if capabilities.structured_output_via_additional_params:
+                options["additional_params"] = {"response_format": response_format}
+            else:
+                options["response_format"] = response_format
         elif _structured_output_mode == "required":
             raise AgentModelError(
                 descriptor.name,
@@ -786,7 +794,15 @@ def invoke(
         timeout_seconds=llm_timeout,
         invocation_policy=invocation_policy,
     )
+    diagnostic_trace = get_active_provider_diagnostic_trace()
+    if diagnostic_trace is not None:
+        diagnostic_trace.record_request_build(llm_options)
     llm = _build_or_reuse_llm(crewai_module, descriptor, llm_options)
+    restore_diagnostic_client = (
+        install_provider_client_diagnostics(llm, diagnostic_trace)
+        if diagnostic_trace is not None
+        else (lambda: None)
+    )
     llm_built_at = time.monotonic()
 
     crewai_agent = crewai_module.Agent(
@@ -812,6 +828,8 @@ def invoke(
         finally:
             _provider_semaphore.release()
     except TimeoutError as exc:
+        if diagnostic_trace is not None:
+            diagnostic_trace.record_provider_error(exc)
         logger.info(
             "model invocation finished",
             extra={
@@ -833,6 +851,8 @@ def invoke(
             descriptor.name, f"timed out after {effective_timeout}s", trace_id=get_trace_id(), cause=exc
         ) from exc
     except Exception as exc:
+        if diagnostic_trace is not None:
+            diagnostic_trace.record_provider_error(exc)
         logger.info(
             "model invocation finished",
             extra={
@@ -851,12 +871,26 @@ def invoke(
             },
         )
         raise AgentModelError(descriptor.name, "the model call failed", trace_id=get_trace_id(), cause=exc) from exc
+    finally:
+        restore_diagnostic_client()
 
+    if diagnostic_trace is not None:
+        diagnostic_trace.record_normalization(crewai_output)
     raw_text = getattr(crewai_output, "raw", None)
     if raw_text is None:
+        if diagnostic_trace is not None:
+            diagnostic_trace.record_content_failure()
         raise AgentOutputParseError(
             descriptor.name, f"could not extract text from CrewAI output: {crewai_output!r}", trace_id=get_trace_id()
         )
+    if not isinstance(raw_text, str):
+        if diagnostic_trace is not None:
+            diagnostic_trace.record_content_failure()
+        raise AgentOutputParseError(
+            descriptor.name, "CrewAI output raw content was not text", trace_id=get_trace_id()
+        )
+    if diagnostic_trace is not None:
+        diagnostic_trace.record_content_extraction(raw_text)
 
     if deep_debug_enabled():
         interaction_payload = json.dumps(

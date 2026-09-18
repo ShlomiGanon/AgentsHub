@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from agents import AgentRegistry, configure_structured_output_mode
+from agents import AgentRegistry, configure_structured_output_mode, provider_diagnostic_trace
 from config import resolve_tier_model_from_env
 from history.query import HistoryQueryService
 from messages import get_catalog, set_current_catalog
@@ -671,11 +671,26 @@ def _write_artifact(path: Path, provider: ProviderConfiguration, results: list[E
         handle.write(json.dumps({"summary": summary(results)}, ensure_ascii=False, sort_keys=True) + "\n")
 
 
+def _write_diagnostic_artifact(path: Path, trace: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(trace, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Opt-in Task 57 real-provider SITREP evaluation")
     parser.add_argument("--real", action="store_true", help="make bounded provider calls; otherwise no model call occurs")
     parser.add_argument("--runs", type=int, default=3, choices=range(1, 6))
     parser.add_argument("--artifact", type=Path, help="optional JSONL metrics artifact; never contains prompts or responses")
+    parser.add_argument(
+        "--diagnostic-case",
+        choices=("B-sec-phase1-supported",),
+        help="run exactly one opt-in non-secret provider diagnostic call for the selected case",
+    )
+    parser.add_argument(
+        "--diagnostic-artifact",
+        type=Path,
+        help="optional non-secret diagnostic trace artifact; only valid with --diagnostic-case",
+    )
     args = parser.parse_args(argv)
     provider = provider_configuration()
     if not args.real:
@@ -684,6 +699,8 @@ def main(argv: list[str] | None = None) -> int:
     if provider is None:
         print(json.dumps({"status": "skipped", "reason": "core provider configuration is unavailable"}, ensure_ascii=False, sort_keys=True))
         return 0
+    if args.diagnostic_artifact is not None and args.diagnostic_case is None:
+        parser.error("--diagnostic-artifact requires --diagnostic-case")
 
     configure_structured_output_mode(provider.structured_output_mode)
     # Mirror profiles.unified_test.DEFAULT_LANGUAGE for the real Task 56 path.
@@ -695,6 +712,34 @@ def main(argv: list[str] | None = None) -> int:
     cases = build_evaluation_cases()
     results: list[EvaluationResult] = []
     try:
+        if args.diagnostic_case is not None:
+            case = next(case for case in cases if case.case_id == args.diagnostic_case)
+            with provider_diagnostic_trace(
+                provider=provider.provider,
+                model=provider.model,
+                structured_mode=provider.structured_output_mode,
+            ) as trace:
+                result = run_case(agent, case, provider=provider, run_number=1)
+            diagnostic = trace.artifact()
+            if args.diagnostic_artifact:
+                _write_diagnostic_artifact(args.diagnostic_artifact, diagnostic)
+            print(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "real_provider_calls": 1,
+                        "case_id": case.case_id,
+                        "structured_output_valid": result.structured_output_valid,
+                        "fallback_used": result.fallback_used,
+                        "hard_gate_pass": result.hard_gate_pass,
+                        "lifecycle_unchanged": result.lifecycle_unchanged,
+                        "diagnostic": diagnostic,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+            return 0
         for case in cases:
             for run_number in range(1, args.runs + 1):
                 result = run_case(agent, case, provider=provider, run_number=run_number)

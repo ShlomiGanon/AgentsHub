@@ -16,6 +16,7 @@ class InvocationPolicy:
 @dataclass(frozen=True)
 class ProviderCapabilities:
     strict_json_schema: bool = False
+    structured_output_via_additional_params: bool = False
     usage_metrics: bool = False
     streaming: bool = False
     reasoning_effort: bool = False
@@ -30,6 +31,13 @@ def provider_capabilities(model: str) -> ProviderCapabilities:
             usage_metrics=True,
             streaming=True,
             reasoning_effort=True,
+            thread_safe_client=False,
+        )
+    if provider == "openrouter":
+        return ProviderCapabilities(
+            strict_json_schema=True,
+            structured_output_via_additional_params=True,
+            usage_metrics=True,
             thread_safe_client=False,
         )
     return ProviderCapabilities()

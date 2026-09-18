@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Callable, Literal
 
 from agents import InvocationPolicy, authenticated_request_identity
+from agents.diagnostics import get_active_provider_diagnostic_trace
 from history import HistoryQuerySpec, storage_timestamp
 from history.query import HistoryQueryError
 from messages import get_current_catalog
@@ -1082,19 +1083,120 @@ def _contains_execution_claim(text: str) -> bool:
 
 def _validate_reasoning_refs(raw_refs: object, *, field_name: str, allowed: set[str]) -> tuple[str, ...]:
     if not isinstance(raw_refs, list) or not raw_refs or not all(isinstance(item, str) for item in raw_refs):
+        trace = get_active_provider_diagnostic_trace()
+        if trace is not None and trace.schema_validation_success is not False:
+            trace.record_canonical_success()
+            trace.record_provenance_failure(
+                "missing_or_invalid_source_refs",
+                missing_ref_count=1,
+                claim_type=field_name.split("[", 1)[0],
+            )
         raise ValueError(f"{field_name} must contain at least one source_ref")
     refs = tuple(dict.fromkeys(item.strip() for item in raw_refs if item.strip()))
     if not refs or any(item not in allowed for item in refs):
+        trace = get_active_provider_diagnostic_trace()
+        if trace is not None and trace.schema_validation_success is not False:
+            unknown_count = sum(item not in allowed for item in refs)
+            trace.record_canonical_success()
+            trace.record_provenance_failure(
+                "unknown_source_refs",
+                invalid_ref_count=unknown_count,
+                missing_ref_count=1 if not refs else 0,
+                unknown_ref_count=unknown_count,
+                claim_type=field_name.split("[", 1)[0],
+            )
         raise ValueError(f"{field_name} contains an unknown source_ref")
     return refs
 
 
+def _reasoning_schema_issue(value: object, schema: dict, path: str = "$") -> tuple[str, str] | None:
+    expected = schema.get("type")
+    expected_types = expected if isinstance(expected, list) else [expected]
+    type_matches = any(
+        (item == "object" and isinstance(value, dict))
+        or (item == "array" and isinstance(value, list))
+        or (item == "string" and isinstance(value, str))
+        or (item == "boolean" and type(value) is bool)
+        or (item == "null" and value is None)
+        for item in expected_types
+    )
+    if expected is not None and not type_matches:
+        return "type_mismatch", path
+    enum = schema.get("enum")
+    if enum is not None and value not in enum:
+        return "enum_violation", path
+    if isinstance(value, dict):
+        for required in schema.get("required", ()):
+            if required not in value:
+                return "missing_required_field", f"{path}.{required}"
+        if schema.get("additionalProperties") is False:
+            allowed = set(schema.get("properties", {}))
+            for key in value:
+                if key not in allowed:
+                    return "additional_property", f"{path}.{key}"
+        for key, child_schema in schema.get("properties", {}).items():
+            if key in value:
+                issue = _reasoning_schema_issue(value[key], child_schema, f"{path}.{key}")
+                if issue is not None:
+                    return issue
+    if isinstance(value, list):
+        if len(value) < schema.get("minItems", 0):
+            return "array_too_short", path
+        if len(value) > schema.get("maxItems", len(value)):
+            return "array_too_long", path
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                issue = _reasoning_schema_issue(item, item_schema, f"{path}[{index}]")
+                if issue is not None:
+                    return issue
+    return None
+
+
+def _parse_reasoning_json(raw_text: str) -> dict:
+    trace = get_active_provider_diagnostic_trace()
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        if trace is not None:
+            error = ValueError("reasoning response is empty")
+            trace.record_json_failure(error, raw_text)
+        raise ValueError("reasoning response is empty")
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        if trace is not None:
+            trace.record_json_failure(exc, raw_text)
+        raise ValueError("reasoning response is not a JSON object") from exc
+    if not isinstance(payload, dict):
+        if trace is not None:
+            error = ValueError("reasoning response is not a JSON object")
+            trace.record_json_failure(error, raw_text)
+        raise ValueError("reasoning response is not a JSON object")
+    if trace is not None:
+        trace.record_json_success(payload)
+    return payload
+
+
 def _reject_internal_reference_leak(text: str, refs: tuple[str, ...]) -> None:
     if any(source_ref in text for source_ref in refs):
+        trace = get_active_provider_diagnostic_trace()
+        if trace is not None and trace.schema_validation_success is not False:
+            trace.record_canonical_success()
+            trace.record_provenance_failure(
+                "internal_source_ref_leak",
+                invalid_ref_count=1,
+                claim_type="text",
+            )
         raise ValueError("reasoning output exposes an internal source_ref")
 
 
 def _validate_reasoning_payload(payload: dict, context: OperationalContext) -> OperationalReasoning:
+    trace = get_active_provider_diagnostic_trace()
+    if trace is not None:
+        schema_issue = _reasoning_schema_issue(payload, _REASONING_SCHEMA)
+        if schema_issue is None:
+            trace.record_schema_success()
+        else:
+            trace.record_schema_failure(*schema_issue)
     allowed_refs = _reasoning_source_refs(context)
     facts_payload = payload.get("facts")
     assessments_payload = payload.get("assessments")
@@ -1196,6 +1298,9 @@ def _validate_reasoning_payload(payload: dict, context: OperationalContext) -> O
             )
         )
 
+    if trace is not None:
+        trace.record_canonical_success()
+        trace.record_provenance_success()
     return OperationalReasoning(
         facts=tuple(facts),
         assessments=tuple(assessments),
@@ -1225,7 +1330,7 @@ def reason_over_operational_context(
             result = main_agent.process(prompt, [], invocation_policy=_REASONING_POLICY)
         if result.status != "success":
             raise ValueError("model returned an unusable reasoning result")
-        payload = _extract_json_object(result.text)
+        payload = _parse_reasoning_json(result.text)
         reasoning = _validate_reasoning_payload(payload, context)
         logger.info(
             "bounded situational reasoning completed",
@@ -1240,6 +1345,21 @@ def reason_over_operational_context(
         )
         return reasoning
     except Exception as exc:
+        trace = get_active_provider_diagnostic_trace()
+        if trace is not None:
+            if trace.first_failed_stage is None:
+                trace.record_canonical_failure(type(exc).__name__)
+            trace.record_fallback(
+                trace.fallback_reason
+                or {
+                    "PROVIDER_RESPONSE": trace.provider_error_category or "provider_error",
+                    "CONTENT_EXTRACTION": "response_extraction_failed",
+                    "JSON_PARSE": trace.json_error_category or "json_parse_failed",
+                    "SCHEMA_VALIDATION": "schema_validation_failed",
+                    "CANONICAL_MODEL_VALIDATION": "canonical_validation_failed",
+                    "PROVENANCE_VALIDATION": "provenance_validation_failed",
+                }.get(trace.first_failed_stage or "", "unknown")
+            )
         logger.warning(
             "bounded situational reasoning failed; using deterministic fallback",
             extra={
@@ -1256,7 +1376,8 @@ def reason_over_operational_context(
             model_call_count=1,
             fallback=True,
             rejected_claim_count=1,
-            failure_kind="invalid_or_unavailable_model_output",
+            failure_kind=(trace.fallback_reason if trace is not None else None)
+            or "invalid_or_unavailable_model_output",
         )
 
 
@@ -1771,6 +1892,9 @@ def build_situational_picture(
                 if not reasoning.fallback
                 else _render_reasoning_fallback(typed_snapshot)
             )
+            diagnostic_trace = get_active_provider_diagnostic_trace()
+            if diagnostic_trace is not None:
+                diagnostic_trace.record_render()
         else:
             picture_text = render_typed_snapshot(typed_snapshot, include_findings=True)
         logger.info(

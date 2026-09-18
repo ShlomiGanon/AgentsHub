@@ -3919,3 +3919,108 @@ no CI change was needed.
   the bounded one-call contract, authoritative fallback, Hebrew profile
   locale, and existing hard gates. Do not broaden the prompt or add retries
   before isolating the provider/schema compatibility failure.
+
+### Task 59 - OpenRouter Structured-Output Reliability Repair
+- **Status:** partially complete; stopped after the required three-call
+  post-fix canary failed its structured-validity gate. The 18-call corpus was
+  deliberately not rerun, and no further real-provider generation calls were
+  made.
+- **Baseline diagnosis:** Task 58 preserved final outputs and generic
+  fallback logs, but not raw provider responses, request telemetry, or error
+  metadata. Therefore all 17 Task 58 failures are safely classified only at
+  the canonical boundary as `invalid_or_unavailable_model_output`; an exact
+  response-stage A-O distribution cannot be reconstructed without inventing
+  evidence. The pre-fix transport root cause is independently proven: for
+  OpenRouter, capability detection returned no strict-schema capability, so
+  structured mode `auto` emitted no `response_format` at all.
+- **Provider contract audit:** OpenRouter's documented structured-output wire
+  contract is `response_format.type=json_schema` with a named strict schema,
+  and the configured model advertises `response_format` and
+  `structured_outputs`. The local CrewAI 1.15.18 adapter rejects that payload
+  in its direct typed `response_format` field, but accepts it through
+  `additional_params`; the repaired request serialization was verified to
+  produce the closed Task 56 schema with `strict=true`.
+- **Implementation:** `ProviderCapabilities` now models the narrow
+  `structured_output_via_additional_params` transport capability for
+  OpenRouter. Runtime option construction routes the unchanged Task 56 schema
+  through `additional_params.response_format`; it does not change provider,
+  model, prompt, retry count, token budget, or schema semantics. The Task 56
+  reasoning boundary now accepts only a top-level JSON object from
+  `json.loads`; prose, truncated JSON, arrays, and invalid JSON are rejected
+  into the existing deterministic fallback. The older planning extractor was
+  not broadened or changed by this task.
+- **Canary:** exactly three calls were made: A routine, B SEC Phase 1, and F
+  critical multi-domain. Structured-valid results were **0/3**; deterministic
+  fallback was **3/3**; corrected hard-gate passes were **3/3**; lifecycle
+  snapshots were unchanged **3/3**. Latencies were 23.386s, 14.664s, and
+  15.290s (median 15.290s). The canary log contains only safe generic
+  fallback warnings and no raw response/error category, so the remaining
+  failure stage is unclassified at the current observability boundary. No
+  reasoning-quality claim is made for model output that was never accepted.
+- **Quality/lifecycle:** B and F retained the known fallback-only soft
+  cross-domain gap; no model recommendations reached validation. Hebrew
+  fallback rendering was verified with the profile catalog explicitly set.
+  All three runs had one bounded reasoning invocation, no retry or second
+  repair call, and no DB/Event/Hold/ToolReceipt/simulator lifecycle mutation.
+- **Verification:** 73 focused tests passed, including deterministic request
+  serialization, CrewAI normalization, strict parser rejection, runtime
+  boundaries, situational reasoning, and evaluator regression coverage.
+  `py_compile` and `git diff --check` pass. The prior Task 58 broad baseline
+  remains 1,702 passed with its four known unrelated failures; no broad suite
+  was run after the failed Task 59 canary because the task's stop condition
+  had been reached.
+- **Remaining gap / next task:** Task 59 cannot claim a completed provider
+  repair. One narrow follow-up is required before any additional generation:
+  **Task 60 - add non-secret provider-boundary diagnostics that distinguish
+  request rejection, provider error, response extraction, truncation, and
+  strict JSON parsing for one bounded failing call.**
+
+### Task 60 - Non-Secret Structured-Output Failure Diagnostics
+- **Status:** complete as a diagnostics task; no structured-output repair was
+  applied. The required exactly-one-call diagnostic run was completed and the
+  first failing stage was proven.
+- **Architecture:** Added an opt-in `ProviderDiagnosticTrace` context and a
+  temporary CrewAI synchronous-client proxy. Normal production calls remain
+  unchanged and diagnostics are inactive unless the evaluator explicitly uses
+  `--diagnostic-case`.
+- **Stages and redaction:** The trace records request build/request/response,
+  CrewAI normalization, content extraction, JSON parsing, schema, canonical,
+  provenance, render, and fallback stages. It retains only types, field names,
+  lengths, hashes, finish reason, usage counters, parser positions, safe
+  categories, and lifecycle/gate metadata. It never stores prompt/context,
+  response text, headers, API keys, cookies, exception bodies, or reasoning
+  content. The diagnostic artifact was written outside the repository at
+  `C:\Users\97250\AppData\Local\Temp\task60-provider-diagnostic-40ed61dd5c8246c0a8dc5ca6f7addba8.json`.
+- **Deterministic verification:** Added coverage for successful stages,
+  provider errors, timeout, missing response, response-shape variants, CrewAI
+  normalization, malformed/truncated JSON with positions, schema/canonical/
+  provenance separation, typed fallback reason, default-off behavior, secret
+  redaction, and no chain-of-thought retention. The focused suite passed **82
+  tests**; `py_compile` and `git diff --check` passed.
+- **Exactly one real call:** The evaluator ran only
+  `B-sec-phase1-supported` / SEC Phase 1 with provider `openrouter`, model
+  `anthropic/claude-sonnet-4.6`, structured mode `auto`, strict schema,
+  `max_retries=0`, and the unchanged 650-token budget. No retry, repair call,
+  second provider call, corpus run, prompt change, schema change, provider
+  change, or model change occurred.
+- **Proven evidence:** OpenRouter accepted the request and returned a
+  `openai.types.chat.chat_completion.ChatCompletion` with one choice. The
+  response had `finish_reason=length`; no provider error or HTTP rejection was
+  observed. `message.content` was a string of length **1349**, started with
+  `{`, did not end with `}`, and CrewAI normalized it into a
+  `crewai.lite_agent_output.LiteAgentOutput` while preserving the same raw
+  string boundary. `json.loads` failed at position **1338**, line **1**,
+  column **1339**. Schema, canonical, and provenance validation were never
+  reached.
+- **Diagnosis:** `last_successful_stage=CONTENT_EXTRACTION`,
+  `first_failed_stage=JSON_PARSE`, exact category `truncated`, fallback reason
+  `truncated`. This proves output-token truncation at the current 650-token
+  limit, not provider rejection, response-field loss, CrewAI extraction loss,
+  schema invalidity, canonical invalidity, or provenance failure.
+- **Lifecycle:** The evaluator recorded `hard_gate_pass=true` and
+  `lifecycle_unchanged=true`; Event count, Holds, ToolReceipts, approvals, and
+  relevant domain state were unchanged. The fallback remained authoritative.
+- **Remaining gap / next repair:** **Task 61 - bounded structured-output
+  output-budget repair**, using the proven truncation evidence to choose a
+  sufficient bounded token budget and re-verify the same one-call contract.
+  No repair was applied in Task 60.
