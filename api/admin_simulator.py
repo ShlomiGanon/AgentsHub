@@ -598,12 +598,16 @@ SIMULATOR_BODY = """
     });
   }
 
-  function appendBubble(chatKey, kind, sender, text, stepNumber) {
+  function appendBubble(chatKey, kind, sender, text, stepNumber, timestamp) {
     const messages = document.getElementById('messages-' + chatKey);
     const bubble = el('div', 'bubble' + (kind ? ' ' + kind : ''));
     const head = el('div', 'bubble-head');
     head.appendChild(el('span', 'sender', sender));
-    head.appendChild(el('span', null, formatTimestamp(new Date().toISOString())));
+    // `timestamp` is the scenario's scripted step.timestamp when known (a persona's own
+    // message); callers with no scripted time (system/reply bubbles for genuinely live
+    // events) omit it and fall back to real-world now — both are ISO strings, so
+    // formatTimestamp() sees the same input shape either way.
+    head.appendChild(el('span', null, formatTimestamp(timestamp || new Date().toISOString())));
     bubble.appendChild(head);
     const body = el('p', 'bubble-text', text);
     body.dir = 'auto';
@@ -777,7 +781,7 @@ SIMULATOR_BODY = """
     state.busy = true;
     updateGlobalState();
 
-    appendBubble(chatKey, null, step.sender_name, step.text, step.step);
+    appendBubble(chatKey, null, step.sender_name, step.text, step.step, step.timestamp);
     const reply = appendBubble(chatKey, 'sys', t('system_label'), t('sending'), null);
 
     const request = buildRequest(chat, step);
