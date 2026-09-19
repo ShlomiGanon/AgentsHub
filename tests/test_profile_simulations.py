@@ -346,14 +346,11 @@ def test_ensure_simulation_entities_registers_and_approves_a_fresh_roster(tmp_pa
 
         result = ensure_simulation_entities(persistence, loaded)
 
-        assert store.members == {simulation_user_telegram_id(0): "A", simulation_user_telegram_id(1): "B"}
-        assert store.approve_calls == ["cmdr"]
-        assert store.roster_is_approved()
-        assert set(result.registered_roster_members) == {
-            ("team_status", simulation_user_telegram_id(0)),
-            ("team_status", simulation_user_telegram_id(1)),
-        }
-        assert result.newly_approved_rosters == ("team_status",)
+        assert store.members == {}
+        assert store.approve_calls == []
+        assert not store.roster_is_approved()
+        assert result.registered_roster_members == ()
+        assert result.newly_approved_rosters == ()
     finally:
         persistence.close()
 
@@ -374,9 +371,9 @@ def test_ensure_simulation_entities_never_re_approves_an_already_approved_roster
         result = ensure_simulation_entities(persistence, loaded)
 
         assert store.approve_calls == []
+        assert store.members == {}
         assert result.newly_approved_rosters == ()
-        # registration itself is a plain idempotent upsert, unaffected by approval state
-        assert result.registered_roster_members == (("team_status", simulation_user_telegram_id(0)),)
+        assert result.registered_roster_members == ()
     finally:
         persistence.close()
 
@@ -390,8 +387,8 @@ def test_ensure_simulation_entities_roster_registration_reports_only_newly_regis
         loaded = _fake_loaded_profile(simulation_users=(persona,), simulation_rosters=(roster,))
 
         first = ensure_simulation_entities(persistence, loaded)
-        assert first.registered_roster_members == (("team_status", simulation_user_telegram_id(0)),)
-        assert first.newly_approved_rosters == ("team_status",)
+        assert first.registered_roster_members == ()
+        assert first.newly_approved_rosters == ()
 
         second = ensure_simulation_entities(persistence, loaded)
         assert second.registered_roster_members == ()  # already registered — nothing "new" to report
@@ -581,10 +578,8 @@ def test_unified_test_response_team_personas_become_approved_team_status_members
     test_core_model, test_sub_model, monkeypatch, tmp_path
 ):
     """Closes the gap the SEC_001-attendance-step investigation found: a response-team
-    persona could authenticate and post into a team_status_agent-owned group, yet
-    TeamStatusAgent's record_attendance_response tool still refused it because its
-    separate approved-roster store never knew about simulation personas. Runs against
-    an isolated copy of the profile's own declared roster, not its real on-disk DB."""
+    simulation provisioning must not write simulation personas into a LIVE roster.
+    The operational baseline is applied only after a simulation run scope is created."""
 
     from dataclasses import replace
 
@@ -610,14 +605,4 @@ def test_unified_test_response_team_personas_become_approved_team_status_members
         persistence.close()
 
     store = open_team_status_persistence(isolated_db_path)
-    approved_identities = {m["telegram_identity"] for m in store.list_members(approved_only=True)}
-
-    pre_approved_personas = [p for p in loaded.simulation_users if p.pre_approved_rosters]
-    assert pre_approved_personas, "expected at least one persona to declare pre_approved_rosters"
-    for persona in pre_approved_personas:
-        assert simulation_user_telegram_id(persona.offset) in approved_identities
-
-    # A persona that merely posts into the same channel without being a team member
-    # (e.g. a resident reporting in as a bystander) correctly stays off the roster.
-    bystander = next(p for p in loaded.simulation_users if p.key == "resident_avraham")
-    assert simulation_user_telegram_id(bystander.offset) not in approved_identities
+    assert store.list_members(approved_only=True) == []

@@ -200,7 +200,7 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
                 continue
             conn.execute(f"ALTER TABLE {table} RENAME TO {table}_legacy")
             conn.execute(create_sql)
-            conn.execute(insert_sql.replace(table, f"{table}_legacy"))
+            conn.execute(insert_sql.replace(f"FROM {table}", f"FROM {table}_legacy"))
             conn.execute(f"DROP TABLE {table}_legacy")
             conn.execute(f"ALTER TABLE {table}_new RENAME TO {table}")
         if "drone_missions" in tables:

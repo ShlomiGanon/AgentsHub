@@ -4164,3 +4164,17 @@ no CI change was needed.
 - [ ] Run Step 7 manually and confirm the commander SITREP reflects current-run manpower, maintenance, advisory, condition, and incident facts.
 - [ ] Send a natural follow-up such as “למה לא?” after a summary and confirm it remains conversational.
 - [ ] Keep simulator progression manual: no automatic send, next-step, or provider repair behavior.
+
+### Task 64 - Fix Operational State Isolation Between Simulation Runs and Live Production
+
+1. **Status:** Implemented the generic OperationalScope migration and runtime propagation.
+2. **Scope contract:** Added immutable `LIVE` and `SIMULATION_RUN` scopes. Simulation scopes require trusted `scenario_id` plus `scenario_run_id`; scenario identity is never used as domain branching logic.
+3. **Current-state audit:** Scoped surveillance cameras, drones, drone missions, team roster, roster approval, attendance cycles/responses, operational manpower/resources, and operational team state. History/audit/event projections remain history stores and retain their existing run filters.
+4. **Legacy migration:** Existing unscoped rows are mapped to `LIVE` only. No production rows are deleted, reset, or copied into simulation scopes.
+5. **Baseline lifecycle:** New scopes receive generic scenario-declared baselines; resuming the same scope is idempotent and preserves mutations; a new run receives a clean baseline. Surveillance canonical seeds and scenario-declared team members are applied through generic store initialization.
+6. **Simulation provisioning safety:** Startup provisioning still creates simulation users/groups but no longer writes simulation personas into the shared LIVE roster. Operational membership is initialized only in the run scope.
+7. **Runtime propagation:** Trusted scope reaches domain report ingestion, protocol tool execution, specialist read tools, typed Main Agent snapshots, and recent-history queries. A situational picture cannot combine team, surveillance, resources, or history from different scopes.
+8. **Production boundary:** Ordinary Telegram/API requests resolve to `LIVE`; simulation metadata is accepted only through the existing authenticated simulator boundary and never mutates or reads LIVE state.
+9. **Seed reconciliation:** Existing demo surveillance DBs receive missing canonical seed rows additively, including CAM-08, while preserving current observations and runtime state.
+10. **Provider/simulator invariants:** Provider/model, reasoning prompt, fixed 650-token budget, retries, manual simulator behavior, auto-next, and auto-send were unchanged.
+11. **Verification:** Added parametrized generic scope-isolation coverage and acceptance coverage for LIVE, SEC-A, FIRE-B, and SEC-C semantics: cross-run mutations are invisible, resumed state persists, new-run state is clean, and LIVE remains unchanged. Focused operational, situational, profile, and integration suites passed; the unbounded full suite exceeded the 240-second shell timeout without an emitted failure report.

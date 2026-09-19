@@ -36,6 +36,7 @@ from orchestrator.holds import create_clarification_hold, create_event_data_hold
 from orchestrator.insights import InsightsAgent
 from orchestrator.main_agent import MainAgent
 from persistence.sqlite_store import SQLitePersistence
+from persistence import OperationalScope
 from protocols.loader import ProtocolSet
 from protocols.model import CriticalityLevel, Protocol
 from profiles import AreaRegistry
@@ -637,6 +638,7 @@ def test_protocol_worker_installs_event_metadata_and_authenticated_sender(deps, 
         "received_at": "2026-09-16T10:00:00+00:00",
         "availability_start": None,
         "availability_end": None,
+        "operational_scope": OperationalScope.live(),
     }
 
 

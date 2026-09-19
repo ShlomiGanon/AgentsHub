@@ -16,8 +16,8 @@ from orchestrator.situational_picture import (
     build_typed_snapshot,
     build_operational_context,
 )
-from persistence import open_persistence
-from profiles import AreaRegistry, EventTypeRegistry, OptimizationPolicy, unified_test
+from persistence import OperationalScope, open_persistence
+from profiles import AreaRegistry, EventTypeRegistry, OptimizationPolicy, initialize_operational_scope, unified_test
 from protocols import ProtocolSet
 
 
@@ -63,8 +63,18 @@ def _deps(tmp_path, monkeypatch):
 
 def _run_report(deps, text, *, owner, sender, step, time, run_id="fire-run-1"):
     deps = deps.__class__(**{**deps.__dict__, "group_owner": owner})
+    scope = OperationalScope.simulation("FIRE_002_PHASE_1", run_id)
+    baseline = {"team": {"members": [
+        {"telegram_identity": "lahav_avi_shift_commander", "full_name": "Lahav"},
+        {"telegram_identity": "omri_firefighter", "full_name": "Omri"},
+        {"telegram_identity": "yuval_ashed3_commander", "full_name": "Yuval"},
+    ]}}
+    for agent in deps.registry.all():
+        initializer = getattr(agent, "ensure_operational_scope", None)
+        if callable(initializer):
+            initializer(scope, baseline=baseline)
     plan = prepare_fast_path_report(
-        deps, object(), text, time, False, time,
+        deps, object(), text, time, False, time, scope,
     )
     assert plan is not None and plan.domain_only is True
     event_id = begin_report(
@@ -93,8 +103,9 @@ def test_fire_phase_one_steps_one_to_six_commit_expected_state_without_actions(t
         step2 = _run_report(deps, "מעדכן שאני צריך לצאת ב-12:00 לבדיקה רפואית תקופתית, חוזר למשמרת ב-15:00.", owner="team_status_agent", sender="omri_firefighter", step=2, time="2026-09-09T07:45:00+00:00")
         assert step2["availability_start"].startswith("2026-09-09T09:00")
         assert step2["availability_end"].startswith("2026-09-09T12:00")
-        assert team.status_store.operational_state()["manpower_count"] == 6
-        assert team.status_store.availability_snapshot("2026-09-09T10:00:00+00:00")[0]["availability"] == "unavailable"
+        scope = OperationalScope.simulation("FIRE_002_PHASE_1", "fire-run-1")
+        assert team.status_store.operational_state(scope=scope)["manpower_count"] == 6
+        assert any(row["availability"] == "unavailable" for row in team.status_store.availability_snapshot("2026-09-09T10:00:00+00:00", scope=scope))
 
         condition = _run_report(deps, "חיישן טמפרטורה ומצלמה תרמית במגדל תצפית אורנים מציגים התראת חום נמוכה עקב שרב כבד ורוחות מזרחיות.", owner="surveillance_agent", sender="roni_surveillance_operator", step=3, time="2026-09-09T08:30:00+00:00")
         assert condition["classification"] == "operational_condition_report"
@@ -107,7 +118,7 @@ def test_fire_phase_one_steps_one_to_six_commit_expected_state_without_actions(t
 
         maintenance = _run_report(deps, "מצלמה 02 (צומת המחצבה) הופסקה יזומית לטובת ניקוי עדשה עקב אבק כבד.", owner="surveillance_agent", sender="roni_surveillance_operator", step=5, time="2026-09-09T10:00:00+00:00")
         assert maintenance["business_fields"]["camera_id"] == "CAM-02"
-        assert surveillance.surveillance_store.get_camera("CAM-02")["status"] == "offline"
+        assert surveillance.surveillance_store.get_camera("CAM-02", scope=scope)["status"] == "offline"
         assert maintenance["business_fields"]["downtime_duration_hours"] is None
 
         incident = _run_report(deps, "דיווח על שריפת קוצים קטנה בצד כביש 444, כנראה מסיגריה. ניידת במקום, אין סיכון למבנים.", owner="friendly_forces_agent", sender="police_hub_agam", step=6, time="2026-09-09T11:00:00+00:00")
@@ -137,6 +148,7 @@ def test_fire_run_reports_are_scoped_for_step_seven_typed_context(tmp_path, monk
             scenario_id="FIRE_002_PHASE_1",
             scenario_run_id="fire-run-1",
             scope=SituationalQueryScope.overall_scope(),
+            operational_scope=OperationalScope.simulation("FIRE_002_PHASE_1", "fire-run-1"),
         )
         assert snapshot is not None
         assert snapshot.team is not None
