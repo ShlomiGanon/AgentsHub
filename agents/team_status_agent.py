@@ -72,7 +72,12 @@ class TeamStatusAgent(Agent):
     """Specialist used only by readiness-team profiles."""
 
     name = "team_status_agent"
-    owned_report_types = ("team_resource_report", "team_availability", "team_attendance_report")
+    owned_report_types = (
+        "team_resource_report",
+        "team_operational_report",
+        "team_availability",
+        "team_attendance_report",
+    )
     default_report_type = "team_attendance_report"
     role = (
         "Maintains the approved readiness-team roster and its current attendance picture. "
@@ -149,6 +154,25 @@ class TeamStatusAgent(Agent):
                 scope=scope,
             )
             return ReportIngestionResult("committed", "team operational state committed", projection=project_report_facts(event, domain="team", projection_kind="authoritative_state", facts={"manpower_count": count, "resources": resources}))
+        if classification == "team_operational_report":
+            allowed = {"operational_status", "location", "uncertainty", "resource_mention"}
+            if set(fields) - allowed:
+                return ReportIngestionResult("rejected", "team operational report contains unsupported domain fields")
+            if any(
+                value is not None and type(value) not in {str, int, float, bool}
+                for value in fields.values()
+            ):
+                return ReportIngestionResult("rejected", "team operational report fields must be scalar")
+            return ReportIngestionResult(
+                "committed",
+                "team operational fact committed",
+                projection=project_report_facts(
+                    event,
+                    domain="team",
+                    projection_kind="operational_fact",
+                    facts=fields,
+                ),
+            )
         if classification != "team_attendance_report":
             return ReportIngestionResult("not_applicable")
         availability = fields.get("availability")

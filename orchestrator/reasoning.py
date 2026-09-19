@@ -907,12 +907,15 @@ def _operational_intake_schema(
     ``protocol`` mirrors the typed ``OperationalIntake`` runtime contract and
     prevents drift between provider output and orchestration code.
     """
+    def nullable_enum_schema(values: tuple[str, ...]) -> dict:
+        return {"anyOf": [{"type": "string", "enum": list(values)}, {"type": "null"}]}
+
     business_properties = {}
     for field_name, allowed_values in _operational_intake_business_fields(
         protocols, event_types, event_type_business_fields
     ).items():
         business_properties[field_name] = (
-            {"type": ["string", "null"], "enum": [*allowed_values, None]}
+            nullable_enum_schema(tuple(allowed_values))
             if allowed_values
             else {"type": ["string", "number", "boolean", "null"]}
         )
@@ -941,7 +944,7 @@ def _operational_intake_schema(
         "classification": {
             "type": "object",
             "properties": {
-                "name": {"type": ["string", "null"], "enum": [*event_types, None]},
+                "name": nullable_enum_schema(event_types),
                 "confident": {"type": "boolean"},
                 "area": nullable_string,
                 "entities": {"type": "array", "items": {"type": "string"}},
@@ -955,9 +958,8 @@ def _operational_intake_schema(
         "business_fields": {
             "type": "object",
             "properties": business_properties,
-            "required": [] if event_type_business_fields else list(business_properties),
+            "required": list(business_properties),
             "additionalProperties": False,
-            "allow_sparse": bool(event_type_business_fields),
         },
         "risk": {
             "type": "object",
@@ -995,7 +997,57 @@ def _operational_intake_schema(
         "properties": properties,
         "required": list(_OPERATIONAL_INTAKE_TOP_LEVEL_FIELDS),
         "additionalProperties": False,
+        "x-allow-sparse-business-fields": bool(event_type_business_fields),
     }
+
+
+def _operational_intake_provider_schema(schema: dict) -> dict:
+    """Compact the provider-facing intake schema for Anthropic strict output.
+
+    The canonical parser schema above remains nullable.  Anthropic rejects the
+    full nullable form when many business fields are present, so the provider
+    contract uses the empty string as a transport sentinel for nullable scalar
+    fields; runtime validation converts it back before applying the canonical
+    schema.
+    """
+
+    def convert(value: object, path: tuple[str, ...] = ()) -> object:
+        if isinstance(value, list):
+            return [convert(item, path) for item in value]
+        if not isinstance(value, dict):
+            return value
+        if any(isinstance(item, dict) and item.get("type") == "null" for item in value.get("anyOf", ())):
+            string_branch = next(
+                (item for item in value["anyOf"] if isinstance(item, dict) and item.get("type") == "string"),
+                None,
+            )
+            if isinstance(string_branch, dict):
+                converted = {"type": "string"}
+                if "enum" in string_branch:
+                    converted["enum"] = [*string_branch["enum"], ""]
+                return converted
+        expected_type = value.get("type")
+        if isinstance(expected_type, list) and "null" in expected_type:
+            non_null = [item for item in expected_type if item != "null"]
+            if path and path[0] == "business_fields":
+                return {"type": "string"}
+            if non_null == ["string"]:
+                converted = {"type": "string"}
+                if "enum" in value:
+                    converted["enum"] = [item for item in value["enum"] if item is not None] + [""]
+                return converted
+        return {
+            key: convert(child, (*path, str(key)) if key == "properties" else path)
+            if key != "properties"
+            else {
+                prop_name: convert(prop_schema, (*path, str(prop_name)))
+                for prop_name, prop_schema in child.items()
+            }
+            for key, child in value.items()
+            if not str(key).startswith("x-")
+        }
+
+    return convert(schema)  # type: ignore[return-value]
 
 
 def _schema_type_matches(value: object, expected_type: str) -> bool:
@@ -1019,6 +1071,10 @@ def _schema_type_matches(value: object, expected_type: str) -> bool:
 def _schema_default(schema: dict) -> object:
     if "default" in schema:
         return schema["default"]
+
+    any_of = schema.get("anyOf")
+    if isinstance(any_of, list) and any(isinstance(item, dict) and item.get("type") == "null" for item in any_of):
+        return None
 
     expected_type = schema.get("type")
     if isinstance(expected_type, list) and "null" in expected_type:
@@ -1089,6 +1145,21 @@ def _validate_operational_intake_schema(payload: dict, schema: dict) -> dict:
             normalized[field_name] = _schema_default(field_schema)
 
     def validate_value(value: object, value_schema: dict, path: str) -> object:
+        any_of = value_schema.get("anyOf")
+        if isinstance(any_of, list):
+            for option in any_of:
+                if not isinstance(option, dict):
+                    continue
+                option_types = option.get("type")
+                if isinstance(option_types, str):
+                    option_types = (option_types,)
+                if option_types and not any(_schema_type_matches(value, type_name) for type_name in option_types):
+                    continue
+                if "enum" in option and value not in option["enum"]:
+                    continue
+                return validate_value(value, option, path)
+            raise _operational_intake_schema_failure(schema, payload, category=f"anyOf:{path}")
+
         expected_types = value_schema.get("type")
         if isinstance(expected_types, str):
             expected_types = (expected_types,)
@@ -1113,7 +1184,15 @@ def _validate_operational_intake_schema(payload: dict, schema: dict) -> dict:
         if isinstance(value, dict):
             nested_properties = value_schema.get("properties", {})
             nested_required = set(value_schema.get("required", ()))
-            nested_missing = tuple(sorted(nested_required - set(value)))
+            allow_sparse_business_fields = (
+                path == "business_fields"
+                and bool(schema.get("x-allow-sparse-business-fields"))
+            )
+            nested_missing = (
+                ()
+                if allow_sparse_business_fields
+                else tuple(sorted(nested_required - set(value)))
+            )
             nested_unknown = (
                 tuple(sorted(set(value) - set(nested_properties)))
                 if value_schema.get("additionalProperties") is False
@@ -1130,7 +1209,7 @@ def _validate_operational_intake_schema(payload: dict, schema: dict) -> dict:
             normalized_object = dict(value)
             for nested_name, nested_schema in nested_properties.items():
                 if nested_name not in normalized_object:
-                    if value_schema.get("allow_sparse"):
+                    if allow_sparse_business_fields:
                         continue
                     normalized_object[nested_name] = _schema_default(nested_schema)
                 normalized_object[nested_name] = validate_value(
@@ -1144,6 +1223,34 @@ def _validate_operational_intake_schema(payload: dict, schema: dict) -> dict:
     return normalized
 
 
+def _normalize_operational_intake_provider_sentinels(value: object, schema: dict, path: tuple[str, ...] = ()) -> object:
+    any_of = schema.get("anyOf")
+    nullable_any_of = isinstance(any_of, list) and any(
+        isinstance(item, dict) and item.get("type") == "null" for item in any_of
+    )
+    expected_type = schema.get("type")
+    nullable_type = isinstance(expected_type, list) and "null" in expected_type
+    if value == "" and (nullable_any_of or nullable_type or (path and path[0] == "business_fields")):
+        return None
+    if isinstance(value, dict):
+        properties = schema.get("properties", {})
+        if isinstance(properties, dict):
+            return {
+                key: _normalize_operational_intake_provider_sentinels(
+                    child,
+                    properties.get(key, {}) if isinstance(properties.get(key, {}), dict) else {},
+                    (*path, str(key)),
+                )
+                for key, child in value.items()
+            }
+    if isinstance(value, list) and isinstance(schema.get("items"), dict):
+        return [
+            _normalize_operational_intake_provider_sentinels(item, schema["items"], (*path, str(index)))
+            for index, item in enumerate(value)
+        ]
+    return value
+
+
 def make_operational_intake(
     main_agent: MainAgent,
     message_text: str,
@@ -1153,6 +1260,7 @@ def make_operational_intake(
     protocols: tuple[Protocol, ...],
     risk_threshold: float,
     event_type_business_fields=None,
+    trusted_report_types: tuple[str, ...] = (),
 ) -> "OperationalIntake":
     """Classify, extract, assess risk, and select a protocol in exactly one model call."""
 
@@ -1187,6 +1295,16 @@ def make_operational_intake(
         }
         for protocol in protocols
     ]
+    trusted_domain_rule = ""
+    if trusted_report_types:
+        trusted_domain_rule = (
+            "The message arrived through a trusted group-owned domain. If intent.value is report, "
+            f"classification.name must stay within these owned report types: {json.dumps(trusted_report_types, ensure_ascii=False)}. "
+            "Do not use team attendance or availability for a report unless the message is a direct member availability statement "
+            "and the canonical availability field is actually supported by the message. Operational reports about people, forces, "
+            "injuries, incidents, hazards, or resources are not attendance merely because they mention personnel. "
+        )
+
     prompt = (
         "Return exactly one compact JSON object matching the supplied canonical schema and nothing else. "
         "The top-level object has exactly these nested sections: "
@@ -1194,7 +1312,8 @@ def make_operational_intake(
         f"Canonical nested field names JSON: {json.dumps(canonical_fields, ensure_ascii=False, sort_keys=True)}. "
         "Classify the user's intent; only for a clear operational report, extract event data, assess risk, "
         "and select a listed protocol. Set intent.confident and classification.confident false rather than guessing. "
-        "Use the intent booleans with their ordinary meanings and copy an exact supporting quote into intent.evidence. "
+        + trusted_domain_rule
+        + "Use the intent booleans with their ordinary meanings and copy an exact supporting quote into intent.evidence. "
         "Intent identifies what the user is doing; missing domain fields do not make a clear report intent ambiguous. "
         "Set unavailable business values to null. Do not invent identity, source_message_id, received_at, or original_text. "
         "Keep every business_fields value scalar; represent an uncertain possible cause with a scalar unverified status and scalar text, never an object or array and never a verified cause. "
@@ -1217,12 +1336,17 @@ def make_operational_intake(
                 max_output_tokens=900,
                 timeout_seconds=60.0,
                 reasoning_effort="none",
-                response_schema={"name": "operational_intake", "schema": schema},
+                response_schema={
+                    "name": "operational_intake",
+                    "schema": schema,
+                    "provider_schema": _operational_intake_provider_schema(schema),
+                },
             ),
         )
     if result.status != "success":
         raise OrchestrationParseError(f"operational intake was refused or unusable: {result.text}")
     payload = _load_unique_json_object(_normalize_operational_decision_json(result.text), "operational intake")
+    payload = _normalize_operational_intake_provider_sentinels(payload, schema)
     payload = _validate_operational_intake_schema(payload, schema)
 
     intent_payload = payload["intent"]
@@ -1296,10 +1420,20 @@ def make_operational_intake(
         if protocol_payload["status"] == "selected" and selected_protocol is not None
         else business_fields
     )
-    if not isinstance(extracted_business, dict) or set(extracted_business) != set(expected_business_fields):
+    if not isinstance(extracted_business, dict):
+        raise OrchestrationParseError("operational intake business_fields schema is invalid")
+    extracted_keys = set(extracted_business)
+    expected_keys = set(expected_business_fields)
+    provider_schema_keys = set(business_fields)
+    if extracted_keys != expected_keys and extracted_keys != provider_schema_keys:
+        raise OrchestrationParseError("operational intake business_fields schema is invalid")
+    unexpected_non_null = tuple(
+        sorted(key for key in extracted_keys - expected_keys if extracted_business.get(key) is not None)
+    )
+    if unexpected_non_null:
         raise OrchestrationParseError("operational intake business_fields schema is invalid")
     for field_name, allowed_values in expected_business_fields.items():
-        value = extracted_business[field_name]
+        value = extracted_business.get(field_name)
         if value is not None and type(value) not in {str, int, float, bool}:
             raise OrchestrationParseError(f"operational intake business field {field_name!r} must be a scalar")
         if allowed_values and value is not None and value not in allowed_values:

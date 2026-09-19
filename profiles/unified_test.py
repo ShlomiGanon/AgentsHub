@@ -1016,6 +1016,7 @@ EVENT_TYPES = [
     "surveillance_report",
     "operational_condition_report",
     "team_resource_report",
+    "team_operational_report",
     "drone_dispatch",
     "drone_recall",
     "drone_mission_query",
@@ -1670,10 +1671,20 @@ EVENT_TYPE_BUSINESS_FIELDS = {
     "team_resource_report": {
         "manpower_count": (), "resources_count": (),
     },
+    "team_availability": {
+        "availability": ("available", "unavailable"), "reason": (),
+    },
+    "team_attendance_report": {
+        "availability": ("available", "unavailable"), "reason": (),
+    },
+    "team_operational_report": {
+        "operational_status": (), "location": (), "uncertainty": (), "resource_mention": (),
+    },
     "friendly_forces_report": {
         "advisory_kind": (), "applies_to": (), "patrols": (), "status": (),
         "active_due_to": (), "incident_kind": (), "size": (), "location": (),
         "possible_cause": (), "cause_status": ("unverified",), "responding_unit": (), "building_risk": (),
+        "force_source": (), "reported_status": (), "uncertainty": (), "resource_mention": (),
     },
 }
 

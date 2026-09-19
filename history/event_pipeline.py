@@ -72,6 +72,7 @@ def extract_event(
     area_registry,
     model_invoker: Callable[[str], str] | None = None,
     event_type_business_fields=None,
+    normalize_declared_business_fields: bool = False,
 ) -> ExtractionResult:
     if source not in {"sensor", "telegram"}:
         raise ValueError("source must be 'sensor' or 'telegram'")
@@ -137,13 +138,26 @@ def extract_event(
         area = None
 
     declared_fields = (event_type_business_fields or {}).get(classification, {}) if classification else {}
+    if (
+        normalize_declared_business_fields
+        and classification == "surveillance_report"
+        and "status" in business_fields
+        and "camera_status" not in business_fields
+    ):
+        business_fields["camera_status"] = business_fields.pop("status")
     if declared_fields and set(business_fields) != set(declared_fields):
-        raise ExtractionExecutionError(
-            f"extraction field 'business_fields' must contain exactly the declared fields for {classification}"
-        )
+        if not normalize_declared_business_fields:
+            raise ExtractionExecutionError(
+                f"extraction field 'business_fields' must contain exactly the declared fields for {classification}"
+            )
+        business_fields = {
+            field_name: value
+            for field_name, value in business_fields.items()
+            if field_name in declared_fields
+        }
     if declared_fields:
         for field_name, allowed_values in declared_fields.items():
-            value = business_fields[field_name]
+            value = business_fields.get(field_name)
             if value is not None and type(value) not in {str, int, float, bool}:
                 raise ExtractionExecutionError(
                     f"extraction business field '{field_name}' must be scalar"

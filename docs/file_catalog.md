@@ -214,6 +214,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_expiry_finalization.py` | Test | Internal | Verifies canonical Event/Hold expiry finalization, recovery idempotency, queue expiry handling, and scheduler maintenance. |
 | `tests/test_friendly_forces_agent.py` | Test | Internal | Verifies friendly forces agent dispatch tools and coordination records. |
 | `tests/test_group_owned_report_ingestion.py` | Test | Internal | Verifies trusted group-owner report ingestion and terminal outcomes. |
+| `tests/test_task53_group_owned_report_contract.py` | Test | Internal | Verifies Task 53 canonical group-owned operational report classification, extraction normalization, and non-attendance projection. |
 | `tests/test_group_routing.py` | Test | Internal | Verifies the group routing table, staleness refresh, scope resolution, and dependency scoping. |
 | `tests/test_history_agent.py` | Test | Internal | Verifies history agent behavior and edge cases. |
 | `tests/test_history_event_pipeline.py` | Test | Internal | Verifies extraction, time normalization, and durable history writes. |

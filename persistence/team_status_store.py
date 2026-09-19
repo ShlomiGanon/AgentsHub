@@ -248,9 +248,21 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         key = self._require_scope(scope)
         with self._connect() as connection:
             responses = int(connection.execute("SELECT COUNT(*) FROM attendance_responses WHERE scope_key=?", (key,)).fetchone()[0])
-            cycles = int(connection.execute("SELECT COUNT(*) FROM attendance_cycles WHERE scope_key=?", (key,)).fetchone()[0])
+            seed_cycle = connection.execute(
+                "SELECT cycle_id FROM attendance_cycles WHERE scope_key=? ORDER BY opened_at ASC LIMIT 1",
+                (key,),
+            ).fetchone()
+            cycles = 0 if seed_cycle is None else int(connection.execute(
+                "SELECT COUNT(*) FROM attendance_cycles WHERE scope_key=? AND cycle_id<>?",
+                (key, seed_cycle[0]),
+            ).fetchone()[0])
             state = int(connection.execute("SELECT COUNT(*) FROM operational_team_state WHERE scope_key=?", (key,)).fetchone()[0])
-            connection.execute("DELETE FROM attendance_responses WHERE scope_key=?", (key,)); connection.execute("DELETE FROM attendance_cycles WHERE scope_key=?", (key,)); connection.execute("DELETE FROM operational_team_state WHERE scope_key=?", (key,))
+            connection.execute("DELETE FROM attendance_responses WHERE scope_key=?", (key,))
+            if seed_cycle is None:
+                connection.execute("DELETE FROM attendance_cycles WHERE scope_key=?", (key,))
+            else:
+                connection.execute("DELETE FROM attendance_cycles WHERE scope_key=? AND cycle_id<>?", (key, seed_cycle[0]))
+            connection.execute("DELETE FROM operational_team_state WHERE scope_key=?", (key,))
         return {"attendance_responses": responses, "attendance_cycles": cycles, "runtime_cycles_removed": cycles, "operational_team_state": state}
 
     def record_operational_state(self, *, manpower_count, resources, source_event_id, received_at, scenario_id=None, scenario_run_id=None, scenario_time=None, scope=None):

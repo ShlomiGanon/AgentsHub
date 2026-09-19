@@ -72,17 +72,21 @@ def scope_from_event(event: Mapping[str, object] | None) -> OperationalScope:
     event = event or {}
     scenario_id = event.get("scenario_id")
     scenario_run_id = event.get("scenario_run_id")
-    if scenario_id is not None or scenario_run_id is not None:
+    # Scenario identity is only a simulation scope when the trusted pair is
+    # complete.  Historical/direct callers may carry a scenario label without
+    # a run identity; that metadata must not manufacture an invalid scope or
+    # silently select a different operational world.
+    if scenario_id and scenario_run_id:
         return OperationalScope.simulation(str(scenario_id or ""), str(scenario_run_id or ""))
-    return OperationalScope.live()
+    return current_operational_scope()
 
 
 def scope_from_simulation_context(context: object | None) -> OperationalScope:
     scenario_id = getattr(context, "scenario_id", None)
     scenario_run_id = getattr(context, "scenario_run_id", None)
-    if scenario_id is None and scenario_run_id is None:
-        return OperationalScope.live()
-    return OperationalScope.simulation(str(scenario_id or ""), str(scenario_run_id or ""))
+    if scenario_id and scenario_run_id:
+        return OperationalScope.simulation(str(scenario_id), str(scenario_run_id))
+    return current_operational_scope()
 
 
 @contextmanager

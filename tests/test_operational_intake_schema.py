@@ -6,6 +6,7 @@ import pytest
 from agents import AgentResult
 from orchestrator.reasoning import (
     OrchestrationParseError,
+    _operational_intake_provider_schema,
     _operational_intake_schema,
     make_operational_intake,
 )
@@ -105,6 +106,46 @@ def test_schema_declares_required_and_optional_fields():
         "social_only", "is_quoted", "is_hypothetical", "evidence",
     }
     assert set(schema["properties"]["classification"]["required"]) == {"name", "confident", "entities", "description"}
+
+
+def test_nullable_enums_are_provider_compatible_anyof_contracts():
+    schema = _operational_intake_schema(EVENT_TYPES, PROTOCOLS)
+
+    classification_name = schema["properties"]["classification"]["properties"]["name"]
+    assert classification_name == {
+        "anyOf": [
+            {"type": "string", "enum": list(EVENT_TYPES)},
+            {"type": "null"},
+        ]
+    }
+    assert "type" not in classification_name
+    assert "enum" not in classification_name
+
+    availability = schema["properties"]["business_fields"]["properties"]["availability"]
+    assert availability == {
+        "anyOf": [
+            {"type": "string", "enum": ["available", "unavailable"]},
+            {"type": "null"},
+        ]
+    }
+    assert "allow_sparse" not in schema["properties"]["business_fields"]
+
+
+def test_provider_schema_compacts_nullable_unions_for_anthropic_strict_mode():
+    schema = _operational_intake_schema(
+        unified_test.EVENT_TYPES,
+        tuple(unified_test.PROTOCOLS),
+        unified_test.EVENT_TYPE_BUSINESS_FIELDS,
+    )
+    provider_schema = _operational_intake_provider_schema(schema)
+
+    rendered = json.dumps(provider_schema, sort_keys=True)
+    assert "x-allow-sparse-business-fields" not in rendered
+    assert '"anyOf"' not in rendered
+    assert '"type": ["string", "number", "boolean", "null"]' not in rendered
+    assert provider_schema["properties"]["classification"]["properties"]["name"]["type"] == "string"
+    assert "" in provider_schema["properties"]["classification"]["properties"]["name"]["enum"]
+    assert provider_schema["properties"]["business_fields"]["required"]
 
 
 def test_full_valid_intake_passes_in_one_model_call():

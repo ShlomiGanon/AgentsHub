@@ -1,12 +1,34 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
-from persistence import OperationalScope, open_surveillance_persistence, open_team_status_persistence
+from persistence import (
+    OperationalScope,
+    current_operational_scope,
+    open_surveillance_persistence,
+    open_team_status_persistence,
+    operational_scope_context,
+    scope_from_event,
+    scope_from_simulation_context,
+)
 
 
 def _baseline(*identities):
     return {"team": {"members": [{"telegram_identity": item, "full_name": item} for item in identities]}}
+
+
+def test_partial_event_simulation_metadata_never_creates_an_invalid_scope():
+    simulation = OperationalScope.simulation("fixture", "run-1")
+
+    assert scope_from_event({"scenario_id": "fixture"}) == OperationalScope.live()
+    assert scope_from_event({"scenario_run_id": "run-1"}) == OperationalScope.live()
+    assert scope_from_simulation_context(SimpleNamespace(scenario_id="fixture")) == OperationalScope.live()
+
+    with operational_scope_context(simulation):
+        assert current_operational_scope() == simulation
+        assert scope_from_event({"scenario_id": "fixture"}) == simulation
+        assert scope_from_simulation_context(SimpleNamespace(scenario_run_id="run-1")) == simulation
 
 
 @pytest.mark.parametrize(

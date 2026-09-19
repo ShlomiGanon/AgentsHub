@@ -59,10 +59,20 @@ class FriendlyForcesAgent(Agent):
             return ReportIngestionResult("not_applicable")
         if not str(event.get("description") or "").strip():
             return ReportIngestionResult("rejected", "friendly-forces report has no description")
-        allowed = {"advisory_kind", "applies_to", "patrols", "status", "active_due_to", "incident_kind", "size", "location", "possible_cause", "cause_status", "responding_unit", "building_risk"}
+        allowed = {
+            "advisory_kind", "applies_to", "patrols", "status", "active_due_to",
+            "incident_kind", "size", "location", "possible_cause", "cause_status",
+            "responding_unit", "building_risk", "force_source", "reported_status",
+            "uncertainty", "resource_mention",
+        }
         fields = event.get("business_fields") or {}
         if set(fields) - allowed:
             return ReportIngestionResult("rejected", "friendly-forces report contains unsupported domain fields")
+        if any(
+            value is not None and type(value) not in {str, int, float, bool}
+            for value in fields.values()
+        ):
+            return ReportIngestionResult("rejected", "friendly-forces report fields must be scalar")
         # Generic intelligence facts are already durably stored as the event
         # before this hook runs.  No dispatch is implied by a report.
         projection = project_report_facts(

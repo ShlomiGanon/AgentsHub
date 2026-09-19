@@ -586,7 +586,12 @@ def _llm_options(
         capabilities = provider_capabilities(descriptor.model)
         if capabilities.strict_json_schema:
             schema_name = str(invocation_policy.response_schema.get("name", "agentshub_output"))
-            schema = invocation_policy.response_schema.get("schema", invocation_policy.response_schema)
+            schema = _provider_json_schema(
+                invocation_policy.response_schema.get(
+                    "provider_schema",
+                    invocation_policy.response_schema.get("schema", invocation_policy.response_schema),
+                )
+            )
             response_format = {
                 "type": "json_schema",
                 "json_schema": {"name": schema_name, "strict": True, "schema": schema},
@@ -602,6 +607,20 @@ def _llm_options(
                 trace_id=get_trace_id(),
             )
     return options
+
+
+def _provider_json_schema(schema: object) -> object:
+    """Return the provider-facing JSON Schema without internal extension keys."""
+
+    if isinstance(schema, dict):
+        return {
+            key: _provider_json_schema(value)
+            for key, value in schema.items()
+            if not str(key).startswith("x-")
+        }
+    if isinstance(schema, list):
+        return [_provider_json_schema(item) for item in schema]
+    return schema
 
 
 def _llm_cache_key(descriptor: AgentDescriptor, options: dict) -> tuple[str, str, str]:

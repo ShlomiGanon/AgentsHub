@@ -1,6 +1,7 @@
 """The new-event flow and the package's declared entry point (work_plan.md §6.11, §6.14)."""
 
 import functools
+import inspect
 import json
 import logging
 from dataclasses import asdict, dataclass, replace
@@ -518,9 +519,7 @@ def _trusted_group_extraction(deps: FlowDeps, raw_text: str, received_at: str, r
     if result is None:
         return None
     result = _apply_attendance_temporal_fields(result, raw_text, received_at, deps.timezone_name, reference_time)
-    classification = _owner_report_classification(deps, result.classification or UNCLASSIFIED_TYPE)
-    if classification != result.classification:
-        result = replace(result, classification=classification, classification_status="trusted")
+    result = _normalize_group_owned_extraction(deps, result)
     if result.classification == UNCLASSIFIED_TYPE or result.area is None and result.classification == "team_attendance_report":
         return None
     if not result.description or not result.severity or not result.occurred_at:
@@ -560,8 +559,9 @@ def prepare_fast_path_report(
         deps.protocol_set.all(),
         deps.settings_store.get_risk_threshold(),
         getattr(deps, "event_type_business_fields", None),
+        trusted_report_types=_owned_report_types(deps),
     )
-    if not intake.confident or intake.extraction is None or intake.decision is None:
+    if not intake.confident or intake.extraction is None:
         return None
     # A report explicitly asking for an action belongs to the action pipeline;
     # the deterministic report fast path must never turn an action into a
@@ -569,7 +569,6 @@ def prepare_fast_path_report(
     if (
         intake.intent.intent != "report"
         or intake.intent.requests_action
-        or intake.decision.selection.status != "selected"
     ):
         return None
 
@@ -580,9 +579,13 @@ def prepare_fast_path_report(
         deps.timezone_name,
         reference_time,
     )
-    owner_classification = _owner_report_classification(deps, extraction.classification or UNCLASSIFIED_TYPE)
-    if owner_classification != extraction.classification:
-        extraction = replace(extraction, classification=owner_classification, classification_status="resolved")
+    extraction = _normalize_group_owned_extraction(deps, extraction)
+    if extraction.classification == UNCLASSIFIED_TYPE:
+        return None
+    if getattr(deps, "group_owner", None):
+        return FastPathPlan(extraction, domain_only=True)
+    if intake.decision is None or intake.decision.selection.status != "selected":
+        return None
     if extraction.occurred_at is not None:
         try:
             parse_timestamp(extraction.occurred_at)
@@ -720,6 +723,7 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
             raw_text, source, received_at, deps.event_type_registry, deps.area_registry,
             model_invoker=_model_invoker_for(main_agent),
             event_type_business_fields=getattr(deps, "event_type_business_fields", None),
+            normalize_declared_business_fields=bool(getattr(deps, "group_owner", None)),
         )
     except ExtractionExecutionError as exc:
         record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
@@ -744,6 +748,7 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
         },
     )
 
+    extraction_result = _normalize_group_owned_extraction(deps, extraction_result)
     record_extracted_fields(deps.persistence, event_id, extraction_result)
 
     # A report that doesn't match any event type the active profile declares
@@ -754,10 +759,8 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
     # item #6). `determine_clarification_hold` still keys off the *original*
     # extraction result, unchanged — this only affects what gets persisted.
     resolved_classification = extraction_result.classification or UNCLASSIFIED_TYPE
-    owner_classification = _owner_report_classification(deps, resolved_classification)
-    if owner_classification != resolved_classification:
-        record_event_state(deps.persistence, event_id, {"classification": owner_classification})
-        resolved_classification = owner_classification
+    if extraction_result.classification != resolved_classification:
+        resolved_classification = extraction_result.classification or UNCLASSIFIED_TYPE
 
     # A trusted group owner may refine an otherwise unresolved/misclassified
     # report into its own declared domain.  Unscoped/private messages retain
@@ -866,7 +869,33 @@ def _continue_after_required_fields(
     return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent)
 
 
-def _owner_report_classification(deps: "FlowDeps", classification: str) -> str:
+_TEAM_ATTENDANCE_TYPES = frozenset({"team_attendance_report", "team_availability"})
+_TEAM_RESOURCE_TYPES = frozenset({"team_resource_report"})
+
+
+def _owned_report_types(deps: "FlowDeps") -> tuple[str, ...]:
+    owner_name = getattr(deps, "group_owner", None)
+    if not owner_name:
+        return ()
+
+    try:
+        owner = deps.registry.get(owner_name)
+    except KeyError:
+        return ()
+
+    return tuple(
+        report_type
+        for report_type in getattr(owner, "owned_report_types", ())
+        if getattr(deps.event_type_registry, "is_valid", lambda value: True)(report_type)
+    )
+
+
+def _owner_report_classification(
+    deps: "FlowDeps",
+    classification: str,
+    business_fields: dict[str, object] | None = None,
+    classification_status: str | None = None,
+) -> str:
     """Constrain report classification to trusted group ownership.
 
     Agents declare the event types they can ingest.  A classifier may refine a
@@ -886,12 +915,93 @@ def _owner_report_classification(deps: "FlowDeps", classification: str) -> str:
     owned_types = tuple(getattr(owner, "owned_report_types", ()))
     registry = deps.event_type_registry
     is_valid = getattr(registry, "is_valid", lambda value: True)
+
+    fields = business_fields or {}
+    if owner_name == "team_status_agent":
+        attendance_is_typed = (
+            classification_status == "trusted"
+            and classification in _TEAM_ATTENDANCE_TYPES
+            and fields.get("availability") in {"available", "unavailable"}
+        )
+        if attendance_is_typed:
+            return "team_attendance_report" if is_valid("team_attendance_report") else classification
+
+        resource_is_typed = (
+            classification in _TEAM_RESOURCE_TYPES
+            and classification_status == "trusted"
+            and type(fields.get("manpower_count")) is int
+        )
+        if resource_is_typed:
+            return classification
+
+        if "team_operational_report" in owned_types and is_valid("team_operational_report"):
+            return "team_operational_report"
+
+        return UNCLASSIFIED_TYPE
+
     if classification in owned_types and is_valid(classification):
         return classification
+
     default_type = getattr(owner, "default_report_type", None)
     if isinstance(default_type, str) and default_type in owned_types and is_valid(default_type):
         return default_type
     return classification
+
+
+def _normalize_group_owned_extraction(deps: "FlowDeps", extraction):
+    owner_name = getattr(deps, "group_owner", None)
+    if not owner_name:
+        return extraction
+
+    original_classification = extraction.classification or UNCLASSIFIED_TYPE
+    classification = _owner_report_classification(
+        deps,
+        original_classification,
+        dict(extraction.business_fields or {}),
+        extraction.classification_status,
+    )
+    declarations = getattr(deps, "event_type_business_fields", None) or {}
+    declared_fields = declarations.get(classification, {}) or {}
+    source_fields = dict(extraction.business_fields or {})
+    if (
+        classification == "surveillance_report"
+        and "status" in source_fields
+        and "camera_status" not in source_fields
+    ):
+        source_fields["camera_status"] = source_fields.pop("status")
+
+    normalized_fields = {}
+    dropped_fields = []
+    for field_name, value in source_fields.items():
+        if field_name not in declared_fields:
+            dropped_fields.append(field_name)
+            continue
+        if type(value) not in {str, int, float, bool}:
+            if value is None:
+                normalized_fields[field_name] = None
+                continue
+            dropped_fields.append(field_name)
+            continue
+        normalized_fields[field_name] = value
+
+    if dropped_fields:
+        logger.info(
+            "group-owned report fields normalized",
+            extra={
+                "event": "group_report_fields_normalized",
+                "owner": owner_name,
+                "classification": classification,
+                "dropped_fields": sorted(set(dropped_fields)),
+                "trace_id": get_trace_id(),
+            },
+        )
+
+    return replace(
+        extraction,
+        classification=classification,
+        classification_status="trusted",
+        business_fields=normalized_fields,
+    )
 
 
 def _commit_report_domain_state(deps: "FlowDeps", event_id: str) -> ReportIngestionResult:
@@ -918,7 +1028,16 @@ def _commit_report_domain_state(deps: "FlowDeps", event_id: str) -> ReportIngest
         ingest_report = getattr(agent, "ingest_report", None)
         if ingest_report is None:
             continue
-        result = ingest_report(event, scope=scope_from_event(event))
+        scope = scope_from_event(event)
+        try:
+            parameters = inspect.signature(ingest_report).parameters.values()
+        except (TypeError, ValueError):
+            parameters = ()
+        accepts_scope = any(
+            parameter.name == "scope" or parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+        result = ingest_report(event, scope=scope) if accepts_scope else ingest_report(event)
         if result is None:
             return ReportIngestionResult("failed", "domain report ingestion returned no typed result")
         if result.status != "not_applicable":
