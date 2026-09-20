@@ -68,7 +68,11 @@ from orchestrator.flows import (
 from protocols import CriticalityLevel, Protocol, ProtocolEditError, add_protocol, remove_protocol, replace_protocol
 from profiles.loader import hash_profile_file
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, initialize_operational_scope, resolve_simulation_step
-from persistence import NotFoundError as PersistenceNotFoundError, scope_from_simulation_context
+from persistence import (
+    NotFoundError as PersistenceNotFoundError,
+    operational_scope_context,
+    scope_from_simulation_context,
+)
 from api.simulations import find_simulation_scenario, materialize_simulation, simulation_catalog_payload
 
 from orchestrator.flows import continue_after_approval, continue_after_clarification, decline, resolve_approval, resolve_clarification
@@ -128,7 +132,7 @@ def _simulation_context_from_request(ctx, sender_identity: str, chat_id: str | N
         raise InvalidInputError(str(exc), field="X-Simulation-ID") from exc
 
 
-def _initialize_request_operational_scope(ctx, simulation_context):
+def _initialize_request_operational_scope(ctx, simulation_context, sender_identity: str | None = None):
     scope = scope_from_simulation_context(simulation_context)
     initialize_operational_scope(ctx.loaded_profile, ctx.deps.registry, scope)
     return scope
@@ -169,7 +173,7 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
             None,
             "event",
         )
-        operational_scope = _initialize_request_operational_scope(ctx, simulation_context)
+        operational_scope = _initialize_request_operational_scope(ctx, simulation_context, str(sender_identity))
         if source_message_id:
             existing_event = ctx.deps.persistence.fetch_event_by_source_message(
                 "sensor", str(sender_identity), str(source_message_id)
@@ -427,7 +431,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             str(telegram_chat_id) if telegram_chat_id is not None else None,
             str(telegram_chat_type) if telegram_chat_type is not None else None,
         )
-        operational_scope = _initialize_request_operational_scope(ctx, simulation_context)
+        operational_scope = _initialize_request_operational_scope(ctx, simulation_context, str(sender_identity))
 
         trace_id = get_trace_id() or new_trace_id()
         set_trace_id(trace_id)
@@ -920,7 +924,9 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             )
             require(level, require_op)
             if matched_protocol.name == "report_team_availability" and hasattr(ag, "report_team_availability"):
-                with authenticated_request_identity(caller_identity):
+                if ctx.deps.persistence.is_simulation_identity(caller_identity) and not operational_scope.is_simulation:
+                    raise AuthorizationError("a trusted simulation scope is required for a synthetic identity")
+                with operational_scope_context(operational_scope), authenticated_request_identity(caller_identity):
                     answer = ag.report_team_availability(view=_team_roster_view(str(text)))
                 _remember("assistant", answer)
                 return jsonify({
@@ -928,7 +934,13 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     "answer": answer,
                     "protocol": matched_protocol.name,
                 })
-            with authenticated_request_identity(caller_identity):
+            if (
+                ctx.deps.persistence.is_simulation_identity(caller_identity)
+                and not operational_scope.is_simulation
+                and getattr(ag, "name", ag_name) == "team_status_agent"
+            ):
+                raise AuthorizationError("a trusted simulation scope is required for a synthetic identity")
+            with operational_scope_context(operational_scope), authenticated_request_identity(caller_identity):
                 res = ag.process(text, allowed_tools)
             answer = res.text if res.status == "success" else f"\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05d4\u05e4\u05e2\u05dc\u05ea \u05e1\u05d5\u05db\u05df: {res.text}"
             _remember("assistant", answer)
@@ -1560,7 +1572,7 @@ def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
         require(level, RequestedOperation.VIEW_COMMANDER_ROSTER)
 
         commanders = [
-            u for u in ctx.deps.persistence.list_users()
+            u for u in ctx.deps.persistence.list_live_users()
             if u["permission_level"] == "commander" and u["telegram_identity"] != "bot-service"
         ]
         return jsonify({"commanders": [{"telegram_identity": u["telegram_identity"]} for u in commanders]})

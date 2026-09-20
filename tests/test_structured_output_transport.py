@@ -161,8 +161,8 @@ def _llm_with_response(content: str | None = None, error: Exception | None = Non
 @pytest.mark.parametrize(
     "content",
     (
-        '{"f":[],"a":[],"r":[]}',
-        '{"f":[{"t":"x","s":["S1"]}],"a":[],"r":[]}',
+        '{"facts":[],"assessments":[],"recommendations":[]}',
+        '{"facts":[{"text":"x","source_aliases":["S1"]}],"assessments":[],"recommendations":[]}',
         '{"facts":[',
         "not json",
     ),
@@ -204,8 +204,8 @@ def test_provider_error_stays_an_error_at_the_provider_boundary():
 def test_valid_transport_payload_still_enters_the_existing_agent_result_boundary():
     result = AgentResult(
         status="success",
-        text='{"f":[],"a":[],"r":[]}',
+        text='{"facts":[],"assessments":[],"recommendations":[]}',
     )
 
     assert result.status == "success"
-    assert _parse_reasoning_json(result.text)["f"] == []
+    assert _parse_reasoning_json(result.text)["facts"] == []

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 
 import pytest
 
@@ -104,6 +105,22 @@ class _NoMainCalls:
         raise AssertionError("typed state must not invoke Main Agent composition")
 
 
+class _BoundedReasoningMain:
+    def __init__(self):
+        self.calls = []
+
+    def process(self, text, allowed_tools, *, invocation_policy=None):
+        self.calls.append((text, tuple(allowed_tools), invocation_policy))
+        return AgentResult(
+            "success",
+            json.dumps({
+                "facts": [{"text": "Scoped operational picture.", "source_aliases": ["S1"]}],
+                "assessments": [],
+                "recommendations": [],
+            }),
+        )
+
+
 class _NoHistory:
     def recent_committed_events(self, **kwargs):
         raise AssertionError("narrow current-state queries must not read recent reports")
@@ -143,11 +160,16 @@ def test_operational_query_scopes_cover_step5_variants_and_reject_follow_up_stat
     assert classify_situational_query("\u05de\u05d4 \u05de\u05e6\u05d1 \u05d4\u05e4\u05e2\u05d5\u05dc\u05d4 \u05e9\u05d1\u05d9\u05e7\u05e9\u05ea\u05d9?") is None
     assert classify_situational_query("\u05de\u05d4 \u05de\u05e6\u05d1 \u05d4\u05d0\u05d9\u05e9\u05d5\u05e8?") is None
     assert classify_situational_query("\u05de\u05d4 \u05de\u05e6\u05d1 \u05de\u05d6\u05d2 \u05d4\u05d0\u05d5\u05d5\u05d9\u05e8?") is None
+    assert classify_situational_query(
+        "\u05ea\u05e6\u05d9\u05e3 \u05dc\u05d9 \u05ea\u05de\u05d5\u05e0\u05d4 \u05de\u05d4\u05d9\u05e8\u05d4: \u05d9\u05e9 \u05de\u05e9\u05d4\u05d5 \u05d7\u05e9\u05d5\u05d3 \u05d1\u05d2\u05d6\u05e8\u05d4 \u05d4\u05de\u05d6\u05e8\u05d7\u05d9\u05ea?") == SituationalQueryScope(
+        surveillance=True,
+        external_reports=True,
+    )
 
 
 def test_scoped_step5_reads_only_team_and_surveillance_and_renders_no_unrelated_sections():
     registry, surveillance, team = _typed_registry()
-    main_agent = _NoMainCalls()
+    main_agent = _BoundedReasoningMain()
     scope = classify_situational_query(STEP_5)
 
     picture = build_situational_picture(
@@ -175,9 +197,10 @@ def test_scoped_step5_reads_only_team_and_surveillance_and_renders_no_unrelated_
     assert team.store.reads == 1
     assert surveillance.calls == []
     assert team.calls == []
-    assert main_agent.calls == []
-    assert "Cameras: 4/6 active; 1 degraded; 1 offline; 0 unknown." in picture.text
-    assert "Readiness team: 1 available; 1 unavailable; 1 not reported" in picture.text
+    assert len(main_agent.calls) == 1
+    assert picture.reasoning is not None
+    assert picture.reasoning.fallback is False
+    assert "Scoped operational picture." in picture.text
     assert "Drones:" not in picture.text
     assert "Recent committed reports:" not in picture.text
     assert picture.plan.scope == scope
@@ -213,7 +236,7 @@ def test_overall_step9_keeps_the_existing_typed_picture_scope():
 
 
 def test_api_routes_step5_through_typed_picture_without_event_or_specialist_calls(tmp_path):
-    ctx = build_context(tmp_path, main_agent=_NoMainCalls())
+    ctx = build_context(tmp_path, main_agent=_BoundedReasoningMain())
     surveillance_store = _ReadOnlyStore()
     team_store = _TeamStore()
     surveillance = _StoreAgent("surveillance_agent", surveillance_store, "read_surveillance")
@@ -245,10 +268,10 @@ def test_api_routes_step5_through_typed_picture_without_event_or_specialist_call
         "external_reports": False,
         "overall": False,
     }
-    assert "4/6 active; 1 degraded; 1 offline" in body["answer"]
+    assert "Scoped operational picture." in body["answer"]
     assert "Drones:" not in body["answer"]
     assert "Recent committed reports:" not in body["answer"]
     assert surveillance.calls == []
     assert team.calls == []
-    assert ctx.main_agent.calls == []
+    assert len(ctx.main_agent.calls) == 1
     assert ctx.deps.persistence.fetch_events_range("2000-01-01", "2100-01-01") == []

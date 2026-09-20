@@ -1072,7 +1072,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         return sorted(
             (
                 user
-                for user in ctx.deps.persistence.list_users()
+                for user in ctx.deps.persistence.list_live_users()
                 if user["telegram_identity"] != BOT_SERVICE_IDENTITY
             ),
             key=lambda user: (
@@ -1357,7 +1357,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         if redirect_response is not None:
             return redirect_response
         registered_users = sorted(
-            ctx.deps.persistence.list_users(), key=lambda user: user["telegram_identity"]
+            ctx.deps.persistence.list_live_users(), key=lambda user: user["telegram_identity"]
         )
         return _render(
             _USERS_TEMPLATE,
@@ -1396,7 +1396,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             safe_mode=ctx.deps.settings_store.get_safe_mode(),
             automatic_users=sum(
                 bool(user.get("auto_register", False))
-                for user in ctx.deps.persistence.list_users()
+                for user in ctx.deps.persistence.list_live_users()
             ),
             automatic_groups=sum(
                 bool(group.auto_register) for group in ctx.group_routing.all()

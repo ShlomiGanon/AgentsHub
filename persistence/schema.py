@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS users (
     telegram_identity TEXT PRIMARY KEY,
     permission_level TEXT NOT NULL,
     full_name TEXT NOT NULL DEFAULT '',
-    auto_register INTEGER NOT NULL DEFAULT 0 CHECK (auto_register IN (0, 1))
+    auto_register INTEGER NOT NULL DEFAULT 0 CHECK (auto_register IN (0, 1)),
+    identity_kind TEXT NOT NULL DEFAULT 'LIVE' CHECK (identity_kind IN ('LIVE', 'SIMULATION'))
 );
 """
 
@@ -315,6 +316,7 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "ALTER TABLE events ADD COLUMN scenario_run_id TEXT;"
         "CREATE INDEX IF NOT EXISTS idx_events_scenario_run_id ON events(scenario_id, scenario_run_id, scenario_step);",
     ),
+    (25, "mark synthetic simulation identities", ""),
 ]
 
 
@@ -365,6 +367,11 @@ _REQUIRED_COLUMNS_BY_VERSION = (
         "events",
         (("scenario_run_id", "TEXT"),),
     ),
+    (
+        25,
+        "users",
+        (("identity_kind", "TEXT NOT NULL DEFAULT 'LIVE' CHECK (identity_kind IN ('LIVE', 'SIMULATION'))"),),
+    ),
 )
 
 _REQUIRED_TABLE_DDL = {
@@ -382,7 +389,12 @@ def _repair_required_columns(connection: sqlite3.Connection, schema_version: int
 
         columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()}
         if not columns:
-            connection.execute(_REQUIRED_TABLE_DDL[table_name])
+            table_ddl = _REQUIRED_TABLE_DDL.get(table_name)
+            if table_ddl is None:
+                # Some migration fixtures intentionally contain only the
+                # table under test; do not materialize unrelated tables.
+                continue
+            connection.execute(table_ddl)
             columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()}
             repaired = True
 
@@ -443,7 +455,7 @@ def run_migrations(db_path: str) -> None:
                         "ALTER TABLE telegram_groups ADD COLUMN auto_register INTEGER NOT NULL DEFAULT 0 "
                         "CHECK (auto_register IN (0, 1))"
                     )
-            elif version in {20, 21, 22, 23, 24}:
+            elif version in {20, 21, 22, 23, 24, 25}:
                 _repair_required_columns(connection, version)
                 if version == 24:
                     connection.execute(

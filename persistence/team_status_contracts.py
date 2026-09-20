@@ -34,6 +34,19 @@ class TeamStatusPersistenceInterface(ABC):
     @abstractmethod
     def list_members(self, *, approved_only: bool = True, scope: OperationalScope | None = None) -> list[dict]: ...
 
+    def get_members(self, *, approved_only: bool = True, scope: OperationalScope | None = None) -> list[dict]:
+        """Canonical scope-bound membership read API."""
+        return self.list_members(approved_only=approved_only, scope=scope)
+
+    def get_member_state(self, telegram_identity: str, *, scope: OperationalScope | None = None) -> dict | None:
+        for member in self.list_members(approved_only=False, scope=scope):
+            if member.get("telegram_identity") == telegram_identity:
+                return member
+        return None
+
+    def retire_member(self, telegram_identity: str, *, scope: OperationalScope | None = None) -> bool:
+        raise NotImplementedError
+
     @abstractmethod
     def open_cycle(self, cycle_key: str, opened_at: str, deadline_at: str, *, scope: OperationalScope | None = None) -> AttendanceCycle: ...
 

@@ -838,8 +838,8 @@ class SQLitePersistence(PersistenceInterface):
         def _do(connection: sqlite3.Connection) -> None:
             try:
                 connection.execute(
-                    "INSERT INTO users (telegram_identity, permission_level, full_name, auto_register) "
-                    "VALUES (?, ?, COALESCE(?, ''), 0) "
+                    "INSERT INTO users (telegram_identity, permission_level, full_name, auto_register, identity_kind) "
+                    "VALUES (?, ?, COALESCE(?, ''), 0, 'LIVE') "
                     "ON CONFLICT(telegram_identity) DO UPDATE SET "
                     "permission_level = excluded.permission_level, "
                     "full_name = CASE WHEN ? IS NULL THEN users.full_name ELSE excluded.full_name END",
@@ -855,8 +855,8 @@ class SQLitePersistence(PersistenceInterface):
     def register_telegram_user_if_missing(self, telegram_identity: str) -> dict:
         def _do(connection: sqlite3.Connection) -> None:
             connection.execute(
-                "INSERT INTO users (telegram_identity, permission_level, full_name, auto_register) "
-                "VALUES (?, 'viewer', '', 1) ON CONFLICT(telegram_identity) DO NOTHING",
+                "INSERT INTO users (telegram_identity, permission_level, full_name, auto_register, identity_kind) "
+                "VALUES (?, 'viewer', '', 1, 'LIVE') ON CONFLICT(telegram_identity) DO NOTHING",
                 (telegram_identity,),
             )
             connection.commit()
@@ -867,19 +867,45 @@ class SQLitePersistence(PersistenceInterface):
             raise PersistenceError(f"failed to register telegram user '{telegram_identity}'")
         return result
 
-    def ensure_user_exists(self, telegram_identity: str, permission_level: str, full_name: str) -> bool:
+    def ensure_user_exists(
+        self,
+        telegram_identity: str,
+        permission_level: str,
+        full_name: str,
+        *,
+        identity_kind: str = "LIVE",
+    ) -> bool:
+        if identity_kind not in {"LIVE", "SIMULATION"}:
+            raise PersistenceError("identity_kind must be LIVE or SIMULATION")
+
         def _do(connection: sqlite3.Connection) -> bool:
             try:
                 cursor = connection.execute(
-                    "INSERT INTO users (telegram_identity, permission_level, full_name, auto_register) "
-                    "VALUES (?, ?, ?, 0) ON CONFLICT(telegram_identity) DO NOTHING",
-                    (telegram_identity, permission_level, full_name),
+                    "INSERT INTO users (telegram_identity, permission_level, full_name, auto_register, identity_kind) "
+                    "VALUES (?, ?, ?, 0, ?) ON CONFLICT(telegram_identity) DO NOTHING",
+                    (telegram_identity, permission_level, full_name, identity_kind),
                 )
                 connection.commit()
                 return cursor.rowcount > 0
             except sqlite3.Error as exc:
                 connection.rollback()
                 raise PersistenceError(f"failed to ensure user '{telegram_identity}' exists: {exc}") from exc
+
+        return self._submit_write(_do)
+
+    def mark_simulation_identity(self, telegram_identity: str) -> bool:
+        def _do(connection: sqlite3.Connection) -> bool:
+            try:
+                cursor = connection.execute(
+                    "UPDATE users SET identity_kind = 'SIMULATION', auto_register = 0 "
+                    "WHERE telegram_identity = ? AND identity_kind <> 'SIMULATION'",
+                    (telegram_identity,),
+                )
+                connection.commit()
+                return cursor.rowcount > 0
+            except sqlite3.Error as exc:
+                connection.rollback()
+                raise PersistenceError(f"failed to mark simulation identity '{telegram_identity}': {exc}") from exc
 
         return self._submit_write(_do)
 
@@ -896,8 +922,8 @@ class SQLitePersistence(PersistenceInterface):
             try:
                 if allow_registration:
                     connection.execute(
-                        "INSERT INTO users (telegram_identity, permission_level, full_name, auto_register) "
-                        "VALUES (?, 'viewer', '', 1) ON CONFLICT(telegram_identity) DO NOTHING",
+                        "INSERT INTO users (telegram_identity, permission_level, full_name, auto_register, identity_kind) "
+                        "VALUES (?, 'viewer', '', 1, 'LIVE') ON CONFLICT(telegram_identity) DO NOTHING",
                         (telegram_identity,),
                     )
                     if group_chat_id is not None:
@@ -981,6 +1007,31 @@ class SQLitePersistence(PersistenceInterface):
             for result in results:
                 result["auto_register"] = bool(result["auto_register"])
             return results
+        finally:
+            connection.close()
+
+    def list_live_users(self) -> list[dict]:
+        connection = self._read_connection()
+        try:
+            user_rows = connection.execute(
+                "SELECT telegram_identity, permission_level, full_name, auto_register "
+                "FROM users WHERE identity_kind = 'LIVE'"
+            ).fetchall()
+            results = [dict(user_row) for user_row in user_rows]
+            for result in results:
+                result["auto_register"] = bool(result["auto_register"])
+            return results
+        finally:
+            connection.close()
+
+    def is_simulation_identity(self, telegram_identity: str) -> bool:
+        connection = self._read_connection()
+        try:
+            row = connection.execute(
+                "SELECT identity_kind FROM users WHERE telegram_identity = ?",
+                (telegram_identity,),
+            ).fetchone()
+            return row is not None and row["identity_kind"] == "SIMULATION"
         finally:
             connection.close()
 

@@ -85,6 +85,14 @@ class SituationalQueryScope:
             "overall": self.overall,
         }
 
+    @property
+    def selected_domain_count(self) -> int:
+        return sum((self.team, self.surveillance, self.drones, self.external_reports))
+
+    @property
+    def requires_bounded_reasoning(self) -> bool:
+        return self.overall or self.selected_domain_count > 1
+
 
 _SITUATIONAL_PICTURE_TERMS = (
     "\u05ea\u05de\u05d5\u05e0\u05ea \u05de\u05e6\u05d1",
@@ -96,6 +104,34 @@ _SITUATIONAL_PICTURE_TERMS = (
     "\u05e1\u05d8\u05d8\u05d5\u05e1 \u05d4\u05d2\u05d6\u05e8\u05d4",
     "sector status",
     "overall picture",
+)
+_OPERATIONAL_PICTURE_TERMS = (
+    "\u05ea\u05de\u05d5\u05e0\u05d4",
+    "picture",
+    "overview",
+    "brief",
+    "\u05e1\u05e7\u05d9\u05e8\u05d4",
+)
+_OPERATIONAL_SIGNAL_TERMS = (
+    "\u05d7\u05e9\u05d5\u05d3",
+    "\u05d0\u05d9\u05d5\u05dd",
+    "\u05d4\u05ea\u05e8\u05d0\u05d4",
+    "\u05d0\u05d9\u05e8\u05d5\u05e2",
+    "\u05e1\u05d9\u05db\u05d5\u05df",
+    "suspicious",
+    "threat",
+    "alarm",
+    "risk",
+)
+_OPERATIONAL_AREA_TERMS = (
+    "\u05d2\u05d6\u05e8\u05d4",
+    "\u05e9\u05e2\u05e8",
+    "\u05d4\u05d9\u05e7\u05e4\u05d9\u05dd",
+    "\u05d0\u05d6\u05d5\u05e8",
+    "sector",
+    "gate",
+    "perimeter",
+    "area",
 )
 _TEAM_SCOPE_TERMS = (
     "\u05e1\u05d3\u05db",
@@ -128,6 +164,15 @@ _EXTERNAL_REPORT_SCOPE_TERMS = (
     "\u05d3\u05d9\u05d5\u05d5\u05d7",
     "recent reports",
     "recent events",
+    "\u05e8\u05db\u05d1",
+    "\u05e8\u05db\u05d1\u05d9\u05dd",
+    "\u05d0\u05d6\u05d4\u05e8\u05d4",
+    "\u05e9\u05e8\u05d1",
+    "\u05e9\u05e8\u05d9\u05e4\u05d4",
+    "vehicle",
+    "advisory",
+    "incident",
+    "fire",
 )
 _CURRENT_STATE_TERMS = (
     "\u05de\u05e6\u05d1",
@@ -204,6 +249,21 @@ def classify_situational_query(text: str) -> SituationalQueryScope | None:
     has_external_reports = _contains_query_term(normalized, _EXTERNAL_REPORT_SCOPE_TERMS)
     has_current_state = _contains_query_term(normalized, _CURRENT_STATE_TERMS) or "?" in str(text)
     has_daily_summary = _contains_query_term(normalized, _DAILY_SUMMARY_TERMS)
+    has_operational_picture = _contains_query_term(normalized, _OPERATIONAL_PICTURE_TERMS)
+    has_operational_context = (
+        _contains_query_term(normalized, _OPERATIONAL_SIGNAL_TERMS)
+        and _contains_query_term(normalized, _OPERATIONAL_AREA_TERMS)
+    )
+
+    if has_operational_picture and has_operational_context:
+        has_picture_phrase = True
+        # A generic cross-domain signal/area question is about current
+        # surveillance and committed external indications. Keep the scope
+        # bounded to those domains instead of widening it to drones/team
+        # merely because the requester used the word "picture".
+        if not any((has_team, has_surveillance, has_drones, has_external_reports)):
+            has_surveillance = True
+            has_external_reports = True
 
     if _contains_query_term(normalized, _FOLLOW_UP_STATUS_TERMS) and not has_picture_phrase:
         return None
@@ -227,75 +287,75 @@ _COMPOSE_POLICY = InvocationPolicy(max_output_tokens=450, timeout_seconds=45.0, 
 _REASONING_SCHEMA = {
     "type": "object",
     "properties": {
-        "f": {
+        "facts": {
             "type": "array",
             "maxItems": REASONING_MAX_FACTS,
             "items": {
                 "type": "object",
                 "properties": {
-                    "t": {"type": "string", "minLength": 1, "maxLength": REASONING_FACT_TEXT_MAX},
-                    "s": {
+                    "text": {"type": "string", "minLength": 1, "maxLength": REASONING_FACT_TEXT_MAX},
+                    "source_aliases": {
                         "type": "array",
                         "minItems": 1,
                         "maxItems": 2,
                         "items": {"type": "string", "pattern": "^S[1-9][0-9]*$"},
                     },
                 },
-                "required": ["t", "s"],
+                "required": ["text", "source_aliases"],
                 "additionalProperties": False,
             },
         },
-        "a": {
+        "assessments": {
             "type": "array",
             "maxItems": REASONING_MAX_ASSESSMENTS,
             "items": {
                 "type": "object",
                 "properties": {
-                    "c": {"type": "string", "minLength": 1, "maxLength": REASONING_CONCLUSION_TEXT_MAX},
-                    "s": {
+                    "conclusion": {"type": "string", "minLength": 1, "maxLength": REASONING_CONCLUSION_TEXT_MAX},
+                    "source_aliases": {
                         "type": "array",
                         "minItems": 1,
                         "maxItems": 2,
                         "items": {"type": "string", "pattern": "^S[1-9][0-9]*$"},
                     },
-                    "v": {"type": "string", "enum": ["l", "m", "h"]},
-                    "q": {"type": "string", "maxLength": REASONING_QUALIFICATION_TEXT_MAX},
-                    "d": {
+                    "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "qualification": {"type": "string", "maxLength": REASONING_QUALIFICATION_TEXT_MAX},
+                    "affected_domains": {
                         "type": "array",
                         "minItems": 1,
                         "maxItems": 2,
-                        "items": {"type": "string", "enum": ["t", "s", "d", "e", "x"]},
+                        "items": {"type": "string", "enum": ["team", "surveillance", "drones", "external_reports", "cross_domain"]},
                     },
-                    "p": {"type": "string", "enum": ["l", "m", "h"]},
+                    "priority": {"type": "string", "enum": ["low", "medium", "high"]},
                 },
-                "required": ["c", "s", "v", "d", "p"],
+                "required": ["conclusion", "source_aliases", "confidence", "affected_domains", "priority"],
                 "additionalProperties": False,
             },
         },
-        "r": {
+        "recommendations": {
             "type": "array",
             "maxItems": REASONING_MAX_RECOMMENDATIONS,
             "items": {
                 "type": "object",
                 "properties": {
-                    "d": {"type": "string", "minLength": 1, "maxLength": REASONING_RECOMMENDATION_TEXT_MAX},
-                    "r": {"type": "string", "minLength": 1, "maxLength": REASONING_RATIONALE_TEXT_MAX},
-                    "s": {
+                    "description": {"type": "string", "minLength": 1, "maxLength": REASONING_RECOMMENDATION_TEXT_MAX},
+                    "rationale": {"type": "string", "minLength": 1, "maxLength": REASONING_RATIONALE_TEXT_MAX},
+                    "source_aliases": {
                         "type": "array",
                         "minItems": 1,
                         "maxItems": 2,
                         "items": {"type": "string", "pattern": "^S[1-9][0-9]*$"},
                     },
-                    "p": {"type": "string", "enum": ["l", "m", "h"]},
-                    "c": {"type": ["string", "null"], "maxLength": REASONING_CAPABILITY_MAX},
-                    "a": {"type": "boolean"},
+                    "priority": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "possible_capability": {"type": ["string", "null"], "maxLength": REASONING_CAPABILITY_MAX},
+                    "requires_approval": {"type": "boolean"},
                 },
-                "required": ["d", "r", "s", "p", "c", "a"],
+                "required": ["description", "rationale", "source_aliases", "priority", "possible_capability", "requires_approval"],
                 "additionalProperties": False,
             },
         },
     },
-    "required": ["f", "a", "r"],
+    "required": ["facts", "assessments", "recommendations"],
     "additionalProperties": False,
 }
 _REASONING_POLICY = InvocationPolicy(
@@ -487,12 +547,14 @@ class OperationalContext:
     findings: tuple[OperationalFinding, ...]
     inconsistencies: tuple[str, ...]
     source_refs: tuple[str, ...]
+    operational_scope: str = "LIVE"
 
     def prompt_payload(self) -> dict:
         catalog = get_current_catalog()
         payload: dict[str, object] = {
             "query_scope": self.query_scope.as_dict(),
             "current_time": self.current_time,
+            "operational_scope": self.operational_scope,
             "authoritative_facts": {},
             "current_run_operational_reports": [],
             "deterministic_findings": [],
@@ -540,6 +602,9 @@ class OperationalContext:
                 "unavailable": self.team.unavailable,
                 "not_reported": self.team.not_reported,
                 "pending_identity": self.team.pending_identity,
+                "operational_manpower": self.team.operational_manpower,
+                "effective_manpower": self.team.effective_manpower,
+                "operational_resources": list(self.team.operational_resources),
                 "source_refs": [_state_source("team", self.team.provenance)],
             }
 
@@ -573,6 +638,8 @@ class OperationalContext:
         aliases = _compact_source_aliases(self)
         payload: dict[str, object] = {
             "t": self.current_time,
+            "q": self.query_scope.as_dict(),
+            "o": self.operational_scope,
             "v": [aliases[source_ref] for source_ref in self.source_refs],
             "s": {},
             "r": [],
@@ -1121,13 +1188,13 @@ def _recent_committed_reports(
                 received_at=str(event.get("received_at") or ""),
             ))
         )
-    # Keep at least one committed report per represented domain when the
-    # bounded history window is larger than the display budget, then fill by
-    # canonical scenario order. This prevents a burst from one domain from
-    # hiding all other current-run operational evidence.
+    # The simulation history reader returns a run in scenario order, while the
+    # live reader returns newest-first. Select the latest committed evidence
+    # per domain before filling the bounded report budget.
+    ordered_candidates = list(reversed(candidates)) if scenario_id and scenario_run_id else candidates
     selected: list[RecentOperationalReport] = []
     selected_domains: set[str] = set()
-    for domain, report in candidates:
+    for domain, report in ordered_candidates:
         if domain not in selected_domains:
             selected.append(report)
             selected_domains.add(domain)
@@ -1136,7 +1203,7 @@ def _recent_committed_reports(
     if len(selected) < RECENT_EVENTS_LIMIT:
         selected_refs = {report.source_ref for report in selected}
         selected.extend(
-            report for _, report in candidates
+            report for _, report in ordered_candidates
             if report.source_ref not in selected_refs and len(selected) < RECENT_EVENTS_LIMIT
         )
     reports = selected
@@ -1243,6 +1310,7 @@ def build_operational_context(
     *,
     query_scope: SituationalQueryScope,
     current_time: str,
+    operational_scope: OperationalScope | None = None,
 ) -> OperationalContext:
     """Select only bounded typed facts and committed current-run reports."""
 
@@ -1256,6 +1324,14 @@ def build_operational_context(
     for finding in snapshot.findings:
         source_refs.extend(finding.source_refs)
 
+    scope_key = operational_scope.key if operational_scope is not None else "LIVE"
+    if operational_scope is None:
+        for section_name in ("cameras", "drones", "team"):
+            section = getattr(snapshot, section_name)
+            if section is not None:
+                scope_key = section.provenance.operational_scope
+                break
+
     return OperationalContext(
         query_scope=query_scope,
         current_time=current_time,
@@ -1266,6 +1342,7 @@ def build_operational_context(
         findings=snapshot.findings,
         inconsistencies=snapshot.inconsistencies,
         source_refs=tuple(dict.fromkeys(source_refs)),
+        operational_scope=scope_key,
     )
 
 
@@ -1379,11 +1456,6 @@ def _reasoning_schema_issue(value: object, schema: dict, path: str = "$") -> tup
     return None
 
 
-_WIRE_CONFIDENCE = {"l": "low", "m": "medium", "h": "high"}
-_WIRE_PRIORITY = {"l": "low", "m": "medium", "h": "high"}
-_WIRE_DOMAIN = {"t": "team", "s": "surveillance", "d": "drones", "e": "external_reports", "x": "cross_domain"}
-
-
 def _wire_source_refs(raw_refs: object, aliases: dict[str, str], *, field_name: str) -> list[str]:
     if not isinstance(raw_refs, list):
         raise ValueError(f"{field_name} source aliases are not a list")
@@ -1401,32 +1473,32 @@ def _expand_reasoning_wire_payload(payload: dict, context: OperationalContext) -
     return {
         "facts": [
             {
-                "text": item["t"],
-                "source_refs": _wire_source_refs(item["s"], aliases, field_name=f"facts[{index}]"),
+                "text": item["text"],
+                "source_refs": _wire_source_refs(item["source_aliases"], aliases, field_name=f"facts[{index}]"),
             }
-            for index, item in enumerate(payload["f"])
+            for index, item in enumerate(payload["facts"])
         ],
         "assessments": [
             {
-                "conclusion": item["c"],
-                "supporting_source_refs": _wire_source_refs(item["s"], aliases, field_name=f"assessments[{index}]"),
-                "confidence": _WIRE_CONFIDENCE[item["v"]],
-                "qualification": item.get("q") or "",
-                "affected_domains": [_WIRE_DOMAIN[domain] for domain in item["d"]],
-                "priority": _WIRE_PRIORITY[item["p"]],
+                "conclusion": item["conclusion"],
+                "supporting_source_refs": _wire_source_refs(item["source_aliases"], aliases, field_name=f"assessments[{index}]"),
+                "confidence": item["confidence"],
+                "qualification": item.get("qualification") or "",
+                "affected_domains": item["affected_domains"],
+                "priority": item["priority"],
             }
-            for index, item in enumerate(payload["a"])
+            for index, item in enumerate(payload["assessments"])
         ],
         "recommendations": [
             {
-                "description": item["d"],
-                "rationale": item["r"],
-                "supporting_source_refs": _wire_source_refs(item["s"], aliases, field_name=f"recommendations[{index}]"),
-                "priority": _WIRE_PRIORITY[item["p"]],
-                "possible_capability": item["c"],
-                "requires_approval": item["a"],
+                "description": item["description"],
+                "rationale": item["rationale"],
+                "supporting_source_refs": _wire_source_refs(item["source_aliases"], aliases, field_name=f"recommendations[{index}]"),
+                "priority": item["priority"],
+                "possible_capability": item["possible_capability"],
+                "requires_approval": item["requires_approval"],
             }
-            for index, item in enumerate(payload["r"])
+            for index, item in enumerate(payload["recommendations"])
         ],
     }
 
@@ -1608,6 +1680,7 @@ def reason_over_operational_context(
         max_recommendations=REASONING_MAX_RECOMMENDATIONS,
     )
     started = time.perf_counter()
+    schema_issue: tuple[str, str] | None = None
     try:
         with stage_context("situational_picture_reasoning"):
             result = main_agent.process(prompt, [], invocation_policy=_REASONING_POLICY)
@@ -1619,7 +1692,7 @@ def reason_over_operational_context(
             trace = get_active_provider_diagnostic_trace()
             if trace is not None:
                 trace.record_schema_failure(*schema_issue)
-            raise ValueError(f"reasoning wire schema invalid at {schema_issue[1]}")
+            raise ValueError(f"reasoning wire schema invalid: {schema_issue[0]} at {schema_issue[1]}")
         trace = get_active_provider_diagnostic_trace()
         if trace is not None:
             trace.record_schema_success()
@@ -1654,14 +1727,33 @@ def reason_over_operational_context(
                 }.get(trace.first_failed_stage or "", "unknown")
             )
         logger.warning(
-            "bounded situational reasoning failed; using deterministic fallback",
+            "bounded situational reasoning failed; using deterministic fallback: %s "
+            "(stage=%s failure_kind=%s schema=%s@%s provenance=%s)",
+            exc,
+            trace.first_failed_stage if trace is not None else None,
+            trace.fallback_reason if trace is not None else None,
+            trace.schema_validation_error_category if trace is not None else None,
+            trace.schema_validation_error_path if trace is not None else None,
+            trace.provenance_claim_type if trace is not None else None,
             extra={
                 "event": "situational_reasoning_fallback",
                 "reason": str(exc),
+                "schema_issue": schema_issue[0] if schema_issue is not None else None,
+                "schema_path": schema_issue[1] if schema_issue is not None else None,
                 "reasoning_seconds": round(time.perf_counter() - started, 6),
                 "trace_id": get_trace_id(),
             },
         )
+        if trace is not None:
+            logger.warning(
+                "situational reasoning fallback diagnostics stage=%s kind=%s schema=%s path=%s provenance=%s",
+                trace.first_failed_stage,
+                trace.fallback_reason,
+                trace.schema_validation_error_category,
+                trace.schema_validation_error_path,
+                trace.provenance_claim_type,
+                extra={"event": "situational_reasoning_fallback_diagnostics", "trace_id": get_trace_id()},
+            )
         return OperationalReasoning(
             facts=(),
             assessments=(),
@@ -1696,7 +1788,7 @@ def _render_reasoning_fallback(snapshot: SituationalSnapshot) -> str:
     return render_typed_snapshot(
         snapshot,
         include_findings=True,
-        include_recent_reports=True,
+        include_recent_reports=False,
         include_recommendations=False,
     )
 
@@ -2188,10 +2280,11 @@ def build_situational_picture(
             typed_snapshot,
             query_scope=effective_scope,
             current_time=current_time,
+            operational_scope=resolved_operational_scope,
         )
         context_seconds = time.perf_counter() - context_started
         reasoning = None
-        if effective_scope.overall:
+        if effective_scope.requires_bounded_reasoning:
             reasoning = reason_over_operational_context(
                 main_agent,
                 operational_context,
@@ -2211,7 +2304,7 @@ def build_situational_picture(
             "typed situational picture completed",
             extra={
                 "event": "typed_picture_completed",
-                "overall_reasoning": bool(effective_scope.overall),
+                "bounded_reasoning": bool(effective_scope.requires_bounded_reasoning),
                 "snapshot_seconds": round(snapshot_seconds, 6),
                 "context_seconds": round(context_seconds, 6),
                 "reasoning_seconds": round(

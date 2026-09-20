@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS team_members (
     full_name TEXT NOT NULL,
     registered_at TEXT NOT NULL,
     approved INTEGER NOT NULL DEFAULT 0 CHECK (approved IN (0, 1)),
+    membership_status TEXT NOT NULL DEFAULT 'active' CHECK (membership_status IN ('active', 'retired')),
     PRIMARY KEY (scope_key, telegram_identity)
 );
 CREATE TABLE IF NOT EXISTS roster_approval (
@@ -123,6 +124,13 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             connection.execute("INSERT INTO team_members_new SELECT 'LIVE',telegram_identity,full_name,registered_at,approved FROM team_members_legacy")
             connection.execute("DROP TABLE team_members_legacy")
             connection.execute("ALTER TABLE team_members_new RENAME TO team_members")
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='team_members'").fetchone() is not None:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(team_members)")}
+            if "membership_status" not in columns:
+                connection.execute(
+                    "ALTER TABLE team_members ADD COLUMN membership_status TEXT NOT NULL DEFAULT 'active' "
+                    "CHECK (membership_status IN ('active', 'retired'))"
+                )
         if "roster_approval" in tables and "scope_key" not in {row[1] for row in connection.execute("PRAGMA table_info(roster_approval)")}: 
             connection.execute("ALTER TABLE roster_approval RENAME TO roster_approval_legacy")
             connection.execute("CREATE TABLE roster_approval_new (scope_key TEXT PRIMARY KEY, singleton_id INTEGER NOT NULL DEFAULT 1, approved_by TEXT NOT NULL, approved_at TEXT NOT NULL)")
@@ -186,7 +194,11 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             else:
                 identity = str(member).strip(); name = identity
             if identity:
-                conn.execute("INSERT OR IGNORE INTO team_members(scope_key,telegram_identity,full_name,registered_at,approved) VALUES (?,?,?,?,1)", (scope_key, identity, name, _utc_now()))
+                conn.execute(
+                    "INSERT OR IGNORE INTO team_members(scope_key,telegram_identity,full_name,registered_at,approved,membership_status) "
+                    "VALUES (?,?,?,?,1,'active')",
+                    (scope_key, identity, name, _utc_now()),
+                )
         if members and team.get("approve", True):
             conn.execute("INSERT OR IGNORE INTO roster_approval(scope_key,approved_by,approved_at) VALUES (?,?,?)", (scope_key, "simulation-provisioning", _utc_now()))
         state = team.get("operational_state") if isinstance(team, Mapping) else None
@@ -222,9 +234,34 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             return connection.execute("SELECT 1 FROM roster_approval WHERE scope_key=?", (key,)).fetchone() is not None
 
     def list_members(self, *, approved_only=True, scope=None):
-        key = self._require_scope(scope); where = " AND approved=1" if approved_only else ""
+        key = self._require_scope(scope)
+        where = " AND membership_status='active'" + (" AND approved=1" if approved_only else "")
         with self._connect() as connection:
             return [dict(row) for row in connection.execute(f"SELECT * FROM team_members WHERE scope_key=?{where} ORDER BY full_name", (key,)).fetchall()]
+
+    def get_members(self, *, approved_only=True, scope=None) -> list[dict]:
+        """Canonical scope-bound membership read API."""
+        return self.list_members(approved_only=approved_only, scope=scope)
+
+    def get_member_state(self, telegram_identity: str, *, scope=None) -> dict | None:
+        key = self._require_scope(scope)
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM team_members WHERE scope_key=? AND telegram_identity=? AND membership_status='active'",
+                (key, telegram_identity),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def retire_member(self, telegram_identity: str, *, scope=None) -> bool:
+        """Retire a membership without deleting attendance/history rows."""
+        key = self._require_scope(scope)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE team_members SET membership_status='retired' "
+                "WHERE scope_key=? AND telegram_identity=? AND membership_status='active'",
+                (key, telegram_identity),
+            )
+        return cursor.rowcount > 0
 
     def open_cycle(self, cycle_key, opened_at, deadline_at, *, scope=None):
         key = self._require_scope(scope)
@@ -295,8 +332,12 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         if cycle is None: raise TeamStatusPersistenceError("no attendance cycle is open")
         approval_status = "accepted" if received <= _parse_timestamp(cycle["deadline_at"]) else "pending"; response_id = f"response-{uuid.uuid4().hex}"
         with self._connect() as connection:
-            member = connection.execute("SELECT approved FROM team_members WHERE scope_key=? AND telegram_identity=?", (key, telegram_identity)).fetchone()
-            if member is None or not member["approved"]: raise TeamStatusPersistenceError("attendance responses are accepted only from the approved roster")
+            member = connection.execute(
+                "SELECT approved, membership_status FROM team_members WHERE scope_key=? AND telegram_identity=?",
+                (key, telegram_identity),
+            ).fetchone()
+            if member is None or not member["approved"] or member["membership_status"] != "active":
+                raise TeamStatusPersistenceError("attendance responses are accepted only from the approved roster")
             try:
                 connection.execute("INSERT INTO attendance_responses(scope_key,response_id,source_message_id,cycle_id,telegram_identity,availability,reason,availability_start,availability_end,unavailable_until,original_text,received_at,approval_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (key,response_id,source_message_id,cycle["cycle_id"],telegram_identity,availability,reason.strip() if reason else None,normalized_start,normalized_end,normalized_until,original_text,received_at,approval_status))
             except sqlite3.IntegrityError:

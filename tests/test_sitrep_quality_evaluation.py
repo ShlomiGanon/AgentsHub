@@ -195,9 +195,9 @@ def test_harness_one_call_budget_uses_typed_context(cases):
     ref = case.context.source_refs[0]
     payload = json.dumps(
             {
-                "f": [{"t": "המערכות זמינות", "s": ["S1"]}],
-                "a": [],
-                "r": [],
+                "facts": [{"text": "המערכות זמינות", "source_aliases": ["S1"]}],
+                "assessments": [],
+                "recommendations": [],
             },
         ensure_ascii=False,
     )

@@ -168,22 +168,22 @@ def _payload(source_refs, *, recommendation=False, text=None):
     aliases = {source_ref: f"S{index}" for index, source_ref in enumerate(source_refs, start=1)}
     return json.dumps(
         {
-            "f": [{"t": text or "CAM-03 offline; CAM-08 degraded.", "s": [aliases[source_refs[0]]]}],
-            "a": [{
-                "c": "Cross-domain readiness is reduced.",
-                "s": [aliases[source_ref] for source_ref in source_refs[:2]],
-                "v": "h",
-                "q": "Partial evidence.",
-                "d": ["x"],
-                "p": "h",
+            "facts": [{"text": text or "CAM-03 offline; CAM-08 degraded.", "source_aliases": [aliases[source_refs[0]]]}],
+            "assessments": [{
+                "conclusion": "Cross-domain readiness is reduced.",
+                "source_aliases": [aliases[source_ref] for source_ref in source_refs[:2]],
+                "confidence": "high",
+                "qualification": "Partial evidence.",
+                "affected_domains": ["cross_domain"],
+                "priority": "high",
             }],
-            "r": ([{
-                "d": "Review the degraded camera.",
-                "r": "Needs attention.",
-                "s": [aliases[source_refs[-1]]],
-                "p": "m",
-                "c": None,
-                "a": False,
+            "recommendations": ([{
+                "description": "Review the degraded camera.",
+                "rationale": "Needs attention.",
+                "source_aliases": [aliases[source_refs[-1]]],
+                "priority": "medium",
+                "possible_capability": None,
+                "requires_approval": False,
             }] if recommendation else []),
         },
         ensure_ascii=False,
@@ -208,6 +208,10 @@ def test_operational_context_is_compact_typed_and_selects_abnormal_entities_only
     assert "CAM-01" not in json.dumps(payload, ensure_ascii=False)
     assert payload["source_refs"]
     assert payload["current_run_operational_reports"] == []
+    assert payload["operational_scope"] == "LIVE"
+    compact = context.provider_prompt_payload()
+    assert compact["q"]["team"] is True
+    assert compact["o"] == "LIVE"
 
 
 def test_valid_cross_domain_reasoning_is_accepted_and_rendered_in_hebrew():
@@ -260,7 +264,7 @@ def test_overall_picture_uses_one_reasoning_call_after_typed_snapshot():
 def test_unknown_source_ref_falls_back_without_exposing_model_output():
     _, context = _snapshot_and_context()
     invalid = _payload(("state:cameras:surveillance_store.list_cameras", "event:not-real"))
-    invalid = json.dumps({"f": [{"t": "unknown", "s": ["S99"]}], "a": [], "r": []})
+    invalid = json.dumps({"facts": [{"text": "unknown", "source_aliases": ["S99"]}], "assessments": [], "recommendations": []})
     agent = _ReasoningAgent(invalid)
 
     result = reason_over_operational_context(agent, context, raw_text="picture")
@@ -274,7 +278,7 @@ def test_missing_source_ref_falls_back():
     _, context = _snapshot_and_context()
     invalid = json.dumps({"facts": [{"text": "׳¢׳•׳‘׳“׳”", "source_refs": []}], "assessments": [], "recommendations": []})
 
-    invalid = json.dumps({"f": [{"t": "missing refs", "s": []}], "a": [], "r": []})
+    invalid = json.dumps({"facts": [{"text": "missing refs", "source_aliases": []}], "assessments": [], "recommendations": []})
     result = reason_over_operational_context(_ReasoningAgent(invalid), context, raw_text="picture")
 
     assert result.fallback is True
@@ -318,6 +322,34 @@ def test_model_failure_uses_deterministic_fallback_and_one_call():
     assert len(agent.calls) == 1
     assert "׳“׳™׳•׳•׳—׳™׳ ׳ž׳—׳•׳™׳‘׳™׳" not in picture.text
     assert snapshot.cameras.offline == 1
+
+
+def test_reasoning_fallback_does_not_render_recent_report_dump():
+    class History:
+        def recent_committed_events(self, **kwargs):
+            return ({
+                "event_id": "event-current",
+                "classification": "friendly_forces_report",
+                "description": "Unverified external movement near the east perimeter.",
+                "received_at": "2026-09-18T11:00:00+00:00",
+                "outcome": "succeeded",
+            },)
+
+    picture = build_situational_picture(
+        _ReasoningAgent(error=RuntimeError("model unavailable")),
+        _protocol(),
+        _registry(),
+        History(),
+        "picture",
+        caller_identity="commander",
+        sender_identity_filter=None,
+        now=NOW,
+        scope=SituationalQueryScope.overall_scope(),
+    )
+
+    assert picture.reasoning.fallback is True
+    assert "Recent committed reports:" not in picture.text
+    assert "Unverified external movement" not in picture.text
 
 
 def test_malformed_structured_output_falls_back():
@@ -401,5 +433,7 @@ def test_current_run_context_excludes_previous_run_reports(tmp_path):
 
         assert [report["text"] for report in reports] == ["׳“׳™׳•׳•׳— ׳ž׳”׳¨׳¦׳” B"]
         assert "׳“׳™׳•׳•׳— ׳ž׳”׳¨׳¦׳” A" not in json.dumps(prompt_payload, ensure_ascii=False)
+        assert context.operational_scope == "SIMULATION_RUN:SEC_001_PHASE_1:run-b"
+        assert context.provider_prompt_payload()["o"] == "SIMULATION_RUN:SEC_001_PHASE_1:run-b"
     finally:
         persistence.close()

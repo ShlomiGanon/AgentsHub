@@ -51,7 +51,7 @@ def test_reasoning_boundary_records_json_schema_canonical_and_provenance_success
         def process(self, *_args, **_kwargs):
             return SimpleNamespace(
                 status="success",
-                text=json.dumps({"f": [{"t": "grounded", "s": ["S1"]}], "a": [], "r": []}),
+                text=json.dumps({"facts": [{"text": "grounded", "source_aliases": ["S1"]}], "assessments": [], "recommendations": []}),
             )
 
     context = OperationalContext(

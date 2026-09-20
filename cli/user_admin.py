@@ -110,7 +110,7 @@ def _run_command(args: argparse.Namespace, store: PersistenceInterface) -> int:
         return 0
 
     if args.command == "list":
-        for user in store.list_users():
+        for user in store.list_live_users():
             source = "automatic" if user.get("auto_register", False) else "approved"
             print(f"{user['telegram_identity']}\t{user['permission_level']}\t{user['full_name']}\t{source}")
         return 0

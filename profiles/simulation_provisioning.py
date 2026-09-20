@@ -37,6 +37,15 @@ class ProvisioningResult:
     newly_approved_rosters: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class LegacyMembershipRepairResult:
+    marked_simulation_identities: tuple[str, ...]
+    retired_live_memberships: tuple[tuple[str, str], ...]
+    already_clean_memberships: tuple[tuple[str, str], ...]
+    safe: bool = True
+    skipped_rosters: tuple[str, ...] = ()
+
+
 def ensure_simulation_entities(persistence: "PersistenceInterface", loaded_profile: "LoadedProfile") -> ProvisioningResult:
     """Create declared simulation users/groups without touching operational LIVE state.
 
@@ -48,8 +57,17 @@ def ensure_simulation_entities(persistence: "PersistenceInterface", loaded_profi
     created_users = []
     for persona in loaded_profile.simulation_users:
         telegram_id = simulation_user_telegram_id(persona.offset)
-        if persistence.ensure_user_exists(telegram_id, persona.permission_level, persona.full_name):
+        if persistence.ensure_user_exists(
+            telegram_id,
+            persona.permission_level,
+            persona.full_name,
+            identity_kind="SIMULATION",
+        ):
             created_users.append(telegram_id)
+        else:
+            # Existing databases may predate identity provenance.  This is an
+            # explicit, idempotent provenance repair; it never changes role/name.
+            persistence.mark_simulation_identity(telegram_id)
 
     created_groups = []
     for group in loaded_profile.simulation_groups:
@@ -98,6 +116,54 @@ def initialize_operational_scope(loaded_profile: "LoadedProfile", registry, scop
         initializer = getattr(agent, "ensure_operational_scope", None)
         if callable(initializer):
             initializer(scope, baseline=baseline)
+
+
+def repair_legacy_live_simulation_memberships(
+    persistence: "PersistenceInterface",
+    loaded_profile: "LoadedProfile",
+) -> LegacyMembershipRepairResult:
+    """Repair only provably synthetic LIVE associations, preserving history.
+
+    The identity is canonical because it comes from the declared simulation
+    persona offset, never from a display name.  Membership repair is a soft
+    retirement in the roster store, so foreign-keyed attendance responses and
+    all historical identity/event rows remain intact.  A roster without the
+    official retirement API is reported as unsafe and is not mutated.
+    """
+
+    simulation_ids = tuple(
+        simulation_user_telegram_id(persona.offset)
+        for persona in loaded_profile.simulation_users
+    )
+    stores = []
+    skipped = []
+    for roster in loaded_profile.simulation_rosters:
+        store = roster.open(roster.db_path)
+        if not callable(getattr(store, "retire_member", None)):
+            skipped.append(roster.key)
+        else:
+            stores.append((roster.key, store))
+    if skipped:
+        return LegacyMembershipRepairResult((), (), (), safe=False, skipped_rosters=tuple(skipped))
+
+    marked = tuple(
+        identity for identity in simulation_ids
+        if persistence.mark_simulation_identity(identity)
+    )
+    retired = []
+    clean = []
+    live = OperationalScope.live()
+    for roster_key, store in stores:
+        for identity in simulation_ids:
+            if store.retire_member(identity, scope=live):
+                retired.append((roster_key, identity))
+            else:
+                clean.append((roster_key, identity))
+    return LegacyMembershipRepairResult(
+        marked_simulation_identities=marked,
+        retired_live_memberships=tuple(retired),
+        already_clean_memberships=tuple(clean),
+    )
 
 
 def _ensure_roster_memberships(

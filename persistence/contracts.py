@@ -206,11 +206,30 @@ class PersistenceInterface(ABC):
         """Atomically create an automatic viewer when absent and return the effective record."""
 
     @abstractmethod
-    def ensure_user_exists(self, telegram_identity: str, permission_level: str, full_name: str) -> bool:
+    def ensure_user_exists(
+        self,
+        telegram_identity: str,
+        permission_level: str,
+        full_name: str,
+        *,
+        identity_kind: str = "LIVE",
+    ) -> bool:
         """Create the user (auto_register=False) if absent; never touch it if present.
         Returns True iff a new row was created — used for idempotent simulation-user
         provisioning (docs/profile_simulations_design.md), distinct from
         `register_telegram_user_if_missing`'s safe-mode-pending-approval semantics."""
+
+    @abstractmethod
+    def mark_simulation_identity(self, telegram_identity: str) -> bool:
+        """Mark an existing declared synthetic identity as SIMULATION, idempotently."""
+
+    @abstractmethod
+    def list_live_users(self) -> list[dict]:
+        """Return only real LIVE identities for onboarding/admin management."""
+
+    def is_simulation_identity(self, telegram_identity: str) -> bool:
+        """Return whether an identity is explicitly marked synthetic."""
+        return False
 
     @abstractmethod
     def admit_telegram_update(

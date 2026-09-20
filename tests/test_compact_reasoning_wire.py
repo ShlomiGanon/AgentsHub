@@ -23,29 +23,29 @@ from tools.evaluate_sitrep_quality import build_evaluation_cases
 
 def _max_valid_wire_payload() -> dict:
     return {
-        "f": [
-            {"t": "א" * REASONING_FACT_TEXT_MAX, "s": ["S1", "S2"]}
+        "facts": [
+            {"text": "א" * REASONING_FACT_TEXT_MAX, "source_aliases": ["S1", "S2"]}
             for _ in range(2)
         ],
-        "a": [
+        "assessments": [
             {
-                "c": "ב" * REASONING_CONCLUSION_TEXT_MAX,
-                "s": ["S1"],
-                "v": "h",
-                "q": "ג" * REASONING_QUALIFICATION_TEXT_MAX,
-                "d": ["t", "s"],
-                "p": "h",
+                "conclusion": "ב" * REASONING_CONCLUSION_TEXT_MAX,
+                "source_aliases": ["S1"],
+                "confidence": "high",
+                "qualification": "ג" * REASONING_QUALIFICATION_TEXT_MAX,
+                "affected_domains": ["team", "surveillance"],
+                "priority": "high",
             }
             for _ in range(1)
         ],
-        "r": [
+        "recommendations": [
             {
-                "d": "ד" * REASONING_RECOMMENDATION_TEXT_MAX,
-                "r": "ה" * REASONING_RATIONALE_TEXT_MAX,
-                "s": ["S1"],
-                "p": "m",
-                "c": "ask_current_state",
-                "a": True,
+                "description": "ד" * REASONING_RECOMMENDATION_TEXT_MAX,
+                "rationale": "ה" * REASONING_RATIONALE_TEXT_MAX,
+                "source_aliases": ["S1"],
+                "priority": "medium",
+                "possible_capability": "ask_current_state",
+                "requires_approval": True,
             }
             for _ in range(1)
         ],
@@ -64,7 +64,9 @@ def test_provider_context_is_compact_and_hides_canonical_source_ids():
         payload = context.provider_prompt_payload()
         serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
-        assert set(payload) == {"t", "v", "s", "r", "f", "u"}
+        assert set(payload) == {"t", "q", "o", "v", "s", "r", "f", "u"}
+        assert payload["q"] == context.query_scope.as_dict()
+        assert payload["o"] == context.operational_scope
         assert payload["v"] == [f"S{index}" for index in range(1, len(context.source_refs) + 1)]
         assert all(source_ref not in serialized for source_ref in context.source_refs)
         assert "authoritative_facts" not in serialized
@@ -87,9 +89,9 @@ def test_maximum_valid_wire_payload_is_closed_and_bounded():
 @pytest.mark.parametrize(
     "payload",
     (
-        {"f": [{"t": "x" * (REASONING_FACT_TEXT_MAX + 1), "s": ["S1"]}], "a": [], "r": []},
-        {"f": [], "a": [{"c": "x", "s": ["S1"], "v": "h", "q": "x" * (REASONING_QUALIFICATION_TEXT_MAX + 1), "d": ["x"], "p": "h"}], "r": []},
-        {"f": [], "a": [], "r": [{"d": "x", "r": "x" * (REASONING_RATIONALE_TEXT_MAX + 1), "s": ["S1"], "p": "m", "c": None, "a": False}]},
+        {"facts": [{"text": "x" * (REASONING_FACT_TEXT_MAX + 1), "source_aliases": ["S1"]}], "assessments": [], "recommendations": []},
+        {"facts": [], "assessments": [{"conclusion": "x", "source_aliases": ["S1"], "confidence": "high", "qualification": "x" * (REASONING_QUALIFICATION_TEXT_MAX + 1), "affected_domains": ["cross_domain"], "priority": "high"}], "recommendations": []},
+        {"facts": [], "assessments": [], "recommendations": [{"description": "x", "rationale": "x" * (REASONING_RATIONALE_TEXT_MAX + 1), "source_aliases": ["S1"], "priority": "medium", "possible_capability": None, "requires_approval": False}]},
     ),
 )
 def test_wire_string_bounds_are_rejected(payload):
@@ -98,26 +100,26 @@ def test_wire_string_bounds_are_rejected(payload):
 
 def test_wire_cardinality_and_arbitrary_fields_are_rejected():
     payload = _max_valid_wire_payload()
-    payload["a"].append(payload["a"][0])
+    payload["assessments"].append(payload["assessments"][0])
     assert _reasoning_schema_issue(payload, _REASONING_SCHEMA)[0] == "array_too_long"
 
     payload = _max_valid_wire_payload()
-    payload["r"][0]["unexpected"] = True
+    payload["recommendations"][0]["unexpected"] = True
     assert _reasoning_schema_issue(payload, _REASONING_SCHEMA)[0] == "additional_property"
 
 
 def test_alias_conversion_restores_canonical_refs_and_rejects_unknown_or_duplicate_aliases():
     cases, context = _case_context()
     try:
-        payload = {"f": [{"t": "fact", "s": ["S1"]}], "a": [], "r": []}
+        payload = {"facts": [{"text": "fact", "source_aliases": ["S1"]}], "assessments": [], "recommendations": []}
         expanded = _expand_reasoning_wire_payload(payload, context)
         assert expanded["facts"][0]["source_refs"] == [context.source_refs[0]]
 
-        duplicate = {"f": [{"t": "fact", "s": ["S1", "S1"]}], "a": [], "r": []}
+        duplicate = {"facts": [{"text": "fact", "source_aliases": ["S1", "S1"]}], "assessments": [], "recommendations": []}
         with pytest.raises(ValueError, match="duplicate"):
             _expand_reasoning_wire_payload(duplicate, context)
 
-        unknown = {"f": [{"t": "fact", "s": ["S99"]}], "a": [], "r": []}
+        unknown = {"facts": [{"text": "fact", "source_aliases": ["S99"]}], "assessments": [], "recommendations": []}
         unknown_expanded = _expand_reasoning_wire_payload(unknown, context)
         assert unknown_expanded["facts"][0]["source_refs"] == ["S99"]
         with pytest.raises(ValueError, match="unknown source_ref"):
