@@ -130,7 +130,7 @@ def save_selected_profile(module_path: str) -> None:
     _atomic_json(control_dir() / "selected_profile.json", {"module_path": module_path})
 
 
-def load_selected_profile(default: str = "profiles.unified_test") -> str:
+def load_selected_profile(default: str = "profiles.standby_squad") -> str:
     try:
         value = json.loads((control_dir() / "selected_profile.json").read_text(encoding="utf-8"))
         module_path = value.get("module_path")

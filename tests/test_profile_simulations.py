@@ -473,10 +473,16 @@ def test_find_simulation_scenario_returns_none_for_an_unknown_key():
     assert find_simulation_scenario(loaded, "demo") is not None
 
 
-# -- the SEC_001 migration (profiles/unified_test.py), against the real profile -------------
+# -- the SEC_001 migration (profiles/standby_squad.py), against the real profile ------------
+#
+# Profile Split Plan (docs/Profile_Split_Plan.md), Step 1: repointed from profiles.unified_test
+# (which declared this alongside the pilot scenario and the FIRE_002 series) to
+# profiles.standby_squad (which declares SEC_001 only, offsets renumbered from 0). The
+# FIRE_002-series test below this one is repointed separately, in Step 2, when
+# profiles/firefighting.py is created.
 
 
-def test_unified_test_declares_the_migrated_sec001_series(test_core_model, test_sub_model, monkeypatch):
+def test_standby_squad_declares_the_migrated_sec001_series(test_core_model, test_sub_model, monkeypatch):
     """docs/profile_simulations_design.md: the SEC_001 series
     (fixtures/admin_scenarios/'כיתת כוננת - חלק 1/2/3.json') was migrated into real
     SIMULATIONS declarations, with recurring characters sharing one reserved ID
@@ -485,7 +491,7 @@ def test_unified_test_declares_the_migrated_sec001_series(test_core_model, test_
     monkeypatch.setenv("BOT_TOKEN", "fake-token")
     from profiles.loader import load_profile
 
-    loaded = load_profile("profiles.unified_test", core_model=test_core_model, sub_model=test_sub_model)
+    loaded = load_profile("profiles.standby_squad", core_model=test_core_model, sub_model=test_sub_model)
 
     sec001_keys = {"sec001_phase1", "sec001_phase2", "sec001_phase3"}
     assert sec001_keys <= {s.key for s in loaded.simulations}
@@ -513,21 +519,22 @@ def test_unified_test_declares_the_migrated_sec001_series(test_core_model, test_
         for key in sec001_keys:
             assert _sender_ids_for(key, persona_key), f"{persona_key} missing its reserved ID in {key}"
 
-    # response_team is reused from the pre-existing demo scenario's group, not re-declared.
     group_keys = [g.key for g in loaded.simulation_groups]
     assert group_keys.count("response_team") == 1
     assert {"cameras", "external_forces"}.issubset(group_keys)
 
 
-def test_unified_test_declares_the_migrated_fire002_series(test_core_model, test_sub_model, monkeypatch):
-    """Same migration pattern as SEC_001, applied to the firefighting series — its own
-    independent persona/group roster, despite the raw fixture reusing identical channel
-    names ('TELEGRAM_GROUP_RESPONSE_TEAM' etc.) across both series."""
+def test_firefighting_declares_the_migrated_fire002_series(test_core_model, test_sub_model, monkeypatch):
+    """Same migration pattern as SEC_001 (profiles/standby_squad.py), applied to the firefighting
+    series. Profile Split Plan (docs/Profile_Split_Plan.md), Step 2: repointed from
+    profiles.unified_test to profiles.firefighting (its own dedicated file/process, offsets
+    renumbered from 0) -- despite the raw fixture reusing identical channel names
+    ('TELEGRAM_GROUP_RESPONSE_TEAM' etc.) across both series."""
 
-    monkeypatch.setenv("BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("FIREFIGHTING_BOT_TOKEN", "fake-token")
     from profiles.loader import load_profile
 
-    loaded = load_profile("profiles.unified_test", core_model=test_core_model, sub_model=test_sub_model)
+    loaded = load_profile("profiles.firefighting", core_model=test_core_model, sub_model=test_sub_model)
 
     fire002_keys = {"fire002_phase1", "fire002_phase2", "fire002_phase3"}
     assert fire002_keys <= {s.key for s in loaded.simulations}
@@ -553,31 +560,24 @@ def test_unified_test_declares_the_migrated_fire002_series(test_core_model, test
         for key in fire002_keys:
             assert _sender_ids_for(key, persona_key), f"{persona_key} missing its reserved ID in {key}"
 
-    # FIRE_002's roster and groups are entirely independent of SEC_001's — no shared keys.
+    # FIRE_002's roster and groups are the only ones profiles.firefighting declares --
+    # independence from SEC_001 (profiles.standby_squad) is now structural (a separate
+    # profile file/process/DB), not just a same-profile key/offset separation.
     fire_persona_keys = {
         "lahav_avi_shift_commander", "omri_firefighter", "roni_surveillance_operator", "kkl_mountains_sector",
         "police_hub_agam", "station_commander", "yuval_ashed3_commander", "citizen_reports_group",
         "fire_police_patrol", "district_fire_commander",
     }
-    sec_persona_keys = {
-        "eli_response_team", "yossi_technician", "sdemot_security_coordinator", "danny_response_team",
-        "site_security_officer", "michael_response_team", "police_duty_officer", "yuval_response_team",
-        "patrol_unit_40", "gil_response_team", "resident_avraham", "dan_response_team", "mda_dispatch",
-        "police_patrol", "yasam_commander",
-    }
-    assert fire_persona_keys.isdisjoint(sec_persona_keys)
     all_persona_keys = [p.key for p in loaded.simulation_users]
-    assert len(all_persona_keys) == len(set(all_persona_keys))  # no key or offset collisions anywhere
+    assert set(all_persona_keys) == fire_persona_keys
+    assert len(all_persona_keys) == len(set(all_persona_keys))  # no key or offset collisions
 
-    # FIRE_002 declares its own group keys ("fire_*") rather than reusing SEC_001's
-    # same-purpose groups ("cameras", "external_forces") — independent rosters, per series.
     fire_group_keys = {"fire_response_team", "fire_cameras", "fire_external_forces"}
     group_keys = {g.key for g in loaded.simulation_groups}
-    assert fire_group_keys.issubset(group_keys)
-    assert fire_group_keys.isdisjoint({"cameras", "external_forces"})
+    assert group_keys == fire_group_keys
 
 
-def test_unified_test_response_team_personas_become_approved_team_status_members(
+def test_standby_squad_response_team_personas_become_approved_team_status_members(
     test_core_model, test_sub_model, monkeypatch, tmp_path
 ):
     """Closes the gap the SEC_001-attendance-step investigation found: a response-team
@@ -593,7 +593,7 @@ def test_unified_test_response_team_personas_become_approved_team_status_members
     from profiles.loader import load_profile
 
     monkeypatch.setenv("BOT_TOKEN", "fake-token")
-    loaded = load_profile("profiles.unified_test", core_model=test_core_model, sub_model=test_sub_model)
+    loaded = load_profile("profiles.standby_squad", core_model=test_core_model, sub_model=test_sub_model)
 
     isolated_db_path = str(tmp_path / "team_status.db")
     real_roster = next(r for r in loaded.simulation_rosters if r.key == "team_status")

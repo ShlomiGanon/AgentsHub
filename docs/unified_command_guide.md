@@ -1,6 +1,6 @@
 # מדריך הפעלה וארכיטקטורה: חמ''ל מבצעי אחוד (Unified Command Hub)
 
-מסמך זה מרכז את כלל המידע המבצעי, הטכנולוגי ושלבי ההפעלה של הפרופיל המבצעי האחוד (**`profiles.unified_test`**), מערך הרשאות המשתמשים ב-Dashboard, לחצני הטלגרם לפי תפקיד, ניהול צי הרחפנים והמענה המבצעי הקצר בעברית.
+מסמך זה מרכז את כלל המידע המבצעי, הטכנולוגי ושלבי ההפעלה של הפרופיל המבצעי האחוד (**`profiles.standby_squad`**), מערך הרשאות המשתמשים ב-Dashboard, לחצני הטלגרם לפי תפקיד, ניהול צי הרחפנים והמענה המבצעי הקצר בעברית.
 
 ---
 
@@ -24,7 +24,7 @@ failed to start API: required environment variable 'CORE_MODEL_PROVIDER' is not 
 ### שלב 1: הפעלת שרת ה-API וה-Dashboard
 בחלון הטרמינל הראשון (לאחר הרצת `.\load-env.ps1`):
 ```powershell
-python -m api.app profiles.unified_test
+python -m api.app profiles.standby_squad
 ```
 - **פורט השרת המבודד:** השרת רץ על פורט **`8905`** (מבודד מכל שאר הפרופילים במערכת).
 - **מסדי נתונים מבודדים:** נוצרים אוטומטית בתיקייה `data/unified_test/`:
@@ -49,7 +49,7 @@ python -m api.app profiles.unified_test
 > **חלופה ב-CLI (ללא דפדפן):**
 > ניתן להוסיף משתמש ישירות משורת הפקודה:
 > ```powershell
-> python -m cli.user_admin --profile profiles.unified_test add --telegram-id <USER_ID> --level commander
+> python -m cli.user_admin --profile profiles.standby_squad add --telegram-id <USER_ID> --level commander
 > ```
 
 ---
@@ -57,7 +57,7 @@ python -m api.app profiles.unified_test
 ### שלב 3: הפעלת בוט הטלגרם
 בחלון טרמינל **שני נפרד** (גם בו יש להריץ קודם `.\load-env.ps1`):
 ```powershell
-python -m bot.app profiles.unified_test
+python -m bot.app profiles.standby_squad
 ```
 הבוט יתחבר לחשבון הטלגרם שהוגדר ב-`BOT_TOKEN` ויחל בהאזנה להודעות (`long-polling`).
 
@@ -218,5 +218,5 @@ http://localhost:8905/admin/simulator
 | :--- | :--- | :--- |
 | `required environment variable 'CORE_MODEL_PROVIDER' is not set` | משתני הסביבה טרם נטענו בטרמינל הנוכחי | הרץ `.\load-env.ps1` בחלון ה-PowerShell לפני הפעלת השרת או הבוט |
 | הבוט מחזיר: `משתמש זה אינו מורשה להשתמש במערכת` | מזהה הטלגרם לא אושר ב-Dashboard | היכנס ל-`http://localhost:8905/admin` והוסף את ה-User ID שלך |
-| שגיאת `Connection refused` או `401 Unauthorized` בריצת הבוט | שרת ה-API אינו רץ או מפתח ה-Service שגוי | ודא ששרת ה-API רץ בחלון הראשון (`python -m api.app profiles.unified_test`) ושנטען ה-`.env` |
+| שגיאת `Connection refused` או `401 Unauthorized` בריצת הבוט | שרת ה-API אינו רץ או מפתח ה-Service שגוי | ודא ששרת ה-API רץ בחלון הראשון (`python -m api.app profiles.standby_squad`) ושנטען ה-`.env` |
 | בקשת פעולה נשארת ב-`held_for_approval` | הפעולה דורשת שליטת מפקד או אישור מפורש | מפקד רשום צריך לאשר או לדחות אותה בתור האישורים; אין צורך להעלות את הרשאת המבקש |

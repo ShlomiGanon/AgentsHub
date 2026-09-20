@@ -133,7 +133,7 @@ def test_parse_timestamp_still_rejects_genuinely_unparseable_input():
 
 def test_availability_snapshot_accepts_an_offset_less_as_of_timestamp(tmp_path):
     """The exact live-run failure this fixes: `report_team_availability`
-    (profiles/unified_test.py) passes `as_of_iso` straight through to
+    (profiles/standby_squad.py) passes `as_of_iso` straight through to
     `availability_snapshot` without adding an offset — a naive timestamp must
     succeed, not raise, exactly as an explicit `Z`/`+00:00` one already does."""
 

@@ -4,10 +4,8 @@ MESSAGES = {
     "status.thinking": "המודל חושב...",
     "error.request_failed": "הבקשה נכשלה: {reason}",
     "error.run_failure_generic": "לא הצלחתי לעבד את זה — נסה לנסח מחדש או פנה למפקד.",
-    "debug.llm_call": (
-        "קריאת LLM אל {provider}/{model} הסתיימה בתוך {latency_ms} מילישניות; "
-        "מספר tokens: {tokens}."
-    ),
+    "debug.llm_call": "קריאת LLM אל {provider}/{model} הסתיימה בתוך {latency_ms} מילישניות; "
+        "מספר tokens: {tokens}.",
     "debug.api_received": "מעקב: הבקשה הגיעה ל-API ולסוכן הראשי.",
     "debug.intent": "מעקב: הסוכן הראשי סיווג את ההודעה כ-{intent}.",
     "debug.report": "מעקב: הדיווח {event_id} נשמר ונכנס לתור.",
@@ -64,101 +62,61 @@ MESSAGES = {
     "common.unknown": "(לא ידוע)",
     "common.none": "(אין)",
     "common.no_reason": "(לא נמסרה סיבה)",
-    "auth.unregistered": (
-        "אינך משתמש רשום במערכת זו (זהות: {identity}). "
-        "מנהל מערכת חייב להוסיף אותך לפני שתוכל להשתמש בבוט."
-    ),
-    "auth.operation_refused": (
-        "הפעולה '{operation}' דורשת הרשאת מפקד; החשבון שלך "
-        "({identity}) רשום ברמת {level}."
-    ),
-    "profile.nothing_changed": (
-        "המערכת הפעילה לא השתנתה — העריכה תיכנס לתוקף בהפעלה הבאה."
-    ),
+    "auth.unregistered": "אינך משתמש רשום במערכת זו (זהות: {identity}). "
+        "מנהל מערכת חייב להוסיף אותך לפני שתוכל להשתמש בבוט.",
+    "auth.operation_refused": "הפעולה '{operation}' דורשת הרשאת מפקד; החשבון שלך "
+        "({identity}) רשום ברמת {level}.",
+    "profile.nothing_changed": "המערכת הפעילה לא השתנתה — העריכה תיכנס לתוקף בהפעלה הבאה.",
     "profile.name": "פרופיל: {profile_name}",
     "profile.agents": "סוכנים:",
     "profile.protocols": "פרוטוקולים:",
     "profile.protocol_requires_approval": "דורש אישור",
     "profile.protocol_no_approval": "אינו דורש אישור",
-    "profile.protocol_line": (
-        "- {name} (רמת קריטיות: {criticality}, {approval}): {description}"
-    ),
+    "profile.protocol_line": "- {name} (רמת קריטיות: {criticality}, {approval}): {description}",
     "profile.event_types": "סוגי אירועים: {event_types}",
     "profile.areas": "אזורים: {areas}",
-    "profile.restart_pending": (
-        "קובץ הפרופיל בדיסק שונה מהגרסה הפעילה. נדרשת הפעלה מחדש כדי להחיל את השינוי."
-    ),
-    "profile.restart_not_pending": (
-        "קובץ הפרופיל בדיסק תואם לגרסה הפעילה. אין צורך בהפעלה מחדש."
-    ),
-    "protocol.approval_flag_required": (
-        "חובה להגדיר את 'approval_flag' במפורש כ-true או false; אין לו ערך ברירת מחדל."
-    ),
+    "profile.restart_pending": "קובץ הפרופיל בדיסק שונה מהגרסה הפעילה. נדרשת הפעלה מחדש כדי להחיל את השינוי.",
+    "profile.restart_not_pending": "קובץ הפרופיל בדיסק תואם לגרסה הפעילה. אין צורך בהפעלה מחדש.",
+    "protocol.approval_flag_required": "חובה להגדיר את 'approval_flag' במפורש כ-true או false; אין לו ערך ברירת מחדל.",
     "common.rejected": "נדחה: {message}",
     "settings.safe_mode_boolean": "הערך 'safe_mode' חייב להיות true או false.",
     "settings.safe_mode_state": "מצב בטוח: {value}",
-    "settings.view": (
-        "מספר ניסיונות: {retry_count}\nסף סיכון: {risk_threshold}\n"
-        "חלון היסטוריה (ימים): {lookback_window_days}"
-    ),
+    "settings.view": "מספר ניסיונות: {retry_count}\nסף סיכון: {risk_threshold}\n"
+        "חלון היסטוריה (ימים): {lookback_window_days}",
     "settings.retry_whole": "הערך 'retry_count' חייב להיות מספר שלם, התקבל {value}.",
     "settings.retry_nonnegative": "הערך 'retry_count' אינו יכול להיות שלילי.",
     "settings.risk_number": "הערך 'risk_threshold' חייב להיות מספר, התקבל {value}.",
     "settings.risk_range": "הערך 'risk_threshold' חייב להיות בין 0.0 ל-1.0.",
-    "settings.lookback_whole": (
-        "הערך 'lookback_window_days' חייב להיות מספר שלם, התקבל {value}."
-    ),
-    "settings.lookback_positive": (
-        "הערך 'lookback_window_days' חייב להיות לפחות 1; חלון באורך אפס אינו תקין."
-    ),
-    "settings.unknown": (
-        "הגדרה לא מוכרת: {field}. ניתן לשנות רק retry_count, risk_threshold "
-        "ו-lookback_window_days."
-    ),
-    "settings.saved": (
-        "{message}\n\nהשינוי נכנס לתוקף מיד ונשמר; בניגוד לעריכת פרופיל, אין צורך בהפעלה מחדש."
-    ),
+    "settings.lookback_whole": "הערך 'lookback_window_days' חייב להיות מספר שלם, התקבל {value}.",
+    "settings.lookback_positive": "הערך 'lookback_window_days' חייב להיות לפחות 1; חלון באורך אפס אינו תקין.",
+    "settings.unknown": "הגדרה לא מוכרת: {field}. ניתן לשנות רק retry_count, risk_threshold "
+        "ו-lookback_window_days.",
+    "settings.saved": "{message}\n\nהשינוי נכנס לתוקף מיד ונשמר; בניגוד לעריכת פרופיל, אין צורך בהפעלה מחדש.",
     "approval.risk": "סיכון: {risk_level} ({risk_reason})",
-    "approval.flagged": (
-        "{header}\n\nפרוטוקול שממתין לאישור: {protocol_name}\n{risk}\n\nהאם להפעיל אותו?"
-    ),
-    "approval.ambiguous": (
-        "{header}\n\nכמה פרוטוקולים מתאימים באותה מידה:\n{candidates}\n{risk}\n\nאיזה מהם להפעיל?"
-    ),
+    "approval.flagged": "{header}\n\nפרוטוקול שממתין לאישור: {protocol_name}\n{risk}\n\nהאם להפעיל אותו?",
+    "approval.ambiguous": "{header}\n\nכמה פרוטוקולים מתאימים באותה מידה:\n{candidates}\n{risk}\n\nאיזה מהם להפעיל?",
     "approval.approve": "אישור",
     "approval.reject": "דחייה",
     "approval.resumed": "האישור נשמר והפרוטוקול חודש.",
     "approval.rejected": "הדחייה נשמרה; האירוע לא יופעל.",
     "approval.already_answered": "האישור כבר נענה{who}. {message}",
-    "clarification.prompt": (
-        "{header}\n\nהדיווח המקורי:\n{raw_text}\n\nלא ניתן היה לזהות: {field}.\n"
-        "יש לבחור את הסיווג הנכון להלן."
-    ),
+    "clarification.prompt": "{header}\n\nהדיווח המקורי:\n{raw_text}\n\nלא ניתן היה לזהות: {field}.\n"
+        "יש לבחור את הסיווג הנכון להלן.",
     "clarification.resumed": "הבחירה נשמרה והתהליך חודש.",
     "clarification.already_resolved": "ההבהרה כבר נפתרה{who}. {message}",
     "common.by_identity": " על ידי {identity}",
-    "notice.uncertain": (
-        "{header}\n\nאירוע {event_id} הסתיים בתוצאה לא ודאית.\n\nתובנה:\n{insight}"
-    ),
-    "notice.uncertain_reporter": (
-        "{header}\n\nהאירוע שדיווחת עליו עדיין נבדק.\nנעדכן אותך כשיהיה מידע נוסף."
-    ),
-    "notice.no_match": (
-        "{header}\n\nאין פרוטוקול קיים שיכול למלא בקשה זו.\nטקסט מקורי: {raw_text}\n"
-        "{reason}\nסיכון: {risk_level} ({risk_reason})"
-    ),
-    "notice.precedent": (
-        "{header}\n\nאירוע: {raw_text}\n\nנסגר מול תקדים {precedent_id}, "
-        "שהסתיים כך: {ending}"
-    ),
+    "notice.uncertain": "{header}\n\nאירוע {event_id} הסתיים בתוצאה לא ודאית.\n\nתובנה:\n{insight}",
+    "notice.uncertain_reporter": "{header}\n\nהאירוע שדיווחת עליו עדיין נבדק.\nנעדכן אותך כשיהיה מידע נוסף.",
+    "notice.no_match": "{header}\n\nאין פרוטוקול קיים שיכול למלא בקשה זו.\nטקסט מקורי: {raw_text}\n"
+        "{reason}\nסיכון: {risk_level} ({risk_reason})",
+    "notice.precedent": "{header}\n\nאירוע: {raw_text}\n\nנסגר מול תקדים {precedent_id}, "
+        "שהסתיים כך: {ending}",
     "bot.not_available": "האפשרות עדיין אינה זמינה: {reason}",
     "bot.handler_error": "אירעה שגיאה בטיפול בבקשה. פרטי השגיאה נרשמו.",
     "bot.no_answer": "(לא הוחזרה תשובה)",
     "bot.refused": "הבקשה נדחתה: {message}",
-    "bot.welcome": (
-        "שלום — זהו {profile_name}. דווח על משהו, שאל שאלה, "
-        "או בקש פעולה — פשוט הקלד."
-    ),
+    "bot.welcome": "שלום — זהו {profile_name}. דווח על משהו, שאל שאלה, "
+        "או בקש פעולה — פשוט הקלד.",
     "auth.safe_mode_blocked": "חשבון הטלגרם הזה ממתין לאישור מנהל בזמן שמצב בטוח פעיל.",
     "auth.safe_mode_group_blocked": "קבוצת הטלגרם הזאת ממתינה לאישור מנהל בזמן שמצב בטוח פעיל.",
     "bot.full_name_prompt": "לפני שנמשיך, נא לכתוב שם מלא (לפחות שתי מילים).",
@@ -167,16 +125,12 @@ MESSAGES = {
     "command.menu_start": "התחלה",
     "command.menu_profile": "צפייה בפרופיל הפעיל או עריכתו",
     "command.menu_settings": "צפייה בהגדרות חיות או שינויין",
-    "protocol.expected_fields": (
-        "נדרשים 7 שדות המופרדים בקו אנכי — name | description | "
+    "protocol.expected_fields": "נדרשים 7 שדות המופרדים בקו אנכי — name | description | "
         "participating_agents (מופרדים בפסיקים) | approved_tools (מופרדים בפסיקים) | "
-        "expected_success_output | criticality | approval_flag (true/false)."
-    ),
+        "expected_success_output | criticality | approval_flag (true/false).",
     "protocol.flag_boolean": "הערך 'approval_flag' חייב להיות בדיוק 'true' או 'false'.",
     "command.profile_usage": "שימוש: /profile view | diff | add ... | edit ... | remove <name>",
-    "command.settings_usage": (
-        "שימוש: /settings view | set <retry_count|risk_threshold|lookback_window_days> <value>"
-    ),
+    "command.settings_usage": "שימוש: /settings view | set <retry_count|risk_threshold|lookback_window_days> <value>",
     "api.internal_error": "אירעה שגיאה פנימית.",
     "api.identity_required": "לא סופקה זהות משתמש.",
     "api.sender_identity_mismatch": "זהות המדווח אינה תואמת לזהות המשתמש המאומתת.",
@@ -187,17 +141,13 @@ MESSAGES = {
     "api.safe_mode_boolean": "הערך 'safe_mode' חייב להיות אמת או שקר.",
     "api.operation_forbidden": "רמת ההרשאה {level} אינה רשאית לבצע {operation}.",
     "api.field_required": "השדה '{field}' הוא שדה חובה.",
-    "api.conversation_id_invalid": (
-        "השדה 'conversation_id' חייב להיות מחרוזת לא ריקה באורך של עד 200 תווים."
-    ),
+    "api.conversation_id_invalid": "השדה 'conversation_id' חייב להיות מחרוזת לא ריקה באורך של עד 200 תווים.",
     "api.queue_full": "תור האירועים מלא; יש לנסות שוב מאוחר יותר.",
     "api.queue_full_event_detail": "תור האירועים מלא; יש לנסות לשלוח את פרטי האירוע מאוחר יותר.",
     "api.event_detail_again": "נא לספק שוב את פרטי האירוע החסרים.",
-    "api.event_detail_ambiguous": (
-        "יש כרגע {count} דיווחים הממתינים לפרטים חסרים, ולכן אינני יכול לדעת "
+    "api.event_detail_ambiguous": "יש כרגע {count} דיווחים הממתינים לפרטים חסרים, ולכן אינני יכול לדעת "
         "לאיזה מהם מתייחסת התגובה הזו. על מפקד לסגור קודם את הישן מביניהם, "
-        "ולאחר מכן ניתן להשיב שוב."
-    ),
+        "ולאחר מכן ניתן להשיב שוב.",
     "api.clarify_check_record_do": "נא להבהיר מה ברצונך שאבדוק, אתעד או אבצע.",
     "api.clarify_action": "נא להבהיר מה ברצונך שאבצע.",
     "api.drone_selection_invalid": "לא זיהיתי רחפן מתאים. בחר שם או מזהה מהרשימה:\n{choices}\nאפשר גם לכתוב: כולם",
@@ -210,9 +160,7 @@ MESSAGES = {
     "api.queued_request_debug": "התקבל, ונרשם כבקשת פעולה. אני מטפל/ת בזה עכשיו.\nמזהה משימה: {task_id}\nאעדכן כאן ברגע שיסתיים.",
     "api.missing_required_field": "חסר שדה חובה: {field}.",
     "api.malformed_protocol": "מבנה הפרוטוקול אינו תקין: {reason}",
-    "api.profile_field_restart": (
-        "השדה '{field}' שייך לפרופיל וייכנס לתוקף רק לאחר הפעלה מחדש."
-    ),
+    "api.profile_field_restart": "השדה '{field}' שייך לפרופיל וייכנס לתוקף רק לאחר הפעלה מחדש.",
     "api.retry_nonnegative_integer": "הערך 'retry_count' חייב להיות מספר שלם שאינו שלילי.",
     "api.risk_threshold_range": "הערך 'risk_threshold' חייב להיות מספר בין 0.0 ל-1.0.",
     "api.lookback_positive_integer": "הערך 'lookback_window_days' חייב להיות מספר שלם חיובי.",
@@ -221,9 +169,7 @@ MESSAGES = {
     "api.job_not_found": "לא נמצאה משימה עם המזהה '{task_id}'.",
     "api.hold_not_found": "לא נוצרה המתנת {kind} עבור האירוע '{event_id}'.",
     "api.hold_resolved": "כבר נפתר על ידי '{identity}' בזמן {resolved_at}.",
-    "api.decision_required": (
-        "השדה 'decision' הוא חובה: 'approved', 'rejected' או שם פרוטוקול מועמד."
-    ),
+    "api.decision_required": "השדה 'decision' הוא חובה: 'approved', 'rejected' או שם פרוטוקול מועמד.",
     "api.cursor_invalid": "השדה 'since' חייב להיות סמן שלם שאינו שלילי.",
     "api.wait_invalid": "השדה 'wait_seconds' חייב להיות מספר שלם בין 0 ל-30.",
     "api.trace_id_invalid": "מזהה המעקב אינו תקין.",
@@ -233,15 +179,11 @@ MESSAGES = {
     "api.group_agent_invalid": "'{agent}' אינו סוכן שניתן לנתב אליו. מותר: {allowed}.",
     "api.attendance_agent_unavailable": "לא רשום סוכן נוכחות בפריסה הזו.",
     "api.simulation_not_found": "אין סימולציה כזו: '{simulation_key}'.",
-    "bot.group_added_hint": (
-        "הקבוצה הזו (מזהה צ'אט {chat_id}) עדיין לא רשומה. מפקד צריך לשייך אותה לסוכן "
-        "בממשק הניהול או בפקודת ניהול הקבוצות לפני שהודעות כאן יטופלו."
-    ),
+    "bot.group_added_hint": "הקבוצה הזו (מזהה צ'אט {chat_id}) עדיין לא רשומה. מפקד צריך לשייך אותה לסוכן "
+        "בממשק הניהול או בפקודת ניהול הקבוצות לפני שהודעות כאן יטופלו.",
     "bot.unavailability_prompt_group": "{name}, אנא השב להודעה זו עם סיבת אי-הזמינות ומספר ימים משוער (לדוגמה: 'עקב מחלה ליומיים').",
-    "attendance.group_prompt": (
-        "בדיקת נוכחות יומית לכיתת הכוננות. יש להשיב תוך שעה (עד {deadline}) על זמינותך. "
-        "אם אינך זמין, ציין סיבה ומספר ימים.\n\nחברים שנדרשים לדווח:\n{members}"
-    ),
+    "attendance.group_prompt": "בדיקת נוכחות יומית לכיתת הכוננות. יש להשיב תוך שעה (עד {deadline}) על זמינותך. "
+        "אם אינך זמין, ציין סיבה ומספר ימים.\n\nחברים שנדרשים לדווח:\n{members}",
     "attendance.group_prompt_nobody": "בדיקת הנוכחות היומית נפתחה. אין חברים שנדרשים לדווח היום.",
     "attendance.button_available": "אני זמין לכוננות",
     "attendance.button_unavailable": "איני זמין",
@@ -272,17 +214,11 @@ MESSAGES = {
     "terminal.profile": "פרופיל:  {profile}",
     "terminal.database": "מסד נתונים: {database}",
     "terminal.api": "API:      {base_url}  (יש לוודא שהפקודה `{command}` כבר פועלת)",
-    "terminal.background": (
-        "(בדיקת התראות ברקע מתחילה מיד; ניתן להקליד /holds בכל עת במסך ההודעות)"
-    ),
+    "terminal.background": "(בדיקת התראות ברקע מתחילה מיד; ניתן להקליד /holds בכל עת במסך ההודעות)",
     "terminal.goodbye": "\nלהתראות.",
-    "terminal.skip_existing": (
-        "(מדלג על {count} התראות קיימות מהיסטוריית deployment זה, שנוצרו לפני הפעלה זו)"
-    ),
-    "terminal.first_run_skip": (
-        "(הפעלה ראשונה עבור הזהות {identity} — מדלג על {count} התראות קיימות; "
-        "בהפעלות הבאות הסמן ימשיך מנקודה זו בדומה לבוט האמיתי)"
-    ),
+    "terminal.skip_existing": "(מדלג על {count} התראות קיימות מהיסטוריית deployment זה, שנוצרו לפני הפעלה זו)",
+    "terminal.first_run_skip": "(הפעלה ראשונה עבור הזהות {identity} — מדלג על {count} התראות קיימות; "
+        "בהפעלות הבאות הסמן ימשיך מנקודה זו בדומה לבוט האמיתי)",
     "terminal.poll_background_error": "(בדיקת ההתראות ברקע נכשלה ומנסה שוב: {reason})",
     "terminal.new_notifications": "--- {count} התראות חדשות מאז הפעולה האחרונה ---",
     "terminal.holds_need_answer": "({count} מהן דורשות תשובה — יש להקליד /holds לבדיקה)",
@@ -296,9 +232,7 @@ MESSAGES = {
     "terminal.no_holds": "אין בקשות ממתינות כרגע.",
     "terminal.identity_exists": "זהות ברמת {level} כבר קיימת: {identity}.",
     "terminal.provision_identity": "מגדיר זהות ברמת {level} באמצעות `cli.user_admin`: {identity}",
-    "terminal.provision_service": (
-        "מגדיר את זהות השירות של הבוט באמצעות `cli.user_admin`: {identity}"
-    ),
+    "terminal.provision_service": "מגדיר את זהות השירות של הבוט באמצעות `cli.user_admin`: {identity}",
     "admin.login_wrong_credentials": "שם משתמש או סיסמה שגויים.",
     "admin.login_locked_out": "יותר מדי ניסיונות כושלים. נסה שוב בעוד {duration}.",
     "admin.lockout_less_than_a_minute": "פחות מדקה",
@@ -501,16 +435,12 @@ MESSAGES = {
     "admin.no_groups": "עדיין לא נרשמו קבוצות.",
     "admin.confirm_remove_group": "להסיר את הקבוצה {chat_id}?",
     "admin.add_group": "הוספת קבוצה",
-    "admin.add_group_help": (
-        "מזהה הצ'אט הוא המספר השלילי שהבוט מפרסם כשמוסיפים אותו לקבוצה לא רשומה. "
-        "בחר {main_agent} לניתוב מלא, או תת-סוכן אחד כדי להגביל את הקבוצה לפרוטוקולים שלו בלבד."
-    ),
+    "admin.add_group_help": "מזהה הצ'אט הוא המספר השלילי שהבוט מפרסם כשמוסיפים אותו לקבוצה לא רשומה. "
+        "בחר {main_agent} לניתוב מלא, או תת-סוכן אחד כדי להגביל את הקבוצה לפרוטוקולים שלו בלבד.",
     "admin.label_placeholder": "כיתת כוננות",
     "admin.bot_service_title": "זהות השירות של הבוט",
-    "admin.bot_service_help": (
-        "רושם או רושם מחדש את {identity} ברמת מפקד. נדרש לפני שהבוט יכול לשאוב התראות, "
-        "לקרוא את רשימת המפקדים או לבדוק שינויים בפרופיל."
-    ),
+    "admin.bot_service_help": "רושם או רושם מחדש את {identity} ברמת מפקד. נדרש לפני שהבוט יכול לשאוב התראות, "
+        "לקרוא את רשימת המפקדים או לבדוק שינויים בפרופיל.",
     "admin.bot_service_button": "רישום bot-service",
     "admin.session_expired": "ההתחברות פקעה עקב חוסר פעילות - יש להיכנס שוב.",
     "admin.csrf_failed": "לא ניתן היה לאמת את הפעולה - נסה שוב.",
@@ -522,10 +452,8 @@ MESSAGES = {
     "admin.group_removed": "הקבוצה '{chat_id}' הוסרה.",
     "admin.rename_group": "שינוי מזהה",
     "admin.new_chat_id_placeholder": "-1009876543210",
-    "admin.group_rename_help": (
-        "החלף את מזהה הצ'אט של הקבוצה בטלגרם - לדוגמה, לאחר שקבוצת טלגרם אמיתית קיימת לקליטת "
-        "תעבורה של קבוצת סימולציה שנוצרה במזהה זמני."
-    ),
+    "admin.group_rename_help": "החלף את מזהה הצ'אט של הקבוצה בטלגרם - לדוגמה, לאחר שקבוצת טלגרם אמיתית קיימת לקליטת "
+        "תעבורה של קבוצת סימולציה שנוצרה במזהה זמני.",
     "admin.new_chat_id_required": "נדרש מזהה צ'אט חדש בטלגרם.",
     "admin.new_chat_id_invalid": "מזהה הצ'אט החדש חייב להיות מספר שלילי, כמו מזהה קבוצה אמיתי בטלגרם.",
     "admin.group_chat_id_taken": "'{chat_id}' כבר בשימוש על ידי קבוצה אחרת.",
@@ -649,18 +577,151 @@ MESSAGES = {
     "time.minutes_ago": "לפני {minutes} דק'",
     "time.hours_ago": "לפני {hours} שע'",
     "time.unknown": "זמן לא ידוע",
-
-    # --- profiles/unified_test.py — mechanically relocated from source so no
-    # first-party module holds a Hebrew literal outside this catalog
-    # (tests/test_hebrew_leakage.py). Keys namespaced "unified.*"/"seed.*".
-    "unified.profile_name": "חמ''ל מבצעי אחוד (Unified Command Hub)",
-
-    "unified.surveillance.role": (
-        "אחראי על תצפית חזותית, מערך מצלמות אבטחה, וצי רחפנים טקטיים. "
-        "מספק סטטוס רחפנים וסוללות, תמונת מצב מצלמות, ושיגור או החזרת רחפנים."
-    ),
-    "unified.surveillance.system_prompt": (
-        "אתה סוכן מומחה לתצפית חזותית ורחפנים. "
+    "orchestrator.picture.default_domain_query": "דווח כעת על המצב העדכני בכל תחום האחריות שלך: מספרים, סטטוסים, שמות, מזהים, מיקומים וכל חריגה. "
+        "ענה רק מנתוני הכלים שלך.",
+    "orchestrator.picture.recent_events_question": "אילו אירועים נרשמו ב-{hours} השעות האחרונות? לכל אירוע ציין זמן, סיווג, אזור, פרוטוקול ותוצאה.",
+    "orchestrator.picture.no_recent_events": "לא נרשמו אירועים ב-{hours} השעות האחרונות.",
+    "orchestrator.picture.recent_events_label": "אירועים אחרונים ({hours} השעות האחרונות)",
+    "orchestrator.picture.domain_unavailable": "לא התקבל דיווח מ-{domain}.",
+    "orchestrator.picture.fallback_header": "תמונת מצב נכון ל-{time}:",
+    "orchestrator.picture.missing_note": "(הערה מבצעית: לא התקבל דיווח מ-{domains})",
+    "standby_squad.friendly_forces.confirm_ambulance": "נרשמה בהצלחה הזנקת צוות רפואה/מד\"א ליעד '{location}'.",
+    "standby_squad.friendly_forces.confirm_firefighters": "נרשמה בהצלחה הזנקת כוחות כיבוי והצלה ליעד '{location}'.",
+    "standby_squad.friendly_forces.confirm_military": "נרשמה בהצלחה הזנקת כוחות צבא וביטחון ליעד '{location}'.",
+    "standby_squad.friendly_forces.confirm_police": "נרשמה בהצלחה הזנקת כוחות משטרה ליעד '{location}'.",
+    "standby_squad.friendly_forces.log_ambulance": "הוזנק מד\"א ל-'{location}': נפגעים={count}",
+    "standby_squad.friendly_forces.log_firefighters": "הוזנק כיבוי אש ל-'{location}': רכבים={count}",
+    "standby_squad.friendly_forces.log_military": "הוזנק כוח צבאי ל-'{location}': כוחות={count}",
+    "standby_squad.friendly_forces.log_police": "הוזנקה משטרה ל-'{location}': כוחות={count}",
+    "standby_squad.friendly_forces.role": "אחראי על תיאום והזנקת כוחות ביטחון וחירום (משטרה, מד\"א, כיבוי אש, צבא).",
+    "standby_squad.friendly_forces.system_prompt": "אתה סוכן מומחה לתיאום והזנקת כוחות ביטחון וחירום (משטרה, מד\"א, כיבוי אש, צבא). "
+        "חובה לענות אך ורק בעברית קצרה ומדויקת (עד 3 שורות). "
+        "אל תשתמש באנגלית כלל. דווח תמיד איזה כוח הוזנק ולאיזה יעד בדיוק.",
+    "standby_squad.friendly_forces.tool.ambulance": "רישום הזנקת כוחות רפואה / מד\"א ליעד מבוקש.",
+    "standby_squad.friendly_forces.tool.firefighters": "רישום הזנקת כוחות כיבוי והצלה ליעד מבוקש.",
+    "standby_squad.friendly_forces.tool.military": "רישום הזנקת כוחות צבא וביטחון ליעד מבוקש.",
+    "standby_squad.friendly_forces.tool.police": "רישום הזנקת כוחות משטרה ליעד מבוקש.",
+    "standby_squad.keyboard.approvals_queue": "{icon} תור אישורים",
+    "standby_squad.keyboard.available": "{icon} אני זמין לכוננות",
+    "standby_squad.keyboard.camera_status": "{icon} מצב מצלמות",
+    "standby_squad.keyboard.dispatch_drone": "{icon} הזנקת רחפן",
+    "standby_squad.keyboard.dispatch_forces": "{icon} הזנקת כוחות",
+    "standby_squad.keyboard.drone_fleet_status": "{icon} מצב צי רחפנים",
+    "standby_squad.keyboard.event_history": "{icon} היסטוריית אירועים",
+    "standby_squad.keyboard.overall_picture": "{icon} תמונת מצב כללית",
+    "standby_squad.keyboard.recall_drone": "{icon} החזרת רחפן לבסיס",
+    "standby_squad.keyboard.team_status": "{icon} סטטוס כיתת כוננות",
+    "standby_squad.keyboard.unavailable": "{icon} איני זמין",
+    "standby_squad.seed.commander_user_name": "מפקד כיתת כוננות",
+    "standby_squad.seed.member_1001": "דן לוי",
+    "standby_squad.seed.member_1002": "יוסי כהן",
+    "standby_squad.seed.member_1003": "מיכל אברהם",
+    "standby_squad.seed.primary_name": "מפקד / משתמש ראשי",
+    "standby_squad.seed.viewer_user_name": "לוחם כיתת כוננות",
+    "standby_squad.simulation.response_team_label": "כיתת כוננות מדומה",
+    "standby_squad.simulation.sec001.chat.cameras.label": "מוקד מצלמות",
+    "standby_squad.simulation.sec001.chat.commander_dm.label": "שיחה פרטית עם רבש\"ץ",
+    "standby_squad.simulation.sec001.chat.external_forces.label": "כוחות חוץ",
+    "standby_squad.simulation.sec001.chat.response_team.label": "כיתת כוננות",
+    "standby_squad.simulation.sec001.group.cameras.label": "מוקד מצלמות",
+    "standby_squad.simulation.sec001.group.external_forces.label": "כוחות חוץ",
+    "standby_squad.simulation.sec001.persona.dan_response_team": "דן - כיתת כוננות",
+    "standby_squad.simulation.sec001.persona.danny_response_team": "דני - כיתת כוננות",
+    "standby_squad.simulation.sec001.persona.eli_response_team": "אלי - כיתת כוננות",
+    "standby_squad.simulation.sec001.persona.gil_response_team": "גיל - כיתת כוננות",
+    "standby_squad.simulation.sec001.persona.mda_dispatch": "מוקד מד\"א",
+    "standby_squad.simulation.sec001.persona.michael_response_team": "מיכאל - כיתת כוננות",
+    "standby_squad.simulation.sec001.persona.patrol_unit_40": "ניידת סיור 40",
+    "standby_squad.simulation.sec001.persona.police_duty_officer": "יומנאי תחנת משטרה",
+    "standby_squad.simulation.sec001.persona.police_patrol": "סיור משטרתי",
+    "standby_squad.simulation.sec001.persona.resident_avraham": "תושב - אברם (שכונת ההרחבה)",
+    "standby_squad.simulation.sec001.persona.sdemot_security_coordinator": "מוקד שדמות - רכז ביטחון שכן",
+    "standby_squad.simulation.sec001.persona.site_security_officer": "רבש\"ץ",
+    "standby_squad.simulation.sec001.persona.yasam_commander": "מפקד יס\"מ - משטרה",
+    "standby_squad.simulation.sec001.persona.yossi_technician": "יוסי - טכנאי חוזי",
+    "standby_squad.simulation.sec001.persona.yuval_response_team": "יובל - כיתת כוננות",
+    "standby_squad.simulation.sec001.phase1.description": "איסוף נתוני סד\"כ יומיים, תקלות רשת ותחזוקה קלות, ודיווחים היקפיים ללא איום מוגדר.",
+    "standby_squad.simulation.sec001.phase1.step1.text": "בוקר טוב, מעדכן שאני במילואים מראשון עד שלישי בערב, לא זמין ביישוב.",
+    "standby_squad.simulation.sec001.phase1.step2.text": "מצלמה 08 (פינה דרומית) מציגה הפרעות קליטה לפרקים. ייתכן שזה רק ענף שמסתיר או בעיית פוקוס.",
+    "standby_squad.simulation.sec001.phase1.step3.text": "לכל הגזרה: שריפה קטנה בשטח פתוח ליד כביש הגישה האזורי. כיבוי מטפלים, אין סיכון לשטחים חקלאיים.",
+    "standby_squad.simulation.sec001.phase1.step4.text": "חברים, החלפתי נייד. המספר החדש מעודכן, בודק זמינות בגל שקט הלילה.",
+    "standby_squad.simulation.sec001.phase1.step5.text": "ערב טוב, תפיק לי סיכום יומי: מי חסר בסד\"כ ללילה ומה הסטטוס של מצלמות הגדר?",
+    "standby_squad.simulation.sec001.phase1.step6.text": "קמתי עם חום גבוה, לא אוכל להשתתף בסיור הערב.",
+    "standby_squad.simulation.sec001.phase1.step7.text": "מצלמה 03 (גדר מזרחית, מקטע 4) הורדה יזומית לשעתיים לצורך עדכון גרסה תקופתי.",
+    "standby_squad.simulation.sec001.phase1.step8.text": "עדכון גזרתי: הלילה נגנב טרקטורון מאצלינו. סבירות גבוהה שהגנבים נעו לאורך ציר המערכת.",
+    "standby_squad.simulation.sec001.phase1.step9.text": "תציג לי תגזיר תמונת מצב מעודכנת לקראת הלילה.",
+    "standby_squad.simulation.sec001.phase1.title": "אירוע כיתת כוננות - שלב מכין: שגרה ותקלות קלות",
+    "standby_squad.simulation.sec001.phase2.description": "מעבר משגרה לחירום. סדרת תקלות תצפית חריגות, אינדיקציות משטרתיות על רכב חשוד, וזיהוי נזק פיזי לגדר המערכת המצריכים הקפצה תחת חסר בסד\"כ.",
+    "standby_squad.simulation.sec001.phase2.step1.text": "בוקר טוב. מוזר, מצלמה 03 שהורדנו אתמול לעדכון עדיין לא חזרה. עכשיו גם מצלמה 04 לידה תקועה על תמונה קפואה.",
+    "standby_squad.simulation.sec001.phase2.step2.text": "לכל המרחב: התקבל דיווח על רכב מסחרי לבן ללא לחיות זיהוי שנראה נע באיטיות באזור המטעים המזרחיים שלכם.",
+    "standby_squad.simulation.sec001.phase2.step3.text": "היי חברים, שומע פריקה של ציוד כבד באזור השער המערבי. יש שם עבודות מתוכננות היום?",
+    "standby_squad.simulation.sec001.phase2.step4.text": "תציף לי תמונה מהירה: יש לנו משהו חשוד בגזרה המזרחית? ומה הדיבור על השער המערבי?",
+    "standby_squad.simulation.sec001.phase2.step5.text": "חבר'ה, הגעתי פיזית למצלמה 03 בגדר המזרחית. יש כבל תקשורת חתוך פיזית! זה חבלה יזומות, לא תקלת רשת!",
+    "standby_squad.simulation.sec001.phase2.step6.text": "מזהים את המסחרית הלבנה נטושה במטע הזיתים המזרחי, כ-150 מטר מגדר היישוב. דלתות פתוחות, הרכב ריק. מקפיצים יחידת כלבנים.",
+    "standby_squad.simulation.sec001.phase2.step7.text": "אירוע חם! תצליב לי מיד את כל המידע מהסוכנים, תקפיץ כיתת הכוננות ותמליץ על פריסת כוחות!",
+    "standby_squad.simulation.sec001.phase2.step8.text": "קיבלתי את ההקפצה, יוצא מהבית לכיוון גזרה מזרחית. מגיע תוך 4 דקות. מי עוד איתי בצוות?",
+    "standby_squad.simulation.sec001.phase2.step9.text": "געתי למקטע 4 מזרח. מזהה פריצה טרייה בגדר המערכת! עקבות רגליים מובילות פנימה לכיוון שכונת ההרחבה!",
+    "standby_squad.simulation.sec001.phase2.title": "אירוע כיתת כוננות - שלב עיקרי: התחממות והצטברות אירועים",
+    "standby_squad.simulation.sec001.phase3.description": "הגעה לקצה המבצעי. חדירת חשודים ליישוב, דיווי שווא המייצרים דילול כוחות, תיאום אירוע נפגעים מורכב, סריקות מבית לבית וסגירת אירוע תחת עומס מידע.",
+    "standby_squad.simulation.sec001.phase3.step1.text": "סירנות בשער מזרח! ראיתי דמות חשודה בתוך החצר של משפחת לוי ברחוב הזית 12! יש לו משהו ארוך ביד!",
+    "standby_squad.simulation.sec001.phase3.step10.text": "מעולה, האירוע הסתיים. תריץ לי סיכום אירוע מלא מקצה לקצה: ציר זמן, כשלים/דיווי שווא שהיו, סטטוס פצועים וסד\"כ, והודעה להפצה לתושבי היישוב לרגיעה.",
+    "standby_squad.simulation.sec001.phase3.step2.text": "רגע! תושבים מדווחים עכשיו על ירי בלתי פוסק באזור השער המערבי! אני רץ לשם!",
+    "standby_squad.simulation.sec001.phase3.step3.text": "קיבלנו דיווח על פצוע ירי בכניסה לשכונת ההרחבה! אמבולנס בדרך, דורשים אבטחה של כיתת כוננות לצוות הרפואי.",
+    "standby_squad.simulation.sec001.phase3.step4.text": "יש לי פה בלבול מטורף! דן רץ למערב בגלל דיווח על ירי, מד\"א מדברים על פצוע במזרח, ותושב מדווח על חמוש בהרחבה. תעשה לי סדר מיד! לאן לשלוח את הכוח הזמין?!",
+    "standby_squad.simulation.sec001.phase3.step5.text": "הבהרה: אין ירי בשער המערבי! הירי שדווח הוא ירי אזהרה של הניידת שלנו באזור המטעים המזרחיים. אל תפצלו כוחות למערב!",
+    "standby_squad.simulation.sec001.phase3.step6.text": "הגעתי לרחוב הזית 12 בהרחבה! חברתי למד\"א, מטפלים בפצוע (תושב שנפצע מזכוכיות בזמן בריחה). זיהיתי את החשוד נמלט לכיוון המבנה הציבורי הישן!",
+    "standby_squad.simulation.sec001.phase3.step7.text": "הצלחתי להרים מצלמה טקטית ניידת על תורן המזכירות! רואים חשוד אחד מתחבא על גג המבנה הציבורי הישן, מוחזק עצם כהה ביד.",
+    "standby_squad.simulation.sec001.phase3.step8.text": "כוח יס\"מ ויחידת ימ\"ג נכנסים כעת לשטח היישוב. מעבירים אלינו את פיקוד אירוע השתלטות ברגע שנגיע למבנה.",
+    "standby_squad.simulation.sec001.phase3.step9.text": "אירוע בשליטה! החשוד נעצר על הגג ללא ירי. מדובר בפורץ שנסה להימלט לאחר שחתך את הגדר. מועבר לחקירות.",
+    "standby_squad.simulation.sec001.phase3.title": "אירוע כיתת כוננות - שלב קיצון: חדירה פעילה, בלבול וסגר מלא",
+    "standby_squad.surveillance.camera_id_required": "נדרש מזהה מצלמה לעדכון תצפית.",
+    "standby_squad.surveillance.camera_line": "• [{camera_id}] {name} ({area}, {azimuth}°): {feed_summary} [{status}]",
+    "standby_squad.surveillance.camera_status.active": "תקין ופעיל {icon}",
+    "standby_squad.surveillance.camera_status.maintenance": "בתחזוקה {icon}",
+    "standby_squad.surveillance.camera_status.offline": "לא מקוון {icon}",
+    "standby_squad.surveillance.camera_update_done": "תצפית מצלמה {camera_id} ({name}) עודכנה בהצלחה {icon}: {feed_summary}",
+    "standby_squad.surveillance.camera_update_failed": "עדכון תצפית המצלמה נכשל: {error}",
+    "standby_squad.surveillance.cameras_header": "{icon} מצב מצלמות אבטחה ({count} מצלמות):",
+    "standby_squad.surveillance.default_incident_description": "סיור ותצפית מבצעית",
+    "standby_squad.surveillance.dispatch_area_required": "נדרש לציין גזרת יעד לשיגור הרחפן.",
+    "standby_squad.surveillance.dispatch_done": "הזנקת רחפן הושלמה בהצלחה {icon}\n"
+        "• רחפן: {callsign} ({drone_id})\n"
+        "• גזרת יעד: {target_area}\n"
+        "• זמן הגעה משוער (ETA): כ-{eta} שניות\n"
+        "• סוללה: {battery}% | מזהה משימה: {mission_id}",
+    "standby_squad.surveillance.dispatch_failed": "שיגור הרחפן נכשל: {error}",
+    "standby_squad.surveillance.fleet_header": "{icon} מצב צי רחפנים ({count} רחפנים):",
+    "standby_squad.surveillance.fleet_line": "• [{drone_id}] {callsign} ({model}): {status} | סוללה: {battery}% | גזרה: {area}{mission_info}",
+    "standby_squad.surveillance.fleet_mission_info": " (במשימה: {mission_id})",
+    "standby_squad.surveillance.fleet_summary": "סיכום: {ready} מוכנים לשיגור | {in_flight} באוויר | {charging} בטעינה",
+    "standby_squad.surveillance.mission_line": "• [{mission_id}] רחפן {callsign} ({drone_id}) -> גזרה: {target_area} "
+        "| סוללה: {battery}% | ETA: {eta} שנ' | משימה: {description}",
+    "standby_squad.surveillance.missions_header": "{icon} משימות רחפנים פעילות באוויר ({count}):",
+    "standby_squad.surveillance.no_cameras": "לא נמצאו מצלמות פעילות בגזרה המבוקשת.",
+    "standby_squad.surveillance.no_drones": "לא נמצאו רחפנים במערך.",
+    "standby_squad.surveillance.no_missions": "אין כרגע משימות רחפנים פעילות באוויר.",
+    "standby_squad.surveillance.overview_cameras_line": "• מצלמות אבטחה: {active}/{total} פעילות ותקינות בגזרה.",
+    "standby_squad.surveillance.overview_drones_line": "• מערך רחפנים: {ready} מוכנים לשיגור, {in_flight} באוויר במשימה.",
+    "standby_squad.surveillance.overview_header": "{icon} תמונת מצב תצפיתית כוללת:",
+    "standby_squad.surveillance.overview_mission_line": "  - רחפן {callsign} לעבר {target_area} (זמן משוער: {eta} שנ')",
+    "standby_squad.surveillance.overview_missions_header": "• משימות באוויר ({count}):",
+    "standby_squad.surveillance.overview_no_missions": "• משימות באוויר: אין משימות אוויריות פעילות כרגע.",
+    "standby_squad.surveillance.recall_all_done": "החזרת הרחפנים הושלמה בהצלחה {icon}. כל הרחפנים הפעילים ({count}) הוחזרו לבסיס ומוכנים לפעולה.",
+    "standby_squad.surveillance.recall_done": "החזרת הרחפן לבסיס הושלמה בהצלחה {icon}. רחפן {callsign} ({drone_id}) חזר לבסיס ומוכן לפעולה (צי רחפנים).",
+    "standby_squad.surveillance.recall_done_generic": "החזרת הרחפן לבסיס הושלמה בהצלחה {icon}.",
+    "standby_squad.surveillance.recall_failed": "החזרת הרחפן נכשלה: {error}",
+    "standby_squad.surveillance.recall_fallback_done": "פקודת החזרה התקבלה: רחפן {callsign} ({drone_id}) חוזר כעת לבסיס לנחיתה {icon}.",
+    "standby_squad.surveillance.recall_no_match_multi": "לא נמצא רחפן פעיל תואם ל-'{requested}' מתוך {count} רחפנים באוויר.",
+    "standby_squad.surveillance.recall_no_match_single": "לא נמצא רחפן פעיל תואם להחזרה.",
+    "standby_squad.surveillance.recall_none_active": "אין כרגע רחפנים פעילים באוויר להחזרה.",
+    "standby_squad.surveillance.recall_selection_required": "קיימים {count} רחפנים פעילים באוויר. אנא ציין איזה רחפן להחזיר או ציין 'החזר את כולם'.",
+    "standby_squad.surveillance.role": "אחראי על תצפית חזותית, מערך מצלמות אבטחה, וצי רחפנים טקטיים. "
+        "מספק סטטוס רחפנים וסוללות, תמונת מצב מצלמות, ושיגור או החזרת רחפנים.",
+    "standby_squad.surveillance.status.charging": "בטעינה {icon}",
+    "standby_squad.surveillance.status.in_flight": "באוויר במשימה {icon}",
+    "standby_squad.surveillance.status.maintenance": "בתחזוקה {icon}",
+    "standby_squad.surveillance.status.ready": "מוכן לפעולה {icon}",
+    "standby_squad.surveillance.system_prompt": "אתה סוכן מומחה לתצפית חזותית ורחפנים. "
         "חובה לענות אך ורק בעברית קצרה, מדויקת ומבצעית (עד 4-5 שורות לכל היותר). "
         "אל תשתמש באנגלית כלל, למעט מזהים מדויקים (כגון CAM-01, DRONE-01). "
         "להחזרת רחפן קרא תמיד מיד ל-return_drone_to_base(drone_or_mission_id=''). "
@@ -669,92 +730,51 @@ MESSAGES = {
         "לשיגור רחפן קרא מיד ל-dispatch_drone_to_area עם גזרת היעד (target_area) בלבד. "
         "שדות specific_drone_id ו-dispatched_by הם אופציונליים לחלוטין ואסור בתכלית האיסור לבקש אותם - המערכת בוחרת אוטומטית רחפן מוכן מהצי. "
         "לעולם אל תדווח שמשימה אינה ברורה או שחסרים פרטים כאשר גזרת היעד ידועה, אלא שגר את הרחפן מיד. "
-        "היה תמציתי, ישיר ומבצעי."
-    ),
-    "unified.surveillance.tool.fleet_status": "מחזיר סטטוס תפעולי, רמות סוללה ומיקומים של צי הרחפנים בעברית.",
-    "unified.surveillance.tool.active_missions": (
-        "מחזיר את כל המשימות האוויריות הפעילות כרגע, כולל מזהה משימה, רחפן, גזרת יעד ו-ETA בעברית."
-    ),
-    "unified.surveillance.tool.camera_feeds": "מחזיר תמונת מצב וסטטוס של מצלמות האבטחה לפי גזרה או זיהוי מצלמה בעברית.",
-    "unified.surveillance.tool.overview": "תמונת מצב תצפיתית ואווירית משולבת: מצלמות, רחפנים ומשימות פעילות בעברית.",
-    "unified.surveillance.tool.return_drone": "החזרת רחפן פעיל לבסיס בצורה מבוקרת ובטוחה בעברית.",
-    "unified.surveillance.tool.dispatch_drone": (
-        "שיגור רחפן טקטי לגזרה. פרמטר target_area בלבד הוא חובה. שאר הפרמטרים אופציונליים לחלוטין ואין לבקשם."
-    ),
-    "unified.surveillance.tool.update_camera": "עדכון תצפית ידנית או סטטוס של מצלמת אבטחה בעברית.",
-
-    "unified.surveillance.no_drones": "לא נמצאו רחפנים במערך.",
-    "unified.surveillance.status.ready": "מוכן לפעולה {icon}",
-    "unified.surveillance.status.in_flight": "באוויר במשימה {icon}",
-    "unified.surveillance.status.charging": "בטעינה {icon}",
-    "unified.surveillance.status.maintenance": "בתחזוקה {icon}",
-    "unified.surveillance.fleet_header": "{icon} מצב צי רחפנים ({count} רחפנים):",
-    "unified.surveillance.fleet_line": (
-        "• [{drone_id}] {callsign} ({model}): {status} | סוללה: {battery}% | גזרה: {area}{mission_info}"
-    ),
-    "unified.surveillance.fleet_mission_info": " (במשימה: {mission_id})",
-    "unified.surveillance.fleet_summary": "סיכום: {ready} מוכנים לשיגור | {in_flight} באוויר | {charging} בטעינה",
-
-    "unified.surveillance.no_missions": "אין כרגע משימות רחפנים פעילות באוויר.",
-    "unified.surveillance.missions_header": "{icon} משימות רחפנים פעילות באוויר ({count}):",
-    "unified.surveillance.mission_line": (
-        "• [{mission_id}] רחפן {callsign} ({drone_id}) -> גזרה: {target_area} "
-        "| סוללה: {battery}% | ETA: {eta} שנ' | משימה: {description}"
-    ),
-
-    "unified.surveillance.no_cameras": "לא נמצאו מצלמות פעילות בגזרה המבוקשת.",
-    "unified.surveillance.camera_status.active": "תקין ופעיל {icon}",
-    "unified.surveillance.camera_status.offline": "לא מקוון {icon}",
-    "unified.surveillance.camera_status.maintenance": "בתחזוקה {icon}",
-    "unified.surveillance.cameras_header": "{icon} מצב מצלמות אבטחה ({count} מצלמות):",
-    "unified.surveillance.camera_line": "• [{camera_id}] {name} ({area}, {azimuth}°): {feed_summary} [{status}]",
-
-    "unified.surveillance.overview_header": "{icon} תמונת מצב תצפיתית כוללת:",
-    "unified.surveillance.overview_cameras_line": "• מצלמות אבטחה: {active}/{total} פעילות ותקינות בגזרה.",
-    "unified.surveillance.overview_drones_line": "• מערך רחפנים: {ready} מוכנים לשיגור, {in_flight} באוויר במשימה.",
-    "unified.surveillance.overview_missions_header": "• משימות באוויר ({count}):",
-    "unified.surveillance.overview_mission_line": "  - רחפן {callsign} לעבר {target_area} (זמן משוער: {eta} שנ')",
-    "unified.surveillance.overview_no_missions": "• משימות באוויר: אין משימות אוויריות פעילות כרגע.",
-
-    "unified.surveillance.recall_none_active": "אין כרגע רחפנים פעילים באוויר להחזרה.",
-    "unified.surveillance.recall_all_done": (
-        "החזרת הרחפנים הושלמה בהצלחה {icon}. כל הרחפנים הפעילים ({count}) הוחזרו לבסיס ומוכנים לפעולה."
-    ),
-    "unified.surveillance.recall_done": (
-        "החזרת הרחפן לבסיס הושלמה בהצלחה {icon}. רחפן {callsign} ({drone_id}) חזר לבסיס ומוכן לפעולה (צי רחפנים)."
-    ),
-    "unified.surveillance.recall_fallback_done": (
-        "פקודת החזרה התקבלה: רחפן {callsign} ({drone_id}) חוזר כעת לבסיס לנחיתה {icon}."
-    ),
-    "unified.surveillance.recall_no_match_single": "לא נמצא רחפן פעיל תואם להחזרה.",
-    "unified.surveillance.recall_no_match_multi": "לא נמצא רחפן פעיל תואם ל-'{requested}' מתוך {count} רחפנים באוויר.",
-    "unified.surveillance.recall_selection_required": (
-        "קיימים {count} רחפנים פעילים באוויר. אנא ציין איזה רחפן להחזיר או ציין 'החזר את כולם'."
-    ),
-    "unified.surveillance.recall_done_generic": "החזרת הרחפן לבסיס הושלמה בהצלחה {icon}.",
-    "unified.surveillance.recall_failed": "החזרת הרחפן נכשלה: {error}",
-
-    "unified.surveillance.default_incident_description": "סיור ותצפית מבצעית",
-    "unified.surveillance.dispatch_area_required": "נדרש לציין גזרת יעד לשיגור הרחפן.",
-    "unified.surveillance.dispatch_done": (
-        "הזנקת רחפן הושלמה בהצלחה {icon}\n"
-        "• רחפן: {callsign} ({drone_id})\n"
-        "• גזרת יעד: {target_area}\n"
-        "• זמן הגעה משוער (ETA): כ-{eta} שניות\n"
-        "• סוללה: {battery}% | מזהה משימה: {mission_id}"
-    ),
-    "unified.surveillance.dispatch_failed": "שיגור הרחפן נכשל: {error}",
-
-    "unified.surveillance.camera_id_required": "נדרש מזהה מצלמה לעדכון תצפית.",
-    "unified.surveillance.camera_update_done": "תצפית מצלמה {camera_id} ({name}) עודכנה בהצלחה {icon}: {feed_summary}",
-    "unified.surveillance.camera_update_failed": "עדכון תצפית המצלמה נכשל: {error}",
-
-    "unified.team_status.role": (
-        "אחראי על ניהול מצבת ונוכחות כיתת כוננות. "
-        "מספק דוחות זמינות (מי זמין/לא זמין), וקולט דיווחי נוכחות של חברי הכיתה."
-    ),
-    "unified.team_status.system_prompt": (
-        "אתה סוכן מומחה לניהול וסטטוס כיתת כוננות. "
+        "היה תמציתי, ישיר ומבצעי.",
+    "standby_squad.surveillance.tool.active_missions": "מחזיר את כל המשימות האוויריות הפעילות כרגע, כולל מזהה משימה, רחפן, גזרת יעד ו-ETA בעברית.",
+    "standby_squad.surveillance.tool.camera_feeds": "מחזיר תמונת מצב וסטטוס של מצלמות האבטחה לפי גזרה או זיהוי מצלמה בעברית.",
+    "standby_squad.surveillance.tool.dispatch_drone": "שיגור רחפן טקטי לגזרה. פרמטר target_area בלבד הוא חובה. שאר הפרמטרים אופציונליים לחלוטין ואין לבקשם.",
+    "standby_squad.surveillance.tool.fleet_status": "מחזיר סטטוס תפעולי, רמות סוללה ומיקומים של צי הרחפנים בעברית.",
+    "standby_squad.surveillance.tool.overview": "תמונת מצב תצפיתית ואווירית משולבת: מצלמות, רחפנים ומשימות פעילות בעברית.",
+    "standby_squad.surveillance.tool.return_drone": "החזרת רחפן פעיל לבסיס בצורה מבוקרת ובטוחה בעברית.",
+    "standby_squad.surveillance.tool.update_camera": "עדכון תצפית ידנית או סטטוס של מצלמת אבטחה בעברית.",
+    "standby_squad.team_status.available_header": "{icon} זמינים לכוננות ({count}): {names}",
+    "standby_squad.team_status.awaiting_header": "{icon} טרם דיווחו ({count}): {names}",
+    "standby_squad.team_status.clarify_availability": "הבהרה נדרשת: ציין האם אתה זמין או לא זמין.",
+    "standby_squad.team_status.clarify_days": "הבהרה נדרשת: ציין לכמה ימים אינך זמין.",
+    "standby_squad.team_status.clarify_reason": "הבהרה נדרשת: לוחם שאינו זמין נדרש לספק סיבה.",
+    "standby_squad.team_status.count_summary": "{icon} זמינים כעת {available} מתוך {total} חברי כיתה.",
+    "standby_squad.team_status.default_original_text": "דיווח זמינות: {availability}",
+    "standby_squad.team_status.identity_unavailable": "רישום התגובה נכשל: זהות המשתמש המאומת אינה זמינה.",
+    "standby_squad.team_status.keywords.available": "מי זמין|זמינים בלבד|who is available",
+    "standby_squad.team_status.keywords.awaiting": "לא דיווח|טרם דיווח|ממתין|awaiting|pending",
+    "standby_squad.team_status.keywords.count_available": "זמין|available",
+    "standby_squad.team_status.keywords.count_number": "כמה|כמות|how many|count",
+    "standby_squad.team_status.keywords.members": "מי חבר|חברי הכיתה|השמות|מי הם|members|names",
+    "standby_squad.team_status.keywords.reason": "למה|סיבת|reason|why",
+    "standby_squad.team_status.keywords.unavailable": "מי לא זמין|אינם זמינים|unavailable",
+    "standby_squad.team_status.legacy_placeholder_name": "חבר כיתת כוננות ({identity})",
+    "standby_squad.team_status.marked_available": "{icon} הזמינות שלך עודכנה. אתה מסומן כזמין לכוננות.",
+    "standby_squad.team_status.marked_unavailable": "{icon} הזמינות שלך עודכנה. אתה מסומן כלא זמין ({reason}).",
+    "standby_squad.team_status.members_header": "{icon} חברי כיתת הכוננות ({count}): {names}",
+    "standby_squad.team_status.no_reason_saved": "לא נשמרה סיבה",
+    "standby_squad.team_status.none_now": "אין כרגע",
+    "standby_squad.team_status.none_unavailable": "{icon} אין כרגע חברי כיתה שמסומנים כלא זמינים.",
+    "standby_squad.team_status.not_approved": "רישום התגובה נכשל: המשתמש אינו חבר מאושר בכיתת הכוננות.",
+    "standby_squad.team_status.pending_commander_approval": "הדיווח התקבל וממתין לאישור מפקד לפני שינוי סטטוס הכוננות.",
+    "standby_squad.team_status.reason_available": "{name} מסומן כזמין; אין סיבת אי־זמינות פעילה.",
+    "standby_squad.team_status.reason_awaiting": "{name} טרם דיווח במחזור הנוכחי; לא נשמרה סיבת אי־זמינות.",
+    "standby_squad.team_status.reason_unavailable": "{name} אינו זמין: {reason}{until}.",
+    "standby_squad.team_status.reason_unknown_member": "לא ניתן לזהות בוודאות את חבר הכיתה המבוקש מתוך ה־roster.",
+    "standby_squad.team_status.reason_until_suffix": " עד {until}",
+    "standby_squad.team_status.record_failed": "רישום התגובה נכשל: {error}",
+    "standby_squad.team_status.role": "אחראי על ניהול מצבת ונוכחות כיתת כוננות. "
+        "מספק דוחות זמינות (מי זמין/לא זמין), וקולט דיווחי נוכחות של חברי הכיתה.",
+    "standby_squad.team_status.summary_available_line": "• זמינים לפעילות ({count}): {names}",
+    "standby_squad.team_status.summary_awaiting_line": "• טרם דיווחו ({count}): {names}",
+    "standby_squad.team_status.summary_header": "{icon} סטטוס כיתת כוננות (סה\"כ {count} לוחמים):",
+    "standby_squad.team_status.summary_unavailable_line": "• אינם זמינים ({count}): {names}",
+    "standby_squad.team_status.system_prompt": "אתה סוכן מומחה לניהול וסטטוס כיתת כוננות. "
         "חובה לענות אך ורק בעברית קצרה, מדויקת ומבצעית (עד 4-5 שורות לכל היותר). "
         "אל תשתמש באנגלית כלל. "
         "לשאלות על סטטוס הנוכחות של כיתת הכוננות קרא ל-report_team_availability. "
@@ -762,268 +782,59 @@ MESSAGES = {
         "unavailable למי לא זמין, awaiting למי שטרם דיווח, count לכמות זמינים, ו-reason לסיבת אי-זמינות; "
         "ב-view מסוג reason העבר גם member_query מתוך השאלה. אל תמציא שמות או סיבות. "
         "לרישום דיווח נוכחות קרא ל-record_attendance_response. "
-        "היה תמציתי וברור."
-    ),
-    "unified.team_status.tool.report_availability": (
-        "מחזיר נתוני roster אמיתיים למחזור הנוכחי. view הוא summary, members, available, unavailable, "
-        "awaiting, count או reason; עבור reason יש להעביר member_query."
-    ),
-    "unified.team_status.tool.get_roster": (
-        "מחזיר את תמונת מצבת כיתת הכוננות וזמינות הלוחמים בלבד (קריאה בלבד ללא שום תופעות לוואי) בעברית."
-    ),
-    "unified.team_status.tool.record_attendance": "רישום תגובת נוכחות של לוחם כיתת כוננות בעברית.",
-
-    "unified.team_status.legacy_placeholder_name": "חבר כיתת כוננות ({identity})",
-    "unified.team_status.unnamed_member": "משתמש {identity} (שם לא הוגדר)",
-
-    # "|"-delimited keyword groups `_requested_roster_view` matches against
-    # a free-text question to infer which roster view was meant — not
-    # rendered to anyone, so the same bilingual keyword list is kept in
-    # both catalogs rather than translated.
-    "unified.team_status.keywords.reason": "למה|סיבת|reason|why",
-    "unified.team_status.keywords.awaiting": "לא דיווח|טרם דיווח|ממתין|awaiting|pending",
-    "unified.team_status.keywords.unavailable": "מי לא זמין|אינם זמינים|unavailable",
-    "unified.team_status.keywords.count_number": "כמה|כמות|how many|count",
-    "unified.team_status.keywords.count_available": "זמין|available",
-    "unified.team_status.keywords.available": "מי זמין|זמינים בלבד|who is available",
-    "unified.team_status.keywords.members": "מי חבר|חברי הכיתה|השמות|מי הם|members|names",
-
-    "unified.team_status.none_now": "אין כרגע",
-    "unified.team_status.members_header": "{icon} חברי כיתת הכוננות ({count}): {names}",
-    "unified.team_status.available_header": "{icon} זמינים לכוננות ({count}): {names}",
-    "unified.team_status.unavailable_header": "{icon} אינם זמינים ({count}):",
-    "unified.team_status.unavailable_line": "• {name} — {reason}",
-    "unified.team_status.no_reason_saved": "לא נשמרה סיבה",
-    "unified.team_status.none_unavailable": "{icon} אין כרגע חברי כיתה שמסומנים כלא זמינים.",
-    "unified.team_status.awaiting_header": "{icon} טרם דיווחו ({count}): {names}",
-    "unified.team_status.count_summary": "{icon} זמינים כעת {available} מתוך {total} חברי כיתה.",
-    "unified.team_status.reason_unknown_member": "לא ניתן לזהות בוודאות את חבר הכיתה המבוקש מתוך ה־roster.",
-    "unified.team_status.reason_unavailable": "{name} אינו זמין: {reason}{until}.",
-    "unified.team_status.reason_until_suffix": " עד {until}",
-    "unified.team_status.reason_available": "{name} מסומן כזמין; אין סיבת אי־זמינות פעילה.",
-    "unified.team_status.reason_awaiting": "{name} טרם דיווח במחזור הנוכחי; לא נשמרה סיבת אי־זמינות.",
-    "unified.team_status.summary_header": "{icon} סטטוס כיתת כוננות (סה\"כ {count} לוחמים):",
-    "unified.team_status.summary_available_line": "• זמינים לפעילות ({count}): {names}",
-    "unified.team_status.summary_unavailable_line": "• אינם זמינים ({count}): {names}",
-    "unified.team_status.summary_awaiting_line": "• טרם דיווחו ({count}): {names}",
-
-    "unified.team_status.identity_unavailable": "רישום התגובה נכשל: זהות המשתמש המאומת אינה זמינה.",
-    "unified.team_status.default_original_text": "דיווח זמינות: {availability}",
-    "unified.team_status.not_approved": "רישום התגובה נכשל: המשתמש אינו חבר מאושר בכיתת הכוננות.",
-    "unified.team_status.clarify_availability": "הבהרה נדרשת: ציין האם אתה זמין או לא זמין.",
-    "unified.team_status.clarify_reason": "הבהרה נדרשת: לוחם שאינו זמין נדרש לספק סיבה.",
-    "unified.team_status.clarify_days": "הבהרה נדרשת: ציין לכמה ימים אינך זמין.",
-    "unified.team_status.record_failed": "רישום התגובה נכשל: {error}",
-    "unified.team_status.pending_commander_approval": "הדיווח התקבל וממתין לאישור מפקד לפני שינוי סטטוס הכוננות.",
-    "unified.team_status.marked_available": "{icon} הזמינות שלך עודכנה. אתה מסומן כזמין לכוננות.",
-    "unified.team_status.marked_unavailable": "{icon} הזמינות שלך עודכנה. אתה מסומן כלא זמין ({reason}).",
-
-    "unified.friendly_forces.role": "אחראי על תיאום והזנקת כוחות ביטחון וחירום (משטרה, מד\"א, כיבוי אש, צבא).",
-    "unified.friendly_forces.system_prompt": (
-        "אתה סוכן מומחה לתיאום והזנקת כוחות ביטחון וחירום (משטרה, מד\"א, כיבוי אש, צבא). "
-        "חובה לענות אך ורק בעברית קצרה ומדויקת (עד 3 שורות). "
-        "אל תשתמש באנגלית כלל. דווח תמיד איזה כוח הוזנק ולאיזה יעד בדיוק."
-    ),
-    "unified.friendly_forces.tool.ambulance": "רישום הזנקת כוחות רפואה / מד\"א ליעד מבוקש.",
-    "unified.friendly_forces.tool.police": "רישום הזנקת כוחות משטרה ליעד מבוקש.",
-    "unified.friendly_forces.tool.firefighters": "רישום הזנקת כוחות כיבוי והצלה ליעד מבוקש.",
-    "unified.friendly_forces.tool.military": "רישום הזנקת כוחות צבא וביטחון ליעד מבוקש.",
-    "unified.friendly_forces.log_ambulance": "הוזנק מד\"א ל-'{location}': נפגעים={count}",
-    "unified.friendly_forces.confirm_ambulance": "נרשמה בהצלחה הזנקת צוות רפואה/מד\"א ליעד '{location}'.",
-    "unified.friendly_forces.log_police": "הוזנקה משטרה ל-'{location}': כוחות={count}",
-    "unified.friendly_forces.confirm_police": "נרשמה בהצלחה הזנקת כוחות משטרה ליעד '{location}'.",
-    "unified.friendly_forces.log_firefighters": "הוזנק כיבוי אש ל-'{location}': רכבים={count}",
-    "unified.friendly_forces.confirm_firefighters": "נרשמה בהצלחה הזנקת כוחות כיבוי והצלה ליעד '{location}'.",
-    "unified.friendly_forces.log_military": "הוזנק כוח צבאי ל-'{location}': כוחות={count}",
-    "unified.friendly_forces.confirm_military": "נרשמה בהצלחה הזנקת כוחות צבא וביטחון ליעד '{location}'.",
-
-    "unified.seed.primary_name": "מפקד / משתמש ראשי",
-    "unified.seed.commander_user_name": "מפקד כיתת כוננות",
-    "unified.seed.viewer_user_name": "לוחם כיתת כוננות",
-    "unified.seed.member_1001": "דן לוי",
-    "unified.seed.member_1002": "יוסי כהן",
-    "unified.seed.member_1003": "מיכל אברהם",
-
-    "unified.simulation.commander_name": "מפקד מדומה",
-    "unified.simulation.viewer_name": "צופה מדומה",
-    "unified.simulation.response_team_label": "כיתת כוננות מדומה",
-    "unified.simulation.viewer_dm_label": "שיחה פרטית עם צופה",
-    "unified.simulation.overall_picture.title": "תמונת מצב כוללת (הדגמה)",
-    "unified.simulation.overall_picture.description": (
-        "הדגמה בצעד יחיד: צופה מדומה שואל בשיחה פרטית לתמונת המצב הכוללת - פרוטוקול ברמת סיכון "
-        "נמוכה שאינו דורש אישור ומסתיים מיד."
-    ),
-    "unified.simulation.overall_picture.step_text": "מה תמונת המצב הכוללת כרגע?",
-
-    "unified.simulation.sec001.persona.eli_response_team": "אלי - כיתת כוננות",
-    "unified.simulation.sec001.persona.yossi_technician": "יוסי - טכנאי חוזי",
-    "unified.simulation.sec001.persona.sdemot_security_coordinator": "מוקד שדמות - רכז ביטחון שכן",
-    "unified.simulation.sec001.persona.danny_response_team": "דני - כיתת כוננות",
-    "unified.simulation.sec001.persona.site_security_officer": "רבש\"ץ",
-    "unified.simulation.sec001.persona.michael_response_team": "מיכאל - כיתת כוננות",
-    "unified.simulation.sec001.persona.police_duty_officer": "יומנאי תחנת משטרה",
-    "unified.simulation.sec001.persona.yuval_response_team": "יובל - כיתת כוננות",
-    "unified.simulation.sec001.persona.patrol_unit_40": "ניידת סיור 40",
-    "unified.simulation.sec001.persona.gil_response_team": "גיל - כיתת כוננות",
-    "unified.simulation.sec001.persona.resident_avraham": "תושב - אברם (שכונת ההרחבה)",
-    "unified.simulation.sec001.persona.dan_response_team": "דן - כיתת כוננות",
-    "unified.simulation.sec001.persona.mda_dispatch": "מוקד מד\"א",
-    "unified.simulation.sec001.persona.police_patrol": "סיור משטרתי",
-    "unified.simulation.sec001.persona.yasam_commander": "מפקד יס\"מ - משטרה",
-    "unified.simulation.sec001.chat.response_team.label": "כיתת כוננות",
-    "unified.simulation.sec001.chat.cameras.label": "מוקד מצלמות",
-    "unified.simulation.sec001.chat.external_forces.label": "כוחות חוץ",
-    "unified.simulation.sec001.chat.commander_dm.label": "שיחה פרטית עם רבש\"ץ",
-    "unified.simulation.sec001.group.cameras.label": "מוקד מצלמות",
-    "unified.simulation.sec001.group.external_forces.label": "כוחות חוץ",
-    "unified.simulation.sec001.phase1.title": "אירוע כיתת כוננות - שלב מכין: שגרה ותקלות קלות",
-    "unified.simulation.sec001.phase1.description": "איסוף נתוני סד\"כ יומיים, תקלות רשת ותחזוקה קלות, ודיווחים היקפיים ללא איום מוגדר.",
-    "unified.simulation.sec001.phase1.step1.text": "בוקר טוב, מעדכן שאני במילואים מראשון עד שלישי בערב, לא זמין ביישוב.",
-    "unified.simulation.sec001.phase1.step2.text": "מצלמה 08 (פינה דרומית) מציגה הפרעות קליטה לפרקים. ייתכן שזה רק ענף שמסתיר או בעיית פוקוס.",
-    "unified.simulation.sec001.phase1.step3.text": "לכל הגזרה: שריפה קטנה בשטח פתוח ליד כביש הגישה האזורי. כיבוי מטפלים, אין סיכון לשטחים חקלאיים.",
-    "unified.simulation.sec001.phase1.step4.text": "חברים, החלפתי נייד. המספר החדש מעודכן, בודק זמינות בגל שקט הלילה.",
-    "unified.simulation.sec001.phase1.step5.text": "ערב טוב, תפיק לי סיכום יומי: מי חסר בסד\"כ ללילה ומה הסטטוס של מצלמות הגדר?",
-    "unified.simulation.sec001.phase1.step6.text": "קמתי עם חום גבוה, לא אוכל להשתתף בסיור הערב.",
-    "unified.simulation.sec001.phase1.step7.text": "מצלמה 03 (גדר מזרחית, מקטע 4) הורדה יזומית לשעתיים לצורך עדכון גרסה תקופתי.",
-    "unified.simulation.sec001.phase1.step8.text": "עדכון גזרתי: הלילה נגנב טרקטורון מאצלינו. סבירות גבוהה שהגנבים נעו לאורך ציר המערכת.",
-    "unified.simulation.sec001.phase1.step9.text": "תציג לי תגזיר תמונת מצב מעודכנת לקראת הלילה.",
-    "unified.simulation.sec001.phase2.title": "אירוע כיתת כוננות - שלב עיקרי: התחממות והצטברות אירועים",
-    "unified.simulation.sec001.phase2.description": "מעבר משגרה לחירום. סדרת תקלות תצפית חריגות, אינדיקציות משטרתיות על רכב חשוד, וזיהוי נזק פיזי לגדר המערכת המצריכים הקפצה תחת חסר בסד\"כ.",
-    "unified.simulation.sec001.phase2.step1.text": "בוקר טוב. מוזר, מצלמה 03 שהורדנו אתמול לעדכון עדיין לא חזרה. עכשיו גם מצלמה 04 לידה תקועה על תמונה קפואה.",
-    "unified.simulation.sec001.phase2.step2.text": "לכל המרחב: התקבל דיווח על רכב מסחרי לבן ללא לחיות זיהוי שנראה נע באיטיות באזור המטעים המזרחיים שלכם.",
-    "unified.simulation.sec001.phase2.step3.text": "היי חברים, שומע פריקה של ציוד כבד באזור השער המערבי. יש שם עבודות מתוכננות היום?",
-    "unified.simulation.sec001.phase2.step4.text": "תציף לי תמונה מהירה: יש לנו משהו חשוד בגזרה המזרחית? ומה הדיבור על השער המערבי?",
-    "unified.simulation.sec001.phase2.step5.text": "חבר'ה, הגעתי פיזית למצלמה 03 בגדר המזרחית. יש כבל תקשורת חתוך פיזית! זה חבלה יזומות, לא תקלת רשת!",
-    "unified.simulation.sec001.phase2.step6.text": "מזהים את המסחרית הלבנה נטושה במטע הזיתים המזרחי, כ-150 מטר מגדר היישוב. דלתות פתוחות, הרכב ריק. מקפיצים יחידת כלבנים.",
-    "unified.simulation.sec001.phase2.step7.text": "אירוע חם! תצליב לי מיד את כל המידע מהסוכנים, תקפיץ כיתת הכוננות ותמליץ על פריסת כוחות!",
-    "unified.simulation.sec001.phase2.step8.text": "קיבלתי את ההקפצה, יוצא מהבית לכיוון גזרה מזרחית. מגיע תוך 4 דקות. מי עוד איתי בצוות?",
-    "unified.simulation.sec001.phase2.step9.text": "געתי למקטע 4 מזרח. מזהה פריצה טרייה בגדר המערכת! עקבות רגליים מובילות פנימה לכיוון שכונת ההרחבה!",
-    "unified.simulation.sec001.phase3.title": "אירוע כיתת כוננות - שלב קיצון: חדירה פעילה, בלבול וסגר מלא",
-    "unified.simulation.sec001.phase3.description": "הגעה לקצה המבצעי. חדירת חשודים ליישוב, דיווי שווא המייצרים דילול כוחות, תיאום אירוע נפגעים מורכב, סריקות מבית לבית וסגירת אירוע תחת עומס מידע.",
-    "unified.simulation.sec001.phase3.step1.text": "סירנות בשער מזרח! ראיתי דמות חשודה בתוך החצר של משפחת לוי ברחוב הזית 12! יש לו משהו ארוך ביד!",
-    "unified.simulation.sec001.phase3.step2.text": "רגע! תושבים מדווחים עכשיו על ירי בלתי פוסק באזור השער המערבי! אני רץ לשם!",
-    "unified.simulation.sec001.phase3.step3.text": "קיבלנו דיווח על פצוע ירי בכניסה לשכונת ההרחבה! אמבולנס בדרך, דורשים אבטחה של כיתת כוננות לצוות הרפואי.",
-    "unified.simulation.sec001.phase3.step4.text": "יש לי פה בלבול מטורף! דן רץ למערב בגלל דיווח על ירי, מד\"א מדברים על פצוע במזרח, ותושב מדווח על חמוש בהרחבה. תעשה לי סדר מיד! לאן לשלוח את הכוח הזמין?!",
-    "unified.simulation.sec001.phase3.step5.text": "הבהרה: אין ירי בשער המערבי! הירי שדווח הוא ירי אזהרה של הניידת שלנו באזור המטעים המזרחיים. אל תפצלו כוחות למערב!",
-    "unified.simulation.sec001.phase3.step6.text": "הגעתי לרחוב הזית 12 בהרחבה! חברתי למד\"א, מטפלים בפצוע (תושב שנפצע מזכוכיות בזמן בריחה). זיהיתי את החשוד נמלט לכיוון המבנה הציבורי הישן!",
-    "unified.simulation.sec001.phase3.step7.text": "הצלחתי להרים מצלמה טקטית ניידת על תורן המזכירות! רואים חשוד אחד מתחבא על גג המבנה הציבורי הישן, מוחזק עצם כהה ביד.",
-    "unified.simulation.sec001.phase3.step8.text": "כוח יס\"מ ויחידת ימ\"ג נכנסים כעת לשטח היישוב. מעבירים אלינו את פיקוד אירוע השתלטות ברגע שנגיע למבנה.",
-    "unified.simulation.sec001.phase3.step9.text": "אירוע בשליטה! החשוד נעצר על הגג ללא ירי. מדובר בפורץ שנסה להימלט לאחר שחתך את הגדר. מועבר לחקירות.",
-    "unified.simulation.sec001.phase3.step10.text": "מעולה, האירוע הסתיים. תריץ לי סיכום אירוע מלא מקצה לקצה: ציר זמן, כשלים/דיווי שווא שהיו, סטטוס פצועים וסד\"כ, והודעה להפצה לתושבי היישוב לרגיעה.",
-
-    "unified.simulation.fire002.persona.lahav_avi_shift_commander": "להב אבי - מפקד משמרת",
-    "unified.simulation.fire002.persona.omri_firefighter": "רס\"ל עמרי - כבאי",
-    "unified.simulation.fire002.persona.roni_surveillance_operator": "רוני - מפעיל תצפיות",
-    "unified.simulation.fire002.persona.kkl_mountains_sector": "מוקד קק\"ל - גזרת הרים",
-    "unified.simulation.fire002.persona.police_hub_agam": "מוקד משטרה - אגמ",
-    "unified.simulation.fire002.persona.station_commander": "מפקד התחנה",
-    "unified.simulation.fire002.persona.yuval_ashed3_commander": "רס\"ל יובל - מפקד צוות אשד 3",
-    "unified.simulation.fire002.persona.citizen_reports_group": "אזרח - קבוצת דיווחים",
-    "unified.simulation.fire002.persona.fire_police_patrol": "סיור משטרתי",
-    "unified.simulation.fire002.persona.district_fire_commander": "מפקד מחוז - כב\"ה",
-    "unified.simulation.fire002.chat.fire_response_team.label": "כיתת כיבוי",
-    "unified.simulation.fire002.chat.fire_cameras.label": "מוקד תצפית",
-    "unified.simulation.fire002.chat.fire_external_forces.label": "כוחות חוץ",
-    "unified.simulation.fire002.chat.fire_commander_dm.label": "שיחה פרטית עם מפקד התחנה",
-    "unified.simulation.fire002.group.fire_response_team.label": "כיתת כיבוי",
-    "unified.simulation.fire002.group.fire_cameras.label": "מוקד תצפית",
-    "unified.simulation.fire002.group.fire_external_forces.label": "כוחות חוץ",
-    "unified.simulation.fire002.phase1.title": "אירוע כיבוי והצלה - שלב מכין: שגרה, עומס חום ותחזוקת ציוד",
-    "unified.simulation.fire002.phase1.description": "היערכות ליום שרבי. ניהול סד\"כ משמרת, תקלות רכב/ציוד קלות, ודיווחי שריפות פתוחות קטנות בשגרה.",
-    "unified.simulation.fire002.phase1.step1.text": "בוקר טוב. מעדכן סד\"כ פותח: 6 כבאים בצוות א', רכב אשד 3 וכרמל 1 במבצעיות מלאה.",
-    "unified.simulation.fire002.phase1.step2.text": "מעדכן שאני צריך לצאת ב-12:00 לבדיקה רפואית תקופתית, חוזר למשמרת ב-15:00.",
-    "unified.simulation.fire002.phase1.step3.text": "חיישן טמפרטורה ומצלמה תרמית במגדל תצפית אורנים מציגים התראת חום נמוכה עקב שרב כבד ורוחות מזרחיות.",
-    "unified.simulation.fire002.phase1.step4.text": "לכל הגורמים: עקב השרב, הוצאנו הנחיה לאיסור הדלקת אש בכל היערות באזור. יערנים בסריקות.",
-    "unified.simulation.fire002.phase1.step5.text": "מצלמה 02 (צומת המחצבה) הופסקה יזומית לטובת ניקוי עדשה עקב אבק כבד.",
-    "unified.simulation.fire002.phase1.step6.text": "דיווח על שריפת קוצים קטנה בצד כביש 444, כנראה מסיגריה. ניידת במקום, אין סיכון למבנים.",
-    "unified.simulation.fire002.phase1.step7.text": "תפיק לי תמונת מצב לתחילת הצהריים: מה זמינות הכוחות והרכבים שלנו תחת תנאי השרב?",
-    "unified.simulation.fire002.phase2.title": "אירוע כיבוי והצלה - שלב עיקרי: התפשטות שריפה ועומס מוקד",
-    "unified.simulation.fire002.phase2.description": "הסלמה בתנאי קיצון. שריפת קוצים בשטח פתוח מתפשטת בחסות הרוח לכיוון יער ומבני תעשייה, במקביל לדיווחי שווא ותקלה במצלמה תרמית.",
-    "unified.simulation.fire002.phase2.step1.text": "זיהוי עשן ראשוני במצלמה 05 (רכס אורנים)! נראה כמו מוקד אש קטן בשטח פתוח, מתפשט מזרחה בחסות הרוח.",
-    "unified.simulation.fire002.phase2.step2.text": "מתקבלים עשרות דיווחים מאזרחים על עשן סמיך שנראה מכביש 444. עומסי תנועה מתפתחים באזור.",
-    "unified.simulation.fire002.phase2.step3.text": "רכב אשד 3 יצא לנקודה. מגיעים עוד 4 דקות. נזכיר שעמרי בבדיקה רפואית, סד\"כ בתחנה צמצום.",
-    "unified.simulation.fire002.phase2.step4.text": "מצלמה 05 נכנסה לבלבול תרמי עקב עשן כבד וסנוור. העדשה קפאה ולא ניתן להזחיז אותה מרחוק.",
-    "unified.simulation.fire002.phase2.step5.text": "דיווח מהשטח: האש דילגה מעל שביל עפר ונכנסה לקו החורש! יש סיכון ממשי להתפשטות לכיוון פארק התעשייה.",
-    "unified.simulation.fire002.phase2.step6.text": "מזהים התפשטות מהירה בתוך היער. מקפיצים 2 טרקטורי כיבוי שלנו, דורשים תיאום גזרות מולכם.",
-    "unified.simulation.fire002.phase2.step7.text": "תציג לי תמונת מצב דחופה: מה מיקום השריפה המדויק, מה הסטטוס של הצוותים בשטח, ומה המלצת הסוכנים לגבי הקפצת כוננות?",
-    "unified.simulation.fire002.phase3.title": "אירוע כיבוי והצלה - שלב קיצון: איום חומ\"ס, פינוי תושבים ועומס קריטי",
-    "unified.simulation.fire002.phase3.description": "הגעה לקצה המבצעי. השריפה מתקרבת למפעל חומרים מסוכנים בפארק התעשייה, הוראה על פינוי קו בתים ראשון, דיווחי שווא על לכודים וניהול סד\"כ ארצי/מחוזי.",
-    "unified.simulation.fire002.phase3.step1.text": "חירום! הלהבות בחזית הצפונית עברו את כביש הגישה והגיעו לגדר של מפעל 'כימי-קל'. יש שם צובר גז ומיכלי אמוניה בחצר!",
-    "unified.simulation.fire002.phase3.step2.text": "מתחילים פינוי מיידי של קו הבתים הראשון ברחוב אורנים עקב עשן רעיל וסמיך! מבקשים הנחיות לגבי חסימות צירים נוספות.",
-    "unified.simulation.fire002.phase3.step3.text": "יש שני ילדים לכודים על גג המבנה ברחוב אורנים 14! סורגים סגורים, העשן נכנס פנימה!",
-    "unified.simulation.fire002.phase3.step4.text": "יש לנו שני מוקדי חרום קריטיים: חומ\"ס במפעל מול לכודים בבתים! הסד\"כ שלנו עדיין בחסר. תתעדף לי מיד תגובה והקצאת מים/צוותים!",
-    "unified.simulation.fire002.phase3.step5.text": "בדיקה ברחוב אורנים 14: הבית ריק! הילדים פונו מוקדם יותר על ידי ההורים. הדיווח על לכודים - סרק!",
-    "unified.simulation.fire002.phase3.step6.text": "מצלמה טקטית מרחפן מראה שהאש נושקת למכל הגז החיצוני של המפעל. נדרש מסך מים מקורר באופן מיידי!",
-    "unified.simulation.fire002.phase3.step7.text": "משגרים אליכם 4 רכבי אלון (מיכליות מים) מתחנה שכנה + 2 טייסת כיבוי. שמיים נקיים לריסוס.",
-    "unified.simulation.fire002.phase3.step8.text": "הסיוע המחוזי הגיע! הקמנו מסך מים סביב צוברי הגז והלהבות במפעל נבלמו. אין דליפת חומ\"ס.",
-    "unified.simulation.fire002.phase3.step9.text": "האירוע בהכלה. תפיק לי תחקירי ראשוני: לוח זמנים, ניהול המשאבים, זיהוי דיווחי השווא והנחיות להחזרת תושבים לבתים.",
-
-    "unified.protocol.overall_situational_picture.description": (
-        "תמונת מצב גזרתית כוללת (קריאה בלבד ללא שינוי נתונים): שילוב תצפית (מצלמות ורחפנים) ומצבת כיתת כוננות בגזרה."
-    ),
-    "unified.protocol.overall_situational_picture.expected_output": (
-        "תמונת מצב גזרתית מאוחדת ומבצעית המשלבת תצפית וכיתת כוננות ללא שינוי נתונים."
-    ),
-    "unified.protocol.query_surveillance_overview.description": (
-        "תמונת מצב תצפיתית כוללת: סטטוס מצלמות, רחפנים ומשימות אוויריות פעילות בכל הגזרות."
-    ),
-    "unified.protocol.query_surveillance_overview.expected_output": "תמונת מצב טקטית מרוכזת של מערך התצפית והרחפנים.",
-    "unified.protocol.query_drone_fleet_status.description": (
-        "בירור מצב צי הרחפנים: זמינות, רמות סוללה, מיקומים וסטטוס מבצעי של כל הרחפנים."
-    ),
-    "unified.protocol.query_drone_fleet_status.expected_output": "דוח מפורט של מצב הרחפנים, סוללות וזמינות לשיגור.",
-    "unified.protocol.query_active_drone_missions.description": (
-        "בירור משימות רחפנים פעילות באוויר: יעדים, זמני הגעה משוערים, רמות סוללה ומשימות."
-    ),
-    "unified.protocol.query_active_drone_missions.expected_output": "דוח משימות רחפנים פעילות באוויר בעברית.",
-    "unified.protocol.query_camera_status.description": "בדיקת סטטוס ותמונת מצב של מצלמות אבטחה לפי גזרה או מצלמה ספציפית.",
-    "unified.protocol.query_camera_status.expected_output": "דוח תצפית של מצלמות האבטחה בגזרה המבוקשת.",
-    "unified.protocol.dispatch_drone_to_incident.description": (
-        "שיגור רחפן טקטי לאירוע או גזרה לצורך תצפית או סיור. פעולת מפקד בלבד הדורשת אישור."
-    ),
-    "unified.protocol.dispatch_drone_to_incident.expected_output": "אישור שיגור רחפן לגזרה כולל אות קריאה וזמן הגעה משוער.",
-    "unified.protocol.recall_drone_to_base.description": (
-        "החזרת רחפן פעיל לבסיס וסגירת משימה אווירית. הפעלת return_drone_to_base מיד ללא סריקה מוקדמת. "
-        "פעולת מפקד בלבד הדורשת אישור."
-    ),
-    "unified.protocol.recall_drone_to_base.expected_output": "אישור החזרת הרחפן לבסיס ועדכון סטטוס הרחפן למוכן לפעולה.",
-    "unified.protocol.report_team_availability.description": (
-        "דוח מצבת נוכחות וזמינות כיתת כוננות: מי זמין, מי לא זמין, סיבות, ומי שטרם דיווח."
-    ),
-    "unified.protocol.report_team_availability.expected_output": "תמונת מצב שמית מפורטת של כיתת הכוננות.",
-    "unified.protocol.record_attendance_response.description": (
-        "הזנת דיווח נוכחות של חבר כיתת כוננות: סטטוס זמין או לא זמין עם סיבה."
-    ),
-    "unified.protocol.record_attendance_response.expected_output": "אישור קליטת דיווח הנוכחות של חבר הכיתה.",
-    "unified.protocol.dispatch_emergency_forces.description": (
-        "הזנקת ותיאום כוחות חירום וביטחון: אמבולנס, משטרה, כיבוי אש, צבא. פעולת מפקד בלבד הדורשת אישור."
-    ),
-    "unified.protocol.dispatch_emergency_forces.expected_output": "אישור רישום ותיאום הזנקת כוחות החירום ליעד.",
-    "unified.protocol.query_historical_incidents.description": "תחקור אירועים ומשימות קודמות מתוך יומן המבצעים וההיסטוריה.",
-    "unified.protocol.query_historical_incidents.expected_output": "סיכום תמציתי ומדויק של אירועי עבר ביומן המבצעי.",
-
-    "unified.keyboard.approvals_queue": "{icon} תור אישורים",
-    "unified.keyboard.overall_picture": "{icon} תמונת מצב כללית",
-    "unified.keyboard.camera_status": "{icon} מצב מצלמות",
-    "unified.keyboard.drone_fleet_status": "{icon} מצב צי רחפנים",
-    "unified.keyboard.dispatch_drone": "{icon} הזנקת רחפן",
-    "unified.keyboard.recall_drone": "{icon} החזרת רחפן לבסיס",
-    "unified.keyboard.team_status": "{icon} סטטוס כיתת כוננות",
-    "unified.keyboard.dispatch_forces": "{icon} הזנקת כוחות",
-    "unified.keyboard.event_history": "{icon} היסטוריית אירועים",
-    "unified.keyboard.available": "{icon} אני זמין לכוננות",
-    "unified.keyboard.unavailable": "{icon} איני זמין",
-
-    "orchestrator.picture.default_domain_query": (
-        "דווח כעת על המצב העדכני בכל תחום האחריות שלך: מספרים, סטטוסים, שמות, מזהים, מיקומים וכל חריגה. "
-        "ענה רק מנתוני הכלים שלך."
-    ),
-    "orchestrator.picture.recent_events_question": (
-        "אילו אירועים נרשמו ב-{hours} השעות האחרונות? לכל אירוע ציין זמן, סיווג, אזור, פרוטוקול ותוצאה."
-    ),
-    "orchestrator.picture.no_recent_events": "לא נרשמו אירועים ב-{hours} השעות האחרונות.",
-    "orchestrator.picture.recent_events_label": "אירועים אחרונים ({hours} השעות האחרונות)",
-    "orchestrator.picture.domain_unavailable": "לא התקבל דיווח מ-{domain}.",
-    "orchestrator.picture.fallback_header": "תמונת מצב נכון ל-{time}:",
-    "orchestrator.picture.missing_note": "(הערה מבצעית: לא התקבל דיווח מ-{domains})",
+        "היה תמציתי וברור.",
+    "standby_squad.team_status.tool.get_roster": "מחזיר את תמונת מצבת כיתת הכוננות וזמינות הלוחמים בלבד (קריאה בלבד ללא שום תופעות לוואי) בעברית.",
+    "standby_squad.team_status.tool.record_attendance": "רישום תגובת נוכחות של לוחם כיתת כוננות בעברית.",
+    "standby_squad.team_status.tool.report_availability": "מחזיר נתוני roster אמיתיים למחזור הנוכחי. view הוא summary, members, available, unavailable, "
+        "awaiting, count או reason; עבור reason יש להעביר member_query.",
+    "standby_squad.team_status.unavailable_header": "{icon} אינם זמינים ({count}):",
+    "standby_squad.team_status.unavailable_line": "• {name} — {reason}",
+    "standby_squad.team_status.unnamed_member": "משתמש {identity} (שם לא הוגדר)",
+    "firefighting.simulation.fire002.chat.fire_cameras.label": "מוקד תצפית",
+    "firefighting.simulation.fire002.chat.fire_commander_dm.label": "שיחה פרטית עם מפקד התחנה",
+    "firefighting.simulation.fire002.chat.fire_external_forces.label": "כוחות חוץ",
+    "firefighting.simulation.fire002.chat.fire_response_team.label": "כיתת כיבוי",
+    "firefighting.simulation.fire002.group.fire_cameras.label": "מוקד תצפית",
+    "firefighting.simulation.fire002.group.fire_external_forces.label": "כוחות חוץ",
+    "firefighting.simulation.fire002.group.fire_response_team.label": "כיתת כיבוי",
+    "firefighting.simulation.fire002.persona.citizen_reports_group": "אזרח - קבוצת דיווחים",
+    "firefighting.simulation.fire002.persona.district_fire_commander": "מפקד מחוז - כב\"ה",
+    "firefighting.simulation.fire002.persona.fire_police_patrol": "סיור משטרתי",
+    "firefighting.simulation.fire002.persona.kkl_mountains_sector": "מוקד קק\"ל - גזרת הרים",
+    "firefighting.simulation.fire002.persona.lahav_avi_shift_commander": "להב אבי - מפקד משמרת",
+    "firefighting.simulation.fire002.persona.omri_firefighter": "רס\"ל עמרי - כבאי",
+    "firefighting.simulation.fire002.persona.police_hub_agam": "מוקד משטרה - אגמ",
+    "firefighting.simulation.fire002.persona.roni_surveillance_operator": "רוני - מפעיל תצפיות",
+    "firefighting.simulation.fire002.persona.station_commander": "מפקד התחנה",
+    "firefighting.simulation.fire002.persona.yuval_ashed3_commander": "רס\"ל יובל - מפקד צוות אשד 3",
+    "firefighting.simulation.fire002.phase1.description": "היערכות ליום שרבי. ניהול סד\"כ משמרת, תקלות רכב/ציוד קלות, ודיווחי שריפות פתוחות קטנות בשגרה.",
+    "firefighting.simulation.fire002.phase1.step1.text": "בוקר טוב. מעדכן סד\"כ פותח: 6 כבאים בצוות א', רכב אשד 3 וכרמל 1 במבצעיות מלאה.",
+    "firefighting.simulation.fire002.phase1.step2.text": "מעדכן שאני צריך לצאת ב-12:00 לבדיקה רפואית תקופתית, חוזר למשמרת ב-15:00.",
+    "firefighting.simulation.fire002.phase1.step3.text": "חיישן טמפרטורה ומצלמה תרמית במגדל תצפית אורנים מציגים התראת חום נמוכה עקב שרב כבד ורוחות מזרחיות.",
+    "firefighting.simulation.fire002.phase1.step4.text": "לכל הגורמים: עקב השרב, הוצאנו הנחיה לאיסור הדלקת אש בכל היערות באזור. יערנים בסריקות.",
+    "firefighting.simulation.fire002.phase1.step5.text": "מצלמה 02 (צומת המחצבה) הופסקה יזומית לטובת ניקוי עדשה עקב אבק כבד.",
+    "firefighting.simulation.fire002.phase1.step6.text": "דיווח על שריפת קוצים קטנה בצד כביש 444, כנראה מסיגריה. ניידת במקום, אין סיכון למבנים.",
+    "firefighting.simulation.fire002.phase1.step7.text": "תפיק לי תמונת מצב לתחילת הצהריים: מה זמינות הכוחות והרכבים שלנו תחת תנאי השרב?",
+    "firefighting.simulation.fire002.phase1.title": "אירוע כיבוי והצלה - שלב מכין: שגרה, עומס חום ותחזוקת ציוד",
+    "firefighting.simulation.fire002.phase2.description": "הסלמה בתנאי קיצון. שריפת קוצים בשטח פתוח מתפשטת בחסות הרוח לכיוון יער ומבני תעשייה, במקביל לדיווחי שווא ותקלה במצלמה תרמית.",
+    "firefighting.simulation.fire002.phase2.step1.text": "זיהוי עשן ראשוני במצלמה 05 (רכס אורנים)! נראה כמו מוקד אש קטן בשטח פתוח, מתפשט מזרחה בחסות הרוח.",
+    "firefighting.simulation.fire002.phase2.step2.text": "מתקבלים עשרות דיווחים מאזרחים על עשן סמיך שנראה מכביש 444. עומסי תנועה מתפתחים באזור.",
+    "firefighting.simulation.fire002.phase2.step3.text": "רכב אשד 3 יצא לנקודה. מגיעים עוד 4 דקות. נזכיר שעמרי בבדיקה רפואית, סד\"כ בתחנה צמצום.",
+    "firefighting.simulation.fire002.phase2.step4.text": "מצלמה 05 נכנסה לבלבול תרמי עקב עשן כבד וסנוור. העדשה קפאה ולא ניתן להזחיז אותה מרחוק.",
+    "firefighting.simulation.fire002.phase2.step5.text": "דיווח מהשטח: האש דילגה מעל שביל עפר ונכנסה לקו החורש! יש סיכון ממשי להתפשטות לכיוון פארק התעשייה.",
+    "firefighting.simulation.fire002.phase2.step6.text": "מזהים התפשטות מהירה בתוך היער. מקפיצים 2 טרקטורי כיבוי שלנו, דורשים תיאום גזרות מולכם.",
+    "firefighting.simulation.fire002.phase2.step7.text": "תציג לי תמונת מצב דחופה: מה מיקום השריפה המדויק, מה הסטטוס של הצוותים בשטח, ומה המלצת הסוכנים לגבי הקפצת כוננות?",
+    "firefighting.simulation.fire002.phase2.title": "אירוע כיבוי והצלה - שלב עיקרי: התפשטות שריפה ועומס מוקד",
+    "firefighting.simulation.fire002.phase3.description": "הגעה לקצה המבצעי. השריפה מתקרבת למפעל חומרים מסוכנים בפארק התעשייה, הוראה על פינוי קו בתים ראשון, דיווחי שווא על לכודים וניהול סד\"כ ארצי/מחוזי.",
+    "firefighting.simulation.fire002.phase3.step1.text": "חירום! הלהבות בחזית הצפונית עברו את כביש הגישה והגיעו לגדר של מפעל 'כימי-קל'. יש שם צובר גז ומיכלי אמוניה בחצר!",
+    "firefighting.simulation.fire002.phase3.step2.text": "מתחילים פינוי מיידי של קו הבתים הראשון ברחוב אורנים עקב עשן רעיל וסמיך! מבקשים הנחיות לגבי חסימות צירים נוספות.",
+    "firefighting.simulation.fire002.phase3.step3.text": "יש שני ילדים לכודים על גג המבנה ברחוב אורנים 14! סורגים סגורים, העשן נכנס פנימה!",
+    "firefighting.simulation.fire002.phase3.step4.text": "יש לנו שני מוקדי חרום קריטיים: חומ\"ס במפעל מול לכודים בבתים! הסד\"כ שלנו עדיין בחסר. תתעדף לי מיד תגובה והקצאת מים/צוותים!",
+    "firefighting.simulation.fire002.phase3.step5.text": "בדיקה ברחוב אורנים 14: הבית ריק! הילדים פונו מוקדם יותר על ידי ההורים. הדיווח על לכודים - סרק!",
+    "firefighting.simulation.fire002.phase3.step6.text": "מצלמה טקטית מרחפן מראה שהאש נושקת למכל הגז החיצוני של המפעל. נדרש מסך מים מקורר באופן מיידי!",
+    "firefighting.simulation.fire002.phase3.step7.text": "משגרים אליכם 4 רכבי אלון (מיכליות מים) מתחנה שכנה + 2 טייסת כיבוי. שמיים נקיים לריסוס.",
+    "firefighting.simulation.fire002.phase3.step8.text": "הסיוע המחוזי הגיע! הקמנו מסך מים סביב צוברי הגז והלהבות במפעל נבלמו. אין דליפת חומ\"ס.",
+    "firefighting.simulation.fire002.phase3.step9.text": "האירוע בהכלה. תפיק לי תחקירי ראשוני: לוח זמנים, ניהול המשאבים, זיהוי דיווחי השווא והנחיות להחזרת תושבים לבתים.",
+    "firefighting.simulation.fire002.phase3.title": "אירוע כיבוי והצלה - שלב קיצון: איום חומ\"ס, פינוי תושבים ועומס קריטי",
 }
+

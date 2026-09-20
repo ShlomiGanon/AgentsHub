@@ -15,6 +15,36 @@ default. If `OBSERVABILITY_MODE=otlp`, startup fails unless
 `OTEL_EXPORTER_OTLP_ENDPOINT` is set, preventing a production instance from
 silently running without required telemetry.
 
+## Running Standby Squad and Firefighting (docs/Profile_Split_Plan.md)
+
+Exactly two profiles ship today: `profiles.standby_squad` (readiness-team status, visual
+surveillance, friendly-forces dispatch — `API_PORT` 8905, `SIMULATOR_PORT` 8915) and
+`profiles.firefighting` (crew status, fire-camera surveillance, mutual-aid dispatch —
+`API_PORT` 8906, `SIMULATOR_PORT` 8916), each with its own three admin-simulator scenarios.
+
+**Primary mode: switch in place.** Run `python -m run_stack` once — it starts whichever
+profile `config/server_control.load_selected_profile()` last selected (Standby Squad by
+default). Use the admin panel's server-control page (`/admin/server`) to switch the running
+profile between the two; the supervisor stops the current profile's processes and restarts
+with the new one on the same ports, a few seconds of downtime. This is the default workflow:
+it needs no extra environment setup, and only one profile's admin panel/bot is reachable at a
+time.
+
+**Advanced mode: run both profiles concurrently.** Since the two profiles use distinct
+`API_PORT`/`SIMULATOR_PORT`s and distinct `DB_PATH`s, nothing stops running two independent
+`run_stack.py` supervisors side by side — one admin panel per profile, reachable at the same
+time (`:8905/admin/simulator` and `:8906/admin/simulator`). This needs one extra step:
+`config/server_control.py`'s control channel (`status.json`/`command.json`) defaults to one
+shared `data/server_control/` directory, so the second supervisor must be started with its own
+`AGENTSHUB_CONTROL_DIR` (e.g. `AGENTSHUB_CONTROL_DIR=data/server_control_firefighting`), or
+the two instances will overwrite each other's status/command files. Only use this mode if you
+specifically need both profiles live at once (e.g. side-by-side demos); otherwise prefer the
+primary switch-in-place workflow above.
+
+Each profile needs its own bot token: `BOT_TOKEN` for Standby Squad, `FIREFIGHTING_BOT_TOKEN`
+for Firefighting (`.env.example`) — required even in switch-in-place mode, since both values
+must already be set in `.env` before whichever profile is currently selected can start.
+
 ## Writing a profile from scratch
 
 A profile is a plain Python module — see `docs/profile_spec.md` for the

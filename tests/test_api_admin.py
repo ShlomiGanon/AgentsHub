@@ -314,7 +314,8 @@ def test_server_page_requires_session_and_disables_controls_without_supervisor(t
     page = client.get("/admin/server")
     assert page.status_code == 200
     assert b"run_stack.py" in page.data
-    assert b"profiles.demo" in page.data
+    assert b"profiles.standby_squad" in page.data
+    assert b"profiles.firefighting" in page.data
 
 
 def test_server_safe_mode_control_reflects_the_live_system_setting(tmp_path, teardown_ctx, _admin_env):

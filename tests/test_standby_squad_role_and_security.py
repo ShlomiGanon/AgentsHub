@@ -1,4 +1,4 @@
-"""Comprehensive automated tests for role-based security, unified profile, and confirmation flows."""
+"""Comprehensive automated tests for role-based security, the Standby Squad profile, and confirmation flows."""
 
 from unittest.mock import AsyncMock, MagicMock
 
@@ -14,61 +14,61 @@ from protocols.contracts import CriticalityLevel, Protocol
 
 
 @pytest.fixture
-def unified_env(monkeypatch, tmp_path):
-    """Set up environment variables for unified test profile.
+def standby_squad_env(monkeypatch, tmp_path):
+    """Set up environment variables for the standby squad profile.
 
-    Also ensures profiles.unified_test's mock/demo data is seeded. That
-    profile no longer seeds it as an `import profiles.unified_test` side
-    effect (see profiles.unified_test.ensure_seed_data) — every test below
+    Also ensures profiles.standby_squad's mock/demo data is seeded. That
+    profile does not seed it as an `import profiles.standby_squad` side
+    effect (see profiles.standby_squad.ensure_seed_data) — every test below
     that exercises this profile against its real (non-tmp_path) databases
     calls this fixture instead of relying on some earlier test having
     imported the module first.
     """
-    monkeypatch.setenv("BOT_TOKEN", "123456789:AAFakeTokenForUnifiedTesting000")
+    monkeypatch.setenv("BOT_TOKEN", "123456789:AAFakeTokenForStandbySquadTest0")
     monkeypatch.setenv("CORE_MODEL_KEY", "mock-core-key")
     monkeypatch.setenv("SUB_MODEL_KEY", "mock-sub-key")
     monkeypatch.setenv("BOT_SERVICE_KEY", "mock-service-key")
 
-    from profiles import unified_test
+    from profiles import standby_squad
 
-    monkeypatch.setattr(unified_test, "DB_PATH", str(tmp_path / "history.db"))
+    monkeypatch.setattr(standby_squad, "DB_PATH", str(tmp_path / "history.db"))
     monkeypatch.setattr(
-        unified_test,
-        "UNIFIED_SURVEILLANCE_DB_PATH",
+        standby_squad,
+        "STANDBY_SQUAD_SURVEILLANCE_DB_PATH",
         str(tmp_path / "surveillance.db"),
     )
     monkeypatch.setattr(
-        unified_test,
-        "UNIFIED_TEAM_STATUS_DB_PATH",
+        standby_squad,
+        "STANDBY_SQUAD_TEAM_STATUS_DB_PATH",
         str(tmp_path / "team-status.db"),
     )
     monkeypatch.setattr(
-        unified_test,
+        standby_squad,
         "RESETTABLE_DATABASES",
         (
-            unified_test.DB_PATH,
-            unified_test.UNIFIED_SURVEILLANCE_DB_PATH,
-            unified_test.UNIFIED_TEAM_STATUS_DB_PATH,
+            standby_squad.DB_PATH,
+            standby_squad.STANDBY_SQUAD_SURVEILLANCE_DB_PATH,
+            standby_squad.STANDBY_SQUAD_TEAM_STATUS_DB_PATH,
         ),
     )
     monkeypatch.setattr(
-        unified_test.UnifiedSurveillanceAgent,
+        standby_squad.StandbySquadSurveillanceAgent,
         "surveillance_db_path",
-        unified_test.UNIFIED_SURVEILLANCE_DB_PATH,
+        standby_squad.STANDBY_SQUAD_SURVEILLANCE_DB_PATH,
     )
     monkeypatch.setattr(
-        unified_test.UnifiedTeamStatusAgent,
+        standby_squad.StandbySquadTeamStatusAgent,
         "status_db_path",
-        unified_test.UNIFIED_TEAM_STATUS_DB_PATH,
+        standby_squad.STANDBY_SQUAD_TEAM_STATUS_DB_PATH,
     )
-    unified_test.ensure_seed_data()
+    standby_squad.ensure_seed_data()
 
 
-def test_unified_profile_structure_and_contracts(unified_env):
+def test_standby_squad_profile_structure_and_contracts(standby_squad_env):
     """Scenario 7 & Profile sanity: verifies profile loads, agents registered, DBs isolated."""
-    loaded = load_profile("profiles.unified_test", core_model=MagicMock(), sub_model=MagicMock())
+    loaded = load_profile("profiles.standby_squad", core_model=MagicMock(), sub_model=MagicMock())
 
-    assert loaded.profile_name == "חמ''ל מבצעי אחוד (Unified Command Hub)"
+    assert loaded.profile_name == "Standby Squad"
     assert loaded.default_language == "he"
     assert loaded.api_port == 8905
 
@@ -79,35 +79,49 @@ def test_unified_profile_structure_and_contracts(unified_env):
     assert "friendly_forces_agent" in agent_names
     assert "history_agent" in agent_names
 
-    # Verify protocols are present with correct security flags
+    # Verify all 7 protocols are present (Profile Split Plan §5.1 -- rebuilt from
+    # nothing but SEC_001's steps; no old profile's protocols carried over)
     proto_map = {p.name: p for p in loaded.protocols}
-    assert "recall_drone_to_base" in proto_map
-    assert proto_map["recall_drone_to_base"].commander_only is True
-    assert proto_map["recall_drone_to_base"].requires_confirmation is True
-    assert proto_map["recall_drone_to_base"].approval_flag is True
+    assert set(proto_map) == {
+        "record_attendance_response",
+        "report_team_availability",
+        "update_camera_observation",
+        "report_security_incident",
+        "dispatch_emergency_forces",
+        "overall_situational_picture",
+        "query_historical_incidents",
+    }
 
-    assert "dispatch_drone_to_incident" in proto_map
-    assert proto_map["dispatch_drone_to_incident"].commander_only is True
-    assert proto_map["dispatch_drone_to_incident"].requires_confirmation is True
+    assert "report_security_incident" in proto_map
+    assert proto_map["report_security_incident"].commander_only is False
+    assert proto_map["report_security_incident"].requires_confirmation is True
+    assert proto_map["report_security_incident"].approval_flag is True
 
     assert "dispatch_emergency_forces" in proto_map
     assert proto_map["dispatch_emergency_forces"].commander_only is True
     assert proto_map["dispatch_emergency_forces"].requires_confirmation is True
+    assert proto_map["dispatch_emergency_forces"].approval_flag is True
 
     # Read-only protocols must not require confirmation or commander only
-    assert proto_map["query_surveillance_overview"].commander_only is False
-    assert proto_map["query_surveillance_overview"].requires_confirmation is False
     assert proto_map["overall_situational_picture"].commander_only is False
     assert proto_map["overall_situational_picture"].requires_confirmation is False
+    assert proto_map["overall_situational_picture"].approval_flag is False
     assert set(proto_map["overall_situational_picture"].participating_agents) == {"surveillance_agent", "team_status_agent"}
     assert set(proto_map["overall_situational_picture"].approved_tools) == {
-        "get_surveillance_overview", "get_team_status_roster", "report_team_availability"
+        "get_surveillance_overview", "report_team_availability"
     }
-    assert proto_map["query_drone_fleet_status"].commander_only is False
     assert proto_map["report_team_availability"].commander_only is False
+    assert proto_map["record_attendance_response"].commander_only is False
+    assert proto_map["query_historical_incidents"].participating_agents == ("history_agent",)
+
+    # Camera-observation updates are approval-flagged but not commander-only
+    # or self-confirming -- a viewer's report is held, a commander's is not.
+    assert proto_map["update_camera_observation"].commander_only is False
+    assert proto_map["update_camera_observation"].requires_confirmation is False
+    assert proto_map["update_camera_observation"].approval_flag is True
 
 
-def test_role_based_keyboards_display_correctly(unified_env):
+def test_role_based_keyboards_display_correctly(standby_squad_env):
     """Scenario 6: COMMANDER and VIEWER receive role-tailored keyboards on /start."""
     import asyncio
     from bot import app
@@ -118,7 +132,7 @@ def test_role_based_keyboards_display_correctly(unified_env):
     api_client.users["viewer_id"] = "viewer"
 
     telegram_client = FakeTelegramClient()
-    deps = app.build_deps("profiles.unified_test", core_model=MagicMock(), sub_model=MagicMock())
+    deps = app.build_deps("profiles.standby_squad", core_model=MagicMock(), sub_model=MagicMock())
     deps = BotDeps(
         api_client=api_client,
         telegram_client=telegram_client,
@@ -160,7 +174,7 @@ def test_role_based_keyboards_display_correctly(unified_env):
 
 
 
-def test_unregistered_user_rejected_without_agent_invocation(unified_env):
+def test_unregistered_user_rejected_without_agent_invocation(standby_squad_env):
     """Scenario 1: Unregistered user is rejected, no agent invoked, no state changed."""
     import asyncio
     from bot import app
@@ -169,7 +183,7 @@ def test_unregistered_user_rejected_without_agent_invocation(unified_env):
     api_client = FakeBotApiClient()
     # "unknown_hacker" is not in api_client.users
     telegram_client = FakeTelegramClient()
-    deps = app.build_deps("profiles.unified_test", core_model=MagicMock(), sub_model=MagicMock())
+    deps = app.build_deps("profiles.standby_squad", core_model=MagicMock(), sub_model=MagicMock())
     deps = BotDeps(
         api_client=api_client,
         telegram_client=telegram_client,
@@ -194,31 +208,31 @@ def test_unregistered_user_rejected_without_agent_invocation(unified_env):
     assert not any(call[0] == "submit_message" for call in api_client.calls)
 
 
-def test_viewer_free_text_drone_dispatch_is_held_for_commander(unified_env):
-    """A viewer may request an action, but no mission runs before commander approval."""
+def test_viewer_free_text_security_incident_is_held_for_commander(standby_squad_env):
+    """A viewer may report a security incident, but no drone dispatch runs before commander approval."""
     from orchestrator.flows import continue_from_risk_assessment
     from orchestrator.reasoning import ProtocolSelectionResult
-    from profiles import unified_test
+    from profiles import standby_squad
 
-    surv_store = open_surveillance_persistence(unified_test.UNIFIED_SURVEILLANCE_DB_PATH)
+    surv_store = open_surveillance_persistence(standby_squad.STANDBY_SQUAD_SURVEILLANCE_DB_PATH)
     initial_drones = {d["drone_id"]: d["status"] for d in surv_store.list_drones()}
 
     deps = MagicMock()
-    deps.protocol_set.all.return_value = unified_test.PROTOCOLS
+    deps.protocol_set.all.return_value = standby_squad.PROTOCOLS
     deps.persistence = MagicMock()
     deps.persistence.fetch_event.return_value = {
         "deadline_at": None,
-        "raw_text": "smoke observed at gate 3",
-        "classification": "surveillance_report",
+        "raw_text": "unmarked vehicle moving slowly near the fence",
+        "classification": "security_incident",
         "area": "north_gate",
-        "description": "smoke",
+        "description": "suspicious vehicle",
         "severity": "LOW",
         "occurred_at": "2026-09-07T12:00:00Z",
         "received_at": "2026-09-07T12:00:00Z",
         "sender_permission_level": "viewer",
     }
 
-    selection = ProtocolSelectionResult(status="selected", protocol_name="dispatch_drone_to_incident", reason="test")
+    selection = ProtocolSelectionResult(status="selected", protocol_name="report_security_incident", reason="test")
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr("orchestrator.flows._look_up_precedent_if_possible", lambda *a, **k: ())
@@ -239,26 +253,26 @@ def test_viewer_free_text_drone_dispatch_is_held_for_commander(unified_env):
     assert current_drones == initial_drones
 
 
-def test_viewer_free_text_drone_recall_is_held_for_commander(unified_env):
+def test_viewer_free_text_camera_observation_update_is_held_for_commander(standby_squad_env):
     from orchestrator.flows import continue_from_risk_assessment
     from orchestrator.reasoning import ProtocolSelectionResult
-    from profiles import unified_test
+    from profiles import standby_squad
 
     deps = MagicMock()
-    deps.protocol_set.all.return_value = unified_test.PROTOCOLS
+    deps.protocol_set.all.return_value = standby_squad.PROTOCOLS
     deps.persistence = MagicMock()
     deps.persistence.fetch_event.return_value = {
         "deadline_at": None,
-        "raw_text": "החזר רחפן",
-        "classification": "drone_recall",
+        "raw_text": "מצלמה 03 תקועה על תמונה קפואה",
+        "classification": "surveillance_report",
         "area": "north_gate",
-        "description": "החזרה",
+        "description": "מצלמה קפואה",
         "severity": "LOW",
         "occurred_at": "2026-09-07T12:00:00Z",
         "received_at": "2026-09-07T12:00:00Z",
     }
 
-    selection = ProtocolSelectionResult(status="selected", protocol_name="recall_drone_to_base", reason="test")
+    selection = ProtocolSelectionResult(status="selected", protocol_name="update_camera_observation", reason="test")
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr("orchestrator.flows._look_up_precedent_if_possible", lambda *a, **k: ())
@@ -276,13 +290,13 @@ def test_viewer_free_text_drone_recall_is_held_for_commander(unified_env):
     deps.persistence.store_held_event.assert_called_once()
 
 
-def test_viewer_free_text_emergency_forces_is_held_for_commander(unified_env):
+def test_viewer_free_text_emergency_forces_is_held_for_commander(standby_squad_env):
     from orchestrator.flows import continue_from_risk_assessment
     from orchestrator.reasoning import ProtocolSelectionResult
-    from profiles import unified_test
+    from profiles import standby_squad
 
     deps = MagicMock()
-    deps.protocol_set.all.return_value = unified_test.PROTOCOLS
+    deps.protocol_set.all.return_value = standby_squad.PROTOCOLS
     deps.persistence = MagicMock()
     deps.persistence.fetch_event.return_value = {
         "deadline_at": None,
@@ -313,38 +327,38 @@ def test_viewer_free_text_emergency_forces_is_held_for_commander(unified_env):
     deps.persistence.store_held_event.assert_called_once()
 
 
-def test_commander_side_effects_trigger_confirmation_flow(unified_env):
+def test_commander_side_effects_trigger_confirmation_flow(standby_squad_env):
     """Scenario 5: COMMANDER actions require confirmation before execution."""
     from orchestrator.holds import determine_approval_hold
     from orchestrator.reasoning import ProtocolSelectionResult
-    from profiles import unified_test
+    from profiles import standby_squad
 
-    protocols_by_name = {p.name: p for p in unified_test.PROTOCOLS}
+    protocols_by_name = {p.name: p for p in standby_squad.PROTOCOLS}
 
-    # Dispatch drone requires confirmation even for commander
-    sel_dispatch = ProtocolSelectionResult(status="selected", protocol_name="dispatch_drone_to_incident", reason="r")
-    hold_dispatch = determine_approval_hold(sel_dispatch, protocols_by_name, originated_from_commander=True)
-    assert hold_dispatch == "flagged_protocol"
-
-    # Recall drone requires confirmation even for commander
-    sel_recall = ProtocolSelectionResult(status="selected", protocol_name="recall_drone_to_base", reason="r")
-    hold_recall = determine_approval_hold(sel_recall, protocols_by_name, originated_from_commander=True)
-    assert hold_recall == "flagged_protocol"
+    # Reporting a security incident requires confirmation even for commander
+    sel_incident = ProtocolSelectionResult(status="selected", protocol_name="report_security_incident", reason="r")
+    hold_incident = determine_approval_hold(sel_incident, protocols_by_name, originated_from_commander=True)
+    assert hold_incident == "flagged_protocol"
 
     # Emergency forces require confirmation even for commander
     sel_forces = ProtocolSelectionResult(status="selected", protocol_name="dispatch_emergency_forces", reason="r")
     hold_forces = determine_approval_hold(sel_forces, protocols_by_name, originated_from_commander=True)
     assert hold_forces == "flagged_protocol"
 
-    # Read-only actions (cameras, fleet status, team status) do NOT hold for commander
-    sel_overview = ProtocolSelectionResult(status="selected", protocol_name="query_surveillance_overview", reason="r")
+    # Read-only/low-criticality actions do NOT hold for commander
+    sel_overview = ProtocolSelectionResult(status="selected", protocol_name="overall_situational_picture", reason="r")
     assert determine_approval_hold(sel_overview, protocols_by_name, originated_from_commander=True) is None
 
-    sel_cameras = ProtocolSelectionResult(status="selected", protocol_name="query_camera_status", reason="r")
-    assert determine_approval_hold(sel_cameras, protocols_by_name, originated_from_commander=True) is None
+    sel_history = ProtocolSelectionResult(status="selected", protocol_name="query_historical_incidents", reason="r")
+    assert determine_approval_hold(sel_history, protocols_by_name, originated_from_commander=True) is None
 
     sel_team = ProtocolSelectionResult(status="selected", protocol_name="report_team_availability", reason="r")
     assert determine_approval_hold(sel_team, protocols_by_name, originated_from_commander=True) is None
+
+    # Camera-observation updates are approval-flagged but NOT confirmation-required
+    # -- a commander's own report should proceed without a hold.
+    sel_camera = ProtocolSelectionResult(status="selected", protocol_name="update_camera_observation", reason="r")
+    assert determine_approval_hold(sel_camera, protocols_by_name, originated_from_commander=True) is None
 
 
 def test_approval_authorization_never_depends_on_raw_message_phrasing():
@@ -360,7 +374,7 @@ def test_approval_authorization_never_depends_on_raw_message_phrasing():
     assert "determine_approval_hold" in source
 
 
-def test_viewer_attendance_reporting_shortcut(unified_env):
+def test_viewer_attendance_reporting_shortcut(standby_squad_env):
     """Scenario 6: VIEWER reporting attendance via buttons."""
     import asyncio
     from bot import app
@@ -371,7 +385,7 @@ def test_viewer_attendance_reporting_shortcut(unified_env):
     api_client.users["viewer_123"] = "viewer"
     api_client.message_submission_result = MessageSubmissionResult(kind="question", answer_text="הדיווח התקבל")
     telegram_client = FakeTelegramClient()
-    deps = app.build_deps("profiles.unified_test", core_model=MagicMock(), sub_model=MagicMock())
+    deps = app.build_deps("profiles.standby_squad", core_model=MagicMock(), sub_model=MagicMock())
     deps = BotDeps(
         api_client=api_client,
         telegram_client=telegram_client,
@@ -411,7 +425,7 @@ def test_viewer_attendance_reporting_shortcut(unified_env):
     assert "אנא ציין את סיבת אי-הזמינות" in last_sent.text
 
 
-def test_unavailability_follow_up_keeps_reason_until_days_and_uses_isolated_conversation(unified_env):
+def test_unavailability_follow_up_keeps_reason_until_days_and_uses_isolated_conversation(standby_squad_env):
     import asyncio
     from bot import app
     from bot.contracts import MessageSubmissionResult
@@ -422,7 +436,7 @@ def test_unavailability_follow_up_keeps_reason_until_days_and_uses_isolated_conv
     api_client.users["viewer_123"] = "viewer"
     api_client.message_submission_result = MessageSubmissionResult(kind="report", job_id="attendance-1")
     telegram_client = FakeTelegramClient()
-    loaded = app.build_deps("profiles.unified_test", core_model=MagicMock(), sub_model=MagicMock())
+    loaded = app.build_deps("profiles.standby_squad", core_model=MagicMock(), sub_model=MagicMock())
     deps = BotDeps(api_client=api_client, telegram_client=telegram_client, loaded_profile=loaded.loaded_profile)
     context = MagicMock(bot_data={"deps": deps})
 
@@ -451,7 +465,7 @@ def test_unavailability_follow_up_keeps_reason_until_days_and_uses_isolated_conv
     assert app._PENDING_UNAVAILABILITY == {}
 
 
-def test_available_button_cancels_pending_unavailability(unified_env):
+def test_available_button_cancels_pending_unavailability(standby_squad_env):
     import asyncio
     from bot import app
     from bot.contracts import MessageSubmissionResult
@@ -462,7 +476,7 @@ def test_available_button_cancels_pending_unavailability(unified_env):
     api_client.users["viewer_123"] = "viewer"
     api_client.message_submission_result = MessageSubmissionResult(kind="report", job_id="attendance-2")
     telegram_client = FakeTelegramClient()
-    loaded = app.build_deps("profiles.unified_test", core_model=MagicMock(), sub_model=MagicMock())
+    loaded = app.build_deps("profiles.standby_squad", core_model=MagicMock(), sub_model=MagicMock())
     deps = BotDeps(api_client=api_client, telegram_client=telegram_client, loaded_profile=loaded.loaded_profile)
     context = MagicMock(bot_data={"deps": deps})
 
@@ -482,22 +496,22 @@ def test_available_button_cancels_pending_unavailability(unified_env):
     assert ("submit_message_conversation", "telegram:333:attendance:viewer_123") in api_client.calls
 
 
-def test_parallel_agent_requests_receive_only_their_own_captured_result(unified_env, monkeypatch):
+def test_parallel_agent_requests_receive_only_their_own_captured_result(standby_squad_env, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
     from agents import AgentResult, TeamStatusAgent
-    from profiles import unified_test
+    from profiles import standby_squad
 
     barrier = Barrier(2)
 
     def fake_base_process(self, text, allowed_tools, *, invocation_policy=None):
         barrier.wait()
-        unified_test._capture_team_result(f"tool-result:{text}")
+        standby_squad._capture_team_result(f"tool-result:{text}")
         barrier.wait()
         return AgentResult(status="success", text=f"model-result:{text}")
 
     monkeypatch.setattr(TeamStatusAgent, "process", fake_base_process)
-    agent = unified_test.UnifiedTeamStatusAgent(model="mock")
+    agent = standby_squad.StandbySquadTeamStatusAgent(model="mock")
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(agent.process, "request-a", ["report_team_availability"])
@@ -505,19 +519,19 @@ def test_parallel_agent_requests_receive_only_their_own_captured_result(unified_
 
     assert first.result().text == "tool-result:request-a"
     assert second.result().text == "tool-result:request-b"
-    assert not hasattr(unified_test, "_latest_team_result")
-    assert not hasattr(unified_test, "_latest_surv_result")
-    assert not hasattr(unified_test, "_latest_forces_result")
+    assert not hasattr(standby_squad, "_latest_team_result")
+    assert not hasattr(standby_squad, "_latest_surv_result")
+    assert not hasattr(standby_squad, "_latest_forces_result")
 
 
 def test_team_status_roster_views_are_complete_and_follow_up_specific(tmp_path, monkeypatch):
     from datetime import datetime, timedelta, timezone
     from agents import AgentResult, TeamStatusAgent
-    from profiles import unified_test
+    from profiles import standby_squad
 
     status_path = str(tmp_path / "team-status-views.db")
-    monkeypatch.setattr(unified_test.UnifiedTeamStatusAgent, "status_db_path", status_path)
-    agent = unified_test.UnifiedTeamStatusAgent(model="mock")
+    monkeypatch.setattr(standby_squad.StandbySquadTeamStatusAgent, "status_db_path", status_path)
+    agent = standby_squad.StandbySquadTeamStatusAgent(model="mock")
     opened = datetime(2026, 9, 7, 5, 0, tzinfo=timezone.utc)
     for identity, name in (
         ("1001", "דן לוי"),
@@ -592,11 +606,11 @@ def test_team_status_reason_view_matches_a_short_name_against_its_full_suffixed_
     check (in either direction) would conflate."""
 
     from datetime import datetime, timedelta, timezone
-    from profiles import unified_test
+    from profiles import standby_squad
 
     status_path = str(tmp_path / "team-status-name-match.db")
-    monkeypatch.setattr(unified_test.UnifiedTeamStatusAgent, "status_db_path", status_path)
-    agent = unified_test.UnifiedTeamStatusAgent(model="mock")
+    monkeypatch.setattr(standby_squad.StandbySquadTeamStatusAgent, "status_db_path", status_path)
+    agent = standby_squad.StandbySquadTeamStatusAgent(model="mock")
     opened = datetime(2026, 9, 7, 5, 0, tzinfo=timezone.utc)
     for identity, name in (
         ("2001", "דן - כיתת כוננות"),
@@ -641,11 +655,11 @@ def test_team_status_reason_view_matches_a_short_name_against_its_full_suffixed_
         "פצוע במזרח, ותושב מדווח על חמוש בהרחבה. תעשה לי סדר מיד! לאן לשלוח "
         "את הכוח הזמין?!"
     )
-    token = unified_test._team_query_text.set(original_message)
+    token = standby_squad._team_query_text.set(original_message)
     try:
         fallback_result = agent.report_team_availability(as_of, "reason")
     finally:
-        unified_test._team_query_text.reset(token)
+        standby_squad._team_query_text.reset(token)
     assert "דן - כיתת כוננות אינו זמין" in fallback_result
     assert "דני" not in fallback_result
 
@@ -657,11 +671,11 @@ def test_team_status_reason_view_refuses_to_guess_between_two_real_same_named_me
     "דן"/"דני" pair above, which are never actually the same name)."""
 
     from datetime import datetime, timedelta, timezone
-    from profiles import unified_test
+    from profiles import standby_squad
 
     status_path = str(tmp_path / "team-status-same-name.db")
-    monkeypatch.setattr(unified_test.UnifiedTeamStatusAgent, "status_db_path", status_path)
-    agent = unified_test.UnifiedTeamStatusAgent(model="mock")
+    monkeypatch.setattr(standby_squad.StandbySquadTeamStatusAgent, "status_db_path", status_path)
+    agent = standby_squad.StandbySquadTeamStatusAgent(model="mock")
     opened = datetime(2026, 9, 7, 5, 0, tzinfo=timezone.utc)
     for identity, name in (
         ("3001", "דן - כיתת כוננות"),
@@ -680,11 +694,11 @@ def test_team_status_reason_view_refuses_to_guess_between_two_real_same_named_me
 
 def test_team_status_does_not_invent_a_name_for_legacy_placeholder(tmp_path, monkeypatch):
     from datetime import datetime, timedelta, timezone
-    from profiles import unified_test
+    from profiles import standby_squad
 
     status_path = str(tmp_path / "team-status-placeholder.db")
-    monkeypatch.setattr(unified_test.UnifiedTeamStatusAgent, "status_db_path", status_path)
-    agent = unified_test.UnifiedTeamStatusAgent(model="mock")
+    monkeypatch.setattr(standby_squad.StandbySquadTeamStatusAgent, "status_db_path", status_path)
+    agent = standby_squad.StandbySquadTeamStatusAgent(model="mock")
     opened = datetime(2026, 9, 7, 5, 0, tzinfo=timezone.utc)
     agent.status_store.register_member("999", "חבר כיתת כוננות (999)", opened.isoformat())
     agent.status_store.approve_roster("commander", opened.isoformat())
@@ -700,11 +714,11 @@ def test_team_status_does_not_invent_a_name_for_legacy_placeholder(tmp_path, mon
 def test_available_attendance_discards_stale_unavailability_fields(tmp_path, monkeypatch):
     from datetime import datetime, timedelta, timezone
     from agents import authenticated_request_identity
-    from profiles import unified_test
+    from profiles import standby_squad
 
     status_path = str(tmp_path / "team-status-available-normalization.db")
-    monkeypatch.setattr(unified_test.UnifiedTeamStatusAgent, "status_db_path", status_path)
-    agent = unified_test.UnifiedTeamStatusAgent(model="mock")
+    monkeypatch.setattr(standby_squad.StandbySquadTeamStatusAgent, "status_db_path", status_path)
+    agent = standby_squad.StandbySquadTeamStatusAgent(model="mock")
     opened = datetime.now(timezone.utc)
     agent.status_store.register_member("1001", "דן לוי", opened.isoformat())
     agent.status_store.approve_roster("commander", opened.isoformat())
@@ -727,7 +741,7 @@ def test_available_attendance_discards_stale_unavailability_fields(tmp_path, mon
     assert member["unavailable_until"] is None
 
 
-def test_all_commander_and_viewer_buttons_mapped(unified_env):
+def test_all_commander_and_viewer_buttons_mapped(standby_squad_env):
     """Verifies that every single button across Commander and Viewer keyboards maps to expected behavior."""
     import asyncio
     from bot import app
@@ -739,7 +753,7 @@ def test_all_commander_and_viewer_buttons_mapped(unified_env):
     api_client.users["vwr_1"] = "viewer"
     api_client.message_submission_result = MessageSubmissionResult(kind="question", answer_text="תשובה")
     telegram_client = FakeTelegramClient()
-    deps = app.build_deps("profiles.unified_test", core_model=MagicMock(), sub_model=MagicMock())
+    deps = app.build_deps("profiles.standby_squad", core_model=MagicMock(), sub_model=MagicMock())
     deps = BotDeps(api_client=api_client, telegram_client=telegram_client, loaded_profile=deps.loaded_profile)
 
     # 1. Commander button: "🚨 הזנקת כוחות" gives guidance
@@ -808,11 +822,11 @@ def test_all_commander_and_viewer_buttons_mapped(unified_env):
         assert expected_phrase in submit_call[1], f"Button '{btn}' failed to map to prompt with '{expected_phrase}'"
 
 
-def test_hebrew_tools_return_concise_operational_hebrew(unified_env):
+def test_hebrew_tools_return_concise_operational_hebrew(standby_squad_env):
     """Verifies that specialist agent tools return 100% Hebrew, concise, operational output."""
-    from profiles import unified_test
+    from profiles import standby_squad
 
-    surv_agent = unified_test.UnifiedSurveillanceAgent(model="mock")
+    surv_agent = standby_squad.StandbySquadSurveillanceAgent(model="mock")
     # Fleet status tool
     fleet = surv_agent.get_drone_fleet_status()
     assert "מצב צי רחפנים" in fleet
@@ -847,7 +861,7 @@ def test_hebrew_tools_return_concise_operational_hebrew(unified_env):
     assert "תצפית מצלמה CAM-01" in cam_upd
 
     # Team status agent tools
-    team_agent = unified_test.UnifiedTeamStatusAgent(model="mock")
+    team_agent = standby_squad.StandbySquadTeamStatusAgent(model="mock")
     team_avail = team_agent.report_team_availability()
     assert "סטטוס כיתת כוננות" in team_avail
     assert "זמינים לפעילות" in team_avail
@@ -858,7 +872,7 @@ def test_hebrew_tools_return_concise_operational_hebrew(unified_env):
     assert att_resp == "✅ הזמינות שלך עודכנה. אתה מסומן כזמין לכוננות."
 
     # Friendly forces agent tools
-    forces_agent = unified_test.UnifiedFriendlyForcesAgent(model="mock")
+    forces_agent = standby_squad.StandbySquadForcesAgent(model="mock")
     police = forces_agent.dispatch_police("שער צפון", unit_count=2)
     assert "הזנקת כוחות משטרה" in police
     assert "שער צפון" in police
@@ -884,7 +898,7 @@ def test_compact_formatting_for_unified_protocols():
         job_id="job-12345",
         outcome="succeeded",
         steps_completed=("הזנקת רחפן הושלמה בהצלחה ✅\n• רחפן: נשר 1 (DRONE-01)\n• גזרת יעד: שער צפון",),
-        protocol_name="dispatch_drone_to_incident",
+        protocol_name="report_security_incident",
         risk_level="high",
         protocol_reason="dispatch recon",
         insight_text="Verbose insights that should be omitted in compact mode",

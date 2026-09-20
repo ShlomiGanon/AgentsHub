@@ -83,6 +83,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `docs/Next_Plan.md` | Documentation | Internal | Defines deferred optimizations that remain disabled until the current speed changes pass their gates. |
 | `docs/operator_guide.md` | Documentation | Internal | Documents operator guide. |
 | `docs/profile_simulations_design.md` | Documentation | Internal | Documents the per-profile simulation mechanism's architecture, data model, reserved ID scheme, and file impact. |
+| `docs/Profile_Split_Plan.md` | Documentation | Internal | Plans and records the Standby Squad/Firefighting profile split: architecture, protocol traceability, migration, and implementation deviations. |
 | `docs/profile_spec.md` | Documentation | Internal | Documents profile spec. |
 | `docs/progress.md` | Documentation | Internal | Documents progress. |
 | `docs/questions.txt` | Documentation | Internal | Documents questions. |
@@ -139,15 +140,12 @@ This English catalog describes every tracked or pending first-party file in the 
 | `persistence/team_status_store.py` | Production | Private implementation | Implements the isolated SQLite store for readiness-team roster and attendance state. |
 | `profiles/__init__.py` | Production | Public facade | Exposes profile contracts, loading, registries, and compatibility aliases. |
 | `profiles/contracts.py` | Production | Private implementation | Defines profile declarations, loaded-profile state, and area/event-type registries. |
-| `profiles/demo.py` | Production | Private implementation | Defines the runnable demonstration deployment profile. |
-| `profiles/friendly_forces.py` | Production | Private implementation | Defines the friendly forces profile. |
+| `profiles/firefighting.py` | Production | Private implementation | Defines the Firefighting profile (crew status, visual surveillance, mutual-aid dispatch) and the FIRE_002 simulations (docs/Profile_Split_Plan.md). |
 | `profiles/loader.py` | Production | Private implementation | Imports, validates, hashes, and constructs deployment profiles and registries. |
 | `profiles/simulation.py` | Production | Private implementation | Defines simulation persona, group, scenario, and roster declarations and the reserved Telegram ID scheme. |
 | `profiles/simulation_provisioning.py` | Production | Private implementation | Ensures a profile's declared simulation users and groups exist, and registers/approves any of them on the agent-owned rosters they declare. |
-| `profiles/sub_agent_surveillance.py` | Production | Private implementation | Defines the dedicated visual-surveillance deployment and protocols. |
-| `profiles/sub_agent_team_status.py` | Production | Private implementation | Defines the dedicated readiness-team status deployment and reporting protocol. |
+| `profiles/standby_squad.py` | Production | Private implementation | Defines the Standby Squad profile (readiness-team status, visual surveillance, friendly-forces dispatch) and the SEC_001 simulations (docs/Profile_Split_Plan.md). |
 | `profiles/template.py` | Production | Private implementation | Provides a reference template for authoring deployment profiles. |
-| `profiles/unified_test.py` | Production | Private implementation | Defines the unified test profile for surveillance, readiness team, and friendly forces. |
 | `protocols/__init__.py` | Production | Public facade | Exposes protocol contracts, execution, repository operations, and aliases. |
 | `protocols/contracts.py` | Production | Private implementation | Defines protocols, steps, criticality, results, and edit errors. |
 | `protocols/executor.py` | Production | Private implementation | Executes protocol steps with retry and idempotency enforcement. |
@@ -190,10 +188,10 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_bot_simulator_transport.py` | Test | Internal | Verifies `FakeBotRequest`, `SimulatorTelegramClient`, and synthetic-Update construction against real PTB filters. |
 | `tests/test_bot_transports.py` | Test | Internal | Verifies bot HTTP clients, abstract client behavior, and Telegram transports. |
 | `tests/test_cli_group_admin.py` | Test | Internal | Verifies the Telegram group routing administration command. |
-| `tests/test_demo_profile.py` | Test | Internal | Verifies demo profile behavior and edge cases. |
 | `tests/test_environment_config.py` | Test | Internal | Verifies environment-backed model and runtime configuration. |
 | `tests/test_file_catalog.py` | Test | Internal | Ensures this catalog exactly matches the first-party repository tree. |
 | `tests/test_friendly_forces_agent.py` | Test | Internal | Verifies friendly forces agent dispatch tools and coordination records. |
+| `tests/test_firefighting_external_forces_agent.py` | Test | Internal | Verifies FirefightingExternalForcesAgent's two new mutual-aid tools (docs/Profile_Split_Plan.md). |
 | `tests/test_group_routing.py` | Test | Internal | Verifies the group routing table, staleness refresh, scope resolution, and dependency scoping. |
 | `tests/test_history_agent.py` | Test | Internal | Verifies history agent behavior and edge cases. |
 | `tests/test_history_event_pipeline.py` | Test | Internal | Verifies extraction, time normalization, and durable history writes. |
@@ -241,13 +239,11 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_server_control.py` | Test | Internal | Verifies safe profile discovery and supervisor command and selection persistence. |
 | `tests/test_situational_picture.py` | Test | Internal | Verifies picture planning, per-domain live questioning, recent-events window and scope, unavailable-domain handling, and composition fallbacks. |
 | `tests/test_sqlite_store.py` | Test | Internal | Verifies SQLite serialization, concurrency, and user persistence. |
-| `tests/test_sub_agent_surveillance_profile.py` | Test | Internal | Verifies the surveillance profile, isolated databases, agent, and protocol declarations. |
-| `tests/test_sub_agent_team_status_profile.py` | Test | Internal | Verifies the readiness-team profile, isolated database configuration, agent, and protocol declaration. |
 | `tests/test_surveillance_agent.py` | Test | Internal | Verifies camera, drone, dispatch, mission, and overview tools. |
 | `tests/test_surveillance_persistence.py` | Test | Internal | Verifies surveillance database initialization, updates, dispatch, and mission state. |
 | `tests/test_team_status_agent.py` | Test | Internal | Verifies daily attendance, multi-day unavailability, late approval, and protocol execution. |
 | `tests/test_team_status_persistence.py` | Test | Internal | Verifies readiness-team roster approval, message idempotency, late-response isolation, and separate SQLite schemas. |
-| `tests/test_unified_role_and_security.py` | Test | Internal | Verifies unified role-based security, button workflows, and confirmation flows. |
+| `tests/test_standby_squad_role_and_security.py` | Test | Internal | Verifies Standby Squad role-based security, button workflows, and confirmation flows. |
 | `tests/test_unsafe_system.py` | Test | Internal | Verifies safe/open Telegram admission, automatic registration, approval, and API isolation. |
 | `tests/test_user_admin.py` | Test | Internal | Verifies user admin behavior and edge cases. |
 | `tools/__init__.py` | Production | Public facade | Exposes shared observability helpers and lazy terminal compatibility aliases. |

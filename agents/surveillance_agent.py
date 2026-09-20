@@ -19,7 +19,7 @@ def _utc_now() -> str:
 # `ContextVar` + lock + capture function + `process()`-override helper for
 # forcing `return_drone_to_base`'s exact tool output back to the caller
 # instead of the model's own paraphrase of it — see `agents.runtime.
-# ExactResultCapture`. `profiles.unified_test.UnifiedSurveillanceAgent`
+# ExactResultCapture`. `profiles.standby_squad.StandbySquadSurveillanceAgent`
 # (and its team-status/friendly-forces siblings) build their own instances
 # of the same shared helper for the same reason.
 _recall_capture = make_exact_result_capture("surveillance_recall")
@@ -124,8 +124,8 @@ class SurveillanceAgent(Agent):
     def _recall(self, drone_or_mission_id: str) -> dict:
         """Resolve one recall request against the store — the state-machine step behind
         `return_drone_to_base`. A subclass that needs to localize the returned text (see
-        `profiles.unified_test.UnifiedSurveillanceAgent`) calls this instead of duplicating
-        the branching against `self.surveillance_store`."""
+        `profiles.standby_squad.StandbySquadSurveillanceAgent`) calls this instead of
+        duplicating the branching against `self.surveillance_store`."""
 
         requested = drone_or_mission_id.strip()
         normalized = requested.casefold()
