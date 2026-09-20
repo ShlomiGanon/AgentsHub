@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Callable, Literal
 from agents import InvocationPolicy, authenticated_request_identity, get_active_provider_diagnostic_trace
 from history import HistoryQuerySpec, storage_timestamp
 from history.query import HistoryQueryError
-from persistence import OperationalScope, operational_scope_context, resolve_operational_scope
+from persistence import OperationalScope, operational_scope_context, operational_time_context, resolve_operational_scope
 from messages import get_current_catalog
 from messages.model_messages import (
     SITUATIONAL_PICTURE_COMPOSE_INSTRUCTION,
@@ -48,6 +48,10 @@ DEFAULT_RECENT_EVENTS_HOURS = 12
 MIN_RECENT_EVENTS_HOURS = 1
 MAX_RECENT_EVENTS_HOURS = 72
 RECENT_EVENTS_LIMIT = 8
+# How many committed operational facts a rendered picture may state. Bounded
+# well below RECENT_EVENTS_LIMIT so a commander brief stays a brief and can
+# never become a chronological dump.
+FALLBACK_OPERATIONAL_FACT_LIMIT = 4
 SPECIALIST_TIMEOUT_SECONDS = 25.0
 PICTURE_MAX_LINES = 8
 REASONING_MAX_FACTS = 2
@@ -136,6 +140,9 @@ _OPERATIONAL_AREA_TERMS = (
 _TEAM_SCOPE_TERMS = (
     "\u05e1\u05d3\u05db",
     "\u05db\u05d5\u05d7",
+    "\u05e6\u05d5\u05d5\u05ea",
+    "crew",
+    "team",
     "\u05db\u05d5\u05e0\u05e0\u05d5\u05ea",
     "\u05d6\u05de\u05d9\u05e0",
     "\u05d7\u05e1\u05e8",
@@ -242,7 +249,8 @@ def classify_situational_query(text: str) -> SituationalQueryScope | None:
     if not normalized:
         return None
 
-    has_picture_phrase = _contains_query_term(normalized, _SITUATIONAL_PICTURE_TERMS)
+    explicit_picture_request = _contains_query_term(normalized, _SITUATIONAL_PICTURE_TERMS)
+    has_picture_phrase = explicit_picture_request
     has_team = _contains_query_term(normalized, _TEAM_SCOPE_TERMS)
     has_surveillance = _contains_query_term(normalized, _SURVEILLANCE_SCOPE_TERMS)
     has_drones = _contains_query_term(normalized, _DRONE_SCOPE_TERMS)
@@ -273,6 +281,14 @@ def classify_situational_query(text: str) -> SituationalQueryScope | None:
 
     if not has_current_state and not has_picture_phrase and not has_daily_summary:
         return None
+
+    # Asking for a situational picture is asking for the whole picture. Naming
+    # domains inside such a request is emphasis, not a restriction, so it must
+    # not hide a degraded camera from a commander who also mentioned manpower.
+    # Only the explicit phrase widens; the generic "picture"/"brief" wording
+    # handled above deliberately stays bounded to the domains it implies.
+    if explicit_picture_request:
+        return SituationalQueryScope.overall_scope()
 
     return SituationalQueryScope(
         team=has_team,
@@ -431,6 +447,9 @@ class RecentOperationalReport:
     text: str
     source_ref: str
     received_at: str
+    # The owning report domain, so a picture can tell which committed facts a
+    # structured section already states authoritatively.
+    domain: str = ""
 
 
 @dataclass(frozen=True)
@@ -1170,6 +1189,10 @@ def _recent_committed_reports(
     for event in events:
         if event.get("outcome") != "succeeded":
             continue
+        # A retracted report is still history, but it is no longer current and
+        # must never be stated to a commander as a live fact.
+        if event.get("superseded_by_event_id"):
+            continue
         classification = str(event.get("classification") or "").casefold()
         if not classification.endswith("_report"):
             continue
@@ -1186,6 +1209,7 @@ def _recent_committed_reports(
                 text=text,
                 source_ref=f"event:{event.get('event_id', 'unknown')}",
                 received_at=str(event.get("received_at") or ""),
+                domain=domain,
             ))
         )
     # The simulation history reader returns a run in scenario order, while the
@@ -1784,11 +1808,44 @@ def _render_reasoned_picture(context: OperationalContext, reasoning: Operational
     return "\n".join(line for line in lines if line)
 
 
+def operational_facts_for_render(snapshot: SituationalSnapshot) -> tuple[RecentOperationalReport, ...]:
+    """The committed facts a picture should state that no section already states.
+
+    Everything here is already scoped, succeeded-only and bounded by the time it
+    reaches the snapshot — this only removes what a structured section reports
+    authoritatively, and keeps the remainder short enough to read. It performs
+    no history lookup of its own.
+    """
+
+    represented: set[str] = set()
+
+    if snapshot.cameras is not None and snapshot.cameras.status != "unknown":
+        represented.add("surveillance")
+    if snapshot.drones is not None and snapshot.drones.status != "unknown":
+        represented.add("drone")
+    if snapshot.team is not None and snapshot.team.status != "unknown":
+        represented.add("team_attendance")
+        if snapshot.team.operational_manpower is not None or snapshot.team.operational_resources:
+            represented.add("team_resource")
+
+    kept = [report for report in snapshot.recent_reports if report.domain not in represented]
+
+    return tuple(kept[:FALLBACK_OPERATIONAL_FACT_LIMIT])
+
+
 def _render_reasoning_fallback(snapshot: SituationalSnapshot) -> str:
+    """Render the picture when bounded reasoning is unavailable.
+
+    Committed operational facts are authoritative state already selected into
+    this scoped snapshot, not a history query and not model output, so they are
+    stated. Nothing is advised: no recommendation is offered when nothing
+    reasoned, and no action is claimed.
+    """
+
     return render_typed_snapshot(
         snapshot,
         include_findings=True,
-        include_recent_reports=False,
+        include_recent_reports=True,
         include_recommendations=False,
     )
 
@@ -1848,6 +1905,20 @@ def render_typed_snapshot(
                 not_reported=section.not_reported,
                 pending_identity=section.pending_identity,
             ))
+            # Roster attendance and reported manpower are different facts. A
+            # commander asking about forces and vehicles needs the committed
+            # operational state too, not only who answered the daily check.
+            if section.operational_manpower is not None:
+                lines.append(catalog.text(
+                    "orchestrator.picture.typed.manpower",
+                    effective=section.effective_manpower,
+                    reported=section.operational_manpower,
+                ))
+            if section.operational_resources:
+                lines.append(catalog.text(
+                    "orchestrator.picture.typed.resources",
+                    resources=", ".join(section.operational_resources),
+                ))
 
     if include_findings and snapshot.findings:
         lines.extend(("", catalog.text("orchestrator.picture.typed.findings_header")))
@@ -1859,11 +1930,12 @@ def render_typed_snapshot(
             for finding in snapshot.findings
         )
 
-    if include_recent_reports and snapshot.recent_reports:
+    operational_facts = operational_facts_for_render(snapshot) if include_recent_reports else ()
+    if operational_facts:
         lines.extend(("", catalog.text("orchestrator.picture.typed.recent_reports_header")))
         lines.extend(
             catalog.text("orchestrator.picture.typed.recent_report", text=report.text)
-            for report in snapshot.recent_reports
+            for report in operational_facts
         )
 
     recommendations = (
@@ -2103,7 +2175,7 @@ def collect_domain_reports(
             agent = registry.get(briefing.agent_name)
             tools = _readable_tools(agent, protocol)
             try:
-                with authenticated_request_identity(caller_identity), operational_scope_context(resolved_operational_scope), stage_context("picture_specialist"):
+                with authenticated_request_identity(caller_identity), operational_scope_context(resolved_operational_scope), operational_time_context(now), stage_context("picture_specialist"):
                     result = agent.process(briefing.query, tools)
             except Exception as exc:
                 outcomes[briefing.agent_name] = (str(exc), False)

@@ -71,6 +71,7 @@ from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, initialize_opera
 from persistence import (
     NotFoundError as PersistenceNotFoundError,
     operational_scope_context,
+    operational_time_context,
     scope_from_simulation_context,
 )
 from api.simulations import find_simulation_scenario, materialize_simulation, simulation_catalog_payload
@@ -926,7 +927,9 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             if matched_protocol.name == "report_team_availability" and hasattr(ag, "report_team_availability"):
                 if ctx.deps.persistence.is_simulation_identity(caller_identity) and not operational_scope.is_simulation:
                     raise AuthorizationError("a trusted simulation scope is required for a synthetic identity")
-                with operational_scope_context(operational_scope), authenticated_request_identity(caller_identity):
+                with operational_scope_context(operational_scope), operational_time_context(
+                    getattr(simulation_context, "scenario_time", None)
+                ), authenticated_request_identity(caller_identity):
                     answer = ag.report_team_availability(view=_team_roster_view(str(text)))
                 _remember("assistant", answer)
                 return jsonify({
@@ -940,7 +943,9 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 and getattr(ag, "name", ag_name) == "team_status_agent"
             ):
                 raise AuthorizationError("a trusted simulation scope is required for a synthetic identity")
-            with operational_scope_context(operational_scope), authenticated_request_identity(caller_identity):
+            with operational_scope_context(operational_scope), operational_time_context(
+                getattr(simulation_context, "scenario_time", None)
+            ), authenticated_request_identity(caller_identity):
                 res = ag.process(text, allowed_tools)
             answer = res.text if res.status == "success" else f"\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05d4\u05e4\u05e2\u05dc\u05ea \u05e1\u05d5\u05db\u05df: {res.text}"
             _remember("assistant", answer)

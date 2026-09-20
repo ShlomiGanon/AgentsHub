@@ -324,16 +324,32 @@ def test_model_failure_uses_deterministic_fallback_and_one_call():
     assert snapshot.cameras.offline == 1
 
 
-def test_reasoning_fallback_does_not_render_recent_report_dump():
+def test_reasoning_fallback_does_not_render_an_unbounded_recent_event_dump():
+    """Revised in Task 62 from the original Task 54 invariant.
+
+    Task 54 forbade the fallback from rendering committed reports at all,
+    because at that time the upstream read behaved like a global recent-event
+    dump. That contract has since changed: `recent_reports` is scoped to the
+    current scenario run, admits only succeeded `*_report` events, and is
+    capped. The invariant this test now protects is the one that actually
+    mattered — a commander brief must never become an unbounded chronological
+    dump — while a small number of scoped committed facts may be stated.
+    """
+
+    from orchestrator.situational_picture import FALLBACK_OPERATIONAL_FACT_LIMIT
+
     class History:
         def recent_committed_events(self, **kwargs):
-            return ({
-                "event_id": "event-current",
-                "classification": "friendly_forces_report",
-                "description": "Unverified external movement near the east perimeter.",
-                "received_at": "2026-09-18T11:00:00+00:00",
-                "outcome": "succeeded",
-            },)
+            return tuple(
+                {
+                    "event_id": f"event-{index}",
+                    "classification": "friendly_forces_report",
+                    "description": f"External movement report {index} near the east perimeter.",
+                    "received_at": "2026-09-18T11:00:00+00:00",
+                    "outcome": "succeeded",
+                }
+                for index in range(12)
+            )
 
     picture = build_situational_picture(
         _ReasoningAgent(error=RuntimeError("model unavailable")),
@@ -347,9 +363,11 @@ def test_reasoning_fallback_does_not_render_recent_report_dump():
         scope=SituationalQueryScope.overall_scope(),
     )
 
+    rendered_reports = [line for line in picture.text.splitlines() if "External movement report" in line]
+
     assert picture.reasoning.fallback is True
-    assert "Recent committed reports:" not in picture.text
-    assert "Unverified external movement" not in picture.text
+    assert 0 < len(rendered_reports) <= FALLBACK_OPERATIONAL_FACT_LIMIT
+    assert "event-" not in picture.text
 
 
 def test_malformed_structured_output_falls_back():

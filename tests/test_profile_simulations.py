@@ -22,6 +22,30 @@ from profiles.simulation import (
 from profiles.simulation_provisioning import ensure_simulation_entities
 
 
+@pytest.fixture
+def isolated_unified_paths(monkeypatch, tmp_path):
+    """Point profiles.unified_test's declared databases at a temporary directory.
+
+    `load_profile` constructs the profile's agents, and an agent opens its
+    store, so loading this profile for inspection would otherwise create
+    schema, LIVE scope rows and seed reconciliation inside the repository's
+    real `data/` directory (Task 60).
+    """
+
+    from profiles import unified_test
+
+    history = str(tmp_path / "history.db")
+    surveillance = str(tmp_path / "surveillance.db")
+    team_status = str(tmp_path / "team-status.db")
+    monkeypatch.setattr(unified_test, "DB_PATH", history)
+    monkeypatch.setattr(unified_test, "UNIFIED_SURVEILLANCE_DB_PATH", surveillance)
+    monkeypatch.setattr(unified_test, "UNIFIED_TEAM_STATUS_DB_PATH", team_status)
+    monkeypatch.setattr(unified_test.UnifiedSurveillanceAgent, "surveillance_db_path", surveillance)
+    monkeypatch.setattr(unified_test.UnifiedTeamStatusAgent, "status_db_path", team_status)
+    monkeypatch.setattr(unified_test, "RESETTABLE_DATABASES", (history, surveillance, team_status))
+    return SimpleNamespace(history=history, surveillance=surveillance, team_status=team_status)
+
+
 # -- profiles/simulation.py: the reserved ID scheme --------------------------
 
 
@@ -473,7 +497,7 @@ def test_find_simulation_scenario_returns_none_for_an_unknown_key():
 # -- the SEC_001 migration (profiles/unified_test.py), against the real profile -------------
 
 
-def test_unified_test_declares_the_migrated_sec001_series(test_core_model, test_sub_model, monkeypatch):
+def test_unified_test_declares_the_migrated_sec001_series(test_core_model, test_sub_model, monkeypatch, isolated_unified_paths):
     """docs/profile_simulations_design.md: the SEC_001 series
     (fixtures/admin_scenarios/'כיתת כוננת - חלק 1/2/3.json') was migrated into real
     SIMULATIONS declarations, with recurring characters sharing one reserved ID
@@ -516,7 +540,7 @@ def test_unified_test_declares_the_migrated_sec001_series(test_core_model, test_
     assert {"cameras", "external_forces"}.issubset(group_keys)
 
 
-def test_unified_test_declares_the_migrated_fire002_series(test_core_model, test_sub_model, monkeypatch):
+def test_unified_test_declares_the_migrated_fire002_series(test_core_model, test_sub_model, monkeypatch, isolated_unified_paths):
     """Same migration pattern as SEC_001, applied to the firefighting series — its own
     independent persona/group roster, despite the raw fixture reusing identical channel
     names ('TELEGRAM_GROUP_RESPONSE_TEAM' etc.) across both series."""
@@ -575,7 +599,7 @@ def test_unified_test_declares_the_migrated_fire002_series(test_core_model, test
 
 
 def test_unified_test_response_team_personas_become_approved_team_status_members(
-    test_core_model, test_sub_model, monkeypatch, tmp_path
+    test_core_model, test_sub_model, monkeypatch, tmp_path, isolated_unified_paths
 ):
     """Closes the gap the SEC_001-attendance-step investigation found: a response-team
     simulation provisioning must not write simulation personas into a LIVE roster.

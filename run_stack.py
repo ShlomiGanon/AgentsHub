@@ -91,10 +91,30 @@ class StackSupervisor:
             last_error=self.last_error,
         )
 
+    def bootstrap(self) -> bool:
+        """Run the profile's declared seed once, as an explicit startup step.
+
+        Importing a profile is read-only by contract, so the canonical seed has
+        to be invoked somewhere explicit. This is that place: a real start of
+        the stack, never a module import, a test or a diagnostic. The hook is
+        optional and idempotent, so a profile that declares none is skipped and
+        a repeated start changes nothing.
+        """
+
+        module = importlib.import_module(self.profile_module)
+        seed = getattr(module, "ensure_seed_data", None)
+        if not callable(seed):
+            return False
+
+        seed()
+        logger.info("Profile seed reconciled for %s", self.profile_module)
+        return True
+
     def start(self) -> None:
         info = available_profile(self.profile_module)
         if info is None:
             raise ValueError(f"unknown profile: {self.profile_module}")
+        self.bootstrap()
         env = os.environ.copy()
         env["AGENTSHUB_SUPERVISOR"] = "1"
         slug = self.profile_module.rsplit(".", 1)[-1]

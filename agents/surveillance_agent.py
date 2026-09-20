@@ -20,6 +20,43 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Domain vocabulary for the trusted group-owned extraction path. These describe
+# how an operator states a camera state or a heat alert, in either language —
+# they are deliberately free of any scenario, camera number or place name, so a
+# fixture can exercise this path without defining it.
+_CAMERA_REFERENCE = re.compile(
+    r"(?:cam[-\s]?|camera\s*|מצלמה\s*(?:cam[-\s]?)?)(\d{1,3})\b",
+    re.IGNORECASE,
+)
+
+_CAMERA_STATUS_PATTERNS = (
+    (re.compile(r"חזרה לפעול|שבה לפעול|עלתה חזרה|back online|restored|is back up", re.IGNORECASE), "active"),
+    (re.compile(r"הופסק|הורדה|הורדנו|נותק|כבתה|לא משדרת|אינה משדרת|offline|shut down|shutdown|taken down|went dark", re.IGNORECASE), "offline"),
+    (re.compile(r"הפרעות|תקועה|מטושטש|קפאה|לסירוגין|לפרקים|בלבול תרמי|interference|degraded|stuck|frozen|blurred|intermittent", re.IGNORECASE), "degraded"),
+)
+
+_PLANNED_SHUTDOWN = re.compile(
+    r"יזומי|יזומה|מתוכננ|תחזוק|ניקוי|עדכון גרס|planned|scheduled|maintenance|cleaning|version update",
+    re.IGNORECASE,
+)
+
+_DOWNTIME_TWO_HOURS = re.compile(r"לשעתיים|שעתיים|two hours", re.IGNORECASE)
+_DOWNTIME_HOURS = re.compile(r"(\d+(?:\.\d+)?)\s*(?:שעות|hours?)", re.IGNORECASE)
+_DOWNTIME_ONE_HOUR = re.compile(r"לשעה|one hour|an hour", re.IGNORECASE)
+
+_HEAT_ALERT = re.compile(
+    r"התראת חום|התרעת חום|heat alert|heat warning",
+    re.IGNORECASE,
+)
+_SEVERITY_LOW = re.compile(r"נמוכ|\blow\b", re.IGNORECASE)
+_SEVERITY_HIGH = re.compile(r"גבוה|\bhigh\b|\bsevere\b", re.IGNORECASE)
+
+_CONDITION_SOURCES = (
+    (re.compile(r"חיישן טמפרטורה|temperature sensor", re.IGNORECASE), "temperature sensor"),
+    (re.compile(r"מצלמה תרמית|thermal camera", re.IGNORECASE), "thermal camera"),
+)
+
+
 # `ContextVar` + lock + capture function + `process()`-override helper for
 # forcing `return_drone_to_base`'s exact tool output back to the caller
 # instead of the model's own paraphrase of it — see `agents.runtime.
@@ -145,27 +182,98 @@ class SurveillanceAgent(Agent):
         return _recall_capture.run(super().process, text, allowed_tools, invocation_policy=invocation_policy)
 
     def extract_report(self, raw_text: str, *, received_at: str, scenario_time: str | None = None, scope: OperationalScope | None = None, **_) -> ExtractionResult | None:
+        """Extract only what the message itself grounds.
+
+        Every field returned here becomes authoritative state, so a field that
+        the message does not support is omitted and a report whose subject or
+        state cannot be read is declined outright. Declining is safe: the
+        message then travels the ordinary intake path instead of committing a
+        value nobody reported.
+        """
+
         from history import ExtractionResult
         text = str(raw_text or "")
-        normalized = text.casefold()
         occurrence = scenario_time or received_at
-        if re.search(r"\u05d7\u05d9\u05d9\u05e9\u05df|\u05d8\u05de\u05e4\u05e8\u05d8\u05d5\u05e8\u05d4|\u05ea\u05e8\u05de\u05d9\u05ea|\u05d4\u05ea\u05e8\u05d0\u05ea \u05d7\u05d5\u05dd|\u05d0\u05d5\u05e8\u05e0\u05d9\u05dd|thermal|temperature|heat alert|observation tower", normalized):
-            return ExtractionResult(
-                "operational_condition_report", "trusted", None, ("ORANIM_OBSERVATION_TOWER",), text, "low", occurrence, False, (),
-                business_fields={"condition_type": "heat_alert", "observation_source": "temperature sensor and thermal camera", "location": "Oranim observation tower", "severity_label": "low", "qualification": "heavy heatwave; easterly winds"},
-            )
-        if re.search(r"\u05de\u05e6\u05dc\u05de\u05d4|camera|clean|\u05e0\u05d9\u05e7\u05d5\u05d9|\u05e2\u05d3\u05e9\u05d4|offline|\u05d4\u05d5\u05e4\u05e1\u05e7\u05d4|maintenance", normalized):
-            reference = "CAM-02" if re.search(r"(?:02|cam[- ]?02|camera\s*02|\u05de\u05e6\u05dc\u05de\u05d4\s*02)", normalized) else None
-            if reference is None:
-                return None
-            canonical = self._resolve_camera_reference(reference)
-            if canonical is None:
-                return None
-            area = next((str(camera.get("area")) for camera in self.surveillance_store.list_cameras(scope=scope or self._operational_scope()) if camera.get("camera_id") == canonical), None)
-            return ExtractionResult(
-                "surveillance_report", "trusted", area, (canonical,), text, "low", occurrence, False, (),
-                business_fields={"camera_id": canonical, "camera_status": "offline", "shutdown_type": "planned_maintenance", "downtime_duration_hours": None, "reason": "fresh lens cleaning", "sector": area, "cause_status": None, "possible_cause": None},
-            )
+        resolved_scope = scope or self._operational_scope()
+
+        camera_report = self._extract_camera_report(text, occurrence, resolved_scope, ExtractionResult)
+        if camera_report is not None:
+            return camera_report
+
+        return self._extract_condition_report(text, occurrence, ExtractionResult)
+
+    def _extract_camera_report(self, text, occurrence, scope, ExtractionResult):
+        canonical = self._camera_reference_in(text, scope)
+        if canonical is None:
+            return None
+
+        status = self._camera_status_in(text)
+        if status is None:
+            return None
+
+        shutdown_type = "planned_maintenance" if status == "offline" and _PLANNED_SHUTDOWN.search(text) else None
+        fields = {
+            "camera_id": canonical,
+            "camera_status": status,
+            "downtime_duration_hours": self._downtime_hours_in(text),
+            "shutdown_type": shutdown_type,
+        }
+        area = next(
+            (str(camera.get("area")) for camera in self.surveillance_store.list_cameras(scope=scope)
+             if camera.get("camera_id") == canonical),
+            None,
+        )
+        if area:
+            fields["sector"] = area
+
+        return ExtractionResult(
+            "surveillance_report", "trusted", area, (canonical,), text, "low", occurrence, False, (),
+            business_fields={name: value for name, value in fields.items() if value is not None},
+        )
+
+    def _extract_condition_report(self, text, occurrence, ExtractionResult):
+        if not _HEAT_ALERT.search(text):
+            return None
+
+        severity = "high" if _SEVERITY_HIGH.search(text) else "low" if _SEVERITY_LOW.search(text) else None
+        if severity is None:
+            return None
+
+        sources = [label for pattern, label in _CONDITION_SOURCES if pattern.search(text)]
+        fields = {"condition_type": "heat_alert", "severity_label": severity}
+        if sources:
+            fields["observation_source"] = ", ".join(sources)
+
+        return ExtractionResult(
+            "operational_condition_report", "trusted", None, (), text, severity, occurrence, False, (),
+            business_fields=fields,
+        )
+
+    def _camera_reference_in(self, text: str, scope) -> str | None:
+        """The one camera this message is about, resolved against the scoped inventory."""
+
+        numbers = list(dict.fromkeys(match.group(1) for match in _CAMERA_REFERENCE.finditer(text)))
+        if len(numbers) != 1:
+            return None
+        return self._resolve_camera_reference(numbers[0], scope=scope)
+
+    @staticmethod
+    def _camera_status_in(text: str) -> str | None:
+        for pattern, status in _CAMERA_STATUS_PATTERNS:
+            if pattern.search(text):
+                return status
+        return None
+
+    @staticmethod
+    def _downtime_hours_in(text: str) -> float | None:
+        dual = _DOWNTIME_TWO_HOURS.search(text)
+        if dual:
+            return 2.0
+        counted = _DOWNTIME_HOURS.search(text)
+        if counted:
+            return float(counted.group(1))
+        if _DOWNTIME_ONE_HOUR.search(text):
+            return 1.0
         return None
 
     def ingest_report(self, event: dict, *, scope: OperationalScope | None = None) -> ReportIngestionResult:
@@ -179,7 +287,9 @@ class SurveillanceAgent(Agent):
         self.ensure_operational_scope(scope)
         if event.get("classification") == "operational_condition_report":
             fields = event.get("business_fields") or {}
-            if fields.get("condition_type") != "heat_alert" or fields.get("severity_label") != "low":
+            # The severity the reporter actually stated, not a single fixed
+            # level — still a closed set, so an ungrounded value is rejected.
+            if fields.get("condition_type") != "heat_alert" or fields.get("severity_label") not in {"low", "medium", "high"}:
                 return ReportIngestionResult("rejected", "operational condition report has invalid heat-alert fields")
             return ReportIngestionResult("committed", "operational condition committed", projection=project_report_facts(event, domain="surveillance", projection_kind="operational_fact", facts=fields))
         if event.get("classification") != "surveillance_report":
@@ -277,11 +387,11 @@ class SurveillanceAgent(Agent):
             "committed", f"camera {updated['camera_id']} committed", projection=projection
         )
 
-    def _resolve_camera_reference(self, reference: str) -> str | None:
+    def _resolve_camera_reference(self, reference: str, *, scope: OperationalScope | None = None) -> str | None:
         """Resolve a canonical camera ID or an explicitly supported alias."""
 
         normalized = " ".join(reference.strip().split()).casefold()
-        for camera in self.surveillance_store.list_cameras(scope=self._operational_scope()):
+        for camera in self.surveillance_store.list_cameras(scope=scope or self._operational_scope()):
             camera_id = str(camera["camera_id"])
             canonical = camera_id.casefold()
             numeric = canonical.removeprefix("cam-")

@@ -7,6 +7,7 @@ import uuid
 from dataclasses import asdict, is_dataclass
 from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from queue import SimpleQueue
 
 from persistence.contracts import (
@@ -81,6 +82,9 @@ _EVENT_COLUMNS = (
     "action_state_updated_at",
     "action_failure_reason",
     "action_tool_receipts",
+    "superseded_by_event_id",
+    "supersedes_event_id",
+    "supersession_kind",
 )
 
 _EVENT_JSON_COLUMNS = {"entities", "precedent_matched_event_ids", "business_fields", "action_tool_receipts"}
@@ -93,6 +97,10 @@ _EVENT_IMMUTABLE_COLUMNS = {
     "scenario_id", "scenario_run_id", "scenario_step", "scenario_time",
 }
 _UPDATABLE_EVENT_COLUMNS = frozenset(_EVENT_COLUMNS) - _EVENT_IMMUTABLE_COLUMNS
+
+# A retraction says the reported fact did not occur; a correction says it
+# occurred but was misreported. Closed set, so neither can be invented later.
+_SUPERSESSION_KINDS = frozenset({"retraction", "correction"})
 
 _HELD_EVENT_RESERVED_KEYS = {"hold_id", "event_id", "created_at"}
 _HELD_EVENT_RESOLUTION_RESERVED_KEYS = {"resolved_by", "resolved_at"}
@@ -300,6 +308,11 @@ def _search_where(criteria: EventSearchCriteria) -> tuple[str, list[object], str
 class SQLitePersistence(PersistenceInterface):
     def __init__(self, db_path: str):
         super().__init__(db_path)
+
+        # Opening a database is what creates its directory, the same way the
+        # surveillance and team-status stores do it. Importing the profile
+        # that merely declares the path must stay read-only.
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
         run_migrations(db_path)
 
@@ -530,6 +543,69 @@ class SQLitePersistence(PersistenceInterface):
                 raise PersistenceError(f"failed to update event '{event_id}': {exc}") from exc
 
         self._submit_write(_do)
+
+    def record_supersession(
+        self, *, superseded_event_id: str, superseding_event_id: str, kind: str
+    ) -> bool:
+        """Link a retracted report to the correction that supersedes it.
+
+        Neither row is deleted or rewritten: the retracted report keeps its
+        text, its outcome and its provenance, because a commander asking which
+        reports turned out to be false can only be answered from them. The link
+        is what stops it counting as current.
+        """
+
+        if kind not in _SUPERSESSION_KINDS:
+            raise PersistenceError(f"unsupported supersession kind: '{kind}'")
+        if superseded_event_id == superseding_event_id:
+            raise PersistenceError("an event cannot supersede itself")
+
+        def _do(connection: sqlite3.Connection) -> bool:
+            rows = {
+                row["event_id"]: row
+                for row in connection.execute(
+                    "SELECT event_id, scenario_id, scenario_run_id, superseded_by_event_id FROM events "
+                    "WHERE event_id IN (?, ?)",
+                    (superseded_event_id, superseding_event_id),
+                ).fetchall()
+            }
+            superseded = rows.get(superseded_event_id)
+            superseding = rows.get(superseding_event_id)
+            if superseded is None:
+                raise NotFoundError(f"no such event: '{superseded_event_id}'")
+            if superseding is None:
+                raise NotFoundError(f"no such event: '{superseding_event_id}'")
+
+            # Supersession never crosses an operational world.
+            if (superseded["scenario_id"], superseded["scenario_run_id"]) != (
+                superseding["scenario_id"], superseding["scenario_run_id"]
+            ):
+                raise PersistenceError("supersession cannot cross operational scopes")
+
+            already = superseded["superseded_by_event_id"]
+            if already == superseding_event_id:
+                return False
+            if already is not None:
+                raise PersistenceError(
+                    f"event '{superseded_event_id}' is already superseded by '{already}'"
+                )
+
+            try:
+                connection.execute(
+                    "UPDATE events SET superseded_by_event_id = ?, supersession_kind = ? WHERE event_id = ?",
+                    (superseding_event_id, kind, superseded_event_id),
+                )
+                connection.execute(
+                    "UPDATE events SET supersedes_event_id = ?, supersession_kind = ? WHERE event_id = ?",
+                    (superseded_event_id, kind, superseding_event_id),
+                )
+                connection.commit()
+            except sqlite3.Error as exc:
+                connection.rollback()
+                raise PersistenceError(f"failed to record supersession: {exc}") from exc
+            return True
+
+        return self._submit_write(_do)
 
     def list_expired_events(self, now: str, limit: int = 100) -> list[dict]:
         if not isinstance(limit, int) or limit <= 0:

@@ -4287,3 +4287,594 @@ The project rule remains in force: automated tests plus real manual Browser E2E 
 - **Verification:** focused Task55B/persistence/scope/admin/security tests passed; migration tests passed 16/16; integration profile-simulation tests and file catalog passed 5/5; compile and `git diff --check` passed. The final complete offline suite passed **1,758 tests, 7 warnings** in 240 seconds using the documented fake CORE/SUB tier indirection variables. The first full run's two simulator regressions from an overly broad guard and the new-test catalog entry were fixed before the final run.
 - **Out of scope and unchanged:** FireProfile/ResponseTeamProfile, SITREP/provider/schema work, Incident/Evidence, protocol packs, resource lifecycle, and Main Agent reasoning were not changed by Task55B.
 - **One next task:** rerun the complete seven-fixture real Browser E2E matrix after the browser automation connection is restored, then separately address only any remaining Task55B scope/roster evidence.
+
+### Task 56A - Canonical Operational (Business) Time vs Runtime Lifecycle Time
+
+- **Status:** implemented, automated-verified, and validated by real Browser E2E against the running stack with the real OpenRouter provider. LIVE isolation re-checked after the run.
+- **Root cause (Category G):** the readiness-team attendance path compared two different clocks. `attendance_cycles.opened_at/deadline_at` were written from operational (business) time — in a simulation the trusted `scenario_time` — while `SQLiteTeamStatusPersistence.record_response` decided lateness with `received_at`, the real runtime receipt. Every simulation attendance report therefore arrived "after" a deadline computed from a historical fixture instant and was stored `approval_status='pending'`. `availability_snapshot` only reads `approval_status='accepted'` rows, so the absence never reached authoritative state, the operational picture, or the SITREP. Reproduced before any edit on a throwaway DB: cycle deadline `2026-09-18T13:00:00+00:00`, receipt `2026-09-20T09:01:42+00:00`, result `pending`.
+- **Second defect found in the same interval semantics (Category B):** `availability_snapshot` evaluated a declared absence using only `availability_end`, ignoring `availability_start`, so a future window ("out 12:00-15:00", reported at 07:45) marked the member absent from the moment of the report.
+- **Contract added:** `persistence/operational_time.py` defines the two clocks and is exported through the `persistence` facade. `runtime_now()` is the real execution clock and owns processing deadlines, queue TTLs, hold/approval expiry, the sweeper and recovery. `operational_now(...)`, `operational_time_of_event(...)` and `operational_timestamp_of_event(...)` resolve the business clock: inside a simulation scope the trusted `scenario_time` wins, then an ambient operational instant installed by the releasing boundary, then the receipt, then the runtime clock. In LIVE the business clock is the receipt time, so LIVE semantics are unchanged by construction. `operational_time_context(...)` binds the ambient business clock the way `operational_scope_context(...)` binds the scope.
+- **Write path:** `record_response` gained an explicit keyword-only `reported_at`; lateness is now decided `reported_at <= cycle.deadline_at`, both on the business clock. `received_at` is still stored unchanged as the runtime receipt. `agents/team_status_agent.ingest_report` opens the implicit cycle from `operational_time_of_event(...)` and passes the same instant as `reported_at`. `orchestrator/flows.py` publishes `reported_at` in the trusted event metadata, `agents/runtime.py` injects it into `record_attendance_response` as a trusted, model-invisible field, and `profiles/unified_test.record_attendance_response` anchors the `unavailable_days` business interval on it instead of on the runtime receipt.
+- **Read path:** `availability_snapshot` now treats a declared absence as a bounded interval (`start <= instant < end`). `report_team_availability` (base agent and unified profile) and `_open_cycle`/`attendance_check_due` default to `operational_now(...)` rather than `datetime.now(timezone.utc)`. `api/routes.py` and `orchestrator/situational_picture.py` bind `operational_time_context(...)` wherever they already bind `operational_scope_context(...)`, so a specialist read taking no explicit instant resolves the same clock as the picture it serves.
+- **Storage:** additive `attendance_responses.reported_at` column plus an idempotent repair that backfills it from `received_at` for any row written before the operational clock existed — the LIVE-equivalent value. No row, table or database was deleted, reset or rewritten.
+- **Task 49 untouched:** the expiry path still takes its instants from the runtime clock. Browser E2E confirmed it on live rows: step 2's event carried `scenario_time=2026-09-09T07:45:00Z` and `deadline_at=2026-09-20T09:29:38` (runtime receipt plus the policy window), so a historical fixture instant produced no born-expired runtime deadline.
+- **Files changed:** `persistence/operational_time.py` (new), `persistence/__init__.py`, `persistence/team_status_store.py`, `persistence/team_status_contracts.py`, `agents/team_status_agent.py`, `agents/runtime.py`, `orchestrator/flows.py`, `orchestrator/situational_picture.py`, `api/routes.py`, `profiles/unified_test.py`, `docs/file_catalog.md`, `tests/test_task56a_operational_time.py` (new), `tests/test_orchestrator_flows.py` (the trusted-metadata contract assertion).
+- **Tests:** `tests/test_task56a_operational_time.py` adds 14 cases covering runtime-clock identity, LIVE-versus-simulation business-time resolution, ambient-clock scoping, in-window acceptance despite a much later runtime receipt, a genuinely late report still held for review, unchanged LIVE receipt semantics when `reported_at` is omitted, the bounded absence interval, window visibility while still available, the idempotent backfill, ingestion opening the cycle on the operational clock, and a runtime deadline that is never taken from scenario time.
+- **Automated verification:** focused attendance/scope/flows/architecture suites passed 131/131, then the complete offline suite passed **1,770 tests in 274 seconds** with the documented fake CORE/SUB tier variables and `-p no:randomly`. An earlier full run additionally showed `test_expiry_finalization.py::test_runtime_sweeper_survives_one_maintenance_exception` failing; it passes in isolation five times out of five and passed in the clean full run — it is a wall-clock/thread-timing test with a 2-second budget, and nothing in this task touches the expiry path. Two suites remain red for reasons that predate this task and belong to uncommitted user work, so they were left alone: `test_file_catalog.py` and `test_hebrew_leakage.py` both fail only because the working tree has an in-progress `docs/` to `.github/docs/` move (plus a catalogued but absent `pyrefly.toml`). The two files this task added were catalogued, and the remaining catalog delta is exactly that pending move.
+- **Real Browser E2E (Playwright Chromium, real admin panel, real provider):** the stack was started with `python run_stack.py profiles.unified_test`; the API console had no selectable identity because the only LIVE identity in the active DB was `bot-service`, which the console deliberately excludes, so one LIVE commander was provisioned through the canonical operator path (`python -m cli.user_admin --profile profiles.unified_test add --telegram-id commander_user --level commander`). The Simulator page then exposed all seven official fixtures. `fire002_phase1` was loaded and stepped **one step at a time**: each step was sent with the real "send the next step" button, and the next step was only sent after that step's own authoritative event row had reached a terminal outcome and the UI had released its queue. No auto-run, no auto-next, no bulk send, and no direct HTTP substitution for a scenario message. Run `80b98576d0684670ada07510e839f261`, steps 1-7: `team_resource_report` succeeded, `team_attendance_report` succeeded, `operational_condition_report` succeeded, `friendly_forces_report` succeeded, `surveillance_report` succeeded, `friendly_forces_report` succeeded, and step 7's commander DM returned a rendered situational answer (a question step writes no scenario event row, so its completion was taken from the UI).
+- **Authoritative state after the Browser run (the actual pass criterion):** in scope `SIMULATION_RUN:FIRE_002_PHASE_1:80b98576d0684670ada07510e839f261` the attendance cycle opened at `2026-09-09T07:45:00+00:00` with deadline `2026-09-09T08:45:00+00:00` (operational clock), and Omri's response is `approval_status='accepted'` with `reported_at=2026-09-09T07:45:00+00:00` (business) beside `received_at=2026-09-20T09:28:45` (runtime) — the two clocks recorded separately and never compared with one another. The declared window is `2026-09-09T09:00:00+00:00 .. 2026-09-09T12:00:00+00:00`, i.e. 12:00-15:00 Israel time, and the scoped snapshot returns `unavailable=0/3` at 10:45 and 11:30 Israel, `1/3` at 12:00 and 14:30, and `0/3` again from 15:00 — exactly the documented expectation that Omri is unavailable only from 12:00 through 15:00 scenario time. `manpower_count=6` with `ASHED 3` and `CARMEL 1` committed, and Camera 02 moved to `offline` from the step 5 planned-maintenance report.
+- **Scope isolation re-verified after the run:** LIVE still holds 0 attendance responses and the canonical 6 active members; simulation rows stayed inside their own scope; zero `attendance_responses` rows have a NULL `reported_at`.
+- **Known gaps confirmed but deliberately not addressed here:** step 7's commander answer is still the deterministic team-attendance rendering ("0 available; 1 unavailable; 2 not yet reported; 3 total") rather than a bounded cross-domain commander brief. The commander asked about force *and vehicle* availability under the heatwave, and the answer omitted the committed manpower/resource state, the offline camera, the heat advisory, the KKL fire ban and the roadside fire. That is the known Category F provider/SITREP gap plus a Category D/E routing and context-assembly gap, neither of which the temporal fix touches. They remain Priorities 4 and 5.
+- **Observation about the active database, stated plainly:** the active `data/unified_test/unified_history.db` now contains 8 events and 2 simulation run scopes, both created by this task's Browser run, and the team-status DB holds 3 scopes and 2 attendance responses. These numbers do not match the Task 55B audit (34 user rows, 188 events, 27 scopes, 17 attendance responses). The users table is intact (28 rows before this task, plus the one LIVE commander added above), so the event history was already empty when this task began. Nothing in this task deletes or resets a database: `run_stack.StackSupervisor.start()` never calls `reset_profile_databases`, which runs only from the explicit admin reset command, and this task issued no reset, no manual SQL against the active DBs and no cleanup. This is recorded as an observation, not a claim about who cleared it.
+- **Next selected priority:** Priority 1 continues into one narrow follow-up before Priority 2. SEC_001_PHASE_1 spans two operational days (step 1 at 2026-09-06T07:30Z, step 6 at 2026-09-07T06:30Z), and `ingest_report` opens an implicit cycle only when *no* cycle exists at all, so a second-day report is still judged against the first day's window. The declared model is one cycle per operational local day (`attendance_check_due` compares `cycle_key` with the local date, and `open_cycle` is unique and idempotent per `cycle_key`), and the two paths also disagree on whether `cycle_key` is the UTC or the profile-local date. That is a distinct defect from this task's clock mixing and is being handled separately rather than bundled in.
+
+### Task 56B - Cross-Day Attendance Cycle Ownership (investigated, NOT implemented — blocked on a product decision and on provider credits)
+
+- **Status:** defect confirmed and reproduced; no code was changed. Two valid semantics exist, they differ in LIVE-visible behaviour, and the repository contracts do not resolve the choice, so it is being put to the user rather than decided unilaterally. Real Browser E2E, which this project requires before an operational change counts as verified, is additionally unavailable right now (see the provider note below).
+- **Defect (Category G/B, distinct from Task 56A):** `agents/team_status_agent.ingest_report` opens an implicit attendance cycle only when *no* cycle exists at all, and `record_response` always attaches a response to `latest_cycle()`. A run that spans two operational days therefore judges a second-day report against the first day's one-hour window.
+- **Reproduced** on a throwaway DB with the real store and agent, using SEC_001_PHASE_1's own step times (step 1 at `2026-09-06T07:30:00Z`, step 6 at `2026-09-07T06:30:00Z`): only one cycle is created, `2026-09-06` opened 07:30 with deadline 08:30. Eli's day-1 reserve-duty report is `accepted`; Danny's day-2 sickness report (`06:30Z`, absent 06:30-21:00) is `pending`, so the 19:00Z day-2 snapshot returns Danny as `awaiting_response` instead of `unavailable`. SEC_001_PHASE_1 step 9 asks the commander question this would answer wrongly.
+- **Why this is not the Task 56A bug:** 56A fixed comparing a business deadline against a runtime receipt. Here both sides are already on the business clock; what is wrong is *which operational window owns the report*.
+- **Contract evidence gathered:** the declared model is one cycle per operational local day — `attendance_check_due` compares `latest["cycle_key"]` with the local date, `attendance_cycles` is `UNIQUE (scope_key, cycle_key)`, and `open_cycle` is idempotent on `cycle_key`. `availability_snapshot` already resolves a cycle by instant (`opened_at <= as_of`), while `record_response` does not — read and write disagree. The two cycle-opening paths also disagree on the key: `_open_cycle` uses the profile-local date, `ingest_report` uses `opened_at[:10]`, the UTC date.
+- **Option A — ingestion opens the missing day's cycle.** `ingest_report` opens a cycle for the report's operational local day when that day has none, and `record_response` resolves the owning cycle by the report's operational instant. Fully general and makes read and write agree. **LIVE consequence:** a member who reports before the 08:00 scheduled check would open that day's cycle early, and `open_scheduled_cycle`/`start_daily_attendance_check` would then find it already open and send no daily prompt. That is a real change to the LIVE daily-check flow.
+- **Option B — no new cycles; do not penalise a day that never had a window.** `record_response` resolves the owning cycle by operational instant, and when the resolved cycle belongs to a different operational day than the report, the report is not late (nothing had been asked of that member that day) and is accepted. **LIVE consequence:** none to scheduling; an early-morning LIVE report stops requiring commander approval, which appears to be the intended semantics rather than a regression. **Cost:** the response stays filed under the older cycle id, so `availability_snapshot`'s `is_current_cycle` branch will not treat it as this day's response.
+- **Recommendation:** Option B. It fixes the observed wrong answer, leaves LIVE scheduling untouched, and is the smaller change; the stale `cycle_id` only affects the "reported available in the current cycle" rendering, which can be addressed separately if it matters.
+- **Provider blocker (PART 29 item 4):** during this session OpenRouter began returning `HTTP 402 Payment Required` ("This request requires more credits") — 21 occurrences in `api-unified_test.stderr.log`, first at 12:26:38, interleaved with successful 200s. The FIRE_002_PHASE_1 Browser run still produced correct authoritative state because group-owned report classification and projection are deterministic, but a later SEC_001_PHASE_1 Browser attempt failed at step 1 with the user-visible internal-error bubble, traced to a 402 on a required call. Until the account has credits, real Browser E2E cannot be used as evidence, so no further operational change was made. The SEC run was stopped after step 1; it wrote no events.
+- **Stack state:** the stack started for this task was stopped and its two stale `.bot.lock`/`.bot-simulator.lock` files (left because Windows `terminate` skips the bot's `finally` block) were removed, which is exactly what `StackSupervisor.stop()` does on a clean stop. No database was reset, deleted or edited by hand.
+- **Next selected priority once unblocked:** decide 56B's semantics, implement it, then Priority 2 — re-run the targeted Browser E2E failures across the seven fixtures to see which previously observed C/G/internal-error results disappear now that clock ownership is correct.
+
+### Task 56B - Cross-Day Attendance Window Ownership (implemented, Option B)
+
+- **Status:** implemented and automated-verified. The user chose Option B from the two semantics recorded in the previous entry. Browser E2E result recorded below.
+- **Defect recap (Category G/B):** `record_response` always attached a response to `latest_cycle()`, so in a run spanning two operational days a second-day report was judged against the first day's one-hour window and stored `pending`. Because `availability_snapshot` reads only `accepted` rows, the member stayed `awaiting_response` and the commander's night question was answered wrongly.
+- **Chosen semantics (Option B):** a report is judged against the window that owns its operational instant, and it cannot be late for an operational day that never had an open window — nothing had been asked of that member that day. Cycle creation stays with the scheduler, so the LIVE daily-check flow is untouched. Option A (ingestion opens the missing day's cycle) was rejected because a LIVE member reporting before the 08:00 scheduled check would have opened that day's cycle early and suppressed the daily prompt.
+- **Implementation:**
+  - `SQLiteTeamStatusPersistence.cycle_for_operational_instant(instant, scope=...)` resolves the window that owns an operational instant — the latest cycle with `opened_at <= instant`, or the earliest cycle when the report predates every window. This is exactly how `availability_snapshot` already resolves a cycle, so write and read now agree. The interface carries a default implementation that falls back to `latest_cycle`, so any other backend stays valid.
+  - `record_response` gained a keyword-only `operational_day`. It resolves the owning cycle by instant, and treats the report as judged by that window only when `operational_day` matches the cycle's own `cycle_key`; otherwise the report is accepted. Omitting `operational_day` preserves the previous behaviour exactly, so existing LIVE and direct callers are unchanged.
+  - `agents/team_status_agent.ingest_report` derives `operational_day` from the report's operational instant in the profile timezone and passes it through. The implicit cycle it opens now uses that same profile-local day as `cycle_key`, which also removes the old disagreement with `_open_cycle` (local date) versus `ingest_report` (UTC date via `opened_at[:10]`).
+  - `profiles/unified_test.record_attendance_response` passes the same profile-local `operational_day` alongside the trusted `reported_at`.
+- **Files changed:** `persistence/team_status_store.py`, `persistence/team_status_contracts.py`, `agents/team_status_agent.py`, `profiles/unified_test.py`, `docs/file_catalog.md`, `tests/test_task56b_cross_day_attendance.py` (new).
+- **Tests:** 8 new cases — a next-day report accepted, a genuinely late report inside its own day still held for review, no extra cycle created by a next-day report, window ownership resolved by operational instant, a report predating every window owned by the first, omitting `operational_day` preserving the previous judgement, two-day ingestion reaching the right night picture, and the implicit cycle key being the profile-local day (22:00Z is already the next day in Asia/Jerusalem).
+- **Reproduction, before and after,** using SEC_001_PHASE_1's own step times (step 1 `2026-09-06T07:30:00Z` reserve duty, step 6 `2026-09-07T06:30:00Z` high fever). Before: one cycle `2026-09-06` (07:30-08:30), Eli `accepted`, Danny `pending`, and the 19:00Z day-two snapshot returned Danny as `awaiting_response`. After: same single cycle, both `accepted`, and the day-two night snapshot returns Eli `unavailable` (reserve duty runs to 09-08) and Danny `unavailable`.
+- **Automated verification:** the complete offline suite passed **1,778 tests in 279 seconds** with the documented fake CORE/SUB tier variables and `-p no:randomly`, excluding the two suites that are red because of the working tree's in-progress `docs/` to `.github/docs/` move (`test_file_catalog.py`, `test_hebrew_leakage.py`). The new test file was added to `docs/file_catalog.md`.
+- **Real Browser E2E: attempted, blocked by the provider — NOT claimed as passed.** The stack was restarted and an admin browser session re-established; the Simulator exposed all seven fixtures and `sec001_phase1` loaded. Step 1 failed with the user-visible internal-error bubble and wrote no event row. The API log shows the cause: `POST https://openrouter.ai/api/v1/chat/completions` returning `HTTP/1.1 402 Payment Required` ("This request requires more credits"), raised out of `call_llm_and_parse`. A direct probe using the project's own `.env` and `config.environment.resolve_tier_model_from_env("CORE")` shows the failure is definitely OpenRouter's and not an authentication or code problem: `GET /api/v1/key` returns HTTP 200, and an 8-token completion returns HTTP 200 for $0.000039. The same call reports the key's own credit limit: `limit 50`, `usage 49.79`, `limit_remaining 0.21`. That is a per-key cap, so adding account balance does not lift it. The key in `.env` was unchanged across the user's 13:02 update (same `sk-or-v1-5bc...b52b` fingerprint). Real-provider work was stopped here rather than accumulating operational changes that cannot be Browser-verified.
+- **Verification status, stated precisely:** Task 56B is automated-verified and reproduced end-to-end through the real agent and the real store, but its Browser E2E is **pending** on provider credits. Task 56A's Browser E2E is complete and unaffected.
+- **Next selected priority once the provider key is uncapped or replaced:** run SEC_001_PHASE_1 steps 1-6 in the Simulator and confirm the day-one reserve-duty report and the day-two sickness report are both `accepted` in the run scope and that the night picture returns both members `unavailable`; then Priority 2 — re-run the targeted Browser E2E failures across the seven fixtures to see which previously observed C/G/internal-error results disappear now that clock ownership and window ownership are correct.
+
+### Task 56C - Database / Profile Continuity Investigation (read-only; no DB was reset, copied, restored, deleted or mutated)
+
+Resolving the observation recorded in the Task 56A entry: Task 55B/55C describe a populated history database (34 user rows, 188 Events, 27 scopes, 17 attendance responses) while this session's runtime saw 0 Events before its own run.
+
+**Active profile.** `config.server_control.load_selected_profile()` returns `profiles.unified_test` (api_port 8905, simulator_port 8915). That is the profile this session started and the only one with a data directory on disk.
+
+**Resolved DB paths.** `profiles/unified_test.py:73` computes `_PROFILE_DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "unified_test"`, so the three paths are absolute and derived from the profile module's own location:
+`C:\Users\ofekb\leadspotting\AgentsHub\data\unified_test\{unified_history,unified_surveillance,unified_team_status}.db`.
+They depend on neither the working directory nor any environment variable, so **path/environment resolution cannot have changed** and cannot have pointed the runtime at a different file. No `*_DB_PATH` environment override exists for this profile.
+
+**Was the same profile/database set used?** Yes for this session. `data/` contains only `server_control/` and `unified_test/` — there is no `data/demo`, `data/friendly_forces` or `data/sub_agent_*` directory, so no other profile's database holds the history either.
+
+**Does another existing database contain the previous history?** No. A filesystem search under `C:\Users\ofekb` (excluding temp) finds exactly one `unified_history.db`, the active one. `AppData/Local/CrewAI/AgentsHub` is an empty directory. `.gitignore:225` ignores `data/`, so these databases were never tracked and cannot be recovered from git history.
+
+**What the active file's own records show** (all read-only `PRAGMA`/`SELECT`):
+
+- `unified_history.db` has been written continuously since **2026-09-09T07:31:41Z**. Its 8,949 `log_entries` fall on 09-09 (330), 09-10 (2,680), 09-11 (297), 09-14 (1,712), 09-15 (734) and 09-20 (3,196) — **nothing on 09-16 through 09-19**, which is precisely the window in which the 09-18/09-19 commits and the Task 52-55 entries were produced.
+- Of the log entries written **before 2026-09-20**, the only loggers present are `__main__` (2,875), `werkzeug` (1,439), `tools.observability` (1,435) and three one-off records. There is **not one** `orchestrator.*`, `api.*`, `history.*`, `protocols.*` or `persistence.*` entry, and **zero** entries referencing an `event_id`, `report_received` or `request_received`. No operational message was ever processed against this file before this session.
+- `events` holds 8 rows, `rowid` 1-8, all written `2026-09-20T09:26:34Z` to `09:29:14Z` — this session's own FIRE_002_PHASE_1 runs.
+- `conversation_messages` holds 26 rows, all between `2026-09-20T09:26:34Z` and `10:14:26Z` — also this session's.
+- `users` holds 30 rows with **contiguous** rowids 1-30, so no user row was ever deleted from this file. 28 existed before this session (`bot-service` plus the 27 declared simulation personas, i.e. exactly what profile import-time provisioning creates), plus the one LIVE commander added via the CLI, plus one more written during the run.
+- A search of all 8,949 log entries for `database_reset`, `reset_profile_databases`, `clean_unified_test_runtime`, `runtime_cleanup` or equivalent returns **0 matches**.
+- In `unified_team_status.db` and `unified_surveillance.db`, the `LIVE` operational scope rows were created at `2026-09-20T09:15:26Z`, and every other scope row is one of this session's own simulation runs. Team status holds 5 scopes / 24 team members / 2 attendance responses; surveillance holds 4 scopes / 24 cameras / 12 drones.
+
+**Finding.** The database set Task 55B audited and Task 55C exercised is **not this file set**, and no copy of it exists on this machine. This is not a cleared or reset copy of that database: the file predates the missing work by eleven days, contains a continuous server log across that period, shows no deletion trace, and shows no evidence that the pipeline ever ran against it before today. The most consistent reading of the evidence is that Tasks 52-55 ran against a `data/unified_test/` directory that did not travel with this working copy — `data/` is gitignored, so a fresh clone or checkout starts with an empty one. This is stated as a finding from the file's own records, not as a claim about how the earlier directory was lost.
+
+**Consequence for the project.** The Task 55B/55C numbers (15 LIVE memberships repaired to 6, 188 Events, 27 scopes) describe a database that is no longer available, so they cannot be re-verified and should not be treated as describing current state. The **code** changes from those tasks are present and intact in this working copy — migration 25 is applied (`PRAGMA user_version = 25`), `users.identity_kind` exists and is populated, `membership_status` exists, and `repair_legacy_live_simulation_memberships()` is present and idempotent. What is gone is the historical data those tasks operated on, not the work.
+
+**One behaviour worth recording, found during this investigation.** `profiles/unified_test.py` seeds databases at **import time** (`_PROFILE_DATA_DIR.mkdir(...)` at line 74, then the seeding block from line 816). Importing the profile module — including from a test, a CLI command or a one-line `python -c` check — creates and writes the real absolute-path databases. That is why the `LIVE` scopes in the team-status and surveillance stores carry a creation timestamp from a plain profile import in this session rather than from a server start. `invest.md` already flags this as the one convention deviation among the profiles. No change was made to it here; it is recorded because it makes "which run touched the database" harder to reason about.
+
+**Actions taken:** none beyond reading. No database was reset, copied, restored, deleted or mutated to reconcile counts.
+
+## Pending Real-Provider Revalidation
+
+Live register of work that is complete offline but whose required real-provider / Browser E2E
+validation is `BLOCKED_BY_PROVIDER`. Append to it; move an item out only when its Browser
+validation has actually been performed and recorded as its own progress entry.
+
+**Provider status (2026-09-20).** OpenRouter authenticates and serves tiny requests, but the key in
+`.env` carries a per-key credit limit that is effectively exhausted: `GET /api/v1/key` returns
+HTTP 200 with `limit 50`, `usage 49.79`, `limit_remaining 0.21`; an 8-token completion returns
+HTTP 200 for $0.000039; the pipeline's real request sizes return
+`HTTP 402 Payment Required — "This request requires more credits"` out of `call_llm_and_parse`.
+Adding account balance does not lift a per-key cap. The failure is OpenRouter's, after successful
+authentication — not an authentication failure and not a code defect. Provider configuration was
+not modified, no fake provider was created, and no validation was loosened.
+
+While this holds, development proceeds in **provider-degraded mode**: only work whose correctness
+is deterministically verifiable offline is implemented; anything whose success criterion is
+primarily model output is deferred.
+
+---
+
+### BLOCKED_BY_PROVIDER — Task 56B, cross-day attendance window ownership
+
+- **Task:** Task 56B — a report is judged against the window that owns its operational instant and
+  cannot be late for an operational day that never had an open window (Option B).
+- **Exact scenario/step:** `SEC_001_PHASE_1` in the Simulator, steps 1 through 6 — step 1
+  (`2026-09-06T07:30:00Z`, Eli, reserve duty) and step 6 (`2026-09-07T06:30:00Z`, Danny, high
+  fever) are the two that span operational days. Step 5 is the commander DM that sits between them
+  and must be sent to reach step 6.
+- **Exact boundary reached:** the stack started, the admin session was established, the Simulator
+  exposed all seven fixtures and `sec001_phase1` loaded. **Step 1 failed** with the user-visible
+  internal-error bubble and wrote no event row; `api-unified_test.stderr.log` shows
+  `POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 402 Payment Required"` raised out
+  of `call_llm_and_parse` at `13:09:41` and `13:09:43`. Recorded as `BLOCKED_BY_PROVIDER`, **not**
+  as a feature failure.
+- **Already verified offline:** 11 automated cases in `tests/test_task56b_cross_day_attendance.py`,
+  plus an end-to-end reproduction through the real `TeamStatusAgent.ingest_report` and the real
+  `SQLiteTeamStatusPersistence` using SEC_001_PHASE_1's own step times. Specifically verified:
+  Option B semantics (next-day report accepted, same-day late report still `pending`); **no new
+  cycle auto-created** (`latest_cycle` stays `2026-09-06`); **original cycle and provenance
+  preserved** (the response's `cycle_id` is the day-one cycle, the cycle row is byte-identical
+  before and after, and `reported_at`/`received_at` are stored separately and differ); **LIVE
+  scheduling unchanged** (`attendance_check_due` true once after 08:00 local, `open_scheduled_cycle`
+  creates and prompts exactly once, a second call returns `None`, and a LIVE attendance ingest adds
+  no extra cycle); **runtime holds/deadlines still runtime-clocked** (inside an ambient simulation
+  scope pinned to `2026-09-06T07:30:00Z`, `finalize_expired_event` skips a future runtime deadline
+  with `deadline_not_expired` and finalizes a past one with `deadline_expired`); window ownership
+  resolved by operational instant; a report predating every window owned by the first; omitting
+  `operational_day` preserving the previous judgement; and the implicit cycle key being the
+  profile-local day. Full offline suite: **1,781 passed**.
+- **Still requires OpenRouter:** the Simulator path only. Steps 1-6 of `SEC_001_PHASE_1` must be
+  released one at a time through the real `send the next step` button so the reports travel the
+  real intake pipeline rather than a direct store call.
+- **Expected validation once access returns:** in the new run scope, Eli's day-one report and
+  Danny's day-two report are both `approval_status='accepted'`; exactly one attendance cycle exists
+  and its `cycle_key` is `2026-09-06`; Danny's response carries that cycle's `cycle_id`; and the
+  scoped `availability_snapshot` at `2026-09-07T19:00:00Z` returns both members `unavailable`.
+  Step 5's commander answer is not part of this task's pass criterion.
+
+### BLOCKED_BY_PROVIDER — Task 56A, remaining fixture coverage
+
+- **Task:** Task 56A — operational (business) time versus runtime lifecycle time.
+- **Already verified with the real provider and the real browser:** `FIRE_002_PHASE_1` steps 1-7,
+  recorded in full in the Task 56A entry. That evidence stands and is not blocked.
+- **Still requires OpenRouter:** the other six official fixtures, to confirm the clock change
+  introduces no regression outside the FIRE phase-1 path.
+- **Expected validation once access returns:** each fixture's attendance and availability reads
+  resolve on the operational clock, and no event's `deadline_at` is derived from `scenario_time`.
+
+### DEFERRED while the provider is unavailable
+
+Not blocked work awaiting a run — work deliberately not started, because its success criterion is
+primarily model output: the real-provider SITREP wire-contract repair (Priority 4), prompt tuning,
+model reasoning-quality work, and cross-domain LLM synthesis tuning (Priority 5). The known
+Category F evidence for these is recorded in the Task 56A entry: step 7 of `FIRE_002_PHASE_1`
+returned the deterministic team-attendance rendering and omitted committed manpower/resource
+state, the offline camera, the heat advisory, the KKL fire ban and the roadside fire.
+
+### Task 57 - Grounded Surveillance Extraction (provider-degraded mode; Priority 1)
+
+- **Status:** implemented and verified deterministically end-to-end. No provider call is involved in this path at all, so this task carries no `BLOCKED_BY_PROVIDER` item; the only thing still owed is the ordinary Browser confirmation listed under Task 56A's remaining fixture coverage.
+- **How the evidence was obtained:** a deterministic audit harness ran every step of all seven official fixtures through its owning group's `extract_report`, offline. That is reproducible without OpenRouter and is what this task is measured against.
+
+**Two defect classes found (Category C).**
+
+1. **Fabricated authoritative state — the severe one.** The extractor matched loose keywords and then emitted *constants* copied from FIRE_002_PHASE_1's wording, regardless of what the message said. `FIRE_002_PHASE_2` step 1 — "initial smoke detection on camera 05 (Oranim ridge), looks like a small fire spreading east" — was extracted as an `operational_condition_report` with `condition_type=heat_alert`, `location="Oranim observation tower"`, `qualification="heavy heatwave; easterly winds"` and entity `ORANIM_OBSERVATION_TOWER`. None of that is in the message. The trigger was the bare place name `אורנים` in the branch regex. The camera branch likewise asserted a fixed `camera_status="offline"`, `shutdown_type="planned_maintenance"` and `reason="fresh lens cleaning"` on every match. This is exactly the pattern PART 39 forbids, and it wrote wrong operational facts rather than merely missing them.
+2. **Fixture-pinned identifiers.** The camera branch resolved one hard-coded number: `reference = "CAM-02" if <matches 02> else None`. Every other camera report returned `None`. That is the Task 55C "missing camera identifier" failure. Unlike class 1 this is a safe degradation — the message falls through to the ordinary intake path — but it makes the deterministic path useless outside one fixture step.
+
+**Contract now implemented.** The trusted group-owned extractor states only what the message grounds; a field the message does not support is omitted, and a report whose subject or state cannot be read is declined. Declining is safe by design, because the message then travels the ordinary intake path instead of committing a value nobody reported.
+
+- **Subject resolution is generic.** `_CAMERA_REFERENCE` reads `CAM-nn`, `camera nn` and `מצלמה nn` (including `מצלמה CAM-nn`) and the number is resolved against the **scoped camera inventory** through `_resolve_camera_reference`, which now accepts an explicit `scope` instead of only the ambient one. A number outside the inventory is declined. A message naming two different cameras is declined rather than guessing which one it is about.
+- **State is read, not assumed.** `_CAMERA_STATUS_PATTERNS` maps restored/offline/degraded vocabulary in both languages to `active`/`offline`/`degraded`. A message that names a camera but states no state change is declined.
+- **Qualifiers are grounded.** `shutdown_type="planned_maintenance"` only when the message actually says the shutdown was deliberate, planned, maintenance, cleaning or a version update, and only alongside an offline state. `downtime_duration_hours` is parsed from `לשעתיים`/`לשעה`/`N שעות`/`N hours` and is otherwise absent. `reason` is no longer emitted at all, because it cannot be grounded generically — absent beats wrong.
+- **The heat-alert branch is narrowed.** It requires an explicit `התראת חום`/`heat alert` phrase, so a place name or a smoke report no longer triggers it. `severity_label` is read from the message (`נמוכה`/`low`, `גבוהה`/`high`) and the report is declined when no severity is stated. `observation_source` lists only the sensors the message actually names. `location`, `qualification` and the invented entity are gone.
+- **One validation generalised, not loosened.** `ingest_report` previously required `severity_label == "low"`, a literal that only FIRE_002_PHASE_1 step 3 could satisfy. It now requires membership of the closed set `{low, medium, high}`, so a grounded severity is accepted and an ungrounded one (`"catastrophic"`) is still rejected. A test pins that rejection.
+
+**Measured effect across all seven fixtures (deterministic audit, before → after).**
+
+- Trusted extractions rose from 9 to 11, and the three fabricated surveillance extractions became either honest declines or grounded ones.
+- Newly and correctly extracted: `SEC_001_PHASE_1` step 2 → `CAM-08 degraded`; `SEC_001_PHASE_1` step 7 → `CAM-03 offline`, `planned_maintenance`, `downtime_duration_hours=2.0`; `FIRE_002_PHASE_2` step 4 → `CAM-05 degraded`.
+- Fabrication removed: `FIRE_002_PHASE_2` step 1 no longer produces a heat alert at a place it never mentions; `FIRE_002_PHASE_1` step 5 keeps its grounded `offline` + `planned_maintenance` but no longer invents a cleaning reason; `FIRE_002_PHASE_1` step 3 keeps a heat alert with grounded severity and sources and no invented location or wind qualification.
+- Correctly still declined, and recorded as known limits rather than defects: `SEC_001_PHASE_2` step 1 names two cameras in one message; `SEC_001_PHASE_2` step 5 names a camera but reports sabotage of a cable rather than a camera state; `FIRE_002_PHASE_3` step 6 says "tactical camera from a drone" with no camera identifier.
+
+**Deliberate trade-off recorded.** `FIRE_002_PHASE_1` step 3 no longer carries `location="Oranim observation tower"` or the heatwave/wind qualification, because neither can be grounded generically — the surveillance inventory's areas (`north_gate`, `south_sector`, `east_fence`, `central_hub`, `west_hill`) contain no such place. Per PART 41 the fixture's previous output is not the target; a correct general contract is. Recovering that location properly needs a first-class location/place registry, which is not built here.
+
+- **Files changed:** `agents/surveillance_agent.py`, `tests/test_task57_grounded_surveillance_extraction.py` (new), `tests/test_task63_fire_end_to_end.py` (one assertion), `docs/file_catalog.md`.
+- **Tests:** 16 new cases — every inventory camera resolving (not one hard-coded number), English and Hebrew references resolving alike, a camera outside the inventory declined, status read from the message across all three states, a camera named without a state declined, a two-camera message declined, planned maintenance and duration grounded, no field invented for a camera report, sector taken from the scoped inventory, heat alert severity and sources grounded, no invented location or qualification, a heat alert without a stated severity declined, a place name alone no longer producing a heat alert, a grounded report committing the read state to the scoped store, a high-severity alert accepted by ingestion, and an ungrounded severity still rejected.
+- **Regression:** the surveillance/maintenance/projection suites passed 30/30, then the complete offline suite passed **1,797 tests in 268 seconds**. One existing assertion in `tests/test_task63_fire_end_to_end.py` required updating: it asserted `downtime_duration_hours is None` for a message that states no downtime; the field is now absent instead, which expresses the same fact, and the test additionally pins `shutdown_type == "planned_maintenance"`. `test_file_catalog.py` and `test_hebrew_leakage.py` remain deselected for the pre-existing uncommitted `docs/` to `.github/docs/` move.
+- **Next selected priority:** the same fabrication pattern is still live in the other two group-owned extractors, and the audit shows it writing wrong state today. `TeamStatusAgent.extract_report` asserts `reason="routine medical checkup"` on any message matching a time plus a shift/return/medical word, and returns `manpower_count: 0` when its count regex misses — `FIRE_002_PHASE_2` step 3 ("Ashed 3 departed... Omri is at a medical check, station manpower reduced") currently commits `manpower_count=0`. `FriendlyForcesAgent.extract_report` asserts `incident_kind="brush_fire"`, `possible_cause="cigarette remains"` and `responding_unit="police patrol"` — `FIRE_002_PHASE_2` step 2 (citizen smoke reports and traffic congestion) currently commits all three. That is the next task, and it is fully provider-independent.
+
+### Task 58 - Grounded Team-Status and Friendly-Forces Extraction (provider-degraded mode; Priority 1)
+
+- **Status:** implemented and verified deterministically. Like Task 57 this path makes no provider call, so it carries no `BLOCKED_BY_PROVIDER` item of its own.
+- **Root cause (Category C, same class as Task 57):** both remaining group-owned extractors matched a loose keyword and then emitted constants copied from FIRE_002_PHASE_1's wording. Unlike a missed extraction, this committed operational facts nobody reported.
+
+**What was being fabricated, measured on the official fixtures.**
+
+- `TeamStatusAgent.extract_report` computed `manpower_count = count or 0`, so any message its headcount pattern missed committed a headcount of **zero**. `FIRE_002_PHASE_2` step 3 — "Ashed 3 vehicle departed... Omri is at a medical check, station manpower reduced" — committed `manpower_count=0`, i.e. "no firefighters at the station", from a message that states no headcount at all.
+- The same extractor returned `reason="routine medical checkup"` for **any** message containing a clock time plus one of `חוזר`/`לצאת`/`משמרת`/`return`/`leave`/`medical`. The reason is the field that decides whether an absence is committed, and it was a constant.
+- `FriendlyForcesAgent.extract_report` triggered its incident branch on `כביש 444`/`route 444` alone and then emitted `incident_kind="brush_fire"`, `size="small"`, `location="Route 444"`, `possible_cause="cigarette remains"`, `cause_status="unverified"`, `responding_unit="police patrol"` and `building_risk="none"`. `FIRE_002_PHASE_2` step 2 — "dozens of citizen reports of thick smoke visible from route 444, traffic congestion developing" — committed every one of those facts, none of which it states.
+- Its advisory branch triggered on the bare words `היערות`/`יערנים`/`forests`/`rangers` and emitted `applies_to`, `patrols` and `active_due_to="heatwave"` as constants.
+
+**Contract now implemented** (the same rule Task 57 established, applied to both agents): a field the message does not state is omitted, and a message whose subject cannot be read is declined so it travels the ordinary intake path rather than committing an invented fact.
+
+- **Headcount.** `_MANPOWER_COUNT` reads an explicit number followed by a personnel word in either language. When no number is stated the field is **absent**, never zero. A message with neither a headcount nor a vehicle count is declined, so a bare readiness word is no longer a resource report.
+- **Vehicle counts.** `_RESOURCE_VOCABULARY` is the single place resource names are matched; `ingest_report` now reuses it instead of re-implementing the same regex against the description.
+- **A vehicle-only report no longer restates the headcount.** `ingest_report` carries the committed `manpower_count` forward when the message states none, and **rejects** the report when nothing is committed yet rather than inventing an anchor. The store's `manpower_count` column is `NOT NULL`, so this is where the "absent means unchanged" semantics has to live.
+- **Absence reason.** `_ABSENCE_REASONS` maps a closed operational vocabulary — medical checkup, reserve duty, illness, leave — read from the message. An absence with no stated reason is declined, which routes it to the Team Status tool's existing reason-clarification path instead of committing a default. The clock-time precondition is gone, because the reason, not the presence of a time, is what makes an absence committable.
+- **Advisory.** Requires an actual prohibition phrase; `applies_to`, `patrols` and `active_due_to` are each emitted only when the message states forests, rangers or a heatwave.
+- **Incident.** Requires an actual fire word, so a road number alone no longer produces one. `incident_kind` is `brush_fire` only when the message says brush fire, otherwise `fire`. `size`, `location` (from a generic `כביש|route|highway` + number pattern), `possible_cause`, `responding_unit` and `building_risk` are each emitted only when stated, and `cause_status="unverified"` only when the cause is actually hedged.
+
+**Measured effect across all seven fixtures (deterministic audit, before → after).**
+
+- Trusted extractions rose from 11 (after Task 57) to **13**, and both remaining fabrications disappeared.
+- Fabrication removed: `FIRE_002_PHASE_2` step 2 is now declined instead of committing a cigarette-caused brush fire with a police patrol; `FIRE_002_PHASE_2` step 3 now yields `resources_count=1` with **no** `manpower_count` instead of committing zero firefighters.
+- Newly and correctly extracted, all previously missed: `SEC_001_PHASE_1` step 1 → attendance, reason `reserve duty`; `SEC_001_PHASE_1` step 6 → attendance, reason `illness`; `SEC_001_PHASE_1` step 3 → incident `fire`, `size=small`, `responding_unit=firefighters`, and correctly **no** `building_risk`, because that message says there is no risk to *agricultural areas*, not to buildings.
+- Grounded extractions preserved unchanged: `FIRE_002_PHASE_1` step 1 (manpower 6, ASHED 3, CARMEL 1), step 2 (medical checkup), step 4 (all four advisory qualifiers, each genuinely stated), step 6 (brush fire, Route 444, cigarette remains, unverified, police patrol, no building risk — every one stated).
+
+**Cumulative effect of Tasks 57 and 58:** trusted extractions across the seven fixtures went from **9 to 13**, and the **five** fabricated extractions that were writing wrong authoritative state are gone. The messages that remain undeclared fall through to the ordinary intake path, which is the designed behaviour and is safe.
+
+- **Files changed:** `agents/team_status_agent.py`, `agents/friendly_forces_agent.py`, `tests/test_task58_grounded_team_and_forces_extraction.py` (new), `docs/file_catalog.md`.
+- **Tests:** 13 new cases — stated headcount and vehicle counts extracted; a message with no headcount never reporting zero; a readiness word alone not being a resource report; the absence reason read across all four categories; no reason invented for a timed shift message; a vehicle-only report carrying the committed headcount forward; a vehicle-only report rejected rather than guessed when nothing is committed; an advisory stating only the qualifiers present; a road number alone no longer being a brush fire; an incident stating only the facts present; a fire without a stated cause or road omitting those fields (including the agricultural-versus-buildings distinction); a non-hedged cause not marked unverified; and a message with neither advisory nor incident declined.
+- **Regression:** the complete offline suite passed **1,810 tests in 279 seconds**. No pre-existing test depended on any of the removed constants. `test_file_catalog.py` and `test_hebrew_leakage.py` remain deselected for the uncommitted `docs/` to `.github/docs/` move.
+- **Known limits recorded, not defects:** `ASHED` and `CARMEL` remain hard-coded resource names in `agents/team_status_agent.py`. They are a domain resource catalogue rather than fixture sentences, but they belong in profile configuration, not in the generic agent — a profile-owned resource catalogue is the right home and is not built here. Messages still declined and awaiting a contract: a surveillance message naming two cameras at once, a camera named in a sabotage report rather than a state change, a camera identified only as "tactical camera from a drone", and the FIRE_002_PHASE_3 emergency/evacuation/HazMat vocabulary, which has no domain contract yet.
+- **Next selected priority:** Priority 2, deterministic authoritative-state correctness. The `FIRE_002_PHASE_3` ingestion failures named in Task 55C are now attributable: those nine steps produce no trusted extraction because no domain contract exists for emergency escalation, evacuation, trapped-person reports, HazMat or external-resource dispatch, so every one of them depends on the provider path. Defining those contracts is provider-independent work, but it is new domain modelling rather than a repair, so the confirmed-evidence rule in the priority list applies: it should follow a decision about which of those categories the product actually needs as first-class state.
+
+### Pending Real-Provider Revalidation — register update after Tasks 57 and 58
+
+Appended rather than edited in place, because `docs/progress.md` is append-only. This supplements
+the register above; the Task 56B and Task 56A items there still stand unchanged.
+
+#### BLOCKED_BY_PROVIDER — Tasks 57 and 58, Browser confirmation of grounded extraction
+
+- **Task:** Tasks 57 and 58 — the trusted group-owned extractors state only what the message grounds.
+- **Exact scenario/step:** the extraction outcome of every step of all seven official fixtures, and
+  specifically the six steps whose behaviour changed: `SEC_001_PHASE_1` steps 1, 2, 3, 6 and 7
+  (newly extracted) and `FIRE_002_PHASE_2` steps 1, 2 and 3 (fabrication removed; now declined or
+  reduced to grounded fields).
+- **Already verified offline:** a deterministic audit harness runs every fixture step through its
+  owning group's `extract_report` with no provider involved, and 29 automated cases across
+  `tests/test_task57_grounded_surveillance_extraction.py` and
+  `tests/test_task58_grounded_team_and_forces_extraction.py` pin both the grounding rules and the
+  declines. Full offline suite: 1,810 passed. Because this path is pure deterministic code, its
+  correctness is fully established offline — what the Browser adds is confirmation of what happens
+  to the messages that are now *declined*.
+- **Still requires OpenRouter:** only the fall-through. A declined message travels the ordinary
+  intake path, which is a provider path, so the end-to-end outcome of a decline cannot be observed
+  while the provider is capped.
+- **Expected validation once access returns:** each newly extracted step commits the grounded state
+  shown in the audit, and each newly declined step reaches a sensible outcome through the ordinary
+  intake path rather than an internal error — in particular `FIRE_002_PHASE_2` step 2 must not
+  produce a brush-fire fact and step 3 must not produce a zero headcount.
+
+### Task 59 - Committed Manpower and Resources Reach the Rendered Picture (provider-degraded mode; Priority 4)
+
+- **Status:** implemented and verified deterministically. The defect and the fix both live in the deterministic renderer, so no provider call is involved and there is no `BLOCKED_BY_PROVIDER` item of its own.
+- **Evidence this came from:** the Task 56A Browser run. `FIRE_002_PHASE_1` step 7 asks the commander question "what is the availability of our forces **and vehicles** under the heatwave", and the answer was "0 available; 1 unavailable; 2 not yet reported; 0 pending identity; 3 total" — no headcount, no vehicles — while the same run had already committed `manpower_count=6` with `ASHED 3` and `CARMEL 1` to the run's authoritative state.
+- **Root cause (Category H, rendering/observability):** `render_typed_snapshot` rendered the team section from the attendance counts only. `TeamSnapshot` already carried `operational_manpower`, `effective_manpower` and `operational_resources`, `_build_team_snapshot` already computed them from the scoped store, and `OperationalContext` already forwarded them to bounded reasoning as `m.om`, `m.em` and `m.rs` — but the deterministic rendering path, which is what a commander actually sees whenever bounded reasoning is unavailable, dropped all three. The state was correct and reachable; only the output was missing it.
+- **Why this is not the attendance line:** roster attendance and reported manpower are different facts. Three roster members answering a daily check is not the same as six firefighters being on station, and the earlier output conflated the absence of one with the absence of the other. Both lines are now rendered, and the attendance line is unchanged.
+- **Implementation:** `render_typed_snapshot` appends a manpower line when `operational_manpower` is committed and a resources line when any resource is committed. Both are optional, so a scope with no committed operational state renders exactly as before. Two catalog keys were added to `messages/en.py` and `messages/he.py` (`orchestrator.picture.typed.manpower`, `orchestrator.picture.typed.resources`), keeping every user-visible string in the catalog as the hard rule requires.
+- **Files changed:** `orchestrator/situational_picture.py`, `messages/en.py`, `messages/he.py`, `tests/test_task59_manpower_rendering.py` (new), `docs/file_catalog.md`.
+- **Tests:** 8 cases — committed manpower rendered, committed resources rendered, nothing rendered when nothing is committed, resources rendered even without a headcount, the attendance line unchanged, both catalogs carrying the new keys, and an end-to-end check that builds the snapshot from a real scoped store (three members, one committed absence, `manpower_count=6`, `ASHED 3`) and asserts the rendered text reports `5 of 6` available with `ASHED-3`. The suite pins the catalog language in an autouse fixture, because another suite leaves the process bound to Hebrew and the assertions are on English strings — that was caught by the full run, not by the isolated one.
+- **Regression:** the complete offline suite passed **1,818 tests in 245 seconds**. `test_file_catalog.py` and `test_hebrew_leakage.py` remain deselected for the uncommitted `docs/` to `.github/docs/` move.
+- **What this does not do:** it does not change what the bounded-reasoning path produces, and it does not add cross-domain synthesis. The commander answer still omits the offline camera, the heat advisory, the KKL fire ban and the roadside fire, because those come from the query-routing and context-assembly gaps (Categories D and E) and from the provider path. This task only ensures that when the deterministic renderer answers, it answers with the manpower and resources the system already holds.
+- **Next selected priority:** the remaining provider-independent candidates are narrowing. The `FIRE_002_PHASE_3` ingestion failures need new domain contracts (emergency escalation, evacuation, trapped persons, HazMat, external resource dispatch) rather than repairs, and the priority list says to model resources only where confirmed scenario evidence requires it — so that should follow a product decision about which of those categories need first-class state. The Category D/E routing and context-assembly work and the Category F SITREP wire contract remain deferred while the provider is capped, since their success criterion is model output.
+
+### Task 60 - Side-Effect-Free Profile Loading / Explicit Bootstrap (provider-degraded mode)
+
+- **Status:** implemented and verified deterministically. No provider call is involved, so this task carries no `BLOCKED_BY_PROVIDER` item.
+- **Decision preserved from the previous cycle:** `FIRE_002_PHASE_1` step 3 keeps **no** location. `"Oranim observation tower"` is not restored, and a location will only be emitted when it is grounded by the incoming report, a trusted entity/location registry, or another authoritative scoped source. Absent beats invented.
+
+**What was actually happening, measured rather than assumed.** Two probes were written for this task, both read-only in effect:
+
+1. An import probe wrapped `sqlite3.connect` and `Path.mkdir` and imported the profile in a clean process. Result: **one** persistent write during import — `_PROFILE_DATA_DIR.mkdir(parents=True, exist_ok=True)` at `profiles/unified_test.py:74`. No SQLite write. `ensure_seed_data()` was already an explicit entry point and was already not called at import, contrary to the initial suspicion.
+2. A pytest plugin recorded every connection to the repository's real `data/` directory during a full suite run. Result: **15 connections** from three tests in `tests/test_profile_simulations.py`. The stacks show why: `load_profile` constructs the profile's agents, and `TeamStatusAgent.__init__`/`open_surveillance_persistence` open their declared stores, which creates schema, inserts the `LIVE` operational-scope row, and runs `reconcile_camera_seed` and `_reconcile_live_drones`. So *loading a profile for inspection* wrote to the real databases, which is exactly the forensic problem: a `LIVE` scope row could be created by a test rather than by any runtime action. This also explains the `LIVE` scope creation timestamps observed during the Task 56C continuity investigation.
+
+**What was changed.**
+
+- **Import is now read-only.** The module-level `mkdir` was removed from **all five** profiles (`unified_test`, `demo`, `friendly_forces`, `sub_agent_surveillance`, `sub_agent_team_status`), not just the one that prompted the task. Declaring a database path is no longer the same as creating its directory.
+- **The store that opens a database creates its directory.** `SQLitePersistence.__init__` now does `Path(db_path).parent.mkdir(parents=True, exist_ok=True)` before `run_migrations`, which is exactly what the surveillance and team-status stores already did. Without this, removing the profile-level `mkdir` would have broken a fresh checkout, because `run_migrations` calls `sqlite3.connect` directly and SQLite will not create a missing parent directory.
+- **Canonical seeding is wired to an explicit bootstrap.** `StackSupervisor.bootstrap()` was added to `run_stack.py` and is called from `start()`. It imports the selected profile, and calls its `ensure_seed_data()` when the profile declares one. The hook is optional, so a profile without it is skipped, and it is idempotent, so a repeated start changes nothing. This closes a real gap: `ensure_seed_data()` existed and its docstring named `run_stack.py` as its intended caller, but **no application code called it at all** — the canonical seed only ever ran because a test happened to invoke it.
+- **Tests no longer reach real data.** The three offending tests in `tests/test_profile_simulations.py` now use a new `isolated_unified_paths` fixture that redirects `DB_PATH`, `UNIFIED_SURVEILLANCE_DB_PATH`, `UNIFIED_TEAM_STATUS_DB_PATH`, `RESETTABLE_DATABASES` and the two agent class paths to `tmp_path`, the same pattern the other unified suites already used.
+
+**What was deliberately not changed:** no database was reset or recreated, no fixture content was touched, `LIVE`/simulation scope semantics are unchanged, Task 50's additive idempotent seed reconciliation and Task 55B's identity/membership repair are untouched (they are still reached through the same code paths, only from an explicit bootstrap rather than an implicit one), provider configuration is untouched, and the user's `docs/` to `.github/docs/` work was not touched.
+
+- **Files changed:** `profiles/unified_test.py`, `profiles/demo.py`, `profiles/friendly_forces.py`, `profiles/sub_agent_surveillance.py`, `profiles/sub_agent_team_status.py`, `persistence/sqlite_store.py`, `run_stack.py`, `tests/test_profile_simulations.py`, `tests/test_task60_side_effect_free_profile_import.py` (new), `docs/file_catalog.md`.
+- **Tests, covering all six required properties:** 16 cases. Importing performs no persistent write — parameterised across all five profiles, each in a subprocess where `sqlite3.connect` and `Path.mkdir` are made fatal, so a write cannot pass unnoticed (1). Reading declared paths is also write-free. Explicit bootstrap still provisions canonical state — `bot-service`, an approved roster containing the declared members, an open cycle, and a reconciled camera seed (2). Bootstrap is idempotent — three consecutive calls leave members and cycle byte-identical (3). Repeated imports and two `importlib.reload` cycles remain side-effect-free (4). Simulation provisioning happens only on an explicit `ensure_simulation_entities` call and not from `load_profile` (5). Importing configuration does not alter the real databases — SHA-256 of every `data/**/*.db` before and after importing all five profiles (6). Plus two cases pinning the supervisor bootstrap hook itself, including that a profile without the hook is skipped.
+- **Regression, and the decisive evidence:** the complete offline suite passed **1,833 tests in 265 seconds**, run with the same real-`data/` probe attached. It reported **0 connections to the real `data/` directory**, down from 15, and the SHA-1 of all three production-like databases was **byte-identical before and after the run**. The probe plugin was removed from the repository afterwards and is not part of the tree. `test_file_catalog.py` and `test_hebrew_leakage.py` remain deselected for the uncommitted `docs/` to `.github/docs/` move.
+- **Consequence for future forensics:** from here, a row or a timestamp in `data/unified_test/` can only originate from an explicit stack start or from a deliberate operator command. Neither importing a module, nor loading a profile in a test, nor running the suite can produce one.
+- **Next selected priority:** re-evaluated from current evidence. Deterministic cross-domain context assembly and rendering completeness is the strongest remaining provider-independent candidate, since Task 59 showed the renderer dropping committed state that the snapshot already carried and the same class of omission may exist for the camera and advisory sections of a commander answer. Remaining ingestion/entity-resolution work is now mostly new domain modelling (FIRE_002_PHASE_3 emergency, evacuation, trapped-person, HazMat and external-resource vocabulary), which the priority list defers until there is confirmed evidence of which categories need first-class state. Provider/SITREP wire-contract work stays untouched while OpenRouter is capped.
+
+### Pending Real-Provider Revalidation — register update after Task 60
+
+No new blocked item. Task 60 is entirely deterministic: importing, loading and bootstrapping a
+profile involve no provider call, and the required evidence (zero real-`data/` connections across a
+full suite run, byte-identical database fingerprints) is reproducible offline.
+
+One existing item gains a note: the Task 56A and 56B Browser validations will now start from a
+cleaner baseline, because a `LIVE` scope row or a seed timestamp in `data/unified_test/` can no
+longer be produced by a test run or a module import. Any row observed during those Browser runs is
+attributable to the run itself.
+
+The register's blocked items are otherwise unchanged:
+- Task 56B — `SEC_001_PHASE_1` steps 1-6 in the Simulator.
+- Task 56A — the six official fixtures other than `FIRE_002_PHASE_1`.
+- Tasks 57 and 58 — the end-to-end outcome of the messages that are now declined.
+
+Deferred while the provider is capped, unchanged: the real-provider SITREP wire-contract repair,
+prompt tuning, model reasoning-quality work, and cross-domain LLM synthesis tuning.
+
+### Task 61 - Situational Scope Completeness for an Explicit Picture Request (provider-degraded mode)
+
+- **Status:** implemented and verified deterministically. The classifier is keyword-based and involves no provider call, so this task carries no `BLOCKED_BY_PROVIDER` item.
+- **Evidence this came from:** the Task 56A Browser run again. `FIRE_002_PHASE_1` step 7 produced an answer containing only the readiness-team section, while the same run had `CAM-02` committed as `offline`. Task 59 fixed the missing manpower line; this task explains the missing camera section, and it turned out not to be a rendering gap at all.
+- **Root cause (Category D, query routing):** `classify_situational_query` treated domain words inside an explicit situational-picture request as a **restriction**. The final branch returned `SituationalQueryScope(team=..., surveillance=..., drones=..., external_reports=..., overall=False)` whenever any domain term matched, discarding the fact that the requester had explicitly asked for a picture. `build_typed_snapshot` only builds the camera section when `overall or surveillance` is set, so the section was never built and the renderer had nothing to render.
+- **Measured, on the fixtures' own commander questions:**
+  - `FIRE_002_PHASE_1` step 7 ("produce me a situational picture for early afternoon: what is the availability of our **forces** and **vehicles** under the heatwave") classified as `team=True, external_reports=True, surveillance=False` — the offline camera could not appear.
+  - `FIRE_002_PHASE_2` step 7 ("show me an urgent situational picture: what is the exact **fire** location, what is the status of the **teams** in the field") classified as `external_reports=True` only — not even the team section, because `צוות` was absent from the team vocabulary.
+- **Fix, kept generic.** An explicit situational-picture request now returns `SituationalQueryScope.overall_scope()` regardless of which domains it also names: asking for a picture is asking for the whole picture, and naming domains inside it is emphasis. The widening is deliberately tied to the **explicit** `_SITUATIONAL_PICTURE_TERMS` only. The generic `_OPERATIONAL_PICTURE_TERMS` wording ("תמונה", "picture", "brief", "סקירה") keeps the bounded behaviour that an earlier task established on purpose, so the explicit flag is captured before that branch can set `has_picture_phrase` for its own reasons.
+- **Vocabulary gap closed at the same time:** `צוות`, `crew` and `team` were added to `_TEAM_SCOPE_TERMS`. `צוות` is ordinary Hebrew for a team or crew and its absence meant a plain "what is the status of the teams in the field?" was not recognised as a team question at all.
+- **What deliberately did not change:** a bare domain question stays bounded to its domain, a daily summary keeps its own bounded scope, the generic picture-plus-signal wording stays bounded to surveillance and external reports, and lifecycle/follow-up questions (an action's status, an approval's status, the weather) are still refused. All four are pinned by tests.
+- **Files changed:** `orchestrator/situational_picture.py`, `tests/test_task61_situational_scope_completeness.py` (new), `docs/file_catalog.md`.
+- **Tests:** 15 cases — both fixture commander questions returning the full scope, the surveillance section being reachable for a manpower-worded picture, three bare domain questions staying bounded, the generic picture wording staying bounded, the daily summary keeping its scope, three non-operational questions still refused, the new team wording recognised in Hebrew and English, an overall request still requiring bounded reasoning, and an end-to-end check that builds a typed snapshot from real scoped stores and asserts the camera section is present with `offline == 1` alongside `operational_manpower == 6`.
+- **Regression:** the complete offline suite passed **1,848 tests in 240 seconds**. The three existing classifier assertions from the earlier routing task pass unchanged. `test_file_catalog.py` and `test_hebrew_leakage.py` remain deselected for the uncommitted `docs/` to `.github/docs/` move.
+- **Combined effect of Tasks 59 and 61 on the step 7 answer:** the deterministic commander answer now builds the camera, drone, team and external-report sections and renders committed manpower and resources alongside attendance. What it still will not do is *reason* across those sections — that is the bounded-reasoning path, which needs the provider.
+- **Next selected priority:** re-evaluated. The deterministic assembly and rendering path is now materially complete for the evidence in hand, so the next provider-independent candidates are weaker: the remaining ingestion gaps are new domain modelling for the `FIRE_002_PHASE_3` emergency vocabulary, which the priority list defers pending a decision on which categories need first-class state, and the observability items need the UI exercised, which currently needs the provider. Work that depends primarily on model output stays deferred.
+
+### Pending Real-Provider Revalidation — register update after Task 61
+
+#### BLOCKED_BY_PROVIDER — Tasks 59 and 61, Browser confirmation of the commander answer
+
+- **Task:** Tasks 59 and 61 together — the deterministic commander answer now builds every section
+  for an explicit situational-picture request and renders committed manpower and resources.
+- **Exact scenario/step:** `FIRE_002_PHASE_1` step 7 and `FIRE_002_PHASE_2` step 7, the two commander
+  DM questions whose classification changed.
+- **Already verified offline:** 23 automated cases across
+  `tests/test_task59_manpower_rendering.py` and
+  `tests/test_task61_situational_scope_completeness.py`, including an end-to-end check that builds a
+  typed snapshot from real scoped stores and asserts the camera section is present with
+  `offline == 1` alongside `operational_manpower == 6`. Full offline suite: 1,848 passed.
+- **Still requires OpenRouter:** the answer the commander actually receives. Both steps are DM
+  questions that travel the situational-picture pipeline, which invokes the model for planning and
+  for bounded reasoning.
+- **Expected validation once access returns:** `FIRE_002_PHASE_1` step 7 returns an answer that
+  names the offline `CAM-02`, the committed manpower of 6 with `ASHED 3` and `CARMEL 1`, and the
+  heat advisory — rather than the readiness-team counts alone.
+
+The register's other blocked items are unchanged: Task 56B (`SEC_001_PHASE_1` steps 1-6), Task 56A
+(the six fixtures other than `FIRE_002_PHASE_1`), and Tasks 57/58 (the end-to-end outcome of the
+messages that are now declined). Deferred while the provider is capped, unchanged: the SITREP wire
+contract, prompt tuning, model reasoning-quality work and cross-domain LLM synthesis tuning.
+
+### Task 62 - Reasoning-Fallback Report Completeness (INVESTIGATED, REVERTED — conflicts with a deliberate Task 54 decision)
+
+- **Status:** a change was implemented, it conflicted with an explicit earlier architectural
+  decision, and it was **reverted in full**. No code, test or catalog entry from it remains. The
+  finding is recorded here as a product decision for the user rather than as an implemented task.
+- **What was found.** `_render_reasoning_fallback` renders the picture that a commander actually
+  receives whenever bounded reasoning is unavailable — which is every answer while the provider is
+  capped. It calls `render_typed_snapshot(..., include_recent_reports=False,
+  include_recommendations=False)`, so the committed operational reports are withheld. That is why
+  `FIRE_002_PHASE_1` step 7 showed no heat advisory, no KKL fire ban and no roadside fire: the
+  answer's shape (title, team line, findings header, no recommendations) matches this function
+  exactly.
+- **Why the change was reverted.** `docs/progress.md` records this as a deliberate Task 54 decision:
+  "when bounded reasoning fails, the renderer returns a concise scoped typed-state summary and does
+  not print the former global recent-event dump", contrasted against the earlier Task 52B behaviour
+  described as "a broad counter/recent-report style response with repeated event material". It is
+  pinned by `tests/test_situational_reasoning.py::test_reasoning_fallback_does_not_render_recent_report_dump`,
+  which the full suite caught immediately. It also matches the standing product principle that a
+  commander answer should avoid repeating many historical rows. Reversing it is a product decision,
+  not a repair, so it was not made unilaterally.
+- **What has changed since that decision was taken, which is why it is worth revisiting.** When Task
+  54 made it, `recent_reports` was closer to a global recent-event dump. It is now bounded on three
+  axes it was not bounded on then: the read is scenario-run scoped, it admits only `outcome
+  = succeeded` events whose classification ends in `_report`, and it is capped by
+  `RECENT_EVENTS_LIMIT`. In the `FIRE_002_PHASE_1` run that would have been four committed
+  operational facts, not a row dump.
+- **What is no longer missing, so this is a narrower question than it first appeared.** Tasks 59 and
+  61 already restored most of what step 7 omitted, without touching this decision: the camera
+  section now builds for an explicit picture request, and committed manpower and resources now
+  render. What the fallback still omits is the advisory and incident facts specifically.
+- **The decision, stated plainly for the user.** Either (a) keep Task 54's rule as it stands and
+  accept that while the provider is capped a commander answer carries state counts and findings but
+  no committed advisory or incident facts; or (b) allow the fallback to render the now-bounded
+  committed reports, on the grounds that they are authoritative state read from the store rather
+  than model output, and update the Task 54 test to pin the new rule. Recommendation: (b), limited
+  to reports and still excluding recommendations, because the original concern was an unbounded
+  global dump and that condition no longer holds. No action will be taken on this without a
+  decision.
+- **Regression after the revert:** the complete offline suite passed **1,848 tests in 238 seconds**,
+  matching the count after Task 61 exactly, which confirms the revert is clean.
+
+### Task 62 - Bounded Scoped Operational Facts in the Deterministic SITREP Fallback (provider-degraded mode)
+
+- **Status:** implemented and verified deterministically. No provider call is involved in this path, so this task carries no `BLOCKED_BY_PROVIDER` item of its own. Supersedes the reverted investigation recorded in the previous Task 62 entry, which is left in place as the record of why the change was not made unilaterally.
+
+**Why Task 54's rendering rule was revised — the upstream contract changed.**
+
+Task 54 recorded: "when bounded reasoning fails, the renderer returns a concise scoped typed-state summary and does not print the former global recent-event dump", contrasted against Task 52B's "broad counter/recent-report style response with repeated event material". That rule was correct for the contract that existed then, when the upstream read behaved like a global recent-event dump.
+
+`recent_reports` is no longer that. By the time it reaches the snapshot it is already:
+- **scoped** — for a simulation run the read is bounded by `scenario_id` *and* `scenario_run_id` rather than by receipt time, so it cannot see another run or LIVE;
+- **succeeded-only** — `_recent_committed_reports` drops any event whose `outcome` is not `succeeded`;
+- **report-only** — it drops any classification that does not end in `_report`;
+- **de-duplicated** by normalised text, **domain-diversified**, and **capped** at `RECENT_EVENTS_LIMIT`.
+
+The original concern therefore no longer applies, and withholding these facts made the answer a commander actually receives while the provider is capped strictly poorer than the state the system already holds. The rule is revised; the invariant that mattered — a commander brief must never become an unbounded chronological dump — is kept and is now tested directly.
+
+**What was implemented.**
+
+- `RecentOperationalReport` gained a typed `domain` field, populated from the owning classification upstream where it was previously computed and discarded. Without it the renderer cannot tell which committed facts a structured section already states.
+- `operational_facts_for_render(snapshot)` selects what a picture should state. It performs **no history lookup of its own** — it reads only the scoped reports already selected into the snapshot — and removes any report whose domain a rendered structured section already reports authoritatively: `surveillance` when a camera section is present, `drone` when a drone section is present, `team_attendance` when a team section is present, and `team_resource` additionally when committed manpower or resources are rendered. The remainder is truncated to `FALLBACK_OPERATIONAL_FACT_LIMIT = 4`, deliberately well below `RECENT_EVENTS_LIMIT = 8`, so the output stays a brief.
+- `render_typed_snapshot` renders through that selection, so the no-duplication and cap rules hold for every caller of the typed render, not only the fallback.
+- `_render_reasoning_fallback` now passes `include_recent_reports=True` and still passes `include_recommendations=False`: facts are stated, nothing is advised when nothing reasoned, and no action is claimed.
+
+**Effect on the evidence that prompted this.** For the `FIRE_002_PHASE_1` run the six committed reports reduce to three stated facts — the roadside brush fire, the KKL fire-lighting prohibition and the low heat alert. The camera, attendance and resource reports are dropped because the camera section, the team line and the manpower/resources lines already state them. Combined with Tasks 59 and 61, the deterministic answer to step 7 now carries the camera state, the committed manpower and resources, and the advisory and incident facts the commander asked about.
+
+**The Task 54 regression test was revised, not deleted.** `test_reasoning_fallback_does_not_render_recent_report_dump` became `test_reasoning_fallback_does_not_render_an_unbounded_recent_event_dump`. Its docstring records why the invariant changed. Its fake history now returns twelve committed reports, and it asserts that at least one and at most `FALLBACK_OPERATIONAL_FACT_LIMIT` are rendered and that no event identifier appears — replacing "never render recent reports" with "never render an unbounded/global recent-event dump".
+
+- **Files changed:** `orchestrator/situational_picture.py`, `tests/test_situational_reasoning.py` (the revised invariant), `tests/test_task62_bounded_operational_facts.py` (new), `docs/file_catalog.md`.
+- **Tests:** 16 new cases covering every proof required — a scoped roadside-fire fact appearing, a scoped advisory/restriction appearing, a significant condition appearing, facts from another run excluded, LIVE facts not leaking into a simulation picture, the scoped read being asked for the run rather than globally, the renderer performing no lookup of its own, failed reports excluded, non-terminal reports excluded, non-report events excluded, camera/team/resource facts not repeated while still stated once by their own sections, those same facts stated when no section represents them, a resource fact appearing when no manpower is committed, the cap enforced at both selection and render level, no recommendation or action fabricated, and no event identifier, source ref or timestamp rendered.
+- **Regression:** the complete offline suite passed **1,864 tests in 241 seconds**. `test_file_catalog.py` and `test_hebrew_leakage.py` remain deselected for the uncommitted `docs/` to `.github/docs/` move.
+- **Next selected priority:** the correction/supersession contract, derived from the fixtures before any implementation. The evidence is two explicit retractions in the official fixtures — `SEC_001_PHASE_3` ("clarification: there is no gunfire at the western gate! the reported gunfire was a warning shot from our own patrol") and `FIRE_002_PHASE_3` ("check at Oranim 14: the house is empty! the children were evacuated earlier by the parents. the trapped-persons report is false"). Both currently produce no trusted extraction, and the risk the next task must address is that a correction must not simply append a contradictory fact while leaving the original authoritative. Evacuation, HazMat, trapped-person and physical-resource lifecycle contracts are explicitly **not** bundled into it.
+
+### Pending Real-Provider Revalidation — register update after Task 62
+
+The Task 59/61 blocked item is amended: the expected validation once OpenRouter access returns now
+also covers the committed operational facts. `FIRE_002_PHASE_1` step 7 should return an answer that
+names the offline `CAM-02`, the committed manpower of 6 with `ASHED 3` and `CARMEL 1`, **and** the
+roadside brush fire, the KKL fire-lighting prohibition and the low heat alert — while rendering at
+most `FALLBACK_OPERATIONAL_FACT_LIMIT` such facts and no event identifiers.
+
+No new blocked item. Task 62 is deterministic end to end and its evidence is reproducible offline.
+
+All other register items are unchanged: Task 56B (`SEC_001_PHASE_1` steps 1-6), Task 56A (the six
+fixtures other than `FIRE_002_PHASE_1`), Tasks 57/58 (the end-to-end outcome of declined messages).
+Deferred while the provider is capped: the SITREP wire contract, prompt tuning, model
+reasoning-quality work and cross-domain LLM synthesis tuning.
+
+### Task 63 (part 1) - Correction / Supersession Contract, Derived From the Fixtures
+
+Derivation only. No code was changed by this entry. It exists so the implementation that follows is
+bound to evidence rather than to a design invented up front.
+
+**Why this is now urgent rather than merely missing.** Task 62 allows the deterministic picture to
+state committed operational facts. A report that has since been retracted is still a committed
+`succeeded` `*_report` event, so today it would be presented to a commander as a current fact. The
+gap the priority list named — "corrections must not simply append another contradictory fact while
+leaving the old fact authoritative" — is therefore live, and it is live specifically because of the
+previous task.
+
+#### The evidence: two retractions in the official fixtures
+
+`SEC_001_PHASE_3`
+- step 2, `2026-09-08T08:52:00Z`, group `response_team`: residents report continuous gunfire at the **western gate**.
+- step 5, `2026-09-08T09:00:00Z`, group `external_forces`: "clarification: **there is no gunfire at the western gate**. The gunfire reported was a warning shot from our own patrol in the eastern orchards. Do not split forces west."
+- step 10 asks the commander question that depends on this: produce a full incident summary including "the failures / **false reports** that occurred".
+
+`FIRE_002_PHASE_3`
+- step 3, `2026-09-09T13:07:00Z`, group `fire_response_team`: **two children trapped** on the roof at **Oranim 14**.
+- step 5, `2026-09-09T13:14:00Z`, group `fire_external_forces`: "check at **Oranim 14**: the house is empty! The children were evacuated earlier by the parents. **The trapped-persons report is false.**"
+- step 9 again asks for "identification of the **false reports**".
+
+#### What the evidence establishes
+
+1. **A correction is a report, never an action.** Both are plain group messages. Neither requests anything, and neither is an approval. So a correction follows the passive report path: canonical extraction, domain projection, terminal report result. It must not create a ToolReceipt, an action state or an approval hold.
+2. **A correction crosses group and domain boundaries.** In both cases the correcting group is not the reporting group (`external_forces` corrects `response_team`). Supersession therefore must not be gated on group ownership. Task 53's rule that a group's own reports are not reassigned to another domain is untouched: the correction is classified in its own right, it does not re-classify its target.
+3. **The target is named by subject, not by identifier.** "the western gate", "Oranim 14". No reply metadata, no event id, no `source_message_id` linkage exists in the transport. Resolution has to be by the named subject.
+4. **The original must survive.** Both fixtures end with a commander asking to identify the false reports. A retracted report that were deleted, or whose text were rewritten, could not answer that question, and deleting it would breach the never-from-memory rule. The original event stays, with its `raw_text`, its `outcome` and its provenance intact — it *did* succeed as an ingestion; what changed is that it is no longer current.
+5. **The correction carries its own new fact.** "the gunfire was a warning shot from our own patrol in the eastern orchards"; "the children were evacuated earlier by the parents". A correction is therefore not only a negation — it is itself a committed fact.
+6. **Ordering is operational.** A correction can only retract something already reported, so the comparison uses the operational clock established in Task 56A, not the runtime receipt.
+
+#### The contract
+
+**Unit.** Supersession links two `events` in the same `OperationalScope`: the *superseded* report and the *superseding* correction.
+
+**Storage** (additive, migration 26, no row rewritten or deleted):
+- `events.superseded_by_event_id TEXT` on the retracted report.
+- `events.supersedes_event_id TEXT` on the correction.
+- `events.supersession_kind TEXT` — a closed set, `retraction` (the reported fact did not occur) or `correction` (the fact occurred but was misreported). Both fixtures are `retraction`; `correction` is declared because the SEC case also restates the fact differently, and the distinction must not be invented later by widening a literal.
+
+**Resolution, and its refusal to guess.** A correction resolves its target among committed `*_report` events that are: in the **same operational scope**; at or before the correction's **operational time**; not already superseded. The named subject is matched against those events' description and entities. Exactly one match supersedes it. **Zero or more than one match supersedes nothing** — the correction is still committed as its own operational fact and records that its target was unresolved. This is the same discipline as Tasks 57 and 58: absent beats wrong, and silently retracting the wrong report is worse than retracting none.
+
+**Effect on current state.** A superseded report stops being a current fact: it is excluded from the scoped `recent_reports` that feed the operational picture, so it can no longer be stated to a commander as current. It remains fully present in history and audit, and the supersession link is what makes "which reports were false?" answerable.
+
+**Isolation.** Supersession never crosses an `OperationalScope`. A LIVE report cannot be retracted by a simulation report, nor the reverse, and a report in one simulation run cannot be retracted from another.
+
+**Non-goals, explicitly out of this contract.** Evacuation state, HazMat state, trapped-person state, incident aggregation, and any physical resource lifecycle. Each is its own domain contract and the priority list requires them to be handled one at a time. This contract covers only the supersession relationship and its effect on what is current.
+
+### Task 63 (part 2) - Correction / Supersession Implementation (provider-degraded mode)
+
+- **Status:** the contract derived in part 1 is implemented and verified deterministically. This path involves no provider call. One piece is explicitly **not** done and is listed as the follow-up: wiring the resolution into live report ingestion.
+- **Note on numbering:** an older `tests/test_task63_fire_end_to_end.py` already exists from the previous numbering series, which restarted at Task 52. The files do not collide, but the label is reused.
+
+**Storage — migration 26, additive and idempotent.** `events` gained `superseded_by_event_id`, `supersedes_event_id` and `supersession_kind`, plus an index on the first. Migration 26 routes through the existing `_repair_required_columns` path rather than a raw `ALTER`, so it is safe on a fresh database whose DDL already carries the columns and safe to re-run; verified by opening a new database, checking `PRAGMA user_version = 26`, and reopening. No row is deleted or rewritten by the migration.
+
+**`SQLitePersistence.record_supersession(...)`** is the only way the link is written. It enforces at the persistence boundary, not in a caller:
+- both events must exist, otherwise `NotFoundError`;
+- both must be in the **same operational scope** — the `(scenario_id, scenario_run_id)` pair must match, so a LIVE report can never be retracted by a simulation report, nor a report in one run by a correction in another;
+- an event cannot supersede itself;
+- a report already superseded by a **different** correction is refused rather than relinked;
+- re-recording the **same** link returns `False` instead of raising, so a replayed correction is safe;
+- `kind` must be in the closed set `{retraction, correction}`.
+
+**`orchestrator/supersession.py`** resolves what a correction retracts. `classify_correction` recognises a retraction (an explicit false-report/negation statement) or a correction (a clarification with no negation) from generic vocabulary in both languages — no scenario, place name or fixture sentence appears in it. `resolve_superseded_event` then considers only committed reports that are in the same scope, `succeeded`, classified `*_report`, not already superseded, and **at or before the correction on the operational clock** (Task 56A's business clock, not the runtime receipt). It scores distinctive shared subject tokens against a stopword list and requires at least two. **Exactly one best match retracts it; zero or a tie retracts nothing** and the resolution reports `no_match` or `ambiguous` with the tied candidates. This is the same discipline as Tasks 57 and 58: silently retracting the wrong report is worse than retracting none.
+
+**Effect on current state.** `_recent_committed_reports` now skips any event carrying `superseded_by_event_id`, so a retracted report can no longer reach the operational picture that Task 62 lets a commander see. It remains fully present in history with its `raw_text`, its `outcome` and its provenance, which is what makes the commander question both fixtures end on — "identify the false reports" — answerable at all.
+
+**Verified against the real fixture pairs, not invented examples.** `SEC_001_PHASE_3` step 5 classifies as a retraction and resolves to step 2's gunfire report while correctly *not* resolving to step 3's gunshot-casualty report, which shares the word for gunfire. `FIRE_002_PHASE_3` step 5 classifies as a retraction and resolves to step 3's trapped-children report. In both, the correcting group differs from the reporting group, confirming that supersession is scope-gated but never group-gated.
+
+- **Files changed:** `persistence/schema.py` (migration 26 and the events DDL), `persistence/sqlite_store.py` (`record_supersession`, the new columns, the closed kind set), `persistence/contracts.py` (the interface method), `orchestrator/supersession.py` (new), `orchestrator/situational_picture.py` (retracted reports excluded from current facts), `tests/test_task63_correction_supersession.py` (new), `docs/file_catalog.md`.
+- **Tests:** 23 cases — both fixture retractions recognised; an ordinary report not treated as a correction; a clarification without a negation classified as `correction` rather than `retraction`; both fixture pairs resolving to the right target; nothing retracted on no match; nothing retracted on a tie, with the tied candidates reported; a report later than the correction on the operational clock never retracted; already-superseded, failed, non-terminal and non-report candidates all ineligible; a non-correction resolving nothing; the link written on both sides with the original preserved; idempotent re-recording; refusal across operational scopes; refusal across simulation runs; refusal to retract twice; refusal to self-supersede; refusal of an unknown kind; a missing event raising rather than passing silently; a retracted report no longer appearing as a current fact while the correction still does; and the retracted report still readable from history.
+- **Regression:** the complete offline suite passed **1,887 tests in 252 seconds**. `test_file_catalog.py` and `test_hebrew_leakage.py` remain deselected for the uncommitted `docs/` to `.github/docs/` move.
+- **Deliberately not done, and why.** The resolution is not yet called from report ingestion, so a correction arriving through the live pipeline does not yet retract anything by itself. That wiring needs a decision this task should not make alone: the two fixture corrections currently produce **no trusted group-owned extraction**, so they reach ingestion only through the provider path, which is capped. Wiring resolution into ingestion while it cannot be exercised end to end would add an unverifiable path. The mechanism, its storage and its effect on the picture are complete and independently verified; connecting them is the next narrow step once either a deterministic correction extractor is added or the provider returns.
+- **Explicitly out of scope, unchanged:** evacuation, HazMat, trapped-person state, incident aggregation and physical resource lifecycle. Each is its own domain contract, to be handled one at a time.
+
+### Pending Real-Provider Revalidation — register update after Task 63
+
+#### BLOCKED_BY_PROVIDER — Task 63, corrections reaching ingestion
+
+- **Task:** Task 63 — correction/supersession.
+- **Exact scenario/step:** `SEC_001_PHASE_3` steps 2 and 5, and `FIRE_002_PHASE_3` steps 3 and 5.
+- **Already verified offline:** 23 cases pinning recognition, safe resolution against both real
+  fixture pairs, scope-isolated storage and the effect on current facts. Full suite: 1,887 passed.
+- **Still requires OpenRouter:** all four steps currently produce no trusted group-owned extraction,
+  so they reach ingestion only through the provider path. The resolution is therefore not yet wired
+  into ingestion — see the task entry for why that was left undone rather than added unverifiable.
+- **Expected validation once access returns:** sending `SEC_001_PHASE_3` steps 1-5 in the Simulator
+  leaves step 2's gunfire report carrying `superseded_by_event_id` pointing at step 5, step 5
+  carrying `supersedes_event_id` pointing at step 2, the gunfire fact absent from the commander
+  picture at step 5's operational time, and both events still readable from history.
+
+All other register items are unchanged.
+
+### Task 64 - Deterministic Correction / Retraction Intake and Ingestion Wiring (provider-degraded mode)
+
+- **Status:** implemented and verified deterministically, plus a partial real Browser check. Task 63 built the mechanism; this connects it to intake so a clearly expressed correction reaches it without a provider.
+
+**A correctness fix that had to come first.** Task 63's `classify_correction` treated a bare negation as a retraction, so "there are no casualties" would have been read as withdrawing an earlier casualty report. That is exactly the over-classification to avoid. The vocabulary is now three separate classes and a retraction needs real evidence: an unambiguous falsity statement (`דיווח שווא`, `סרק`, `אזעקת שווא`, `false report`, `false alarm`, `disregard`, `stand down`), **or** a negation/cancellation that is explicitly tied to an earlier report (`הדיווח`, `שדווח`, `דיווח קודם`, `previous report`, `the report about`) or to a correction marker (`הבהרה`, `תיקון`, `clarification`, `correction`). A correction marker alone still yields the weaker `correction` kind. Verified that `אין נפגעים`, `אין סיכון למבנים`, `אין דליפת חומ"ס`, "There are no casualties at the scene" and both original fixture reports all classify as **not** a correction.
+
+**Intake.** `_trusted_correction_extraction` runs first inside `_trusted_group_extraction`, before any domain extractor. A correction is a statement *about* an earlier report rather than a domain report, so classifying it in the group owner would be wrong twice over: the owner would not recognise it, and `_normalize_group_owned_extraction` would rewrite its type into the owner's domain. Recognising it first keeps the canonical `correction_report` type intact and keeps the rule group-independent, which matters because both fixture corrections come from a different group than the report they retract. The profile opts in by declaring `correction_report` among its event types; where it does not, the path is inert and the message takes the ordinary route. The extraction states only `correction_kind`, grounded in the message — no event id, report id, location, cause, actor or timestamp is invented.
+
+**Ingestion.** `_commit_report_domain_state` routes a `correction_report` to `_commit_correction_report` before the domain-agent loop, since no domain owns it. That reads candidates through `EventSearchCriteria` bounded to the correction's own operational scope — `time_basis="received_at"`, because every committed event has a receipt time while `occurred_at` may be unset and would silently drop candidates; the **operational** ordering that decides what may be retracted is applied by the Task 63 resolver, not by the lookup. A LIVE correction additionally filters out any row carrying a simulation run id, so it can never reach into a run. The lookup is capped at `CORRECTION_CANDIDATE_LIMIT = 50`.
+
+The correction is **always** committed as its own operational fact. Retraction is a separate effect that happens only when the resolver returns exactly one target. `target_status` records what happened — `resolved`, `no_match`, `ambiguous` (with `ambiguous_candidate_count`) or `link_refused` — and an unresolved correction retracts nothing rather than picking the closest report. A replayed correction that already carries `supersedes_event_id` reports that existing link instead of re-resolving, which the test suite caught: re-resolving would otherwise attach it to a *different* report, because its original target is no longer an eligible candidate.
+
+**Verified against the real fixture pairs through the real ingestion functions.** `SEC_001_PHASE_3` step 5 retracts step 2's gunfire report and **not** step 3's gunshot-casualty report, which shares the word for gunfire — the case the task called out specifically. `FIRE_002_PHASE_3` step 5 retracts step 3's trapped-children report and not step 1's flames report. Both originals keep their `raw_text` and `outcome`.
+
+- **Files changed:** `orchestrator/supersession.py` (three-class vocabulary, the canonical type constant), `orchestrator/flows.py` (correction extraction, scoped candidate lookup, correction ingestion, replay handling), `profiles/unified_test.py` (declares `correction_report`), `tests/test_task64_correction_intake.py` (new), `docs/file_catalog.md`.
+- **Tests:** 23 new cases — explicit correction phrase producing a typed extraction; an explicit cancel phrase; a clarification without negation classified as `correction`; six ordinary negative or plain reports **not** becoming corrections; the path inert when the profile does not declare the type; a correction recognised before any domain extractor, with the domain extractor asserted never to run; both fixture pairs resolving to the intended target and not to the vocabulary-overlapping neighbour; a cross-group correction within one scope retracting normally; no match retracting nothing; an ambiguous subject retracting nothing with the candidate count recorded; a correction unable to reach another run; a LIVE correction unable to retract a simulation report; a repeated correction idempotent; a second correction not relinking an already-retracted report; both records remaining in history; the retracted report leaving current operational facts; and a guard asserting no fixture sentence or place name appears in the intake source.
+- **Regression:** the complete offline suite passed **1,910 tests in 290 seconds**. `test_file_catalog.py` and `test_hebrew_leakage.py` remain deselected for the uncommitted `docs/` to `.github/docs/` move.
+
+**Real Browser / Simulator check, and its exact boundary.** The stack was started and the log confirms Task 60's explicit bootstrap running before the children (`Profile seed reconciled for profiles.unified_test`). `FIRE_002_PHASE_1` steps 1 and 2 were sent one at a time through the real Simulator button and both reached `succeeded` — `team_resource_report` and `team_attendance_report`. That is a meaningful restraint check in the live pipeline: ordinary reports travelling the same newly-reordered intake were **not** misread as corrections, and the run recorded zero `correction_report` events and zero supersession links.
+
+**The correction steps themselves were not exercised in the browser, and this is not claimed.** Both fixture corrections are step 5 of a phase-3 scenario, and steps 1-4 of those scenarios produce no trusted extraction, so they reach ingestion only through the provider path, which is capped. The Simulator sends steps in order, so step 5 cannot be reached. Worth recording precisely: the correction intake itself is **not** provider-dependent — `prepare_fast_path_report` returns the trusted extraction before any model call — so once the prerequisite reports can commit, the correction will complete deterministically. What is blocked is the prerequisite, not the mechanism.
+
+- **Next selected priority:** re-evaluated from the audit. The remaining undeclared fixture messages cluster into evacuation, trapped-person, HazMat and external-resource dispatch vocabulary, plus suspicious-vehicle and intrusion reporting in SEC. Each is a separate domain contract and the instruction is one at a time. The strongest single candidate on current evidence is **first-class incident/evidence semantics**, because the SEC phase 3 and FIRE phase 3 messages are overwhelmingly reports *about one evolving incident*, and several later steps only make sense relative to an incident identity that does not yet exist. That contract should be derived from the fixtures before implementation, the way Task 63's was.
+
+### Pending Real-Provider Revalidation — register update after Task 64
+
+#### BLOCKED_BY_PROVIDER — Task 64, the correction pairs in the Simulator
+
+Replaces the Task 63 entry, which said the resolution was not yet wired into ingestion. It now is.
+
+- **Task:** Task 64 — deterministic correction/retraction intake and ingestion wiring.
+- **Exact scenario/step:** `SEC_001_PHASE_3` steps 1-5 and `FIRE_002_PHASE_3` steps 1-5.
+- **Already verified offline:** 46 cases across `tests/test_task63_correction_supersession.py` and
+  `tests/test_task64_correction_intake.py`, including both fixture pairs driven through the real
+  extraction and ingestion functions against a real SQLite store. Full suite: 1,910 passed.
+- **Already verified in the real browser:** the stack boots with the Task 60 bootstrap, and
+  `FIRE_002_PHASE_1` steps 1-2 commit through the real Simulator with zero `correction_report`
+  events and zero supersession links — ordinary reports are not misread as corrections by the
+  reordered intake.
+- **Still requires OpenRouter, and precisely why:** the correction intake is **not** itself
+  provider-dependent; `prepare_fast_path_report` returns the trusted extraction before any model
+  call. What is blocked is the **prerequisite**: steps 1-4 of both phase-3 scenarios produce no
+  trusted extraction and so need the provider to commit, and the Simulator sends steps in order, so
+  step 5 cannot be reached.
+- **Expected validation once access returns:** after sending `SEC_001_PHASE_3` steps 1-5 one at a
+  time, step 2's event carries `superseded_by_event_id` pointing at step 5, step 5 carries
+  `supersedes_event_id` pointing at step 2 with `supersession_kind='retraction'`, step 3's casualty
+  report is untouched, the gunfire fact is absent from the commander picture, and both events remain
+  readable from history. The same shape for `FIRE_002_PHASE_3` steps 3 and 5.
+
+All other register items are unchanged.

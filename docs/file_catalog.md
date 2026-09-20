@@ -134,6 +134,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `orchestrator/reasoning.py` | Production | Private implementation | Prompts and parses Main/Insights decisions, questions, selection, formulation, and judgment. |
 | `orchestrator/response_contract.py` | Production | Private implementation | Defines response provenance and authority validation for user-visible claims. |
 | `orchestrator/situational_picture.py` | Production | Private implementation | Builds the multi-domain picture and defines typed camera/drone/team state, verified operational findings, source provenance, consistency checks, and localized deterministic rendering. |
+| `orchestrator/supersession.py` | Production | Private implementation | Recognises a correction or retraction and resolves the one committed report it supersedes, refusing to guess when the target is absent or ambiguous. |
 | `persistence/__init__.py` | Production | Public facade | Exposes persistence contracts, constructors, and compatibility aliases. |
 | `persistence/contracts.py` | Production | Private implementation | Defines persistence interfaces and domain errors. |
 | `persistence/schema.py` | Production | Private implementation | Owns immutable migration DDL and the current SQLite schema. |
@@ -141,6 +142,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `persistence/runtime_cleanup.py` | Production | Private implementation | Provides the scoped unified-test runtime-history cleanup maintenance operation. |
 | `persistence/surveillance_contracts.py` | Production | Private implementation | Defines camera, drone, and surveillance-mission persistence contracts. |
 | `persistence/operational_scope.py` | Production | Private implementation | Defines the canonical LIVE and simulation-run identity used by current authoritative state. |
+| `persistence/operational_time.py` | Production | Private implementation | Defines the canonical split between operational (business) time and runtime lifecycle time for one operational world. |
 | `persistence/surveillance_store.py` | Production | Private implementation | Implements the isolated SQLite surveillance store. |
 | `persistence/team_status_contracts.py` | Production | Private implementation | Defines the database-agnostic readiness-team status persistence contract and constructor. |
 | `persistence/team_status_store.py` | Production | Private implementation | Implements the isolated SQLite store for readiness-team roster and attendance state. |
@@ -216,6 +218,16 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_group_owned_report_ingestion.py` | Test | Internal | Verifies trusted group-owner report ingestion and terminal outcomes. |
 | `tests/test_task53_group_owned_report_contract.py` | Test | Internal | Verifies Task 53 canonical group-owned operational report classification, extraction normalization, and non-attendance projection. |
 | `tests/test_task55b_identity_scope.py` | Test | Internal | Verifies canonical identity provenance, scope-bound membership, and idempotent legacy LIVE repair. |
+| `tests/test_task56a_operational_time.py` | Test | Internal | Verifies operational-versus-runtime clock ownership, attendance lateness, bounded availability intervals, and the idempotent reported_at backfill. |
+| `tests/test_task56b_cross_day_attendance.py` | Test | Internal | Verifies which operational window owns an attendance report across operational days, and that cycle creation stays with the scheduler. |
+| `tests/test_task57_grounded_surveillance_extraction.py` | Test | Internal | Verifies that the trusted surveillance extractor resolves any inventory camera generically and never asserts a status, shutdown type, reason, location or severity the message does not state. |
+| `tests/test_task58_grounded_team_and_forces_extraction.py` | Test | Internal | Verifies that the team-status and friendly-forces extractors never substitute a headcount, absence reason, incident cause or responding unit the message does not state. |
+| `tests/test_task59_manpower_rendering.py` | Test | Internal | Verifies that committed manpower and resources reach the rendered operational picture and that the attendance line is unchanged. |
+| `tests/test_task60_side_effect_free_profile_import.py` | Test | Internal | Verifies that importing any profile performs no persistent write, that the explicit stack bootstrap still seeds idempotently, and that simulation provisioning needs an explicit call. |
+| `tests/test_task61_situational_scope_completeness.py` | Test | Internal | Verifies that an explicit situational-picture request returns every section while bare domain questions and generic picture wording stay bounded. |
+| `tests/test_task62_bounded_operational_facts.py` | Test | Internal | Verifies that the deterministic fallback states scoped, succeeded, capped committed facts without duplicating structured sections, leaking other runs, or fabricating recommendations. |
+| `tests/test_task63_correction_supersession.py` | Test | Internal | Verifies correction/retraction recognition, safe target resolution, scope-isolated supersession storage, and that a retracted report stops being current while staying in history. |
+| `tests/test_task64_correction_intake.py` | Test | Internal | Verifies deterministic correction intake, restraint against ordinary negative reports, fixture-pair resolution, scope isolation, idempotence and the effect on current facts. |
 | `tests/test_group_routing.py` | Test | Internal | Verifies the group routing table, staleness refresh, scope resolution, and dependency scoping. |
 | `tests/test_history_agent.py` | Test | Internal | Verifies history agent behavior and edge cases. |
 | `tests/test_history_event_pipeline.py` | Test | Internal | Verifies extraction, time normalization, and durable history writes. |

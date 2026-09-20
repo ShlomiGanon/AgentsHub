@@ -1063,6 +1063,10 @@ MESSAGES = {
         "{not_reported} not reported; {pending_identity} pending identity; {total} total."
     ),
     "orchestrator.picture.typed.team_unknown": "Readiness team: data unavailable.",
+    "orchestrator.picture.typed.manpower": (
+        "Manpower: {effective} of {reported} reported personnel currently available."
+    ),
+    "orchestrator.picture.typed.resources": "Resources: {resources}.",
     "orchestrator.picture.typed.findings_header": "Operational findings:",
     "orchestrator.picture.typed.recommendations_header": "Recommended next actions:",
     "orchestrator.picture.typed.finding_line": "- {text}",

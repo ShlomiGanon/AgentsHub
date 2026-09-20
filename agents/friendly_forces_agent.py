@@ -8,6 +8,33 @@ from agents.contracts import ReportIngestionResult, project_report_facts
 from agents.runtime import Agent, tool
 
 
+# Domain vocabulary for the trusted group-owned extraction path — how an
+# external force states an advisory or an incident, in either language. It
+# carries no scenario, road number or unit name, so a fixture exercises this
+# path without defining it.
+_FIRE_BAN = re.compile(
+    r"איסור הדלקת|איסור אש|fire ban|no.?burn|fire.?lighting prohibition",
+    re.IGNORECASE,
+)
+_FORESTS = re.compile(r"יערות|יער|forests?", re.IGNORECASE)
+_RANGERS = re.compile(r"יערנים|rangers?", re.IGNORECASE)
+_HEATWAVE = re.compile(r"שרב|גל חום|heatwave|heat wave", re.IGNORECASE)
+
+_FIRE_INCIDENT = re.compile(r"שריפה|שריפת|\bfire\b", re.IGNORECASE)
+_BRUSH_FIRE = re.compile(r"שריפת קוצים|brush fire", re.IGNORECASE)
+_SIZE_SMALL = re.compile(r"קטנה|קטן|\bsmall\b", re.IGNORECASE)
+_SIZE_LARGE = re.compile(r"גדולה|גדול|\blarge\b|\bmajor\b", re.IGNORECASE)
+_ROUTE_NUMBER = re.compile(r"(?:כביש|route|highway)\s*(\d{1,4})\b", re.IGNORECASE)
+_CIGARETTE = re.compile(r"סיגריה|מסיגריה|cigarette", re.IGNORECASE)
+_HEDGED = re.compile(r"כנראה|ייתכן|חשד|possibly|likely|suspected|probably", re.IGNORECASE)
+_POLICE_PATROL = re.compile(r"ניידת|משטרה|police|patrol car", re.IGNORECASE)
+_FIREFIGHTERS = re.compile(r"כיבוי|כבאים|firefighters?|fire crews?", re.IGNORECASE)
+_NO_BUILDING_RISK = re.compile(
+    r"אין סיכון\s+(?:ל|למ)?מבנים|no risk to buildings|no structures? at risk",
+    re.IGNORECASE,
+)
+
+
 class FriendlyForcesAgent(Agent):
     name = "friendly_forces_agent"
     # Friendly-forces groups own intelligence reports.  The event itself is
@@ -36,23 +63,68 @@ class FriendlyForcesAgent(Agent):
         super().__init__(model, api_key)
 
     def extract_report(self, raw_text: str, *, received_at: str, scenario_time: str | None = None, **_) -> ExtractionResult | None:
+        """Extract only the advisory or incident facts the message itself states.
+
+        A field the message does not support is omitted, and a message whose
+        subject cannot be read is declined so it travels the ordinary intake
+        path rather than committing an invented operational fact.
+        """
+
         from history import ExtractionResult
         text = str(raw_text or "")
-        normalized = text.casefold()
-        if re.search(r"\u05d0\u05d9\u05e1\u05d5\u05e8 \u05d4\u05d3\u05dc\u05e7\u05ea|\u05d4\u05d9\u05e2\u05e8\u05d5\u05ea|\u05d9\u05e2\u05e8\u05e0\u05d9\u05dd|fire.?lighting|forests|rangers", normalized):
-            fields = {
-                "advisory_kind": "fire_lighting_prohibition", "applies_to": "forests in area",
-                "patrols": "rangers", "status": "active", "active_due_to": "heatwave",
-            }
-            return ExtractionResult("friendly_forces_report", "trusted", "central_hub", (), text, "low", scenario_time or received_at, False, (), business_fields=fields)
-        if re.search(r"\u05e9\u05e8\u05d9\u05e4\u05ea \u05e7\u05d5\u05e6\u05d9\u05dd|\u05db\u05d1\u05d9\u05e9\s*444|brush fire|route\s*444", normalized):
-            fields = {
-                "incident_kind": "brush_fire", "size": "small", "location": "Route 444",
-                "possible_cause": "cigarette remains", "cause_status": "unverified",
-                "responding_unit": "police patrol", "building_risk": "none",
-            }
-            return ExtractionResult("friendly_forces_report", "trusted", "central_hub", (), text, "low", scenario_time or received_at, False, (), business_fields=fields)
-        return None
+        occurrence = scenario_time or received_at
+
+        fields = self._advisory_fields(text) or self._incident_fields(text)
+        if fields is None:
+            return None
+
+        return ExtractionResult(
+            "friendly_forces_report", "trusted", "central_hub", (), text, "low", occurrence, False, (),
+            business_fields=fields,
+        )
+
+    @staticmethod
+    def _advisory_fields(text: str) -> dict | None:
+        if not _FIRE_BAN.search(text):
+            return None
+
+        fields = {"advisory_kind": "fire_lighting_prohibition", "status": "active"}
+        if _FORESTS.search(text):
+            fields["applies_to"] = "forests in area"
+        if _RANGERS.search(text):
+            fields["patrols"] = "rangers"
+        if _HEATWAVE.search(text):
+            fields["active_due_to"] = "heatwave"
+        return fields
+
+    @staticmethod
+    def _incident_fields(text: str) -> dict | None:
+        if not _FIRE_INCIDENT.search(text):
+            return None
+
+        fields = {"incident_kind": "brush_fire" if _BRUSH_FIRE.search(text) else "fire"}
+        if _SIZE_SMALL.search(text):
+            fields["size"] = "small"
+        elif _SIZE_LARGE.search(text):
+            fields["size"] = "large"
+
+        route = _ROUTE_NUMBER.search(text)
+        if route:
+            fields["location"] = f"Route {route.group(1)}"
+
+        if _CIGARETTE.search(text):
+            fields["possible_cause"] = "cigarette remains"
+        if fields.get("possible_cause") and _HEDGED.search(text):
+            fields["cause_status"] = "unverified"
+
+        if _POLICE_PATROL.search(text):
+            fields["responding_unit"] = "police patrol"
+        elif _FIREFIGHTERS.search(text):
+            fields["responding_unit"] = "firefighters"
+
+        if _NO_BUILDING_RISK.search(text):
+            fields["building_risk"] = "none"
+        return fields
 
     def ingest_report(self, event: dict, *, scope=None) -> ReportIngestionResult:
         if event.get("classification") != self.default_report_type:

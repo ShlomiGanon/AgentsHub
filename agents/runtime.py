@@ -264,6 +264,7 @@ def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> 
         "source_message_id",
         "original_text",
         "received_at",
+        "reported_at",
         "availability_start",
         "availability_end",
     }

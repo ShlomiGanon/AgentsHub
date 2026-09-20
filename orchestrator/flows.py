@@ -108,8 +108,18 @@ from orchestrator.group_routing import (  # re-exported: api may only import orc
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
 from protocols import CriticalityLevel, Step, StepOutcome
 from protocols.executor import execute_steps
-from agents import authenticated_request_identity, trusted_event_metadata, ToolReceipt, ReportIngestionResult
-from persistence import scope_from_event
+from agents import authenticated_request_identity, trusted_event_metadata, project_report_facts, ToolReceipt, ReportIngestionResult
+from orchestrator.supersession import (
+    CORRECTION_REPORT_TYPE,
+    RETRACTION,
+    classify_correction,
+    resolve_superseded_event,
+)
+
+# How far back a correction may look for the report it retracts. Bounded so the
+# lookup stays a lookup and never becomes a scan of the whole history.
+CORRECTION_CANDIDATE_LIMIT = 50
+from persistence import EventSearchCriteria, operational_timestamp_of_event, scope_from_event
 from tools import get_trace_id
 
 if TYPE_CHECKING:
@@ -498,7 +508,50 @@ def _apply_attendance_temporal_fields(
     return replace(extraction_result, missing_fields=missing)
 
 
+def _trusted_correction_extraction(deps: FlowDeps, raw_text: str, received_at: str, reference_time: str | None):
+    """Recognize a clearly expressed correction before any domain extractor.
+
+    A correction is not a domain report — it is a statement about an earlier
+    one — so it is classified here rather than inside the group owner, and it
+    keeps its own type instead of being normalized into the owner's domain.
+    The profile opts in by declaring the type; where it does not, this path is
+    inert and the message takes the ordinary intake route.
+
+    The cue must be explicit. An ordinary negative report ("there are no
+    casualties") is a fact about the present, not a withdrawal of an earlier
+    report, and must fall through rather than be guessed at.
+    """
+
+    is_valid = getattr(deps.event_type_registry, "is_valid", lambda value: True)
+    if not is_valid(CORRECTION_REPORT_TYPE):
+        return None
+
+    kind = classify_correction(raw_text)
+    if kind is None:
+        return None
+
+    from history import ExtractionResult
+
+    text = str(raw_text or "")
+    return ExtractionResult(
+        CORRECTION_REPORT_TYPE,
+        "trusted",
+        None,
+        (),
+        text,
+        "low",
+        reference_time or received_at,
+        False,
+        (),
+        business_fields={"correction_kind": kind},
+    )
+
+
 def _trusted_group_extraction(deps: FlowDeps, raw_text: str, received_at: str, reference_time: str | None, scope=None):
+    correction = _trusted_correction_extraction(deps, raw_text, received_at, reference_time)
+    if correction is not None:
+        return correction
+
     owner_name = getattr(deps, "group_owner", None)
     if not owner_name:
         return None
@@ -1004,6 +1057,119 @@ def _normalize_group_owned_extraction(deps: "FlowDeps", extraction):
     )
 
 
+def _correction_candidates(deps: "FlowDeps", event: dict, scope) -> list[dict]:
+    """Committed reports from this correction's own operational scope."""
+
+    criteria = EventSearchCriteria(
+        outcomes=("succeeded",),
+        # Retrieval only. Every committed event has a receipt time, while
+        # `occurred_at` may be unset and would silently drop candidates. The
+        # ordering that decides what a correction may retract is the
+        # operational clock, and the resolver applies it.
+        time_basis="received_at",
+        scenario_id=scope.scenario_id if scope.is_simulation else None,
+        scenario_run_id=scope.scenario_run_id if scope.is_simulation else None,
+        order="newest",
+        limit=CORRECTION_CANDIDATE_LIMIT,
+    )
+    try:
+        candidates = deps.persistence.search_events(criteria)
+    except Exception:
+        logger.warning(
+            "correction target lookup failed",
+            extra={"event": "correction_lookup_failed", "event_id": event.get("event_id"), "trace_id": get_trace_id()},
+        )
+        return []
+
+    if scope.is_simulation:
+        return candidates
+
+    # A LIVE correction must not reach into any simulation run.
+    return [candidate for candidate in candidates if not candidate.get("scenario_run_id")]
+
+
+def _commit_correction_report(deps: "FlowDeps", event: dict) -> ReportIngestionResult:
+    """Commit a correction and, when it resolves to exactly one report, retract it.
+
+    The correction is always committed as its own operational fact. Retraction
+    is an additional, separate effect that happens only when the target is
+    unambiguous — an unresolved or ambiguous correction records that and
+    retracts nothing, because silently withdrawing the wrong report is worse
+    than withdrawing none.
+    """
+
+    scope = scope_from_event(event)
+    event_id = str(event.get("event_id") or "")
+
+    already_retracted = event.get("supersedes_event_id")
+    if already_retracted:
+        # A replayed correction reports the link it already made. Re-resolving
+        # could otherwise attach it to a different report, because its original
+        # target is no longer an eligible candidate.
+        return ReportIngestionResult(
+            "committed",
+            "correction committed",
+            projection=project_report_facts(
+                event,
+                domain="correction",
+                projection_kind="operational_fact",
+                facts={
+                    "correction_kind": str(event.get("supersession_kind") or RETRACTION),
+                    "target_status": "resolved",
+                    "superseded_event_id": str(already_retracted),
+                },
+            ),
+        )
+
+    resolution = resolve_superseded_event(event, _correction_candidates(deps, event, scope), scope=scope)
+
+    facts: dict[str, object] = {
+        "correction_kind": resolution.kind,
+        "target_status": resolution.status,
+    }
+
+    if resolution.resolved:
+        try:
+            deps.persistence.record_supersession(
+                superseded_event_id=str(resolution.target_event_id),
+                superseding_event_id=event_id,
+                kind=resolution.kind,
+            )
+        except Exception as exc:
+            facts["target_status"] = "link_refused"
+            logger.warning(
+                "correction did not retract its target",
+                extra={
+                    "event": "correction_link_refused",
+                    "event_id": event_id,
+                    "reason": str(exc),
+                    "trace_id": get_trace_id(),
+                },
+            )
+        else:
+            facts["superseded_event_id"] = str(resolution.target_event_id)
+            logger.info(
+                "report retracted by a correction",
+                extra={
+                    "event": "report_superseded",
+                    "event_id": event_id,
+                    "superseded_event_id": str(resolution.target_event_id),
+                    "supersession_kind": resolution.kind,
+                    "trace_id": get_trace_id(),
+                },
+            )
+    elif resolution.candidate_event_ids:
+        facts["ambiguous_candidate_count"] = len(resolution.candidate_event_ids)
+
+    return ReportIngestionResult(
+        "committed",
+        "correction committed",
+        projection=project_report_facts(
+            event, domain="correction", projection_kind="operational_fact", facts=facts
+        ),
+    )
+
+
 def _commit_report_domain_state(deps: "FlowDeps", event_id: str) -> ReportIngestionResult:
     """Commit a report through the owning domain agent, if one declares a hook.
 
@@ -1015,6 +1181,10 @@ def _commit_report_domain_state(deps: "FlowDeps", event_id: str) -> ReportIngest
     """
 
     event = deps.persistence.fetch_event(event_id) or {}
+
+    if event.get("classification") == CORRECTION_REPORT_TYPE:
+        return _commit_correction_report(deps, event)
+
     owner_name = getattr(deps, "group_owner", None)
     if owner_name:
         try:
@@ -1811,6 +1981,7 @@ def _execute_protocol_plan(
             "source_message_id": event.get("source_message_id"),
             "original_text": event.get("raw_text"),
             "received_at": event.get("received_at"),
+            "reported_at": operational_timestamp_of_event(event, scope=scope_from_event(event)),
             "availability_start": event.get("availability_start"),
             "availability_end": event.get("availability_end"),
             "operational_scope": scope_from_event(event),

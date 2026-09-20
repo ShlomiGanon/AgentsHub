@@ -82,6 +82,18 @@ class PersistenceInterface(ABC):
     def fetch_event_by_source_message(self, source: str, sender_identity: str, source_message_id: str) -> dict | None:
         """Return an idempotently ingested event, if present."""
 
+    def record_supersession(
+        self, *, superseded_event_id: str, superseding_event_id: str, kind: str
+    ) -> bool:
+        """Link a retracted report to the correction that supersedes it.
+
+        Returns True when the link was written and False when it already
+        existed, so a replayed correction is safe. Raises when the two events
+        belong to different operational scopes.
+        """
+
+        raise NotImplementedError
+
     @abstractmethod
     def list_expired_events(self, now: str, limit: int = 100) -> list[dict]:
         """Return bounded, deterministic candidates whose open outcome deadline has passed."""

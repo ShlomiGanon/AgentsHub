@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS attendance_responses (
     unavailable_until TEXT,
     original_text TEXT NOT NULL,
     received_at TEXT NOT NULL,
+    reported_at TEXT,
     approval_status TEXT NOT NULL CHECK (approval_status IN ('accepted', 'pending', 'rejected')),
     reviewed_by TEXT,
     reviewed_at TEXT,
@@ -154,6 +155,14 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             connection.execute(f"INSERT INTO attendance_responses_new SELECT 'LIVE',response_id,source_message_id,cycle_id,telegram_identity,availability,reason,{start},{end},unavailable_until,original_text,received_at,approval_status,reviewed_by,reviewed_at FROM attendance_responses_legacy")
             connection.execute("DROP TABLE attendance_responses_legacy")
             connection.execute("ALTER TABLE attendance_responses_new RENAME TO attendance_responses")
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='attendance_responses'").fetchone() is not None:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(attendance_responses)")}
+            if "reported_at" not in columns:
+                connection.execute("ALTER TABLE attendance_responses ADD COLUMN reported_at TEXT")
+            # Idempotent repair rather than a one-shot backfill: a row written
+            # before the operational clock existed is anchored on its runtime
+            # receipt, which is exactly LIVE semantics.
+            connection.execute("UPDATE attendance_responses SET reported_at=received_at WHERE reported_at IS NULL")
         if "operational_team_state" in tables and "scope_key" not in {row[1] for row in connection.execute("PRAGMA table_info(operational_team_state)")}: 
             connection.execute("ALTER TABLE operational_team_state RENAME TO operational_team_state_legacy")
             connection.execute("CREATE TABLE operational_team_state_new (scope_key TEXT PRIMARY KEY, manpower_count INTEGER NOT NULL, resources_json TEXT NOT NULL, source_event_id TEXT, received_at TEXT NOT NULL, scenario_id TEXT, scenario_run_id TEXT, scenario_time TEXT)")
@@ -275,6 +284,19 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             row = connection.execute("SELECT cycle_id,cycle_key,opened_at,deadline_at FROM attendance_cycles WHERE scope_key=? AND cycle_key=?", (key, cycle_key)).fetchone()
         return AttendanceCycle(**dict(row), created=created)
 
+    def cycle_for_operational_instant(self, instant, *, scope=None):
+        """The attendance window that owns one operational instant.
+
+        `availability_snapshot` already resolves a cycle this way, so a stored
+        response and the snapshot that later renders it agree on which window
+        it belongs to. A report that predates every window belongs to the first."""
+        key = self._require_scope(scope); moment = _parse_timestamp(instant) if isinstance(instant, str) else instant
+        with self._connect() as connection:
+            row = connection.execute("SELECT cycle_id,cycle_key,opened_at,deadline_at FROM attendance_cycles WHERE scope_key=? AND opened_at<=? ORDER BY opened_at DESC LIMIT 1", (key, moment.isoformat())).fetchone()
+            if row is None:
+                row = connection.execute("SELECT cycle_id,cycle_key,opened_at,deadline_at FROM attendance_cycles WHERE scope_key=? ORDER BY opened_at ASC LIMIT 1", (key,)).fetchone()
+        return dict(row) if row is not None else None
+
     def latest_cycle(self, *, scope=None):
         key = self._require_scope(scope)
         with self._connect() as connection:
@@ -317,20 +339,26 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         if row is None: return None
         result = dict(row); result["resources"] = json.loads(result.pop("resources_json")); return result
 
-    def record_response(self, *, telegram_identity, source_message_id, availability, original_text, received_at, reason=None, unavailable_until=None, availability_start=None, availability_end=None, scope=None):
+    def record_response(self, *, telegram_identity, source_message_id, availability, original_text, received_at, reason=None, unavailable_until=None, availability_start=None, availability_end=None, reported_at=None, operational_day=None, scope=None):
         key = self._require_scope(scope)
         if availability not in {"available", "unavailable"}: raise TeamStatusPersistenceError("availability must be 'available' or 'unavailable'")
         if availability == "unavailable" and not (reason or "").strip(): raise TeamStatusPersistenceError("an unavailable response requires a reason")
         if availability == "available" and any(value is not None for value in (reason, unavailable_until, availability_start, availability_end)): raise TeamStatusPersistenceError("an available response cannot include unavailable-period fields")
-        received = _parse_timestamp(received_at); normalized_start = _parse_timestamp(availability_start).isoformat() if availability_start else None; normalized_end = _parse_timestamp(availability_end).isoformat() if availability_end else None; normalized_until = _parse_timestamp(unavailable_until).isoformat() if unavailable_until else None
+        received = _parse_timestamp(received_at); reported = _parse_timestamp(reported_at) if reported_at else received; normalized_start = _parse_timestamp(availability_start).isoformat() if availability_start else None; normalized_end = _parse_timestamp(availability_end).isoformat() if availability_end else None; normalized_until = _parse_timestamp(unavailable_until).isoformat() if unavailable_until else None
         if availability == "unavailable":
             if (normalized_start is None) != (normalized_end is None): raise TeamStatusPersistenceError("an unavailable response requires both availability_start and availability_end")
             if normalized_start and normalized_end <= normalized_start: raise TeamStatusPersistenceError("availability_end must be after availability_start")
             if normalized_end and normalized_until and normalized_end != normalized_until: raise TeamStatusPersistenceError("unavailable_until must equal availability_end")
             if normalized_end: normalized_until = normalized_end
-        cycle = self.latest_cycle(scope=scope)
+        cycle = self.cycle_for_operational_instant(reported, scope=scope)
         if cycle is None: raise TeamStatusPersistenceError("no attendance cycle is open")
-        approval_status = "accepted" if received <= _parse_timestamp(cycle["deadline_at"]) else "pending"; response_id = f"response-{uuid.uuid4().hex}"
+        # The cycle window is operational (business) time. Lateness is therefore
+        # decided against the report's operational instant, never against the
+        # runtime receipt, which in a simulation belongs to a different clock.
+        # A report also cannot be late for an operational day that never had an
+        # open window: nothing was asked of that member that day.
+        judged_by_window = operational_day is None or str(operational_day) == cycle["cycle_key"]
+        approval_status = "accepted" if (not judged_by_window or reported <= _parse_timestamp(cycle["deadline_at"])) else "pending"; response_id = f"response-{uuid.uuid4().hex}"
         with self._connect() as connection:
             member = connection.execute(
                 "SELECT approved, membership_status FROM team_members WHERE scope_key=? AND telegram_identity=?",
@@ -339,7 +367,7 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             if member is None or not member["approved"] or member["membership_status"] != "active":
                 raise TeamStatusPersistenceError("attendance responses are accepted only from the approved roster")
             try:
-                connection.execute("INSERT INTO attendance_responses(scope_key,response_id,source_message_id,cycle_id,telegram_identity,availability,reason,availability_start,availability_end,unavailable_until,original_text,received_at,approval_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (key,response_id,source_message_id,cycle["cycle_id"],telegram_identity,availability,reason.strip() if reason else None,normalized_start,normalized_end,normalized_until,original_text,received_at,approval_status))
+                connection.execute("INSERT INTO attendance_responses(scope_key,response_id,source_message_id,cycle_id,telegram_identity,availability,reason,availability_start,availability_end,unavailable_until,original_text,received_at,reported_at,approval_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (key,response_id,source_message_id,cycle["cycle_id"],telegram_identity,availability,reason.strip() if reason else None,normalized_start,normalized_end,normalized_until,original_text,received_at,reported.isoformat(),approval_status))
             except sqlite3.IntegrityError:
                 row = connection.execute("SELECT * FROM attendance_responses WHERE scope_key=? AND source_message_id=?", (key, source_message_id)).fetchone(); return dict(row)
             return dict(connection.execute("SELECT * FROM attendance_responses WHERE scope_key=? AND response_id=?", (key, response_id)).fetchone())
@@ -376,7 +404,12 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
                 entry = {"scope_key": key, "telegram_identity": member["telegram_identity"], "full_name": member["full_name"], "availability": "awaiting_response", "reason": None, "availability_start": None, "availability_end": None, "unavailable_until": None, "original_text": None, "received_at": None}
                 if accepted is not None:
                     response = dict(accepted)
-                    active = response["availability"] == "unavailable" and (response["availability_end"] is None or instant < _parse_timestamp(response["availability_end"]))
+                    # A declared absence is a bounded operational interval:
+                    # it is active only between its own start and end, so a
+                    # future window does not mark a member absent right now.
+                    started = response["availability_start"] is None or instant >= _parse_timestamp(response["availability_start"])
+                    not_ended = response["availability_end"] is None or instant < _parse_timestamp(response["availability_end"])
+                    active = response["availability"] == "unavailable" and started and not_ended
                     is_current_cycle = cycle_id is not None and response["cycle_id"] == cycle_id
                     if response["availability"] == "unavailable" and active:
                         entry.update(response)

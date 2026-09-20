@@ -8,7 +8,30 @@ import re
 
 from agents.contracts import ReportIngestionResult, project_report_facts
 from agents.runtime import Agent, get_authenticated_request_identity, get_trusted_operational_scope, tool
-from persistence import AttendanceCycle, OperationalScope, TeamStatusPersistenceError, current_operational_scope, open_team_status_persistence, scope_from_event
+from persistence import AttendanceCycle, OperationalScope, TeamStatusPersistenceError, current_operational_scope, open_team_status_persistence, operational_now, operational_time_of_event, runtime_now, scope_from_event
+
+
+# Domain vocabulary for the trusted group-owned extraction path — how a
+# readiness team states a headcount, a vehicle count or an absence, in either
+# language. No persona, scenario or fixture sentence appears here.
+_MANPOWER_COUNT = re.compile(
+    r"(\d+)\s*(?:כבאים|לוחמים|אנשים|firefighters?|personnel|members?)",
+    re.IGNORECASE,
+)
+
+_RESOURCE_VOCABULARY = (
+    ("ASHED", re.compile(r"(?:אשד|ashed)\s*(\d+)", re.IGNORECASE)),
+    ("CARMEL", re.compile(r"(?:כרמל|carmel)\s*(\d+)", re.IGNORECASE)),
+)
+
+# An absence is committed only when the reporter states why. The reason is a
+# closed operational category read from the message, never a default.
+_ABSENCE_REASONS = (
+    (re.compile(r"בדיקה רפואית|בדיקה תקופתית|medical check|medical exam|checkup", re.IGNORECASE), "medical checkup"),
+    (re.compile(r"מילואים|reserve duty", re.IGNORECASE), "reserve duty"),
+    (re.compile(r"חום גבוה|חולה|מחלה|חולהני|fever|\bsick\b|illness", re.IGNORECASE), "illness"),
+    (re.compile(r"חופשה|חופש|on leave|vacation", re.IGNORECASE), "leave"),
+)
 
 
 def _aware_datetime(value: str | None) -> datetime:
@@ -112,24 +135,59 @@ class TeamStatusAgent(Agent):
         return get_trusted_operational_scope() or current_operational_scope()
 
     def extract_report(self, raw_text: str, *, received_at: str, scenario_time: str | None = None, **_) -> ExtractionResult | None:
-        """Extract trusted, typed readiness reports received in the owned group."""
+        """Extract trusted, typed readiness reports received in the owned group.
+
+        A headcount that the message does not state is never substituted with a
+        number, and an absence reason that the message does not give is never
+        supplied: both would become authoritative state nobody reported.
+        """
+
         from history import ExtractionResult
         text = str(raw_text or "")
-        normalized = text.casefold()
-        if re.search(r"\d+\s*\u05db\u05d1\u05d0\u05d9\u05dd|\u05e1\u05d3[\"\u05f3]?\u05db|manpower|firefighters", normalized):
-            count_match = re.search(r"(\d+)\s*(?:\u05db\u05d1\u05d0\u05d9\u05dd|firefighters)", normalized)
-            ashed = re.search(r"(?:\u05d0\u05e9\u05d3|ashed)\s*(\d+)", normalized)
-            carmel = re.search(r"(?:\u05db\u05e8\u05de\u05dc|carmel)\s*(\d+)", normalized)
-            count = int(count_match.group(1)) if count_match else None
-            resources = []
-            if ashed:
-                resources.append({"name": "ASHED", "count": int(ashed.group(1)), "status": "operational"})
-            if carmel:
-                resources.append({"name": "CARMEL", "count": int(carmel.group(1)), "status": "operational"})
-            fields = {"manpower_count": count or 0, "resources_count": len(resources)}
-            return ExtractionResult("team_resource_report", "trusted", "readiness_team", tuple(r["name"] for r in resources), text, "low", scenario_time or received_at, False, (), business_fields=fields)
-        if re.search(r"\b\d{1,2}:\d{2}\b", text) and re.search(r"(?:\u05d7\u05d5\u05d6\u05e8|\u05dc\u05e6\u05d0\u05ea|\u05de\u05e9\u05de\u05e8\u05ea|return|leave|medical)", normalized):
-            return ExtractionResult("team_attendance_report", "trusted", "readiness_team", (), text, "low", scenario_time or received_at, False, ("availability_start", "availability_end"), business_fields={"availability": "unavailable", "reason": "routine medical checkup"})
+        occurrence = scenario_time or received_at
+
+        resource_report = self._resource_fields(text)
+        if resource_report is not None:
+            fields, resources = resource_report
+            return ExtractionResult(
+                "team_resource_report", "trusted", "readiness_team",
+                tuple(resource["name"] for resource in resources), text, "low", occurrence, False, (),
+                business_fields=fields,
+            )
+
+        reason = self._absence_reason_in(text)
+        if reason is not None:
+            return ExtractionResult(
+                "team_attendance_report", "trusted", "readiness_team", (), text, "low", occurrence, False,
+                ("availability_start", "availability_end"),
+                business_fields={"availability": "unavailable", "reason": reason},
+            )
+        return None
+
+    @staticmethod
+    def _resource_fields(text: str):
+        """A headcount, a vehicle count, or nothing \u2014 never a substituted zero."""
+
+        count_match = _MANPOWER_COUNT.search(text)
+        resources = [
+            {"name": name, "count": int(match.group(1)), "status": "operational"}
+            for name, pattern in _RESOURCE_VOCABULARY
+            for match in [pattern.search(text)]
+            if match
+        ]
+        if count_match is None and not resources:
+            return None
+
+        fields = {"resources_count": len(resources)}
+        if count_match is not None:
+            fields["manpower_count"] = int(count_match.group(1))
+        return fields, resources
+
+    @staticmethod
+    def _absence_reason_in(text: str) -> str | None:
+        for pattern, reason in _ABSENCE_REASONS:
+            if pattern.search(text):
+                return reason
         return None
 
     def ingest_report(self, event: dict, *, scope: OperationalScope | None = None) -> ReportIngestionResult:
@@ -139,14 +197,22 @@ class TeamStatusAgent(Agent):
         fields = event.get("business_fields") or {}
         if classification == "team_resource_report":
             count = fields.get("manpower_count")
-            if type(count) is not int or count < 0:
+            if count is not None and (type(count) is not int or count < 0):
                 return ReportIngestionResult("rejected", "team resource report has invalid manpower count")
-            resources = []
             description = str(event.get("description") or "")
-            for name, label in (("ASHED", "\u05d0\u05e9\u05d3"), ("CARMEL", "\u05db\u05e8\u05de\u05dc")):
-                match = re.search(rf"{label}\s*(\d+)|{name}\s*(\d+)", description, re.IGNORECASE)
-                if match:
-                    resources.append({"name": name, "count": int(match.group(1) or match.group(2)), "status": "operational"})
+            resources = [
+                {"name": name, "count": int(match.group(1)), "status": "operational"}
+                for name, pattern in _RESOURCE_VOCABULARY
+                for match in [pattern.search(description)]
+                if match
+            ]
+            if count is None:
+                # A vehicle report that states no headcount must not restate
+                # the headcount; it carries the committed one forward.
+                committed = self.status_store.operational_state(scope=scope)
+                if committed is None:
+                    return ReportIngestionResult("rejected", "team resource report states no manpower count and none is committed")
+                count = int(committed["manpower_count"])
             self.status_store.record_operational_state(
                 manpower_count=count, resources=resources, source_event_id=event.get("event_id"),
                 received_at=event.get("received_at") or datetime.now(timezone.utc).isoformat(),
@@ -182,17 +248,21 @@ class TeamStatusAgent(Agent):
         if not start or not end:
             return ReportIngestionResult("rejected", "attendance report is missing its bounded interval")
         identity = str(event.get("sender_identity") or "")
+        # The attendance cycle is an operational window, so it is opened and
+        # judged on the operational clock; `received_at` stays the runtime
+        # receipt record and never decides business lateness.
+        reported = operational_time_of_event(event, scope=scope)
+        operational_day = reported.astimezone(ZoneInfo(self.timezone_name)).date().isoformat()
         cycle = self.status_store.latest_cycle(scope=scope)
         if cycle is None:
-            opened = event.get("scenario_time") or event.get("received_at")
-            opened_at = _aware_datetime(opened).isoformat()
-            self.status_store.open_cycle(opened_at[:10], opened_at, (_aware_datetime(opened) + timedelta(hours=1)).isoformat(), scope=scope)
+            self.status_store.open_cycle(operational_day, reported.isoformat(), (reported + timedelta(hours=self.response_window_hours)).isoformat(), scope=scope)
         try:
             response = self.status_store.record_response(
                 telegram_identity=identity, source_message_id=str(event.get("source_message_id") or event.get("event_id")),
                 availability="unavailable", original_text=str(event.get("raw_text") or event.get("description") or ""),
-                received_at=event.get("received_at") or datetime.now(timezone.utc).isoformat(), reason=str(fields["reason"]),
+                received_at=event.get("received_at") or runtime_now().isoformat(), reason=str(fields["reason"]),
                 unavailable_until=end, availability_start=start, availability_end=end,
+                reported_at=reported.isoformat(), operational_day=operational_day,
                 scope=scope,
             )
         except Exception as exc:
@@ -230,7 +300,7 @@ class TeamStatusAgent(Agent):
     def attendance_check_due(self, now_iso: str | None = None) -> bool:
         """True once after 08:00 Israel time for each local calendar day."""
 
-        now = _aware_datetime(now_iso).astimezone(ZoneInfo(self.timezone_name))
+        now = (_aware_datetime(now_iso) if now_iso else operational_now(scope=self._operational_scope())).astimezone(ZoneInfo(self.timezone_name))
         if now.hour < self.attendance_check_hour:
             return False
         latest = self.status_store.latest_cycle(scope=self._operational_scope())
@@ -267,7 +337,7 @@ class TeamStatusAgent(Agent):
         }
 
     def _open_cycle(self, now_iso: str) -> tuple[AttendanceCycle, list[str]]:
-        now = _aware_datetime(now_iso or None)
+        now = _aware_datetime(now_iso) if now_iso else operational_now(scope=self._operational_scope())
         local_now = now.astimezone(ZoneInfo(self.timezone_name))
         deadline = now + timedelta(hours=self.response_window_hours)
         cycle = self.status_store.open_cycle(
@@ -374,7 +444,7 @@ class TeamStatusAgent(Agent):
         side_effecting=False,
     )
     def report_team_availability(self, as_of_iso: str = "") -> str:
-        now = _aware_datetime(as_of_iso or None)
+        now = _aware_datetime(as_of_iso) if as_of_iso else operational_now(scope=self._operational_scope())
         snapshot = self.status_store.availability_snapshot(now.isoformat(), scope=self._operational_scope())
         if not snapshot:
             return "The readiness-team roster is empty or has not been approved."

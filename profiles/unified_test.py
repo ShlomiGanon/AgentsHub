@@ -23,7 +23,7 @@ from agents import (
     verified_availability_period,
 )
 from messages import get_catalog
-from persistence import open_persistence, open_surveillance_persistence, open_team_status_persistence
+from persistence import open_persistence, open_surveillance_persistence, open_team_status_persistence, operational_now, parse_operational_timestamp
 from profiles.contracts import AgentSpec, OptimizationPolicy
 from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
 from protocols import CriticalityLevel, DirectToolExecution, Protocol
@@ -71,7 +71,6 @@ _ICON_SIREN = "\U0001f6a8"
 _ICON_SCROLL = "\U0001f4dc"
 
 _PROFILE_DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "unified_test"
-_PROFILE_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = str(_PROFILE_DATA_DIR / "unified_history.db")
 UNIFIED_SURVEILLANCE_DB_PATH = str(_PROFILE_DATA_DIR / "unified_surveillance.db")
@@ -536,9 +535,8 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
     def report_team_availability(
         self, as_of_iso: str = "", view: str = "summary", member_query: str = ""
     ) -> str:
-        from datetime import datetime, timezone
         catalog = get_catalog(DEFAULT_LANGUAGE)
-        now_iso = as_of_iso or datetime.now(timezone.utc).isoformat()
+        now_iso = as_of_iso or operational_now(scope=self._operational_scope()).isoformat()
         snapshot = self.status_store.availability_snapshot(now_iso, scope=self._operational_scope())
         avail = [e for e in snapshot if e["availability"] == "available"]
         unavail = [e for e in snapshot if e["availability"] == "unavailable"]
@@ -652,29 +650,30 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
         reason: str = "",
         unavailable_days: int = 0,
         received_at: str = "",
+        reported_at: str = "",
         availability_start: str = "",
         availability_end: str = "",
     ) -> str:
         from datetime import datetime, timedelta, timezone
+        from zoneinfo import ZoneInfo
         catalog = get_catalog(DEFAULT_LANGUAGE)
         telegram_identity = get_authenticated_request_identity()
         if not telegram_identity:
             res = catalog.text("unified.team_status.identity_unavailable")
             _capture_team_result(res)
             return res
-        # The event runtime supplies received_at mechanically.  Use it as the
-        # persistence anchor (with the historical current-time fallback for
-        # direct, non-event calls).
-        if received_at:
-            try:
-                now_dt = datetime.fromisoformat(received_at.replace("Z", "+00:00"))
-                if now_dt.tzinfo is None:
-                    now_dt = now_dt.replace(tzinfo=timezone.utc)
-                now_dt = now_dt.astimezone(timezone.utc)
-            except ValueError:
-                now_dt = datetime.now(timezone.utc)
-        else:
+        # The event runtime supplies received_at and reported_at mechanically.
+        # received_at is the runtime receipt anchor; reported_at is the
+        # operational instant the report belongs to and is what any business
+        # interval is measured from.
+        try:
+            now_dt = parse_operational_timestamp(received_at) or datetime.now(timezone.utc)
+        except ValueError:
             now_dt = datetime.now(timezone.utc)
+        try:
+            operational_dt = parse_operational_timestamp(reported_at) or now_dt
+        except ValueError:
+            operational_dt = now_dt
         if not source_message_id:
             source_message_id = f"msg-{int(now_dt.timestamp())}"
         if not original_text:
@@ -698,7 +697,7 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
             return res
         period = verified_availability_period(availability_start, availability_end) if normalized == "unavailable" else None
         if period is None and normalized == "unavailable" and type(unavailable_days) is int and unavailable_days > 0:
-            period = (now_dt.isoformat(), (now_dt + timedelta(days=unavailable_days)).isoformat())
+            period = (operational_dt.isoformat(), (operational_dt + timedelta(days=unavailable_days)).isoformat())
         if normalized == "unavailable" and period is None:
             res = catalog.text("unified.team_status.clarify_days")
             _capture_team_result(res)
@@ -720,6 +719,8 @@ class UnifiedTeamStatusAgent(TeamStatusAgent):
                 unavailable_until=unavailable_until,
                 availability_start=availability_start_value,
                 availability_end=availability_end_value,
+                reported_at=operational_dt.isoformat(),
+                operational_day=operational_dt.astimezone(ZoneInfo(self.timezone_name)).date().isoformat(),
                 scope=self._operational_scope(),
             )
         except Exception as exc:
@@ -1023,6 +1024,7 @@ EVENT_TYPES = [
     "team_availability",
     "team_attendance_report",
     "friendly_forces_report",
+    "correction_report",
     "emergency_dispatch",
     "historical_query",
 ]

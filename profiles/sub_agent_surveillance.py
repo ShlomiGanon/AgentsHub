@@ -13,7 +13,6 @@ MAX_ITER = 2
 MODEL_TIMEOUT_SECONDS = 30
 
 _PROFILE_DATA_DIR = Path(tempfile.gettempdir()) / "agentshub_sub_agent_surveillance"
-_PROFILE_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = str(_PROFILE_DATA_DIR / "operational_history.db")
 SURVEILLANCE_DB_PATH = str(_PROFILE_DATA_DIR / "surveillance.db")

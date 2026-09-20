@@ -53,6 +53,10 @@ class TeamStatusPersistenceInterface(ABC):
     @abstractmethod
     def latest_cycle(self, *, scope: OperationalScope | None = None) -> dict | None: ...
 
+    def cycle_for_operational_instant(self, instant, *, scope: OperationalScope | None = None) -> dict | None:
+        """The attendance window that owns one operational instant."""
+        return self.latest_cycle(scope=scope)
+
     @abstractmethod
     def record_response(
         self,
@@ -66,6 +70,8 @@ class TeamStatusPersistenceInterface(ABC):
         unavailable_until: str | None = None,
         availability_start: str | None = None,
         availability_end: str | None = None,
+        reported_at: str | None = None,
+        operational_day: str | None = None,
         scope: OperationalScope | None = None,
     ) -> dict: ...
 

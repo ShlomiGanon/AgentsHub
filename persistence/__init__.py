@@ -43,6 +43,16 @@ from persistence.operational_scope import (
     scope_from_event,
     scope_from_simulation_context,
 )
+from persistence.operational_time import (
+    OperationalTimeError,
+    current_operational_time,
+    operational_now,
+    operational_time_context,
+    operational_time_of_event,
+    operational_timestamp_of_event,
+    parse_operational_timestamp,
+    runtime_now,
+)
 
 sqlite = sqlite_store
 sqlite_backend = sqlite_store
@@ -76,4 +86,12 @@ __all__ = [
     "resolve_operational_scope",
     "scope_from_event",
     "scope_from_simulation_context",
+    "OperationalTimeError",
+    "current_operational_time",
+    "operational_now",
+    "operational_time_context",
+    "operational_time_of_event",
+    "operational_timestamp_of_event",
+    "parse_operational_timestamp",
+    "runtime_now",
 ]

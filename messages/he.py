@@ -1056,6 +1056,10 @@ MESSAGES = {
         "{not_reported} טרם דיווחו; {pending_identity} ממתינים לזיהוי; {total} בסך הכול."
     ),
     "orchestrator.picture.typed.team_unknown": "כיתת כוננות: הנתונים אינם זמינים.",
+    "orchestrator.picture.typed.manpower": (
+        "כוח אדם: {effective} מתוך {reported} שדווחו זמינים כעת."
+    ),
+    "orchestrator.picture.typed.resources": "אמצעים: {resources}.",
     "orchestrator.picture.typed.findings_header": "מסקנות מבצעיות:",
     "orchestrator.picture.typed.recommendations_header": "פעולות מומלצות:",
     "orchestrator.picture.typed.finding_line": "- {text}",

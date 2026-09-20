@@ -80,7 +80,10 @@ CREATE TABLE IF NOT EXISTS events (
     action_state TEXT,
     action_state_updated_at TEXT,
     action_failure_reason TEXT,
-    action_tool_receipts TEXT
+    action_tool_receipts TEXT,
+    superseded_by_event_id TEXT,
+    supersedes_event_id TEXT,
+    supersession_kind TEXT
 );
 """
 
@@ -317,6 +320,7 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "CREATE INDEX IF NOT EXISTS idx_events_scenario_run_id ON events(scenario_id, scenario_run_id, scenario_step);",
     ),
     (25, "mark synthetic simulation identities", ""),
+    (26, "link a retracted report to the correction that superseded it", ""),
 ]
 
 
@@ -371,6 +375,15 @@ _REQUIRED_COLUMNS_BY_VERSION = (
         25,
         "users",
         (("identity_kind", "TEXT NOT NULL DEFAULT 'LIVE' CHECK (identity_kind IN ('LIVE', 'SIMULATION'))"),),
+    ),
+    (
+        26,
+        "events",
+        (
+            ("superseded_by_event_id", "TEXT"),
+            ("supersedes_event_id", "TEXT"),
+            ("supersession_kind", "TEXT"),
+        ),
     ),
 )
 
@@ -455,12 +468,17 @@ def run_migrations(db_path: str) -> None:
                         "ALTER TABLE telegram_groups ADD COLUMN auto_register INTEGER NOT NULL DEFAULT 0 "
                         "CHECK (auto_register IN (0, 1))"
                     )
-            elif version in {20, 21, 22, 23, 24, 25}:
+            elif version in {20, 21, 22, 23, 24, 25, 26}:
                 _repair_required_columns(connection, version)
                 if version == 24:
                     connection.execute(
                         "CREATE INDEX IF NOT EXISTS idx_events_scenario_run_id "
                         "ON events(scenario_id, scenario_run_id, scenario_step)"
+                    )
+                if version == 26:
+                    connection.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_events_superseded_by "
+                        "ON events(superseded_by_event_id)"
                     )
             else:
                 connection.executescript(sql)

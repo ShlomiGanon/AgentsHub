@@ -119,7 +119,10 @@ def test_fire_phase_one_steps_one_to_six_commit_expected_state_without_actions(t
         maintenance = _run_report(deps, "מצלמה 02 (צומת המחצבה) הופסקה יזומית לטובת ניקוי עדשה עקב אבק כבד.", owner="surveillance_agent", sender="roni_surveillance_operator", step=5, time="2026-09-09T10:00:00+00:00")
         assert maintenance["business_fields"]["camera_id"] == "CAM-02"
         assert surveillance.surveillance_store.get_camera("CAM-02", scope=scope)["status"] == "offline"
-        assert maintenance["business_fields"]["downtime_duration_hours"] is None
+        # The message states no downtime, so the field is absent rather than
+        # asserted as unknown (Task 57: never state what the report does not).
+        assert "downtime_duration_hours" not in maintenance["business_fields"]
+        assert maintenance["business_fields"]["shutdown_type"] == "planned_maintenance"
 
         incident = _run_report(deps, "דיווח על שריפת קוצים קטנה בצד כביש 444, כנראה מסיגריה. ניידת במקום, אין סיכון למבנים.", owner="friendly_forces_agent", sender="police_hub_agam", step=6, time="2026-09-09T11:00:00+00:00")
         assert incident["business_fields"]["cause_status"] == "unverified"
