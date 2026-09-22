@@ -74,7 +74,7 @@ _FRIENDLY_FORCES_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DB_PATH = str(_FRIENDLY_FORCES_DATA_DIR / "friendly_forces_profile.db")
 RESETTABLE_DATABASES = (DB_PATH,)
 
-API_PORT = 8903
+API_PORT = 8907
 RETRY_COUNT = 3
 RISK_THRESHOLD = 0.6
 LOOKBACK_WINDOW_DAYS = 30

@@ -636,12 +636,16 @@ SIMULATOR_BODY = """
     });
   }
 
-  function appendBubble(chatKey, kind, sender, text, stepNumber) {
+  function appendBubble(chatKey, kind, sender, text, stepNumber, timestamp) {
     const messages = document.getElementById('messages-' + chatKey);
     const bubble = el('div', 'bubble' + (kind ? ' ' + kind : ''));
     const head = el('div', 'bubble-head');
     head.appendChild(el('span', 'sender', sender));
-    head.appendChild(el('span', null, formatTimestamp(new Date().toISOString())));
+    // A scripted step carries the scenario's own operational timestamp; showing
+    // wall-clock time for it mixed the two clocks the core keeps apart. Bubbles
+    // with no scripted time (system/reply lines for genuinely live events) still
+    // fall back to now — both are ISO strings, so formatTimestamp sees one shape.
+    head.appendChild(el('span', null, formatTimestamp(timestamp || new Date().toISOString())));
     bubble.appendChild(head);
     const body = el('p', 'bubble-text', text);
     body.dir = 'auto';
@@ -884,7 +888,7 @@ SIMULATOR_BODY = """
     state.busy = true;
     updateGlobalState();
 
-    appendBubble(chatKey, null, step.sender_name, step.text, step.step);
+    appendBubble(chatKey, null, step.sender_name, step.text, step.step, step.timestamp);
     const reply = appendBubble(chatKey, 'sys', t('system_label'), t('sending'), null);
 
     if (!(await ensureScenarioRun(step))) {

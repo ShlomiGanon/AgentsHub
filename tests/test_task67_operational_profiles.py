@@ -802,3 +802,83 @@ def test_an_incomplete_world_is_logged_even_from_the_silent_path(world, run_depl
         initialize_operational_scope(run_deployment, registry, scope)
 
     assert [r.event for r in caplog.records if hasattr(r, "event")] == ["run_provisioning_failed"]
+
+
+# =============================================================================
+# feat/FinalProfiles integration — fire-service mutual aid, profile-gated
+# =============================================================================
+#
+# FinalProfiles gave the fire organization two real dispatch tools and put them
+# on a fire-only agent subclass, which its own deployment split made possible.
+# One deployment of this core hosts both organization types, so the tools live
+# on the one shared forces agent and the *profile* decides who may run them.
+
+
+def test_only_a_fire_station_can_reach_fire_service_mutual_aid(deployment):
+    import profiles.unified_test as unified_test
+
+    declared = tuple(unified_test.PROTOCOLS)
+    fire = {p.name for p in operational_profile(FIRE_STATION).protocol_catalogue(declared)}
+    team = {p.name for p in operational_profile(RESPONSE_TEAM).protocol_catalogue(declared)}
+
+    assert "dispatch_mutual_aid" in fire
+    assert "dispatch_mutual_aid" not in team
+    assert fire - team == {"dispatch_mutual_aid"}, "mutual aid is the one capability that differs"
+
+
+def test_mutual_aid_is_a_real_action_path_not_a_declared_name(deployment):
+    """Task 67 refused to expose fire capabilities precisely because no tool path
+    existed. This asserts the path now exists, end to end."""
+
+    import profiles.unified_test as unified_test
+    from agents import FriendlyForcesAgent
+
+    protocol = next(p for p in unified_test.PROTOCOLS if p.name == "dispatch_mutual_aid")
+    tools = {t.name for t in FriendlyForcesAgent(model="m").exposed_tools()}
+
+    assert set(protocol.approved_tools) == {"dispatch_water_tankers", "dispatch_aircraft"}
+    assert set(protocol.approved_tools) <= tools, "every approved tool must really exist on the agent"
+    assert protocol.participating_agents == ("friendly_forces_agent",)
+    # A side-effecting mutual-aid request is a commander action, like every other dispatch.
+    assert protocol.approval_flag is True
+    assert protocol.commander_only is True
+
+
+def test_every_protocol_a_profile_names_is_actually_declared(deployment):
+    """The drift guard.
+
+    `protocol_catalogue` intersects the profile's names with the deployment's, so
+    a name that drifts from the declared set is not a harmless typo — it silently
+    removes a real capability with no error anywhere.
+    """
+
+    import profiles.unified_test as unified_test
+
+    declared = {p.name for p in unified_test.PROTOCOLS}
+    for profile_id in declared_operational_profiles():
+        profile = operational_profile(profile_id)
+        undeclared = set(profile.protocols) - declared
+        assert undeclared == set(), f"{profile_id} names protocols the deployment does not declare: {sorted(undeclared)}"
+
+
+def test_no_declared_protocol_is_stranded_outside_every_profile(deployment):
+    """The other direction: a protocol exposed by no profile is unreachable."""
+
+    import profiles.unified_test as unified_test
+
+    declared = {p.name for p in unified_test.PROTOCOLS}
+    exposed = set()
+    for profile_id in declared_operational_profiles():
+        exposed |= set(operational_profile(profile_id).protocols)
+
+    assert declared - exposed == set(), f"unreachable protocols: {sorted(declared - exposed)}"
+
+
+def test_the_integration_added_no_second_profile_system():
+    """One answer to 'what type of organization is this scope using'."""
+
+    import profiles
+
+    assert sorted(declared_operational_profiles()) == [FIRE_STATION, RESPONSE_TEAM]
+    for rejected in ("FinalProfile", "ScenarioProfile", "OrganizationProfile", "SimulationProfile"):
+        assert not hasattr(profiles, rejected), f"{rejected} would be a parallel profile abstraction"

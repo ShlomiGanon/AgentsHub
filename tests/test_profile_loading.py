@@ -587,3 +587,28 @@ def test_demo_profile_declares_area_required_for_fire_and_medical(monkeypatch, t
 
     assert registry.required_fields_for("fire") == ("area",)
     assert registry.required_fields_for("medical") == ("area",)
+
+
+def test_no_two_declared_profiles_claim_the_same_port():
+    """`friendly_forces` and `sub_agent_team_status` both declared 8903.
+
+    Nothing caught it because the two are never run in the same process, so the
+    collision only surfaces the day someone runs both — which is exactly what a
+    multi-deployment install does. Discovery is the right place to assert it.
+    """
+
+    import importlib
+
+    from config.server_control import discover_profiles
+
+    ports = {}
+    for info in discover_profiles():
+        module = importlib.import_module(info.module_path)
+        for attribute in ("API_PORT", "SIMULATOR_PORT"):
+            port = getattr(module, attribute, None)
+            if port is None:
+                continue
+            assert port not in ports, (
+                f"{info.module_path}.{attribute}={port} collides with {ports[port]}"
+            )
+            ports[port] = f"{info.module_path}.{attribute}"

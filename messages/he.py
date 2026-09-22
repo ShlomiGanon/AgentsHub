@@ -1018,6 +1018,11 @@ MESSAGES = {
         "הזנקת ותיאום כוחות חירום וביטחון: אמבולנס, משטרה, כיבוי אש, צבא. פעולת מפקד בלבד הדורשת אישור."
     ),
     "unified.protocol.dispatch_emergency_forces.expected_output": "אישור רישום ותיאום הזנקת כוחות החירום ליעד.",
+    "unified.protocol.dispatch_mutual_aid.description": (
+        "בקשת סיוע הדדי לשריפה פעילה: משאיות מים מתחנה אחרת, או מטוסי כיבוי. "
+        "פעולת מפקד בלבד הדורשת אישור. רק ארגון כבאות והצלה מפעיל יכולת זו."
+    ),
+    "unified.protocol.dispatch_mutual_aid.expected_output": "אישור רישום בקשת הסיוע ההדדי — משאיות או מטוסים — למיקום שנמסר.",
     "unified.protocol.query_historical_incidents.description": "תחקור אירועים ומשימות קודמות מתוך יומן המבצעים וההיסטוריה.",
     "unified.protocol.query_historical_incidents.expected_output": "סיכום תמציתי ומדויק של אירועי עבר ביומן המבצעי.",
 

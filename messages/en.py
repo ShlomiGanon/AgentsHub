@@ -1024,6 +1024,12 @@ MESSAGES = {
         "Dispatching and coordinating emergency and security forces: ambulance, police, firefighters, military. Commander-only action requiring approval."
     ),
     "unified.protocol.dispatch_emergency_forces.expected_output": "Confirmation that the emergency-forces dispatch to the target was recorded and coordinated.",
+    "unified.protocol.dispatch_mutual_aid.description": (
+        "Requesting fire-service mutual aid for an active fire: water-tanker trucks from another station, "
+        "or firefighting aircraft. Commander-only action requiring approval. Only a fire-and-rescue "
+        "organization operates this capability."
+    ),
+    "unified.protocol.dispatch_mutual_aid.expected_output": "Confirmation that the requested mutual-aid tankers or aircraft were recorded for the named location.",
     "unified.protocol.query_historical_incidents.description": "Investigating past incidents and missions from the operational log and history.",
     "unified.protocol.query_historical_incidents.expected_output": "A concise, accurate summary of past events in the operational log.",
 
