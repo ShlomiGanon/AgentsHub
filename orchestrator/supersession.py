@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
+from messages import get_catalog
 from persistence import OperationalScope, operational_time_of_event
 
 
@@ -40,47 +41,34 @@ CORRECTION_REPORT_TYPE = "correction_report"
 
 # Class A — an explicit reference to an earlier report.
 _PRIOR_REPORT_REFERENCE = re.compile(
-    r"הדיווח|דיווח קודם|שדווח|שדווחה|שדווחו|"
-    r"previous report|earlier report|the report (?:about|regarding|of)|prior report|reported earlier",
+    get_catalog("en").text("extraction.supersession.prior_report_reference"),
     re.IGNORECASE,
 )
 
 # Class B — a statement that something is not so, or is cancelled.
 _NEGATION_OR_CANCELLATION = re.compile(
-    r"אין\b|בוטל|מבוטל|בטל|ביטול|"
-    r"\bthere is no\b|\bthere are no\b|\bno\s+\S+\s+at\b|\bcancel|\bretract",
+    get_catalog("en").text("extraction.supersession.negation_or_cancellation"),
     re.IGNORECASE,
 )
 
 # Class B-strong — a falsity statement that is itself unambiguous evidence that
 # an earlier report is being withdrawn.
 _FALSITY_STATEMENT = re.compile(
-    r"דיווח שווא|דיווחי שווא|אזעקת שווא|"
-    r"סרק\b|התברר כשגוי|אינו נכון|לא נכון|"
-    r"false report|false alarm|unfounded|disregard|stand down",
+    get_catalog("en").text("extraction.supersession.falsity_statement"),
     re.IGNORECASE,
 )
 
 # Class C — an explicit correction marker.
 _CLARIFICATION_MARKER = re.compile(
-    r"הבהרה|תיקון|מתקן|clarification|correction|to clarify",
+    get_catalog("en").text("extraction.supersession.clarification_marker"),
     re.IGNORECASE,
 )
 
-_TOKEN = re.compile(r"[\w֐-׿]{3,}", re.IGNORECASE)
+_TOKEN = re.compile(get_catalog("en").text("extraction.supersession.token"), re.IGNORECASE)
 
 # Words that carry no operational subject, so matching on them would make any
 # two messages look related.
-_STOPWORDS = frozenset(
-    {
-        "את", "על", "של", "זה", "הוא",
-        "היא", "אני", "אנחנו",
-        "יש", "אין", "לא", "כן",
-        "הבהרה", "דיווח",
-        "the", "and", "for", "with", "that", "this", "there", "report", "reported",
-        "clarification", "correction", "from", "our", "are", "was", "were", "not",
-    }
-)
+_STOPWORDS = frozenset(get_catalog("en").text("extraction.supersession.stopwords").split("|"))
 
 # A resolved target must share at least this many distinctive subject tokens.
 MINIMUM_SUBJECT_OVERLAP = 2

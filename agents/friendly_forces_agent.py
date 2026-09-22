@@ -6,6 +6,11 @@ import re
 
 from agents.contracts import ReportIngestionResult, project_report_facts
 from agents.runtime import Agent, tool
+from messages import get_catalog
+
+
+def _catalog_pattern(key: str) -> str:
+    return get_catalog("en").text(key)
 
 
 # Domain vocabulary for the trusted group-owned extraction path — how an
@@ -13,24 +18,24 @@ from agents.runtime import Agent, tool
 # carries no scenario, road number or unit name, so a fixture exercises this
 # path without defining it.
 _FIRE_BAN = re.compile(
-    r"איסור הדלקת|איסור אש|fire ban|no.?burn|fire.?lighting prohibition",
+    _catalog_pattern("extraction.friendly_forces.fire_ban"),
     re.IGNORECASE,
 )
-_FORESTS = re.compile(r"יערות|יער|forests?", re.IGNORECASE)
-_RANGERS = re.compile(r"יערנים|rangers?", re.IGNORECASE)
-_HEATWAVE = re.compile(r"שרב|גל חום|heatwave|heat wave", re.IGNORECASE)
+_FORESTS = re.compile(_catalog_pattern("extraction.friendly_forces.forests"), re.IGNORECASE)
+_RANGERS = re.compile(_catalog_pattern("extraction.friendly_forces.rangers"), re.IGNORECASE)
+_HEATWAVE = re.compile(_catalog_pattern("extraction.friendly_forces.heatwave"), re.IGNORECASE)
 
-_FIRE_INCIDENT = re.compile(r"שריפה|שריפת|\bfire\b", re.IGNORECASE)
-_BRUSH_FIRE = re.compile(r"שריפת קוצים|brush fire", re.IGNORECASE)
-_SIZE_SMALL = re.compile(r"קטנה|קטן|\bsmall\b", re.IGNORECASE)
-_SIZE_LARGE = re.compile(r"גדולה|גדול|\blarge\b|\bmajor\b", re.IGNORECASE)
-_ROUTE_NUMBER = re.compile(r"(?:כביש|route|highway)\s*(\d{1,4})\b", re.IGNORECASE)
-_CIGARETTE = re.compile(r"סיגריה|מסיגריה|cigarette", re.IGNORECASE)
-_HEDGED = re.compile(r"כנראה|ייתכן|חשד|possibly|likely|suspected|probably", re.IGNORECASE)
-_POLICE_PATROL = re.compile(r"ניידת|משטרה|police|patrol car", re.IGNORECASE)
-_FIREFIGHTERS = re.compile(r"כיבוי|כבאים|firefighters?|fire crews?", re.IGNORECASE)
+_FIRE_INCIDENT = re.compile(_catalog_pattern("extraction.friendly_forces.fire_incident"), re.IGNORECASE)
+_BRUSH_FIRE = re.compile(_catalog_pattern("extraction.friendly_forces.brush_fire"), re.IGNORECASE)
+_SIZE_SMALL = re.compile(_catalog_pattern("extraction.friendly_forces.size_small"), re.IGNORECASE)
+_SIZE_LARGE = re.compile(_catalog_pattern("extraction.friendly_forces.size_large"), re.IGNORECASE)
+_ROUTE_NUMBER = re.compile(_catalog_pattern("extraction.friendly_forces.route_number"), re.IGNORECASE)
+_CIGARETTE = re.compile(_catalog_pattern("extraction.friendly_forces.cigarette"), re.IGNORECASE)
+_HEDGED = re.compile(_catalog_pattern("extraction.friendly_forces.hedged"), re.IGNORECASE)
+_POLICE_PATROL = re.compile(_catalog_pattern("extraction.friendly_forces.police_patrol"), re.IGNORECASE)
+_FIREFIGHTERS = re.compile(_catalog_pattern("extraction.friendly_forces.firefighters"), re.IGNORECASE)
 _NO_BUILDING_RISK = re.compile(
-    r"אין סיכון\s+(?:ל|למ)?מבנים|no risk to buildings|no structures? at risk",
+    _catalog_pattern("extraction.friendly_forces.no_building_risk"),
     re.IGNORECASE,
 )
 

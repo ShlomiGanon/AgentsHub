@@ -8,6 +8,7 @@ import re
 
 from agents.contracts import ReportIngestionResult, project_report_facts
 from agents.runtime import Agent, get_authenticated_request_identity, get_trusted_operational_scope, tool
+from messages import get_catalog
 from persistence import AttendanceCycle, OperationalScope, TeamStatusPersistenceError, current_operational_scope, open_team_status_persistence, operational_now, operational_time_of_event, runtime_now, scope_from_event
 
 
@@ -15,22 +16,22 @@ from persistence import AttendanceCycle, OperationalScope, TeamStatusPersistence
 # readiness team states a headcount, a vehicle count or an absence, in either
 # language. No persona, scenario or fixture sentence appears here.
 _MANPOWER_COUNT = re.compile(
-    r"(\d+)\s*(?:כבאים|לוחמים|אנשים|firefighters?|personnel|members?)",
+    get_catalog("en").text("extraction.team_status.manpower_count"),
     re.IGNORECASE,
 )
 
 _RESOURCE_VOCABULARY = (
-    ("ASHED", re.compile(r"(?:אשד|ashed)\s*(\d+)", re.IGNORECASE)),
-    ("CARMEL", re.compile(r"(?:כרמל|carmel)\s*(\d+)", re.IGNORECASE)),
+    ("ASHED", re.compile(get_catalog("en").text("extraction.team_status.ashed"), re.IGNORECASE)),
+    ("CARMEL", re.compile(get_catalog("en").text("extraction.team_status.carmel"), re.IGNORECASE)),
 )
 
 # An absence is committed only when the reporter states why. The reason is a
 # closed operational category read from the message, never a default.
 _ABSENCE_REASONS = (
-    (re.compile(r"בדיקה רפואית|בדיקה תקופתית|medical check|medical exam|checkup", re.IGNORECASE), "medical checkup"),
-    (re.compile(r"מילואים|reserve duty", re.IGNORECASE), "reserve duty"),
-    (re.compile(r"חום גבוה|חולה|מחלה|חולהני|fever|\bsick\b|illness", re.IGNORECASE), "illness"),
-    (re.compile(r"חופשה|חופש|on leave|vacation", re.IGNORECASE), "leave"),
+    (re.compile(get_catalog("en").text("extraction.team_status.medical_check"), re.IGNORECASE), "medical checkup"),
+    (re.compile(get_catalog("en").text("extraction.team_status.reserve_duty"), re.IGNORECASE), "reserve duty"),
+    (re.compile(get_catalog("en").text("extraction.team_status.illness"), re.IGNORECASE), "illness"),
+    (re.compile(get_catalog("en").text("extraction.team_status.leave"), re.IGNORECASE), "leave"),
 )
 
 

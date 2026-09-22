@@ -7,6 +7,7 @@ import re
 
 from agents.contracts import AgentResult, InvocationPolicy, ReportIngestionResult, project_report_facts
 from agents.runtime import Agent, get_trusted_operational_scope, make_exact_result_capture, tool
+from messages import get_catalog
 from persistence import (
     OperationalScope,
     SurveillancePersistenceError,
@@ -20,40 +21,44 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _catalog_pattern(key: str) -> str:
+    return get_catalog("en").text(key)
+
+
 # Domain vocabulary for the trusted group-owned extraction path. These describe
 # how an operator states a camera state or a heat alert, in either language —
 # they are deliberately free of any scenario, camera number or place name, so a
 # fixture can exercise this path without defining it.
 _CAMERA_REFERENCE = re.compile(
-    r"(?:cam[-\s]?|camera\s*|מצלמה\s*(?:cam[-\s]?)?)(\d{1,3})\b",
+    _catalog_pattern("extraction.surveillance.camera_reference"),
     re.IGNORECASE,
 )
 
 _CAMERA_STATUS_PATTERNS = (
-    (re.compile(r"חזרה לפעול|שבה לפעול|עלתה חזרה|back online|restored|is back up", re.IGNORECASE), "active"),
-    (re.compile(r"הופסק|הורדה|הורדנו|נותק|כבתה|לא משדרת|אינה משדרת|offline|shut down|shutdown|taken down|went dark", re.IGNORECASE), "offline"),
-    (re.compile(r"הפרעות|תקועה|מטושטש|קפאה|לסירוגין|לפרקים|בלבול תרמי|interference|degraded|stuck|frozen|blurred|intermittent", re.IGNORECASE), "degraded"),
+    (re.compile(_catalog_pattern("extraction.surveillance.camera_active"), re.IGNORECASE), "active"),
+    (re.compile(_catalog_pattern("extraction.surveillance.camera_offline"), re.IGNORECASE), "offline"),
+    (re.compile(_catalog_pattern("extraction.surveillance.camera_degraded"), re.IGNORECASE), "degraded"),
 )
 
 _PLANNED_SHUTDOWN = re.compile(
-    r"יזומי|יזומה|מתוכננ|תחזוק|ניקוי|עדכון גרס|planned|scheduled|maintenance|cleaning|version update",
+    _catalog_pattern("extraction.surveillance.planned_shutdown"),
     re.IGNORECASE,
 )
 
-_DOWNTIME_TWO_HOURS = re.compile(r"לשעתיים|שעתיים|two hours", re.IGNORECASE)
-_DOWNTIME_HOURS = re.compile(r"(\d+(?:\.\d+)?)\s*(?:שעות|hours?)", re.IGNORECASE)
-_DOWNTIME_ONE_HOUR = re.compile(r"לשעה|one hour|an hour", re.IGNORECASE)
+_DOWNTIME_TWO_HOURS = re.compile(_catalog_pattern("extraction.surveillance.downtime_two_hours"), re.IGNORECASE)
+_DOWNTIME_HOURS = re.compile(_catalog_pattern("extraction.surveillance.downtime_hours"), re.IGNORECASE)
+_DOWNTIME_ONE_HOUR = re.compile(_catalog_pattern("extraction.surveillance.downtime_one_hour"), re.IGNORECASE)
 
 _HEAT_ALERT = re.compile(
-    r"התראת חום|התרעת חום|heat alert|heat warning",
+    _catalog_pattern("extraction.surveillance.heat_alert"),
     re.IGNORECASE,
 )
-_SEVERITY_LOW = re.compile(r"נמוכ|\blow\b", re.IGNORECASE)
-_SEVERITY_HIGH = re.compile(r"גבוה|\bhigh\b|\bsevere\b", re.IGNORECASE)
+_SEVERITY_LOW = re.compile(_catalog_pattern("extraction.surveillance.severity_low"), re.IGNORECASE)
+_SEVERITY_HIGH = re.compile(_catalog_pattern("extraction.surveillance.severity_high"), re.IGNORECASE)
 
 _CONDITION_SOURCES = (
-    (re.compile(r"חיישן טמפרטורה|temperature sensor", re.IGNORECASE), "temperature sensor"),
-    (re.compile(r"מצלמה תרמית|thermal camera", re.IGNORECASE), "thermal camera"),
+    (re.compile(_catalog_pattern("extraction.surveillance.temperature_sensor"), re.IGNORECASE), "temperature sensor"),
+    (re.compile(_catalog_pattern("extraction.surveillance.thermal_camera"), re.IGNORECASE), "thermal camera"),
 )
 
 

@@ -4827,6 +4827,14 @@ previous task.
 
 All other register items are unchanged.
 
+### Task 64A - Hebrew Leakage Regression Repair
+
+- **Status:** done. The regression came from Hebrew regex vocabulary and supersession stopwords embedded directly in four production modules: `agents/friendly_forces_agent.py`, `agents/surveillance_agent.py`, `agents/team_status_agent.py`, and `orchestrator/supersession.py`.
+- **Repair:** moved the bilingual extraction patterns into the existing `messages/en.py` and `messages/he.py` catalogs and made the four modules read them through `get_catalog()`. Regex structure, extraction, routing, persistence, and provider behavior were unchanged.
+- **Focused verification:** 76 focused tests passed, including `test_hebrew_leakage.py`, Tasks 57-58, Tasks 63-64, and the relevant agent/message tests (46 additional agent/message tests passed).
+- **Full offline suite:** **1,912 passed, 0 failed, 7 warnings, 238.62 seconds**.
+- **Static checks:** targeted `compileall` and `git diff --check` passed. No remaining Hebrew literals were found in the four repaired production modules. `pyrefly.toml` was not modified.
+
 ### Task 64 - Deterministic Correction / Retraction Intake and Ingestion Wiring (provider-degraded mode)
 
 - **Status:** implemented and verified deterministically, plus a partial real Browser check. Task 63 built the mechanism; this connects it to intake so a clearly expressed correction reaches it without a provider.
