@@ -306,6 +306,7 @@ class HttpApiClient(BotApiClient):
         protocol_hint: str | None = None,
         telegram_chat_id: str | None = None,
         telegram_chat_type: str | None = None,
+        fixed_state_button: bool = False,
     ) -> MessageSubmissionResult:
         body = {"text": text, "sender_identity": sender_identity, "source_message_id": source_message_id}
         if conversation_id is not None:
@@ -314,6 +315,8 @@ class HttpApiClient(BotApiClient):
             body["event_data_event_id"] = event_data_event_id
         if protocol_hint is not None:
             body["protocol_hint"] = protocol_hint
+        if fixed_state_button:
+            body["fixed_state_button"] = True
         if telegram_chat_id is not None:
             body["telegram_chat_id"] = telegram_chat_id
         if telegram_chat_type is not None:

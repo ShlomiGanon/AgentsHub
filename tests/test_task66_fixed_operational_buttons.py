@@ -282,6 +282,7 @@ def test_api_fixed_button_hint_bypasses_conversation_and_generic_model_routing(t
             "source_message_id": "task66-button-1",
             "conversation_id": "task66-conversation",
             "protocol_hint": "report_team_availability",
+            "fixed_state_button": True,
         },
     )
     state.team[LIVE.key] = "team-live-b"
@@ -294,6 +295,7 @@ def test_api_fixed_button_hint_bypasses_conversation_and_generic_model_routing(t
             "source_message_id": "task66-button-2",
             "conversation_id": "task66-conversation",
             "protocol_hint": "report_team_availability",
+            "fixed_state_button": True,
         },
     )
 

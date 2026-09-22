@@ -203,6 +203,7 @@ class FakeBotApiClient(BotApiClient):
         protocol_hint: str | None = None,
         telegram_chat_id: str | None = None,
         telegram_chat_type: str | None = None,
+        fixed_state_button: bool = False,
     ) -> MessageSubmissionResult:
         if sender_identity not in self.users:
             raise ApiRequestError(401, f"'{sender_identity}' is not a registered identity")
@@ -216,6 +217,8 @@ class FakeBotApiClient(BotApiClient):
             self.calls.append(("submit_message_event_data", event_data_event_id))
         if protocol_hint is not None:
             self.calls.append(("submit_message_protocol_hint", protocol_hint))
+        if fixed_state_button:
+            self.calls.append(("submit_message_fixed_state_button",))
         if telegram_chat_id is not None or telegram_chat_type is not None:
             self.calls.append(("submit_message_chat", telegram_chat_id, telegram_chat_type))
         assert self.message_submission_result is not None, "test must set message_submission_result"

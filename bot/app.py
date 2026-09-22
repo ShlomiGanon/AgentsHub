@@ -376,6 +376,7 @@ async def _submit_and_format_message(
     protocol_hint: str | None = None,
     telegram_chat_id: str | None = None,
     telegram_chat_type: str | None = None,
+    fixed_state_button: bool = False,
 ) -> tuple[str, MessageSubmissionResult | None]:
     """Submit one message and return both presentation text and semantic result."""
 
@@ -390,6 +391,7 @@ async def _submit_and_format_message(
             protocol_hint,
             telegram_chat_id=telegram_chat_id,
             telegram_chat_type=telegram_chat_type,
+            fixed_state_button=fixed_state_button,
         )
     except ApiRequestError as exc:
         messages = interactions.message_catalog_for(deps)
@@ -471,6 +473,7 @@ async def present_incoming_message(
     event_data_event_id: str | None = None,
     protocol_hint: str | None = None,
     telegram_chat_type: str | None = None,
+    fixed_state_button: bool = False,
 ) -> str | None:
     """Present one free-form message with the shared status/edit lifecycle.
 
@@ -506,6 +509,7 @@ async def present_incoming_message(
             protocol_hint,
             telegram_chat_id=chat_id if telegram_chat_type is not None else None,
             telegram_chat_type=telegram_chat_type,
+            fixed_state_button=fixed_state_button,
         )
     except ApiNotImplementedError as exc:
         logger.info(
@@ -609,6 +613,16 @@ BUTTON_PROTOCOL_HINTS = {
     "📋 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05d0\u05d7\u05e8\u05d5\u05e0\u05d9\u05dd": "query_historical_incidents",
     "📋 \u05d9\u05d5\u05de\u05df \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05d5\u05ea\u05d7\u05e7\u05d5\u05e8": "query_historical_incidents",
 }
+
+# These controls are a read-only operational surface, distinct from a free-form
+# message that happens to use the same protocol hint.
+FIXED_STATE_BUTTON_PROTOCOLS = frozenset({
+    "report_team_availability",
+    "query_camera_status",
+    "query_drone_fleet_status",
+    "query_historical_incidents",
+    "overall_situational_picture",
+})
 
 QUEUE_SHORTCUT_PHRASES = {
     "\u23f3 \u05ea\u05d5\u05e8 \u05d0\u05d9\u05e9\u05d5\u05e8\u05d9\u05dd",  # Approvals queue with hourglass
@@ -756,6 +770,7 @@ async def _on_text_message(update, context) -> None:
         return
 
     protocol_hint = BUTTON_PROTOCOL_HINTS.get(incoming_text)
+    fixed_state_button = protocol_hint in FIXED_STATE_BUTTON_PROTOCOLS
     if is_attendance_submission:
         # The multi-turn workflow already collected every required field.
         # Pin it to the attendance protocol so the model cannot misroute the
@@ -794,6 +809,7 @@ async def _on_text_message(update, context) -> None:
             event_data_event_id,
             protocol_hint=protocol_hint,
             telegram_chat_type=chat_type,
+            fixed_state_button=fixed_state_button,
         )
     finally:
         activity_task.cancel()

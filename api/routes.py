@@ -504,7 +504,11 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     "duplicate": True,
                 }), 202
 
-        fixed_state_protocol = _fixed_state_protocol(str(text), request_payload.get("protocol_hint"))
+        fixed_state_protocol = (
+            _fixed_state_protocol(str(text), request_payload.get("protocol_hint"))
+            if request_payload.get("fixed_state_button") is True
+            else None
+        )
         if fixed_state_protocol is not None:
             if is_scoped_target(scoped_agent) and (
                 app_ctx.deps.protocol_set.get(fixed_state_protocol) is not None
