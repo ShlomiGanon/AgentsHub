@@ -75,17 +75,24 @@ from profiles import (
     OptimizationPolicy,
     initialize_operational_scope,
     operational_profile_context,
+    provision_operational_world,
     profile_for_scope,
     resolve_simulation_step,
 )
 from persistence import (
     NotFoundError as PersistenceNotFoundError,
+    OperationalScope,
     operational_scope_context,
     operational_time_context,
     scoped_conversation_id,
     scope_from_simulation_context,
 )
-from api.simulations import find_simulation_scenario, materialize_simulation, simulation_catalog_payload
+from api.simulations import (
+    find_simulation_scenario,
+    find_simulation_scenario_by_id,
+    materialize_simulation,
+    simulation_catalog_payload,
+)
 
 from orchestrator.flows import continue_after_approval, continue_after_clarification, decline, resolve_approval, resolve_clarification
 
@@ -144,9 +151,23 @@ def _simulation_context_from_request(ctx, sender_identity: str, chat_id: str | N
         raise InvalidInputError(str(exc), field="X-Simulation-ID") from exc
 
 
-def _initialize_request_operational_scope(ctx, simulation_context, sender_identity: str | None = None):
+def _initialize_request_operational_scope(ctx, simulation_context, sender_identity: str | None = None, *, provisioning_ctx=None):
+    """Ensure this request's operational world exists, completely.
+
+    `provisioning_ctx` carries the **unscoped** context. Message routing narrows
+    the registry to the one specialist that owns the sending group, and
+    provisioning must not inherit that narrowing — doing so is what left a run
+    with a team world but no surveillance world until a camera message arrived.
+    Routing is unchanged; only world creation sees every domain.
+
+    This stays a safety net: a run created through `POST /Simulations/<id>/Runs`
+    is already complete before its first message, so this re-ensure finds
+    nothing to do and says nothing. An incomplete world is still logged.
+    """
+
     scope = scope_from_simulation_context(simulation_context)
-    initialize_operational_scope(ctx.loaded_profile, ctx.deps.registry, scope)
+    world_ctx = provisioning_ctx if provisioning_ctx is not None else ctx
+    provision_operational_world(world_ctx.loaded_profile, world_ctx.deps.registry, scope, announce=False)
     return scope
 
 
@@ -486,7 +507,9 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             str(telegram_chat_id) if telegram_chat_id is not None else None,
             str(telegram_chat_type) if telegram_chat_type is not None else None,
         )
-        operational_scope = _initialize_request_operational_scope(ctx, simulation_context, str(sender_identity))
+        operational_scope = _initialize_request_operational_scope(
+            ctx, simulation_context, str(sender_identity), provisioning_ctx=app_ctx
+        )
         if conversation_id is not None:
             conversation_id = scoped_conversation_id(conversation_id, operational_scope)
 
@@ -2538,6 +2561,42 @@ def build_simulations_blueprint(ctx: "ApiContext") -> Blueprint:
             materialize_simulation(scenario, ctx.loaded_profile.simulation_users, ctx.loaded_profile.simulation_groups)
         )
 
-    return blueprint
+    @blueprint.route("/Simulations/<scenario_id>/Runs", methods=["POST"])
+    def provision_simulation_run(scenario_id):
+        """Create one run's complete operational world before any step is sent.
+
+        Run creation, not the first report, owns baseline world creation. The
+        registry here is the unscoped one, so every domain the resolved
+        organization enables is materialized at once and the run is inspectable
+        immediately. Provisioning is additive, so re-provisioning a run already
+        in progress leaves its current state alone.
+        """
+
+        if not is_authenticated_bot_request():
+            raise AuthorizationError("simulation run provisioning requires an authenticated simulator service")
+
+        payload = request.get_json(silent=True) or {}
+        run_id = str(payload.get("scenario_run_id") or "").strip()
+        if not run_id:
+            raise InvalidInputError(
+                messages.text("api.field_required", field="scenario_run_id"), field="scenario_run_id"
+            )
+        if find_simulation_scenario_by_id(ctx.loaded_profile, str(scenario_id)) is None:
+            raise NotFoundError(messages.text("api.simulation_not_found", simulation_key=str(scenario_id)))
+
+        scope = OperationalScope.simulation(str(scenario_id), run_id)
+        result = provision_operational_world(ctx.loaded_profile, ctx.deps.registry, scope)
+        response = {
+            "scenario_id": str(scenario_id),
+            "scenario_run_id": run_id,
+            "scope_key": result.scope_key,
+            "operational_profile": result.profile_id,
+            "domains": list(result.domains),
+            "ready": result.ready,
+            "failures": list(result.failures),
+        }
+        # A run whose required baseline could not be built is never announced as
+        # ready; the caller must not start sending steps into a partial world.
+        return jsonify(response), (200 if result.ready else 503)
 
     return blueprint

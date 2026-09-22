@@ -367,6 +367,16 @@ class BotApiClient(ABC):
         """Submit one simulator sensor Event through the authenticated API transport."""
 
 
+    async def provision_simulation_run(self, scenario_id: str, scenario_run_id: str) -> dict:
+        """Ask the API to build one simulation run's complete operational world.
+
+        Deliberately not abstract: a transport that cannot provision simply
+        reports nothing rather than breaking every existing implementation.
+        """
+
+        return {}
+
+
     @abstractmethod
     async def answer_clarification_hold(
         self, event_id: str, chosen_classification: str, answering_identity: str

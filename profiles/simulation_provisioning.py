@@ -17,12 +17,16 @@ operator's later edits (a simulation user's full name, a simulation group's
 label or promoted chat ID) survive every subsequent restart.
 """
 
+import logging
 from dataclasses import dataclass
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
 from persistence import OperationalScope
+from profiles.operational_profile import profile_for_scope
 from profiles.simulation import simulation_group_chat_id, simulation_user_telegram_id
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from persistence import PersistenceInterface
@@ -108,14 +112,96 @@ def operational_baseline_for_scenario(loaded_profile: "LoadedProfile", scenario_
     return baseline
 
 
+@dataclass(frozen=True)
+class RunProvisioningResult:
+    """What one operational world contains after provisioning, and whether it is usable."""
+
+    scope_key: str
+    profile_id: str
+    domains: tuple[str, ...]
+    ready: bool
+    failures: tuple[str, ...] = ()
+
+
+def provision_operational_world(
+    loaded_profile: "LoadedProfile", registry, scope: OperationalScope, *, announce: bool = True
+) -> RunProvisioningResult:
+    """Materialize every domain the resolved organization enables, at once.
+
+    This is the one orchestration point for creating a run's world. It composes
+    the agents' own `ensure_operational_scope` implementations rather than
+    reaching into any store, and it must be given the **full** registry: message
+    routing narrows the registry to one owning specialist, and provisioning that
+    inherits that narrowing is exactly how a run ended up with a team world but
+    no surveillance world until a camera message happened to arrive.
+
+    Every initializer is additive — a scope that already exists is left alone —
+    so re-provisioning a running scenario never resets current state.
+
+    A domain that cannot be provisioned is reported rather than skipped: the run
+    is not ready, and nothing falls back to LIVE or to another run.
+
+    `announce=False` is for the per-request safety net, which re-ensures an
+    already-materialized world on every incoming message: run creation is worth
+    one log line, one line per message is noise inside a request trace. An
+    incomplete world is always logged, at either call site.
+    """
+
+    baseline = (
+        operational_baseline_for_scenario(loaded_profile, scope.scenario_id or "")
+        if scope.is_simulation
+        else {}
+    )
+    profile = profile_for_scope(loaded_profile, scope)
+
+    initialized: list[str] = []
+    failures: list[str] = []
+    for agent in registry.all():
+        initializer = getattr(agent, "ensure_operational_scope", None)
+        if not callable(initializer):
+            continue
+        agent_name = str(getattr(agent, "name", agent.__class__.__name__))
+        try:
+            initializer(scope, baseline=baseline)
+        except Exception as exc:
+            failures.append(f"{agent_name}: {exc}")
+        else:
+            initialized.append(agent_name)
+
+    result = RunProvisioningResult(
+        scope_key=scope.key,
+        profile_id=profile.profile_id,
+        domains=tuple(sorted(initialized)),
+        ready=not failures,
+        failures=tuple(failures),
+    )
+    if failures:
+        logger.error(
+            "operational world provisioning incomplete",
+            extra={
+                "event": "run_provisioning_failed",
+                "scope_key": scope.key,
+                "profile_id": profile.profile_id,
+                "failures": list(failures),
+            },
+        )
+    elif announce:
+        logger.info(
+            "operational world provisioned",
+            extra={
+                "event": "run_provisioned",
+                "scope_key": scope.key,
+                "profile_id": profile.profile_id,
+                "domains": list(result.domains),
+            },
+        )
+    return result
+
+
 def initialize_operational_scope(loaded_profile: "LoadedProfile", registry, scope: OperationalScope) -> None:
     """Create one isolated operational world through agent-declared stores."""
 
-    baseline = operational_baseline_for_scenario(loaded_profile, scope.scenario_id or "") if scope.is_simulation else {}
-    for agent in registry.all():
-        initializer = getattr(agent, "ensure_operational_scope", None)
-        if callable(initializer):
-            initializer(scope, baseline=baseline)
+    provision_operational_world(loaded_profile, registry, scope, announce=False)
 
 
 def repair_legacy_live_simulation_memberships(

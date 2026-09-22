@@ -356,6 +356,22 @@ class HttpApiClient(BotApiClient):
             status=str(response_payload.get("status") or "queued"),
         )
 
+    async def provision_simulation_run(self, scenario_id: str, scenario_run_id: str) -> dict:
+        status, payload = await self._call(
+            "POST",
+            f"/Simulations/{scenario_id}/Runs",
+            BOT_SERVICE_IDENTITY,
+            {"scenario_run_id": scenario_run_id},
+        )
+        # A run whose world could not be built answers 503 carrying the whole
+        # provisioning contract, including which domains failed. That is an
+        # answer, not a transport failure: the caller refuses the run with the
+        # reason rather than with a bare status code.
+        if status >= 400 and "ready" not in payload:
+            self._raise_for_error(status, payload)
+        return payload
+
+
     async def answer_clarification_hold(self, event_id: str, chosen_classification: str, answering_identity: str) -> HoldAnswerOutcome:
         status, response_payload = await self._call("POST", f"/Clarify/{event_id}", answering_identity, {"classification": chosen_classification})
         return self._hold_answer_outcome(status, response_payload, invalid_field_status="invalid_classification", resolved_status="resolved")

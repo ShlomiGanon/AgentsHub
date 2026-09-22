@@ -695,3 +695,79 @@ def test_run_polling_registers_handlers_then_polls(client, monkeypatch):
     client.run_polling(lambda application: calls.append(("registered", application is client._application)))
 
     assert calls == [("registered", True), "polled"]
+
+
+# -- provision_simulation_run (Task 68) --------------------------------------
+#
+# `_raise_for_error` raises unconditionally — it is "raise this error", not
+# "raise if this is an error". Every other call site guards it with a status
+# check, and a method that forgets the guard turns a perfectly good 200 into a
+# transport failure, which is exactly what happened here.
+
+
+class _StubbedProvisioning(HttpApiClient):
+    """The real method over a scripted transport, so the status handling itself is under test."""
+
+    def __init__(self, status, payload):
+        super().__init__("http://127.0.0.1:1", bot_service_key=_TEST_BOT_SERVICE_KEY)
+        self._scripted = (status, payload)
+        self.calls = []
+
+    async def _call(self, method, path, identity, request_payload=None, **kwargs):
+        self.calls.append((method, path, identity, request_payload))
+        return self._scripted
+
+
+def test_provisioning_a_run_returns_the_world_contract_on_success():
+    client = _StubbedProvisioning(200, {
+        "scope_key": "SIMULATION_RUN:FIRE_002_PHASE_1:run-1",
+        "operational_profile": "fire_station",
+        "domains": ["surveillance_agent", "team_status_agent"],
+        "ready": True,
+        "failures": [],
+    })
+
+    result = _run(client.provision_simulation_run("FIRE_002_PHASE_1", "run-1"))
+
+    assert result["ready"] is True
+    assert result["operational_profile"] == "fire_station"
+    assert client.calls == [
+        ("POST", "/Simulations/FIRE_002_PHASE_1/Runs", BOT_SERVICE_IDENTITY, {"scenario_run_id": "run-1"})
+    ]
+
+
+def test_an_incomplete_world_comes_back_as_an_answer_not_a_transport_failure():
+    """503 carries the whole contract, so the caller can refuse the run *with reasons*."""
+
+    client = _StubbedProvisioning(503, {
+        "scope_key": "SIMULATION_RUN:FIRE_002_PHASE_1:run-2",
+        "operational_profile": "fire_station",
+        "domains": ["team_status_agent"],
+        "ready": False,
+        "failures": ["surveillance_agent: store unavailable"],
+    })
+
+    result = _run(client.provision_simulation_run("FIRE_002_PHASE_1", "run-2"))
+
+    assert result["ready"] is False
+    assert result["failures"] == ["surveillance_agent: store unavailable"]
+
+
+def test_an_error_without_the_contract_still_raises():
+    client = _StubbedProvisioning(404, {"message": "simulation not found", "error_class": "not_found"})
+
+    with pytest.raises(ApiRequestError) as excinfo:
+        _run(client.provision_simulation_run("NOPE", "run-3"))
+
+    assert excinfo.value.status_code == 404
+
+
+def test_provisioning_an_undeclared_scenario_raises_over_real_http(server):
+    """The same refusal, end to end, against a profile that declares no simulations."""
+
+    client = HttpApiClient(server.base_url, bot_service_key=_TEST_BOT_SERVICE_KEY)
+
+    with pytest.raises(ApiRequestError) as excinfo:
+        _run(client.provision_simulation_run("NOT_A_SCENARIO", "run-4"))
+
+    assert excinfo.value.status_code == 404

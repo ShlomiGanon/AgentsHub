@@ -61,7 +61,9 @@ from profiles.operational_profile import (
 )
 from profiles.simulation_provisioning import (
     ProvisioningResult,
+    RunProvisioningResult,
     ensure_simulation_entities,
+    provision_operational_world,
     initialize_operational_scope,
     operational_baseline_for_scenario,
 )
@@ -116,6 +118,8 @@ __all__ = [
     "operational_profile_context",
     "profile_for_scope",
     "profile_id_for_scenario",
+    "RunProvisioningResult",
+    "provision_operational_world",
     "initialize_operational_scope",
     "operational_baseline_for_scenario",
 ]

@@ -47,6 +47,20 @@ def find_simulation_scenario(loaded_profile: "LoadedProfile", key: str) -> Simul
     return None
 
 
+def find_simulation_scenario_by_id(loaded_profile: "LoadedProfile", scenario_id: str) -> SimulationScenario | None:
+    """The declared scenario whose canonical scenario_id matches, or None.
+
+    Run creation addresses a scenario by its canonical identity rather than by
+    the profile's declaration key, because that identity is what every event and
+    every operational scope already carries.
+    """
+
+    for scenario in loaded_profile.simulations:
+        if scenario.scenario_id == scenario_id:
+            return scenario
+    return None
+
+
 def materialize_simulation(
     scenario: SimulationScenario,
     simulation_users: tuple[SimulationPersona, ...],

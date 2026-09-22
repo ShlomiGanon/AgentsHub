@@ -669,8 +669,19 @@ SIMULATOR_BODY = """
 
   // ---- dispatch (the bot's own requests, made from the browser) --------------------------
 
+  function scenarioHasTimestampedStep() {
+    return Object.keys(state.queues || {}).some(function (key) {
+      return (state.queues[key] || []).some(function (item) { return !!item.timestamp; });
+    });
+  }
+
   async function ensureScenarioRun(step) {
-    if (!state.scenario || !state.scenario.id || !step.timestamp) return true;
+    // `step === null` is the eager call made the moment a fixture is loaded.
+    // Creating the run is what materializes its whole operational world, so
+    // this is what makes a loaded run complete and inspectable before step 1
+    // instead of one domain at a time as messages happen to arrive.
+    const timestamped = step ? !!step.timestamp : scenarioHasTimestampedStep();
+    if (!state.scenario || !state.scenario.id || !timestamped) return true;
     if (state.runId && !state.resumeRunId) return true;
     let result;
     try {
@@ -1045,7 +1056,7 @@ SIMULATOR_BODY = """
   // never expected to have anything left to map, but this costs nothing and keeps every path on
   // one rule). Offers the mapping panel only when something is actually missing, so a
   // fully-specified scenario never sees an extra click.
-  function loadRawScenario(raw) {
+  async function loadRawScenario(raw) {
     const missing = collectMissingIdentifiers(raw);
     if (missing.groupsNeedingId.length || missing.personaValues.length) {
       offerManualMapping(raw, missing.groupsNeedingId, missing.personaValues);
@@ -1055,7 +1066,9 @@ SIMULATOR_BODY = """
       loadScenario(raw);
     } catch (error) {
       showAlert(error.message, true);
+      return;
     }
+    await ensureScenarioRun(null);
   }
 
   // ---- profile-declared simulations: server-queried, no manual ID entry ------------------
@@ -1137,7 +1150,7 @@ SIMULATOR_BODY = """
       // Always the already-materialized shape (reserved IDs already embedded server-side) — routed
       // through loadRawScenario purely as defense-in-depth, on the same one rule every other entry
       // point uses; a real profile simulation is never expected to have anything left to map.
-      loadRawScenario(result.payload);
+      await loadRawScenario(result.payload);
     } catch (error) {
       showAlert(t('profile_simulation_load_failed', { message: error.message }), true);
     } finally {

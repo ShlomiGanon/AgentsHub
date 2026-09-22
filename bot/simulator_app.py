@@ -130,8 +130,27 @@ class SimulatorRuntime:
             return {"scenario_id": scenario_id, "scenario_run_id": resume_run_id, "resumed": True}
 
         scenario_run_id = uuid.uuid4().hex
+
+        # The run's world is built now, by the API that owns the stores, so the
+        # scenario is a complete inspectable operational world before step 1 is
+        # sent. A run whose baseline could not be provisioned is never handed
+        # back as usable.
+        provisioning = await self.api_client.provision_simulation_run(scenario_id, scenario_run_id)
+        if provisioning and provisioning.get("ready") is False:
+            raise SimulatorRequestRefused(
+                "scenario run world could not be provisioned: "
+                + "; ".join(str(failure) for failure in provisioning.get("failures", ()))
+            )
+
         self._scenario_runs[scenario_run_id] = scenario_id
-        return {"scenario_id": scenario_id, "scenario_run_id": scenario_run_id, "resumed": False}
+        return {
+            "scenario_id": scenario_id,
+            "scenario_run_id": scenario_run_id,
+            "resumed": False,
+            "operational_profile": provisioning.get("operational_profile") if provisioning else None,
+            "domains": list(provisioning.get("domains", ())) if provisioning else [],
+            "ready": bool(provisioning.get("ready", True)) if provisioning else True,
+        }
 
     def _simulation_context_from_payload(
         self,
