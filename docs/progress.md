@@ -4886,3 +4886,16 @@ Replaces the Task 63 entry, which said the resolution was not yet wired into ing
   readable from history. The same shape for `FIRE_002_PHASE_3` steps 3 and 5.
 
 All other register items are unchanged.
+
+### Task 65 - Conversation History OperationalScope Isolation
+
+- **Status:** implemented and verified offline. The narrow defect was that `conversation_messages` was keyed only by the transport `conversation_id`; the API and follow-up paths already carried trusted simulation scope for operational state, but conversation reads and writes did not. A reused simulator chat id could therefore address another run's conversation history.
+- **Canonical identity:** `scoped_conversation_id()` preserves the transport id for LIVE. For simulation it appends the trusted scenario and run (`<transport>::scope=<scenario>::run=<run>`), so the same chat in two runs is distinct while separate chats in one run remain distinct.
+- **Storage:** migration 27 adds nullable `conversation_messages.scope_key` and a scoped lookup index. It is additive, idempotent and backward-compatible. Existing NULL-scope rows are never rewritten or deleted: LIVE may read them for continuity; simulation never reads them. New writes always carry the resolved trusted scope key.
+- **Read/write coverage:** `/Msg`, follow-up correlation, required-field clarification, and resumed protocol clarification now pass the operational scope on both fetch and append. Event-link follow-up lookup applies the same LIVE-versus-exact-simulation filter. Missing or incomplete simulation metadata does not fall back to LIVE; only the trusted complete scope pair creates a simulation scope.
+- **Focused verification:** `tests/test_task65_conversation_scope.py` passes 5/5, covering same-chat run A/B isolation, simulation exclusion of LIVE and legacy NULL rows, LIVE continuity, separate chats, ambient trusted scope, and idempotent migration. The focused conversation/regression set passes 170/170. `tests/test_file_catalog.py` passes after registering the new test.
+- **Full offline suite:** **1,917 passed, 0 failed, 7 warnings, 405.25 seconds**. Targeted compile checks and `git diff --check` also pass.
+- **Browser boundary:** the required manual Simulator check could not start. The local API warmup receives OpenRouter `403 Key limit exceeded`, so the Simulator page is unavailable and no browser run is claimed for Task 65. The supervisor was stopped after the failed startup loop; no database reset, deletion, manual SQL migration or external message was performed.
+- **Explicitly unchanged:** Incident/Evidence, provider/SITREP behavior, resources, profiles, event-history redesign, legacy deletion, fallback-to-live simulation behavior, display-name matching, auto-run and auto-next remain out of scope.
+
+All other register items are unchanged.

@@ -63,6 +63,9 @@ from orchestrator.flows import (
     render_response,
     resolve_follow_up,
     is_context_dependent_follow_up,
+    FIXED_STATE_PROTOCOLS,
+    FixedStateRead,
+    read_fixed_operational_state,
 )
 
 from protocols import CriticalityLevel, Protocol, ProtocolEditError, add_protocol, remove_protocol, replace_protocol
@@ -291,6 +294,39 @@ def _team_roster_view(text: str) -> str:
     return "summary"
 
 
+def _fixed_state_protocol(text: str, protocol_hint: object) -> str | None:
+    """Return a fixed operational-state control's declared protocol, if any."""
+
+    hinted = str(protocol_hint).strip() if isinstance(protocol_hint, str) else ""
+    if hinted in FIXED_STATE_PROTOCOLS:
+        return hinted
+
+    mapped = KNOWN_BUTTON_PROTOCOLS.get(text.strip())
+    return mapped if mapped in FIXED_STATE_PROTOCOLS else None
+
+
+def _log_fixed_state_read(protocol_name: str, operational_scope, state_read, trace_id: str) -> None:
+    logger.info(
+        "fixed operational-state button read",
+        extra={
+            "event": "fixed_operational_state_read",
+            "request_id": trace_id,
+            "button": protocol_name,
+            "callback": protocol_name,
+            "scope_kind": operational_scope.kind,
+            "scenario_id": operational_scope.scenario_id,
+            "scenario_run_id": operational_scope.scenario_run_id,
+            "sources": state_read.sources,
+            "domains": state_read.domains,
+            "fetched_at": state_read.fetched_at,
+            "source_updated_at": state_read.source_updated_at,
+            "cache_used": False,
+            "result_status": state_read.result_status,
+            "trace_id": trace_id,
+        },
+    )
+
+
 def _is_approval_policy_question(text: str) -> bool:
     normalized = text.strip().casefold()
     return any(word in normalized for word in ("\u05d0\u05d9\u05e9\u05d5\u05e8", "\u05dc\u05d0\u05e9\u05e8", "\u05de\u05d0\u05e9\u05e8")) and any(
@@ -467,6 +503,89 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     "status": "queued" if existing_event.get("outcome") is None else existing_event["outcome"],
                     "duplicate": True,
                 }), 202
+
+        fixed_state_protocol = _fixed_state_protocol(str(text), request_payload.get("protocol_hint"))
+        if fixed_state_protocol is not None:
+            if is_scoped_target(scoped_agent) and (
+                app_ctx.deps.protocol_set.get(fixed_state_protocol) is not None
+                and ctx.deps.protocol_set.get(fixed_state_protocol) is None
+            ):
+                raise InvalidInputError(
+                    messages.text(
+                        "api.protocol_out_of_group_scope",
+                        protocol=fixed_state_protocol,
+                        agent=scoped_agent,
+                    ),
+                    field="protocol_hint",
+                )
+
+        if fixed_state_protocol is not None and ctx.deps.protocol_set.get(fixed_state_protocol) is not None:
+            require(level, RequestedOperation.ASK_QUESTION)
+            if (
+                fixed_state_protocol == "report_team_availability"
+                and ctx.deps.persistence.is_simulation_identity(caller_identity)
+                and not operational_scope.is_simulation
+            ):
+                raise AuthorizationError("a trusted simulation scope is required for a synthetic identity")
+
+            try:
+                state_read = read_fixed_operational_state(
+                    fixed_state_protocol,
+                    registry=ctx.deps.registry,
+                    history_query_service=ctx.deps.history_query_service,
+                    messages=messages,
+                    operational_scope=operational_scope,
+                    scenario_time=getattr(simulation_context, "scenario_time", None),
+                    sender_identity_filter=None if level >= PermissionLevel.COMMANDER else caller_identity,
+                )
+            except Exception:
+                logger.warning(
+                    "fixed operational-state read unavailable",
+                    exc_info=True,
+                    extra={
+                        "event": "fixed_operational_state_unavailable",
+                        "button": fixed_state_protocol,
+                        "scope_kind": operational_scope.kind,
+                        "scenario_id": operational_scope.scenario_id,
+                        "scenario_run_id": operational_scope.scenario_run_id,
+                        "trace_id": trace_id,
+                    },
+                )
+                answer = messages.text("operational_button.state_unavailable")
+                _log_fixed_state_read(
+                    fixed_state_protocol,
+                    operational_scope,
+                    FixedStateRead(
+                        answer=answer,
+                        sources=(),
+                        domains=(),
+                        result_status="unavailable",
+                        fetched_at=_now(),
+                    ),
+                    trace_id,
+                )
+                return jsonify({
+                    "taken_as": "question",
+                    "answer": answer,
+                    "protocol": fixed_state_protocol,
+                    "provenance": {"cache_used": False, "result_status": "unavailable"},
+                })
+
+            _log_fixed_state_read(fixed_state_protocol, operational_scope, state_read, trace_id)
+            return jsonify({
+                "taken_as": "question",
+                "answer": state_read.answer,
+                "protocol": fixed_state_protocol,
+                "provenance": {
+                    "sources": list(state_read.sources),
+                    "domains": list(state_read.domains),
+                    "fetched_at": state_read.fetched_at,
+                    "source_updated_at": state_read.source_updated_at,
+                    "cache_used": False,
+                    "result_status": state_read.result_status,
+                    "snapshot": state_read.provenance,
+                },
+            })
 
         prior_messages: tuple[dict, ...] = ()
         if conversation_id is not None and history_turns > 0:

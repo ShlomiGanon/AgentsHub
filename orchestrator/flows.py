@@ -92,6 +92,11 @@ from orchestrator.situational_picture import (  # re-exported: api may only impo
     render_typed_snapshot,
     REASONING_OUTPUT_TOKEN_BUDGET,
 )
+from orchestrator.fixed_state import (  # re-exported: API fixed controls use authoritative stores directly
+    FIXED_STATE_PROTOCOLS,
+    FixedStateRead,
+    read_fixed_operational_state,
+)
 from orchestrator.follow_up import FollowUpResolution, is_context_dependent_follow_up, resolve_follow_up
 from orchestrator.event_queue import PolicyAwareEventQueue, SerialEventQueue, WorkItem
 from orchestrator.group_routing import (  # re-exported: api may only import orchestrator.flows

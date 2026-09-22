@@ -128,6 +128,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `orchestrator/capabilities.py` | Production | Private implementation | Builds the role-aware, per-caller Main Agent capability and system context. |
 | `orchestrator/event_queue.py` | Production | Private implementation | Serializes event processing on a dedicated worker. |
 | `orchestrator/flows.py` | Production | Private implementation | Coordinates report, request, hold-resume, protocol, and outcome workflows. |
+| `orchestrator/fixed_state.py` | Production | Private implementation | Performs deterministic, scope-bound authoritative reads for fixed operational-state controls without model or conversation authority. |
 | `orchestrator/follow_up.py` | Production | Private implementation | Resolves short follow-up messages against persisted conversation/event state using catalog-owned multilingual recognition patterns. |
 | `orchestrator/group_routing.py` | Production | Private implementation | Holds the in-memory, DB-backed Telegram group to agent routing table and scopes flow dependencies per group. |
 | `orchestrator/holds.py` | Production | Private implementation | Creates and resolves clarification and approval holds. |
@@ -229,6 +230,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_task63_correction_supersession.py` | Test | Internal | Verifies correction/retraction recognition, safe target resolution, scope-isolated supersession storage, and that a retracted report stops being current while staying in history. |
 | `tests/test_task64_correction_intake.py` | Test | Internal | Verifies deterministic correction intake, restraint against ordinary negative reports, fixture-pair resolution, scope isolation, idempotence and the effect on current facts. |
 | `tests/test_task65_conversation_scope.py` | Test | Internal | Verifies conversation-history isolation by trusted operational scope, LIVE continuity, legacy-row compatibility, and idempotent migration. |
+| `tests/test_task66_fixed_operational_buttons.py` | Test | Internal | Verifies fixed operational-state buttons reread authoritative state, preserve LIVE/simulation isolation, bypass models and conversation history, and rebuild the picture. |
 | `tests/test_group_routing.py` | Test | Internal | Verifies the group routing table, staleness refresh, scope resolution, and dependency scoping. |
 | `tests/test_history_agent.py` | Test | Internal | Verifies history agent behavior and edge cases. |
 | `tests/test_history_event_pipeline.py` | Test | Internal | Verifies extraction, time normalization, and durable history writes. |
