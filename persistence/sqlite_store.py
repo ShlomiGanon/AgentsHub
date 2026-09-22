@@ -19,6 +19,7 @@ from persistence.contracts import (
     PersistenceInterface,
 )
 from persistence.schema import SUMMARY_TABLE_NAMES, run_migrations
+from persistence.operational_scope import OperationalScope, resolve_operational_scope
 from tools import telemetry_span
 
 _STOP = object()
@@ -1425,6 +1426,7 @@ class SQLitePersistence(PersistenceInterface):
         ttl_hours: int,
         max_turns: int,
         event_id: str | None = None,
+        scope: OperationalScope | None = None,
     ) -> None:
         if not conversation_id or role not in {"user", "assistant"} or not content:
             raise PersistenceError("conversation message requires a conversation_id, valid role, and content")
@@ -1434,21 +1436,28 @@ class SQLitePersistence(PersistenceInterface):
         now = datetime.now(timezone.utc)
         cutoff = (now - timedelta(hours=ttl_hours)).isoformat()
         keep_messages = max_turns * 2
+        scope_key = resolve_operational_scope(scope).key
 
         def _do(connection: sqlite3.Connection) -> None:
             try:
                 connection.execute(
-                    "DELETE FROM conversation_messages WHERE conversation_id = ? AND created_at < ?",
-                    (conversation_id, cutoff),
+                    "DELETE FROM conversation_messages WHERE conversation_id = ? "
+                    "AND (scope_key = ? OR (? = 'LIVE' AND scope_key IS NULL)) AND created_at < ?",
+                    (conversation_id, scope_key, scope_key, cutoff),
                 )
                 connection.execute(
-                    "INSERT INTO conversation_messages (conversation_id, role, content, created_at, event_id) VALUES (?, ?, ?, ?, ?)",
-                    (conversation_id, role, content, now.isoformat(), event_id),
+                    "INSERT INTO conversation_messages "
+                    "(conversation_id, scope_key, role, content, created_at, event_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (conversation_id, scope_key, role, content, now.isoformat(), event_id),
                 )
                 connection.execute(
-                    "DELETE FROM conversation_messages WHERE conversation_id = ? AND message_id NOT IN "
-                    "(SELECT message_id FROM conversation_messages WHERE conversation_id = ? ORDER BY message_id DESC LIMIT ?)",
-                    (conversation_id, conversation_id, keep_messages),
+                    "DELETE FROM conversation_messages WHERE conversation_id = ? "
+                    "AND (scope_key = ? OR (? = 'LIVE' AND scope_key IS NULL)) AND message_id NOT IN "
+                    "(SELECT message_id FROM conversation_messages WHERE conversation_id = ? "
+                    "AND (scope_key = ? OR (? = 'LIVE' AND scope_key IS NULL)) "
+                    "ORDER BY message_id DESC LIMIT ?)",
+                    (conversation_id, scope_key, scope_key, conversation_id, scope_key, scope_key, keep_messages),
                 )
                 connection.commit()
             except sqlite3.Error as exc:
@@ -1457,26 +1466,33 @@ class SQLitePersistence(PersistenceInterface):
 
         self._submit_write(_do)
 
-    def fetch_conversation_messages(self, conversation_id: str, limit: int) -> list[dict]:
+    def fetch_conversation_messages(
+        self, conversation_id: str, limit: int, *, scope: OperationalScope | None = None
+    ) -> list[dict]:
         if not 1 <= limit <= 200:
             raise PersistenceError("conversation message limit must be between 1 and 200")
+        scope_key = resolve_operational_scope(scope).key
         connection = self._read_connection()
         try:
             rows = connection.execute(
-                "SELECT message_id, conversation_id, role, content, created_at, event_id FROM "
-                "(SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY message_id DESC LIMIT ?) "
+                "SELECT message_id, conversation_id, scope_key, role, content, created_at, event_id FROM "
+                "(SELECT * FROM conversation_messages WHERE conversation_id = ? "
+                "AND (scope_key = ? OR (? = 'LIVE' AND scope_key IS NULL)) "
+                "ORDER BY message_id DESC LIMIT ?) "
                 "ORDER BY message_id",
-                (conversation_id, limit),
+                (conversation_id, scope_key, scope_key, limit),
             ).fetchall()
             return [dict(row) for row in rows]
         finally:
             connection.close()
 
     def list_conversation_event_links(
-        self, conversation_id: str, sender_identity: str, limit: int = 20
+        self, conversation_id: str, sender_identity: str, limit: int = 20, *, scope: OperationalScope | None = None
     ) -> list[ConversationEventLink]:
         if not conversation_id or not sender_identity or limit <= 0:
             return []
+
+        resolved_scope = resolve_operational_scope(scope)
 
         connection = self._read_connection()
         try:
@@ -1486,11 +1502,22 @@ class SQLitePersistence(PersistenceInterface):
                        insight_text, outcome_failure_reason, action_failure_reason,
                        received_at, selected_protocol, action_tool_receipts
                 FROM events
-                WHERE conversation_id = ? AND sender_identity = ?
+                 WHERE conversation_id = ? AND sender_identity = ?
+                   AND (
+                       (? = 'LIVE' AND scenario_id IS NULL AND scenario_run_id IS NULL)
+                       OR (scenario_id = ? AND scenario_run_id = ?)
+                   )
                 ORDER BY received_at DESC, event_id DESC
                 LIMIT ?
                 """,
-                (conversation_id, sender_identity, int(limit)),
+                (
+                    conversation_id,
+                    sender_identity,
+                    resolved_scope.kind,
+                    resolved_scope.scenario_id,
+                    resolved_scope.scenario_run_id,
+                    int(limit),
+                ),
             ).fetchall()
 
             links: list[ConversationEventLink] = []

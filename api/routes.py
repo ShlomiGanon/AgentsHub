@@ -72,6 +72,7 @@ from persistence import (
     NotFoundError as PersistenceNotFoundError,
     operational_scope_context,
     operational_time_context,
+    scoped_conversation_id,
     scope_from_simulation_context,
 )
 from api.simulations import find_simulation_scenario, materialize_simulation, simulation_catalog_payload
@@ -433,6 +434,8 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             str(telegram_chat_type) if telegram_chat_type is not None else None,
         )
         operational_scope = _initialize_request_operational_scope(ctx, simulation_context, str(sender_identity))
+        if conversation_id is not None:
+            conversation_id = scoped_conversation_id(conversation_id, operational_scope)
 
         trace_id = get_trace_id() or new_trace_id()
         set_trace_id(trace_id)
@@ -451,6 +454,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     ttl_hours=history_ttl,
                     max_turns=history_turns,
                     event_id=event_id,
+                    scope=operational_scope,
                 )
 
         if source_message_id:
@@ -466,7 +470,23 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
 
         prior_messages: tuple[dict, ...] = ()
         if conversation_id is not None and history_turns > 0:
-            prior_messages = tuple(ctx.deps.persistence.fetch_conversation_messages(conversation_id, history_turns * 2))
+            prior_messages = tuple(
+                ctx.deps.persistence.fetch_conversation_messages(
+                    conversation_id, history_turns * 2, scope=operational_scope
+                )
+            )
+            logger.info(
+                "conversation history loaded",
+                extra={
+                    "event": "conversation_history_loaded",
+                    "conversation_id": conversation_id,
+                    "scope_kind": operational_scope.kind,
+                    "scenario_id": operational_scope.scenario_id,
+                    "scenario_run_id": operational_scope.scenario_run_id,
+                    "history_row_count": len(prior_messages),
+                    "trace_id": trace_id,
+                },
+            )
 
         _remember("user", text)
 
@@ -697,7 +717,13 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 ), 202
             ctx.queue.release_reservation(reservation)
 
-        follow_up = resolve_follow_up(ctx.deps.persistence, conversation_id, caller_identity, str(text))
+        follow_up = resolve_follow_up(
+            ctx.deps.persistence,
+            conversation_id,
+            caller_identity,
+            str(text),
+            scope=operational_scope,
+        )
         if follow_up.kind != "none":
             if follow_up.hold is not None:
                 if level < PermissionLevel.COMMANDER:

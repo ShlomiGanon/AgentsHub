@@ -228,6 +228,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_task62_bounded_operational_facts.py` | Test | Internal | Verifies that the deterministic fallback states scoped, succeeded, capped committed facts without duplicating structured sections, leaking other runs, or fabricating recommendations. |
 | `tests/test_task63_correction_supersession.py` | Test | Internal | Verifies correction/retraction recognition, safe target resolution, scope-isolated supersession storage, and that a retracted report stops being current while staying in history. |
 | `tests/test_task64_correction_intake.py` | Test | Internal | Verifies deterministic correction intake, restraint against ordinary negative reports, fixture-pair resolution, scope isolation, idempotence and the effect on current facts. |
+| `tests/test_task65_conversation_scope.py` | Test | Internal | Verifies conversation-history isolation by trusted operational scope, LIVE continuity, legacy-row compatibility, and idempotent migration. |
 | `tests/test_group_routing.py` | Test | Internal | Verifies the group routing table, staleness refresh, scope resolution, and dependency scoping. |
 | `tests/test_history_agent.py` | Test | Internal | Verifies history agent behavior and edge cases. |
 | `tests/test_history_event_pipeline.py` | Test | Internal | Verifies extraction, time normalization, and durable history writes. |

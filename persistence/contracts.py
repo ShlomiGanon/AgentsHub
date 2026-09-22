@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from persistence.operational_scope import OperationalScope
+
 
 class PersistenceError(Exception):
     """Base exception exposed by persistence implementations."""
@@ -191,15 +193,18 @@ class PersistenceInterface(ABC):
         ttl_hours: int,
         max_turns: int,
         event_id: str | None = None,
+        scope: OperationalScope | None = None,
     ) -> None:
         """Append and prune one conversation's bounded context."""
 
     @abstractmethod
-    def fetch_conversation_messages(self, conversation_id: str, limit: int) -> list[dict]:
+    def fetch_conversation_messages(
+        self, conversation_id: str, limit: int, *, scope: OperationalScope | None = None
+    ) -> list[dict]:
         """Return bounded conversation messages in chronological order."""
 
     def list_conversation_event_links(
-        self, conversation_id: str, sender_identity: str, limit: int = 20
+        self, conversation_id: str, sender_identity: str, limit: int = 20, *, scope: OperationalScope | None = None
     ) -> list[ConversationEventLink]:
         """Return persisted operational events owned by this conversation/sender."""
 

@@ -198,6 +198,7 @@ CONVERSATION_MESSAGES_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS conversation_messages (
     message_id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id TEXT NOT NULL,
+    scope_key TEXT,
     role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
     content TEXT NOT NULL,
     created_at TEXT NOT NULL,
@@ -321,6 +322,7 @@ MIGRATIONS: list[tuple[int, str, str]] = [
     ),
     (25, "mark synthetic simulation identities", ""),
     (26, "link a retracted report to the correction that superseded it", ""),
+    (27, "bind conversation messages to operational scope", ""),
 ]
 
 
@@ -384,6 +386,11 @@ _REQUIRED_COLUMNS_BY_VERSION = (
             ("supersedes_event_id", "TEXT"),
             ("supersession_kind", "TEXT"),
         ),
+    ),
+    (
+        27,
+        "conversation_messages",
+        (("scope_key", "TEXT"),),
     ),
 )
 
@@ -468,7 +475,7 @@ def run_migrations(db_path: str) -> None:
                         "ALTER TABLE telegram_groups ADD COLUMN auto_register INTEGER NOT NULL DEFAULT 0 "
                         "CHECK (auto_register IN (0, 1))"
                     )
-            elif version in {20, 21, 22, 23, 24, 25, 26}:
+            elif version in {20, 21, 22, 23, 24, 25, 26, 27}:
                 _repair_required_columns(connection, version)
                 if version == 24:
                     connection.execute(
@@ -480,6 +487,15 @@ def run_migrations(db_path: str) -> None:
                         "CREATE INDEX IF NOT EXISTS idx_events_superseded_by "
                         "ON events(superseded_by_event_id)"
                     )
+                if version == 27:
+                    conversation_columns = {
+                        row[1] for row in connection.execute("PRAGMA table_info(conversation_messages)").fetchall()
+                    }
+                    if conversation_columns:
+                        connection.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_conversation_messages_scoped_lookup "
+                            "ON conversation_messages(conversation_id, scope_key, created_at DESC, message_id DESC)"
+                        )
             else:
                 connection.executescript(sql)
 

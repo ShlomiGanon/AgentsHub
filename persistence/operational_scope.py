@@ -89,6 +89,23 @@ def scope_from_simulation_context(context: object | None) -> OperationalScope:
     return current_operational_scope()
 
 
+def scoped_conversation_id(conversation_id: str, scope: OperationalScope | None = None) -> str:
+    """Return the canonical conversation identity for a trusted operational scope.
+
+    LIVE keeps the transport identity for backward compatibility. Simulation
+    identities include both the declared scenario and run, so a reused chat id
+    cannot address another run's event or conversation state.
+    """
+
+    if not conversation_id:
+        return conversation_id
+
+    resolved = resolve_operational_scope(scope)
+    if resolved.kind == "LIVE":
+        return conversation_id
+    return f"{conversation_id}::scope={resolved.scenario_id}::run={resolved.scenario_run_id}"
+
+
 @contextmanager
 def operational_scope_context(scope: OperationalScope):
     token = _CURRENT_SCOPE.set(scope)

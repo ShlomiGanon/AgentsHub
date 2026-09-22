@@ -40,6 +40,7 @@ from persistence.operational_scope import (
     current_operational_scope,
     operational_scope_context,
     resolve_operational_scope,
+    scoped_conversation_id,
     scope_from_event,
     scope_from_simulation_context,
 )
@@ -84,6 +85,7 @@ __all__ = [
     "current_operational_scope",
     "operational_scope_context",
     "resolve_operational_scope",
+    "scoped_conversation_id",
     "scope_from_event",
     "scope_from_simulation_context",
     "OperationalTimeError",

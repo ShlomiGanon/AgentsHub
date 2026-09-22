@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from messages import get_catalog
-from persistence import ConversationEventLink, PersistenceInterface
+from persistence import ConversationEventLink, OperationalScope, PersistenceInterface
 
 
 FollowUpKind = Literal[
@@ -102,10 +102,12 @@ def _verified_receipt(event: ConversationEventLink) -> bool:
     )
 
 
-def _conversation_context_follow_up(persistence, conversation_id: str, text: str) -> FollowUpResolution | None:
+def _conversation_context_follow_up(
+    persistence, conversation_id: str, text: str, *, scope: OperationalScope | None = None
+) -> FollowUpResolution | None:
     """Resolve discourse follow-ups without treating prior prose as facts."""
     try:
-        messages = persistence.fetch_conversation_messages(conversation_id, 12)
+        messages = persistence.fetch_conversation_messages(conversation_id, 12, scope=scope)
     except (AttributeError, NotImplementedError):
         return None
     users = [message for message in messages if message.get("role") == "user"]
@@ -143,6 +145,8 @@ def resolve_follow_up(
     conversation_id: str | None,
     sender_identity: str,
     text: str,
+    *,
+    scope: OperationalScope | None = None,
 ) -> FollowUpResolution:
     """Resolve a follow-up from persisted conversation/event state, never from model prose."""
 
@@ -161,7 +165,7 @@ def resolve_follow_up(
                 ):
                     return FollowUpResolution("pending_approval", hold=hold)
 
-        links = persistence.list_conversation_event_links(conversation_id, sender_identity)
+        links = persistence.list_conversation_event_links(conversation_id, sender_identity, scope=scope)
     except (AttributeError, NotImplementedError):
         return FollowUpResolution("none")
     links = [
@@ -206,7 +210,7 @@ def resolve_follow_up(
         if event.action_state == "requested":
             return FollowUpResolution("requested", event=event)
 
-    context_resolution = _conversation_context_follow_up(persistence, conversation_id, text)
+    context_resolution = _conversation_context_follow_up(persistence, conversation_id, text, scope=scope)
     if context_resolution is not None:
         return context_resolution
 

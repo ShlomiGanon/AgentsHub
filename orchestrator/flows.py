@@ -876,7 +876,9 @@ def _apply_required_fields_gate(
     conversation_messages: tuple[dict, ...] = ()
     if event.get("conversation_id") and deps.conversation_history_turns > 0:
         conversation_messages = tuple(
-            deps.persistence.fetch_conversation_messages(event["conversation_id"], deps.conversation_history_turns * 2)
+            deps.persistence.fetch_conversation_messages(
+                event["conversation_id"], deps.conversation_history_turns * 2, scope=scope_from_event(event)
+            )
         )
 
     question = formulate_event_data_question(main_agent, event, missing, conversation_messages)
@@ -886,6 +888,7 @@ def _apply_required_fields_gate(
             event["conversation_id"], "assistant", question,
             ttl_hours=deps.conversation_history_ttl_hours, max_turns=deps.conversation_history_turns,
             event_id=event_id,
+            scope=scope_from_event(event),
         )
 
     # waiting_step_ids=() — no protocol has been selected yet. This is what
@@ -2006,7 +2009,9 @@ def _execute_protocol_plan(
         conversation_messages: tuple[dict, ...] = ()
         if latest_event.get("conversation_id"):
             conversation_messages = tuple(
-                deps.persistence.fetch_conversation_messages(latest_event["conversation_id"], 12)
+                deps.persistence.fetch_conversation_messages(
+                    latest_event["conversation_id"], 12, scope=scope_from_event(latest_event)
+                )
             )
         question = formulate_event_data_question(
             main_agent, latest_event, run_result.missing_event_fields, conversation_messages
@@ -2023,6 +2028,7 @@ def _execute_protocol_plan(
                 ttl_hours=deps.conversation_history_ttl_hours,
                 max_turns=deps.conversation_history_turns,
                 event_id=event_id,
+                scope=scope_from_event(latest_event),
             )
         create_event_data_hold(
             deps.persistence, event_id, run_result.missing_event_fields, question, waiting_step_ids
