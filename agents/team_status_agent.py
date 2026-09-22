@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import re
 
 from agents.contracts import ReportIngestionResult, project_report_facts
-from agents.runtime import Agent, get_authenticated_request_identity, get_trusted_operational_scope, tool
+from agents.runtime import Agent, get_active_operational_profile, get_authenticated_request_identity, get_trusted_operational_scope, tool
 from messages import get_catalog
 from persistence import AttendanceCycle, OperationalScope, TeamStatusPersistenceError, current_operational_scope, open_team_status_persistence, operational_now, operational_time_of_event, runtime_now, scope_from_event
 
@@ -18,11 +18,6 @@ from persistence import AttendanceCycle, OperationalScope, TeamStatusPersistence
 _MANPOWER_COUNT = re.compile(
     get_catalog("en").text("extraction.team_status.manpower_count"),
     re.IGNORECASE,
-)
-
-_RESOURCE_VOCABULARY = (
-    ("ASHED", re.compile(get_catalog("en").text("extraction.team_status.ashed"), re.IGNORECASE)),
-    ("CARMEL", re.compile(get_catalog("en").text("extraction.team_status.carmel"), re.IGNORECASE)),
 )
 
 # An absence is committed only when the reporter states why. The reason is a
@@ -135,7 +130,7 @@ class TeamStatusAgent(Agent):
     def _operational_scope(self) -> OperationalScope:
         return get_trusted_operational_scope() or current_operational_scope()
 
-    def extract_report(self, raw_text: str, *, received_at: str, scenario_time: str | None = None, **_) -> ExtractionResult | None:
+    def extract_report(self, raw_text: str, *, received_at: str, scenario_time: str | None = None, profile=None, **_) -> ExtractionResult | None:
         """Extract trusted, typed readiness reports received in the owned group.
 
         A headcount that the message does not state is never substituted with a
@@ -147,7 +142,7 @@ class TeamStatusAgent(Agent):
         text = str(raw_text or "")
         occurrence = scenario_time or received_at
 
-        resource_report = self._resource_fields(text)
+        resource_report = self._resource_fields(text, profile or get_active_operational_profile())
         if resource_report is not None:
             fields, resources = resource_report
             return ExtractionResult(
@@ -166,16 +161,14 @@ class TeamStatusAgent(Agent):
         return None
 
     @staticmethod
-    def _resource_fields(text: str):
+    def _resource_fields(text: str, profile=None):
         """A headcount, a vehicle count, or nothing \u2014 never a substituted zero."""
 
         count_match = _MANPOWER_COUNT.search(text)
-        resources = [
-            {"name": name, "count": int(match.group(1)), "status": "operational"}
-            for name, pattern in _RESOURCE_VOCABULARY
-            for match in [pattern.search(text)]
-            if match
-        ]
+        # Resource names belong to the active operational profile's catalogue.
+        # An organization that operates no declared resources resolves none, so
+        # a fire-only vehicle never appears in a response-team report.
+        resources = list(profile.resolve_resources(text)) if profile is not None else []
         if count_match is None and not resources:
             return None
 
@@ -201,12 +194,8 @@ class TeamStatusAgent(Agent):
             if count is not None and (type(count) is not int or count < 0):
                 return ReportIngestionResult("rejected", "team resource report has invalid manpower count")
             description = str(event.get("description") or "")
-            resources = [
-                {"name": name, "count": int(match.group(1)), "status": "operational"}
-                for name, pattern in _RESOURCE_VOCABULARY
-                for match in [pattern.search(description)]
-                if match
-            ]
+            active_profile = get_active_operational_profile()
+            resources = list(active_profile.resolve_resources(description)) if active_profile is not None else []
             if count is None:
                 # A vehicle report that states no headcount must not restate
                 # the headcount; it carries the committed one forward.

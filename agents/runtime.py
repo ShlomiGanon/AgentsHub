@@ -107,6 +107,18 @@ def get_trusted_operational_scope():
     return scope
 
 
+def get_active_operational_profile():
+    """Return the server-derived operational profile for the active event/tool.
+
+    Carried on the same trusted channel as the scope, so a specialist never
+    imports deployment configuration and never infers its own organization
+    type from the message it is reading.
+    """
+
+    metadata = _trusted_event_metadata.get() or {}
+    return metadata.get("operational_profile")
+
+
 @contextmanager
 def tool_execution_context(event_id: str | None = None, step_id: str | None = None):
     """Capture runtime receipts and correlate them to a persisted event step."""

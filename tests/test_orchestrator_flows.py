@@ -638,6 +638,9 @@ def test_protocol_worker_installs_event_metadata_and_authenticated_sender(deps, 
         "received_at": "2026-09-16T10:00:00+00:00",
         # LIVE has one clock, so the operational instant is the receipt itself.
         "reported_at": "2026-09-16T10:00:00+00:00",
+        # These deps declare no deployment profile, so no organization type is
+        # resolved. Trusted configuration is the only source (Task 67).
+        "operational_profile": None,
         "availability_start": None,
         "availability_end": None,
         "operational_scope": OperationalScope.live(),

@@ -102,6 +102,10 @@ class LoadedProfile:
     # into that mechanism — the admin simulator's message-kind steps then have no bot-side
     # proxy target and the feature is simply unavailable, not broken.
     simulator_port: int | None = None
+    # The organization type this deployment runs as when no simulation is
+    # involved. Defaults to the response-team organization so an existing
+    # installation keeps behaving exactly as before (Task 67 §23).
+    live_operational_profile: str = "response_team"
 
 REQUIRED_PROFILE_ATTRS = (
     "PROFILE_NAME",

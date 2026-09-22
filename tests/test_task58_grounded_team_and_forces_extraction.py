@@ -10,6 +10,7 @@ message mentioning a road number.
 import pytest
 
 from persistence import OperationalScope, open_team_status_persistence
+from profiles import FIRE_STATION, operational_profile
 
 
 OCCURRED = "2026-09-09T07:00:00+00:00"
@@ -45,8 +46,13 @@ def forces():
     return _Agent()
 
 
-def _extract(agent, text):
-    return agent.extract_report(text, received_at=OCCURRED, scenario_time=OCCURRED)
+# Resource names belong to the active organization's catalogue (Task 67), so a
+# fire report is extracted under the fire-station profile.
+FIRE_PROFILE = operational_profile(FIRE_STATION)
+
+
+def _extract(agent, text, profile=FIRE_PROFILE):
+    return agent.extract_report(text, received_at=OCCURRED, scenario_time=OCCURRED, profile=profile)
 
 
 # --- team status ------------------------------------------------------------

@@ -110,7 +110,13 @@ from orchestrator.group_routing import (  # re-exported: api may only import orc
     resolve_scope,
     scope_deps,
 )
-from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
+from profiles import (
+    HUMAN_ACTIVATION_TYPE,
+    OptimizationPolicy,
+    UNCLASSIFIED_TYPE,
+    current_operational_profile,
+    profile_for_scope,
+)
 from protocols import CriticalityLevel, Step, StepOutcome
 from protocols.executor import execute_steps
 from agents import authenticated_request_identity, trusted_event_metadata, project_report_facts, ToolReceipt, ReportIngestionResult
@@ -454,6 +460,10 @@ class FlowDeps:
     # Trusted routing context set by /Msg for a registered Telegram group.
     # This value comes from the persisted group binding, never from model text.
     group_owner: str | None = None
+    # The loaded deployment profile, used only to resolve which operational
+    # organization owns an event's scope. Never used to choose behaviour from
+    # message content.
+    loaded_profile: object = None
 
 
 @dataclass(frozen=True)
@@ -511,6 +521,23 @@ def _apply_attendance_temporal_fields(
 
     missing = tuple(dict.fromkeys((*extraction_result.missing_fields, "availability_start", "availability_end")))
     return replace(extraction_result, missing_fields=missing)
+
+
+def active_operational_profile(deps: "FlowDeps", scope=None):
+    """The organization type that owns this work.
+
+    Prefers the profile a request boundary already bound; otherwise resolves it
+    from the deployment configuration and the event's own scope. Both routes are
+    trusted configuration — neither reads the message.
+    """
+
+    bound = current_operational_profile()
+    if bound is not None:
+        return bound
+    loaded = getattr(deps, "loaded_profile", None)
+    if loaded is None:
+        return None
+    return profile_for_scope(loaded, scope)
 
 
 def _trusted_correction_extraction(deps: FlowDeps, raw_text: str, received_at: str, reference_time: str | None):
@@ -573,6 +600,7 @@ def _trusted_group_extraction(deps: FlowDeps, raw_text: str, received_at: str, r
         scenario_time=reference_time,
         timezone_name=deps.timezone_name,
         scope=scope,
+        profile=active_operational_profile(deps, scope),
     )
     if result is None:
         return None
@@ -1215,7 +1243,14 @@ def _commit_report_domain_state(deps: "FlowDeps", event_id: str) -> ReportIngest
             parameter.name == "scope" or parameter.kind is inspect.Parameter.VAR_KEYWORD
             for parameter in parameters
         )
-        result = ingest_report(event, scope=scope) if accepts_scope else ingest_report(event)
+        # Domain ingestion resolves resource names through the active
+        # organization's catalogue, so it needs the same trusted channel the
+        # protocol path uses rather than a second way of learning its profile.
+        with trusted_event_metadata({
+            "operational_scope": scope,
+            "operational_profile": active_operational_profile(deps, scope_from_event(event)),
+        }):
+            result = ingest_report(event, scope=scope) if accepts_scope else ingest_report(event)
         if result is None:
             return ReportIngestionResult("failed", "domain report ingestion returned no typed result")
         if result.status != "not_applicable":
@@ -1993,6 +2028,7 @@ def _execute_protocol_plan(
             "availability_start": event.get("availability_start"),
             "availability_end": event.get("availability_end"),
             "operational_scope": scope_from_event(event),
+            "operational_profile": active_operational_profile(deps, scope_from_event(event)),
         }
     ):
         run_result = execute_steps(

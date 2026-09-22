@@ -1056,10 +1056,10 @@ MESSAGES = {
     ),
     "orchestrator.picture.typed.drones_unknown": "רחפנים: הנתונים אינם זמינים.",
     "orchestrator.picture.typed.team": (
-        "כיתת כוננות: {available} זמינים; {unavailable} לא זמינים; "
+        "{roster}: {available} זמינים; {unavailable} לא זמינים; "
         "{not_reported} טרם דיווחו; {pending_identity} ממתינים לזיהוי; {total} בסך הכול."
     ),
-    "orchestrator.picture.typed.team_unknown": "כיתת כוננות: הנתונים אינם זמינים.",
+    "orchestrator.picture.typed.team_unknown": "{roster}: הנתונים אינם זמינים.",
     "orchestrator.picture.typed.manpower": (
         "כוח אדם: {effective} מתוך {reported} שדווחו זמינים כעת."
     ),
@@ -1125,6 +1125,16 @@ MESSAGES = {
 
     # Bilingual extraction vocabulary is stored here as canonical matching
     # patterns; it is not rendered directly to users.
+    "profile.response_team.name": "כיתת כוננות",
+    "profile.response_team.roster": "כיתת כוננות",
+    "profile.response_team.member": "לוחם",
+    "profile.fire_station.name": "תחנת כיבוי",
+    "profile.fire_station.roster": "כוח כיבוי",
+    "profile.fire_station.member": "כבאי",
+    "profile.fire_station.resource.ashed": "אשד",
+    "profile.fire_station.resource.carmel": "כרמל",
+    "profile.fire_station.resource.ashed.pattern": r"(?:אשד|ashed)\s*(\d+)",
+    "profile.fire_station.resource.carmel.pattern": r"(?:כרמל|carmel)\s*(\d+)",
     "extraction.friendly_forces.fire_ban": r"איסור הדלקת|איסור אש|fire ban|no.?burn|fire.?lighting prohibition",
     "extraction.friendly_forces.forests": r"יערות|יער|forests?",
     "extraction.friendly_forces.rangers": r"יערנים|rangers?",
@@ -1155,8 +1165,6 @@ MESSAGES = {
     "extraction.surveillance.thermal_camera": r"מצלמה תרמית|thermal camera",
 
     "extraction.team_status.manpower_count": r"(\d+)\s*(?:כבאים|לוחמים|אנשים|firefighters?|personnel|members?)",
-    "extraction.team_status.ashed": r"(?:אשד|ashed)\s*(\d+)",
-    "extraction.team_status.carmel": r"(?:כרמל|carmel)\s*(\d+)",
     "extraction.team_status.medical_check": r"בדיקה רפואית|בדיקה תקופתית|medical check|medical exam|checkup",
     "extraction.team_status.reserve_duty": r"מילואים|reserve duty",
     "extraction.team_status.illness": r"חום גבוה|חולה|מחלה|חולהני|fever|\bsick\b|illness",

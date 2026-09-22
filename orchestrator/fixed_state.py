@@ -13,6 +13,7 @@ from orchestrator.situational_picture import (
     render_typed_snapshot,
 )
 from persistence import OperationalScope, operational_scope_context, operational_time_context
+from profiles import operational_profile_context
 
 
 FIXED_STATE_PROTOCOLS = frozenset(
@@ -68,6 +69,7 @@ def read_fixed_operational_state(
     operational_scope: OperationalScope,
     scenario_time: str | None,
     sender_identity_filter: str | None,
+    operational_profile=None,
 ) -> FixedStateRead:
     """Read the canonical current state for one known fixed control.
 
@@ -80,7 +82,7 @@ def read_fixed_operational_state(
 
     fetched_at = storage_timestamp(datetime.now(timezone.utc))
 
-    with operational_scope_context(operational_scope), operational_time_context(scenario_time):
+    with operational_scope_context(operational_scope), operational_time_context(scenario_time), operational_profile_context(operational_profile):
         if protocol_name == "report_team_availability":
             agent = registry.get("team_status_agent")
             return FixedStateRead(

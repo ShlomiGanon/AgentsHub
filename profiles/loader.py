@@ -28,6 +28,7 @@ from profiles.contracts import (
     StageModelPolicy,
     protocol_missing_attrs,
 )
+from profiles.operational_profile import RESPONSE_TEAM, operational_profile
 from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
 from protocols import CriticalityLevel, DirectToolExecution, EVENT_DATA_FIELDS
 
@@ -166,6 +167,7 @@ def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> lis
             if stage_policy.max_output_tokens <= 0 or stage_policy.timeout_seconds <= 0:
                 failures.append(f"stage model policy {stage_name!r} requires positive token and timeout budgets")
 
+    failures.extend(_validate_operational_profile(loaded))
     failures.extend(_validate_simulation_declarations(loaded))
     failures.extend(_validate_event_type_business_fields(loaded))
 
@@ -196,6 +198,16 @@ def _validate_event_type_business_fields(loaded: "LoadedProfile") -> list[str]:
                 )
 
     return failures
+
+
+def _validate_operational_profile(loaded: "LoadedProfile") -> list[str]:
+    """A deployment may only declare an organization type that exists."""
+
+    try:
+        operational_profile(getattr(loaded, "live_operational_profile", RESPONSE_TEAM))
+    except Exception as exc:
+        return [str(exc)]
+    return []
 
 
 def _validate_simulation_declarations(loaded: "LoadedProfile") -> list[str]:
@@ -665,6 +677,9 @@ def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) 
         simulations=tuple(getattr(profile_module, "SIMULATIONS", ())),
         simulation_rosters=tuple(getattr(profile_module, "SIMULATION_ROSTERS", ())),
         simulator_port=getattr(profile_module, "SIMULATOR_PORT", None),
+        live_operational_profile=str(
+            getattr(profile_module, "LIVE_OPERATIONAL_PROFILE", RESPONSE_TEAM)
+        ),
     )
 
     failures = validate_profile(loaded, declared_event_types=profile_module.EVENT_TYPES)

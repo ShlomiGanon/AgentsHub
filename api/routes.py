@@ -70,7 +70,14 @@ from orchestrator.flows import (
 
 from protocols import CriticalityLevel, Protocol, ProtocolEditError, add_protocol, remove_protocol, replace_protocol
 from profiles.loader import hash_profile_file
-from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, initialize_operational_scope, resolve_simulation_step
+from profiles import (
+    HUMAN_ACTIVATION_TYPE,
+    OptimizationPolicy,
+    initialize_operational_scope,
+    operational_profile_context,
+    profile_for_scope,
+    resolve_simulation_step,
+)
 from persistence import (
     NotFoundError as PersistenceNotFoundError,
     operational_scope_context,
@@ -141,6 +148,16 @@ def _initialize_request_operational_scope(ctx, simulation_context, sender_identi
     scope = scope_from_simulation_context(simulation_context)
     initialize_operational_scope(ctx.loaded_profile, ctx.deps.registry, scope)
     return scope
+
+
+def request_operational_profile(ctx, scope):
+    """The organization type that owns this request's scope.
+
+    Resolved here, at the one boundary that already established trusted scope,
+    so no downstream layer has to infer it and no message can influence it.
+    """
+
+    return profile_for_scope(ctx.loaded_profile, scope)
 
 
 def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
@@ -541,6 +558,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     operational_scope=operational_scope,
                     scenario_time=getattr(simulation_context, "scenario_time", None),
                     sender_identity_filter=None if level >= PermissionLevel.COMMANDER else caller_identity,
+                    operational_profile=request_operational_profile(ctx, operational_scope),
                 )
             except Exception:
                 logger.warning(
@@ -1018,20 +1036,21 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 # from those findings only (orchestrator/situational_picture.py). A viewer's
                 # recent-events view keeps the same ownership scope as any question they ask.
                 require(level, RequestedOperation.ASK_QUESTION)
-                picture = build_situational_picture(
-                    ctx.main_agent,
-                    matched_protocol,
-                    ctx.deps.registry,
-                    ctx.deps.history_query_service,
-                    str(text),
-                    caller_identity=caller_identity,
-                    sender_identity_filter=None if is_commander else caller_identity,
-                    scenario_id=getattr(simulation_context, "scenario_id", None),
-                    scenario_run_id=getattr(simulation_context, "scenario_run_id", None),
-                    scenario_time=getattr(simulation_context, "scenario_time", None),
-                    scope=situational_scope,
-                    operational_scope=operational_scope,
-                )
+                with operational_profile_context(request_operational_profile(ctx, operational_scope)):
+                    picture = build_situational_picture(
+                        ctx.main_agent,
+                        matched_protocol,
+                        ctx.deps.registry,
+                        ctx.deps.history_query_service,
+                        str(text),
+                        caller_identity=caller_identity,
+                        sender_identity_filter=None if is_commander else caller_identity,
+                        scenario_id=getattr(simulation_context, "scenario_id", None),
+                        scenario_run_id=getattr(simulation_context, "scenario_run_id", None),
+                        scenario_time=getattr(simulation_context, "scenario_time", None),
+                        scope=situational_scope,
+                        operational_scope=operational_scope,
+                    )
                 picture_provenance = picture.provenance()
                 source_refs = tuple(
                     f"agent:{domain['domain']}"
@@ -1078,6 +1097,8 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     raise AuthorizationError("a trusted simulation scope is required for a synthetic identity")
                 with operational_scope_context(operational_scope), operational_time_context(
                     getattr(simulation_context, "scenario_time", None)
+                ), operational_profile_context(
+                    request_operational_profile(ctx, operational_scope)
                 ), authenticated_request_identity(caller_identity):
                     answer = ag.report_team_availability(view=_team_roster_view(str(text)))
                 _remember("assistant", answer)
@@ -1094,6 +1115,8 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 raise AuthorizationError("a trusted simulation scope is required for a synthetic identity")
             with operational_scope_context(operational_scope), operational_time_context(
                 getattr(simulation_context, "scenario_time", None)
+            ), operational_profile_context(
+                request_operational_profile(ctx, operational_scope)
             ), authenticated_request_identity(caller_identity):
                 res = ag.process(text, allowed_tools)
             answer = res.text if res.status == "success" else f"\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05d4\u05e4\u05e2\u05dc\u05ea \u05e1\u05d5\u05db\u05df: {res.text}"

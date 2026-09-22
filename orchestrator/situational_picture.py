@@ -25,6 +25,7 @@ from agents import InvocationPolicy, authenticated_request_identity, get_active_
 from history import HistoryQuerySpec, storage_timestamp
 from history.query import HistoryQueryError
 from persistence import OperationalScope, operational_scope_context, operational_time_context, resolve_operational_scope
+from profiles import current_operational_profile, operational_profile_context
 from messages import get_current_catalog
 from messages.model_messages import (
     SITUATIONAL_PICTURE_COMPOSE_INSTRUCTION,
@@ -1860,6 +1861,13 @@ def render_typed_snapshot(
     """Render localized facts and findings without model-authored claims."""
 
     catalog = get_current_catalog()
+    # The roster label belongs to the active organization type: a fire crew is
+    # not a readiness team, and rendering one as the other produced the
+    # contradictory picture this was changed to prevent.
+    profile = current_operational_profile()
+    roster_label = catalog.text(
+        profile.roster_label_key if profile is not None else "profile.response_team.roster"
+    )
     lines = [catalog.text("orchestrator.picture.typed.title")]
 
     if snapshot.cameras is not None:
@@ -1895,10 +1903,11 @@ def render_typed_snapshot(
     if snapshot.team is not None:
         section = snapshot.team
         if section.status == "unknown":
-            lines.append(catalog.text("orchestrator.picture.typed.team_unknown"))
+            lines.append(catalog.text("orchestrator.picture.typed.team_unknown", roster=roster_label))
         else:
             lines.append(catalog.text(
                 "orchestrator.picture.typed.team",
+                roster=roster_label,
                 total=section.total,
                 available=section.available,
                 unavailable=section.unavailable,
@@ -2175,7 +2184,7 @@ def collect_domain_reports(
             agent = registry.get(briefing.agent_name)
             tools = _readable_tools(agent, protocol)
             try:
-                with authenticated_request_identity(caller_identity), operational_scope_context(resolved_operational_scope), operational_time_context(now), stage_context("picture_specialist"):
+                with authenticated_request_identity(caller_identity), operational_scope_context(resolved_operational_scope), operational_time_context(now), operational_profile_context(current_operational_profile()), stage_context("picture_specialist"):
                     result = agent.process(briefing.query, tools)
             except Exception as exc:
                 outcomes[briefing.agent_name] = (str(exc), False)
