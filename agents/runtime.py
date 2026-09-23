@@ -119,6 +119,16 @@ def get_active_operational_profile():
     return metadata.get("operational_profile")
 
 
+def get_tool_execution_correlation() -> tuple[str | None, str | None]:
+    """Return the trusted event/step correlation for the active tool call."""
+
+    return _tool_execution_correlation.get() or (None, None)
+
+
+def get_trusted_event_metadata() -> dict[str, object]:
+    return dict(_trusted_event_metadata.get() or {})
+
+
 @contextmanager
 def tool_execution_context(event_id: str | None = None, step_id: str | None = None):
     """Capture runtime receipts and correlate them to a persisted event step."""

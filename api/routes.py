@@ -59,6 +59,7 @@ from orchestrator.flows import (
     prepare_fast_path_report,
     run_report_extraction,
     resume_after_event_data,
+    continue_after_drone_selection,
     ResponseEnvelope,
     informational_response,
     render_response,
@@ -776,21 +777,44 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
 
         if drone_selection_hold is not None:
             require(level, RequestedOperation.APPROVE_RUN)
-            surveillance_agent = ctx.deps.registry.get("surveillance_agent")
-            store = getattr(surveillance_agent, "surveillance_store", None)
-            if store is None:
-                raise RunFailureError("surveillance persistence is unavailable")
-
-            normalized = str(text).strip().casefold()
-            recall_all = (
-                normalized in {
-                    "all", "all drones", "\u05db\u05d5\u05dc\u05dd", "\u05db\u05d5\u05dc\u05df",
-                    "\u05d0\u05ea \u05db\u05d5\u05dc\u05dd", "\u05d0\u05ea \u05db\u05d5\u05dc\u05df",
-                    "\u05e2\u05dc \u05db\u05d5\u05dc\u05dd", "\u05e2\u05dc \u05db\u05d5\u05dc\u05df",
-                }
-                or "\u05db\u05dc \u05d4\u05e8\u05d7\u05e4" in normalized
+            pending_event = ctx.deps.persistence.fetch_event(drone_selection_hold["event_id"])
+            continuation_ctx = _context_for_continuation(
+                ctx,
+                pending_event,
+                fallback_identity=caller_identity,
             )
-            result = store.recall_all_drones() if recall_all else store.recall_drone(str(text).strip())
+
+            continuation_ctx.deps.persistence.resolve_held_event(
+                "event_data",
+                drone_selection_hold["hold_id"],
+                {"resolved_by": caller_identity, "drone_selection": str(text).strip()},
+            )
+            result = continue_after_drone_selection(
+                continuation_ctx.deps,
+                drone_selection_hold["event_id"],
+                continuation_ctx.main_agent,
+                continuation_ctx.deps.registry.get("insights_agent"),
+                str(text).strip(),
+            )
+            if result.outcome == "waiting_for_drone_selection":
+                answer = result.detail
+                status = "waiting_for_drone_selection"
+                taken_as = "clarification"
+            elif result.outcome == "succeeded":
+                answer = result.detail
+                status = "succeeded"
+                taken_as = "event_update"
+            else:
+                answer = result.detail or "drone recall failed"
+                status = "failed"
+                taken_as = "event_update"
+            _remember("assistant", answer, drone_selection_hold["event_id"])
+            return jsonify({
+                "taken_as": taken_as,
+                "event_id": drone_selection_hold["event_id"],
+                "answer": answer,
+                "status": status,
+            })
             if result["status"] in {"selection_required", "not_found"}:
                 choices = "\n".join(
                     f"- {mission['callsign']} ({mission['drone_id']}) — {mission['mission_id']}, {mission['target_area']}"

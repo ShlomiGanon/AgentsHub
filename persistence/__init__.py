@@ -60,6 +60,11 @@ from persistence.runtime_context import (
     resolve_runtime_context,
     runtime_context,
 )
+from persistence.dispatch_store import (
+    DispatchPersistenceError,
+    SQLiteOperationalDispatchStore,
+    open_operational_dispatch_store,
+)
 from persistence.operational_time import (
     OperationalTimeError,
     current_operational_time,
@@ -124,4 +129,7 @@ __all__ = [
     "current_runtime_context",
     "resolve_runtime_context",
     "runtime_context",
+    "DispatchPersistenceError",
+    "SQLiteOperationalDispatchStore",
+    "open_operational_dispatch_store",
 ]

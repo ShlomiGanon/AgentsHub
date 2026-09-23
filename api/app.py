@@ -32,7 +32,7 @@ from orchestrator.flows import (
     finalize_expired_event,
     finalize_expired_events,
 )
-from persistence import open_operational_unit_persistence, open_persistence
+from persistence import open_operational_dispatch_store, open_operational_unit_persistence, open_persistence
 from profiles import build_area_registry, build_event_type_registry, ensure_simulation_entities
 from profiles.loader import load_profile
 from protocols import load_protocols
@@ -119,6 +119,12 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
 
     core_agents = assemble_core_agents(loaded_profile, base_config)
     registry = build_agent_registry(core_agents, list(loaded_profile.agents))
+
+    dispatch_store = open_operational_dispatch_store(loaded_profile.db_path)
+    for agent in registry.all():
+        bind_dispatch_store = getattr(agent, "bind_dispatch_store", None)
+        if bind_dispatch_store is not None:
+            bind_dispatch_store(dispatch_store)
 
     try:
         initialize_agent_runtime(list(registry.all()))

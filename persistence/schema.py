@@ -194,6 +194,29 @@ CREATE TABLE IF NOT EXISTS log_entries (
 );
 """
 
+OPERATIONAL_DISPATCHES_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS operational_dispatches (
+    dispatch_id TEXT PRIMARY KEY,
+    scope_key TEXT NOT NULL,
+    operational_profile TEXT NOT NULL DEFAULT '',
+    force_type TEXT NOT NULL,
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    target TEXT NOT NULL,
+    requested_by TEXT NOT NULL,
+    event_id TEXT,
+    protocol_name TEXT,
+    status TEXT NOT NULL CHECK (status IN ('requested', 'dispatched', 'failed', 'cancelled')),
+    requested_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    metadata TEXT NOT NULL DEFAULT '',
+    verification_status TEXT NOT NULL CHECK (verification_status IN ('verified', 'unverified', 'failed'))
+);
+CREATE INDEX IF NOT EXISTS idx_operational_dispatches_scope
+    ON operational_dispatches(scope_key, requested_at);
+CREATE INDEX IF NOT EXISTS idx_operational_dispatches_event
+    ON operational_dispatches(event_id);
+"""
+
 CONVERSATION_MESSAGES_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS conversation_messages (
     message_id INTEGER PRIMARY KEY AUTOINCREMENT,

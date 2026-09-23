@@ -5,7 +5,15 @@ from __future__ import annotations
 import re
 
 from agents.contracts import ReportIngestionResult, project_report_facts
-from agents.runtime import Agent, tool
+from agents.runtime import (
+    Agent,
+    get_active_operational_profile,
+    get_authenticated_request_identity,
+    get_tool_execution_correlation,
+    get_trusted_event_metadata,
+    get_trusted_operational_scope,
+    tool,
+)
 from messages import get_catalog
 
 
@@ -65,7 +73,44 @@ class FriendlyForcesAgent(Agent):
 
     def __init__(self, model: str, api_key: str | None = None):
         self.dispatches_recorded: list[str] = []
+        self.dispatch_store = None
         super().__init__(model, api_key)
+
+    def bind_dispatch_store(self, dispatch_store) -> None:
+        """Bind the profile database-backed dispatch store at runtime startup."""
+
+        self.dispatch_store = dispatch_store
+
+    def _persist_dispatch(
+        self,
+        *,
+        force_type: str,
+        quantity: int,
+        location: str,
+        note: str,
+        extra: str,
+    ) -> dict | None:
+        scope = get_trusted_operational_scope()
+        if self.dispatch_store is None:
+            self.dispatches_recorded.append(extra)
+            return None
+        if scope is None:
+            raise RuntimeError("trusted operational scope is required for dispatch execution")
+        event_id, _step_id = get_tool_execution_correlation()
+        record = self.dispatch_store.create_dispatch(
+            force_type=force_type,
+            quantity=quantity,
+            target=location,
+            requested_by=get_authenticated_request_identity() or "system:runtime",
+            event_id=event_id,
+            protocol_name=get_trusted_event_metadata().get("protocol_name"),
+            operational_profile=getattr(get_active_operational_profile(), "profile_id", None),
+            scope=scope,
+            metadata=note,
+        )
+        if self.dispatch_store.fetch_dispatch(record["dispatch_id"], scope=scope) is None:
+            raise RuntimeError("persisted dispatch could not be verified")
+        return record
 
     def extract_report(self, raw_text: str, *, received_at: str, scenario_time: str | None = None, **_) -> ExtractionResult | None:
         """Extract only the advisory or incident facts the message itself states.
@@ -171,7 +216,10 @@ class FriendlyForcesAgent(Agent):
             f"ambulance dispatch requested for '{location}': patient_count={patient_count}"
             f"{f', severity={severity}' if severity else ''}{f', note={note}' if note else ''}"
         )
-        self.dispatches_recorded.append(record)
+        self._persist_dispatch(
+            force_type="ambulance", quantity=patient_count, location=location,
+            note=note or severity, extra=record,
+        )
         return f"recorded ambulance dispatch request for '{location}'"
 
     @tool(
@@ -186,7 +234,10 @@ class FriendlyForcesAgent(Agent):
             f"police dispatch requested for '{location}': unit_count={unit_count}"
             f"{f', incident_type={incident_type}' if incident_type else ''}{f', note={note}' if note else ''}"
         )
-        self.dispatches_recorded.append(record)
+        self._persist_dispatch(
+            force_type="police", quantity=unit_count, location=location,
+            note=note or incident_type, extra=record,
+        )
         return f"recorded police dispatch request for '{location}'"
 
     @tool(
@@ -201,7 +252,10 @@ class FriendlyForcesAgent(Agent):
             f"firefighter dispatch requested for '{location}': truck_count={truck_count}"
             f"{f', incident_type={incident_type}' if incident_type else ''}{f', note={note}' if note else ''}"
         )
-        self.dispatches_recorded.append(record)
+        self._persist_dispatch(
+            force_type="firefighters", quantity=truck_count, location=location,
+            note=note or incident_type, extra=record,
+        )
         return f"recorded firefighter dispatch request for '{location}'"
 
     @tool(
@@ -216,7 +270,10 @@ class FriendlyForcesAgent(Agent):
             f"military dispatch requested for '{location}': force_size={force_size}"
             f"{f', unit_type={unit_type}' if unit_type else ''}{f', note={note}' if note else ''}"
         )
-        self.dispatches_recorded.append(record)
+        self._persist_dispatch(
+            force_type="military", quantity=force_size or 1, location=location,
+            note=note or unit_type, extra=record,
+        )
         return f"recorded military dispatch request for '{location}'"
 
     # Fire-service mutual aid. Adopted from feat/FinalProfiles, which added these
@@ -239,7 +296,10 @@ class FriendlyForcesAgent(Agent):
             f"water tanker dispatch requested for '{location}': tanker_count={tanker_count}"
             f"{f', source_station={source_station}' if source_station else ''}{f', note={note}' if note else ''}"
         )
-        self.dispatches_recorded.append(record)
+        self._persist_dispatch(
+            force_type="water_tankers", quantity=tanker_count, location=location,
+            note=note or source_station, extra=record,
+        )
         return f"recorded water tanker dispatch request for '{location}'"
 
     @tool(
@@ -254,5 +314,8 @@ class FriendlyForcesAgent(Agent):
             f"aircraft dispatch requested for '{location}': aircraft_count={aircraft_count}"
             f", aircraft_type={aircraft_type}{f', note={note}' if note else ''}"
         )
-        self.dispatches_recorded.append(record)
+        self._persist_dispatch(
+            force_type="aircraft", quantity=aircraft_count, location=location,
+            note=note or aircraft_type, extra=record,
+        )
         return f"recorded aircraft dispatch request for '{location}'"

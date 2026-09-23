@@ -2056,6 +2056,52 @@ def _persist_step_outcomes(
         )
 
 
+def _verify_side_effect_receipt(deps: FlowDeps, receipt: ToolReceipt):
+    """Verify side effects against their authoritative scoped stores."""
+
+    if not receipt.side_effecting or receipt.event_id is None:
+        return receipt
+
+    event = deps.persistence.fetch_event(receipt.event_id)
+    if event is None:
+        return replace(receipt, state_verified=False, verification_source="event_missing")
+    scope = scope_from_event(event)
+
+    if receipt.tool_name in {
+        "dispatch_ambulance", "dispatch_police", "dispatch_firefighters",
+        "dispatch_military", "dispatch_water_tankers", "dispatch_aircraft",
+    }:
+        agent = deps.registry.get("friendly_forces_agent")
+        store = getattr(agent, "dispatch_store", None)
+        if store is None:
+            return receipt
+        rows = store.list_dispatches(scope=scope)
+        verified = any(row.get("event_id") == receipt.event_id and row.get("verification_status") == "verified" for row in rows)
+        return replace(receipt, state_verified=verified, verification_source="operational_dispatches")
+
+    if receipt.tool_name == "return_drone_to_base":
+        agent = deps.registry.get("surveillance_agent")
+        store = getattr(agent, "surveillance_store", None)
+        if store is None:
+            return replace(receipt, state_verified=False, verification_source="surveillance_store_missing")
+        direct_rows = [row for row in (event.get("steps") or ()) if row.get("direct_tool_name") == receipt.tool_name]
+        if not direct_rows:
+            return receipt
+        selection = ((direct_rows[-1].get("direct_tool_arguments") or {}).get("drone_or_mission_id") if direct_rows else "")
+        if selection and str(selection).strip().casefold() not in {"all", "all drones"}:
+            normalized = str(selection).strip().casefold()
+            active = store.get_active_missions(scope=scope)
+            verified = not any(
+                normalized in {str(item.get("mission_id", "")).casefold(), str(item.get("drone_id", "")).casefold(), str(item.get("callsign", "")).casefold()}
+                for item in active
+            )
+        else:
+            verified = not store.get_active_missions(scope=scope)
+        return replace(receipt, state_verified=verified, verification_source="surveillance_state")
+
+    return receipt
+
+
 def _execute_protocol_plan(
     deps: FlowDeps,
     event_id: str,
@@ -2116,6 +2162,7 @@ def _execute_protocol_plan(
             prior_outcomes=prior,
             event_id=event_id,
             lifecycle_callback=_lifecycle_callback,
+            postcondition_verifier=lambda receipt: _verify_side_effect_receipt(deps, receipt),
         )
     if run_result.waiting_for_event_data and not persisted_rows:
         _persist_step_plan(deps, event_id, steps)
@@ -2197,6 +2244,85 @@ def _execute_protocol_plan(
     return _finish_protocol_assessment(
         deps, event_id, main_agent, insights_agent, protocol, run_result.step_outcomes, precedent_matches,
         enforce_deadline=not resumed,
+    )
+
+
+def continue_after_drone_selection(
+    deps: FlowDeps,
+    event_id: str,
+    main_agent: "MainAgent",
+    insights_agent: "InsightsAgent",
+    selection: str,
+) -> FlowResult:
+    """Resume a recalled-drone protocol through the canonical executor.
+
+    The selection is trusted user input for an already-approved event-data
+    hold. It becomes a direct argument to the existing recall tool; no API
+    layer is allowed to call the surveillance store itself.
+    """
+
+    event = deps.persistence.fetch_event(event_id)
+    if event is None:
+        return FlowResult(event_id, "failed", "event not found")
+
+    protocol = eligible_protocol_for_scope(
+        deps, event.get("selected_protocol"), scope_from_event(event)
+    )
+    if protocol is None or protocol.name not in {"return_drone_to_base", "recall_drone_to_base"}:
+        return FlowResult(event_id, "failed", "recall protocol is unavailable for the event scope")
+
+    persisted_steps = tuple(_step_from_row(row) for row in (event.get("steps") or ()))
+    if not persisted_steps:
+        return FlowResult(event_id, "failed", "recall execution plan is missing")
+
+    target_index = next(
+        (
+            index for index, step in enumerate(persisted_steps)
+            if "return_drone_to_base" in step.allowed_tools
+        ),
+        None,
+    )
+    if target_index is None:
+        return FlowResult(event_id, "failed", "recall execution step is missing")
+
+    target = persisted_steps[target_index]
+    resumed_step = replace(
+        target,
+        direct_tool_name="return_drone_to_base",
+        direct_tool_arguments={"drone_or_mission_id": str(selection).strip()},
+        result_text="",
+    )
+    steps = tuple(replace(step, result_text=None) if index == target_index else step for index, step in enumerate(persisted_steps))
+    steps = tuple(resumed_step if index == target_index else step for index, step in enumerate(steps))
+    record_step_execution(
+        deps.persistence,
+        event_id,
+        StepExecutionEnvelope(
+            step_index=target_index,
+            agent_name=resumed_step.agent_name,
+            task_text=resumed_step.task_text,
+            allowed_tools=list(resumed_step.allowed_tools),
+            result_text=None,
+            attempt_count=0,
+            step_id=resumed_step.step_id,
+            depends_on=resumed_step.depends_on,
+            required_event_fields=resumed_step.required_event_fields,
+            status="pending",
+            direct_tool_name=resumed_step.direct_tool_name,
+            direct_tool_arguments=resumed_step.direct_tool_arguments,
+        ),
+    )
+
+    precedent_matches = _look_up_precedent_if_possible(deps, event_id, event)
+    return _execute_protocol_plan(
+        deps,
+        event_id,
+        main_agent,
+        insights_agent,
+        protocol,
+        steps,
+        precedent_matches,
+        resumed=True,
     )
 
 

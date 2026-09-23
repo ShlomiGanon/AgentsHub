@@ -4986,3 +4986,14 @@ All other register items are unchanged.
 - **Permission separation:** application permission continues to authorize the approving caller; operational context remains derived from the originating event/user membership and is not replaced by global permission level.
 - **Tests:** focused approval/transport/holds set passed **102 tests**; full offline suite passed **2,002 tests, 0 failed, 7 warnings** in **245.98 seconds**. compileall, architecture, Hebrew leakage, file catalog and `git diff --check` passed.
 - **Explicitly unchanged:** no Telegram-to-Simulation binding, no new product capability, no broad helper deletion, no test deletion, and no push.
+
+### Task 73 - Canonical Side-Effect Execution
+
+- **Status:** implemented and verified locally; no push performed.
+- **Canonical execution:** drone continuation now resumes the persisted protocol plan through the existing protocol -> tool -> `ToolReceipt` -> lifecycle path. The API no longer calls surveillance recall methods directly; the exact event scope and runtime context are carried into continuation.
+- **Dispatch persistence:** FriendlyForces dispatch tools persist authoritative scoped records in `operational_dispatches` with event correlation, operational profile, force type, quantity, target, requester, status, and verification metadata. The table is created lazily in the profile database through the persistence layer, preserving the existing migration sequence; creation performs readback verification.
+- **Truthful completion:** successful side effects require a receipt and, where authoritative state is available, persisted-state postcondition verification. Dispatch status means recorded/dispatched only; no real-world arrival or external confirmation is claimed. Failure paths remain failed and do not report success.
+- **Safety boundaries:** profile, operational scope, approval permission, and event correlation remain enforced. Production agents are bound to the scoped dispatch store; unbound unit-test doubles retain only a compatibility fallback and cannot bypass the API runtime binding.
+- **Coverage:** added dispatch persistence/readback, restart durability, scope/profile isolation, failure-path tests, and canonical executor verification. Existing fire mutual-aid lifecycle/receipt and response-team profile-gating regressions remain green; drone continuation is covered through the canonical flow contract.
+- **Verification:** full offline suite passed **2,005 tests, 0 failed, 7 warnings** in **277.99 seconds**. Static compileall, architecture/profile/localization/file-catalog checks passed (**94 tests, 0 failed, 1 warning**) and `git diff --check` passed.
+- **Explicitly unchanged:** no new protocol or capability, no Telegram-to-Simulation binding, no auto-run/auto-next/simulator automation, no destructive cleanup, and no push.
