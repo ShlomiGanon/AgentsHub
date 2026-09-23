@@ -159,7 +159,6 @@ This English catalog describes every tracked or pending first-party file in the 
 | `profiles/sub_agent_team_status.py` | Production | Private implementation | Defines the dedicated readiness-team status deployment and reporting protocol. |
 | `profiles/template.py` | Production | Private implementation | Provides a reference template for authoring deployment profiles. |
 | `profiles/unified_test.py` | Production | Private implementation | Defines the unified test profile for surveillance, readiness team, and friendly forces. |
-| `pyrefly.toml` | Configuration | Internal | Configures static type analysis for the repository. |
 | `protocols/__init__.py` | Production | Public facade | Exposes protocol contracts, execution, repository operations, and aliases. |
 | `protocols/contracts.py` | Production | Private implementation | Defines protocols, steps, criticality, results, and edit errors. |
 | `protocols/executor.py` | Production | Private implementation | Executes protocol steps with retry and idempotency enforcement. |
