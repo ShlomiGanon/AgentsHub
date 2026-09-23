@@ -699,8 +699,12 @@ async def _on_text_message(update, context) -> None:
     is_appr = _is_approval(norm_text)
     is_rej = _is_rejection(norm_text)
     if resolution.caller and resolution.caller.level == PermissionLevel.COMMANDER and (is_appr or is_rej):
-        db_path = getattr(deps.loaded_profile, "db_path", None)
-        open_holds = interactions.get_open_approval_holds(db_path)
+        pending_payload = await deps.api_client.fetch_pending_holds(telegram_identity)
+        open_holds = [
+            str(item.get("event_id"))
+            for item in pending_payload.get("holds", ())
+            if item.get("kind") == "approval" and item.get("event_id")
+        ]
         choice = "approved" if is_appr else "rejected"
         if len(open_holds) == 1:
             hold_event_id = open_holds[0]

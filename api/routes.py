@@ -88,6 +88,7 @@ from persistence import (
     operational_time_context,
     scoped_conversation_id,
     scope_from_simulation_context,
+    scope_from_event,
     resolve_live_operational_context,
     resolve_runtime_context,
     runtime_context,
@@ -2324,6 +2325,35 @@ def _pending_hold_or_raise(ctx: "ApiContext", kind: str, event_id: str) -> dict:
     return hold
 
 
+def _context_for_continuation(ctx: "ApiContext", event: dict, fallback_identity: str | None = None):
+    """Bind the event's original trusted operational world for a continuation."""
+
+    event_scope = scope_from_event(event)
+    sender = str(event.get("sender_identity") or "")
+    resolved = resolve_runtime_context(
+        identity_id=sender,
+        users_persistence=ctx.deps.persistence,
+        unit_store=ctx.operational_unit_store,
+        loaded_profile=ctx.loaded_profile,
+        operational_scope=event_scope,
+    )
+    if (
+        resolved.status in {"unknown_user", "no_active_membership"}
+        and not event_scope.is_simulation
+        and fallback_identity
+    ):
+        resolved = resolve_runtime_context(
+            identity_id=str(fallback_identity),
+            users_persistence=ctx.deps.persistence,
+            unit_store=ctx.operational_unit_store,
+            loaded_profile=ctx.loaded_profile,
+            operational_scope=event_scope,
+        )
+    if resolved.status != "resolved":
+        raise AuthorizationError(f"trusted operational context unavailable: {resolved.status}")
+    return dataclasses.replace(ctx, deps=dataclasses.replace(ctx.deps, runtime_context=resolved))
+
+
 def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
     blueprint = Blueprint("holds", __name__)
     messages = ctx.loaded_profile.message_catalog
@@ -2388,12 +2418,14 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
 
         optimization_policy = getattr(ctx.loaded_profile, "optimization_policy", OptimizationPolicy())
         hold = _pending_hold_or_raise(ctx, "clarification", event_id)
+        event = ctx.deps.persistence.fetch_event(event_id) or {}
+        continuation_ctx = _context_for_continuation(ctx, event, identity)
 
         reservation = ctx.queue.reserve(True)
         if reservation is None:
             raise ServiceUnavailableError(messages.text("api.queue_full"))
 
-        answer = resolve_clarification(ctx.deps, hold["hold_id"], identity, level, classification)
+        answer = resolve_clarification(continuation_ctx.deps, hold["hold_id"], identity, level, classification)
         if answer.status == "invalid_classification":
             ctx.queue.release_reservation(reservation)
             raise InvalidInputError(answer.message, field="classification")
@@ -2407,7 +2439,7 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
 
         def _work() -> None:
             with trace_context(trace_id):
-                continue_after_clarification(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent)
+                continue_after_clarification(continuation_ctx.deps, event_id, continuation_ctx.main_agent, continuation_ctx.insights_agent)
 
         ctx.queue.submit(
             WorkItem(
@@ -2436,12 +2468,14 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
 
         optimization_policy = getattr(ctx.loaded_profile, "optimization_policy", OptimizationPolicy())
         hold = _pending_hold_or_raise(ctx, "approval", event_id)
+        event = ctx.deps.persistence.fetch_event(event_id) or {}
+        continuation_ctx = _context_for_continuation(ctx, event, identity)
 
         reservation = ctx.queue.reserve(True)
         if reservation is None:
             raise ServiceUnavailableError(messages.text("api.queue_full"))
 
-        answer = resolve_approval(ctx.deps, hold["hold_id"], identity, level, decision)
+        answer = resolve_approval(continuation_ctx.deps, hold["hold_id"], identity, level, decision)
         if answer.status == "invalid_candidate":
             ctx.queue.release_reservation(reservation)
             raise InvalidInputError(answer.message, field="decision")
@@ -2452,14 +2486,14 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
 
         if answer.status == "rejected":
             ctx.queue.release_reservation(reservation)
-            decline(ctx.deps, event_id)
+            decline(continuation_ctx.deps, event_id)
             return jsonify({"event_id": event_id, "status": "declined"})
 
         selected_protocol_name = answer.hold["selected_protocol_name"]
 
         def _work() -> None:
             with trace_context(trace_id):
-                continue_after_approval(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent, selected_protocol_name)
+                continue_after_approval(continuation_ctx.deps, event_id, continuation_ctx.main_agent, continuation_ctx.insights_agent, selected_protocol_name)
 
         ctx.queue.submit(
             WorkItem(

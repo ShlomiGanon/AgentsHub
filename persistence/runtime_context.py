@@ -74,6 +74,7 @@ def resolve_runtime_context(
     unit_store=None,
     loaded_profile=None,
     simulation_context=None,
+    operational_scope: OperationalScope | None = None,
 ) -> RuntimeOperationalContext:
     """Resolve one trusted context; never silently turns missing data into LIVE."""
 
@@ -81,9 +82,13 @@ def resolve_runtime_context(
     if identity is None:
         return _unresolved(identity=None, scope=None, status="unknown_user", provenance="users")
 
-    if simulation_context is not None:
-        scenario_id = str(getattr(simulation_context, "scenario_id", "") or "")
-        run_id = str(getattr(simulation_context, "scenario_run_id", "") or "")
+    if simulation_context is not None or operational_scope is not None and operational_scope.is_simulation:
+        if simulation_context is not None:
+            scenario_id = str(getattr(simulation_context, "scenario_id", "") or "")
+            run_id = str(getattr(simulation_context, "scenario_run_id", "") or "")
+        else:
+            scenario_id = str(operational_scope.scenario_id or "")
+            run_id = str(operational_scope.scenario_run_id or "")
         if not scenario_id or not run_id:
             return _unresolved(identity=identity, scope=None, status="invalid_simulation_context", provenance="simulator")
         scope = OperationalScope.simulation(scenario_id, run_id)

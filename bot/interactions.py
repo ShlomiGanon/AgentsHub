@@ -606,6 +606,11 @@ def unregister_open_approval_hold(event_id: str) -> None:
 
 
 def get_open_approval_holds(db_path: str | None = None) -> list[str]:
+    """Compatibility helper for legacy unit tests; runtime uses the API boundary.
+
+    The bot process no longer calls this database fallback.  Keeping the helper
+    preserves the narrow historical test contract until those tests are retired.
+    """
     if db_path:
         try:
             import sqlite3

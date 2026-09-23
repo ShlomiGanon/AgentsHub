@@ -88,3 +88,22 @@ def test_incomplete_simulation_context_never_falls_back_to_live(tmp_path):
     assert context.status == "invalid_simulation_context"
     assert context.operational_scope is None
 
+
+def test_event_scope_reuses_exact_simulation_run_without_live_membership(tmp_path):
+    users = open_persistence(str(tmp_path / "main.db"))
+    users.write_user("event-user", "viewer")
+    loaded = SimpleNamespace(
+        live_operational_profile=RESPONSE_TEAM,
+        simulations=(SimpleNamespace(scenario_id="SEC_001", official_metadata={"operational_profile": RESPONSE_TEAM}),),
+    )
+
+    context = resolve_runtime_context(
+        identity_id="event-user",
+        users_persistence=users,
+        loaded_profile=loaded,
+        operational_scope=OperationalScope.simulation("SEC_001", "run-7"),
+    )
+
+    assert context.is_resolved
+    assert context.operational_scope == OperationalScope.simulation("SEC_001", "run-7")
+    assert context.membership is None

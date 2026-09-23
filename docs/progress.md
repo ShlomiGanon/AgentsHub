@@ -4976,3 +4976,13 @@ All other register items are unchanged.
 - **Runtime integration:** `/Msg` resolves the context before profile/protocol selection and carries it into `FlowDeps`; fixed operational reads and Main Agent profile resolution consume the same context. Profile gating now defaults to enforced for loaded deployments.
 - **Tests:** added `tests/test_task70_runtime_context.py` covering LIVE response/fire profiles, ambiguous memberships, simulation resolution without LIVE membership, and no silent fallback. Focused Task 66/67/69C/70 set passed **66 tests**.
 - **Validation boundary:** Telegram-to-Simulation binding was not implemented. Full suite and remaining static gates are pending before commit.
+
+### Task 71 - Runtime Boundary Consolidation & Legacy Context Cleanup
+
+- **Status:** implemented and verified locally; no push performed.
+- **Telegram boundary:** approval free-text lookup now uses the authenticated `/Holds/Pending` API contract instead of direct SQLite access. The legacy `get_open_approval_holds(db_path)` helper remains only for compatibility tests and is no longer used by runtime bot code.
+- **Continuation authority:** Clarification and approval continuations resolve the original event scope/profile once before resuming and carry that context through the queued work. Simulation events retain their exact scenario/run; legacy LIVE events may use the authenticated caller only as a compatibility fallback when the original sender has no persisted user.
+- **Context policy:** profile/scope resolution is not recomputed in deeper continuation layers when `FlowDeps.runtime_context` is already present. Existing low-level event-scope helpers remain for persistence-safe compatibility paths.
+- **Permission separation:** application permission continues to authorize the approving caller; operational context remains derived from the originating event/user membership and is not replaced by global permission level.
+- **Tests:** focused approval/transport/holds set passed **102 tests**; full offline suite passed **2,002 tests, 0 failed, 7 warnings** in **245.98 seconds**. compileall, architecture, Hebrew leakage, file catalog and `git diff --check` passed.
+- **Explicitly unchanged:** no Telegram-to-Simulation binding, no new product capability, no broad helper deletion, no test deletion, and no push.
