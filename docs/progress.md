@@ -4899,3 +4899,15 @@ All other register items are unchanged.
 - **Explicitly unchanged:** Incident/Evidence, provider/SITREP behavior, resources, profiles, event-history redesign, legacy deletion, fallback-to-live simulation behavior, display-name matching, auto-run and auto-next remain out of scope.
 
 All other register items are unchanged.
+
+### Task 66 - Smart Telegram Operational-State Buttons
+
+- **Status:** implemented and verified. The five fixed read controls carry an explicit `fixed_state_button` marker from the Telegram ReplyKeyboard through the bot transport to `/Msg`. A generic API request with the same `protocol_hint` retains its existing route.
+- **Authoritative reads:** team availability reads the scoped team-status store; cameras and drone fleet read the scoped surveillance store (including active missions); event history reads the scoped committed-event ledger; and the overall picture rebuilds and deterministically renders the typed snapshot. Every press reads current records anew. No fixed path reads or writes conversation history, calls generic `process`, or uses a provider fallback.
+- **Scope and observability:** each path runs under the trusted LIVE or scenario/run `OperationalScope`, and logs protocol, scope, sources/domains, fetch metadata, and `cache_used=false`. Unavailable data produces the localized operational-state response.
+- **Regression coverage:** the Task 66 regression tests cover repeated mutable reads for all five controls, typed overall-picture rebuilds, LIVE/simulation isolation, and the API bypass of conversation/model routing. Bot contracts, transport, and fake client coverage propagate the explicit marker.
+- **Verification:** focused button/API/bot/transport suite: **130 passed**. Full offline suite: **1,921 passed, 0 failed, 7 warnings, 329.61 seconds**. Targeted `compileall` and `git diff --check` passed.
+- **Local UI boundary:** the local stack started and the authenticated Simulator rendered its identity and scenario-selection UI. No scenario step, auto-next, reset, or external Telegram message was sent. Telegram ReplyKeyboard controls are not represented in that screen, so their end-to-end behavior is verified by bot/HTTP regression tests rather than a claimed manual Telegram click. The verification processes were stopped; ports 8905 and 8915 are closed.
+- **Explicitly unchanged:** trusted simulation binding, scenario-run selection, incident/evidence semantics, event-history redesign, provider/SITREP behavior, auto-run/auto-next, and `pyrefly.toml`.
+
+All other register items are unchanged.
