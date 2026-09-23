@@ -178,14 +178,12 @@ def test_explicit_bootstrap_provisions_canonical_state(isolated_unified):
         store.close()
 
     team = open_team_status_persistence(team_status)
-    assert team.roster_is_approved() is True
-    assert {member["telegram_identity"] for member in team.list_members()} >= {
-        "commander_user", "viewer_user", "1001", "1002", "1003",
-    }
-    assert team.latest_cycle() is not None
+    assert team.roster_is_approved() is False
+    assert team.list_members(approved_only=False) == []
+    assert team.latest_cycle() is None
 
-    cameras = open_surveillance_persistence(surveillance).list_cameras()
-    assert cameras, "canonical camera seed was not reconciled"
+    cameras = open_surveillance_persistence(surveillance, seed_demo_data=False).list_cameras()
+    assert cameras == []
 
 
 def test_explicit_bootstrap_is_idempotent(isolated_unified):
@@ -202,7 +200,7 @@ def test_explicit_bootstrap_is_idempotent(isolated_unified):
     unified_test.ensure_seed_data()
 
     team_again = open_team_status_persistence(team_status)
-    assert [dict(member) for member in team_again.list_members(approved_only=False)] == first_members
+    assert [dict(member) for member in team_again.list_members(approved_only=False)] == first_members == []
     assert team_again.latest_cycle() == first_cycle
 
 

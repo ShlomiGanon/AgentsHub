@@ -278,6 +278,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_persistence_events.py` | Test | Internal | Verifies persistence events behavior and edge cases. |
 | `tests/test_profile_loading.py` | Test | Internal | Verifies profile imports, validation, construction, and registry configuration. |
 | `tests/test_profile_simulations.py` | Test | Internal | Verifies the simulation ID scheme, profile validation, provisioning, and JSON materialization. |
+| `tests/test_task69b_clean_live_bootstrap.py` | Test | Internal | Verifies clean LIVE bootstrap ownership and isolated simulation-world seeding. |
 | `tests/test_protocol_repository.py` | Test | Internal | Verifies protocol loading, validation, rendering, and atomic editing. |
 | `tests/test_protocol_retry.py` | Test | Internal | Verifies protocol retry behavior and edge cases. |
 | `tests/test_provider_telemetry.py` | Test | Internal | Verifies CrewAI provider-event correlation, usage fields, failures, and race recovery. |

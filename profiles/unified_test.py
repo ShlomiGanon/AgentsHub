@@ -105,7 +105,7 @@ class UnifiedSurveillanceAgent(SurveillanceAgent):
     """Binds the visual surveillance specialist with Hebrew tactical tools."""
 
     surveillance_db_path = UNIFIED_SURVEILLANCE_DB_PATH
-    surveillance_seed_enabled = True
+    surveillance_seed_enabled = False
     surveillance_seed_profile = "profiles.unified_test"
     role = _catalog_text("unified.surveillance.role")
     system_prompt = _catalog_text("unified.surveillance.system_prompt")
@@ -810,8 +810,7 @@ class UnifiedFriendlyForcesAgent(FriendlyForcesAgent):
 
 
 def _seed_mock_data() -> None:
-    """Initialize mock readiness-team members and bot-service if DB is empty."""
-    catalog = get_catalog(DEFAULT_LANGUAGE)
+    """Initialize only the infrastructure identity required by this deployment."""
     hist_store = open_persistence(DB_PATH)
     try:
         if hist_store.read_user("bot-service") is None:
@@ -819,38 +818,6 @@ def _seed_mock_data() -> None:
     finally:
         hist_store.close()
 
-    open_surveillance_persistence(
-        UNIFIED_SURVEILLANCE_DB_PATH,
-        seed_profile="profiles.unified_test",
-    )
-
-    team_store = open_team_status_persistence(UNIFIED_TEAM_STATUS_DB_PATH)
-    now_dt = datetime.now(timezone.utc)
-    now_iso = now_dt.isoformat()
-    if not team_store.roster_is_approved():
-        team_store.register_member("2077472944", catalog.text("unified.seed.primary_name"), now_iso)
-        team_store.register_member("commander_user", catalog.text("unified.seed.commander_user_name"), now_iso)
-        team_store.register_member("viewer_user", catalog.text("unified.seed.viewer_user_name"), now_iso)
-        team_store.register_member("1001", catalog.text("unified.seed.member_1001"), now_iso)
-        team_store.register_member("1002", catalog.text("unified.seed.member_1002"), now_iso)
-        team_store.register_member("1003", catalog.text("unified.seed.member_1003"), now_iso)
-        team_store.approve_roster("commander_user", now_iso)
-
-        cycle_key = now_dt.date().isoformat()
-        deadline = (now_dt + timedelta(hours=4)).isoformat()
-        team_store.open_cycle(cycle_key, now_iso, deadline)
-
-    # Repair only the legacy placeholder produced by the removed Telegram
-    # auto-registration path.  This reuses the profile's already-authoritative
-    # approved name and leaves roster membership and approval untouched.
-    members_by_identity = {
-        member["telegram_identity"]: member
-        for member in team_store.list_members(approved_only=False)
-    }
-    primary = members_by_identity.get("2077472944")
-    legacy_placeholder = catalog.text("unified.team_status.legacy_placeholder_name", identity="2077472944")
-    if primary and primary["full_name"] == legacy_placeholder:
-        team_store.register_member("2077472944", catalog.text("unified.seed.primary_name"), primary["registered_at"])
 
 
 def ensure_seed_data() -> None:

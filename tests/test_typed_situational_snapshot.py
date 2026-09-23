@@ -249,23 +249,27 @@ def test_unified_test_profile_uses_hebrew_findings_renderer(monkeypatch, tmp_pat
     monkeypatch.setattr(unified_test, "UNIFIED_SURVEILLANCE_DB_PATH", surveillance_path)
     monkeypatch.setattr(unified_test, "UNIFIED_TEAM_STATUS_DB_PATH", team_path)
     monkeypatch.setattr(unified_test.UnifiedSurveillanceAgent, "surveillance_db_path", surveillance_path)
+    monkeypatch.setattr(unified_test.UnifiedSurveillanceAgent, "surveillance_seed_enabled", True)
     monkeypatch.setattr(unified_test.UnifiedTeamStatusAgent, "status_db_path", team_path)
     unified_test.ensure_seed_data()
 
     surveillance_agent = unified_test.UnifiedSurveillanceAgent(model="mock")
     team_agent = unified_test.UnifiedTeamStatusAgent(model="mock")
     team_store = team_agent.status_store
-    cycle = team_store.latest_cycle()
+    cycle_opened = "2026-09-23T08:00:00+00:00"
+    team_store.register_member("2077472944", "Primary", cycle_opened)
+    team_store.approve_roster("commander_user", cycle_opened)
+    cycle = team_store.open_cycle("2026-09-23", cycle_opened, "2026-09-23T09:00:00+00:00")
     for index in range(4, 13):
-        team_store.register_member(str(1000 + index), f"Member {index}", cycle["opened_at"])
-    team_store.approve_roster("commander_user", cycle["opened_at"])
+        team_store.register_member(str(1000 + index), f"Member {index}", cycle.opened_at)
+    team_store.approve_roster("commander_user", cycle.opened_at)
     team_store.record_response(
         telegram_identity="2077472944",
         source_message_id="baseline-unavailable",
         availability="unavailable",
         reason="reserve duty",
         original_text="unavailable",
-        received_at=cycle["opened_at"],
+        received_at=cycle.opened_at,
     )
 
     registry = AgentRegistry({
@@ -289,11 +293,11 @@ def test_unified_test_profile_uses_hebrew_findings_renderer(monkeypatch, tmp_pat
     assert picture.snapshot.drones.charging == 1
     assert picture.snapshot.team.available == 0
     assert picture.snapshot.team.unavailable == 1
-    assert picture.snapshot.team.not_reported == 14
+    assert picture.snapshot.team.not_reported == 9
     assert "מצלמות: 6/6 פעילות" in picture.text
     assert "קיימת יכולת אווירית זמינה: 2 רחפנים" in picture.text
     assert "אין כרגע כוח זמין מאושר" in picture.text
-    assert "14 טרם דיווחו" in picture.text
+    assert "9 טרם דיווחו" in picture.text
 
 
 def test_shared_picture_preserves_camera_states_and_committed_reports():

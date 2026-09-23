@@ -222,7 +222,7 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
             row = conn.execute("SELECT 1 FROM operational_scopes WHERE scope_key = ?", (scope.key,)).fetchone()
             if row is None:
                 conn.execute("INSERT INTO operational_scopes VALUES (?, ?, ?, ?, ?)", (scope.key, scope.kind, scope.scenario_id, scope.scenario_run_id, scope_created_at()))
-                if self.seed_demo_data:
+                if self.seed_demo_data or scope.is_simulation:
                     self._seed_scope(conn, scope.key, baseline or {})
             if own_connection:
                 conn.commit()

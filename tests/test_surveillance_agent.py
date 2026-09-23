@@ -178,6 +178,7 @@ def test_maintenance_report_preserves_observation_and_uses_existing_offline_stat
 def test_unified_test_profile_uses_authoritative_report_ingestion(tmp_path, monkeypatch):
     db_path = str(tmp_path / "unified-surveillance.db")
     monkeypatch.setattr(unified_test.UnifiedSurveillanceAgent, "surveillance_db_path", db_path)
+    monkeypatch.setattr(unified_test.UnifiedSurveillanceAgent, "surveillance_seed_enabled", True)
     agent = unified_test.UnifiedSurveillanceAgent(model="mock")
 
     result = agent.ingest_report(

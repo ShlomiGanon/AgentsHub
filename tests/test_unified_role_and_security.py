@@ -1,6 +1,7 @@
 """Comprehensive automated tests for role-based security, unified profile, and confirmation flows."""
 
 from unittest.mock import AsyncMock, MagicMock
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -56,12 +57,21 @@ def unified_env(monkeypatch, tmp_path):
         "surveillance_db_path",
         unified_test.UNIFIED_SURVEILLANCE_DB_PATH,
     )
+    monkeypatch.setattr(unified_test.UnifiedSurveillanceAgent, "surveillance_seed_enabled", True)
     monkeypatch.setattr(
         unified_test.UnifiedTeamStatusAgent,
         "status_db_path",
         unified_test.UNIFIED_TEAM_STATUS_DB_PATH,
     )
     unified_test.ensure_seed_data()
+    team_store = open_team_status_persistence(unified_test.UNIFIED_TEAM_STATUS_DB_PATH)
+    opened = datetime.now(timezone.utc)
+    opened_at = opened.isoformat()
+    deadline_at = (opened + timedelta(hours=4)).isoformat()
+    for identity in ("2077472944", "commander_user", "viewer_user", "1001", "1002", "1003"):
+        team_store.register_member(identity, identity, opened_at)
+    team_store.approve_roster("commander_user", opened_at)
+    team_store.open_cycle(opened.date().isoformat(), opened_at, deadline_at)
 
 
 def test_unified_profile_structure_and_contracts(unified_env):
@@ -813,6 +823,7 @@ def test_hebrew_tools_return_concise_operational_hebrew(unified_env):
     from profiles import unified_test
 
     surv_agent = unified_test.UnifiedSurveillanceAgent(model="mock")
+    surv_agent.surveillance_store.reconcile_camera_seed()
     # Fleet status tool
     fleet = surv_agent.get_drone_fleet_status()
     assert "מצב צי רחפנים" in fleet
