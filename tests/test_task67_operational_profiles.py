@@ -359,6 +359,28 @@ def test_an_unbound_render_keeps_the_previous_default_label(hebrew_catalog):
     assert get_catalog("he").text("profile.response_team.roster") in text
 
 
+def test_operational_context_carries_minimum_trusted_profile_capabilities():
+    from orchestrator.situational_picture import (
+        SituationalQueryScope,
+        build_operational_context,
+    )
+
+    fire = operational_profile(FIRE_STATION)
+    with operational_profile_context(fire):
+        context = build_operational_context(
+            _snapshot(),
+            query_scope=SituationalQueryScope(team=True),
+            current_time="2026-09-09T11:30:00+00:00",
+            operational_scope=OperationalScope.simulation(
+                "FIRE_002_PHASE_1", "run-context-profile"
+            ),
+        )
+
+    profile_payload = context.prompt_payload()["operational_profile"]
+    assert profile_payload["profile_id"] == FIRE_STATION
+    assert "dispatch_mutual_aid" in profile_payload["allowed_protocol_ids"]
+
+
 # --- §28 scenario world materialization --------------------------------------
 
 

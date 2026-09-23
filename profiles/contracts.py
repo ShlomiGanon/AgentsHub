@@ -106,6 +106,10 @@ class LoadedProfile:
     # involved. Defaults to the response-team organization so an existing
     # installation keeps behaving exactly as before (Task 67 §23).
     live_operational_profile: str = "response_team"
+    # Opt-in for deployments whose protocol registry is partitioned by the
+    # canonical OperationalProfile catalogue. Legacy single-purpose profiles
+    # keep their existing protocol sets unchanged.
+    operational_profile_protocol_gating: bool = False
 
 REQUIRED_PROFILE_ATTRS = (
     "PROFILE_NAME",

@@ -1,5 +1,7 @@
+import dataclasses
 import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -7,20 +9,30 @@ import pytest
 from agents.history import HistoryAgent
 from agents.runtime import AgentRegistry
 from api.app import build_app
+from auth.permissions import PermissionLevel
 from orchestrator.flows import (
     FlowDeps,
     action_protocols_for_request,
     begin_request,
     continue_from_risk_assessment,
+    continue_after_approval,
     enforce_action_routing_guard,
     prepare_fast_path_report,
     protocol_has_side_effects,
+    resolve_approval,
 )
-from orchestrator.reasoning import IntentResult, OperationalDecision, ProtocolSelectionResult, RiskAssessment
-from persistence import open_persistence
-from profiles import AreaRegistry, EventTypeRegistry, OptimizationPolicy
-from protocols import ProtocolSet
-from tests.api_fakes import VIEWER_IDENTITY, auth_headers, build_context
+from orchestrator.reasoning import (
+    FormulationResult,
+    IntentResult,
+    OperationalDecision,
+    ProtocolSelectionResult,
+    RiskAssessment,
+    SuccessVerdict,
+)
+from persistence import OperationalScope, open_persistence
+from profiles import AreaRegistry, EventTypeRegistry, OptimizationPolicy, RESPONSE_TEAM
+from protocols import ProtocolSet, Step
+from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, auth_headers, build_context
 
 
 class _Result:
@@ -93,6 +105,11 @@ def unified_action_deps(monkeypatch, tmp_path):
             deterministic_execution_mode="direct",
         ),
         timezone_name=unified_test.TIMEZONE,
+        loaded_profile=SimpleNamespace(
+            live_operational_profile=RESPONSE_TEAM,
+            operational_profile_protocol_gating=True,
+            simulations=unified_test.SIMULATIONS,
+        ),
     )
     yield deps, unified_test
     persistence.close()
@@ -162,6 +179,7 @@ def test_unified_test_action_candidates_are_side_effecting_and_queries_are_not(u
         "dispatch_drone_to_incident",
         "recall_drone_to_base",
     } <= action_names
+    assert "dispatch_mutual_aid" not in action_names
     for name in (
         "overall_situational_picture",
         "query_drone_fleet_status",
@@ -171,6 +189,232 @@ def test_unified_test_action_candidates_are_side_effecting_and_queries_are_not(u
         protocol = next(item for item in unified_test.PROTOCOLS if item.name == name)
         assert protocol_has_side_effects(deps, protocol) is False
         assert name not in action_names
+
+
+def test_fire_scope_action_candidates_include_mutual_aid(unified_action_deps):
+    deps, _unified_test = unified_action_deps
+    scope = OperationalScope.simulation("FIRE_002_PHASE_1", "run-profile-gate")
+
+    action_names = {
+        protocol.name for protocol in action_protocols_for_request(deps, scope)
+    }
+
+    assert "dispatch_mutual_aid" in action_names
+
+
+def test_generic_selection_cannot_return_mutual_aid_for_response_team(
+    unified_action_deps, monkeypatch
+):
+    deps, _unified_test = unified_action_deps
+    monkeypatch.setattr(
+        "orchestrator.flows.assess_risk",
+        lambda *args, **kwargs: RiskAssessment(0.9, "high", "action risk"),
+    )
+    monkeypatch.setattr(
+        "orchestrator.flows.select_protocol",
+        lambda *args, **kwargs: ProtocolSelectionResult(
+            status="selected",
+            protocol_name="dispatch_mutual_aid",
+            reason="attempted global-catalogue bypass",
+        ),
+    )
+    event_id = begin_request(
+        deps,
+        "request fire mutual aid",
+        datetime.now(timezone.utc).isoformat(),
+        VIEWER_IDENTITY,
+    )
+
+    result = continue_from_risk_assessment(
+        deps, event_id, MagicMock(), MagicMock()
+    )
+
+    assert result.outcome == "no_match_protocol"
+    assert deps.persistence.fetch_event(event_id)["selected_protocol"] is None
+
+
+def test_deterministic_selection_cannot_bypass_response_team_profile(
+    unified_action_deps, monkeypatch
+):
+    deps, unified_test = unified_action_deps
+    protocol = next(
+        item for item in unified_test.PROTOCOLS
+        if item.name == "dispatch_mutual_aid"
+    )
+    monkeypatch.setattr("orchestrator.flows.look_up_precedent", lambda *args, **kwargs: ())
+    event_id = begin_request(
+        deps,
+        "request fire mutual aid",
+        datetime.now(timezone.utc).isoformat(),
+        VIEWER_IDENTITY,
+    )
+
+    result = continue_from_risk_assessment(
+        deps,
+        event_id,
+        MagicMock(),
+        MagicMock(),
+        selected_protocol=protocol,
+    )
+
+    assert result.outcome == "no_match_protocol"
+    assert deps.persistence.fetch_event(event_id)["action_state"] is None
+
+
+def test_explicit_protocol_hint_cannot_bypass_response_team_profile(
+    unified_action_deps, tmp_path
+):
+    deps, _unified_test = unified_action_deps
+    deps.persistence.write_user(COMMANDER_IDENTITY, "commander")
+    base_ctx = build_context(tmp_path)
+    base_ctx.queue.stop()
+    base_ctx.deps.persistence.close()
+    base_ctx.loaded_profile.live_operational_profile = RESPONSE_TEAM
+    base_ctx.loaded_profile.operational_profile_protocol_gating = True
+    base_ctx.loaded_profile.simulations = deps.loaded_profile.simulations
+    scoped_deps = dataclasses.replace(
+        deps,
+        loaded_profile=base_ctx.loaded_profile,
+    )
+    ctx = dataclasses.replace(base_ctx, deps=scoped_deps)
+    ctx.queue.start()
+    client = build_app(ctx).test_client()
+
+    response = client.post(
+        "/Msg",
+        headers=auth_headers(COMMANDER_IDENTITY),
+        json={
+            "text": "dispatch mutual aid",
+            "sender_identity": COMMANDER_IDENTITY,
+            "protocol_hint": "dispatch_mutual_aid",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["field"] == "protocol_hint"
+    assert "dispatch_mutual_aid" in response.get_json()["message"]
+    assert deps.registry.get("friendly_forces_agent").dispatches_recorded == []
+    ctx.queue.stop()
+
+
+def test_fire_scope_mutual_aid_reaches_approval_without_tool_execution(
+    unified_action_deps, monkeypatch
+):
+    deps, unified_test = unified_action_deps
+    protocol = next(
+        item for item in unified_test.PROTOCOLS
+        if item.name == "dispatch_mutual_aid"
+    )
+    forces = deps.registry.get("friendly_forces_agent")
+    monkeypatch.setattr("orchestrator.flows.look_up_precedent", lambda *args, **kwargs: ())
+    event_id = begin_request(
+        deps,
+        "request two water tankers",
+        datetime.now(timezone.utc).isoformat(),
+        VIEWER_IDENTITY,
+        simulation_context=SimpleNamespace(
+            scenario_id="FIRE_002_PHASE_1",
+            scenario_run_id="run-profile-gate",
+            scenario_time="2026-09-09T07:30:00+00:00",
+        ),
+    )
+
+    result = continue_from_risk_assessment(
+        deps,
+        event_id,
+        MagicMock(),
+        MagicMock(),
+        selected_protocol=protocol,
+    )
+
+    event = deps.persistence.fetch_event(event_id)
+    assert result.outcome == "held_for_approval"
+    assert event["selected_protocol"] == "dispatch_mutual_aid"
+    assert event["action_state"] == "pending_approval"
+    assert forces.dispatches_recorded == []
+
+
+def test_approved_fire_mutual_aid_uses_normal_lifecycle_and_receipt(
+    unified_action_deps, monkeypatch
+):
+    deps, unified_test = unified_action_deps
+    protocol = next(
+        item for item in unified_test.PROTOCOLS
+        if item.name == "dispatch_mutual_aid"
+    )
+    forces = deps.registry.get("friendly_forces_agent")
+    deps.settings_store.get_retry_count.return_value = 3
+    monkeypatch.setattr("orchestrator.flows.look_up_precedent", lambda *args, **kwargs: ())
+    event_id = begin_request(
+        deps,
+        "request two water tankers",
+        datetime.now(timezone.utc).isoformat(),
+        VIEWER_IDENTITY,
+        simulation_context=SimpleNamespace(
+            scenario_id="FIRE_002_PHASE_1",
+            scenario_run_id="run-approved-profile-gate",
+            scenario_time="2026-09-09T07:30:00+00:00",
+        ),
+    )
+    held = continue_from_risk_assessment(
+        deps,
+        event_id,
+        MagicMock(),
+        MagicMock(),
+        selected_protocol=protocol,
+    )
+    assert held.outcome == "held_for_approval"
+    assert forces.dispatches_recorded == []
+
+    [hold] = deps.persistence.list_held_events("approval")
+    answer = resolve_approval(
+        deps,
+        hold["hold_id"],
+        "commander-1",
+        PermissionLevel.COMMANDER,
+        "approved",
+    )
+    assert answer.status == "approved"
+    assert forces.dispatches_recorded == []
+
+    monkeypatch.setattr(
+        "orchestrator.flows.formulate_tasks",
+        lambda *args, **kwargs: FormulationResult(
+            steps=(
+                Step(
+                    agent_name="friendly_forces_agent",
+                    task_text="dispatch two water tankers",
+                    allowed_tools=("dispatch_water_tankers",),
+                    step_id="mutual-aid-1",
+                    direct_tool_name="dispatch_water_tankers",
+                    direct_tool_arguments={
+                        "location": "north_sector",
+                        "tanker_count": 2,
+                    },
+                ),
+            )
+        ),
+    )
+    monkeypatch.setattr("orchestrator.flows.build_insight", lambda *args, **kwargs: "recorded")
+    monkeypatch.setattr(
+        "orchestrator.flows.judge_success",
+        lambda *args, **kwargs: SuccessVerdict("success", "verified receipt"),
+    )
+
+    result = continue_after_approval(
+        deps,
+        event_id,
+        MagicMock(),
+        MagicMock(),
+        "dispatch_mutual_aid",
+    )
+
+    event = deps.persistence.fetch_event(event_id)
+    assert result.outcome == "succeeded"
+    assert event["action_state"] == "executed"
+    assert event["action_tool_receipts"][0]["tool_name"] == "dispatch_water_tankers"
+    assert event["steps"][0]["tool_receipts"][0]["status"] == "succeeded"
+    assert len(forces.dispatches_recorded) == 1
 
 
 @pytest.mark.parametrize(

@@ -48,6 +48,7 @@ from orchestrator.flows import (
     begin_request,
     classify_intent,
     enforce_action_routing_guard,
+    eligible_protocols_for_scope,
     build_situational_picture,
     classify_situational_query,
     plan_message,
@@ -473,19 +474,6 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 extra={"event": "group_scope_applied", "chat_id": str(telegram_chat_id), "agent": scoped_agent, "trace_id": get_trace_id()},
             )
 
-        # Built fresh, per authenticated request — never once at blueprint
-        # creation, before a caller is known (docs/Next_Plan.md §4.5/Stage 3).
-        # A viewer's context has protected arrays absent entirely, not just
-        # filtered out of the final answer.
-        system_context = build_role_aware_system_context(
-            level,
-            ctx.loaded_profile.profile_name,
-            ctx.deps.protocol_set.all(),
-            ctx.deps.registry,
-            non_human_activation_event_types,
-            areas,
-        )
-
         if not text:
             raise InvalidInputError(messages.text("api.field_required", field="text"), field="text")
         if not sender_identity:
@@ -509,6 +497,25 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
         )
         operational_scope = _initialize_request_operational_scope(
             ctx, simulation_context, str(sender_identity), provisioning_ctx=app_ctx
+        )
+        active_profile = request_operational_profile(ctx, operational_scope)
+        eligible_protocols = eligible_protocols_for_scope(
+            ctx.deps, operational_scope
+        )
+        eligible_protocols_by_name = {
+            protocol.name: protocol for protocol in eligible_protocols
+        }
+
+        # Built fresh after trusted scope/profile resolution. A viewer's
+        # context has protected arrays absent entirely, not just filtered out
+        # of the final answer.
+        system_context = build_role_aware_system_context(
+            level,
+            ctx.loaded_profile.profile_name,
+            eligible_protocols,
+            ctx.deps.registry,
+            non_human_activation_event_types,
+            areas,
         )
         if conversation_id is not None:
             conversation_id = scoped_conversation_id(conversation_id, operational_scope)
@@ -581,7 +588,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     operational_scope=operational_scope,
                     scenario_time=getattr(simulation_context, "scenario_time", None),
                     sender_identity_filter=None if level >= PermissionLevel.COMMANDER else caller_identity,
-                    operational_profile=request_operational_profile(ctx, operational_scope),
+                    operational_profile=active_profile,
                 )
             except Exception:
                 logger.warning(
@@ -975,12 +982,29 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 messages.text("api.protocol_out_of_group_scope", protocol=matched_protocol_name, agent=scoped_agent),
                 field="protocol_hint",
             )
+        if (
+            isinstance(matched_protocol_name, str)
+            and ctx.deps.protocol_set.get(matched_protocol_name) is not None
+            and matched_protocol_name not in eligible_protocols_by_name
+        ):
+            raise InvalidInputError(
+                messages.text(
+                    "api.protocol_out_of_profile_scope",
+                    protocol=matched_protocol_name,
+                    profile=active_profile.profile_id,
+                ),
+                field="protocol_hint",
+            )
         situational_scope = classify_situational_query(str(text))
         if matched_protocol_name is None and situational_scope is not None:
             matched_protocol_name = SITUATIONAL_PICTURE_PROTOCOL
         if matched_protocol_name is None and _is_team_roster_query(str(text), prior_messages):
             matched_protocol_name = "report_team_availability"
-        matched_protocol = ctx.deps.protocol_set.get(matched_protocol_name) if matched_protocol_name else None
+        matched_protocol = (
+            eligible_protocols_by_name.get(matched_protocol_name)
+            if isinstance(matched_protocol_name, str)
+            else None
+        )
 
         if matched_protocol is not None:
             received_at = _now()
@@ -1240,7 +1264,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             try:
                 message_plan = plan_message(
                     ctx.main_agent,
-                    ctx.deps.protocol_set.all(),
+                    eligible_protocols,
                     text,
                     ctx.deps.registry,
                     ctx.deps.history_query_service,
@@ -1259,12 +1283,12 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
 
         try:
             intent = message_plan.intent if planner_mode == "merged" and message_plan is not None else classify_intent(
-                ctx.main_agent, ctx.deps.protocol_set.all(), text, prior_messages
+                ctx.main_agent, eligible_protocols, text, prior_messages
             )
         except OrchestrationParseError as exc:
             raise RunFailureError(str(exc)) from exc
 
-        intent = enforce_action_routing_guard(ctx.deps, intent)
+        intent = enforce_action_routing_guard(ctx.deps, intent, operational_scope)
 
         logger.info(
             "intent classified",

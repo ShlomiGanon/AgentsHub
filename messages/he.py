@@ -248,6 +248,7 @@ MESSAGES = {
     "api.deep_debug_disabled": "מצב Deep Debug אינו מופעל בשרת הזה.",
     "api.group_not_registered": "קבוצת הטלגרם '{chat_id}' אינה רשומה לניתוב.",
     "api.protocol_out_of_group_scope": "הפרוטוקול '{protocol}' אינו זמין בקבוצה זו (מנותבת אל {agent}).",
+    "api.protocol_out_of_profile_scope": "הפרוטוקול '{protocol}' אינו זמין לפרופיל המבצעי '{profile}'.",
     "api.group_agent_invalid": "'{agent}' אינו סוכן שניתן לנתב אליו. מותר: {allowed}.",
     "api.attendance_agent_unavailable": "לא רשום סוכן נוכחות בפריסה הזו.",
     "api.simulation_not_found": "אין סימולציה כזו: '{simulation_key}'.",

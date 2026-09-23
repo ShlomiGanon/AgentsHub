@@ -568,6 +568,8 @@ class OperationalContext:
     inconsistencies: tuple[str, ...]
     source_refs: tuple[str, ...]
     operational_scope: str = "LIVE"
+    operational_profile_id: str | None = None
+    allowed_protocol_ids: tuple[str, ...] = ()
 
     def prompt_payload(self) -> dict:
         catalog = get_current_catalog()
@@ -581,6 +583,11 @@ class OperationalContext:
             "uncertainties": list(self.inconsistencies),
             "source_refs": list(self.source_refs),
         }
+        if self.operational_profile_id is not None:
+            payload["operational_profile"] = {
+                "profile_id": self.operational_profile_id,
+                "allowed_protocol_ids": list(self.allowed_protocol_ids),
+            }
         facts = payload["authoritative_facts"]
         assert isinstance(facts, dict)
 
@@ -1357,6 +1364,8 @@ def build_operational_context(
                 scope_key = section.provenance.operational_scope
                 break
 
+    profile = current_operational_profile()
+
     return OperationalContext(
         query_scope=query_scope,
         current_time=current_time,
@@ -1368,6 +1377,8 @@ def build_operational_context(
         inconsistencies=snapshot.inconsistencies,
         source_refs=tuple(dict.fromkeys(source_refs)),
         operational_scope=scope_key,
+        operational_profile_id=getattr(profile, "profile_id", None),
+        allowed_protocol_ids=tuple(sorted(getattr(profile, "protocols", ()))),
     )
 
 

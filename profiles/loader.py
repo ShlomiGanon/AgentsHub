@@ -28,7 +28,7 @@ from profiles.contracts import (
     StageModelPolicy,
     protocol_missing_attrs,
 )
-from profiles.operational_profile import RESPONSE_TEAM, operational_profile
+from profiles.operational_profile import RESPONSE_TEAM, declared_operational_profiles, operational_profile
 from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
 from protocols import CriticalityLevel, DirectToolExecution, EVENT_DATA_FIELDS
 
@@ -207,7 +207,33 @@ def _validate_operational_profile(loaded: "LoadedProfile") -> list[str]:
         operational_profile(getattr(loaded, "live_operational_profile", RESPONSE_TEAM))
     except Exception as exc:
         return [str(exc)]
-    return []
+
+    gating = getattr(loaded, "operational_profile_protocol_gating", False)
+    if type(gating) is not bool:
+        return ["OPERATIONAL_PROFILE_PROTOCOL_GATING must be a boolean"]
+    if not gating:
+        return []
+
+    declared_protocols = {protocol.name for protocol in loaded.protocols}
+    failures: list[str] = []
+    exposed_protocols: set[str] = set()
+
+    for profile_id in declared_operational_profiles():
+        profile = operational_profile(profile_id)
+        exposed_protocols.update(profile.protocols)
+        missing = sorted(set(profile.protocols) - declared_protocols)
+        if missing:
+            failures.append(
+                f"operational profile '{profile_id}' references undeclared protocol(s): {', '.join(missing)}"
+            )
+
+    stranded = sorted(declared_protocols - exposed_protocols)
+    if stranded:
+        failures.append(
+            f"deployment protocol(s) are unavailable in every operational profile: {', '.join(stranded)}"
+        )
+
+    return failures
 
 
 def _validate_simulation_declarations(loaded: "LoadedProfile") -> list[str]:
@@ -679,6 +705,9 @@ def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) 
         simulator_port=getattr(profile_module, "SIMULATOR_PORT", None),
         live_operational_profile=str(
             getattr(profile_module, "LIVE_OPERATIONAL_PROFILE", RESPONSE_TEAM)
+        ),
+        operational_profile_protocol_gating=getattr(
+            profile_module, "OPERATIONAL_PROFILE_PROTOCOL_GATING", False
         ),
     )
 

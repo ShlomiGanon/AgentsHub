@@ -249,6 +249,7 @@ MESSAGES = {
     "api.deep_debug_disabled": "Deep Debug is not enabled on this server.",
     "api.group_not_registered": "Telegram group '{chat_id}' is not registered for routing.",
     "api.protocol_out_of_group_scope": "Protocol '{protocol}' is not available in this group (routed to {agent}).",
+    "api.protocol_out_of_profile_scope": "Protocol '{protocol}' is not available for operational profile '{profile}'.",
     "api.group_agent_invalid": "'{agent}' is not a routable agent. Allowed: {allowed}.",
     "api.attendance_agent_unavailable": "No attendance specialist is registered in this deployment.",
     "api.simulation_not_found": "No such simulation: '{simulation_key}'.",

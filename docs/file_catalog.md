@@ -152,6 +152,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `profiles/demo.py` | Production | Private implementation | Defines the runnable demonstration deployment profile. |
 | `profiles/friendly_forces.py` | Production | Private implementation | Defines the friendly forces profile. |
 | `profiles/loader.py` | Production | Private implementation | Imports, validates, hashes, and constructs deployment profiles and registries. |
+| `profiles/operational_profile.py` | Production | Private implementation | Defines trusted operational-organization profiles, fixture-to-profile resolution, protocol catalogues, and scoped runtime binding. |
 | `profiles/simulation.py` | Production | Private implementation | Defines simulation persona, group, scenario, and roster declarations and the reserved Telegram ID scheme. |
 | `profiles/simulation_provisioning.py` | Production | Private implementation | Ensures a profile's declared simulation users and groups exist, and registers/approves any of them on the agent-owned rosters they declare. |
 | `profiles/sub_agent_surveillance.py` | Production | Private implementation | Defines the dedicated visual-surveillance deployment and protocols. |
@@ -231,6 +232,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_task64_correction_intake.py` | Test | Internal | Verifies deterministic correction intake, restraint against ordinary negative reports, fixture-pair resolution, scope isolation, idempotence and the effect on current facts. |
 | `tests/test_task65_conversation_scope.py` | Test | Internal | Verifies conversation-history isolation by trusted operational scope, LIVE continuity, legacy-row compatibility, and idempotent migration. |
 | `tests/test_task66_fixed_operational_buttons.py` | Test | Internal | Verifies fixed operational-state buttons reread authoritative state, preserve LIVE/simulation isolation, bypass models and conversation history, and rebuild the picture. |
+| `tests/test_task67_operational_profiles.py` | Test | Internal | Verifies trusted response-team/fire-station profile resolution, runtime capabilities, resources, and isolated simulation-world provisioning. |
 | `tests/test_group_routing.py` | Test | Internal | Verifies the group routing table, staleness refresh, scope resolution, and dependency scoping. |
 | `tests/test_history_agent.py` | Test | Internal | Verifies history agent behavior and edge cases. |
 | `tests/test_history_event_pipeline.py` | Test | Internal | Verifies extraction, time normalization, and durable history writes. |

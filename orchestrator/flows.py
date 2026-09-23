@@ -540,6 +540,42 @@ def active_operational_profile(deps: "FlowDeps", scope=None):
     return profile_for_scope(loaded, scope)
 
 
+def eligible_protocols_for_scope(deps: "FlowDeps", scope=None) -> tuple["Protocol", ...]:
+    """Return the canonical protocols enabled for one trusted runtime scope.
+
+    Operational-profile gating is explicit deployment configuration. Legacy
+    single-purpose deployments retain their existing catalogue, while a gated
+    deployment resolves LIVE from its configured profile and simulations from
+    trusted fixture metadata.
+    """
+
+    declared = tuple(deps.protocol_set.all())
+    loaded = getattr(deps, "loaded_profile", None)
+    gating = getattr(loaded, "operational_profile_protocol_gating", False)
+    if loaded is None or gating is not True:
+        return declared
+
+    profile = active_operational_profile(deps, scope)
+    if profile is None:
+        return ()
+
+    return profile.protocol_catalogue(declared)
+
+
+def eligible_protocol_for_scope(deps: "FlowDeps", protocol_name: str | None, scope=None):
+    if not protocol_name:
+        return None
+
+    return next(
+        (
+            protocol
+            for protocol in eligible_protocols_for_scope(deps, scope)
+            if protocol.name == protocol_name
+        ),
+        None,
+    )
+
+
 def _trusted_correction_extraction(deps: FlowDeps, raw_text: str, received_at: str, reference_time: str | None):
     """Recognize a clearly expressed correction before any domain extractor.
 
@@ -642,7 +678,7 @@ def prepare_fast_path_report(
         received_at,
         tuple(deps.event_type_registry.types),
         tuple(deps.area_registry.areas),
-        deps.protocol_set.all(),
+        eligible_protocols_for_scope(deps, operational_scope),
         deps.settings_store.get_risk_threshold(),
         getattr(deps, "event_type_business_fields", None),
         trusted_report_types=_owned_report_types(deps),
@@ -677,13 +713,20 @@ def prepare_fast_path_report(
             parse_timestamp(extraction.occurred_at)
         except (TypeError, ValueError):
             return None
-    protocol = deps.protocol_set.get(intake.decision.selection.protocol_name)
+    protocol = eligible_protocol_for_scope(
+        deps, intake.decision.selection.protocol_name, operational_scope
+    )
+    if protocol is None:
+        return None
     if protocol.deterministic_required_event_fields is None or protocol.direct_tool_execution is None:
         return None
 
     hold_reason = determine_approval_hold(
         intake.decision.selection,
-        {candidate.name: candidate for candidate in deps.protocol_set.all()},
+        {
+            candidate.name: candidate
+            for candidate in eligible_protocols_for_scope(deps, operational_scope)
+        },
         originated_from_commander,
     )
     if hold_reason is not None:
@@ -1360,7 +1403,11 @@ def process_message(
 ) -> tuple[Literal["question", "report", "request", "conversational", "clarification"], object]:
     """Route a person's message by intent (§6.13)."""
 
-    intent = classify_intent(main_agent, deps.protocol_set.all(), message_text)
+    intent = classify_intent(
+        main_agent,
+        eligible_protocols_for_scope(deps),
+        message_text,
+    )
 
     if intent.intent == "needs_clarification":
         return "clarification", intent.clarification_question or "Could you clarify what you want me to do?"
@@ -1476,7 +1523,12 @@ def resolve_approval(
 
     if answer.status == "approved":
         try:
-            protocol = deps.protocol_set.get(answer.hold["selected_protocol_name"])
+            event = deps.persistence.fetch_event(event_id)
+            protocol = eligible_protocol_for_scope(
+                deps,
+                answer.hold["selected_protocol_name"],
+                scope_from_event(event),
+            )
             if protocol is not None and protocol_has_side_effects(deps, protocol):
                 _safe_action_transition(deps, event_id, "approved")
         except KeyError:
@@ -1505,8 +1557,18 @@ def decline(deps: FlowDeps, event_id: str) -> FlowResult:
 def continue_after_approval(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent", selected_protocol_name: str) -> FlowResult:
     """Resume execution from task formulation through protocol execution — the approved branch only."""
 
-    protocol = deps.protocol_set.get(selected_protocol_name)
     event = deps.persistence.fetch_event(event_id)
+    protocol = eligible_protocol_for_scope(
+        deps, selected_protocol_name, scope_from_event(event)
+    )
+    if protocol is None:
+        reason = "the selected protocol is unavailable for the active operational profile"
+        record_event_outcome(
+            deps.persistence, event_id, "no_match_protocol", failure_reason=reason
+        )
+        _safe_action_transition(deps, event_id, "failed", failure_reason=reason)
+        return FlowResult(event_id, "no_match_protocol", reason)
+
     precedent_matches = _look_up_precedent_if_possible(deps, event_id, event)
 
     return _run_protocol(deps, event_id, main_agent, insights_agent, protocol, precedent_matches, event["raw_text"], event["classification"], event["area"], event["description"])
@@ -1557,7 +1619,7 @@ def protocol_has_side_effects(deps: FlowDeps, protocol: "Protocol") -> bool:
     return False
 
 
-def action_protocols_for_request(deps: FlowDeps) -> tuple["Protocol", ...]:
+def action_protocols_for_request(deps: FlowDeps, scope=None) -> tuple["Protocol", ...]:
     """The only protocols an action request may be resolved to.
 
     The classification comes from the protocol's approved tools and their
@@ -1566,12 +1628,12 @@ def action_protocols_for_request(deps: FlowDeps) -> tuple["Protocol", ...]:
 
     return tuple(
         protocol
-        for protocol in deps.protocol_set.all()
+        for protocol in eligible_protocols_for_scope(deps, scope)
         if protocol_has_side_effects(deps, protocol)
     )
 
 
-def enforce_action_routing_guard(deps: FlowDeps, intent: IntentResult) -> IntentResult:
+def enforce_action_routing_guard(deps: FlowDeps, intent: IntentResult, scope=None) -> IntentResult:
     """Keep a typed action signal on the action path before response routing.
 
     A structured intent response may carry a true action flag while naming a
@@ -1586,7 +1648,7 @@ def enforce_action_routing_guard(deps: FlowDeps, intent: IntentResult) -> Intent
     candidate_names = set(intent.matched_protocol_names)
     side_effect_candidates = {
         protocol.name
-        for protocol in action_protocols_for_request(deps)
+        for protocol in action_protocols_for_request(deps, scope)
     }
     logger.warning(
         "action intent corrected before response routing",
@@ -1629,6 +1691,7 @@ def continue_from_risk_assessment(
     if deadline_failure is not None:
         return deadline_failure
     event = deps.persistence.fetch_event(event_id)
+    event_scope = scope_from_event(event)
     if originated_from_commander is None:
         # Authorization belongs to the original authenticated submitter.  It
         # is persisted with the event so delayed extraction and resumptions do
@@ -1638,11 +1701,14 @@ def continue_from_risk_assessment(
     description, severity = event["description"], event["severity"]
     requires_side_effecting_protocol = classification == HUMAN_ACTIVATION_TYPE
     selectable_protocols = (
-        action_protocols_for_request(deps)
+        action_protocols_for_request(deps, event_scope)
         if requires_side_effecting_protocol
-        else deps.protocol_set.all()
+        else eligible_protocols_for_scope(deps, event_scope)
     )
-    protocols_by_name = {protocol.name: protocol for protocol in deps.protocol_set.all()}
+    protocols_by_name = {
+        protocol.name: protocol
+        for protocol in eligible_protocols_for_scope(deps, event_scope)
+    }
 
     if selected_protocol is not None:
         risk_level = "high" if selected_protocol.criticality == CriticalityLevel.HIGH else "low"
@@ -1722,9 +1788,14 @@ def continue_from_risk_assessment(
 
     if selection.status == "selected":
         chosen_protocol = protocols_by_name.get(selection.protocol_name)
-        if (
+        if chosen_protocol is None:
+            selection = ProtocolSelectionResult(
+                status="no_match",
+                reason="protocol unavailable for the active operational profile",
+            )
+        elif (
             requires_side_effecting_protocol
-            and (chosen_protocol is None or not protocol_has_side_effects(deps, chosen_protocol))
+            and not protocol_has_side_effects(deps, chosen_protocol)
         ):
             selection = ProtocolSelectionResult(
                 status="no_match",
@@ -2329,7 +2400,9 @@ def resume_after_event_data(
             deps, event_id, main_agent, insights_agent, event.get("raw_text", ""), event.get("classification")
         )
 
-    protocol = deps.protocol_set.get(event.get("selected_protocol"))
+    protocol = eligible_protocol_for_scope(
+        deps, event.get("selected_protocol"), scope_from_event(event)
+    )
     if protocol is None:
         reason = "the selected protocol is no longer available"
         record_event_outcome(deps.persistence, event_id, "failed", failure_reason=reason)

@@ -877,6 +877,8 @@ AGENTS = [
     AgentSpec(cls=UnifiedFriendlyForcesAgent, tier="sub"),
 ]
 
+OPERATIONAL_PROFILE_PROTOCOL_GATING = True
+
 PROTOCOLS = [
     Protocol(
         name="overall_situational_picture",
