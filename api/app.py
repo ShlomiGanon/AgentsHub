@@ -32,7 +32,12 @@ from orchestrator.flows import (
     finalize_expired_event,
     finalize_expired_events,
 )
-from persistence import open_operational_dispatch_store, open_operational_unit_persistence, open_persistence
+from persistence import (
+    open_operational_dispatch_store,
+    open_operational_unit_persistence,
+    open_persistence,
+    open_telegram_simulation_binding_store,
+)
 from profiles import build_area_registry, build_event_type_registry, ensure_simulation_entities
 from profiles.loader import load_profile
 from protocols import load_protocols
@@ -63,6 +68,7 @@ class ApiContext:
     scheduler: "SummaryScheduler"
     group_routing: "GroupRoutingTable"
     operational_unit_store: object = None
+    simulation_binding_store: object = None
 
 
 def build_group_routing(persistence, registry) -> GroupRoutingTable:
@@ -150,6 +156,7 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
     operational_unit_store = None
     if team_agent is not None:
         operational_unit_store = open_operational_unit_persistence(team_agent.status_store.db_path)
+    simulation_binding_store = open_telegram_simulation_binding_store(loaded_profile.db_path)
 
     deps = FlowDeps(
         persistence=persistence,
@@ -256,6 +263,7 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
         scheduler=scheduler,
         group_routing=group_routing,
         operational_unit_store=operational_unit_store,
+        simulation_binding_store=simulation_binding_store,
     )
 
 

@@ -2,6 +2,7 @@
 
 import dataclasses
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 import time
 
 from typing import TYPE_CHECKING
@@ -157,6 +158,29 @@ def _simulation_context_from_request(ctx, sender_identity: str, chat_id: str | N
         return context
     except ValueError as exc:
         raise InvalidInputError(str(exc), field="X-Simulation-ID") from exc
+
+
+def _simulation_context_from_telegram_binding(ctx, sender_identity: str):
+    """Resolve only the exact durable run explicitly bound to this Telegram identity."""
+
+    store = getattr(ctx, "simulation_binding_store", None)
+    if store is None:
+        return None
+    binding = store.get_binding(str(sender_identity))
+    if binding is None:
+        return None
+    scenario_id = str(binding["scenario_id"])
+    run_id = str(binding["scenario_run_id"])
+    if not store.scope_is_provisioned(scenario_id, run_id):
+        raise AuthorizationError("the exact bound simulation run is no longer provisioned")
+    if find_simulation_scenario_by_id(ctx.loaded_profile, scenario_id) is None:
+        raise AuthorizationError("the exact bound simulation scenario is unavailable")
+    return SimpleNamespace(
+        scenario_id=scenario_id,
+        scenario_run_id=run_id,
+        scenario_step=None,
+        scenario_time=None,
+    )
 
 
 def _initialize_request_operational_scope(ctx, simulation_context, sender_identity: str | None = None, *, provisioning_ctx=None):
@@ -517,6 +541,8 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             str(telegram_chat_id) if telegram_chat_id is not None else None,
             str(telegram_chat_type) if telegram_chat_type is not None else None,
         )
+        if simulation_context is None:
+            simulation_context = _simulation_context_from_telegram_binding(ctx, str(sender_identity))
         # Resolve one trusted context before any protocol/profile decision.  The
         # same object is carried by downstream orchestration and fixed reads.
         runtime_resolved = resolve_runtime_context(
@@ -2778,8 +2804,55 @@ def build_simulations_blueprint(ctx: "ApiContext") -> Blueprint:
             "ready": result.ready,
             "failures": list(result.failures),
         }
+        if result.ready and ctx.simulation_binding_store is not None:
+            ctx.simulation_binding_store.register_run(
+                scenario_id=str(scenario_id),
+                scenario_run_id=run_id,
+                operational_profile=result.profile_id,
+            )
         # A run whose required baseline could not be built is never announced as
         # ready; the caller must not start sending steps into a partial world.
         return jsonify(response), (200 if result.ready else 503)
+
+    @blueprint.route("/Simulations/Bindings", methods=["GET"])
+    def list_simulation_bindings():
+        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
+        require(level, RequestedOperation.MANAGE_USERS)
+        return jsonify({"bindings": ctx.simulation_binding_store.list_bindings()})
+
+    @blueprint.route("/Simulations/Bindings", methods=["POST"])
+    def bind_telegram_to_simulation():
+        actor = request.headers.get("X-Identity")
+        level = authenticate(ctx.deps.persistence, actor)
+        require(level, RequestedOperation.MANAGE_USERS)
+        payload = request.get_json(silent=True) or {}
+        telegram_identity = str(payload.get("telegram_identity") or "").strip()
+        scenario_id = str(payload.get("scenario_id") or "").strip()
+        scenario_run_id = str(payload.get("scenario_run_id") or "").strip()
+        if not telegram_identity or not scenario_id or not scenario_run_id:
+            raise InvalidInputError(
+                "telegram_identity, scenario_id and scenario_run_id are required",
+                field="simulation_binding",
+            )
+        if ctx.deps.persistence.read_user(telegram_identity) is None:
+            raise NotFoundError("telegram identity is not registered")
+        if find_simulation_scenario_by_id(ctx.loaded_profile, scenario_id) is None:
+            raise NotFoundError(messages.text("api.simulation_not_found", simulation_key=scenario_id))
+        if not ctx.simulation_binding_store.scope_is_provisioned(scenario_id, scenario_run_id):
+            raise ConflictError("exact simulation run is not provisioned")
+        binding = ctx.simulation_binding_store.bind(
+            telegram_identity=telegram_identity,
+            scenario_id=scenario_id,
+            scenario_run_id=scenario_run_id,
+            bound_by=str(actor),
+        )
+        return jsonify(binding)
+
+    @blueprint.route("/Simulations/Bindings/<telegram_identity>", methods=["DELETE"])
+    def unbind_telegram_from_simulation(telegram_identity):
+        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
+        require(level, RequestedOperation.MANAGE_USERS)
+        removed = ctx.simulation_binding_store.unbind(telegram_identity)
+        return jsonify({"telegram_identity": telegram_identity, "unbound": removed})
 
     return blueprint

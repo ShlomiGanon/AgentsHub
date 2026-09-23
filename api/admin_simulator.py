@@ -102,6 +102,7 @@ def simulator_page_context(
         "routable_agents": list(ctx.group_routing.routable_targets),
         "bot_service_identity": bot_service_identity,
         "api_identity": api_identity,
+        "simulation_bindings": ctx.simulation_binding_store.list_bindings() if ctx.simulation_binding_store else [],
         "strings": strings,
     }
 
@@ -265,6 +266,17 @@ SIMULATOR_BODY = """
     </div>
   </div>
 
+  <div class="block-console" id="simulation-binding-panel">
+    <span class="block-label">{{ t('admin.simulator.binding_title') }}</span>
+    <p class="subtitle">{{ t('admin.simulator.binding_help') }}</p>
+    <div class="sim-toolbar" style="margin:0">
+      <input id="binding-identity" class="form-control form-control-console" placeholder="{{ t('admin.simulator.binding_identity') }}">
+      <button type="button" class="btn btn-console-primary" id="bind-loaded-run">{{ t('admin.simulator.binding_bind') }}</button>
+      <button type="button" class="btn btn-console-danger" id="unbind-identity">{{ t('admin.simulator.binding_unbind') }}</button>
+      <span class="subtitle" id="binding-status"></span>
+    </div>
+  </div>
+
   <div class="block-console mapping-panel" id="mapping-panel">
     <span class="block-label">{{ t('admin.simulator.mapping_title') }}</span>
     <p class="subtitle">{{ t('admin.simulator.mapping_help') }}</p>
@@ -297,6 +309,56 @@ SIMULATOR_BODY = """
   const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'uncertain', 'closed_on_precedent', 'declined']);
   const CHAT_TYPES = new Set(['private', 'group', 'supergroup']);
   const CHAT_KINDS = new Set(['message', 'event']);
+
+  function refreshBindingStatus() {
+    const status = document.getElementById('binding-status');
+    const identity = document.getElementById('binding-identity').value.trim();
+    const binding = (DATA.simulation_bindings || []).find(function (item) {
+      return String(item.telegram_identity) === identity;
+    });
+    status.textContent = binding
+      ? t('binding_bound', {scenario_id: binding.scenario_id, run_id: binding.scenario_run_id})
+      : t('binding_unbound');
+  }
+
+  async function bindingRequest(method, url, body) {
+    const headers = {'X-Identity': DATA.api_identity || '', 'Content-Type': 'application/json'};
+    const response = await fetch(url, {method: method, headers: headers, body: body ? JSON.stringify(body) : undefined});
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || payload.message || 'binding request failed');
+    return payload;
+  }
+
+  document.getElementById('binding-identity').addEventListener('input', refreshBindingStatus);
+  document.getElementById('bind-loaded-run').addEventListener('click', async function () {
+    const identity = document.getElementById('binding-identity').value.trim();
+    if (!identity || !state.scenario || !state.scenario.id || !state.runId) {
+      showAlert(t('binding_load_first'), true);
+      return;
+    }
+    try {
+      const binding = await bindingRequest('POST', '/Simulations/Bindings', {
+        telegram_identity: identity, scenario_id: state.scenario.id, scenario_run_id: state.runId
+      });
+      DATA.simulation_bindings = (DATA.simulation_bindings || []).filter(function (item) {
+        return item.telegram_identity !== identity;
+      });
+      DATA.simulation_bindings.push(binding);
+      refreshBindingStatus();
+    } catch (error) { showAlert(t('binding_failed', {message: error.message}), true); }
+  });
+
+  document.getElementById('unbind-identity').addEventListener('click', async function () {
+    const identity = document.getElementById('binding-identity').value.trim();
+    if (!identity) return;
+    try {
+      await bindingRequest('DELETE', '/Simulations/Bindings/' + encodeURIComponent(identity));
+      DATA.simulation_bindings = (DATA.simulation_bindings || []).filter(function (item) {
+        return item.telegram_identity !== identity;
+      });
+      refreshBindingStatus();
+    } catch (error) { showAlert(t('binding_failed', {message: error.message}), true); }
+  });
 
   const groupsByChatId = {};
   (DATA.groups || []).forEach(function (group) { groupsByChatId[String(group.chat_id)] = group; });

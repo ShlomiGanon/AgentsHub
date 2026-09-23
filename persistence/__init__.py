@@ -65,6 +65,11 @@ from persistence.dispatch_store import (
     SQLiteOperationalDispatchStore,
     open_operational_dispatch_store,
 )
+from persistence.telegram_simulation_binding_store import (
+    TelegramSimulationBindingError,
+    SQLiteTelegramSimulationBindingStore,
+    open_telegram_simulation_binding_store,
+)
 from persistence.operational_time import (
     OperationalTimeError,
     current_operational_time,
@@ -132,4 +137,7 @@ __all__ = [
     "DispatchPersistenceError",
     "SQLiteOperationalDispatchStore",
     "open_operational_dispatch_store",
+    "TelegramSimulationBindingError",
+    "SQLiteTelegramSimulationBindingStore",
+    "open_telegram_simulation_binding_store",
 ]
