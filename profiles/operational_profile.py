@@ -157,17 +157,21 @@ _RESPONSE_TEAM_PROFILE = OperationalProfile(
         DOMAIN_EXTERNAL_FORCES, DOMAIN_OPERATIONAL_FACTS, DOMAIN_HISTORY,
     }),
     agents=frozenset({"team_status_agent", "surveillance_agent", "friendly_forces_agent"}),
+    # Every name here is a protocol the deployment actually declares. A name that
+    # drifts from the declared set is not a harmless typo: `protocol_catalogue`
+    # intersects the two, so a misspelled entry silently removes a real capability.
     protocols=frozenset({
         "report_team_availability",
+        "record_attendance_response",
         "query_camera_status",
         "query_drone_fleet_status",
+        "query_active_drone_missions",
+        "query_surveillance_overview",
         "query_historical_incidents",
         "overall_situational_picture",
-        "record_attendance_response",
-        "dispatch_drone_to_area",
-        "return_drone_to_base",
-        "report_camera_issue",
-        "request_external_assistance",
+        "dispatch_drone_to_incident",
+        "recall_drone_to_base",
+        "dispatch_emergency_forces",
     }),
     # A response team operates no canonical vehicle catalogue of its own in the
     # current architecture, so it resolves no resource names.
@@ -186,15 +190,20 @@ _FIRE_STATION_PROFILE = OperationalProfile(
     agents=frozenset({"team_status_agent", "surveillance_agent", "friendly_forces_agent"}),
     protocols=frozenset({
         "report_team_availability",
+        "record_attendance_response",
         "query_camera_status",
         "query_drone_fleet_status",
+        "query_active_drone_missions",
+        "query_surveillance_overview",
         "query_historical_incidents",
         "overall_situational_picture",
-        "record_attendance_response",
-        "dispatch_drone_to_area",
-        "return_drone_to_base",
-        "report_camera_issue",
-        "request_external_assistance",
+        "dispatch_drone_to_incident",
+        "recall_drone_to_base",
+        "dispatch_emergency_forces",
+        # The one capability a response team does not have. Fire-service mutual
+        # aid needs a real action path, and now has one: `dispatch_mutual_aid`
+        # approves `dispatch_water_tankers`/`dispatch_aircraft`.
+        "dispatch_mutual_aid",
     }),
     resources=(
         _resource("ASHED", "profile.fire_station.resource.ashed"),

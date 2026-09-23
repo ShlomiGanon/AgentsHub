@@ -1001,6 +1001,20 @@ PROTOCOLS = [
         commander_only=True,
     ),
     Protocol(
+        # Fire-service mutual aid (adopted from feat/FinalProfiles). Declared once,
+        # here, like every other protocol; only the fire_station operational profile
+        # lists it, so a response team never sees it as executable.
+        name="dispatch_mutual_aid",
+        description=_catalog_text("unified.protocol.dispatch_mutual_aid.description"),
+        participating_agents=("friendly_forces_agent",),
+        approved_tools=("dispatch_water_tankers", "dispatch_aircraft"),
+        expected_success_output=_catalog_text("unified.protocol.dispatch_mutual_aid.expected_output"),
+        criticality=CriticalityLevel.HIGH,
+        approval_flag=True,
+        requires_confirmation=True,
+        commander_only=True,
+    ),
+    Protocol(
         name="query_historical_incidents",
         description=_catalog_text("unified.protocol.query_historical_incidents.description"),
         participating_agents=("history_agent",),

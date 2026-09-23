@@ -218,3 +218,41 @@ class FriendlyForcesAgent(Agent):
         )
         self.dispatches_recorded.append(record)
         return f"recorded military dispatch request for '{location}'"
+
+    # Fire-service mutual aid. Adopted from feat/FinalProfiles, which added these
+    # two to a fire-only agent subclass; here they live beside the other four
+    # dispatch tools instead, because one deployment of this core hosts both
+    # organization types and a second forces agent would be a parallel
+    # abstraction. Which organization may actually run them is decided where
+    # every other capability is decided — the protocol that lists them in its
+    # `approved_tools`, exposed only to the profiles that declare that protocol.
+    @tool(
+        "dispatch_water_tankers",
+        "Records a request to send water-tanker trucks, as mutual aid from another station, to a "
+        "named location. Side-effecting and not idempotent — running it twice records two dispatch "
+        "requests, not one.",
+        side_effecting=True,
+        idempotent=False,
+    )
+    def dispatch_water_tankers(self, location: str, tanker_count: int = 1, source_station: str = "", note: str = "") -> str:
+        record = (
+            f"water tanker dispatch requested for '{location}': tanker_count={tanker_count}"
+            f"{f', source_station={source_station}' if source_station else ''}{f', note={note}' if note else ''}"
+        )
+        self.dispatches_recorded.append(record)
+        return f"recorded water tanker dispatch request for '{location}'"
+
+    @tool(
+        "dispatch_aircraft",
+        "Records a request to send firefighting aircraft to a named location. Side-effecting and "
+        "not idempotent — running it twice records two dispatch requests, not one.",
+        side_effecting=True,
+        idempotent=False,
+    )
+    def dispatch_aircraft(self, location: str, aircraft_count: int = 1, aircraft_type: str = "firefighting", note: str = "") -> str:
+        record = (
+            f"aircraft dispatch requested for '{location}': aircraft_count={aircraft_count}"
+            f", aircraft_type={aircraft_type}{f', note={note}' if note else ''}"
+        )
+        self.dispatches_recorded.append(record)
+        return f"recorded aircraft dispatch request for '{location}'"

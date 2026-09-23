@@ -18,11 +18,18 @@ def test_role_and_system_prompt_are_real_text_not_placeholders():
     assert "placeholder" not in agent.role.lower()
 
 
-def test_exposes_exactly_the_four_dispatch_tools_with_the_right_marks():
+def test_exposes_exactly_the_six_dispatch_tools_with_the_right_marks():
+    """Four general emergency services, plus the two fire-service mutual-aid tools
+    adopted from feat/FinalProfiles. Which organization may run which is decided by
+    the protocol that approves them, not by a second agent class."""
+
     agent = FriendlyForcesAgent(model="m")
     tools = {t.name: t for t in agent.exposed_tools()}
 
-    assert set(tools) == {"dispatch_ambulance", "dispatch_police", "dispatch_firefighters", "dispatch_military"}
+    assert set(tools) == {
+        "dispatch_ambulance", "dispatch_police", "dispatch_firefighters", "dispatch_military",
+        "dispatch_water_tankers", "dispatch_aircraft",
+    }
 
     for tool_info in tools.values():
         assert tool_info.side_effecting is True
@@ -199,3 +206,83 @@ def test_dispatch_military_genuinely_records_each_call_it_receives():
         base._current_allowed_tools.reset(token)
 
     assert len(agent.dispatches_recorded) == 2
+
+
+# -- fire-service mutual aid (adopted from feat/FinalProfiles) -----------------
+
+
+def test_dispatch_water_tankers_records_the_request_and_confirms():
+    agent = FriendlyForcesAgent(model="m")
+
+    token = base._current_allowed_tools.set(frozenset({"dispatch_water_tankers"}))
+    try:
+        result = agent._wrapped_tools["dispatch_water_tankers"](
+            location="chemical_plant", tanker_count=4, source_station="neighboring station", note="water curtain"
+        )
+    finally:
+        base._current_allowed_tools.reset(token)
+
+    assert "chemical_plant" in result
+    assert len(agent.dispatches_recorded) == 1
+    assert "tanker_count=4" in agent.dispatches_recorded[0]
+    assert "source_station=neighboring station" in agent.dispatches_recorded[0]
+    assert "note=water curtain" in agent.dispatches_recorded[0]
+
+
+def test_dispatch_water_tankers_is_blocked_when_not_allowed():
+    agent = FriendlyForcesAgent(model="m")
+
+    token = base._current_allowed_tools.set(frozenset({"dispatch_aircraft"}))
+    try:
+        result = agent._wrapped_tools["dispatch_water_tankers"](location="chemical_plant")
+    finally:
+        base._current_allowed_tools.reset(token)
+
+    assert "not permitted" in result
+    assert agent.dispatches_recorded == []
+
+
+def test_dispatch_aircraft_records_the_request_and_confirms():
+    agent = FriendlyForcesAgent(model="m")
+
+    token = base._current_allowed_tools.set(frozenset({"dispatch_aircraft"}))
+    try:
+        result = agent._wrapped_tools["dispatch_aircraft"](
+            location="ridge_line", aircraft_count=2, aircraft_type="firefighting", note="wind from the east"
+        )
+    finally:
+        base._current_allowed_tools.reset(token)
+
+    assert "ridge_line" in result
+    assert len(agent.dispatches_recorded) == 1
+    assert "aircraft_count=2" in agent.dispatches_recorded[0]
+    assert "aircraft_type=firefighting" in agent.dispatches_recorded[0]
+
+
+def test_dispatch_aircraft_is_blocked_when_not_allowed():
+    agent = FriendlyForcesAgent(model="m")
+
+    token = base._current_allowed_tools.set(frozenset({"dispatch_water_tankers"}))
+    try:
+        result = agent._wrapped_tools["dispatch_aircraft"](location="ridge_line")
+    finally:
+        base._current_allowed_tools.reset(token)
+
+    assert "not permitted" in result
+    assert agent.dispatches_recorded == []
+
+
+def test_each_mutual_aid_call_is_recorded_separately():
+    """Side-effecting and not idempotent: two requests are two requests."""
+
+    agent = FriendlyForcesAgent(model="m")
+
+    token = base._current_allowed_tools.set(frozenset({"dispatch_water_tankers", "dispatch_aircraft"}))
+    try:
+        agent._wrapped_tools["dispatch_water_tankers"](location="north_field")
+        agent._wrapped_tools["dispatch_water_tankers"](location="north_field")
+        agent._wrapped_tools["dispatch_aircraft"](location="north_field")
+    finally:
+        base._current_allowed_tools.reset(token)
+
+    assert len(agent.dispatches_recorded) == 3
