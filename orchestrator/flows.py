@@ -464,6 +464,7 @@ class FlowDeps:
     # organization owns an event's scope. Never used to choose behaviour from
     # message content.
     loaded_profile: object = None
+    operational_unit_store: object = None
 
 
 @dataclass(frozen=True)

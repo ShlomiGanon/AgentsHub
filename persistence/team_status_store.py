@@ -24,13 +24,24 @@ CREATE TABLE IF NOT EXISTS operational_scopes (
     UNIQUE (scenario_id, scenario_run_id)
 );
 CREATE TABLE IF NOT EXISTS team_members (
+    membership_id INTEGER PRIMARY KEY AUTOINCREMENT,
     scope_key TEXT NOT NULL REFERENCES operational_scopes(scope_key),
     telegram_identity TEXT NOT NULL,
     full_name TEXT NOT NULL,
     registered_at TEXT NOT NULL,
     approved INTEGER NOT NULL DEFAULT 0 CHECK (approved IN (0, 1)),
     membership_status TEXT NOT NULL DEFAULT 'active' CHECK (membership_status IN ('active', 'retired')),
-    PRIMARY KEY (scope_key, telegram_identity)
+    unit_id TEXT,
+    role TEXT,
+    UNIQUE (scope_key, telegram_identity, unit_id)
+);
+CREATE TABLE IF NOT EXISTS operational_units (
+    unit_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    profile_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'retired')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS roster_approval (
     scope_key TEXT PRIMARY KEY REFERENCES operational_scopes(scope_key),
@@ -66,8 +77,7 @@ CREATE TABLE IF NOT EXISTS attendance_responses (
     reviewed_at TEXT,
     PRIMARY KEY (scope_key, response_id),
     UNIQUE (scope_key, source_message_id),
-    FOREIGN KEY (scope_key, cycle_id) REFERENCES attendance_cycles(scope_key, cycle_id),
-    FOREIGN KEY (scope_key, telegram_identity) REFERENCES team_members(scope_key, telegram_identity)
+    FOREIGN KEY (scope_key, cycle_id) REFERENCES attendance_cycles(scope_key, cycle_id)
 );
 CREATE INDEX IF NOT EXISTS idx_attendance_responses_scope_member_time ON attendance_responses(scope_key, telegram_identity, received_at DESC);
 CREATE INDEX IF NOT EXISTS idx_attendance_responses_scope_cycle ON attendance_responses(scope_key, cycle_id, telegram_identity, received_at DESC);
@@ -127,11 +137,53 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             connection.execute("ALTER TABLE team_members_new RENAME TO team_members")
         if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='team_members'").fetchone() is not None:
             columns = {row[1] for row in connection.execute("PRAGMA table_info(team_members)")}
+            if "membership_id" not in columns:
+                connection.execute("ALTER TABLE team_members RENAME TO team_members_legacy_69c")
+                connection.execute("""CREATE TABLE team_members (
+                    membership_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scope_key TEXT NOT NULL REFERENCES operational_scopes(scope_key),
+                    telegram_identity TEXT NOT NULL,
+                    full_name TEXT NOT NULL,
+                    registered_at TEXT NOT NULL,
+                    approved INTEGER NOT NULL DEFAULT 0 CHECK (approved IN (0, 1)),
+                    membership_status TEXT NOT NULL DEFAULT 'active' CHECK (membership_status IN ('active', 'retired')),
+                    unit_id TEXT,
+                    role TEXT,
+                    UNIQUE (scope_key, telegram_identity, unit_id)
+                )""")
+                legacy_columns = {row[1] for row in connection.execute("PRAGMA table_info(team_members_legacy_69c)")}
+                unit_expr = "unit_id" if "unit_id" in legacy_columns else "NULL"
+                role_expr = "role" if "role" in legacy_columns else "NULL"
+                status_expr = "membership_status" if "membership_status" in legacy_columns else "'active'"
+                connection.execute(
+                    f"INSERT INTO team_members(scope_key,telegram_identity,full_name,registered_at,approved,membership_status,unit_id,role) "
+                    f"SELECT scope_key,telegram_identity,full_name,registered_at,approved,{status_expr},{unit_expr},{role_expr} FROM team_members_legacy_69c"
+                )
+                connection.execute("DROP TABLE team_members_legacy_69c")
+                if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='attendance_responses'").fetchone() is not None:
+                    connection.execute("ALTER TABLE attendance_responses RENAME TO attendance_responses_legacy_69c")
+                    connection.execute("""CREATE TABLE attendance_responses (
+                        scope_key TEXT NOT NULL, response_id TEXT NOT NULL, source_message_id TEXT NOT NULL,
+                        cycle_id TEXT NOT NULL, telegram_identity TEXT NOT NULL,
+                        availability TEXT NOT NULL CHECK (availability IN ('available', 'unavailable')),
+                        reason TEXT, availability_start TEXT, availability_end TEXT, unavailable_until TEXT,
+                        original_text TEXT NOT NULL, received_at TEXT NOT NULL, reported_at TEXT,
+                        approval_status TEXT NOT NULL CHECK (approval_status IN ('accepted', 'pending', 'rejected')),
+                        reviewed_by TEXT, reviewed_at TEXT, PRIMARY KEY (scope_key, response_id), UNIQUE (scope_key, source_message_id),
+                        FOREIGN KEY (scope_key, cycle_id) REFERENCES attendance_cycles(scope_key, cycle_id)
+                    )""")
+                    connection.execute("INSERT INTO attendance_responses SELECT * FROM attendance_responses_legacy_69c")
+                    connection.execute("DROP TABLE attendance_responses_legacy_69c")
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(team_members)")}
             if "membership_status" not in columns:
                 connection.execute(
                     "ALTER TABLE team_members ADD COLUMN membership_status TEXT NOT NULL DEFAULT 'active' "
                     "CHECK (membership_status IN ('active', 'retired'))"
                 )
+            if "unit_id" not in columns:
+                connection.execute("ALTER TABLE team_members ADD COLUMN unit_id TEXT")
+            if "role" not in columns:
+                connection.execute("ALTER TABLE team_members ADD COLUMN role TEXT")
         if "roster_approval" in tables and "scope_key" not in {row[1] for row in connection.execute("PRAGMA table_info(roster_approval)")}: 
             connection.execute("ALTER TABLE roster_approval RENAME TO roster_approval_legacy")
             connection.execute("CREATE TABLE roster_approval_new (scope_key TEXT PRIMARY KEY, singleton_id INTEGER NOT NULL DEFAULT 1, approved_by TEXT NOT NULL, approved_at TEXT NOT NULL)")
@@ -224,7 +276,14 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         if not identity or not name: raise TeamStatusPersistenceError("telegram identity and full name are required")
         registered_at = registered_at or _utc_now(); _parse_timestamp(registered_at)
         with self._connect() as connection:
-            connection.execute("INSERT INTO team_members(scope_key,telegram_identity,full_name,registered_at,approved) VALUES (?,?,?,?,0) ON CONFLICT(scope_key,telegram_identity) DO UPDATE SET full_name=excluded.full_name", (key, identity, name, registered_at))
+            existing = connection.execute(
+                "SELECT membership_id FROM team_members WHERE scope_key=? AND telegram_identity=? AND unit_id IS NULL ORDER BY membership_id LIMIT 1",
+                (key, identity),
+            ).fetchone()
+            if existing is None:
+                connection.execute("INSERT INTO team_members(scope_key,telegram_identity,full_name,registered_at,approved) VALUES (?,?,?,?,0)", (key, identity, name, registered_at))
+            else:
+                connection.execute("UPDATE team_members SET full_name=? WHERE membership_id=?", (name, existing["membership_id"]))
 
     def approve_roster(self, approved_by, approved_at=None, *, scope=None):
         key = self._require_scope(scope)

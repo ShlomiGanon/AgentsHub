@@ -69,6 +69,7 @@ from messages import get_current_catalog
 from orchestrator.flows import InvalidRoutingTargetError
 from persistence import EventSearchCriteria, NotFoundError, PersistenceError
 from tools import get_trace_id, record_telegram_security_metric
+from persistence import OperationalUnitError, ROLE_CATALOGUE
 
 if TYPE_CHECKING:
     from api.app import ApiContext
@@ -768,6 +769,7 @@ _MENU_TEMPLATE = """<!DOCTYPE html>
     <div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>
   {% endfor %}
   <div class="row g-3">
+    <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.units') }}"><h2 class="h5">{{ t('admin.menu_units') }}</h2><span class="subtitle">{{ t('admin.units_subtitle') }}</span></a></div>
     <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.profiles') }}"><h2 class="h5">{{ t('admin.menu_profiles') }}</h2><span class="subtitle">{{ t('admin.profiles.subtitle') }}</span></a></div>
     <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.protocols') }}"><h2 class="h5">{{ t('admin.menu_protocols') }}</h2><span class="subtitle">{{ t('admin.protocols.subtitle') }}</span></a></div>
     <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.events') }}"><h2 class="h5">{{ t('admin.menu_events') }}</h2><span class="subtitle">{{ t('admin.events.subtitle') }}</span></a></div>
@@ -775,6 +777,35 @@ _MENU_TEMPLATE = """<!DOCTYPE html>
     <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.groups') }}"><h2 class="h5">{{ t('admin.menu_groups') }}</h2><span class="subtitle">{{ t('admin.groups_page_subtitle') }}</span></a></div>
     <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.simulator') }}"><h2 class="h5">{{ t('admin.menu_simulator') }}</h2><span class="subtitle">{{ t('admin.simulator.subtitle') }}</span></a></div>
     <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.server') }}"><h2 class="h5">{{ t('admin.menu_server') }}</h2><span class="subtitle">{{ t('admin.server_subtitle') }}</span></a></div>
+  </div>
+</div></body></html>"""
+
+
+_UNITS_TEMPLATE = """<!DOCTYPE html>
+<html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ t('admin.units_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """
+</head><body><div class="container container-narrow">
+  <div class="d-flex justify-content-between align-items-baseline mb-1"><h1>{{ t('admin.units_title') }}</h1><a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div>
+  <p class="subtitle mb-4">{{ t('admin.units_subtitle') }}</p>
+  {% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>{% endfor %}
+  {% if not units %}<div class="block-console mb-4"><p class="mb-0">{{ t('admin.unit_none') }}</p></div>{% endif %}
+  {% for unit in units %}
+  <div class="block-console mb-4"><span class="block-label">{{ t('admin.unit_current') }}</span>
+    <form method="post" action="{{ url_for('admin.save_unit') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="unit_id" value="{{ unit.unit_id }}">
+      <div class="row g-3 align-items-end"><div class="col-md-5"><label class="form-label-console" for="name-{{ unit.unit_id }}">{{ t('admin.unit_name') }}</label><input id="name-{{ unit.unit_id }}" name="name" value="{{ unit.name }}" class="form-control form-control-console" required></div>
+      <div class="col-md-5"><div class="form-label-console">{{ t('admin.unit_type') }}</div><div class="d-flex gap-2">{% for option in profile_options %}<label class="btn btn-console {% if option.id == unit.profile_id %}btn-console-primary{% endif %}"><input class="visually-hidden" type="radio" name="profile_id" value="{{ option.id }}" {% if option.id == unit.profile_id %}checked{% endif %}>{{ option.label }}</label>{% endfor %}</div></div>
+      <div class="col-md-2"><button class="btn btn-console-primary w-100">{{ t('admin.unit_save') }}</button></div></div>
+      <div class="mt-3 subtitle">{{ t('admin.unit_status') }}: {{ unit.status_label }} · {{ t('admin.unit_roles') }}: {{ unit.roles|join(', ') }}</div>
+    </form>
+  </div>
+  {% endfor %}
+  <div class="block-console mb-4"><span class="block-label">{{ t('admin.unit_current') }}</span>
+    <form method="post" action="{{ url_for('admin.save_unit') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="row g-3 align-items-end"><div class="col-md-5"><label class="form-label-console">{{ t('admin.unit_name') }}</label><input name="name" class="form-control form-control-console" required></div>
+      <div class="col-md-5"><div class="form-label-console">{{ t('admin.unit_type') }}</div><div class="d-flex gap-2">{% for option in profile_options %}<label class="btn btn-console"><input class="visually-hidden" type="radio" name="profile_id" value="{{ option.id }}" {% if loop.first %}checked{% endif %}>{{ option.label }}</label>{% endfor %}</div></div>
+      <div class="col-md-2"><button class="btn btn-console-primary w-100">{{ t('admin.add') }}</button></div></div>
+    </form>
   </div>
 </div></body></html>"""
 
@@ -793,7 +824,7 @@ _USERS_TEMPLATE = """<!DOCTYPE html>
       <input type="text" name="full_name" value="{{ user.full_name }}" class="form-control form-control-console" maxlength="120" placeholder="{{ t('admin.col_full_name') }}">
       <select name="permission_level" class="form-select form-select-console form-select-sm w-auto">{% for level in levels %}<option value="{{ level }}" {% if level == user.permission_level %}selected{% endif %}>{{ level }}</option>{% endfor %}</select>
       <button class="btn btn-console btn-sm">{{ t('admin.save') }}</button></form></td>
-    <td><div class="d-flex gap-2">{% if user.auto_register %}<form method="post" action="{{ url_for('admin.approve_user', identity=user.telegram_identity) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-primary btn-sm">{{ t('admin.approve_registration') }}</button></form>{% endif %}<form method="post" action="{{ url_for('admin.remove_user', identity=user.telegram_identity) }}" onsubmit="return confirm({{ t('admin.confirm_remove_user', identity=user.telegram_identity)|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-danger btn-sm">{{ t('admin.remove') }}</button></form></div></td></tr>{% endfor %}
+    <td><div class="d-flex gap-2">{% if user.auto_register and user.telegram_identity != bot_service_identity %}<form method="post" action="{{ url_for('admin.approve_user', identity=user.telegram_identity) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><select name="unit_id" class="form-select form-select-console form-select-sm" required><option value="">{{ t('admin.membership_unit') }}</option>{% for unit in units %}<option value="{{ unit.unit_id }}">{{ unit.name }} — {{ unit.profile_label }}</option>{% endfor %}</select><select name="role" class="form-select form-select-console form-select-sm" required><option value="">{{ t('admin.membership_role') }}</option>{% for role in roles %}<option value="{{ role }}">{{ role }}</option>{% endfor %}</select><button class="btn btn-console-primary btn-sm">{{ t('admin.membership_assign') }}</button></form>{% elif user.auto_register %}<span class="tag">{{ t('admin.membership_required') }}</span>{% endif %}<form method="post" action="{{ url_for('admin.remove_user', identity=user.telegram_identity) }}" onsubmit="return confirm({{ t('admin.confirm_remove_user', identity=user.telegram_identity)|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-danger btn-sm">{{ t('admin.remove') }}</button></form></div></td></tr>{% endfor %}
   </tbody></table>
   <div class="block-console mb-4"><span class="block-label">{{ t('admin.add_user') }}</span><form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.write_user') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="col"><div class="form-label-console">{{ t('admin.col_identity') }}</div><input name="telegram_identity" class="form-control form-control-console" required></div>
@@ -1229,6 +1260,58 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
 
         return _render(_MENU_TEMPLATE, csrf_token=session["csrf_token"])
 
+    def _unit_page_context() -> dict:
+        store = getattr(ctx, "operational_unit_store", None)
+        units = [] if store is None else []
+        if store is not None:
+            for unit in store.list_units():
+                item = dict(unit.__dict__)
+                item["status_label"] = _t("admin.unit_active" if unit.status == "active" else "admin.unit_pending")
+                item["roles"] = list(ROLE_CATALOGUE[unit.profile_id])
+                units.append(item)
+        return {
+            "units": units,
+            "profile_options": [
+                {"id": "response_team", "label": _t("admin.unit_response_team")},
+                {"id": "fire_station", "label": _t("admin.unit_fire_station")},
+            ],
+            "csrf_token": session["csrf_token"],
+        }
+
+    @blueprint.route("/units", methods=["GET"])
+    def units():
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        return _render(_UNITS_TEMPLATE, **_unit_page_context())
+
+    @blueprint.route("/units/save", methods=["POST"])
+    def save_unit():
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        csrf_response = _require_csrf()
+        if csrf_response is not None:
+            return csrf_response
+        store = getattr(ctx, "operational_unit_store", None)
+        if store is None:
+            flash(_t("admin.unit_invalid", reason="unit persistence is unavailable"), "error")
+            return redirect(url_for("admin.units"))
+        try:
+            unit_id = request.form.get("unit_id", "").strip()
+            name = request.form.get("name", "").strip()
+            profile_id = request.form.get("profile_id", "").strip()
+            if unit_id:
+                store.update_unit(unit_id, name=name, profile_id=profile_id)
+            else:
+                store.create_unit(name, profile_id, status="active")
+        except OperationalUnitError as exc:
+            flash(_t("admin.unit_invalid", reason=str(exc)), "error")
+            return redirect(url_for("admin.units"))
+        logger.info("admin configured operational unit", extra={"event": "admin_operational_unit_configured", "unit_id": unit_id or None, "profile_id": profile_id, "trace_id": get_trace_id()})
+        flash(_t("admin.unit_created"), "ok")
+        return redirect(url_for("admin.units"))
+
     @blueprint.route("/identity", methods=["POST"])
     def select_api_identity():
         redirect_response = _require_session()
@@ -1253,6 +1336,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             "groups": "admin.groups",
             "server": "admin.server",
             "simulator": "admin.simulator",
+            "units": "admin.units",
         }
         return redirect(url_for(destinations.get(request.form.get("next_page", ""), "admin.dashboard")))
 
@@ -1359,6 +1443,16 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         registered_users = sorted(
             ctx.deps.persistence.list_live_users(), key=lambda user: user["telegram_identity"]
         )
+        unit_store = getattr(ctx, "operational_unit_store", None)
+        unit_rows = []
+        if unit_store is not None:
+            for unit in unit_store.list_units():
+                unit_rows.append({
+                    "unit_id": unit.unit_id,
+                    "name": unit.name,
+                    "profile_label": _t("admin.unit_response_team" if unit.profile_id == "response_team" else "admin.unit_fire_station"),
+                })
+        roles = tuple(sorted({role for unit in (unit_store.list_units() if unit_store is not None else ()) for role in ROLE_CATALOGUE[unit.profile_id]}))
         return _render(
             _USERS_TEMPLATE,
             users=registered_users,
@@ -1366,6 +1460,8 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             safe_mode=ctx.deps.settings_store.get_safe_mode(),
             csrf_token=session["csrf_token"],
             bot_service_identity=BOT_SERVICE_IDENTITY,
+            units=unit_rows,
+            roles=roles,
         )
 
     @blueprint.route("/groups", methods=["GET"])
@@ -1779,17 +1875,35 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         csrf_response = _require_csrf()
         if csrf_response is not None:
             return csrf_response
+        unit_id = request.form.get("unit_id", "").strip()
+        role = request.form.get("role", "").strip()
         try:
-            ctx.deps.persistence.approve_user(identity)
-        except NotFoundError:
-            flash(_t("admin.user_not_found", identity=identity), "error")
+            user = ctx.deps.persistence.read_user(identity)
+            if user is None:
+                raise NotFoundError(f"no such user: '{identity}'")
+            if unit_id or role:
+                if identity == BOT_SERVICE_IDENTITY or ctx.deps.persistence.is_simulation_identity(identity):
+                    flash(_t("admin.membership_no_simulation"), "error")
+                    return redirect(url_for("admin.users"))
+                if not unit_id or not role or getattr(ctx, "operational_unit_store", None) is None:
+                    flash(_t("admin.membership_required"), "error")
+                    return redirect(url_for("admin.users"))
+                unit = ctx.operational_unit_store.get_unit(unit_id)
+                membership = ctx.operational_unit_store.assign_membership(identity, unit_id, role, status="active", full_name=user.get("full_name") or identity)
+                ctx.deps.persistence.approve_user(identity)
+                flash(_t("admin.membership_assigned", identity=identity, unit=unit.name, role=role), "ok")
+            else:
+                ctx.deps.persistence.approve_user(identity)
+        except (NotFoundError, OperationalUnitError) as exc:
+            flash(_t("admin.unit_invalid", reason=str(exc)), "error")
             return redirect(url_for("admin.users"))
         logger.info(
             "admin approved a telegram user",
             extra={"event": "telegram_user_approved", "telegram_identity": identity, "approved_by": "admin-session", "trace_id": get_trace_id()},
         )
         record_telegram_security_metric("approved", "user")
-        flash(_t("admin.user_approved", identity=identity), "ok")
+        if not (unit_id or role):
+            flash(_t("admin.user_approved", identity=identity), "ok")
         return redirect(url_for("admin.users"))
 
     @blueprint.route("/bot-service/provision", methods=["POST"])

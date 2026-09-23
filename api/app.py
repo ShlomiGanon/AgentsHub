@@ -32,7 +32,7 @@ from orchestrator.flows import (
     finalize_expired_event,
     finalize_expired_events,
 )
-from persistence import open_persistence
+from persistence import open_operational_unit_persistence, open_persistence
 from profiles import build_area_registry, build_event_type_registry, ensure_simulation_entities
 from profiles.loader import load_profile
 from protocols import load_protocols
@@ -62,6 +62,7 @@ class ApiContext:
     queue: "SerialEventQueue"
     scheduler: "SummaryScheduler"
     group_routing: "GroupRoutingTable"
+    operational_unit_store: object = None
 
 
 def build_group_routing(persistence, registry) -> GroupRoutingTable:
@@ -136,6 +137,14 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
         timezone_name=loaded_profile.timezone_name,
     )
 
+    try:
+        team_agent = registry.get("team_status_agent")
+    except KeyError:
+        team_agent = None
+    operational_unit_store = None
+    if team_agent is not None:
+        operational_unit_store = open_operational_unit_persistence(team_agent.status_store.db_path)
+
     deps = FlowDeps(
         persistence=persistence,
         settings_store=settings_store,
@@ -150,6 +159,7 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
         conversation_history_ttl_hours=loaded_profile.conversation_history_ttl_hours,
         event_type_business_fields=loaded_profile.event_type_business_fields,
         loaded_profile=loaded_profile,
+        operational_unit_store=operational_unit_store,
     )
 
     startup_recovery = finalize_expired_events(
@@ -239,6 +249,7 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
         queue=queue,
         scheduler=scheduler,
         group_routing=group_routing,
+        operational_unit_store=operational_unit_store,
     )
 
 

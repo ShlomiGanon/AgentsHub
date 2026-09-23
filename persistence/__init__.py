@@ -44,6 +44,16 @@ from persistence.operational_scope import (
     scope_from_event,
     scope_from_simulation_context,
 )
+from persistence.operational_unit_store import (
+    FIRE_STATION,
+    RESPONSE_TEAM,
+    ROLE_CATALOGUE,
+    LiveOperationalContext,
+    OperationalUnit,
+    OperationalUnitError,
+    open_operational_unit_persistence,
+    resolve_live_operational_context,
+)
 from persistence.operational_time import (
     OperationalTimeError,
     current_operational_time,
@@ -96,4 +106,12 @@ __all__ = [
     "operational_timestamp_of_event",
     "parse_operational_timestamp",
     "runtime_now",
+    "FIRE_STATION",
+    "RESPONSE_TEAM",
+    "ROLE_CATALOGUE",
+    "LiveOperationalContext",
+    "OperationalUnit",
+    "OperationalUnitError",
+    "open_operational_unit_persistence",
+    "resolve_live_operational_context",
 ]

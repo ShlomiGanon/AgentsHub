@@ -143,6 +143,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `persistence/runtime_cleanup.py` | Production | Private implementation | Provides the scoped unified-test runtime-history cleanup maintenance operation. |
 | `persistence/surveillance_contracts.py` | Production | Private implementation | Defines camera, drone, and surveillance-mission persistence contracts. |
 | `persistence/operational_scope.py` | Production | Private implementation | Defines the canonical LIVE and simulation-run identity used by current authoritative state. |
+| `persistence/operational_unit_store.py` | Production | Public facade | Persists LIVE OperationalUnit records and reuses `team_members` as the canonical membership source. |
 | `persistence/operational_time.py` | Production | Private implementation | Defines the canonical split between operational (business) time and runtime lifecycle time for one operational world. |
 | `persistence/surveillance_store.py` | Production | Private implementation | Implements the isolated SQLite surveillance store. |
 | `persistence/team_status_contracts.py` | Production | Private implementation | Defines the database-agnostic readiness-team status persistence contract and constructor. |
@@ -279,6 +280,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_profile_loading.py` | Test | Internal | Verifies profile imports, validation, construction, and registry configuration. |
 | `tests/test_profile_simulations.py` | Test | Internal | Verifies the simulation ID scheme, profile validation, provisioning, and JSON materialization. |
 | `tests/test_task69b_clean_live_bootstrap.py` | Test | Internal | Verifies clean LIVE bootstrap ownership and isolated simulation-world seeding. |
+| `tests/test_task69c_operational_units.py` | Test | Internal | Verifies OperationalUnit persistence, profile-safe roles, multi-membership ambiguity, and simulation identity isolation. |
 | `tests/test_protocol_repository.py` | Test | Internal | Verifies protocol loading, validation, rendering, and atomic editing. |
 | `tests/test_protocol_retry.py` | Test | Internal | Verifies protocol retry behavior and edge cases. |
 | `tests/test_provider_telemetry.py` | Test | Internal | Verifies CrewAI provider-event correlation, usage fields, failures, and race recovery. |

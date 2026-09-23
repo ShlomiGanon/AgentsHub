@@ -76,6 +76,7 @@ from profiles import (
     OptimizationPolicy,
     initialize_operational_scope,
     operational_profile_context,
+    operational_profile,
     provision_operational_world,
     profile_for_scope,
     resolve_simulation_step,
@@ -87,7 +88,9 @@ from persistence import (
     operational_time_context,
     scoped_conversation_id,
     scope_from_simulation_context,
+    resolve_live_operational_context,
 )
+from persistence import OperationalUnitError
 from api.simulations import (
     find_simulation_scenario,
     find_simulation_scenario_by_id,
@@ -172,13 +175,19 @@ def _initialize_request_operational_scope(ctx, simulation_context, sender_identi
     return scope
 
 
-def request_operational_profile(ctx, scope):
+def request_operational_profile(ctx, scope, caller_identity: str | None = None):
     """The organization type that owns this request's scope.
 
     Resolved here, at the one boundary that already established trusted scope,
     so no downstream layer has to infer it and no message can influence it.
     """
 
+    if not getattr(scope, "is_simulation", False) and caller_identity and getattr(ctx, "operational_unit_store", None) is not None:
+        live_context = resolve_live_operational_context(caller_identity, ctx.deps.persistence, ctx.operational_unit_store)
+        if live_context.status == "ambiguous_active_membership":
+            raise AuthorizationError("multiple active operational memberships require an explicit unit selection")
+        if live_context.profile_id:
+            return operational_profile(live_context.profile_id)
     return profile_for_scope(ctx.loaded_profile, scope)
 
 
@@ -498,10 +507,9 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
         operational_scope = _initialize_request_operational_scope(
             ctx, simulation_context, str(sender_identity), provisioning_ctx=app_ctx
         )
-        active_profile = request_operational_profile(ctx, operational_scope)
-        eligible_protocols = eligible_protocols_for_scope(
-            ctx.deps, operational_scope
-        )
+        active_profile = request_operational_profile(ctx, operational_scope, caller_identity)
+        with operational_profile_context(active_profile):
+            eligible_protocols = eligible_protocols_for_scope(ctx.deps, operational_scope)
         eligible_protocols_by_name = {
             protocol.name: protocol for protocol in eligible_protocols
         }
@@ -1083,7 +1091,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 # from those findings only (orchestrator/situational_picture.py). A viewer's
                 # recent-events view keeps the same ownership scope as any question they ask.
                 require(level, RequestedOperation.ASK_QUESTION)
-                with operational_profile_context(request_operational_profile(ctx, operational_scope)):
+                with operational_profile_context(request_operational_profile(ctx, operational_scope, caller_identity)):
                     picture = build_situational_picture(
                         ctx.main_agent,
                         matched_protocol,
@@ -1145,7 +1153,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 with operational_scope_context(operational_scope), operational_time_context(
                     getattr(simulation_context, "scenario_time", None)
                 ), operational_profile_context(
-                    request_operational_profile(ctx, operational_scope)
+                    request_operational_profile(ctx, operational_scope, caller_identity)
                 ), authenticated_request_identity(caller_identity):
                     answer = ag.report_team_availability(view=_team_roster_view(str(text)))
                 _remember("assistant", answer)
@@ -1163,7 +1171,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             with operational_scope_context(operational_scope), operational_time_context(
                 getattr(simulation_context, "scenario_time", None)
             ), operational_profile_context(
-                request_operational_profile(ctx, operational_scope)
+                request_operational_profile(ctx, operational_scope, caller_identity)
             ), authenticated_request_identity(caller_identity):
                 res = ag.process(text, allowed_tools)
             answer = res.text if res.status == "success" else f"\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05d4\u05e4\u05e2\u05dc\u05ea \u05e1\u05d5\u05db\u05df: {res.text}"
@@ -1738,12 +1746,25 @@ def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
         if user is None:
             return jsonify({"registered": False, "permission_level": None, "full_name": None})
 
-        return jsonify({
+        response = {
             "registered": True,
             "permission_level": user["permission_level"],
             "full_name": user["full_name"],
             **({"auto_register": bool(user.get("auto_register", False))} if level is PermissionLevel.COMMANDER else {}),
-        })
+        }
+        if level is PermissionLevel.COMMANDER and getattr(ctx, "operational_unit_store", None) is not None:
+            live_context = resolve_live_operational_context(identity, ctx.deps.persistence, ctx.operational_unit_store)
+            if live_context.membership is not None:
+                response["membership"] = {
+                    "unit_id": live_context.unit.unit_id,
+                    "unit_name": live_context.unit.name,
+                    "profile_id": live_context.profile_id,
+                    "role": live_context.membership.get("role"),
+                    "membership_status": live_context.membership.get("membership_status"),
+                }
+            else:
+                response["onboarding_status"] = live_context.status
+        return jsonify(response)
 
     @blueprint.route("/User/<identity>/name", methods=["PUT"])
     def update_own_name(identity):
@@ -1769,10 +1790,27 @@ def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
     def approve_user(identity):
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.MANAGE_USERS)
+        payload = request.get_json(silent=True) or {}
         try:
+            user = ctx.deps.persistence.read_user(identity)
+            if user is None:
+                raise PersistenceNotFoundError(identity)
+            unit_id = str(payload.get("unit_id") or "").strip()
+            role = str(payload.get("role") or "").strip()
+            membership = None
+            if unit_id or role:
+                if identity == BOT_SERVICE_IDENTITY or ctx.deps.persistence.is_simulation_identity(identity):
+                    raise OperationalUnitError("simulation or service identities cannot become LIVE members")
+                if not unit_id or not role or getattr(ctx, "operational_unit_store", None) is None:
+                    raise OperationalUnitError("unit_id and role are required for membership approval")
+                membership = ctx.operational_unit_store.assign_membership(
+                    identity, unit_id, role, status="active", full_name=user.get("full_name") or identity
+                )
             user = ctx.deps.persistence.approve_user(identity)
         except PersistenceNotFoundError:
             raise NotFoundError(messages.text("api.identity_unregistered", identity=identity)) from None
+        except OperationalUnitError as exc:
+            raise InvalidInputError(str(exc)) from None
         logger.info(
             "telegram user approved",
             extra={
@@ -1783,12 +1821,50 @@ def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
             },
         )
         record_telegram_security_metric("approved", "user")
-        return jsonify({
+        response = {
             "telegram_identity": user["telegram_identity"],
             "permission_level": user["permission_level"],
             "full_name": user["full_name"],
             "auto_register": False,
+        }
+        if membership is not None:
+            response["membership"] = membership
+        return jsonify(response)
+
+    @blueprint.route("/OperationalUnits", methods=["GET", "POST"])
+    def operational_units():
+        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
+        require(level, RequestedOperation.MANAGE_USERS)
+        store = getattr(ctx, "operational_unit_store", None)
+        if store is None:
+            raise NotFoundError("operational unit persistence is unavailable")
+        if request.method == "POST":
+            payload = request.get_json(silent=True) or {}
+            try:
+                unit = store.create_unit(payload.get("name", ""), payload.get("profile_id", ""), status=payload.get("status", "active"))
+            except OperationalUnitError as exc:
+                raise InvalidInputError(str(exc)) from None
+            return jsonify({"unit_id": unit.unit_id, "name": unit.name, "profile_id": unit.profile_id, "status": unit.status}), 201
+        return jsonify({
+            "units": [
+                {"unit_id": unit.unit_id, "name": unit.name, "profile_id": unit.profile_id, "status": unit.status, "roles": list(store.compatible_roles(unit.unit_id))}
+                for unit in store.list_units()
+            ]
         })
+
+    @blueprint.route("/OperationalUnits/<unit_id>", methods=["PUT"])
+    def update_operational_unit(unit_id):
+        level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
+        require(level, RequestedOperation.MANAGE_USERS)
+        store = getattr(ctx, "operational_unit_store", None)
+        if store is None:
+            raise NotFoundError("operational unit persistence is unavailable")
+        payload = request.get_json(silent=True) or {}
+        try:
+            unit = store.update_unit(unit_id, name=payload.get("name"), profile_id=payload.get("profile_id"), status=payload.get("status"))
+        except OperationalUnitError as exc:
+            raise InvalidInputError(str(exc)) from None
+        return jsonify({"unit_id": unit.unit_id, "name": unit.name, "profile_id": unit.profile_id, "status": unit.status})
 
     @blueprint.route("/Commanders", methods=["GET"])
     def get_commanders():
