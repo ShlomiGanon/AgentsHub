@@ -89,6 +89,8 @@ from persistence import (
     scoped_conversation_id,
     scope_from_simulation_context,
     resolve_live_operational_context,
+    resolve_runtime_context,
+    runtime_context,
 )
 from persistence import OperationalUnitError
 from api.simulations import (
@@ -175,20 +177,29 @@ def _initialize_request_operational_scope(ctx, simulation_context, sender_identi
     return scope
 
 
-def request_operational_profile(ctx, scope, caller_identity: str | None = None):
+def request_operational_profile(ctx, scope, caller_identity: str | None = None, simulation_context=None):
     """The organization type that owns this request's scope.
 
     Resolved here, at the one boundary that already established trusted scope,
     so no downstream layer has to infer it and no message can influence it.
     """
 
-    if not getattr(scope, "is_simulation", False) and caller_identity and getattr(ctx, "operational_unit_store", None) is not None:
-        live_context = resolve_live_operational_context(caller_identity, ctx.deps.persistence, ctx.operational_unit_store)
-        if live_context.status == "ambiguous_active_membership":
-            raise AuthorizationError("multiple active operational memberships require an explicit unit selection")
-        if live_context.profile_id:
-            return operational_profile(live_context.profile_id)
-    return profile_for_scope(ctx.loaded_profile, scope)
+    trusted_context = getattr(ctx.deps, "runtime_context", None)
+    if simulation_context is None and trusted_context is not None:
+        return trusted_context.operational_profile
+
+    resolved = resolve_runtime_context(
+        identity_id=str(caller_identity or ""),
+        users_persistence=ctx.deps.persistence,
+        unit_store=getattr(ctx, "operational_unit_store", None),
+        loaded_profile=ctx.loaded_profile,
+        simulation_context=simulation_context,
+    )
+    if resolved.status == "ambiguous_active_membership":
+        raise AuthorizationError("multiple active operational memberships require an explicit unit selection")
+    if resolved.status != "resolved":
+        raise AuthorizationError(f"trusted operational context unavailable: {resolved.status}")
+    return resolved.operational_profile
 
 
 def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
@@ -504,10 +515,24 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             str(telegram_chat_id) if telegram_chat_id is not None else None,
             str(telegram_chat_type) if telegram_chat_type is not None else None,
         )
+        # Resolve one trusted context before any protocol/profile decision.  The
+        # same object is carried by downstream orchestration and fixed reads.
+        runtime_resolved = resolve_runtime_context(
+            identity_id=str(caller_identity),
+            users_persistence=ctx.deps.persistence,
+            unit_store=ctx.operational_unit_store,
+            loaded_profile=ctx.loaded_profile,
+            simulation_context=simulation_context,
+        )
+        if runtime_resolved.status == "ambiguous_active_membership":
+            raise AuthorizationError("multiple active operational memberships require an explicit unit selection")
+        if runtime_resolved.status != "resolved":
+            raise AuthorizationError(f"trusted operational context unavailable: {runtime_resolved.status}")
+        ctx = dataclasses.replace(ctx, deps=dataclasses.replace(ctx.deps, runtime_context=runtime_resolved))
         operational_scope = _initialize_request_operational_scope(
             ctx, simulation_context, str(sender_identity), provisioning_ctx=app_ctx
         )
-        active_profile = request_operational_profile(ctx, operational_scope, caller_identity)
+        active_profile = runtime_resolved.operational_profile
         with operational_profile_context(active_profile):
             eligible_protocols = eligible_protocols_for_scope(ctx.deps, operational_scope)
         eligible_protocols_by_name = {

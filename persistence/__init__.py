@@ -54,6 +54,12 @@ from persistence.operational_unit_store import (
     open_operational_unit_persistence,
     resolve_live_operational_context,
 )
+from persistence.runtime_context import (
+    RuntimeOperationalContext,
+    current_runtime_context,
+    resolve_runtime_context,
+    runtime_context,
+)
 from persistence.operational_time import (
     OperationalTimeError,
     current_operational_time,
@@ -114,4 +120,8 @@ __all__ = [
     "OperationalUnitError",
     "open_operational_unit_persistence",
     "resolve_live_operational_context",
+    "RuntimeOperationalContext",
+    "current_runtime_context",
+    "resolve_runtime_context",
+    "runtime_context",
 ]

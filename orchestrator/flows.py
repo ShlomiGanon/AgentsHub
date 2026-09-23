@@ -465,6 +465,7 @@ class FlowDeps:
     # message content.
     loaded_profile: object = None
     operational_unit_store: object = None
+    runtime_context: object = None
 
 
 @dataclass(frozen=True)
@@ -535,6 +536,9 @@ def active_operational_profile(deps: "FlowDeps", scope=None):
     bound = current_operational_profile()
     if bound is not None:
         return bound
+    trusted_context = getattr(deps, "runtime_context", None)
+    if trusted_context is not None and getattr(trusted_context, "operational_profile", None) is not None:
+        return trusted_context.operational_profile
     loaded = getattr(deps, "loaded_profile", None)
     if loaded is None:
         return None

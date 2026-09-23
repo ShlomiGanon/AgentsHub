@@ -8,6 +8,7 @@ from profiles.contracts import AgentSpec, OptimizationPolicy
 from protocols import CriticalityLevel, Protocol
 
 PROFILE_NAME = "sub agent surveillance"
+OPERATIONAL_PROFILE_PROTOCOL_GATING = False
 DEFAULT_LANGUAGE = "he"
 MAX_ITER = 2
 MODEL_TIMEOUT_SECONDS = 30

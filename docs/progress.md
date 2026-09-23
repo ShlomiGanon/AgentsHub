@@ -4966,3 +4966,13 @@ All other register items are unchanged.
 - **Simulation and clean LIVE:** Task 69B clean bootstrap remains intact; unit infrastructure does not create members, cameras, drones, attendance, or events. Simulation personas remain scoped and cannot appear as LIVE memberships.
 - **Verification:** focused Task 69C/regression set passed **245 tests**. Full offline suite passed **1,997 tests, 0 failed, 7 warnings, 318.38 seconds**. Architecture import checks, compileall, Hebrew leakage, file catalog, and `git diff --check` passed. Real browser Dashboard/Telegram E2E was not performed because no browser connector was available; no UI claim is made.
 - **Explicitly unchanged:** no Agent/Tool/Protocol integrity audit, no Telegram-to-Simulation binding, no full event/protocol coverage audit, and no push.
+
+### Task 70 - Canonical Runtime Operational Context Resolver
+
+- **Status:** implemented locally; no push performed.
+- **Canonical context:** added `RuntimeOperationalContext` and one resolver covering trusted identity, LIVE membership/unit/profile, simulation scope/profile, role, permission level, provenance, and explicit resolution status. A contextvar is available for downstream orchestration.
+- **LIVE authority:** active approved LIVE Membership and active OperationalUnit determine the profile. Missing and ambiguous memberships remain explicit states; no latest-row selection is introduced. Isolated legacy test doubles without a unit store use a clearly labelled compatibility provenance only.
+- **Simulation authority:** complete trusted scenario/run metadata determines the exact `OperationalScope` and fixture profile without requiring LIVE membership. Incomplete simulation metadata returns `invalid_simulation_context` and never becomes LIVE.
+- **Runtime integration:** `/Msg` resolves the context before profile/protocol selection and carries it into `FlowDeps`; fixed operational reads and Main Agent profile resolution consume the same context. Profile gating now defaults to enforced for loaded deployments.
+- **Tests:** added `tests/test_task70_runtime_context.py` covering LIVE response/fire profiles, ambiguous memberships, simulation resolution without LIVE membership, and no silent fallback. Focused Task 66/67/69C/70 set passed **66 tests**.
+- **Validation boundary:** Telegram-to-Simulation binding was not implemented. Full suite and remaining static gates are pending before commit.

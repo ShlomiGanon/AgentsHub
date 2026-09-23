@@ -30,6 +30,7 @@ from profiles.spec import AgentSpec
 from protocols.model import CriticalityLevel
 
 PROFILE_NAME = "For Tests"
+OPERATIONAL_PROFILE_PROTOCOL_GATING = False
 DEFAULT_LANGUAGE = "en"
 MAX_ITER = 8
 MODEL_TIMEOUT_SECONDS = 30
