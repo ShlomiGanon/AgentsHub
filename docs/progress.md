@@ -4887,30 +4887,6 @@ Replaces the Task 63 entry, which said the resolution was not yet wired into ing
 
 All other register items are unchanged.
 
-### Task 67 - Operational Profiles
-
-- **Status:** done for the verified operational-profile foundation. One shared GTCA deployment now resolves exactly one trusted immutable organization type per `OperationalScope`: configured `response_team` for LIVE by default, and fixture-declared `response_team` or `fire_station` for simulation runs. User text, protocol names, model output and the latest Event do not select the profile.
-- **Verified implementation:** the two profiles own their roster terminology, enabled domains/agents/protocol IDs and resource catalogue. Fire-only `ASHED`/`CARMEL` resource recognition remains profile-owned; the generic agents do not hard-code those resource IDs. The minimum bounded `OperationalContext` now carries the trusted profile ID and configured allowed protocol IDs, but full profile-aware Main Agent context composition remains deliberately deferred.
-- **Protocol catalogue:** every operational-profile protocol ID is a real protocol in the gated `profiles.unified_test` registry, and every registry protocol is exposed by at least one operational profile. Legacy single-purpose deployments remain unchanged unless they explicitly enable `OPERATIONAL_PROFILE_PROTOCOL_GATING`.
-- **Deviations / remaining boundary:** Telegram-to-simulation binding and the full terminology/context redesign are not part of this task and are not claimed complete.
-
-### Task 68 - Complete Simulation-Run Provisioning
-
-- **Status:** done and verified offline. Explicit run provisioning materializes the complete scoped world before step 1 rather than waiting for a domain message to create part of it.
-- **Verified worlds:** SEC fixtures resolve to a `response_team` world; FIRE fixtures resolve to a `fire_station` world. Team roster/status, cameras, drones and declared fire resources are created in the scenario/run scope. Repeated provisioning is idempotent, LIVE state is unchanged, and one simulation run does not inherit mutable state from another.
-- **Deviations:** no Telegram-to-simulation binding was added. Provisioning continues to use trusted fixture/run metadata only.
-
-### Task 67C - Final Profile Runtime Integration
-
-- **Status:** done. Commit `fc61c43` was integrated into `fix/agent-orchestration-and-runtime-stability` with a normal history-preserving merge (`62d425f`), then the profile runtime chain was completed.
-- **Integrated reconciliation:** canonical protocol IDs replaced drifted aliases; `dispatch_mutual_aid` and its `dispatch_water_tankers` / `dispatch_aircraft` Friendly Forces tools were adopted; simulator bubbles use the scripted operational timestamp; and the Friendly Forces API port collision was corrected from 8903 to 8907.
-- **Runtime eligibility:** `eligible_protocols_for_scope` is the single eligibility boundary for gated deployments. It resolves trusted scope to trusted profile and intersects that profile's allowed IDs with the canonical loaded registry. LLM selection, deterministic selection, action routing, explicit `protocol_hint`, approval continuation and event-data continuation all reuse it. Gating requires the explicit boolean `True`; legacy deployments and incomplete test doubles do not opt in accidentally.
-- **Bypass and lifecycle:** `response_team` cannot select or execute `dispatch_mutual_aid`, `dispatch_water_tankers` or `dispatch_aircraft`. `fire_station` can select `dispatch_mutual_aid`; it remains commander-controlled, approval-flagged and confirmation-required. Tests prove no tool runs before approval and approved execution follows the normal action lifecycle with a successful `ToolReceipt`.
-- **Independent paths:** passive report extraction/projection remains independent of action gating. The five Task 66 fixed state buttons remain deterministic authoritative reads and do not enter the action-selection path.
-- **Catalog:** `profiles/operational_profile.py` and `tests/test_task67_operational_profiles.py` were added to `docs/file_catalog.md`. The `pyrefly.toml` row remains because the catalog contract intentionally includes untracked, non-ignored first-party files; the untracked file itself was neither modified nor added.
-- **Verification:** broad focused regressions passed **329 tests** in **119.39 seconds**; the three legacy-mock regressions found by the first full run were corrected and their final focused rerun passed **17 tests** in **13.87 seconds**. The final complete offline suite passed **1,992 tests, 0 failed, 7 warnings** in **614.41 seconds**. Hebrew leakage and file-catalog checks passed 2/2; application/runtime compilation and `git diff --check` passed.
-- **Explicitly unchanged:** no database/log cleanup, database reset/delete, manual SQL, `pyrefly.toml` change, provider-dependent validation, full Main Agent context redesign, full terminology refactor, or Telegram simulation binding was performed.
-
 ### Task 65 - Conversation History OperationalScope Isolation
 
 - **Status:** implemented and verified offline. The narrow defect was that `conversation_messages` was keyed only by the transport `conversation_id`; the API and follow-up paths already carried trusted simulation scope for operational state, but conversation reads and writes did not. A reused simulator chat id could therefore address another run's conversation history.
@@ -4935,3 +4911,27 @@ All other register items are unchanged.
 - **Explicitly unchanged:** trusted simulation binding, scenario-run selection, incident/evidence semantics, event-history redesign, provider/SITREP behavior, auto-run/auto-next, and `pyrefly.toml`.
 
 All other register items are unchanged.
+
+### Task 67 - Operational Profiles
+
+- **Status:** done for the verified operational-profile foundation. One shared GTCA deployment now resolves exactly one trusted immutable organization type per `OperationalScope`: configured `response_team` for LIVE by default, and fixture-declared `response_team` or `fire_station` for simulation runs. User text, protocol names, model output and the latest Event do not select the profile.
+- **Verified implementation:** the two profiles own their roster terminology, enabled domains/agents/protocol IDs and resource catalogue. Fire-only `ASHED`/`CARMEL` resource recognition remains profile-owned; the generic agents do not hard-code those resource IDs. The minimum bounded `OperationalContext` now carries the trusted profile ID and configured allowed protocol IDs, but full profile-aware Main Agent context composition remains deliberately deferred.
+- **Protocol catalogue:** every operational-profile protocol ID is a real protocol in the gated `profiles.unified_test` registry, and every registry protocol is exposed by at least one operational profile. Legacy single-purpose deployments remain unchanged unless they explicitly enable `OPERATIONAL_PROFILE_PROTOCOL_GATING`.
+- **Deviations / remaining boundary:** Telegram-to-simulation binding and the full terminology/context redesign are not part of this task and are not claimed complete.
+
+### Task 68 - Complete Simulation-Run Provisioning
+
+- **Status:** done and verified offline. Explicit run provisioning materializes the complete scoped world before step 1 rather than waiting for a domain message to create part of it.
+- **Verified worlds:** SEC fixtures resolve to a `response_team` world; FIRE fixtures resolve to a `fire_station` world. Team roster/status, cameras, drones and declared fire resources are created in the scenario/run scope. Repeated provisioning is idempotent, LIVE state is unchanged, and one simulation run does not inherit mutable state from another.
+- **Deviations:** no Telegram-to-simulation binding was added. Provisioning continues to use trusted fixture/run metadata only.
+
+### Task 67C - Final Profile Runtime Integration
+
+- **Status:** done. Commit `fc61c43` was integrated into `fix/agent-orchestration-and-runtime-stability` with a normal history-preserving merge (`62d425f`), then the profile runtime chain was completed.
+- **Integrated reconciliation:** canonical protocol IDs replaced drifted aliases; `dispatch_mutual_aid` and its `dispatch_water_tankers` / `dispatch_aircraft` Friendly Forces tools were adopted; simulator bubbles use the scripted operational timestamp; and the Friendly Forces API port collision was corrected from 8903 to 8907.
+- **Runtime eligibility:** `eligible_protocols_for_scope` is the single eligibility boundary for gated deployments. It resolves trusted scope to trusted profile and intersects that profile's allowed IDs with the canonical loaded registry. LLM selection, deterministic selection, action routing, explicit `protocol_hint`, approval continuation and event-data continuation all reuse it. Gating requires the explicit boolean `True`; legacy deployments and incomplete test doubles do not opt in accidentally.
+- **Bypass and lifecycle:** `response_team` cannot select or execute `dispatch_mutual_aid`, `dispatch_water_tankers` or `dispatch_aircraft`. `fire_station` can select `dispatch_mutual_aid`; it remains commander-controlled, approval-flagged and confirmation-required. Tests prove no tool runs before approval and approved execution follows the normal action lifecycle with a successful `ToolReceipt`.
+- **Independent paths:** passive report extraction/projection remains independent of action gating. The five Task 66 fixed state buttons remain deterministic authoritative reads and do not enter the action-selection path.
+- **Catalog:** `profiles/operational_profile.py` and `tests/test_task67_operational_profiles.py` were added to `docs/file_catalog.md`. The `pyrefly.toml` row remains because the catalog contract intentionally includes untracked, non-ignored first-party files; the untracked file itself was neither modified nor added.
+- **Verification:** broad focused regressions passed **329 tests** in **119.39 seconds**; the three legacy-mock regressions found by the first full run were corrected and their focused rerun passed **17 tests** in **13.87 seconds**. On the final documented tree, the Task 65/66/67/68, action-routing and bot-transport set passed **179 tests** in **34.54 seconds**. The final complete offline suite passed **1,992 tests, 0 failed, 7 warnings** in **614.41 seconds**. Hebrew leakage and file-catalog checks passed 2/2; application/runtime compilation and `git diff --check` passed.
+- **Explicitly unchanged:** no database/log cleanup, database reset/delete, manual SQL, `pyrefly.toml` change, provider-dependent validation, full Main Agent context redesign, full terminology refactor, or Telegram simulation binding was performed.
