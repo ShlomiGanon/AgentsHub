@@ -55,6 +55,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `config/live_settings.py` | Production | Private implementation | Persists retry, risk, and lookback settings atomically. |
 | `config/server_control.py` | Production | Private implementation | Discovers safe profiles and exchanges restart, profile-switch, reset, and status messages with the stack supervisor. |
 | `conftest.py` | Project | Internal | Defines repository-wide pytest fixtures, model-tier configuration, and trace isolation. |
+| `docs/Admin_Profile_Switch_Investigation.md` | Documentation | Internal | Investigates why the admin panel doesn't come up after a profile switch, records the confirmed root cause, and the fix applied. |
 | `docs/DEMO_READY.md` | Documentation | Internal | Documents DEMO READY. |
 | `docs/GT critial agents.pptx.pdf` | Documentation | Internal | Stores the GT critial agents.pptx reference artifact. |
 | `docs/IMPROVES/ADMIN_LOGIN_LOCKOUT_DIAGNOSIS.MD` | Documentation | Internal | Records the admin-login lockout diagnosis. |

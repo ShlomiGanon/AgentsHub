@@ -26,9 +26,14 @@ surveillance, friendly-forces dispatch — `API_PORT` 8905, `SIMULATOR_PORT` 891
 profile `config/server_control.load_selected_profile()` last selected (Standby Squad by
 default). Use the admin panel's server-control page (`/admin/server`) to switch the running
 profile between the two; the supervisor stops the current profile's processes and restarts
-with the new one on the same ports, a few seconds of downtime. This is the default workflow:
-it needs no extra environment setup, and only one profile's admin panel/bot is reachable at a
-time.
+with the new one — **on that profile's own port**, not the same one (Standby Squad is always
+8905, Firefighting always 8906; see `docs/Admin_Profile_Switch_Investigation.md`, which
+diagnosed and fixed an earlier bug where the browser could be left stranded on the old port
+during this transition). After clicking "switch," the page waits for the old port to stop
+answering and then for the new port to start answering before automatically following you
+there — normally a few seconds. If it hasn't reconnected within a minute, it shows both the new
+and previous profile's admin URLs as plain links so you can navigate manually. Only one
+profile's admin panel/bot is reachable at a time in this mode.
 
 **Advanced mode: run both profiles concurrently.** Since the two profiles use distinct
 `API_PORT`/`SIMULATOR_PORT`s and distinct `DB_PATH`s, nothing stops running two independent
@@ -43,7 +48,13 @@ primary switch-in-place workflow above.
 
 Each profile needs its own bot token: `BOT_TOKEN` for Standby Squad, `FIREFIGHTING_BOT_TOKEN`
 for Firefighting (`.env.example`) — required even in switch-in-place mode, since both values
-must already be set in `.env` before whichever profile is currently selected can start.
+must already be set in `.env` before whichever profile is currently selected can start. These
+should be two *different* real Telegram bots. Switch-in-place is safe even if they're
+temporarily the same value (the supervisor always fully stops the old bot process before
+starting the new one, so there's never a moment with two long-polling connections open for one
+token), but the advanced concurrent mode above genuinely requires two distinct bots — running
+both profiles at once with the same token means whichever started polling second gets Telegram's
+`409 Conflict` until the other is stopped.
 
 ## Writing a profile from scratch
 

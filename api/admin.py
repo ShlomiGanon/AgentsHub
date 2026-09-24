@@ -974,8 +974,48 @@ _SERVER_TEMPLATE = """<!DOCTYPE html>
 </body></html>"""
 
 
-_SERVER_WAIT_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.server_restarting') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """</head><body><div class="container container-narrow"><div class="block-console"><h1>{{ t('admin.server_restarting') }}</h1><p class="subtitle">{{ t('admin.server_restarting_help') }}</p><p><a id="retry-link" href="{{ target_url }}">{{ t('admin.server_retry_link') }}</a></p></div></div><script>
-(function(){ const candidates={{ candidate_urls|tojson }}; async function probe(){ for(const url of candidates){ try{ await fetch(url, {mode:'no-cors', credentials:'include', cache:'no-store'}); window.location.href=url; return; }catch(error){} } setTimeout(probe, 1500); } setTimeout(probe, 3000); })();
+# docs/Admin_Profile_Switch_Investigation.md §1/§4.1: the wait page must never navigate the
+# browser to the OLD profile's port -- fetch() with mode:'no-cors' resolves on *any* HTTP
+# response (even the old process, seconds from being killed) and only rejects when a port is
+# genuinely down, so racing both candidate URLs and following whichever answers first can strand
+# the browser on a port that dies moments later. Fixed sequence, never raced: (1) poll `old_url`
+# until it stops answering (confirms the old process actually stopped -- also correct when
+# `old_url == target_url`, i.e. a same-port reset, since that still requires observing a real
+# down-then-up transition before declaring success), (2) only then poll `target_url` until it
+# answers, and navigate there -- never anywhere else. A hard deadline shows both URLs as manual
+# links instead of spinning or retrying forever if either phase never completes.
+_RESTART_POLL_MS = 1500
+_RESTART_TIMEOUT_MS = 60000
+
+_SERVER_WAIT_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.server_restarting') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """</head><body><div class="container container-narrow"><div class="block-console">
+<div id="wait-status"><h1>{{ t('admin.server_restarting') }}</h1><p class="subtitle">{{ t('admin.server_restarting_help') }}</p></div>
+<div id="wait-timeout" hidden><h1>{{ t('admin.server_restart_timeout_title') }}</h1><p class="subtitle">{{ t('admin.server_restart_timeout_help') }}</p><p><a id="target-link" href="{{ target_url }}">{{ t('admin.server_restart_timeout_target_link') }}</a></p><p><a id="old-link" href="{{ old_url }}">{{ t('admin.server_restart_timeout_previous_link') }}</a></p></div>
+</div></div><script>
+(function(){
+  const oldUrl = {{ old_url|tojson }};
+  const targetUrl = {{ target_url|tojson }};
+  const deadline = Date.now() + {{ timeout_ms }};
+  let phase = 'old-down';
+  async function reachable(url) {
+    try { await fetch(url, {mode: 'no-cors', credentials: 'include', cache: 'no-store'}); return true; }
+    catch (error) { return false; }
+  }
+  async function tick() {
+    if (Date.now() >= deadline) {
+      document.getElementById('wait-status').hidden = true;
+      document.getElementById('wait-timeout').hidden = false;
+      return;
+    }
+    if (phase === 'old-down') {
+      if (!(await reachable(oldUrl))) { phase = 'new-up'; }
+    } else if (await reachable(targetUrl)) {
+      window.location.href = targetUrl;
+      return;
+    }
+    setTimeout(tick, {{ poll_ms }});
+  }
+  setTimeout(tick, {{ poll_ms }});
+})();
 </script></body></html>"""
 
 
@@ -1407,9 +1447,14 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
     def _restart_page(port: int):
         host = request.host.split(":", 1)[0]
         target_url = f"{request.scheme}://{host}:{port}/admin/server"
-        fallback_url = f"{request.scheme}://{host}:{ctx.loaded_profile.api_port}/admin/server"
-        candidates = list(dict.fromkeys((target_url, fallback_url)))
-        return _render(_SERVER_WAIT_TEMPLATE, target_url=target_url, candidate_urls=candidates)
+        old_url = f"{request.scheme}://{host}:{ctx.loaded_profile.api_port}/admin/server"
+        return _render(
+            _SERVER_WAIT_TEMPLATE,
+            target_url=target_url,
+            old_url=old_url,
+            timeout_ms=_RESTART_TIMEOUT_MS,
+            poll_ms=_RESTART_POLL_MS,
+        )
 
     @blueprint.route("/server/profile", methods=["POST"])
     def switch_profile():
