@@ -317,7 +317,7 @@ def main(argv: list[str] | None = None) -> None:
         description="Terminal stand-in for a commander's Telegram session — talks to a running `api.app` "
         "server through the same code the real bot uses (work_plan.md §8), for manual end-to-end testing."
     )
-    parser.add_argument("--profile", default="profiles.standby_squad", help="dotted profile module path (default: profiles.standby_squad)")
+    parser.add_argument("--profile", default="profiles.response_team", help="dotted profile module path (default: profiles.response_team)")
     parser.add_argument("--identity", default="cli_tester", help="commander-level test identity to act as (default: cli_tester)")
     parser.add_argument("--host", default="127.0.0.1", help="host the API server is bound to (default: 127.0.0.1)")
     parser.add_argument("--poll-interval", type=float, default=2.0, help="seconds between notification polls (default: 2.0)")

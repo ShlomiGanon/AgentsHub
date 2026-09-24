@@ -473,25 +473,26 @@ def test_find_simulation_scenario_returns_none_for_an_unknown_key():
     assert find_simulation_scenario(loaded, "demo") is not None
 
 
-# -- the SEC_001 migration (profiles/standby_squad.py), against the real profile ------------
+# -- the SEC_001 migration (profiles/response_team.py), against the real profile ------------
 #
 # Profile Split Plan (docs/Profile_Split_Plan.md), Step 1: repointed from profiles.unified_test
 # (which declared this alongside the pilot scenario and the FIRE_002 series) to
-# profiles.standby_squad (which declares SEC_001 only, offsets renumbered from 0). The
-# FIRE_002-series test below this one is repointed separately, in Step 2, when
-# profiles/firefighting.py is created.
+# profiles.standby_squad (which declared SEC_001 only, offsets renumbered from 0), and then
+# (docs/responce_improve.md) into profiles.response_team, once standby_squad was deleted and
+# response_team became SEC_001's one, unified, operational-state profile. The FIRE_002-series
+# test below this one is unaffected -- it targets profiles/firefighting.py, left untouched.
 
 
-def test_standby_squad_declares_the_migrated_sec001_series(test_core_model, test_sub_model, monkeypatch):
+def test_response_team_declares_the_migrated_sec001_series(test_core_model, test_sub_model, monkeypatch):
     """docs/profile_simulations_design.md: the SEC_001 series
     (fixtures/admin_scenarios/'כיתת כוננת - חלק 1/2/3.json') was migrated into real
     SIMULATIONS declarations, with recurring characters sharing one reserved ID
     across the phases they appear in — not re-declared per phase."""
 
-    monkeypatch.setenv("BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("RESPONSE_TEAM_BOT_TOKEN", "fake-token")
     from profiles.loader import load_profile
 
-    loaded = load_profile("profiles.standby_squad", core_model=test_core_model, sub_model=test_sub_model)
+    loaded = load_profile("profiles.response_team", core_model=test_core_model, sub_model=test_sub_model)
 
     sec001_keys = {"sec001_phase1", "sec001_phase2", "sec001_phase3"}
     assert sec001_keys <= {s.key for s in loaded.simulations}
@@ -587,23 +588,23 @@ def test_firefighting_declares_the_migrated_fire002_series(test_core_model, test
     assert group_keys == fire_group_keys
 
 
-def test_standby_squad_response_team_personas_become_approved_team_status_members(
+def test_response_team_personas_become_approved_roster_members(
     test_core_model, test_sub_model, monkeypatch, tmp_path
 ):
     """Closes the gap the SEC_001-attendance-step investigation found: a response-team
-    persona could authenticate and post into a team_status_agent-owned group, yet
-    TeamStatusAgent's record_attendance_response tool still refused it because its
+    persona could authenticate and post into a roster_agent-owned group, yet
+    ResponseTeamRosterAgent's record_attendance_response tool still refused it because its
     separate approved-roster store never knew about simulation personas. Runs against
     an isolated copy of the profile's own declared roster, not its real on-disk DB."""
 
     from dataclasses import replace
 
-    from persistence.team_status_contracts import open_team_status_persistence
+    from persistence import open_response_team_roster_store
     from persistence.sqlite_store import SQLitePersistence
     from profiles.loader import load_profile
 
-    monkeypatch.setenv("BOT_TOKEN", "fake-token")
-    loaded = load_profile("profiles.standby_squad", core_model=test_core_model, sub_model=test_sub_model)
+    monkeypatch.setenv("RESPONSE_TEAM_BOT_TOKEN", "fake-token")
+    loaded = load_profile("profiles.response_team", core_model=test_core_model, sub_model=test_sub_model)
 
     isolated_db_path = str(tmp_path / "team_status.db")
     real_roster = next(r for r in loaded.simulation_rosters if r.key == "team_status")
@@ -619,7 +620,7 @@ def test_standby_squad_response_team_personas_become_approved_team_status_member
     finally:
         persistence.close()
 
-    store = open_team_status_persistence(isolated_db_path)
+    store = open_response_team_roster_store(isolated_db_path)
     approved_identities = {m["telegram_identity"] for m in store.list_members(approved_only=True)}
 
     pre_approved_personas = [p for p in loaded.simulation_users if p.pre_approved_rosters]

@@ -22,7 +22,7 @@ from profiles import REQUIRED_PROFILE_ATTRS
 # Only the two complete operational profiles are selectable in the admin UI and
 # accepted by the stack supervisor.  The other profile modules remain in the
 # package for compatibility and tests, but they are not separate deployments.
-SELECTABLE_PROFILE_STEMS = frozenset({"standby_squad", "firefighting"})
+SELECTABLE_PROFILE_STEMS = frozenset({"response_team", "firefighting"})
 
 
 @dataclass(frozen=True)
@@ -141,7 +141,7 @@ def save_selected_profile(module_path: str) -> None:
     _atomic_json(control_dir() / "selected_profile.json", {"module_path": module_path})
 
 
-def load_selected_profile(default: str = "profiles.standby_squad") -> str:
+def load_selected_profile(default: str = "profiles.response_team") -> str:
     try:
         value = json.loads((control_dir() / "selected_profile.json").read_text(encoding="utf-8"))
         module_path = value.get("module_path")

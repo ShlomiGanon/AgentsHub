@@ -181,7 +181,6 @@ jobs:
           tests/test_integration_serial_processing_under_load.py
           tests/test_integration_user_administration.py
           tests/test_response_improvements.py
-          tests/test_standby_squad_role_and_security.py
 
       - name: Mission 10 - Operational profiles
         run: >

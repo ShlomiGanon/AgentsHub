@@ -314,7 +314,7 @@ def test_server_page_requires_session_and_disables_controls_without_supervisor(t
     page = client.get("/admin/server")
     assert page.status_code == 200
     assert b"run_stack.py" in page.data
-    assert b"profiles.standby_squad" in page.data
+    assert b"profiles.response_team" in page.data
     assert b"profiles.firefighting" in page.data
 
 

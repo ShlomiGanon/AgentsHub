@@ -24,7 +24,6 @@ This English catalog describes every tracked or pending first-party file in the 
 | `agents/fire_station_agents.py` | Production | Private implementation | Implements the Fire and Rescue dispatch and hazmat-assessment specialists (docs/bar_improves.md). |
 | `agents/friendly_forces_agent.py` | Production | Private implementation | Implements the tactical coordination and dispatch specialist for friendly forces. |
 | `agents/provider_telemetry.py` | Production | Private implementation | Correlates CrewAI provider-call events with AgentsHub traces, stages, latency, and usage. |
-| `agents/response_team_agents.py` | Production | Private implementation | Implements the Response Team security-operations and surveillance-fault specialists (docs/bar_improves.md). |
 | `agents/roster_agent.py` | Production | Private implementation | Implements the shared team/crew availability-reporting specialist (docs/bar_improves.md). |
 | `agents/runtime.py` | Production | Private implementation | Constructs and invokes agents, enforces tools, adapts CrewAI, and owns the runtime registry. |
 | `agents/standard_agents.py` | Production | Private implementation | Implements the standard History and Reference agents. |
@@ -92,6 +91,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `docs/profile_spec.md` | Documentation | Internal | Documents profile spec. |
 | `docs/progress.md` | Documentation | Internal | Documents progress. |
 | `docs/questions.txt` | Documentation | Internal | Documents questions. |
+| `docs/responce_improve.md` | Documentation | Internal | Specifies the Response Team unification and operational-state design: one profile, one database, profile-only tables and tools, and SEC_001 treated as live events. |
 | `docs/server_report.md` | Documentation | Internal | Documents server report. |
 | `docs/unified_command_guide.md` | Documentation | Internal | Operational and architectural guide for Unified Command Hub profile (Hebrew). |
 | `docs/vocabulary.md` | Documentation | Internal | Documents vocabulary. |
@@ -137,6 +137,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `orchestrator/situational_picture.py` | Production | Private implementation | Builds the multi-domain situational picture at request time: the Main Agent plans one live question per specialist, gathers their answers and the recent event log concurrently, and composes the picture from those findings only. |
 | `persistence/__init__.py` | Production | Public facade | Exposes persistence contracts, constructors, and compatibility aliases. |
 | `persistence/contracts.py` | Production | Private implementation | Defines persistence interfaces and domain errors. |
+| `persistence/response_team_store.py` | Production | Private implementation | Implements the Response Team profile's own roster/attendance, surveillance, and neighboring-force-dispatch tables against the profile's shared DB_PATH (docs/responce_improve.md). |
 | `persistence/schema.py` | Production | Private implementation | Owns immutable migration DDL and the current SQLite schema. |
 | `persistence/sqlite_store.py` | Production | Private implementation | Implements serialized SQLite persistence, transactions, and row conversion. |
 | `persistence/surveillance_contracts.py` | Production | Private implementation | Defines camera, drone, and surveillance-mission persistence contracts. |
@@ -149,11 +150,9 @@ This English catalog describes every tracked or pending first-party file in the 
 | `profiles/fire_station_sim.py` | Production | Private implementation | Defines the Fire and Rescue Station simulation deployment, reusing the live profile's declared content (docs/bar_improves.md). |
 | `profiles/firefighting.py` | Production | Private implementation | Defines the Firefighting profile (crew status, visual surveillance, mutual-aid dispatch) and the FIRE_002 simulations (docs/Profile_Split_Plan.md). |
 | `profiles/loader.py` | Production | Private implementation | Imports, validates, hashes, and constructs deployment profiles and registries. |
-| `profiles/response_team.py` | Production | Private implementation | Defines the Response Team profile (perimeter/external-force observation, surveillance faults, team status, attendance) (docs/bar_improves.md). |
-| `profiles/response_team_sim.py` | Production | Private implementation | Defines the Response Team simulation deployment, reusing the live profile's declared content (docs/bar_improves.md). |
+| `profiles/response_team.py` | Production | Private implementation | Defines the unified Response Team profile (roster/attendance, camera/drone surveillance, neighboring-force dispatch) and the SEC_001 simulations, all in one profile-owned database (docs/responce_improve.md). |
 | `profiles/simulation.py` | Production | Private implementation | Defines simulation persona, group, scenario, and roster declarations and the reserved Telegram ID scheme. |
-| `profiles/simulation_provisioning.py` | Production | Private implementation | Ensures a profile's declared simulation users and groups exist, and registers/approves any of them on the agent-owned rosters they declare. |
-| `profiles/standby_squad.py` | Production | Private implementation | Defines the Standby Squad profile (readiness-team status, visual surveillance, friendly-forces dispatch) and the SEC_001 simulations (docs/Profile_Split_Plan.md). |
+| `profiles/simulation_provisioning.py` | Production | Private implementation | Ensures a profile's declared simulation users and groups exist, registers/approves any of them on the agent-owned rosters they declare, and runs a profile's own optional OPERATIONAL_SEED hook (docs/responce_improve.md). |
 | `profiles/template.py` | Production | Private implementation | Provides a reference template for authoring deployment profiles. |
 | `protocols/__init__.py` | Production | Public facade | Exposes protocol contracts, execution, repository operations, and aliases. |
 | `protocols/contracts.py` | Production | Private implementation | Defines protocols, steps, criticality, results, and edit errors. |
@@ -254,7 +253,6 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_surveillance_persistence.py` | Test | Internal | Verifies surveillance database initialization, updates, dispatch, and mission state. |
 | `tests/test_team_status_agent.py` | Test | Internal | Verifies daily attendance, multi-day unavailability, late approval, and protocol execution. |
 | `tests/test_team_status_persistence.py` | Test | Internal | Verifies readiness-team roster approval, message idempotency, late-response isolation, and separate SQLite schemas. |
-| `tests/test_standby_squad_role_and_security.py` | Test | Internal | Verifies Standby Squad role-based security, button workflows, and confirmation flows. |
 | `tests/test_unsafe_system.py` | Test | Internal | Verifies safe/open Telegram admission, automatic registration, approval, and API isolation. |
 | `tests/test_user_admin.py` | Test | Internal | Verifies user admin behavior and edge cases. |
 | `tools/__init__.py` | Production | Public facade | Exposes shared observability helpers and lazy terminal compatibility aliases. |

@@ -15,19 +15,20 @@ default. If `OBSERVABILITY_MODE=otlp`, startup fails unless
 `OTEL_EXPORTER_OTLP_ENDPOINT` is set, preventing a production instance from
 silently running without required telemetry.
 
-## Running Standby Squad and Firefighting (docs/Profile_Split_Plan.md)
+## Running Response Team and Firefighting
 
-Exactly two profiles ship today: `profiles.standby_squad` (readiness-team status, visual
-surveillance, friendly-forces dispatch — `API_PORT` 8905, `SIMULATOR_PORT` 8915) and
-`profiles.firefighting` (crew status, fire-camera surveillance, mutual-aid dispatch —
-`API_PORT` 8906, `SIMULATOR_PORT` 8916), each with its own three admin-simulator scenarios.
+Exactly two profiles ship today: `profiles.response_team` (roster/attendance, camera + drone
+surveillance, neighboring-force dispatch, all in one profile-owned database — `API_PORT` 8907,
+`SIMULATOR_PORT` 8915, docs/responce_improve.md) and `profiles.firefighting` (crew status,
+fire-camera surveillance, mutual-aid dispatch — `API_PORT` 8906, `SIMULATOR_PORT` 8916), each
+with its own three admin-simulator scenarios.
 
 **Primary mode: switch in place.** Run `python -m run_stack` once — it starts whichever
-profile `config/server_control.load_selected_profile()` last selected (Standby Squad by
+profile `config/server_control.load_selected_profile()` last selected (Response Team by
 default). Use the admin panel's server-control page (`/admin/server`) to switch the running
 profile between the two; the supervisor stops the current profile's processes and restarts
-with the new one — **on that profile's own port**, not the same one (Standby Squad is always
-8905, Firefighting always 8906; see `docs/Admin_Profile_Switch_Investigation.md`, which
+with the new one — **on that profile's own port**, not the same one (Response Team is always
+8907, Firefighting always 8906; see `docs/Admin_Profile_Switch_Investigation.md`, which
 diagnosed and fixed an earlier bug where the browser could be left stranded on the old port
 during this transition). After clicking "switch," the page waits for the old port to stop
 answering and then for the new port to start answering before automatically following you
@@ -38,7 +39,7 @@ profile's admin panel/bot is reachable at a time in this mode.
 **Advanced mode: run both profiles concurrently.** Since the two profiles use distinct
 `API_PORT`/`SIMULATOR_PORT`s and distinct `DB_PATH`s, nothing stops running two independent
 `run_stack.py` supervisors side by side — one admin panel per profile, reachable at the same
-time (`:8905/admin/simulator` and `:8906/admin/simulator`). This needs one extra step:
+time (`:8907/admin/simulator` and `:8906/admin/simulator`). This needs one extra step:
 `config/server_control.py`'s control channel (`status.json`/`command.json`) defaults to one
 shared `data/server_control/` directory, so the second supervisor must be started with its own
 `AGENTSHUB_CONTROL_DIR` (e.g. `AGENTSHUB_CONTROL_DIR=data/server_control_firefighting`), or
@@ -46,41 +47,47 @@ the two instances will overwrite each other's status/command files. Only use thi
 specifically need both profiles live at once (e.g. side-by-side demos); otherwise prefer the
 primary switch-in-place workflow above.
 
-Both dashboard-selectable profiles use `BOT_TOKEN` from `.env`. This is safe in the primary
-switch-in-place workflow because the supervisor fully stops the current bot before starting the
-newly selected profile, so only one Telegram poller exists at a time.
+`profiles.firefighting` uses `BOT_TOKEN` from `.env`; `profiles.response_team` uses its own
+`RESPONSE_TEAM_BOT_TOKEN` (both are still read directly from the process environment, no
+profile indirection beyond the variable name each profile's `BOT_TOKEN_ENV` names).
 
 ## Running a simulation deployment (docs/bar_improves.md Stage 5)
 
 A simulation is not a special in-process mode — it is simply another ordinary deployment
 of the same profile content, with its own `DB_PATH`, `API_PORT`, and `BOT_TOKEN_ENV` (a
-second, separate Telegram bot). `profiles/response_team_sim.py` and
-`profiles/fire_station_sim.py` import their `AGENTS`/`PROTOCOLS`/`EVENT_TYPES`/`AREAS`/
-`EVENT_TYPE_REQUIRED_FIELDS` content unchanged from `profiles/response_team.py` /
-`profiles/fire_station.py` respectively, and override only those deployment-specific
-values plus `PROFILE_NAME` (with a `"(Simulation)"` suffix). This gives the rehearsal
-complete isolation from the live deployment — separate events, precedents, summaries,
-notifications, conversation memory, users, and queue — with zero new isolation code,
-the same way any other two profiles are isolated from each other.
+second, separate Telegram bot). `profiles/fire_station_sim.py` imports its
+`AGENTS`/`PROTOCOLS`/`EVENT_TYPES`/`AREAS`/`EVENT_TYPE_REQUIRED_FIELDS` content unchanged
+from `profiles/fire_station.py`, and overrides only those deployment-specific values plus
+`PROFILE_NAME` (with a `"(Simulation)"` suffix). This gives the rehearsal complete isolation
+from the live deployment — separate events, precedents, summaries, notifications,
+conversation memory, users, and queue — with zero new isolation code, the same way any other
+two profiles are isolated from each other.
 
-**Starting it:** run the simulation profile exactly like any other deployment, e.g.
-`python -m api.app profiles.response_team_sim ...` and `python -m bot.app
-profiles.response_team_sim ...` (or via `run_stack.py`, pointed at the simulation module).
-It listens on its own port (`8917` for the Response Team simulation, `8918` for the Fire
-and Rescue Station simulation) and polls its own bot token
-(`RESPONSE_TEAM_SIM_BOT_TOKEN` / `FIRE_STATION_SIM_BOT_TOKEN` — a real, distinct Telegram
-bot, never the live profile's token). The bot process's own single-instance lock file is
-named from `loaded_profile.db_path` (`bot/app.py`, `bot/background_services.py`'s
-`SingleInstanceLock`), so it is automatically per-deployment too — nothing stops the live
-and simulation bots for the same organization from running concurrently, on two real,
-independent long-polling connections.
+`profiles/response_team.py` has no such `..._sim` twin (docs/responce_improve.md): its own
+SEC_001 admin-simulator scenarios (`sec001_phase1/2/3`) run directly against the one live
+profile module, through the admin simulator's message-kind proxy (`SIMULATOR_PORT` 8915,
+below) — there is no second, separately-deployed `response_team_sim` process. A genuinely
+separate rehearsal deployment of Response Team is still possible the same way any profile can
+be run twice (point two processes at the same module with different `DB_PATH`/`API_PORT`/
+`BOT_TOKEN_ENV` overrides supplied at the process level), it just isn't a second, dedicated
+profile *file* the way Fire and Rescue Station's is.
+
+**Starting Fire and Rescue Station's simulation:** run the simulation profile exactly like any
+other deployment, e.g. `python -m api.app profiles.fire_station_sim ...` and `python -m bot.app
+profiles.fire_station_sim ...` (or via `run_stack.py`, pointed at the simulation module). It
+listens on its own port (`8918`) and polls its own bot token (`FIRE_STATION_SIM_BOT_TOKEN` — a
+real, distinct Telegram bot, never the live profile's token). The bot process's own
+single-instance lock file is named from `loaded_profile.db_path` (`bot/app.py`,
+`bot/background_services.py`'s `SingleInstanceLock`), so it is automatically per-deployment
+too — nothing stops the live and simulation bots for the same organization from running
+concurrently, on two real, independent long-polling connections.
 
 **Provisioning its users:** exactly like any other deployment — `cli/user_admin`, run
 against the *simulation* profile module, never the live one:
 
 ```
-python -m cli.user_admin --profile profiles.response_team_sim add --telegram-id <id> --level viewer|commander
-python -m cli.user_admin --profile profiles.response_team_sim add --telegram-id bot-service --level commander
+python -m cli.user_admin --profile profiles.fire_station_sim add --telegram-id <id> --level viewer|commander
+python -m cli.user_admin --profile profiles.fire_station_sim add --telegram-id bot-service --level commander
 ```
 
 The `bot-service` identity above is required for the simulation's own bot process, exactly
@@ -88,18 +95,17 @@ as described in "The bot's own service identity" below — it is a second, separ
 row, in the simulation's own `users` table, from the live deployment's `bot-service` row.
 
 **Simulation data can never reach the live database.** `DB_PATH` is a distinct SQLite file
-(`data/response_team_sim/response_team_sim_history.db` /
-`data/fire_station_sim/fire_station_sim_history.db` by default) — every event, precedent,
+(`data/fire_station_sim/fire_station_sim_history.db` by default) — every event, precedent,
 summary, notification, conversation turn, and user row a rehearsal produces is written
-there, never to `profiles/response_team.py` / `profiles/fire_station.py`'s own live
-database file. There is no shared table, no shared connection, and no code path that
-writes to two profiles' databases from one request.
+there, never to `profiles/fire_station.py`'s own live database file. There is no shared
+table, no shared connection, and no code path that writes to two profiles' databases from
+one request.
 
 **Participants use the simulation bot.** A real person joins a rehearsal by messaging the
-*simulation* Telegram bot (the one behind `RESPONSE_TEAM_SIM_BOT_TOKEN` /
-`FIRE_STATION_SIM_BOT_TOKEN`), not the live one. Their live registration under the real
-profile is completely untouched by anything that happens in the simulation, since the
-simulation deployment resolves their identity against its own `users` table only.
+*simulation* Telegram bot (the one behind `FIRE_STATION_SIM_BOT_TOKEN`), not the live one.
+Their live registration under the real profile is completely untouched by anything that
+happens in the simulation, since the simulation deployment resolves their identity against
+its own `users` table only.
 
 ## Writing a profile from scratch
 

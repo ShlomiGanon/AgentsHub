@@ -617,21 +617,23 @@ def test_build_from_loaded_profile_defaults_to_no_required_fields_and_injects_un
     assert registry.required_fields_for("unclassified") == ("area",)
 
 
-def test_standby_squad_profile_declares_area_required_for_its_flagged_event_types(
+def test_response_team_profile_declares_area_required_for_its_flagged_event_types(
     monkeypatch, test_core_model, test_sub_model
 ):
     """AREA_FIELD_REGRESSION_CHECK.MD's own root-cause finding: every prior
     test of this mechanism built its own EventTypeRegistry or a hand-built
     SimpleNamespace, never a real profile module itself — so nothing asserted what
     the actually-deployed profile declares. Assert directly against the
-    real, loaded profiles.standby_squad module (Profile Split Plan, Step 3 --
-    repointed from the now-deleted profiles.demo), not a test double."""
-    monkeypatch.setenv("BOT_TOKEN", "token")
+    real, loaded profiles.response_team module (Profile Split Plan, Step 3 --
+    repointed from the now-deleted profiles.demo, then docs/responce_improve.md
+    -- repointed again from the now-deleted profiles.standby_squad), not a
+    test double."""
+    monkeypatch.setenv("RESPONSE_TEAM_BOT_TOKEN", "token")
 
     from profiles.loader import load_profile
 
-    loaded = load_profile("profiles.standby_squad", core_model=test_core_model, sub_model=test_sub_model)
+    loaded = load_profile("profiles.response_team", core_model=test_core_model, sub_model=test_sub_model)
     registry = build_event_type_registry(loaded)
 
     assert registry.required_fields_for("security_incident") == ("area",)
-    assert registry.required_fields_for("emergency_dispatch") == ("area",)
+    assert registry.required_fields_for("force_dispatch") == ("area",)

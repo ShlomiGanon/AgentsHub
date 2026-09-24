@@ -37,7 +37,7 @@ python -m pip install -r requirements-dev.txt
 
 ## Quick start
 
-The commands below are PowerShell commands and must be run from the repository root. The included `profiles.standby_squad` profile listens on `127.0.0.1:8905` and stores its database in the operating system's temporary directory.
+The commands below are PowerShell commands and must be run from the repository root. The included `profiles.response_team` profile listens on `127.0.0.1:8907` and stores its database in the operating system's temporary directory.
 
 ### 1. Configure the environment
 
@@ -72,8 +72,8 @@ Profiles contain only environment-variable names, never secret values.
 A new deployment has no users. Register the first human commander and the bot's service identity before starting the Telegram frontend:
 
 ```powershell
-python -m cli.user_admin --profile profiles.standby_squad add --telegram-id <your-telegram-id> --level commander
-python -m cli.user_admin --profile profiles.standby_squad add --telegram-id bot-service --level commander
+python -m cli.user_admin --profile profiles.response_team add --telegram-id <your-telegram-id> --level commander
+python -m cli.user_admin --profile profiles.response_team add --telegram-id bot-service --level commander
 ```
 
 Use the human user's numeric Telegram ID for `<your-telegram-id>`. The `bot-service` row is an internal service identity and must remain at commander level. If you only use a terminal client, it provisions its own temporary test identity and ensures `bot-service` exists automatically.
@@ -83,15 +83,15 @@ This registration is not sufficient by itself — `bot-service` is a fixed, publ
 User administration is available from the host CLI (below), and, if configured, the admin web panel ("Admin web panel (optional)" further down):
 
 ```powershell
-python -m cli.user_admin --profile profiles.standby_squad list
-python -m cli.user_admin --profile profiles.standby_squad update --telegram-id <id> --level viewer
-python -m cli.user_admin --profile profiles.standby_squad remove --telegram-id <id>
+python -m cli.user_admin --profile profiles.response_team list
+python -m cli.user_admin --profile profiles.response_team update --telegram-id <id> --level viewer
+python -m cli.user_admin --profile profiles.response_team remove --telegram-id <id>
 ```
 
 ### 3. Start the API
 
 ```powershell
-python -m api.app profiles.standby_squad
+python -m api.app profiles.response_team
 ```
 
 Keep this process running. The API binds to `127.0.0.1` by default and initializes or migrates the profile's SQLite database during startup. Use `--host` only when the deployment has appropriate network and TLS controls.
@@ -106,14 +106,14 @@ From another terminal with the environment loaded, verify the running deployment
 
 ```powershell
 Invoke-RestMethod `
-  -Uri http://127.0.0.1:8905/SYSTEM `
+  -Uri http://127.0.0.1:8907/SYSTEM `
   -Headers @{ "X-Identity" = "<your-telegram-id>" }
 ```
 
 For a production-style local process, use one Waitress process and at least 16 threads:
 
 ```powershell
-python -m api.app profiles.standby_squad --server waitress --threads 16
+python -m api.app profiles.response_team --server waitress --threads 16
 ```
 
 ### 4. Start a client
@@ -123,7 +123,7 @@ For the Telegram frontend, open another terminal, activate the virtual environme
 ```powershell
 .\.venv\Scripts\Activate.ps1
 .\load-env.ps1
-python -m bot.app profiles.standby_squad
+python -m bot.app profiles.response_team
 ```
 
 The API must already be running. The bot connects to the deployment-wide `API_PORT` from `.env`, validates `BOT_TOKEN`, and exits if another bot process already owns the same deployment lock.
@@ -131,8 +131,8 @@ The API must already be running. The bot connects to the deployment-wide `API_PO
 For local end-to-end testing without Telegram, use one of the terminal clients against the running API. They create the required test identity when they start and remove that identity when they exit normally:
 
 ```powershell
-python -m tools.terminal_client_commander --profile profiles.standby_squad
-python -m tools.terminal_client_viewer --profile profiles.standby_squad
+python -m tools.terminal_client_commander --profile profiles.response_team
+python -m tools.terminal_client_viewer --profile profiles.response_team
 ```
 
 The terminal clients are the one-to-one test simulator for Telegram. Both
@@ -146,7 +146,7 @@ Stop any foreground process with `Ctrl+C`. The SQLite database remains on disk, 
 
 ### The two profiles: Standby Squad and Firefighting (docs/Profile_Split_Plan.md)
 
-The Quick start steps above run `profiles.standby_squad` — the integrated command-and-control
+The Quick start steps above run `profiles.response_team` — the integrated command-and-control
 deployment combining visual surveillance, tactical drone fleet management, readiness-team
 status, and friendly-forces dispatch, with role-based Telegram keyboards (Commander vs Viewer)
 and brief operational Hebrew responses. For the full operational guide, see
@@ -174,7 +174,7 @@ python -m bot.app profiles.firefighting
 A browser-based, login-gated administration console, served by the same API process at `/admin` — disabled by default (no `/admin` route exists at all) unless both `ADMIN_USERNAME` and `ADMIN_PASSWORD` are set; once they are, `ADMIN_SESSION_SECRET` is also required (fails startup loudly if missing). The menu has separate, task-oriented pages for profiles, protocols, events, users, Telegram groups, server management, and simulations. Users and groups are presented as complete editable lists; protocols are editable in place; the events page shows recent work, pending decisions, and notifications; technical JSON is secondary feedback rather than the primary interface. Live operational controls call the public endpoints with a registered Telegram identity selected for the admin session, so normal `X-Identity` permissions and error responses are preserved. See step 1's env var list and `.env.example` for all admin-related variables and how to generate `ADMIN_SESSION_SECRET`.
 
 ```
-http://127.0.0.1:8905/admin/login
+http://127.0.0.1:8907/admin/login
 ```
 
 Sign in and you get a list of every registered user (add, change level, or remove), plus a button to register/re-register the bot's own `bot-service` identity — the same `persistence.write_user` call `cli.user_admin add`/`update` makes, not a separate mechanism. Sessions time out after `ADMIN_SESSION_TIMEOUT_MINUTES` (default 15) of inactivity; repeated failed logins from one source IP lock that IP out for `ADMIN_LOGIN_LOCKOUT_MINUTES` after `ADMIN_LOGIN_MAX_ATTEMPTS` attempts.
@@ -184,7 +184,7 @@ Sign in and you get a list of every registered user (add, change level, or remov
 ### Common startup failures
 
 - `required environment variable ... is not set`: activate the intended terminal environment and run `.\load-env.ps1` again.
-- `could not import profile module`: run the command from the repository root and pass a dotted module name such as `profiles.standby_squad`, not a file path.
+- `could not import profile module`: run the command from the repository root and pass a dotted module name such as `profiles.response_team`, not a file path.
 - Connection refused from the bot or a terminal client: start `api.app` first and confirm that the client and API use the same profile and port.
 - HTTP `401`: register that exact identity with `cli.user_admin` against the same profile.
 - Telegram token validation failure: replace the example `BOT_TOKEN` in `.env` with a real token and reload the environment.

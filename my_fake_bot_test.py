@@ -1,6 +1,6 @@
 """Quick test: try to impersonate bot-service against the local API.
 
-Run this WHILE `python -m api.app profiles.standby_squad` is running.
+Run this WHILE `python -m api.app profiles.response_team` is running.
 Usage: python test_impersonation.py
 """
 

@@ -1,19 +1,27 @@
 """Acceptance scenarios for the two operational profiles, run offline and
 deterministically through the real API with the model boundary faked
-(docs/bar_improves.md Stage 6). These verify pipeline wiring — classification
+(docs/bar_improves.md Stage 6; the SEC scenarios below were retargeted to
+profiles/response_team.py's rebuilt protocol/agent/tool set by
+docs/responce_improve.md). These verify pipeline wiring — classification
 routing, required-field gating, holds, approval, persisted fields,
 notifications — never model quality; nothing here asserts model wording.
 
 The Main/Insights Agents are always scripted stand-ins (`ScriptedAgent`, the
 same technique every other API-level test in this suite uses). The
-participating specialist agents (`security_ops_agent`, `surveillance_agent`,
-`roster_agent`, `dispatch_agent`, `hazmat_agent`) are REAL, real profile
-instances, invoked through a small keyword-dispatch fake `crewai.Agent`
+participating specialist agents (`roster_agent`, `surveillance_agent`,
+`neighboring_forces_agent`, `dispatch_agent`, `hazmat_agent`) are REAL, real
+profile instances, invoked through a small keyword-dispatch fake `crewai.Agent`
 local to this file only (not the shared `tests/api_fakes.py` fixture, which
 always returns one fixed canned string regardless of task) — this is what
 lets a step's persisted `result_text` deterministically reflect the task it
 was actually given, so a scenario can assert e.g. "the step result says a
 dispatch request was recorded" without depending on a real model's wording.
+
+Every profiles/response_team.py protocol declares `approval_flag=False`
+(docs/responce_improve.md), so none of the SEC scenarios below exercise an
+approval hold the way the deleted profiles/standby_squad.py's
+`external_force_response` protocol once did -- `query_situational_picture`
+below instead exercises this profile's one three-agent protocol.
 """
 
 import dataclasses
@@ -160,6 +168,22 @@ def _two_agent_formulation(first_agent: str, first_task: str, second_agent: str,
     )
 
 
+def _three_agent_formulation(
+    first_agent: str, first_task: str, second_agent: str, second_task: str, third_agent: str, third_task: str
+) -> str:
+    import json
+
+    return json.dumps(
+        {
+            "steps": [
+                {"step_id": "s1", "agent_name": first_agent, "task": first_task, "depends_on": [], "required_event_fields": []},
+                {"step_id": "s2", "agent_name": second_agent, "task": second_task, "depends_on": [], "required_event_fields": []},
+                {"step_id": "s3", "agent_name": third_agent, "task": third_task, "depends_on": [], "required_event_fields": []},
+            ]
+        }
+    )
+
+
 _VERDICT_SUCCESS = "VERDICT: success\nREASONING: matches expected output"
 
 
@@ -208,7 +232,7 @@ def test_scenario_1_absence_without_interval_then_reply_fills_it_and_resumes(tmp
     agent._dispatch.update(
         {
             "RISK_SCORE": "RISK_SCORE: 0.1\nREASON: routine",
-            "Choose the protocol": "SELECTED: attendance_update\nREASON: fits",
+            "Choose the protocol": "SELECTED: record_attendance\nREASON: fits",
             "participating in the": _single_agent_formulation("roster_agent", "record michael's reported absence"),
             "VERDICT:": _VERDICT_SUCCESS,
         }
@@ -217,22 +241,22 @@ def test_scenario_1_absence_without_interval_then_reply_fills_it_and_resumes(tmp
 
     assert resumed.outcome == "succeeded"
     event = ctx.deps.persistence.fetch_event(event_id)
-    assert event["selected_protocol"] == "attendance_update"
+    assert event["selected_protocol"] == "record_attendance"
     assert event["availability_start"] == "2026-09-15T00:00:00"
     assert event["availability_end"] == "2026-09-17T00:00:00"
 
 
-def test_scenario_2_heavy_equipment_near_the_western_gate(tmp_path, teardown_ctx):
+def test_scenario_2_camera_interference_near_the_east_fence(tmp_path, teardown_ctx):
     agent = ScriptedAgent(
         {
             "Extract this operational event": _extraction(
-                classification="perimeter_observation", area="west_gate",
-                description="heavy equipment parked near the western gate",
+                classification="camera_status", area="east_fence", entities=["CAM-01"],
+                description="CAM-01 shows intermittent reception interference",
             ),
-            "RISK_SCORE": "RISK_SCORE: 0.2\nREASON: routine observation",
-            "Choose the protocol": "SELECTED: perimeter_check\nREASON: unconfirmed perimeter observation",
+            "RISK_SCORE": "RISK_SCORE: 0.2\nREASON: routine equipment observation",
+            "Choose the protocol": "SELECTED: update_camera_status\nREASON: camera operating-condition report",
             "participating in the": _single_agent_formulation(
-                "security_ops_agent", "log the heavy equipment observation at west_gate and notify the team"
+                "surveillance_agent", "record CAM-01's status/observation at east_fence"
             ),
             "VERDICT:": _VERDICT_SUCCESS,
         }
@@ -240,13 +264,13 @@ def test_scenario_2_heavy_equipment_near_the_western_gate(tmp_path, teardown_ctx
     ctx = _sec_ctx(tmp_path, teardown_ctx, agent)
     client = build_app(ctx).test_client()
 
-    event_id = _submit(client, VIEWER_IDENTITY, "heavy equipment parked near the western gate")
+    event_id = _submit(client, VIEWER_IDENTITY, "CAM-01 shows intermittent reception interference")
     ctx.queue.wait_until_idle()
 
     event = ctx.deps.persistence.fetch_event(event_id)
-    assert event["classification"] == "perimeter_observation"
-    assert event["area"] == "west_gate"
-    assert event["selected_protocol"] == "perimeter_check"
+    assert event["classification"] == "camera_status"
+    assert event["area"] == "east_fence"
+    assert event["selected_protocol"] == "update_camera_status"
     assert job_status(ctx, event_id)["status"] == "succeeded"
 
     # Visible to a commander's history question — the history agent answers
@@ -259,24 +283,24 @@ def test_scenario_3_team_member_in_transit(tmp_path, teardown_ctx):
     agent = ScriptedAgent(
         {
             "Extract this operational event": _extraction(
-                classification="team_status", area="sector_b", description="Gil is travelling to sector B",
+                classification="team_movement", area="east_orchards", description="Gil is travelling to east_orchards",
             ),
             "RISK_SCORE": "RISK_SCORE: 0.1\nREASON: routine",
-            "Choose the protocol": "SELECTED: team_movement_log\nREASON: own movement report",
-            "participating in the": _single_agent_formulation("security_ops_agent", "log Gil's movement to sector_b"),
+            "Choose the protocol": "SELECTED: report_team_movement\nREASON: own movement report",
+            "participating in the": _single_agent_formulation("roster_agent", "record Gil's movement to east_orchards"),
             "VERDICT:": _VERDICT_SUCCESS,
         }
     )
     ctx = _sec_ctx(tmp_path, teardown_ctx, agent)
     client = build_app(ctx).test_client()
 
-    event_id = _submit(client, "gil", "Gil: on my way to sector B")
+    event_id = _submit(client, "gil", "Gil: on my way to the eastern orchards")
     ctx.queue.wait_until_idle()
 
     event = ctx.deps.persistence.fetch_event(event_id)
-    assert event["classification"] == "team_status"
-    assert event["area"] == "sector_b"
-    assert event["selected_protocol"] == "team_movement_log"
+    assert event["classification"] == "team_movement"
+    assert event["area"] == "east_orchards"
+    assert event["selected_protocol"] == "report_team_movement"
     assert job_status(ctx, event_id)["status"] == "succeeded"
 
 
@@ -284,22 +308,23 @@ def test_scenario_4_two_cameras_in_one_message(tmp_path, teardown_ctx):
     agent = ScriptedAgent(
         {
             "Extract this operational event": _extraction(
-                classification="surveillance_fault", area="control_room", entities=["CAM-03", "CAM-04"],
-                description="CAM-03 and CAM-04 are offline",
+                classification="camera_status", area="east_fence", entities=["CAM-01", "CAM-02"],
+                description="CAM-01 and CAM-02 are offline",
             ),
             "RISK_SCORE": "RISK_SCORE: 0.2\nREASON: equipment fault",
-            "Choose the protocol": "SELECTED: surveillance_fault_response\nREASON: two cameras reported offline",
+            "Choose the protocol": "SELECTED: update_camera_status\nREASON: two cameras reported offline",
             # This architecture formulates exactly one step per PARTICIPATING
             # agent (orchestrator.reasoning.formulate_tasks rejects more than
             # one step for the same agent) — a real model handling this task
-            # would call log_camera_fault twice within its one step, once per
-            # camera identifier, exactly as agents/response_team_agents.py's
-            # SurveillanceFaultAgent system prompt instructs. What this test
+            # would call update_camera_status twice within its one step, once
+            # per camera identifier, exactly as
+            # profiles.response_team.ResponseTeamSurveillanceAgent's
+            # update_camera_status tool description instructs. What this test
             # can actually observe offline is the guarantee upstream of that:
             # extraction captured both identifiers, and the one formulated
             # task names both.
             "participating in the": _single_agent_formulation(
-                "surveillance_agent", "log a fault for CAM-03 and a fault for CAM-04, then request a technician"
+                "surveillance_agent", "record the status update for CAM-01 and the status update for CAM-02"
             ),
             "VERDICT:": _VERDICT_SUCCESS,
         }
@@ -307,16 +332,16 @@ def test_scenario_4_two_cameras_in_one_message(tmp_path, teardown_ctx):
     ctx = _sec_ctx(tmp_path, teardown_ctx, agent)
     client = build_app(ctx).test_client()
 
-    event_id = _submit(client, VIEWER_IDENTITY, "CAM-03 and CAM-04 are offline")
+    event_id = _submit(client, VIEWER_IDENTITY, "CAM-01 and CAM-02 are offline")
     ctx.queue.wait_until_idle()
 
     event = ctx.deps.persistence.fetch_event(event_id)
-    assert event["classification"] == "surveillance_fault"
-    assert set(event["entities"]) == {"CAM-03", "CAM-04"}
-    assert event["selected_protocol"] == "surveillance_fault_response"
+    assert event["classification"] == "camera_status"
+    assert set(event["entities"]) == {"CAM-01", "CAM-02"}
+    assert event["selected_protocol"] == "update_camera_status"
     [step] = event["steps"]
     assert step["agent_name"] == "surveillance_agent"
-    assert "CAM-03" in step["task_text"] and "CAM-04" in step["task_text"]
+    assert "CAM-01" in step["task_text"] and "CAM-02" in step["task_text"]
     assert job_status(ctx, event_id)["status"] == "succeeded"
 
 
@@ -324,95 +349,96 @@ def test_scenario_5_cut_communications_cable(tmp_path, teardown_ctx):
     agent = ScriptedAgent(
         {
             "Extract this operational event": _extraction(
-                classification="surveillance_fault", area="control_room", entities=["CAM-03"],
+                classification="camera_status", area="east_fence", entities=["CAM-01"],
                 description="cable physically cut, camera offline",
             ),
             "RISK_SCORE": "RISK_SCORE: 0.2\nREASON: equipment fault",
-            "Choose the protocol": "SELECTED: surveillance_fault_response\nREASON: physically cut camera cable",
-            "participating in the": _single_agent_formulation("surveillance_agent", "log the fault for CAM-03"),
+            "Choose the protocol": "SELECTED: update_camera_status\nREASON: physically cut camera cable",
+            "participating in the": _single_agent_formulation("surveillance_agent", "record the status update for CAM-01"),
             "VERDICT:": _VERDICT_SUCCESS,
         }
     )
     ctx = _sec_ctx(tmp_path, teardown_ctx, agent)
     client = build_app(ctx).test_client()
 
-    event_id = _submit(client, VIEWER_IDENTITY, "CAM-03's cable looks physically cut, they think someone did it")
+    event_id = _submit(client, VIEWER_IDENTITY, "CAM-01's cable looks physically cut, they think someone did it")
     ctx.queue.wait_until_idle()
 
     event = ctx.deps.persistence.fetch_event(event_id)
-    assert event["classification"] == "surveillance_fault"
-    assert "CAM-03" in event["entities"]
+    assert event["classification"] == "camera_status"
+    assert "CAM-01" in event["entities"]
     # The physical observation, not the reporter's suspicion, is what is recorded as description.
     assert event["description"] == "cable physically cut, camera offline"
     assert job_status(ctx, event_id)["status"] == "succeeded"
 
 
-def test_scenario_6_external_force_vehicle_approved(tmp_path, teardown_ctx):
+def test_scenario_6_ambulance_dispatched_for_a_casualty(tmp_path, teardown_ctx):
+    """docs/responce_improve.md: every profiles/response_team.py protocol declares
+    approval_flag=False -- unlike the deleted profiles/standby_squad.py's
+    external_force_response, a viewer's own force-dispatch report runs immediately,
+    with no commander approval hold."""
+
     agent = ScriptedAgent(
         {
             "Extract this operational event": _extraction(
-                classification="external_force_observation", area="east_gate",
-                description="unmarked vehicle not belonging to the team observed near east gate",
+                classification="force_dispatch", area="expansion_neighborhood",
+                description="casualty reported near the expansion neighborhood, ambulance needed",
             ),
-            "RISK_SCORE": "RISK_SCORE: 0.8\nREASON: unidentified external force",
-            "Choose the protocol": "SELECTED: external_force_response\nREASON: external force observed",
-        }
-    )
-    ctx = _sec_ctx(tmp_path, teardown_ctx, agent)
-    client = build_app(ctx).test_client()
-
-    event_id = _submit(client, VIEWER_IDENTITY, "unmarked vehicle near east gate, not one of ours")
-    ctx.queue.wait_until_idle()
-
-    status = job_status(ctx, event_id)
-    assert status["status"] == "held_for_approval"
-    assert status["reason"] == "flagged_protocol"
-    assert ctx.deps.persistence.fetch_event(event_id)["steps"] in ([], None)  # nothing executed before approval
-
-    agent._dispatch.update(
-        {
+            "RISK_SCORE": "RISK_SCORE: 0.8\nREASON: casualty reported",
+            "Choose the protocol": "SELECTED: dispatch_neighboring_force\nREASON: casualty needs an ambulance",
             "participating in the": _single_agent_formulation(
-                "security_ops_agent", "log the observation and request friendly-force dispatch to east_gate"
+                "neighboring_forces_agent", "dispatch an ambulance to expansion_neighborhood"
             ),
             "VERDICT:": _VERDICT_SUCCESS,
         }
     )
-    resp = client.post(f"/Approve/{event_id}", headers=auth_headers(COMMANDER_IDENTITY), json={"decision": "approved"})
-    assert resp.status_code == 202
+    ctx = _sec_ctx(tmp_path, teardown_ctx, agent)
+    client = build_app(ctx).test_client()
+
+    event_id = _submit(client, VIEWER_IDENTITY, "casualty near the expansion neighborhood, we need an ambulance")
     ctx.queue.wait_until_idle()
 
     final_status = job_status(ctx, event_id)
-    assert final_status["status"] == "succeeded"
+    assert final_status["status"] == "succeeded"  # never held — force_dispatch's approval_flag is False
     event = ctx.deps.persistence.fetch_event(event_id)
+    assert event["classification"] == "force_dispatch"
+    assert event["area"] == "expansion_neighborhood"
+    assert event["selected_protocol"] == "dispatch_neighboring_force"
     [step] = event["steps"]
     assert "recorded" in step["result_text"]
 
 
-def test_scenario_6_variant_external_force_vehicle_rejected(tmp_path, teardown_ctx):
+def test_scenario_6_variant_combined_situational_picture(tmp_path, teardown_ctx):
+    """query_situational_picture is this profile's one three-agent protocol
+    (roster + surveillance + neighboring forces) — the SEC equivalent of the
+    FIRE scenario below's two-agent hazmat_response, and of the deleted
+    profiles/standby_squad.py's overall_situational_picture (two agents only)."""
+
     agent = ScriptedAgent(
         {
-            "Extract this operational event": _extraction(
-                classification="external_force_observation", area="east_gate",
-                description="unmarked vehicle not belonging to the team observed near east gate",
+            "Extract this operational event": _extraction(classification="situational_query"),
+            "RISK_SCORE": "RISK_SCORE: 0.1\nREASON: routine status request",
+            "Choose the protocol": "SELECTED: query_situational_picture\nREASON: combined snapshot requested",
+            "participating in the": _three_agent_formulation(
+                "roster_agent", "report the current team availability",
+                "surveillance_agent", "report the current surveillance overview",
+                "neighboring_forces_agent", "list the current neighboring-force dispatches",
             ),
-            "RISK_SCORE": "RISK_SCORE: 0.8\nREASON: unidentified external force",
-            "Choose the protocol": "SELECTED: external_force_response\nREASON: external force observed",
+            "VERDICT:": _VERDICT_SUCCESS,
         }
     )
     ctx = _sec_ctx(tmp_path, teardown_ctx, agent)
     client = build_app(ctx).test_client()
 
-    event_id = _submit(client, VIEWER_IDENTITY, "unmarked vehicle near east gate, not one of ours")
+    event_id = _submit(client, COMMANDER_IDENTITY, "what's our combined situational picture right now?")
     ctx.queue.wait_until_idle()
-    assert job_status(ctx, event_id)["status"] == "held_for_approval"
 
-    resp = client.post(f"/Approve/{event_id}", headers=auth_headers(COMMANDER_IDENTITY), json={"decision": "rejected"})
-    assert resp.status_code == 200
-    assert resp.get_json()["status"] == "declined"
-
+    assert job_status(ctx, event_id)["status"] == "succeeded"
     event = ctx.deps.persistence.fetch_event(event_id)
-    assert event["outcome"] == "declined"
-    assert event["steps"] in ([], None)  # no tool executed
+    assert event["selected_protocol"] == "query_situational_picture"
+    assert {step["agent_name"] for step in event["steps"]} == {
+        "roster_agent", "surveillance_agent", "neighboring_forces_agent",
+    }
 
 
 # == FIRE scenario (profiles.fire_station) ===================================
@@ -515,25 +541,25 @@ def test_scenario_8_extraction_times_out_once_then_succeeds(tmp_path, teardown_c
     agent = _TimeoutOnceThenScriptedAgent(
         {
             "Extract this operational event": _extraction(
-                classification="team_status", area="sector_a", description="Gil is on site",
+                classification="team_movement", area="access_road", description="Gil is on site",
             ),
             "RISK_SCORE": "RISK_SCORE: 0.1\nREASON: routine",
-            "Choose the protocol": "SELECTED: team_movement_log\nREASON: own movement report",
-            "participating in the": _single_agent_formulation("security_ops_agent", "log Gil's presence at sector_a"),
+            "Choose the protocol": "SELECTED: report_team_movement\nREASON: own movement report",
+            "participating in the": _single_agent_formulation("roster_agent", "record Gil's presence at access_road"),
             "VERDICT:": _VERDICT_SUCCESS,
         }
     )
     ctx = _sec_ctx(tmp_path, teardown_ctx, agent)
     client = build_app(ctx).test_client()
 
-    event_id = _submit(client, "gil", "Gil: at sector A")
+    event_id = _submit(client, "gil", "Gil: at the access road")
     ctx.queue.wait_until_idle()
 
     assert agent._extraction_attempts == 2  # exactly one retry
     status = job_status(ctx, event_id)
     assert status["status"] == "succeeded"
     event = ctx.deps.persistence.fetch_event(event_id)
-    assert event["classification"] == "team_status"
+    assert event["classification"] == "team_movement"
 
 
 def test_scenario_9_malformed_optional_field_proceeds_with_it_null(tmp_path, teardown_ctx):
@@ -541,8 +567,8 @@ def test_scenario_9_malformed_optional_field_proceeds_with_it_null(tmp_path, tea
 
     malformed_extraction = json.dumps(
         {
-            "classification": "perimeter_observation", "area": "sector_c",
-            "entities": [], "description": "unusual activity reported near sector C",
+            "classification": "security_incident", "area": "south_corner",
+            "entities": [], "description": "unusual activity reported near the south corner",
             # Stage 1: severity is malformed (an object, not a string) — the
             # report must still proceed, with severity dropped to null.
             "severity": {"level": "unclear"},
@@ -553,9 +579,9 @@ def test_scenario_9_malformed_optional_field_proceeds_with_it_null(tmp_path, tea
         {
             "Extract this operational event": malformed_extraction,
             "RISK_SCORE": "RISK_SCORE: 0.2\nREASON: routine",
-            "Choose the protocol": "SELECTED: perimeter_check\nREASON: unconfirmed perimeter observation",
+            "Choose the protocol": "SELECTED: report_security_incident\nREASON: unconfirmed suspicious activity",
             "participating in the": _single_agent_formulation(
-                "security_ops_agent", "log the observation at sector_c and notify the team"
+                "surveillance_agent", "log the observation at south_corner; no drone dispatch needed"
             ),
             "VERDICT:": _VERDICT_SUCCESS,
         }
@@ -563,11 +589,11 @@ def test_scenario_9_malformed_optional_field_proceeds_with_it_null(tmp_path, tea
     ctx = _sec_ctx(tmp_path, teardown_ctx, agent)
     client = build_app(ctx).test_client()
 
-    event_id = _submit(client, VIEWER_IDENTITY, "unusual activity reported near sector C")
+    event_id = _submit(client, VIEWER_IDENTITY, "unusual activity reported near the south corner")
     ctx.queue.wait_until_idle()
 
     status = job_status(ctx, event_id)
     assert status["status"] == "succeeded"  # not failed — the malformed field was dropped, not the report
     event = ctx.deps.persistence.fetch_event(event_id)
-    assert event["classification"] == "perimeter_observation"
+    assert event["classification"] == "security_incident"
     assert event["severity"] is None

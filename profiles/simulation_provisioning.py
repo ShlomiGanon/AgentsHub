@@ -17,6 +17,7 @@ operator's later edits (a simulation user's full name, a simulation group's
 label or promoted chat ID) survive every subsequent restart.
 """
 
+import importlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -58,12 +59,54 @@ def ensure_simulation_entities(persistence: "PersistenceInterface", loaded_profi
 
     registered_roster_members, newly_approved_rosters = _ensure_roster_memberships(loaded_profile)
 
+    _run_operational_seed(loaded_profile)
+
     return ProvisioningResult(
         created_users=tuple(created_users),
         created_groups=tuple(created_groups),
         registered_roster_members=registered_roster_members,
         newly_approved_rosters=newly_approved_rosters,
     )
+
+
+def _run_operational_seed(loaded_profile: "LoadedProfile") -> None:
+    """Optional extension point (docs/responce_improve.md's provisioning
+    stage): a profile module may declare a module-level `OPERATIONAL_SEED`
+    callable (no arguments) doing its own "create if missing, never touch if
+    present" seeding of profile-owned operational state that isn't a
+    simulation user/group/roster -- e.g. `profiles.response_team`'s
+    cameras/drones and today's attendance cycle. Absent for every profile
+    that doesn't declare it (every existing profile/fixture), so this is a
+    no-op for all of them.
+
+    Resolved via `importlib.import_module(loaded_profile.module_path)`
+    (a dynamic, string-keyed import already used identically by
+    `profiles.loader._import_profile_module`) rather than a static import of
+    any specific profile module, so this shared routine never names or
+    imports a specific profile -- keeping the "new persistence module(s) ...
+    imported only by Response Team agents" architecture rule intact even
+    though the *call* happens from here.
+
+    `module_path` is read via `getattr` (default `None`) and a missing/
+    unimportable module is treated as "nothing to seed", not an error --
+    several tests exercise this routine against a hand-built `SimpleNamespace`
+    standing in for a real `LoadedProfile` (predating this field, same as
+    every other optional `LoadedProfile` attribute read via `getattr`
+    elsewhere in this package), and a real `LoadedProfile` always carries a
+    module that already imported successfully during `profiles.loader.
+    load_profile` itself.
+    """
+
+    module_path = getattr(loaded_profile, "module_path", None)
+    if not module_path:
+        return
+    try:
+        module = importlib.import_module(module_path)
+    except ImportError:
+        return
+    seed = getattr(module, "OPERATIONAL_SEED", None)
+    if seed is not None:
+        seed()
 
 
 def _ensure_roster_memberships(

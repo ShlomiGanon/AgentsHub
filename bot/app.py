@@ -1147,7 +1147,7 @@ def main(argv: list[str] | None = None) -> None:
     """One of the three real entry points (with `api.app.main`, `cli.user_admin.main`) that reads `os.environ` for model-tier config — everything below it takes already-resolved `TierM..."""
 
     parser = argparse.ArgumentParser(description="Run the Telegram bot frontend for one deployment (work_plan.md §8).")
-    parser.add_argument("profile_module", help="dotted module path of the profile to run, e.g. profiles.standby_squad")
+    parser.add_argument("profile_module", help="dotted module path of the profile to run, e.g. profiles.response_team")
     args = parser.parse_args(argv)
 
     try:

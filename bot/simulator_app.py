@@ -317,7 +317,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description="Run the simulation-mode bot process for one deployment (docs/bot_simulation_mode_design.md)."
     )
-    parser.add_argument("profile_module", help="dotted module path of the profile to run, e.g. profiles.standby_squad")
+    parser.add_argument("profile_module", help="dotted module path of the profile to run, e.g. profiles.response_team")
     args = parser.parse_args(argv)
 
     try:

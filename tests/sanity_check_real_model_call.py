@@ -211,7 +211,7 @@ def intent_check() -> int:
         return 1
 
     from orchestrator.main_agent import classify_intent, construct_core_agents
-    from profiles.standby_squad import PROTOCOLS
+    from profiles.response_team import PROTOCOLS
 
     main_agent = construct_core_agents(base_config)["main_agent"]
     failures = []

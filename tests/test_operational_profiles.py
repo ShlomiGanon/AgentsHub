@@ -1,7 +1,7 @@
-"""Verifies profiles/response_team.py and profiles/fire_station.py (docs/bar_improves.md
-Stage 4): each profile loads and validates through profiles.loader.load_profile, exposes
-exactly its declared content, has no cross-organization leakage, and every side-effecting
-tool declares idempotency as specified."""
+"""Verifies profiles/response_team.py (docs/responce_improve.md) and profiles/fire_station.py
+(docs/bar_improves.md Stage 4): each profile loads and validates through
+profiles.loader.load_profile, exposes exactly its declared content, has no cross-organization
+leakage, and every side-effecting tool declares idempotency as specified."""
 
 import pytest
 
@@ -59,31 +59,35 @@ def test_fire_station_profile_loads_and_validates(fire_profile):
 
 def test_response_team_exposes_exactly_its_declared_event_types(sec_profile):
     assert set(sec_profile.event_types) == {
-        "perimeter_observation",
-        "external_force_observation",
-        "surveillance_fault",
-        "team_status",
         "attendance",
+        "camera_status",
+        "security_incident",
+        "force_dispatch",
+        "team_movement",
+        "situational_query",
+        "incident_summary",
         "human_activation",  # injected automatically by every profile
     }
 
 
 def test_response_team_exposes_exactly_its_declared_areas(sec_profile):
     assert set(sec_profile.areas) == {
-        "west_gate", "east_gate", "sector_a", "sector_b", "sector_c", "perimeter_fence", "control_room",
+        "west_gate", "east_gate", "east_fence", "east_orchards", "expansion_neighborhood",
+        "old_public_building", "south_corner", "access_road", "drones_warehouse",
     }
 
 
 def test_response_team_exposes_exactly_its_declared_agents(sec_profile):
     assert {agent.name for agent in sec_profile.agents} == {
-        "security_ops_agent", "surveillance_agent", "roster_agent",
+        "roster_agent", "surveillance_agent", "neighboring_forces_agent",
     }
 
 
 def test_response_team_exposes_exactly_its_declared_protocols(sec_profile):
     assert {protocol.name for protocol in sec_profile.protocols} == {
-        "perimeter_check", "external_force_response", "surveillance_fault_response",
-        "team_movement_log", "attendance_update", "drone_recall",
+        "record_attendance", "update_camera_status", "report_security_incident",
+        "dispatch_neighboring_force", "report_team_movement", "query_situational_picture",
+        "query_incident_summary",
     }
 
 
@@ -118,13 +122,13 @@ def test_no_fire_protocol_or_tool_name_exists_in_the_sec_profile(sec_profile, fi
     fire_protocol_names = {protocol.name for protocol in fire_profile.protocols}
     fire_tool_names = set(_tools_by_name(fire_profile))
 
-    # attendance_update/record_availability/roster_agent are intentionally shared
-    # (both profiles report attendance the same way) — everything else must not overlap.
-    shared_protocols = {"attendance_update"}
-    shared_tools = {"record_availability"}
-
-    assert (fire_protocol_names - shared_protocols).isdisjoint(sec_protocol_names - shared_protocols)
-    assert (fire_tool_names - shared_tools).isdisjoint(sec_tool_names - shared_tools)
+    # docs/responce_improve.md: profiles/response_team.py's roster agent is now its own
+    # profile-owned ResponseTeamRosterAgent, not the shared agents.RosterAgent
+    # profiles/fire_station.py still uses -- the two profiles no longer share any
+    # protocol or tool name at all (only the agent *name* "roster_agent" coincides;
+    # see test_sec_and_fire_agent_names_do_not_collide_outside_the_shared_roster_agent).
+    assert fire_protocol_names.isdisjoint(sec_protocol_names)
+    assert fire_tool_names.isdisjoint(sec_tool_names)
 
 
 def test_no_sec_protocol_or_tool_name_exists_in_the_fire_profile(sec_profile, fire_profile):
@@ -144,14 +148,14 @@ def test_sec_and_fire_agent_names_do_not_collide_outside_the_shared_roster_agent
 
 
 _EXPECTED_IDEMPOTENCY = {
-    # SEC
-    "log_observation": True,
-    "notify_team": False,
-    "request_friendly_force_dispatch": False,
-    "recall_drone": False,
-    "log_camera_fault": True,
-    "request_technician": False,
-    "record_availability": True,
+    # SEC (Response Team)
+    "record_attendance_response": True,
+    "start_daily_attendance_check": True,
+    "report_team_movement": True,
+    "update_camera_status": True,
+    "recall_drone": True,
+    "dispatch_drone_to_area": False,
+    "dispatch_neighboring_force": False,
     # FIRE
     "dispatch_station_crew": False,
     "request_mutual_aid": False,
@@ -220,21 +224,12 @@ def test_the_two_profiles_run_side_by_side_as_two_deployments_with_separate_data
 
 
 # -- Simulation as a separate deployment (Stage 5, docs/bar_improves.md) --------
-
-
-def test_response_team_sim_loads_and_validates_with_the_same_declared_content(sec_profile):
-    sim = load_profile("profiles.response_team_sim", CORE_MODEL, SUB_MODEL)
-
-    assert sim.profile_name == "Response Team (Simulation)"
-    assert {agent.name for agent in sim.agents} == {agent.name for agent in sec_profile.agents}
-    assert {protocol.name for protocol in sim.protocols} == {protocol.name for protocol in sec_profile.protocols}
-    assert sim.event_types == sec_profile.event_types
-    assert sim.areas == sec_profile.areas
-    assert sim.db_path != sec_profile.db_path
-    assert sim.api_port != sec_profile.api_port
-    # Each profile's hash is computed from its own file on disk — a genuinely independent
-    # deployment identity, not a copy of the live profile's.
-    assert sim.profile_file_hash != sec_profile.profile_file_hash
+#
+# profiles.response_team has no separate `..._sim` twin (docs/responce_improve.md):
+# a simulation of it is just another deployment of the very same profile module,
+# with different DB_PATH/API_PORT/BOT_TOKEN_ENV values supplied at the process
+# level -- there is no second profile module to load and compare here the way
+# profiles.fire_station_sim still is, below.
 
 
 def test_fire_station_sim_loads_and_validates_with_the_same_declared_content(fire_profile):
@@ -312,19 +307,40 @@ def _agent_by_name(loaded_profile, name):
     return next(agent for agent in loaded_profile.agents if agent.name == name)
 
 
-def test_every_side_effecting_sec_tool_states_only_its_own_recorded_effect(sec_profile):
-    security_ops = _agent_by_name(sec_profile, "security_ops_agent")
-    surveillance = _agent_by_name(sec_profile, "surveillance_agent")
+def test_every_side_effecting_sec_tool_states_only_its_own_recorded_effect(sec_profile, tmp_path):
+    from agents import authenticated_request_identity
+    from persistence import (
+        open_neighboring_force_store,
+        open_response_team_roster_store,
+        open_response_team_surveillance_store,
+    )
+    from profiles.response_team import DRONES_WAREHOUSE, eta_seconds
+
     roster = _agent_by_name(sec_profile, "roster_agent")
+    surveillance = _agent_by_name(sec_profile, "surveillance_agent")
+    neighboring_forces = _agent_by_name(sec_profile, "neighboring_forces_agent")
+
+    # Point each agent's store at an isolated tmp_path database for this test only --
+    # sec_profile's real agents otherwise open this profile's real, on-disk DB_PATH.
+    roster.status_store = open_response_team_roster_store(str(tmp_path / "roster.db"))
+    surveillance.surveillance_store = open_response_team_surveillance_store(
+        str(tmp_path / "surveillance.db"), eta_fn=eta_seconds, home_area=DRONES_WAREHOUSE
+    )
+    neighboring_forces.dispatch_store = open_neighboring_force_store(str(tmp_path / "dispatch.db"))
+
+    roster.status_store.register_member("test-fighter", "Test Fighter")
+    roster.status_store.approve_roster("test-commander")
+    surveillance.surveillance_store.ensure_camera(
+        "CAM-TEST", name="Test Camera", area="east_fence", feed_summary="initial view"
+    )
+
+    with authenticated_request_identity("test-fighter"):
+        movement_result = roster.report_team_movement(area="east_fence")
 
     results = [
-        security_ops.log_observation("west_gate", "heavy equipment parked nearby"),
-        security_ops.notify_team("west_gate", "heads up"),
-        security_ops.request_friendly_force_dispatch("west_gate"),
-        security_ops.recall_drone(),
-        surveillance.log_camera_fault("CAM-03"),
-        surveillance.request_technician("CAM-03"),
-        roster.record_availability("michael", "unavailable", reason="family matter"),
+        movement_result,
+        surveillance.update_camera_status("CAM-TEST", "clear view restored"),
+        neighboring_forces.dispatch_neighboring_force("ambulance", "east_fence"),
     ]
 
     for result in results:
