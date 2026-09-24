@@ -1573,7 +1573,28 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             return redirect_response
 
         payload = request.get_json(silent=True) or {}
-        return _forward_to_simulator("POST", "/Simulator-msg", json=payload)
+        resp = _forward_to_simulator("POST", "/Simulator-msg", json=payload)
+        
+        if isinstance(resp, tuple) and resp[1] == 200:
+            try:
+                body = resp[0].get_json()
+            except Exception:
+                body = {}
+                
+            source_message_id = payload.get("source_message_id")
+            sender_identity = payload.get("sender_identity")
+            if source_message_id and sender_identity:
+                try:
+                    import zlib
+                    hashed_msg_id = str(zlib.crc32(source_message_id.encode("utf-8")) & 0x7FFFFFFF)
+                    event = ctx.deps.persistence.fetch_event_by_source_message("telegram", sender_identity, hashed_msg_id)
+                    if event:
+                        body["event_id"] = event["event_id"]
+                except Exception:
+                    pass
+            return jsonify(body), 200
+            
+        return resp
 
     @blueprint.route("/simulator/bot-poll", methods=["GET"])
     def simulator_bot_poll():

@@ -2,7 +2,7 @@
 surveillance (fire cameras/thermal sensors), and mutual-aid dispatch (Profile Split Plan,
 docs/Profile_Split_Plan.md)."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from agents import FriendlyForcesAgent, SurveillanceAgent, TeamStatusAgent, get_authenticated_request_identity, tool
@@ -103,7 +103,13 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
             selected_members = []
             unknown = []
             for token in tokens:
-                member = by_identity.get(token.casefold()) or by_name.get(token.casefold())
+                token_clean = token.casefold()
+                member = by_identity.get(token_clean) or by_name.get(token_clean)
+                if not member:
+                    for name, m in by_name.items():
+                        if token_clean in name or name in token_clean:
+                            member = m
+                            break
                 if member is None:
                     unknown.append(token)
                 elif member not in selected_members:
@@ -124,7 +130,7 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
                 self.status_store.open_cycle(
                     cycle_key=f"shift-{now_iso.split('T')[0]}",
                     opened_at=now_iso,
-                    deadline_at=now_iso,
+                    deadline_at=(datetime.fromisoformat(now_iso) + timedelta(hours=12)).isoformat(),
                 )
                 
             for member in selected_members:
@@ -291,6 +297,22 @@ PROTOCOLS = [
         criticality=CriticalityLevel.HIGH,
         approval_flag=True,
         requires_confirmation=True,
+        commander_only=False,
+    ),
+    Protocol(
+        name="record_incident_update",
+        description=(
+            "Applies to passive informational updates or requests from external forces (e.g. Police reporting "
+            "road closures, KKL reporting forest patrols, citizen reports that don't require immediate dispatch). "
+            "Does not apply to an initial report of a new active fire (use report_fire_incident for that), "
+            "and does not apply if an active resource dispatch is required (use dispatch_mutual_aid for that)."
+        ),
+        participating_agents=("surveillance_agent",),
+        approved_tools=(),
+        expected_success_output="Confirmation that the incident update was recorded in the operational log.",
+        criticality=CriticalityLevel.LOW,
+        approval_flag=False,
+        requires_confirmation=False,
         commander_only=False,
     ),
     Protocol(
@@ -625,16 +647,10 @@ def _seed_fire_surveillance() -> None:
     conn.execute("PRAGMA foreign_keys = ON;")
 
     # Check if FIRE layout is already present
-    existing = conn.execute("SELECT camera_id FROM cameras ORDER BY camera_id").fetchall()
-    existing_ids = [row["camera_id"] for row in existing]
-    expected_ids = ["CAM-01", "CAM-02", "CAM-03"]
-
-    if existing_ids == expected_ids:
-        # Check the first camera name to confirm it's FIRE-specific, not generic
-        first = conn.execute("SELECT name FROM cameras WHERE camera_id = 'CAM-01'").fetchone()
-        if first and "\u05d0\u05d5\u05e8\u05e0\u05d9\u05dd" in first["name"]:  # (Hebrew) Oranim
-            conn.close()
-            return
+    first = conn.execute("SELECT name FROM cameras WHERE camera_id = 'CAM-01'").fetchone()
+    if first and "\u05d0\u05d5\u05e8\u05e0\u05d9\u05dd" in first["name"]:  # (Hebrew) Oranim
+        conn.close()
+        return
 
     # Clear and re-seed with FIRE-specific data
     conn.execute("DELETE FROM drone_missions")
@@ -688,7 +704,7 @@ def ensure_seed_data() -> None:
         hist_store.close()
         
     # Seed the firefighters crew
-    from persistence.team_status import open_team_status_persistence
+    from persistence import open_team_status_persistence
     team_store = open_team_status_persistence(FIREFIGHTING_CREW_STATUS_DB_PATH)
     try:
         existing = team_store.list_members(approved_only=True)
@@ -708,6 +724,6 @@ def ensure_seed_data() -> None:
                 elif approved:
                     team_store.approve_member(t_id, "system")
     finally:
-        team_store.close()
+        pass
 
     _seed_fire_surveillance()

@@ -828,8 +828,17 @@ SIMULATOR_BODY = """
     // real bot uses — pollSimulatorChat() (Priority 3) watches for it quietly in the
     // background, without blocking this step's queue.
     setBubbleText(reply, payload.reply_text || t('bot_no_reply'), null, false);
-    const completed = await pollSimulatorChat(chatKey, request.body.chat_id, payload.watermark, myGeneration);
-    if (completed || payload.reply_text) {
+    
+    // Run the telegram outbox poller in the background without blocking the queue
+    pollSimulatorChat(chatKey, request.body.chat_id, payload.watermark, myGeneration);
+    
+    let completed = true;
+    if (payload.event_id) {
+        const header = t('event_id', { event_id: payload.event_id });
+        completed = await pollJob(payload.event_id, step.sender_identity, reply, header);
+    }
+    
+    if (completed || !payload.event_id) {
       queue.shift();
     }
     state.busy = false;
