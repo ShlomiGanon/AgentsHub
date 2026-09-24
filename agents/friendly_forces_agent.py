@@ -1,4 +1,7 @@
-"""The Friendly Forces dispatch-coordination agent (profiles/friendly_forces.py)."""
+"""The Friendly Forces dispatch-coordination agent -- shared, reusable infrastructure (unchanged
+across the Profile Split Plan, docs/Profile_Split_Plan.md decision 1), used by
+profiles/standby_squad.py's StandbySquadForcesAgent and profiles/firefighting.py's
+FirefightingExternalForcesAgent."""
 
 from __future__ import annotations
 

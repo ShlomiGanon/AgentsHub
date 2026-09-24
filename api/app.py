@@ -367,7 +367,7 @@ def main(argv: list[str] | None = None) -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Run the API layer for one deployment (work_plan.md §7, §9.21).")
-    parser.add_argument("profile_module", help="dotted module path of the profile to run, e.g. profiles.demo")
+    parser.add_argument("profile_module", help="dotted module path of the profile to run, e.g. profiles.standby_squad")
     parser.add_argument("--host", default="127.0.0.1", help="network interface to bind (default: 127.0.0.1, localhost only)")
     parser.add_argument("--server", choices=("flask", "waitress"), default="flask", help="HTTP server (default: flask for local development)")
     parser.add_argument("--threads", type=int, default=16, help="Waitress worker threads (default: 16, minimum: 4)")

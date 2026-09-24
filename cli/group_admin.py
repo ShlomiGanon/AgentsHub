@@ -26,7 +26,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--profile",
         required=True,
-        help="profile module path, e.g. 'profiles.unified_test' — resolved through the same "
+        help="profile module path, e.g. 'profiles.standby_squad' — resolved through the same "
         "loader the running system uses, so the command writes to that deployment's database and no other",
     )
 

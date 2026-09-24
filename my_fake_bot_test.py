@@ -1,12 +1,12 @@
 """Quick test: try to impersonate bot-service against the local API.
 
-Run this WHILE `python -m api.app profiles.demo` is running.
+Run this WHILE `python -m api.app profiles.standby_squad` is running.
 Usage: python test_impersonation.py
 """
 
 import requests
 
-API_BASE = "http://localhost:8902"
+API_BASE = "http://localhost:8905"
 
 print("Test 1: X-Identity: bot-service, NO X-Service-Key header")
 r1 = requests.get(

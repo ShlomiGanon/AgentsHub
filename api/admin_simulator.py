@@ -703,10 +703,17 @@ SIMULATOR_BODY = """
     const bubble = el('div', 'bubble' + (kind ? ' ' + kind : ''));
     const head = el('div', 'bubble-head');
     head.appendChild(el('span', 'sender', sender));
+<<<<<<< HEAD
     // A scripted step carries the scenario's own operational timestamp; showing
     // wall-clock time for it mixed the two clocks the core keeps apart. Bubbles
     // with no scripted time (system/reply lines for genuinely live events) still
     // fall back to now — both are ISO strings, so formatTimestamp sees one shape.
+=======
+    // `timestamp` is the scenario's scripted step.timestamp when known (a persona's own
+    // message); callers with no scripted time (system/reply bubbles for genuinely live
+    // events) omit it and fall back to real-world now — both are ISO strings, so
+    // formatTimestamp() sees the same input shape either way.
+>>>>>>> feat/FinalProfiles
     head.appendChild(el('span', null, formatTimestamp(timestamp || new Date().toISOString())));
     bubble.appendChild(head);
     const body = el('p', 'bubble-text', text);

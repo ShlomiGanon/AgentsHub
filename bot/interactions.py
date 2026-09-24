@@ -218,12 +218,20 @@ def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None
                 f"{messages.text('result.job_id', job_id=result.job_id)}\n\n{selection_text}"
             )
 
+    # Compact-format protocol names for the two current tactical profiles (Profile Split
+    # Plan, docs/Profile_Split_Plan.md §5.1/§5.2) -- profiles/standby_squad.py's 7 and
+    # profiles/firefighting.py's 8, unioned (update_camera_observation/overall_situational_picture/
+    # query_historical_incidents are shared by name across both). Not profile-scoped: this
+    # formatter has no access to which profile is loaded, so it recognizes protocol names
+    # from either.
     surveillance_protocols = {
-        "query_camera_status", "query_drone_fleet_status", "query_active_drone_missions",
-        "query_surveillance_overview", "overall_situational_picture", "dispatch_drone_to_incident",
-        "return_drone_to_base", "recall_drone_to_base", "surveillance_area_scan",
-        "update_camera_observation", "report_team_availability", "record_attendance_response",
-        "dispatch_emergency_forces", "query_historical_incidents",
+        # profiles/standby_squad.py
+        "record_attendance_response", "report_team_availability", "update_camera_observation",
+        "report_security_incident", "dispatch_emergency_forces", "overall_situational_picture",
+        "query_historical_incidents",
+        # profiles/firefighting.py
+        "record_crew_availability_response", "report_crew_status", "dispatch_drone_to_incident",
+        "report_fire_incident", "dispatch_mutual_aid",
     }
     if result.protocol_name in surveillance_protocols:
         lines = [

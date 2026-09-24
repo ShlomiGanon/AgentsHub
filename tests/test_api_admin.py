@@ -314,7 +314,123 @@ def test_server_page_requires_session_and_disables_controls_without_supervisor(t
     page = client.get("/admin/server")
     assert page.status_code == 200
     assert b"run_stack.py" in page.data
-    assert b"profiles.demo" in page.data
+    assert b"profiles.standby_squad" in page.data
+    assert b"profiles.firefighting" in page.data
+
+
+def _make_supervisor_available(tmp_path, monkeypatch):
+    """docs/Admin_Profile_Switch_Investigation.md §7: nothing previously made the real
+    `AGENTSHUB_SUPERVISOR`/`AGENTSHUB_CONTROL_DIR` control channel available in a test, so
+    `switch_profile()`/`reset_server()` always short-circuited on `submit_server_command`'s
+    RuntimeError before ever reaching `_restart_page()` -- exactly the untested layer the bug
+    lived in. Mirrors tests/test_server_control.py's own setup for the file-based channel."""
+
+    from config import server_control
+
+    control_dir = tmp_path / "server_control"
+    monkeypatch.setenv("AGENTSHUB_CONTROL_DIR", str(control_dir))
+    monkeypatch.setenv("AGENTSHUB_SUPERVISOR", "1")
+    server_control.write_status(supervisor_pid=123, state="running")
+
+
+def test_switch_profile_restart_page_targets_only_the_new_profiles_port(tmp_path, teardown_ctx, _admin_env, monkeypatch):
+    """docs/Admin_Profile_Switch_Investigation.md §1/§4.1: the rendered wait page must carry the
+    new profile's port as the only navigation target, the old (about-to-die) port only as a
+    manual timeout link -- never raced against each other as equally-valid redirect candidates."""
+
+    _make_supervisor_available(tmp_path, monkeypatch)
+    client = _client(tmp_path, teardown_ctx)
+    ctx = teardown_ctx[0]
+    monkeypatch.setattr(ctx.loaded_profile, "api_port", 8899, raising=False)  # the "old" port
+    _login(client)
+
+    csrf_token = _extract_csrf(client.get("/admin/server").data)
+    response = client.post(
+        "/admin/server/profile",
+        data={"profile_module": "profiles.firefighting", "csrf_token": csrf_token},
+    )
+
+    assert response.status_code == 200
+    page = response.data.decode("utf-8")
+    assert ":8906/admin/server" in page  # profiles.firefighting's real API_PORT
+    assert ":8899/admin/server" in page  # the old port, present only as a manual fallback link
+    # The old port must never be reachable via the automatic-redirect variable -- only via the
+    # explicit timeout section's link.
+    assert 'id="target-link" href="http://localhost:8906/admin/server"' in page or "targetUrl = \"http://localhost:8906/admin/server\"" in page
+    assert 'id="old-link" href="http://localhost:8899/admin/server"' in page
+
+
+def test_switch_profile_restart_page_never_races_old_and_new_ports(tmp_path, teardown_ctx, _admin_env, monkeypatch):
+    """The old bug: two candidate URLs tried in a loop, navigating to whichever answered first --
+    which could be the dying old process. The fix: a strict two-phase wait (old down, then new
+    up), never a race. Assert the structural markers of that sequencing are present, and that the
+    old "race both, follow whichever answers" shape is gone."""
+
+    _make_supervisor_available(tmp_path, monkeypatch)
+    client = _client(tmp_path, teardown_ctx)
+    ctx = teardown_ctx[0]
+    monkeypatch.setattr(ctx.loaded_profile, "api_port", 8899, raising=False)
+    _login(client)
+
+    csrf_token = _extract_csrf(client.get("/admin/server").data)
+    page = client.post(
+        "/admin/server/profile",
+        data={"profile_module": "profiles.firefighting", "csrf_token": csrf_token},
+    ).data.decode("utf-8")
+
+    # Two-phase sequencing: wait for the old port to go down first, only then poll the new one.
+    assert "phase = 'old-down'" in page
+    assert "'new-up'" in page
+    assert "reachable(oldUrl)" in page
+    assert "reachable(targetUrl)" in page
+    assert page.index("reachable(oldUrl)") < page.index("reachable(targetUrl)")
+    # The old raced-candidates shape must be gone.
+    assert "candidate_urls" not in page
+    assert "for(const url of candidates)" not in page
+
+
+def test_switch_profile_restart_page_shows_a_timeout_with_both_manual_links(tmp_path, teardown_ctx, _admin_env, monkeypatch):
+    """docs/Admin_Profile_Switch_Investigation.md §4.2: a hard deadline must show both URLs as
+    manual links instead of spinning or retrying forever."""
+
+    _make_supervisor_available(tmp_path, monkeypatch)
+    client = _client(tmp_path, teardown_ctx)
+    ctx = teardown_ctx[0]
+    monkeypatch.setattr(ctx.loaded_profile, "api_port", 8899, raising=False)
+    _login(client)
+
+    csrf_token = _extract_csrf(client.get("/admin/server").data)
+    page = client.post(
+        "/admin/server/profile",
+        data={"profile_module": "profiles.firefighting", "csrf_token": csrf_token},
+    ).data.decode("utf-8")
+
+    assert 'id="wait-timeout" hidden' in page  # hidden until the deadline passes
+    assert "deadline = Date.now() +" in page
+    assert "Date.now() >= deadline" in page
+    assert "target-link" in page and "old-link" in page
+
+
+def test_reset_restart_page_also_waits_for_the_same_port_to_go_down_then_up(tmp_path, teardown_ctx, _admin_env, monkeypatch):
+    """Reset restarts the *same* profile on the *same* port -- old_url == target_url. The
+    two-phase wait must still require an observed down-then-up transition rather than declaring
+    success the instant the (still-running, not-yet-restarted) old process answers."""
+
+    _make_supervisor_available(tmp_path, monkeypatch)
+    client = _client(tmp_path, teardown_ctx)
+    ctx = teardown_ctx[0]
+    monkeypatch.setattr(ctx.loaded_profile, "api_port", 8899, raising=False)
+    _login(client)
+
+    csrf_token = _extract_csrf(client.get("/admin/server").data)
+    page = client.post(
+        "/admin/server/reset",
+        data={"confirm": "yes", "csrf_token": csrf_token},
+    ).data.decode("utf-8")
+
+    assert "http://localhost:8899/admin/server" in page
+    assert "phase = 'old-down'" in page
+    assert "reachable(oldUrl)" in page and "reachable(targetUrl)" in page
 
 
 def test_server_safe_mode_control_reflects_the_live_system_setting(tmp_path, teardown_ctx, _admin_env):
