@@ -10,7 +10,7 @@ from types import MappingProxyType, ModuleType
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from agents import HistoryAgent
-from config import BaseConfig, TierModel, load_base_config
+from config import BaseConfig, TierModel, load_base_config, resolve_runtime_port
 from messages import MessageCatalogError, get_catalog
 from profiles.contracts import (
     HUMAN_ACTIVATION_TYPE,
@@ -469,7 +469,7 @@ def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) 
         areas=tuple(profile_module.AREAS),
         db_path=profile_module.DB_PATH,
         resettable_databases=tuple(getattr(profile_module, "RESETTABLE_DATABASES", (profile_module.DB_PATH,))),
-        api_port=profile_module.API_PORT,
+        api_port=resolve_runtime_port("API_PORT", profile_module.API_PORT),
         retry_count=profile_module.RETRY_COUNT,
         risk_threshold=profile_module.RISK_THRESHOLD,
         lookback_window_days=profile_module.LOOKBACK_WINDOW_DAYS,
@@ -495,7 +495,9 @@ def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) 
         simulation_groups=tuple(getattr(profile_module, "SIMULATION_GROUPS", ())),
         simulations=tuple(getattr(profile_module, "SIMULATIONS", ())),
         simulation_rosters=tuple(getattr(profile_module, "SIMULATION_ROSTERS", ())),
-        simulator_port=getattr(profile_module, "SIMULATOR_PORT", None),
+        simulator_port=resolve_runtime_port(
+            "SIMULATOR_PORT", getattr(profile_module, "SIMULATOR_PORT", None)
+        ),
     )
 
     failures = validate_profile(loaded, declared_event_types=profile_module.EVENT_TYPES)

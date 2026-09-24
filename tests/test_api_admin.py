@@ -360,6 +360,29 @@ def test_switch_profile_restart_page_targets_only_the_new_profiles_port(tmp_path
     assert 'id="old-link" href="http://localhost:8899/admin/server"' in page
 
 
+def test_switch_profile_keeps_the_environment_configured_port(tmp_path, teardown_ctx, _admin_env, monkeypatch):
+    monkeypatch.setenv("API_PORT", "8899")
+    monkeypatch.setenv("SIMULATOR_PORT", "8999")
+    _make_supervisor_available(tmp_path, monkeypatch)
+    client = _client(tmp_path, teardown_ctx)
+    monkeypatch.setattr(teardown_ctx[0].loaded_profile, "api_port", 8899, raising=False)
+    _login(client)
+
+    csrf_token = _extract_csrf(client.get("/admin/server").data)
+    response = client.post(
+        "/admin/server/profile",
+        data={"profile_module": "profiles.firefighting", "csrf_token": csrf_token},
+    )
+
+    assert response.status_code == 200
+    page = response.data.decode("utf-8")
+    assert 'id="target-link" href="http://localhost:8899/admin/server"' in page or (
+        'targetUrl = "http://localhost:8899/admin/server"' in page
+    )
+    assert 'id="old-link" href="http://localhost:8899/admin/server"' in page
+    assert ":8906/admin/server" not in page
+
+
 def test_switch_profile_restart_page_never_races_old_and_new_ports(tmp_path, teardown_ctx, _admin_env, monkeypatch):
     """The old bug: two candidate URLs tried in a loop, navigating to whichever answered first --
     which could be the dying old process. The fix: a strict two-phase wait (old down, then new

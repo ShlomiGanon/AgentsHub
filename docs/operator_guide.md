@@ -46,15 +46,9 @@ the two instances will overwrite each other's status/command files. Only use thi
 specifically need both profiles live at once (e.g. side-by-side demos); otherwise prefer the
 primary switch-in-place workflow above.
 
-Each profile needs its own bot token: `BOT_TOKEN` for Standby Squad, `FIREFIGHTING_BOT_TOKEN`
-for Firefighting (`.env.example`) — required even in switch-in-place mode, since both values
-must already be set in `.env` before whichever profile is currently selected can start. These
-should be two *different* real Telegram bots. Switch-in-place is safe even if they're
-temporarily the same value (the supervisor always fully stops the old bot process before
-starting the new one, so there's never a moment with two long-polling connections open for one
-token), but the advanced concurrent mode above genuinely requires two distinct bots — running
-both profiles at once with the same token means whichever started polling second gets Telegram's
-`409 Conflict` until the other is stopped.
+Both dashboard-selectable profiles use `BOT_TOKEN` from `.env`. This is safe in the primary
+switch-in-place workflow because the supervisor fully stops the current bot before starting the
+newly selected profile, so only one Telegram poller exists at a time.
 
 ## Running a simulation deployment (docs/bar_improves.md Stage 5)
 

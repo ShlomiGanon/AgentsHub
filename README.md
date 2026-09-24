@@ -126,7 +126,7 @@ For the Telegram frontend, open another terminal, activate the virtual environme
 python -m bot.app profiles.standby_squad
 ```
 
-The API must already be running. The bot connects to the profile's `API_PORT`, validates `BOT_TOKEN`, and exits if another bot process already owns the same deployment lock.
+The API must already be running. The bot connects to the deployment-wide `API_PORT` from `.env`, validates `BOT_TOKEN`, and exits if another bot process already owns the same deployment lock.
 
 For local end-to-end testing without Telegram, use one of the terminal clients against the running API. They create the required test identity when they start and remove that identity when they exit normally:
 

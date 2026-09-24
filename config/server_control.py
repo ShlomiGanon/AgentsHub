@@ -15,7 +15,14 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from config.environment import RuntimePortError, resolve_runtime_port
 from profiles import REQUIRED_PROFILE_ATTRS
+
+
+# Only the two complete operational profiles are selectable in the admin UI and
+# accepted by the stack supervisor.  The other profile modules remain in the
+# package for compatibility and tests, but they are not separate deployments.
+SELECTABLE_PROFILE_STEMS = frozenset({"standby_squad", "firefighting"})
 
 
 @dataclass(frozen=True)
@@ -46,14 +53,16 @@ def discover_profiles(directory: Path | None = None) -> tuple[ProfileInfo, ...]:
     discovered: list[ProfileInfo] = []
     for source in sorted(profile_dir.glob("*.py")):
         stem = source.stem
-        if stem.startswith("_") or stem in {"contracts", "loader", "template"}:
+        if stem not in SELECTABLE_PROFILE_STEMS:
             continue
         module_path = f"profiles.{stem}"
         try:
             module = importlib.import_module(module_path)
             profile_name = getattr(module, "PROFILE_NAME")
-            api_port = getattr(module, "API_PORT")
-            simulator_port = getattr(module, "SIMULATOR_PORT", None)
+            api_port = resolve_runtime_port("API_PORT", getattr(module, "API_PORT"))
+            simulator_port = resolve_runtime_port(
+                "SIMULATOR_PORT", getattr(module, "SIMULATOR_PORT", None)
+            )
             db_path = getattr(module, "DB_PATH")
             if any(not hasattr(module, attribute) for attribute in REQUIRED_PROFILE_ATTRS):
                 continue
@@ -70,6 +79,8 @@ def discover_profiles(directory: Path | None = None) -> tuple[ProfileInfo, ...]:
                 continue
             if any(not isinstance(path, str) or not path.strip() for path in resettable):
                 continue
+        except RuntimePortError:
+            raise
         except Exception:
             continue
         discovered.append(ProfileInfo(module_path, profile_name.strip(), api_port, simulator_port))

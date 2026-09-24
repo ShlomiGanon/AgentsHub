@@ -34,7 +34,10 @@ FIREFIGHTING_SURVEILLANCE_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_survei
 FIREFIGHTING_CREW_STATUS_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_crew_status.db")
 RESETTABLE_DATABASES = (DB_PATH, FIREFIGHTING_SURVEILLANCE_DB_PATH, FIREFIGHTING_CREW_STATUS_DB_PATH)
 
-BOT_TOKEN_ENV = "FIREFIGHTING_BOT_TOKEN"
+# The dashboard runs exactly one profile at a time.  Both selectable profiles
+# therefore use the deployment's single Telegram bot token; the supervisor
+# fully stops the old bot before starting the newly selected profile.
+BOT_TOKEN_ENV = "BOT_TOKEN"
 MODEL_CREDENTIAL_ENVS = []
 
 

@@ -3,7 +3,27 @@ from types import ModuleType
 
 import pytest
 
+import run_stack
 from run_stack import reset_profile_databases
+
+
+def test_main_starts_the_last_selected_profile(monkeypatch):
+    started = []
+
+    class FakeSupervisor:
+        def __init__(self, profile_module):
+            self.profile_module = profile_module
+
+        def run(self):
+            started.append(self.profile_module)
+
+    monkeypatch.setattr(run_stack, "load_dotenv", lambda path: True)
+    monkeypatch.setattr(run_stack, "load_selected_profile", lambda: "profiles.firefighting")
+    monkeypatch.setattr(run_stack, "StackSupervisor", FakeSupervisor)
+
+    run_stack.main()
+
+    assert started == ["profiles.firefighting"]
 
 
 def test_reset_removes_only_declared_databases_and_known_sidecars(tmp_path):

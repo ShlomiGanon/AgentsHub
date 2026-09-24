@@ -1,6 +1,21 @@
 """Environment-backed configuration behavior."""
 
+import pytest
+
 from config.base import _parse_console_json_flag, _parse_debug_flag
+from config.environment import RuntimePortError, resolve_runtime_port
+
+
+def test_runtime_port_uses_environment_override_and_profile_fallback():
+    assert resolve_runtime_port("API_PORT", 8906, {"API_PORT": "8905"}) == 8905
+    assert resolve_runtime_port("API_PORT", 8906, {}) == 8906
+    assert resolve_runtime_port("SIMULATOR_PORT", None, {}) is None
+
+
+@pytest.mark.parametrize("value", ["not-a-port", "0", "65536"])
+def test_runtime_port_rejects_invalid_environment_values(value):
+    with pytest.raises(RuntimePortError, match="API_PORT"):
+        resolve_runtime_port("API_PORT", 8905, {"API_PORT": value})
 
 
 def test_debug_flag_parsing_is_strict_not_any_non_empty_string():

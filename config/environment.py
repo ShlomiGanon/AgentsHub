@@ -28,6 +28,38 @@ class ModelTierError(Exception):
     """A model tier's provider/model/API key could not be resolved from the environment."""
 
 
+class RuntimePortError(Exception):
+    """A runtime port override is present but is not a valid TCP port."""
+
+
+def resolve_runtime_port(
+    variable_name: str,
+    declared_port: int | None,
+    environ: Mapping[str, str] | None = None,
+) -> int | None:
+    """Resolve one deployment-wide port, with the profile value as fallback.
+
+    ``run_stack.py`` loads ``.env`` before profile discovery, so every profile
+    selected by that deployment uses the same runtime ports.
+    """
+
+    environment_values = os.environ if environ is None else environ
+    raw_value = environment_values.get(variable_name)
+    if raw_value is None or not raw_value.strip():
+        return declared_port
+    try:
+        port = int(raw_value)
+    except ValueError as exc:
+        raise RuntimePortError(
+            f"environment variable '{variable_name}' must be an integer between 1 and 65535"
+        ) from exc
+    if not 1 <= port <= 65535:
+        raise RuntimePortError(
+            f"environment variable '{variable_name}' must be an integer between 1 and 65535"
+        )
+    return port
+
+
 @dataclass(frozen=True)
 class TierModel:
     """Resolved model identifier and API key."""

@@ -531,7 +531,7 @@ def test_firefighting_declares_the_migrated_fire002_series(test_core_model, test
     renumbered from 0) -- despite the raw fixture reusing identical channel names
     ('TELEGRAM_GROUP_RESPONSE_TEAM' etc.) across both series."""
 
-    monkeypatch.setenv("FIREFIGHTING_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("BOT_TOKEN", "fake-token")
     from profiles.loader import load_profile
 
     loaded = load_profile("profiles.firefighting", core_model=test_core_model, sub_model=test_sub_model)
