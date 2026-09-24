@@ -29,6 +29,22 @@ _ABSENCE_REASONS = (
     (re.compile(get_catalog("en").text("extraction.team_status.leave"), re.IGNORECASE), "leave"),
 )
 
+_HEAVY_EQUIPMENT = re.compile("\u05e6\u05d9\u05d5\u05d3\\s+\u05db\u05d1\u05d3|heavy\\s+equipment", re.IGNORECASE)
+_WEST_GATE = re.compile("\u05d4\u05e9\u05e2\u05e8\\s+\u05d4\u05de\u05e2\u05e8\u05d1\u05d9|\u05e9\u05e2\u05e8\\s+\u05de\u05e2\u05e8\u05d1\u05d9|west\\s+gate", re.IGNORECASE)
+_EAST_SECTOR = re.compile("\u05d4\u05d2\u05d6\u05e8\u05d4\\s+\u05d4\u05de\u05d6\u05e8\u05d7\u05d9\u05ea|\u05d4\u05d2\u05d6\u05e8\u05d4\\s+\u05d4\u05de\u05d6\u05e8\u05d7|\u05de\u05d6\u05e8\u05d7\u05d9\u05ea|eastern\\s+sector", re.IGNORECASE)
+_IN_TRANSIT = re.compile("\u05d9\u05d5\u05e6\u05d0\\s+\u05de\u05d4\u05d1\u05d9\u05ea|\u05d1\u05d3\u05e8\u05da|\u05de\u05d2\u05d9\u05e2\\s+\u05ea\u05d5\u05da|on\\s+the\\s+way|in\\s+transit", re.IGNORECASE)
+_QUESTION_MARK = re.compile("\\?|\u05d9\u05e9\\s+\u05e9\u05dd\\s+.*\\?", re.IGNORECASE)
+_WHO_ELSE = re.compile("\u05de\u05d9\\s+\u05e2\u05d5\u05d3|who\\s+else", re.IGNORECASE)
+_PLANNED_WORK = re.compile("\u05e2\u05d1\u05d5\u05d3\u05d5\u05ea\\s+\u05de\u05ea\u05d5\u05db\u05e0\u05e0\u05d5\u05ea|planned\\s+work", re.IGNORECASE)
+# A readiness-owned group can report a concrete hazard without asking this
+# specialist to choose a response protocol.  Preserve that grounded fact when
+# the provider is unavailable; no location, severity, or action is inferred.
+_HAZARD_REPORT = re.compile(
+    "(?:\u05d7\u05d9\u05e8\u05d5\u05dd|emergency|\u05dc\u05d4\u05d1\u05d5\u05ea|flames).*(?:\u05de\u05e4\u05e2\u05dc|\u05d2\u05d6|\u05d0\u05de\u05d5\u05e0\u05d9\u05d4|gas|ammonia)"
+    "|(?:\u05de\u05e4\u05e2\u05dc|\u05d2\u05d6|\u05d0\u05de\u05d5\u05e0\u05d9\u05d4|gas|ammonia).*(?:\u05dc\u05d4\u05d1\u05d5\u05ea|flames|\u05d2\u05d3\u05e8|fence)",
+    re.IGNORECASE,
+)
+
 
 def _aware_datetime(value: str | None) -> datetime:
     if not value:
@@ -158,7 +174,34 @@ class TeamStatusAgent(Agent):
                 ("availability_start", "availability_end"),
                 business_fields={"availability": "unavailable", "reason": reason},
             )
+        operational_fields = self._operational_fields_in(text)
+        if operational_fields is not None:
+            return ExtractionResult(
+                "team_operational_report", "trusted", "readiness_team", (), text,
+                "low", occurrence, False, (), business_fields=operational_fields,
+            )
         return None
+
+    @staticmethod
+    def _operational_fields_in(text: str) -> dict[str, str] | None:
+        fields: dict[str, str] = {}
+        if _HEAVY_EQUIPMENT.search(text):
+            fields["resource_mention"] = "heavy equipment"
+            fields["operational_status"] = "reported"
+        if _WEST_GATE.search(text):
+            fields["location"] = "west_gate"
+        elif _EAST_SECTOR.search(text):
+            fields["location"] = "east_sector"
+        if _IN_TRANSIT.search(text):
+            fields["operational_status"] = "in_transit"
+        if _HAZARD_REPORT.search(text):
+            fields["operational_status"] = "reported"
+            fields["uncertainty"] = "hazard report preserved; no response action inferred"
+        if not fields:
+            return None
+        if _QUESTION_MARK.search(text):
+            fields["uncertainty"] = "question included; operational fact preserved"
+        return fields
 
     @staticmethod
     def _resource_fields(text: str, profile=None):
@@ -219,9 +262,15 @@ class TeamStatusAgent(Agent):
                 for value in fields.values()
             ):
                 return ReportIngestionResult("rejected", "team operational report fields must be scalar")
+            detail = "team operational fact committed"
+            raw_text = str(event.get("raw_text") or event.get("description") or "")
+            if _WHO_ELSE.search(raw_text):
+                detail += "; no authoritative co-traveller information was included in the report"
+            elif _PLANNED_WORK.search(raw_text):
+                detail += "; planned-work status was not established by this report"
             return ReportIngestionResult(
                 "committed",
-                "team operational fact committed",
+                detail,
                 projection=project_report_facts(
                     event,
                     domain="team",

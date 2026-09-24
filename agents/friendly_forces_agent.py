@@ -46,6 +46,11 @@ _NO_BUILDING_RISK = re.compile(
     _catalog_pattern("extraction.friendly_forces.no_building_risk"),
     re.IGNORECASE,
 )
+_VEHICLE_OBSERVATION = re.compile(
+    "(?:\u05e8\u05db\u05d1\\s+\u05de\u05e1\u05d7\u05e8\u05d9|\u05de\u05e1\u05d7\u05e8\u05d9\u05ea|commercial\\s+van|vehicle).*(?:\u05e0\u05e2|\u05e0\u05e2\u05d4|\u05e0\u05e8\u05d0\u05d4|moving|seen)"
+    "|(?:\u05e0\u05e2|\u05e0\u05e2\u05d4|\u05e0\u05e8\u05d0\u05d4|moving|seen).*(?:\u05e8\u05db\u05d1\\s+\u05de\u05e1\u05d7\u05e8\u05d9|\u05de\u05e1\u05d7\u05e8\u05d9\u05ea|commercial\\s+van|vehicle)",
+    re.IGNORECASE,
+)
 
 
 class FriendlyForcesAgent(Agent):
@@ -150,6 +155,8 @@ class FriendlyForcesAgent(Agent):
     @staticmethod
     def _incident_fields(text: str) -> dict | None:
         if not _FIRE_INCIDENT.search(text):
+            if _VEHICLE_OBSERVATION.search(text):
+                return {"incident_kind": "security_observation"}
             return None
 
         fields = {"incident_kind": "brush_fire" if _BRUSH_FIRE.search(text) else "fire"}

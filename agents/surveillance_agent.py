@@ -208,8 +208,8 @@ class SurveillanceAgent(Agent):
         return self._extract_condition_report(text, occurrence, ExtractionResult)
 
     def _extract_camera_report(self, text, occurrence, scope, ExtractionResult):
-        canonical = self._camera_reference_in(text, scope)
-        if canonical is None:
+        canonicals = self._camera_references_in(text, scope)
+        if not canonicals:
             return None
 
         status = self._camera_status_in(text)
@@ -218,21 +218,23 @@ class SurveillanceAgent(Agent):
 
         shutdown_type = "planned_maintenance" if status == "offline" and _PLANNED_SHUTDOWN.search(text) else None
         fields = {
-            "camera_id": canonical,
+            "camera_id": canonicals[0],
             "camera_status": status,
             "downtime_duration_hours": self._downtime_hours_in(text),
             "shutdown_type": shutdown_type,
         }
+        if len(canonicals) > 1:
+            fields["camera_ids"] = ",".join(canonicals)
         area = next(
             (str(camera.get("area")) for camera in self.surveillance_store.list_cameras(scope=scope)
-             if camera.get("camera_id") == canonical),
+             if camera.get("camera_id") == canonicals[0]),
             None,
         )
         if area:
             fields["sector"] = area
 
         return ExtractionResult(
-            "surveillance_report", "trusted", area, (canonical,), text, "low", occurrence, False, (),
+            "surveillance_report", "trusted", area, tuple(canonicals), text, "low", occurrence, False, (),
             business_fields={name: value for name, value in fields.items() if value is not None},
         )
 
@@ -254,13 +256,16 @@ class SurveillanceAgent(Agent):
             business_fields=fields,
         )
 
-    def _camera_reference_in(self, text: str, scope) -> str | None:
-        """The one camera this message is about, resolved against the scoped inventory."""
+    def _camera_references_in(self, text: str, scope) -> list[str]:
+        """All cameras explicitly named in this message, resolved in scope."""
 
         numbers = list(dict.fromkeys(match.group(1) for match in _CAMERA_REFERENCE.finditer(text)))
-        if len(numbers) != 1:
-            return None
-        return self._resolve_camera_reference(numbers[0], scope=scope)
+        resolved = []
+        for number in numbers:
+            camera_id = self._resolve_camera_reference(number, scope=scope)
+            if camera_id is not None and camera_id not in resolved:
+                resolved.append(camera_id)
+        return resolved
 
     @staticmethod
     def _camera_status_in(text: str) -> str | None:
@@ -302,16 +307,17 @@ class SurveillanceAgent(Agent):
 
         business_fields = event.get("business_fields") or {}
         unknown_fields = set(business_fields) - {
-            "camera_id", "camera_status", "status", "shutdown_type",
+            "camera_id", "camera_ids", "camera_status", "status", "shutdown_type",
             "downtime_duration_hours", "reason", "sector", "cause_status", "possible_cause"
         }
         if unknown_fields:
             return ReportIngestionResult("rejected", "surveillance report contains unsupported domain fields")
-        if any(
-            value is not None and type(value) not in {str, int, float, bool}
-            for value in business_fields.values()
-        ):
+        if any(value is not None and type(value) not in {str, int, float, bool} for value in business_fields.values()):
             return ReportIngestionResult("rejected", "surveillance report business fields must be scalar")
+        camera_ids_value = business_fields.get("camera_ids")
+        if camera_ids_value is not None and (not isinstance(camera_ids_value, str) or not camera_ids_value.strip()):
+            return ReportIngestionResult("rejected", "surveillance camera_ids is invalid")
+        camera_ids = [item.strip() for item in str(camera_ids_value or "").split(",") if item.strip()]
         camera_id = business_fields.get("camera_id")
         if not isinstance(camera_id, str) or not camera_id.strip():
             camera_id = next(
@@ -321,10 +327,17 @@ class SurveillanceAgent(Agent):
             )
         if not camera_id:
             return ReportIngestionResult("rejected", "surveillance report has no camera identifier")
-
-        camera_id = self._resolve_camera_reference(camera_id)
-        if camera_id is None:
-            return ReportIngestionResult("rejected", "surveillance report references an unknown camera")
+        if not camera_ids:
+            camera_ids = [camera_id.strip()]
+        elif camera_id.strip() not in camera_ids:
+            camera_ids.insert(0, camera_id.strip())
+        resolved_camera_ids = []
+        for reference in camera_ids:
+            resolved = self._resolve_camera_reference(reference, scope=scope)
+            if resolved is None:
+                return ReportIngestionResult("rejected", "surveillance report references an unknown camera")
+            if resolved not in resolved_camera_ids:
+                resolved_camera_ids.append(resolved)
 
         observation = event.get("description")
         if not isinstance(observation, str) or not observation.strip():
@@ -365,11 +378,13 @@ class SurveillanceAgent(Agent):
             return ReportIngestionResult("rejected", "surveillance report possible cause is invalid")
 
         try:
-            updated = self.surveillance_store.update_camera_feed(
-                camera_id.strip(), observation.strip(), status=status,
-                updated_at=event.get("received_at"),
-                scope=scope,
-            )
+            updated = None
+            for resolved_camera_id in resolved_camera_ids:
+                updated = self.surveillance_store.update_camera_feed(
+                    resolved_camera_id, observation.strip(), status=status,
+                    updated_at=event.get("received_at"),
+                    scope=scope,
+                )
         except SurveillancePersistenceError as exc:
             return ReportIngestionResult("failed", str(exc))
         projection = project_report_facts(
@@ -377,6 +392,7 @@ class SurveillanceAgent(Agent):
             domain="surveillance",
             facts={
                 "camera_id": updated["camera_id"],
+                "camera_ids": ",".join(resolved_camera_ids),
                 "camera_status": updated["status"],
                 **{
                     field_name: business_fields[field_name]
@@ -389,7 +405,7 @@ class SurveillanceAgent(Agent):
             },
         )
         return ReportIngestionResult(
-            "committed", f"camera {updated['camera_id']} committed", projection=projection
+            "committed", f"cameras {', '.join(resolved_camera_ids)} committed", projection=projection
         )
 
     def _resolve_camera_reference(self, reference: str, *, scope: OperationalScope | None = None) -> str | None:

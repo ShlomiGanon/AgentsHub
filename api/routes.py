@@ -899,20 +899,24 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             except OrchestrationParseError as exc:
                 ctx.queue.release_reservation(reservation)
                 logger.warning(
-                    "event data reply failed validation — abandoning hold to prevent infinite loop",
+                    "event data reply failed validation; keeping hold pending",
                     extra={"event": "event_data_reply_invalid", "reason": str(exc), "trace_id": trace_id},
                 )
-                # Resolve the stuck hold so the user is not trapped in an infinite loop.
-                # Fall through: the message will be treated as a new request.
-                try:
-                    ctx.deps.persistence.resolve_held_event(
-                        "event_data",
-                        pending_hold["hold_id"],
-                        {"resolved_by": "system:abandoned_parse_error"},
-                    )
-                except Exception:
-                    pass  # best-effort; fall through regardless
-                matching_event_data_hold = False
+                # A malformed or unrelated answer is not evidence that the
+                # report was completed. Keep the hold open and return the
+                # existing clarification so the reporter has a truthful path
+                # to retry. In particular, a normal operational report sent
+                # later in the same chat must not consume the earlier hold.
+                answer = pending_hold.get("question") or messages.text("api.event_data_reply_not_pending")
+                _remember("assistant", answer, pending_hold["event_id"])
+                return jsonify(
+                    {
+                        "taken_as": "clarification",
+                        "event_id": pending_hold["event_id"],
+                        "answer": answer,
+                        "status": "waiting_for_event_data",
+                    }
+                )
             except Exception:
                 ctx.queue.release_reservation(reservation)
                 raise

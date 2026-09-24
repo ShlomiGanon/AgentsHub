@@ -1193,7 +1193,7 @@ MESSAGES = {
 
     "extraction.surveillance.camera_reference": r"(?:cam[-\s]?|camera\s*|מצלמה\s*(?:cam[-\s]?)?)(\d{{1,3}})\b",
     "extraction.surveillance.camera_active": r"חזרה לפעול|שבה לפעול|עלתה חזרה|back online|restored|is back up",
-    "extraction.surveillance.camera_offline": r"הופסק|הורדה|הורדנו|נותק|כבתה|לא משדרת|אינה משדרת|offline|shut down|shutdown|taken down|went dark",
+    "extraction.surveillance.camera_offline": r"הופסק|הורדה|הורדנו|נותק|כבתה|לא משדרת|אינה משדרת|כבל.*חתוך|תקשורת.*חתוכה|offline|shut down|shutdown|taken down|went dark",
     "extraction.surveillance.camera_degraded": r"הפרעות|תקועה|מטושטש|קפאה|לסירוגין|לפרקים|בלבול תרמי|interference|degraded|stuck|frozen|blurred|intermittent",
     "extraction.surveillance.planned_shutdown": r"יזומי|יזומה|מתוכננ|תחזוק|ניקוי|עדכון גרס|planned|scheduled|maintenance|cleaning|version update",
     "extraction.surveillance.downtime_two_hours": r"לשעתיים|שעתיים|two hours",

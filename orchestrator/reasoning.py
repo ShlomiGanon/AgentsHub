@@ -1224,6 +1224,10 @@ def _validate_operational_intake_schema(payload: dict, schema: dict) -> dict:
 
 
 def _normalize_operational_intake_provider_sentinels(value: object, schema: dict, path: tuple[str, ...] = ()) -> object:
+    if path == ("classification", "severity") and value is not None and not isinstance(value, str):
+        # A provider object/list here means it could not ground severity. Keep
+        # the report and let the required-field gate request clarification.
+        return None
     any_of = schema.get("anyOf")
     nullable_any_of = isinstance(any_of, list) and any(
         isinstance(item, dict) and item.get("type") == "null" for item in any_of

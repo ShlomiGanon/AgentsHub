@@ -635,6 +635,17 @@ def _trusted_group_extraction(deps: FlowDeps, raw_text: str, received_at: str, r
     extractor = getattr(owner, "extract_report", None)
     if not callable(extractor):
         return None
+    # Domain-owned deterministic extractors resolve identifiers and aliases
+    # against their scoped stores.  A freshly-created simulation scope may not
+    # have been materialized yet; letting extraction run first makes a valid
+    # camera report look as if its area is missing and creates a bogus
+    # event-data hold.  Materialize the trusted scope before asking the owner
+    # to extract anything.  This is preparation only: projections still occur
+    # later, after the report has passed the required-fields gate.
+    if scope is not None:
+        ensure_scope = getattr(owner, "ensure_operational_scope", None)
+        if callable(ensure_scope):
+            ensure_scope(scope)
     result = extractor(
         raw_text,
         received_at=received_at,
@@ -779,6 +790,11 @@ def continue_fast_path_report(
 ) -> FlowResult:
     record_extracted_fields(deps.persistence, event_id, plan.extraction)
     if plan.domain_only:
+        attendance_gate = _apply_required_fields_gate(
+            deps, event_id, main_agent, plan.extraction.classification
+        )
+        if attendance_gate is not None:
+            return attendance_gate
         report_commit = _commit_report_domain_state(deps, event_id)
         return _complete_committed_report(deps, event_id, report_commit)
     return continue_from_risk_assessment(
@@ -945,7 +961,13 @@ def _apply_required_fields_gate(
     path's single gate call only ever validated UNCLASSIFIED_TYPE's fixed
     `("area",)` floor, not whatever the newly-chosen real type declares."""
 
-    required = deps.event_type_registry.required_fields_for(classification)
+    required = list(deps.event_type_registry.required_fields_for(classification))
+    if classification == "team_attendance_report":
+        event_for_interval = deps.persistence.fetch_event(event_id) or {}
+        for temporal_field in ("availability_start", "availability_end"):
+            if not event_for_interval.get(temporal_field) and temporal_field not in required:
+                required.append(temporal_field)
+    required = tuple(required)
     if not required:
         return None
 
