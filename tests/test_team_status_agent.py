@@ -4,6 +4,7 @@ from agents import AgentResult
 from agents import runtime as agent_runtime
 from agents.team_status_agent import TeamStatusAgent
 from protocols import Step, execute_step_with_retry
+from profiles.firefighting import FirefightingCrewStatusAgent
 
 
 class _TestTeamStatusAgent(TeamStatusAgent):
@@ -63,6 +64,50 @@ def test_attendance_tool_binds_to_requester_and_cannot_update_another_member(tmp
     assert "was stored" in result
     assert snapshot["101"]["availability"] == "available"
     assert snapshot["102"]["availability"] == "awaiting_response"
+
+
+def test_firefighting_shift_declaration_records_all_named_crew_members(tmp_path, monkeypatch):
+    monkeypatch.setattr(FirefightingCrewStatusAgent, "status_db_path", str(tmp_path / "fire-crew.db"))
+    agent = FirefightingCrewStatusAgent(model="test-model")
+    opened_at = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
+    for identity, name in (("201", "Avi"), ("202", "Omri"), ("203", "Yuval")):
+        agent.register_member(identity, name, opened_at.isoformat())
+    assert agent.approve_roster("commander", opened_at.isoformat()) == 3
+    _call_tool(agent, "start_daily_attendance_check", now_iso=opened_at.isoformat())
+
+    result = _call_tool(
+        agent,
+        "record_crew_shift_status",
+        telegram_identity="commander",
+        member_identities="all",
+        availability="available",
+        source_message_id="opening-shift-1",
+        original_text="All crew members are available for the opening shift.",
+        received_at=(opened_at + timedelta(minutes=5)).isoformat(),
+    )
+
+    assert "3 approved member(s)" in result
+    snapshot = agent.status_store.availability_snapshot((opened_at + timedelta(minutes=6)).isoformat())
+    assert {row["availability"] for row in snapshot} == {"available"}
+
+
+def test_attendance_tool_does_not_default_an_ambiguous_message_to_available(tmp_path):
+    agent = _agent(tmp_path)
+    opened_at = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
+    _prepare_roster(agent, opened_at)
+    _call_tool(agent, "start_daily_attendance_check", now_iso=opened_at.isoformat())
+
+    result = _call_tool(
+        agent,
+        "record_attendance_response",
+        telegram_identity="101",
+        source_message_id="ambiguous-1",
+        original_text="I am checking my availability.",
+    )
+
+    assert "Clarification required" in result
+    snapshot = agent.status_store.availability_snapshot((opened_at + timedelta(minutes=1)).isoformat())
+    assert snapshot[0]["availability"] == "awaiting_response"
 
 
 def test_unknown_requester_is_not_registered_and_roster_approval_is_unchanged(tmp_path):

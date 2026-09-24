@@ -2,9 +2,10 @@
 surveillance (fire cameras/thermal sensors), and mutual-aid dispatch (Profile Split Plan,
 docs/Profile_Split_Plan.md)."""
 
+from datetime import datetime, timezone
 from pathlib import Path
 
-from agents import FriendlyForcesAgent, SurveillanceAgent, TeamStatusAgent, tool
+from agents import FriendlyForcesAgent, SurveillanceAgent, TeamStatusAgent, get_authenticated_request_identity, tool
 from messages import get_catalog
 from persistence import open_team_status_persistence
 from profiles.contracts import AgentSpec, OptimizationPolicy
@@ -56,6 +57,75 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
     timezone_name = "Asia/Jerusalem"
     attendance_check_hour = 8
     response_window_hours = 1
+
+    @tool(
+        "record_crew_shift_status",
+        "Records a commander-confirmed availability declaration for multiple approved crew members. "
+        "Use member_identities='all' only when the source explicitly says the entire approved crew "
+        "has the same status; otherwise pass comma-separated approved member identities or full names. "
+        "This is for a shift declaration, not a single member's own response.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def record_crew_shift_status(
+        self,
+        member_identities: str = "",
+        availability: str = "",
+        source_message_id: str = "",
+        original_text: str = "",
+        received_at: str = "",
+    ) -> str:
+        if not get_authenticated_request_identity():
+            return "The crew shift status was not stored: authenticated requester identity is unavailable."
+
+        normalized = availability.strip().lower()
+        if normalized not in {"available", "unavailable"}:
+            return "Clarification required: specify whether the crew is available or unavailable."
+        if normalized != "available":
+            return "Clarification required: bulk shift recording currently supports an explicit available declaration only."
+
+        approved_members = self.status_store.list_members(approved_only=True)
+        if not approved_members:
+            return "The crew shift status was not stored: the approved roster is empty."
+
+        requested = member_identities.strip()
+        all_tokens = {"all", "everyone", "entire crew", "all crew"}
+        if requested.casefold() in {token.casefold() for token in all_tokens}:
+            selected_members = approved_members
+        else:
+            tokens = [token.strip() for token in requested.replace(";", ",").split(",") if token.strip()]
+            by_identity = {member["telegram_identity"].casefold(): member for member in approved_members}
+            by_name = {member["full_name"].casefold(): member for member in approved_members}
+            selected_members = []
+            unknown = []
+            for token in tokens:
+                member = by_identity.get(token.casefold()) or by_name.get(token.casefold())
+                if member is None:
+                    unknown.append(token)
+                elif member not in selected_members:
+                    selected_members.append(member)
+            if unknown:
+                return f"The crew shift status was not stored: unknown approved member(s): {', '.join(unknown)}."
+            if not selected_members:
+                return "Clarification required: specify which approved crew members are included."
+
+        now_iso = received_at.strip() or datetime.now(timezone.utc).isoformat()
+        source_base = source_message_id.strip() or f"crew-shift-{int(datetime.now(timezone.utc).timestamp())}"
+        text = original_text.strip() or f"crew shift status: {normalized}"
+        stored = 0
+        try:
+            for member in selected_members:
+                self.status_store.record_response(
+                    telegram_identity=member["telegram_identity"],
+                    source_message_id=f"{source_base}:{member['telegram_identity']}",
+                    availability=normalized,
+                    original_text=text,
+                    received_at=now_iso,
+                )
+                stored += 1
+        except Exception as exc:
+            return f"The crew shift status was not stored: {exc}"
+        return f"Crew shift availability recorded for {stored} approved member(s)."
 
 
 class FirefightingExternalForcesAgent(FriendlyForcesAgent):
@@ -125,16 +195,34 @@ PROTOCOLS = [
         commander_only=False,
     ),
     Protocol(
+        name="record_crew_shift_status",
+        description=(
+            "Applies when a commander explicitly declares the availability of multiple approved "
+            "firefighting crew members for a shift -- for example, that the entire crew is available "
+            "at opening; use record_crew_shift_status to persist that declaration. It does not apply "
+            "to a request for a read-only roster picture (use report_crew_status for that)."
+        ),
+        participating_agents=("team_status_agent",),
+        approved_tools=("record_crew_shift_status",),
+        expected_success_output="Confirmation that the declared crew shift availability was recorded.",
+        criticality=CriticalityLevel.LOW,
+        approval_flag=False,
+        requires_confirmation=False,
+        commander_only=True,
+    ),
+    Protocol(
         name="report_crew_status",
         description=(
-            "Applies when someone declares or asks about the firefighting crew's shift roster "
-            "or engine/vehicle availability -- e.g. an opening-shift headcount, or who is on "
-            "duty; does not apply to a single member's own availability report (use "
+            "Applies when someone asks for a read-only picture of the firefighting crew's shift "
+            "roster or engine/vehicle availability -- e.g. who is currently on duty; does not "
+            "apply to a commander declaring multiple members' availability (use "
+            "record_crew_shift_status for that), and does not apply to a single member's own "
+            "availability report (use "
             "record_crew_availability_response for that)."
         ),
         participating_agents=("team_status_agent",),
         approved_tools=("report_team_availability",),
-        expected_success_output="A roster report covering crew headcount and vehicle/engine availability.",
+        expected_success_output="A read-only roster report covering crew headcount and availability.",
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
         requires_confirmation=False,
@@ -291,7 +379,7 @@ OPTIMIZATION_POLICY = OptimizationPolicy()
 # SEC_001 -- no shared persona/group keys.
 
 SIMULATION_USERS = [
-    SimulationPersona(key="lahav_avi_shift_commander", offset=0, permission_level="viewer", full_name=_catalog_text("firefighting.simulation.fire002.persona.lahav_avi_shift_commander"), pre_approved_rosters=("team_status",)),
+    SimulationPersona(key="lahav_avi_shift_commander", offset=0, permission_level="commander", full_name=_catalog_text("firefighting.simulation.fire002.persona.lahav_avi_shift_commander"), pre_approved_rosters=("team_status",)),
     SimulationPersona(key="omri_firefighter", offset=1, permission_level="viewer", full_name=_catalog_text("firefighting.simulation.fire002.persona.omri_firefighter"), pre_approved_rosters=("team_status",)),
     SimulationPersona(key="roni_surveillance_operator", offset=2, permission_level="viewer", full_name=_catalog_text("firefighting.simulation.fire002.persona.roni_surveillance_operator")),
     SimulationPersona(key="kkl_mountains_sector", offset=3, permission_level="viewer", full_name=_catalog_text("firefighting.simulation.fire002.persona.kkl_mountains_sector")),
@@ -301,6 +389,9 @@ SIMULATION_USERS = [
     SimulationPersona(key="citizen_reports_group", offset=7, permission_level="viewer", full_name=_catalog_text("firefighting.simulation.fire002.persona.citizen_reports_group")),
     SimulationPersona(key="fire_police_patrol", offset=8, permission_level="viewer", full_name=_catalog_text("firefighting.simulation.fire002.persona.fire_police_patrol")),
     SimulationPersona(key="district_fire_commander", offset=9, permission_level="viewer", full_name=_catalog_text("firefighting.simulation.fire002.persona.district_fire_commander")),
+    SimulationPersona(key="firefighter_team_a_4", offset=10, permission_level="viewer", full_name=_catalog_text("firefighting.simulation.fire002.persona.firefighter_team_a_4"), pre_approved_rosters=("team_status",)),
+    SimulationPersona(key="firefighter_team_a_5", offset=11, permission_level="viewer", full_name=_catalog_text("firefighting.simulation.fire002.persona.firefighter_team_a_5"), pre_approved_rosters=("team_status",)),
+    SimulationPersona(key="firefighter_team_a_6", offset=12, permission_level="viewer", full_name=_catalog_text("firefighting.simulation.fire002.persona.firefighter_team_a_6"), pre_approved_rosters=("team_status",)),
 ]
 
 SIMULATION_GROUPS = [
@@ -336,37 +427,37 @@ SIMULATIONS = [
         "chats": list(FIRE002_CHATS),
         "steps": [
             {
-                "step": 1, "chat": "fire_response_team", "sender_identity": "lahav_avi_shift_commander",
+                "step": 1, "chat": "fire_response_team", "sender_identity": "lahav_avi_shift_commander", "timestamp": "2026-09-09T07:00:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.lahav_avi_shift_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase1.step1.text"),
             },
             {
-                "step": 2, "chat": "fire_response_team", "sender_identity": "omri_firefighter",
+                "step": 2, "chat": "fire_response_team", "sender_identity": "omri_firefighter", "timestamp": "2026-09-09T07:45:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.omri_firefighter"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase1.step2.text"),
             },
             {
-                "step": 3, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator",
+                "step": 3, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator", "timestamp": "2026-09-09T08:30:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.roni_surveillance_operator"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase1.step3.text"),
             },
             {
-                "step": 4, "chat": "fire_external_forces", "sender_identity": "kkl_mountains_sector",
+                "step": 4, "chat": "fire_external_forces", "sender_identity": "kkl_mountains_sector", "timestamp": "2026-09-09T09:15:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.kkl_mountains_sector"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase1.step4.text"),
             },
             {
-                "step": 5, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator",
+                "step": 5, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator", "timestamp": "2026-09-09T10:00:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.roni_surveillance_operator"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase1.step5.text"),
             },
             {
-                "step": 6, "chat": "fire_external_forces", "sender_identity": "police_hub_agam",
+                "step": 6, "chat": "fire_external_forces", "sender_identity": "police_hub_agam", "timestamp": "2026-09-09T11:00:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.police_hub_agam"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase1.step6.text"),
             },
             {
-                "step": 7, "chat": "fire_commander_dm", "sender_identity": "station_commander",
+                "step": 7, "chat": "fire_commander_dm", "sender_identity": "station_commander", "timestamp": "2026-09-09T11:30:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.station_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase1.step7.text"),
             },
@@ -389,37 +480,37 @@ SIMULATIONS = [
         "chats": list(FIRE002_CHATS),
         "steps": [
             {
-                "step": 1, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator",
+                "step": 1, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator", "timestamp": "2026-09-09T12:15:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.roni_surveillance_operator"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase2.step1.text"),
             },
             {
-                "step": 2, "chat": "fire_external_forces", "sender_identity": "police_hub_agam",
+                "step": 2, "chat": "fire_external_forces", "sender_identity": "police_hub_agam", "timestamp": "2026-09-09T12:22:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.police_hub_agam"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase2.step2.text"),
             },
             {
-                "step": 3, "chat": "fire_response_team", "sender_identity": "lahav_avi_shift_commander",
+                "step": 3, "chat": "fire_response_team", "sender_identity": "lahav_avi_shift_commander", "timestamp": "2026-09-09T12:30:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.lahav_avi_shift_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase2.step3.text"),
             },
             {
-                "step": 4, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator",
+                "step": 4, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator", "timestamp": "2026-09-09T12:38:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.roni_surveillance_operator"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase2.step4.text"),
             },
             {
-                "step": 5, "chat": "fire_response_team", "sender_identity": "yuval_ashed3_commander",
+                "step": 5, "chat": "fire_response_team", "sender_identity": "yuval_ashed3_commander", "timestamp": "2026-09-09T12:42:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.yuval_ashed3_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase2.step5.text"),
             },
             {
-                "step": 6, "chat": "fire_external_forces", "sender_identity": "kkl_mountains_sector",
+                "step": 6, "chat": "fire_external_forces", "sender_identity": "kkl_mountains_sector", "timestamp": "2026-09-09T12:45:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.kkl_mountains_sector"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase2.step6.text"),
             },
             {
-                "step": 7, "chat": "fire_commander_dm", "sender_identity": "station_commander",
+                "step": 7, "chat": "fire_commander_dm", "sender_identity": "station_commander", "timestamp": "2026-09-09T12:50:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.station_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase2.step7.text"),
             },
@@ -442,47 +533,47 @@ SIMULATIONS = [
         "chats": list(FIRE002_CHATS),
         "steps": [
             {
-                "step": 1, "chat": "fire_response_team", "sender_identity": "yuval_ashed3_commander",
+                "step": 1, "chat": "fire_response_team", "sender_identity": "yuval_ashed3_commander", "timestamp": "2026-09-09T13:00:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.yuval_ashed3_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase3.step1.text"),
             },
             {
-                "step": 2, "chat": "fire_external_forces", "sender_identity": "police_hub_agam",
+                "step": 2, "chat": "fire_external_forces", "sender_identity": "police_hub_agam", "timestamp": "2026-09-09T13:03:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.police_hub_agam"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase3.step2.text"),
             },
             {
-                "step": 3, "chat": "fire_response_team", "sender_identity": "citizen_reports_group",
+                "step": 3, "chat": "fire_response_team", "sender_identity": "citizen_reports_group", "timestamp": "2026-09-09T13:07:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.citizen_reports_group"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase3.step3.text"),
             },
             {
-                "step": 4, "chat": "fire_commander_dm", "sender_identity": "station_commander",
+                "step": 4, "chat": "fire_commander_dm", "sender_identity": "station_commander", "timestamp": "2026-09-09T13:10:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.station_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase3.step4.text"),
             },
             {
-                "step": 5, "chat": "fire_external_forces", "sender_identity": "fire_police_patrol",
+                "step": 5, "chat": "fire_external_forces", "sender_identity": "fire_police_patrol", "timestamp": "2026-09-09T13:14:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.fire_police_patrol"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase3.step5.text"),
             },
             {
-                "step": 6, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator",
+                "step": 6, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator", "timestamp": "2026-09-09T13:18:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.roni_surveillance_operator"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase3.step6.text"),
             },
             {
-                "step": 7, "chat": "fire_external_forces", "sender_identity": "district_fire_commander",
+                "step": 7, "chat": "fire_external_forces", "sender_identity": "district_fire_commander", "timestamp": "2026-09-09T13:25:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.district_fire_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase3.step7.text"),
             },
             {
-                "step": 8, "chat": "fire_response_team", "sender_identity": "lahav_avi_shift_commander",
+                "step": 8, "chat": "fire_response_team", "sender_identity": "lahav_avi_shift_commander", "timestamp": "2026-09-09T13:45:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.lahav_avi_shift_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase3.step8.text"),
             },
             {
-                "step": 9, "chat": "fire_commander_dm", "sender_identity": "station_commander",
+                "step": 9, "chat": "fire_commander_dm", "sender_identity": "station_commander", "timestamp": "2026-09-09T14:15:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.station_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase3.step9.text"),
             },

@@ -688,6 +688,76 @@ def test_persist_step_outcomes_matches_a_step_id_less_step_whose_task_text_was_m
     assert persisted["status"] == "succeeded"
 
 
+def test_execution_injects_complete_event_provenance_into_every_step(deps, monkeypatch):
+    """Write-capable agents must receive the immutable sender/provenance envelope,
+    even when their formulated step declares no event-data fields.  Attendance
+    writes use these values to avoid an unnecessary UNCLEAR_TASK refusal."""
+    event_id = begin_report(
+        deps,
+        "member is unavailable for reserve duty",
+        "telegram",
+        "2026-08-20T10:00:00",
+        "9000000000000000",
+        source_message_id="telegram-msg-42",
+    )
+    deps.persistence.update_event(
+        event_id,
+        {
+            "availability_start": "2026-08-20T12:00:00+00:00",
+            "availability_end": "2026-08-22T18:00:00+00:00",
+            "absence_reason": "reserve duty",
+        },
+    )
+    captured = {}
+
+    def _capture_execute(steps, agents_by_name, settings, **kwargs):
+        captured["task"] = steps[0].task_text
+        outcome = StepOutcome(step=steps[0], result_text="stored", attempt_count=1, succeeded=True)
+        return ProtocolRunResult((outcome,), completed=True)
+
+    monkeypatch.setattr(flows_module, "execute_steps", _capture_execute)
+    monkeypatch.setattr(
+        flows_module,
+        "_finish_protocol_assessment",
+        lambda *args, **kwargs: flows_module.FlowResult(event_id, "succeeded", "ok"),
+    )
+    protocol = Protocol(
+        name="record_attendance_response",
+        description="record attendance",
+        participating_agents=("reference_agent",),
+        approved_tools=("record_attendance_response",),
+        expected_success_output="stored",
+        criticality=CriticalityLevel.LOW,
+        approval_flag=False,
+    )
+    step = Step(agent_name="reference_agent", task_text="store the report", allowed_tools=())
+
+    result = flows_module._execute_protocol_plan(deps, event_id, object(), object(), protocol, (step,), ())
+
+    assert result.outcome == "succeeded"
+    assert '"sender_identity": "9000000000000000"' in captured["task"]
+    assert '"source_message_id": "telegram-msg-42"' in captured["task"]
+    assert '"received_at": "2026-08-20T10:00:00"' in captured["task"]
+    assert '"raw_text": "member is unavailable for reserve duty"' in captured["task"]
+
+
+def test_approved_async_event_is_not_expired_by_its_original_queue_deadline(deps):
+    event_id = begin_report(
+        deps,
+        "camera update awaiting commander approval",
+        "telegram",
+        "2026-08-20T10:00:00",
+        "viewer-1",
+        deadline_at="2000-01-01T00:00:00+00:00",
+    )
+    deps.persistence.update_event(
+        event_id,
+        {"approval_answered_at": "2026-08-20T10:30:00+00:00"},
+    )
+
+    assert flows_module._deadline_failure(deps, event_id, "formulation") is None
+
+
 def test_persist_step_outcomes_matches_multiple_step_id_less_steps_by_position(deps):
     """The same guarantee across more than one step_id == "" step in the same
     plan — proves the position-based match isn't a single-step coincidence

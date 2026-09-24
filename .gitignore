@@ -223,6 +223,7 @@ __marimo__/
 
 #data folder
 data/
+/backups/
 Task75D_screenshots/
 
 pyrefly.toml

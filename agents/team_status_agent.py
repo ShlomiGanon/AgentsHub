@@ -32,6 +32,11 @@ class TeamStatusAgent(Agent):
         "roster. A member is either available or unavailable. Unavailable always requires a "
         "reason and may include a duration in days. If a message is unclear or says unavailable "
         "without a reason, ask a short clarification question and do not invent a status. "
+        "For a protocol run, the authenticated requester identity and the authoritative event "
+        "envelope supply the member identity, source message ID, original text, and received-at "
+        "time. Never refuse a write because those provenance fields are absent from the prose task "
+        "and never ask the caller to repeat them; use the envelope/runtime context and call the "
+        "approved write tool with the normalized availability, reason, and duration. "
         "Responses received after the one-hour window require commander approval. When the Main "
         "Agent asks for the team picture, call report_team_availability and return its complete "
         "name-by-name result without dropping unavailable or missing members."
@@ -155,7 +160,7 @@ class TeamStatusAgent(Agent):
     def record_attendance_response(
         self,
         source_message_id: str = "direct-response",
-        availability: str = "available",
+        availability: str = "",
         original_text: str = "",
         reason: str = "",
         unavailable_days: int = 0,

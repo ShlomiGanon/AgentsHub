@@ -73,7 +73,7 @@ from orchestrator.group_routing import (  # re-exported: api may only import orc
     scope_deps,
 )
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
-from protocols import CriticalityLevel, Step, StepOutcome
+from protocols import CriticalityLevel, EVENT_DATA_FIELDS, Step, StepOutcome
 from protocols.executor import execute_steps
 from agents import AgentModelError, AgentTimeoutError, authenticated_request_identity
 from tools import get_trace_id
@@ -96,6 +96,12 @@ logger = logging.getLogger(__name__)
 
 def _deadline_failure(deps: "FlowDeps", event_id: str, next_stage: str) -> "FlowResult | None":
     event = deps.persistence.fetch_event(event_id)
+    # Approval is an explicit asynchronous pause.  Its original queue deadline
+    # must not invalidate the approved continuation while a commander is
+    # reviewing the hold; otherwise a legitimate approval can never reach task
+    # formulation or the approved tool.
+    if event is not None and event.get("approval_answered_at"):
+        return None
     deadline_at = event.get("deadline_at") if event is not None else None
     if not deadline_at:
         return None
@@ -961,16 +967,37 @@ def _execute_protocol_plan(
     agents_by_name = {name: deps.registry.get(name) for name in protocol.participating_agents}
     persisted_rows = event.get("steps", [])
     prior = _prior_outcomes(persisted_rows, steps)
+    # Every agent step receives the complete immutable envelope of the event that
+    # caused the protocol run.  Previously only fields listed in
+    # ``required_event_fields`` were injected.  That let a model see the parsed
+    # absence interval while not seeing the sender identity, source message ID,
+    # original text, or receipt time needed by write tools such as
+    # ``record_attendance_response``.  Those values already exist in persistence
+    # and the authenticated execution context; exposing them here prevents a
+    # needless UNCLEAR_TASK refusal without allowing the model to invent them.
+    event_envelope = {
+        "event_id": event.get("event_id"),
+        "sender_identity": event.get("sender_identity"),
+        "sender_permission_level": event.get("sender_permission_level"),
+        "source": event.get("source"),
+        "source_message_id": event.get("source_message_id"),
+        "received_at": event.get("received_at"),
+        "raw_text": event.get("raw_text"),
+        "validated_event_fields": {name: event.get(name) for name in EVENT_DATA_FIELDS},
+    }
+    event_envelope_text = (
+        "\n\nAuthoritative event envelope (use these values; do not ask the caller to provide them): "
+        + json.dumps(event_envelope, ensure_ascii=False, sort_keys=True)
+    )
     execution_steps = tuple(
         replace(
             step,
             task_text=(
                 f"{step.task_text}\n\nCurrent validated event data JSON (use this as the source of truth): "
                 f"{json.dumps({name: event.get(name) for name in step.required_event_fields}, ensure_ascii=False, sort_keys=True)}"
+                f"{event_envelope_text}"
             ),
         )
-        if step.required_event_fields
-        else step
         for step in steps
     )
     with authenticated_request_identity(event["sender_identity"]):

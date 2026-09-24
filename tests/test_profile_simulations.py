@@ -566,11 +566,21 @@ def test_firefighting_declares_the_migrated_fire002_series(test_core_model, test
     fire_persona_keys = {
         "lahav_avi_shift_commander", "omri_firefighter", "roni_surveillance_operator", "kkl_mountains_sector",
         "police_hub_agam", "station_commander", "yuval_ashed3_commander", "citizen_reports_group",
-        "fire_police_patrol", "district_fire_commander",
+        "fire_police_patrol", "district_fire_commander", "firefighter_team_a_4", "firefighter_team_a_5",
+        "firefighter_team_a_6",
     }
     all_persona_keys = [p.key for p in loaded.simulation_users]
     assert set(all_persona_keys) == fire_persona_keys
     assert len(all_persona_keys) == len(set(all_persona_keys))  # no key or offset collisions
+    fire_roster_keys = {p.key for p in loaded.simulation_users if "team_status" in p.pre_approved_rosters}
+    assert fire_roster_keys == {
+        "lahav_avi_shift_commander",
+        "omri_firefighter",
+        "yuval_ashed3_commander",
+        "firefighter_team_a_4",
+        "firefighter_team_a_5",
+        "firefighter_team_a_6",
+    }
 
     fire_group_keys = {"fire_response_team", "fire_cameras", "fire_external_forces"}
     group_keys = {g.key for g in loaded.simulation_groups}
