@@ -53,6 +53,8 @@ class OptimizationPolicy:
     direct_deadline_seconds: int = 75
     job_deadline_seconds: int = 180
     stage_model_policies: Mapping[str, StageModelPolicy] = field(default_factory=dict)
+    auto_approve_simulations: bool = False
+    fast_simple_reports: bool = False
 
 
 @dataclass(frozen=True)

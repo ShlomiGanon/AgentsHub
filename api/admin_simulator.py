@@ -752,7 +752,7 @@ SIMULATOR_BODY = """
     let mark = watermark || { status_len: 0, sent_len: 0 };
     while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
       await new Promise(function (resolve) { setTimeout(resolve, POLL_INTERVAL_MS); });
-      if (pollGenerationByChatId[chatId] !== myGeneration) return;
+      if (pollGenerationByChatId[chatId] !== myGeneration) return false;
       let result;
       try {
         result = await apiCall(
@@ -762,15 +762,17 @@ SIMULATOR_BODY = """
           null
         );
       } catch (error) {
-        return; // a network hiccup while quietly watching for a follow-up isn't worth an error bubble
+        return false; // a network hiccup while quietly watching for a follow-up isn't worth an error bubble
       }
-      if (pollGenerationByChatId[chatId] !== myGeneration) return;
-      if (result.status !== 200 || !result.payload) return;
+      if (pollGenerationByChatId[chatId] !== myGeneration) return false;
+      if (result.status !== 200 || !result.payload) return false;
       if (result.payload.watermark) mark = result.payload.watermark;
       if (result.payload.reply_text) {
         appendBubble(chatKey, 'sys', t('system_label'), result.payload.reply_text, null);
+        return true;
       }
     }
+    return false;
   }
 
   async function sendNext(chatKey) {
@@ -826,10 +828,12 @@ SIMULATOR_BODY = """
     // real bot uses — pollSimulatorChat() (Priority 3) watches for it quietly in the
     // background, without blocking this step's queue.
     setBubbleText(reply, payload.reply_text || t('bot_no_reply'), null, false);
-    queue.shift();
+    const completed = await pollSimulatorChat(chatKey, request.body.chat_id, payload.watermark, myGeneration);
+    if (completed || payload.reply_text) {
+      queue.shift();
+    }
     state.busy = false;
     updateGlobalState();
-    pollSimulatorChat(chatKey, request.body.chat_id, payload.watermark, myGeneration);
   }
 
   // ---- mapping panel: prompts for any Telegram ID a manually-provided scenario is missing ----

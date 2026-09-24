@@ -4,7 +4,32 @@
     "domain": "FIRE_AND_RESCUE",
     "phase": "1_PREPARATION_ROUTINE",
     "title": "אירוע כיבוי והצלה - שלב מכין: שגרה, עומס חום ותחזוקת ציוד",
-    "description": "נתוני פתיחה ליום שרבי: שישה כבאים בצוות א׳, שני רכבי כיבוי זמינים בתחנה ושלושה נכסי תצפית במצב שגרה."
+    "description": "נתוני פתיחה ליום שרבי: שישה כבאים בצוות א׳, שני רכבי כיבוי זמינים בתחנה ושלושה נכסי תצפית במצב שגרה.",
+    "continues_from": null,
+    "continues_to": "FIRE_002_PHASE_2"
+  },
+  "canonical_assets": {
+    "crew": [
+      { "id": "FF-001", "name": "אבי", "full_name": "להב אבי", "role": "מפקד משמרת", "team": "א", "persona_key": "lahav_avi_shift_commander" },
+      { "id": "FF-002", "name": "עמרי", "full_name": "רס\"ל עמרי", "role": "כבאי", "team": "א", "persona_key": "omri_firefighter" },
+      { "id": "FF-003", "name": "יובל", "full_name": "רס\"ל יובל", "role": "מפקד צוות אשד 3", "team": "א", "persona_key": "yuval_ashed3_commander" },
+      { "id": "FF-004", "name": "נועם ברק", "full_name": "נועם ברק", "role": "כבאי סימולציה", "team": "א", "persona_key": "firefighter_team_a_4" },
+      { "id": "FF-005", "name": "איתן לוי", "full_name": "איתן לוי", "role": "כבאי סימולציה", "team": "א", "persona_key": "firefighter_team_a_5" },
+      { "id": "FF-006", "name": "דניאל שחר", "full_name": "דניאל שחר", "role": "כבאי סימולציה", "team": "א", "persona_key": "firefighter_team_a_6" }
+    ],
+    "vehicles": [
+      { "id": "VEH-ASHED3", "callsign": "ASHED-3", "name": "אשד 3", "type": "רכב כיבוי", "initial_status": "available_at_station" },
+      { "id": "VEH-CARMEL1", "callsign": "CARMEL-1", "name": "כרמל 1", "type": "רכב כיבוי", "initial_status": "available_at_station" }
+    ],
+    "cameras": [
+      { "id": "CAM-01", "name": "מצלמה תרמית מגדל תצפית אורנים", "aliases": ["מצלמה 01", "מגדל אורנים", "תרמית אורנים"], "area": "pine_ridge", "type": "thermal", "has_temperature_sensor": true, "initial_status": "active" },
+      { "id": "CAM-02", "name": "מצלמת צומת המחצבה", "aliases": ["מצלמה 02", "צומת המחצבה"], "area": "quarry_junction", "type": "optical", "has_temperature_sensor": false, "initial_status": "active" },
+      { "id": "CAM-03", "name": "מצלמת רכס אורנים", "aliases": ["מצלמה 03", "רכס אורנים"], "area": "pine_ridge", "type": "optical", "has_temperature_sensor": false, "initial_status": "active" }
+    ],
+    "drones": [
+      { "id": "DRONE-01", "callsign": "תצפית-01", "name": "רחפן תצפית 01", "model": "DJI Matrice 350 RTK", "initial_status": "ready", "initial_area": "fire_station" },
+      { "id": "DRONE-02", "callsign": "גיבוי-02", "name": "רחפן גיבוי 02", "model": "DJI Mavic 3T", "initial_status": "ready", "initial_area": "fire_station" }
+    ]
   },
   "event_stream": [
     {
@@ -14,7 +39,7 @@
       "source_chat": "TELEGRAM_GROUP_RESPONSE_TEAM",
       "payload": {
         "sender": "להב אבי - מפקד משמרת",
-      "message": "בוקר טוב. סד\"כ פתיחה מאומת: כל ששת הכבאים בצוות א׳ זמינים למשמרת — אבי, עמרי, יובל ושלושה אנשי צוות המסומנים כנתוני סימולציה. אשד 3 וכרמל 1 תקינים, מבצעיים וזמינים בתחנה להקצאה."
+        "message": "בוקר טוב. סד\"כ פתיחה מאומת: כל ששת הכבאים בצוות א׳ זמינים למשמרת — אבי, עמרי, יובל ושלושה אנשי צוות המסומנים כנתוני סימולציה. אשד 3 וכרמל 1 תקינים, מבצעיים וזמינים בתחנה להקצאה."
       }
     },
     {
@@ -24,8 +49,9 @@
       "source_chat": "TELEGRAM_GROUP_RESPONSE_TEAM",
       "payload": {
         "sender": "רס\"ל עמרי - כבאי",
-        "message": "מעדכן שאני צריך לצאת ב-12:00 לבדיקה רפואית תקופתית, חוזר למשמרת ב-15:00."
-      }
+        "message": "מעדכן שאני צריך לצאת ב-12:00 לבדיקה רפואית תקופתית. חזרה מתוכננת ב-15:00."
+      },
+      "scenario_note": "15:00 היא שעת חזרה מתוכננת בלבד — לא אישור שעמרי חזר בפועל. היעדרות בפועל: 12:00-15:00."
     },
     {
       "step": 3,
@@ -34,8 +60,9 @@
       "source_chat": "TELEGRAM_GROUP_CAMERAS",
       "payload": {
         "sender": "רוני - מפעיל תצפיות",
-        "message": "חיישן טמפרטורה ומצלמה תרמית במגדל תצפית אורנים מציגים התראת חום נמוכה עקב שרב כבד ורוחות מזרחיות."
-      }
+        "message": "חיישן טמפרטורה ומצלמה תרמית במגדל תצפית אורנים (CAM-01) מציגים התראת חום נמוכה עקב שרב כבד ורוחות מזרחיות."
+      },
+      "scenario_note": "התראת חום נמוכה (severity: low) היא חומרת ההתראה. מצב המצלמה נשאר active."
     },
     {
       "step": 4,
@@ -54,8 +81,9 @@
       "source_chat": "TELEGRAM_GROUP_CAMERAS",
       "payload": {
         "sender": "רוני - מפעיל תצפיות",
-        "message": "מצלמה 02 (צומת המחצבה) הופסקה יזומית לטובת ניקוי עדשה עקב אבק כבד."
-      }
+        "message": "מצלמה 02 (CAM-02, צומת המחצבה) הופסקה יזומית לטובת ניקוי עדשה עקב אבק כבד."
+      },
+      "scenario_note": "מצב CAM-02 משתנה מ-active ל-offline. זוהי השבתה יזומית לתחזוקה."
     },
     {
       "step": 6,
@@ -65,7 +93,9 @@
       "payload": {
         "sender": "מוקד משטרה - אגמ",
         "message": "דיווח על שריפת קוצים קטנה בצד כביש 444, כנראה מסיגריה. ניידת במקום, אין סיכון למבנים."
-      }
+      },
+      "scenario_note": "אירוע EVT-FIRE-444-BRUSH. זוהי שריפה קטנה מבודדת בשולי הכביש. בחלק 2 השריפה מתפשטת ונכנסת ליער — אותו אירוע שמסלים, לא אירוע חדש.",
+      "event_identity": "EVT-FIRE-444-BRUSH"
     },
     {
       "step": 7,
@@ -83,7 +113,7 @@
       "trigger_step": 7,
       "responsible_agent": "main_orchestrator",
       "action_type": "ROUTINE_SITREP",
-      "description": "הסוכן הראשי פונה לסוכן כ\"א וסוכן חוזי ומציג דוח: עמרי בבדיקה מ-12:00 (סד\"כ יורד ל-5), רכבים מבצעיים, ואזהרת שרב פעילה מול קק\"ל."
+      "description": "הסוכן הראשי פונה לסוכן כ\"א ולסוכן תצפיות ומציג דוח מצב: עמרי הודיע על יציאה מ-12:00 עם חזרה מתוכננת ב-15:00 (סד\"כ צפוי לרדת ל-5 בצהריים); שני הרכבים מבצעיים ובתחנה; CAM-01 פעילה עם התראת חום נמוכה; CAM-02 במצב offline לניקוי; CAM-03 פעילה; שני הרחפנים זמינים; הנחיית קק\"ל לאיסור הדלקת אש; דווח על שריפת קוצים מבודדת בכביש 444 (ניידת במקום, ללא סיכון למבנים)."
     }
   ]
 }

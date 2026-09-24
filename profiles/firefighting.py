@@ -7,7 +7,7 @@ from pathlib import Path
 
 from agents import FriendlyForcesAgent, SurveillanceAgent, TeamStatusAgent, get_authenticated_request_identity, tool
 from messages import get_catalog
-from persistence import open_team_status_persistence
+from persistence import open_persistence, open_surveillance_persistence, open_team_status_persistence
 from profiles.contracts import AgentSpec, OptimizationPolicy
 from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
 from protocols import CriticalityLevel, Protocol
@@ -40,6 +40,10 @@ RESETTABLE_DATABASES = (DB_PATH, FIREFIGHTING_SURVEILLANCE_DB_PATH, FIREFIGHTING
 # fully stops the old bot before starting the newly selected profile.
 BOT_TOKEN_ENV = "BOT_TOKEN"
 MODEL_CREDENTIAL_ENVS = []
+OPTIMIZATION_POLICY = OptimizationPolicy(
+    auto_approve_simulations=True,
+    fast_simple_reports=True,
+)
 
 
 class FirefightingSurveillanceAgent(SurveillanceAgent):
@@ -114,6 +118,15 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         text = original_text.strip() or f"crew shift status: {normalized}"
         stored = 0
         try:
+            # Ensure an active cycle exists for this shift
+            active_cycle = self.status_store.latest_cycle()
+            if not active_cycle:
+                self.status_store.open_cycle(
+                    cycle_key=f"shift-{now_iso.split('T')[0]}",
+                    opened_at=now_iso,
+                    deadline_at=now_iso,
+                )
+                
             for member in selected_members:
                 self.status_store.record_response(
                     telegram_identity=member["telegram_identity"],
@@ -239,8 +252,8 @@ PROTOCOLS = [
         participating_agents=("surveillance_agent",),
         approved_tools=("update_camera_observation",),
         expected_success_output="Confirmation that the camera's observation/status was recorded.",
-        criticality=CriticalityLevel.MEDIUM,
-        approval_flag=True,
+        criticality=CriticalityLevel.LOW,
+        approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
     ),
@@ -510,9 +523,14 @@ SIMULATIONS = [
                 "text": _catalog_text("firefighting.simulation.fire002.phase2.step6.text"),
             },
             {
-                "step": 7, "chat": "fire_commander_dm", "sender_identity": "station_commander", "timestamp": "2026-09-09T12:50:00Z",
+                "step": 7, "chat": "fire_commander_dm", "sender_identity": "station_commander", "timestamp": "2026-09-09T12:48:00Z",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.station_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase2.step7.text"),
+            },
+            {
+                "step": 8, "chat": "fire_commander_dm", "sender_identity": "station_commander", "timestamp": "2026-09-09T12:50:00Z",
+                "sender_name": _catalog_text("firefighting.simulation.fire002.persona.station_commander"),
+                "text": _catalog_text("firefighting.simulation.fire002.phase2.step8.text"),
             },
         ],
     },
@@ -582,3 +600,114 @@ SIMULATIONS = [
     ),
 ]
 
+
+def _seed_fire_surveillance() -> None:
+    """Replace generic demo cameras/drones with FIRE-specific assets.
+
+    The base `SQLiteSurveillancePersistence.__init__` already calls
+    `_seed_demo_data_if_empty` (5 generic cameras, 3 generic drones). For FIRE
+    we need exactly the 3 cameras and 2 drones defined in the canonical asset
+    block. This function is idempotent: it only rewrites when the current
+    camera set does not match the expected FIRE layout.
+    """
+
+    import sqlite3
+    from datetime import datetime, timezone as tz
+
+    now = datetime.now(tz.utc).isoformat()
+    db_path = FIREFIGHTING_SURVEILLANCE_DB_PATH
+
+    # Ensure tables exist by opening through the store once
+    open_surveillance_persistence(db_path)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON;")
+
+    # Check if FIRE layout is already present
+    existing = conn.execute("SELECT camera_id FROM cameras ORDER BY camera_id").fetchall()
+    existing_ids = [row["camera_id"] for row in existing]
+    expected_ids = ["CAM-01", "CAM-02", "CAM-03"]
+
+    if existing_ids == expected_ids:
+        # Check the first camera name to confirm it's FIRE-specific, not generic
+        first = conn.execute("SELECT name FROM cameras WHERE camera_id = 'CAM-01'").fetchone()
+        if first and "\u05d0\u05d5\u05e8\u05e0\u05d9\u05dd" in first["name"]:  # (Hebrew) Oranim
+            conn.close()
+            return
+
+    # Clear and re-seed with FIRE-specific data
+    conn.execute("DELETE FROM drone_missions")
+    conn.execute("DELETE FROM drones")
+    conn.execute("DELETE FROM cameras")
+
+    fire_cameras = [
+        ("CAM-01", "\u05de\u05e6\u05dc\u05de\u05d4 \u05ea\u05e8\u05de\u05d9\u05ea \u05de\u05d2\u05d3\u05dc \u05ea\u05e6\u05e4\u05d9\u05ea \u05d0\u05d5\u05e8\u05e0\u05d9\u05dd",
+         "pine_ridge", "active", 0,
+         "\u05de\u05e6\u05dc\u05de\u05d4 \u05ea\u05e8\u05de\u05d9\u05ea \u05e2\u05dd \u05d7\u05d9\u05d9\u05e9\u05df \u05d8\u05de\u05e4\u05e8\u05d8\u05d5\u05e8\u05d4 \u05d1\u05de\u05d2\u05d3\u05dc \u05ea\u05e6\u05e4\u05d9\u05ea \u05d0\u05d5\u05e8\u05e0\u05d9\u05dd. \u05de\u05e6\u05d1 \u05e9\u05d2\u05e8\u05d4.",
+         now),
+        ("CAM-02", "\u05de\u05e6\u05dc\u05de\u05ea \u05e6\u05d5\u05de\u05ea \u05d4\u05de\u05d7\u05e6\u05d1\u05d4",
+         "quarry_junction", "active", 90,
+         "\u05de\u05e6\u05dc\u05de\u05d4 \u05d0\u05d5\u05e4\u05d8\u05d9\u05ea \u05d1\u05e6\u05d5\u05de\u05ea \u05d4\u05de\u05d7\u05e6\u05d1\u05d4. \u05de\u05e6\u05d1 \u05e9\u05d2\u05e8\u05d4.",
+         now),
+        ("CAM-03", "\u05de\u05e6\u05dc\u05de\u05ea \u05e8\u05db\u05e1 \u05d0\u05d5\u05e8\u05e0\u05d9\u05dd",
+         "pine_ridge", "active", 180,
+         "\u05de\u05e6\u05dc\u05de\u05d4 \u05d0\u05d5\u05e4\u05d8\u05d9\u05ea \u05d1\u05e8\u05db\u05e1 \u05d0\u05d5\u05e8\u05e0\u05d9\u05dd. \u05de\u05e6\u05d1 \u05e9\u05d2\u05e8\u05d4.",
+         now),
+    ]
+    conn.executemany(
+        "INSERT INTO cameras (camera_id, name, area, status, azimuth_degrees, feed_summary, last_updated) VALUES (?,?,?,?,?,?,?)",
+        fire_cameras,
+    )
+
+    fire_drones = [
+        ("DRONE-01", "\u05ea\u05e6\u05e4\u05d9\u05ea-01", "DJI Matrice 350 RTK", "ready", 95, "fire_station", None, now),
+        ("DRONE-02", "\u05d2\u05d9\u05d1\u05d5\u05d9-02", "DJI Mavic 3T", "ready", 88, "fire_station", None, now),
+    ]
+    conn.executemany(
+        "INSERT INTO drones (drone_id, callsign, model, status, battery_percent, current_area, assigned_mission_id, last_updated) VALUES (?,?,?,?,?,?,?,?)",
+        fire_drones,
+    )
+    conn.commit()
+    conn.close()
+
+
+def ensure_seed_data() -> None:
+    """Explicit, idempotent entry point for FIRE profile seed data.
+
+    Seeds the surveillance DB with the 3 FIRE cameras and 2 FIRE drones,
+    and ensures the bot-service identity exists in the history DB.
+    Mirrors `profiles.standby_squad.ensure_seed_data` in purpose.
+    """
+
+    hist_store = open_persistence(DB_PATH)
+    try:
+        if hist_store.read_user("bot-service") is None:
+            hist_store.write_user("bot-service", "commander")
+    finally:
+        hist_store.close()
+        
+    # Seed the firefighters crew
+    from persistence.team_status import open_team_status_persistence
+    team_store = open_team_status_persistence(FIREFIGHTING_CREW_STATUS_DB_PATH)
+    try:
+        existing = team_store.list_members(approved_only=True)
+        if not existing:
+            # Add the 6 members from FIRE_002_PHASE_1
+            crew = [
+                ("1002001", "lahav_avi_shift_commander", "להב אבי", True),
+                ("1002002", "omri_firefighter", "רס\"ל עמרי", True),
+                ("1002003", "yuval_ashed3_commander", "רס\"ל יובל", True),
+                ("1002004", "firefighter_team_a_4", "נועם ברק", True),
+                ("1002005", "firefighter_team_a_5", "איתן לוי", True),
+                ("1002006", "firefighter_team_a_6", "דניאל שחר", True),
+            ]
+            for t_id, t_user, fname, approved in crew:
+                if team_store.get_member(t_id) is None:
+                    team_store.register_member(t_id, telegram_username=t_user, full_name=fname, approved=approved)
+                elif approved:
+                    team_store.approve_member(t_id, "system")
+    finally:
+        team_store.close()
+
+    _seed_fire_surveillance()

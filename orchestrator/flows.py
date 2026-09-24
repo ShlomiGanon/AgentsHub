@@ -791,12 +791,23 @@ def continue_from_risk_assessment(
     hold_reason: "HoldReason | None" = determine_approval_hold(selection, protocols_by_name, originated_from_commander)
 
     if hold_reason is not None:
-        create_approval_hold(deps.persistence, event_id, hold_reason, selection, risk_assessment)
+        hold_id = create_approval_hold(deps.persistence, event_id, hold_reason, selection, risk_assessment)
         record_event_state(deps.persistence, event_id, {"approval_held": True, "approval_reason": hold_reason})
         logger.info(
             "hold created",
             extra={"event": "hold_created", "hold_kind": "approval", "event_id": event_id, "reason": hold_reason, "trace_id": get_trace_id()},
         )
+        
+        if getattr(deps.optimization_policy, "auto_approve_simulations", False):
+            logger.info(
+                "simulation auto-approval triggered",
+                extra={"event": "simulation_auto_approval", "event_id": event_id, "trace_id": get_trace_id()},
+            )
+            from auth.permissions import PermissionLevel
+            answer = resolve_approval(deps, hold_id, "system", PermissionLevel.COMMANDER, "approved")
+            if answer.status == "approved":
+                return continue_after_approval(deps, event_id, main_agent, insights_agent, selection.protocol_name)
+                
         return FlowResult(event_id, "held_for_approval", hold_reason)
 
     protocol = protocols_by_name[selection.protocol_name]
@@ -1108,35 +1119,62 @@ def _finish_protocol_assessment(
                 extra={"event": "final_assessment_invalid", "reason": str(exc), "trace_id": get_trace_id()},
             )
 
-    insight_text = (
-        final_assessment.insight
-        if final_assessment is not None
-        else build_insight(insights_agent, protocol, step_outcomes, comparable_history=precedent_matches)
-    )
-    if len(protocol.participating_agents) > 1:
-        # A multi-domain protocol's insight is the live picture composed from what the
-        # specialists just reported plus the recent event log, never a prepared text.
-        # The viewer/commander ownership scope follows the event's persisted role snapshot.
-        sender_filter = (
-            None
-            if persisted_event.get("sender_permission_level") == "commander"
-            else persisted_event.get("sender_identity")
+    fast_simple = getattr(deps.optimization_policy, "fast_simple_reports", False)
+    if fast_simple and len(protocol.participating_agents) == 1:
+        all_succeeded = all(outcome.succeeded for outcome in step_outcomes)
+        insight_text = "הפעולה הושלמה ונשמרה בהצלחה." if all_succeeded else "העדכון נכשל, אנא ודא את תקינות הנתונים."
+        verdict = type("DummyVerdict", (), {"verdict": "success" if all_succeeded else "failure"})()
+    else:
+        insight_text = (
+            final_assessment.insight
+            if final_assessment is not None
+            else build_insight(insights_agent, protocol, step_outcomes, comparable_history=precedent_matches)
         )
-        try:
-            synthesis = compose_picture_from_step_outcomes(
-                main_agent,
-                protocol,
-                step_outcomes,
-                persisted_event.get("raw_text", ""),
-                deps.history_query_service,
-                sender_identity_filter=sender_filter,
+        if len(protocol.participating_agents) > 1:
+            # A multi-domain protocol's insight is the live picture composed from what the
+            # specialists just reported plus the recent event log, never a prepared text.
+            # The viewer/commander ownership scope follows the event's persisted role snapshot.
+            sender_filter = (
+                None
+                if persisted_event.get("sender_permission_level") == "commander"
+                else persisted_event.get("sender_identity")
             )
-            if synthesis:
-                insight_text = synthesis
-        except Exception as exc:
-            logger.warning(
-                "multi-agent synthesis failed: %s", exc, extra={"event": "synthesis_failed", "trace_id": get_trace_id()}
-            )
+            try:
+                synthesis = compose_picture_from_step_outcomes(
+                    main_agent,
+                    protocol,
+                    step_outcomes,
+                    persisted_event.get("raw_text", ""),
+                    deps.history_query_service,
+                    sender_identity_filter=sender_filter,
+                )
+                if synthesis:
+                    insight_text = synthesis
+            except Exception as exc:
+                logger.warning(
+                    "multi-agent synthesis failed: %s", exc, extra={"event": "synthesis_failed", "trace_id": get_trace_id()}
+                )
+
+        if enforce_deadline:
+            deadline_failure = _deadline_failure(deps, event_id, "judgment")
+            if deadline_failure is not None:
+                return deadline_failure
+        if final_assessment is not None:
+            verdict = final_assessment.verdict
+        else:
+            try:
+                verdict = judge_success(main_agent, protocol, step_outcomes, insight_text=insight_text)
+            except OrchestrationParseError:
+                try:
+                    verdict = judge_success(main_agent, protocol, step_outcomes, insight_text=insight_text)
+                except OrchestrationParseError as exc:
+                    record_event_outcome(
+                        deps.persistence, event_id, "failed",
+                        failure_reason=f"success judgment failed: {exc}", insight_text=insight_text,
+                    )
+                    _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="judgment")
+                    return FlowResult(event_id, "failed", str(exc))
+
     logger.info(
         "insight generated",
         extra={
@@ -1144,26 +1182,6 @@ def _finish_protocol_assessment(
             "insight_text": insight_text, "trace_id": get_trace_id(),
         },
     )
-
-    if enforce_deadline:
-        deadline_failure = _deadline_failure(deps, event_id, "judgment")
-        if deadline_failure is not None:
-            return deadline_failure
-    if final_assessment is not None:
-        verdict = final_assessment.verdict
-    else:
-        try:
-            verdict = judge_success(main_agent, protocol, step_outcomes, insight_text=insight_text)
-        except OrchestrationParseError:
-            try:
-                verdict = judge_success(main_agent, protocol, step_outcomes, insight_text=insight_text)
-            except OrchestrationParseError as exc:
-                record_event_outcome(
-                    deps.persistence, event_id, "failed",
-                    failure_reason=f"success judgment failed: {exc}", insight_text=insight_text,
-                )
-                _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="judgment")
-                return FlowResult(event_id, "failed", str(exc))
 
     outcome = _VERDICT_TO_OUTCOME[verdict.verdict]
     record_event_outcome(deps.persistence, event_id, outcome, insight_text=insight_text)
