@@ -291,7 +291,10 @@ from protocols.model import CriticalityLevel, Protocol
 from tests.helpers import FakeAgent, FakeProtocol, ShapelessProtocol
 
 
-def _loaded(agents=(), protocols=(), areas=("x",), profile_name="For Tests", event_type_required_fields=None):
+def _loaded(
+    agents=(), protocols=(), areas=("x",), profile_name="For Tests",
+    event_type_required_fields=None, event_type_descriptions=None,
+):
     return SimpleNamespace(
         profile_name=profile_name,
         default_language="en",
@@ -301,6 +304,7 @@ def _loaded(agents=(), protocols=(), areas=("x",), profile_name="For Tests", eve
         protocols=protocols,
         areas=areas,
         event_type_required_fields=event_type_required_fields or {},
+        event_type_descriptions=event_type_descriptions or {},
     )
 
 
@@ -403,6 +407,47 @@ def test_required_fields_naming_an_unknown_event_data_field_is_rejected():
     )
 
     assert any("not_a_real_field" in f for f in failures)
+
+
+def test_event_type_descriptions_for_an_undeclared_event_type_is_rejected():
+    failures = validate_profile(
+        _loaded(event_type_descriptions={"medical": "A medical incident."}), declared_event_types=["fire"]
+    )
+
+    assert any("medical" in f and "undeclared" in f for f in failures)
+
+
+def test_event_type_descriptions_with_an_empty_string_is_rejected():
+    failures = validate_profile(
+        _loaded(event_type_descriptions={"fire": ""}), declared_event_types=["fire"]
+    )
+
+    assert any("fire" in f and "non-empty" in f for f in failures)
+
+
+def test_event_type_descriptions_with_a_whitespace_only_string_is_rejected():
+    failures = validate_profile(
+        _loaded(event_type_descriptions={"fire": "   "}), declared_event_types=["fire"]
+    )
+
+    assert any("fire" in f and "non-empty" in f for f in failures)
+
+
+def test_declaring_a_description_for_unclassified_is_rejected():
+    failures = validate_profile(
+        _loaded(event_type_descriptions={"unclassified": "The fallback type."}), declared_event_types=["fire"]
+    )
+
+    assert any("unclassified" in f for f in failures)
+
+
+def test_valid_event_type_descriptions_declaration_reports_no_failures():
+    failures = validate_profile(
+        _loaded(event_type_descriptions={"fire": "A structure or vegetation fire."}),
+        declared_event_types=["fire"],
+    )
+
+    assert failures == []
 
 
 def test_valid_event_type_required_fields_declaration_reports_no_failures():

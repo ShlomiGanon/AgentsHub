@@ -75,7 +75,7 @@ from orchestrator.group_routing import (  # re-exported: api may only import orc
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
 from protocols import CriticalityLevel, Step, StepOutcome
 from protocols.executor import execute_steps
-from agents import authenticated_request_identity
+from agents import AgentModelError, AgentTimeoutError, authenticated_request_identity
 from tools import get_trace_id
 
 if TYPE_CHECKING:
@@ -168,7 +168,26 @@ class EventDataReplyResult:
 
 def _model_invoker_for(main_agent: "MainAgent"):
     def _invoke(prompt: str) -> str:
-        agent_result = main_agent.process(prompt, [])
+        try:
+            agent_result = main_agent.process(prompt, [])
+        except (AgentTimeoutError, AgentModelError) as exc:
+            # Stage 2 (docs/bar_improves.md): the raw report text is already
+            # persisted before extraction ever runs (`begin_report`), so a
+            # single transient provider timeout/error should not lose the
+            # report — retry the extraction call exactly once, mirroring the
+            # existing retry-once pattern used elsewhere in this module for
+            # task formulation and success judgment. MODEL_TIMEOUT_SECONDS and
+            # the zero provider-retry configuration are untouched; this is one
+            # additional application-level attempt, not a provider retry.
+            logger.info(
+                "retrying extraction after model error",
+                extra={
+                    "event": "extraction_retry",
+                    "cause": type(exc).__name__,
+                    "trace_id": get_trace_id(),
+                },
+            )
+            agent_result = main_agent.process(prompt, [])
         if agent_result.status != "success":
             raise ExtractionExecutionError(f"main agent could not produce a usable extraction response: {agent_result.text}")
         return agent_result.text
@@ -1196,6 +1215,27 @@ def apply_event_data_reply(
         except (TypeError, ValueError) as exc:
             raise OrchestrationParseError("event data update returned an invalid occurred_at timestamp") from exc
         updates["occurred_at_is_fallback"] = False
+
+    # Stage 3, docs/bar_improves.md: same timestamp normalization as
+    # occurred_at above, plus the one cross-field check this pair needs —
+    # an end before its own start is never accepted. Both go through the
+    # existing "invalid reply" mechanism (OrchestrationParseError), exactly
+    # like an invalid occurred_at already does — the caller (api/routes.py)
+    # abandons the stuck hold and re-routes the message rather than looping.
+    for availability_field in ("availability_start", "availability_end"):
+        if availability_field in updates:
+            try:
+                updates[availability_field] = storage_timestamp(parse_timestamp(str(updates[availability_field])))
+            except (TypeError, ValueError) as exc:
+                raise OrchestrationParseError(
+                    f"event data update returned an invalid {availability_field} timestamp"
+                ) from exc
+    if "availability_start" in updates or "availability_end" in updates:
+        effective_start = updates.get("availability_start", event.get("availability_start"))
+        effective_end = updates.get("availability_end", event.get("availability_end"))
+        if effective_start and effective_end and parse_timestamp(effective_end) < parse_timestamp(effective_start):
+            raise OrchestrationParseError("availability_end must not be before availability_start")
+
     record_event_data_update(deps.persistence, event["event_id"], updates)
     deps.persistence.resolve_held_event(
         "event_data", hold["hold_id"], {"resolved_by": sender_identity, "updated_fields": sorted(updates)}

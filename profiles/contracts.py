@@ -84,6 +84,12 @@ class LoadedProfile:
     # defaults to no required fields for any type that doesn't declare any —
     # backward compatible with every existing profile/fixture.
     event_type_required_fields: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
+    # Optional per-profile-event-type English description declarations
+    # (docs/bar_improves.md); defaults to no description for any type that
+    # doesn't declare one — backward compatible with every existing
+    # profile/fixture, and with a profile file's own hash/validation
+    # unaffected when omitted entirely.
+    event_type_descriptions: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
     # Optional simulation declarations (docs/profile_simulations_design.md); all
     # default to empty so every existing profile is unaffected. See
     # profiles/simulation.py for SimulationPersona/SimulationGroup/SimulationScenario/
@@ -174,6 +180,16 @@ class EventTypeRegistry:
     # not profile-declared. Deliberately NOT keyed on `HUMAN_ACTIVATION_TYPE` —
     # it is a source label, not a type with fields of its own.
     required_fields: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
+    # Optional English descriptions, keyed by event type — profile-defined
+    # types come from the profile's own EVENT_TYPE_DESCRIPTIONS
+    # (docs/bar_improves.md's follow-up: event-type descriptions previously
+    # had no structural home, so classification only ever saw bare type
+    # names). Defaults to empty, backward compatible with every existing
+    # profile/fixture. `UNCLASSIFIED_TYPE` may never have one — a profile
+    # attempting to declare it fails validation (`profiles.loader.
+    # validate_profile`), the same rule already applied to
+    # `EVENT_TYPE_REQUIRED_FIELDS`.
+    descriptions: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
 
     def is_valid(self, event_type: str) -> bool:
         return event_type in self.types
@@ -189,3 +205,12 @@ class EventTypeRegistry:
         if event_type == UNCLASSIFIED_TYPE:
             return UNCLASSIFIED_REQUIRED_FIELDS
         return tuple(self.required_fields.get(event_type, ()))
+
+    def description_for(self, event_type: str | None) -> str | None:
+        """The profile-declared English description for `event_type`, or
+        `None` when it doesn't have one — `UNCLASSIFIED_TYPE` never has one
+        (see `descriptions`' own docstring above)."""
+
+        if event_type is None or event_type == UNCLASSIFIED_TYPE:
+            return None
+        return self.descriptions.get(event_type)

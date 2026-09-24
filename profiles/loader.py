@@ -35,10 +35,13 @@ def build_area_registry(loaded_profile: "LoadedProfile") -> AreaRegistry:
 
 
 def build_event_type_registry(loaded_profile: "LoadedProfile") -> EventTypeRegistry:
-    # UNCLASSIFIED_TYPE's required fields are fixed in EventTypeRegistry
-    # itself (item #6) — not read from the profile.
+    # UNCLASSIFIED_TYPE's required fields (and its lack of a description) are
+    # fixed in EventTypeRegistry itself (item #6 / docs/bar_improves.md) —
+    # not read from the profile.
     return EventTypeRegistry(
-        types=loaded_profile.event_types, required_fields=MappingProxyType(dict(loaded_profile.event_type_required_fields))
+        types=loaded_profile.event_types,
+        required_fields=MappingProxyType(dict(loaded_profile.event_type_required_fields)),
+        descriptions=MappingProxyType(dict(loaded_profile.event_type_descriptions)),
     )
 
 def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> list[str]:
@@ -95,6 +98,18 @@ def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> lis
             failures.append(
                 f"EVENT_TYPE_REQUIRED_FIELDS['{event_type}'] references unknown field(s): {', '.join(unknown_fields)}"
             )
+
+    descriptions = getattr(loaded, "event_type_descriptions", {})
+    if UNCLASSIFIED_TYPE in descriptions:
+        failures.append(
+            f"profile declares EVENT_TYPE_DESCRIPTIONS['{UNCLASSIFIED_TYPE}'] — "
+            "it is the built-in fallback type, declaring a description for it here is not allowed"
+        )
+    for event_type, description in descriptions.items():
+        if event_type != UNCLASSIFIED_TYPE and event_type not in declared_event_types:
+            failures.append(f"EVENT_TYPE_DESCRIPTIONS references undeclared event type '{event_type}'")
+        if not isinstance(description, str) or not description.strip():
+            failures.append(f"EVENT_TYPE_DESCRIPTIONS['{event_type}'] must be a non-empty string")
 
     if not loaded.areas:
         failures.append("profile declares no areas — extraction has nothing to resolve a location to")
@@ -475,6 +490,7 @@ def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) 
                 for event_type, fields in getattr(profile_module, "EVENT_TYPE_REQUIRED_FIELDS", {}).items()
             }
         ),
+        event_type_descriptions=MappingProxyType(dict(getattr(profile_module, "EVENT_TYPE_DESCRIPTIONS", {}))),
         simulation_users=tuple(getattr(profile_module, "SIMULATION_USERS", ())),
         simulation_groups=tuple(getattr(profile_module, "SIMULATION_GROUPS", ())),
         simulations=tuple(getattr(profile_module, "SIMULATIONS", ())),

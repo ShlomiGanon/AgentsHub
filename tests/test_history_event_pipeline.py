@@ -36,6 +36,104 @@ def test_sensor_uses_received_time_but_model_extracts_other_fields():
     assert result.classification_status == "resolved"
 
 
+# -- Event type descriptions in the extraction prompt (follow-up to Stage 4, docs/bar_improves.md)
+
+
+def _capture_prompt(response_text):
+    captured = []
+
+    def _invoker(prompt):
+        captured.append(prompt)
+        return response_text
+
+    return captured, _invoker
+
+
+def test_extraction_prompt_includes_each_declared_event_type_description():
+    registry = EventTypeRegistry(
+        types=("fire", "medical"),
+        descriptions={"fire": "A structure or vegetation fire.", "medical": "A medical incident with a casualty."},
+    )
+    captured, invoker = _capture_prompt(_response())
+
+    extract_event("smoke at gate", "telegram", "2026-08-20T10:00:00", registry, AreaRegistry(("north",)), invoker)
+
+    [prompt] = captured
+    assert "A structure or vegetation fire." in prompt
+    assert "A medical incident with a casualty." in prompt
+
+
+def test_extraction_prompt_omits_description_text_for_a_type_that_has_none():
+    registry = EventTypeRegistry(
+        types=("fire", "medical"), descriptions={"fire": "A structure or vegetation fire."}
+    )
+    captured, invoker = _capture_prompt(_response())
+
+    extract_event("smoke at gate", "telegram", "2026-08-20T10:00:00", registry, AreaRegistry(("north",)), invoker)
+
+    [prompt] = captured
+    assert "A structure or vegetation fire." in prompt
+    # "medical" itself still appears (the bare type-name list), just with no description text.
+    assert "medical" in prompt
+
+
+def test_extraction_prompt_is_unchanged_when_the_profile_declares_no_event_type_descriptions():
+    """Regression check: a profile that doesn't use the new, optional
+    EVENT_TYPE_DESCRIPTIONS attribute gets exactly the same prompt as
+    before this attribute existed."""
+    registry_without_descriptions = EventTypeRegistry(types=("fire", "medical"))
+    registry_with_empty_descriptions = EventTypeRegistry(types=("fire", "medical"), descriptions={})
+    captured_a, invoker_a = _capture_prompt(_response())
+    captured_b, invoker_b = _capture_prompt(_response())
+
+    extract_event(
+        "smoke at gate", "telegram", "2026-08-20T10:00:00", registry_without_descriptions,
+        AreaRegistry(("north",)), invoker_a,
+    )
+    extract_event(
+        "smoke at gate", "telegram", "2026-08-20T10:00:00", registry_with_empty_descriptions,
+        AreaRegistry(("north",)), invoker_b,
+    )
+
+    assert captured_a == captured_b
+    assert "Event type descriptions:" not in captured_a[0]
+
+
+def test_extraction_prompt_carries_a_real_response_team_profiles_declared_descriptions(monkeypatch):
+    """Against a real operational profile (docs/bar_improves.md), not just a
+    synthetic registry."""
+    from config.base import TierModel
+    from profiles import build_event_type_registry
+    from profiles.loader import load_profile
+
+    monkeypatch.setenv("RESPONSE_TEAM_BOT_TOKEN", "test-token")
+    core_model = TierModel(model="openai/test-core-model", api_key="test-key")
+    sub_model = TierModel(model="openai/test-sub-model", api_key="test-key")
+    loaded = load_profile("profiles.response_team", core_model, sub_model)
+    registry = build_event_type_registry(loaded)
+
+    captured, invoker = _capture_prompt(
+        json.dumps(
+            {
+                "classification": "perimeter_observation", "area": "west_gate", "entities": [],
+                "description": "heavy equipment near the western gate", "severity": None,
+                "occurred_at": "2026-09-10T10:00:00",
+            }
+        )
+    )
+
+    extract_event(
+        "heavy equipment parked near the western gate", "telegram", "2026-09-10T10:00:00", registry,
+        AreaRegistry(loaded.areas), invoker,
+    )
+
+    [prompt] = captured
+    from profiles.response_team import EVENT_TYPE_DESCRIPTIONS
+
+    for description in EVENT_TYPE_DESCRIPTIONS.values():
+        assert description in prompt
+
+
 def test_invalid_closed_set_values_are_left_unresolved():
     result = extract_event(
         "unknown",
@@ -50,6 +148,63 @@ def test_invalid_closed_set_values_are_left_unresolved():
     assert result.area is None
     assert result.occurred_at is None
     assert set(result.missing_fields) >= {"classification", "area", "occurred_at"}
+
+
+def test_malformed_optional_field_is_dropped_not_the_whole_report(caplog):
+    # Stage 1 (docs/bar_improves.md): a non-scalar value for an optional
+    # field (severity here) must not reject an otherwise-usable report.
+    with caplog.at_level("INFO"):
+        result = extract_event(
+            "smoke at gate",
+            "telegram",
+            "2026-08-20T10:00:00",
+            EventTypeRegistry(("fire",)),
+            AreaRegistry(("north",)),
+            lambda prompt: _response(severity={"level": "high"}),
+        )
+
+    assert result.severity is None
+    assert result.classification == "fire"
+    assert result.area == "north"
+    dropped_records = [r for r in caplog.records if getattr(r, "event", None) == "extraction_optional_field_dropped"]
+    assert len(dropped_records) == 1
+    assert dropped_records[0].field == "severity"
+    assert dropped_records[0].received_type == "dict"
+
+
+def test_malformed_optional_entities_field_is_dropped_not_the_whole_report(caplog):
+    with caplog.at_level("INFO"):
+        result = extract_event(
+            "smoke at gate",
+            "telegram",
+            "2026-08-20T10:00:00",
+            EventTypeRegistry(("fire",)),
+            AreaRegistry(("north",)),
+            lambda prompt: _response(entities="gate"),
+        )
+
+    assert result.entities == ()
+    assert result.classification == "fire"
+    dropped_records = [r for r in caplog.records if getattr(r, "event", None) == "extraction_optional_field_dropped"]
+    assert len(dropped_records) == 1
+    assert dropped_records[0].field == "entities"
+    assert dropped_records[0].received_type == "str"
+
+
+def test_valid_optional_fields_are_unaffected_by_the_malformed_field_tolerance():
+    result = extract_event(
+        "smoke at gate",
+        "telegram",
+        "2026-08-20T10:00:00",
+        EventTypeRegistry(("fire",)),
+        AreaRegistry(("north",)),
+        lambda prompt: _response(),
+    )
+
+    assert result.severity == "high"
+    assert result.entities == ("gate",)
+    assert result.classification == "fire"
+    assert result.area == "north"
 
 
 def test_code_fence_is_the_only_cleanup_and_bad_json_is_an_execution_error():

@@ -991,7 +991,12 @@ def _build_judgment_prompt(protocol: Protocol, step_outcomes: tuple[StepOutcome,
     insight_block = f"\nInsight from comparing this run to history: {insight_text}\n" if insight_text else ""
     return (
         f"Judge whether this protocol run succeeded, given what success looks like for this protocol:\n{protocol.expected_success_output}\n\nWhat actually happened:\n{steps_block}\n{insight_block}\n"
-        "Compare the meaning of what happened against what success looks like — do not require exact wording. Respond in exactly this format, two lines:\nVERDICT: <success | failure | uncertain>\nREASONING: <why>"
+        "Compare the meaning of what happened against what success looks like — do not require exact wording. "
+        "A tool result proves only the tool's own recorded effect, never an unobserved real-world outcome — "
+        "e.g. a result stating a dispatch request was recorded is evidence the request was recorded, never that "
+        "the dispatched force actually arrived or that anything happened beyond this system's own boundary; "
+        "judge success against what was actually recorded, not against an outcome nothing here observed. "
+        "Respond in exactly this format, two lines:\nVERDICT: <success | failure | uncertain>\nREASONING: <why>"
     )
 
 

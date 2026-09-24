@@ -135,6 +135,70 @@ def test_migration_nineteen_marks_existing_users_and_groups_as_manually_approved
     assert group == ("main_agent", 0)
 
 
+def test_migration_twenty_adds_availability_fields_to_an_existing_database(tmp_path):
+    # Stage 3, docs/bar_improves.md: an existing database created before
+    # migration 20 gets the three new nullable columns without losing data.
+    db_path = str(tmp_path / "version-nineteen.db")
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "CREATE TABLE events ("
+            "event_id TEXT PRIMARY KEY, received_at TEXT NOT NULL, source TEXT NOT NULL, "
+            "sender_identity TEXT NOT NULL, raw_text TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO events(event_id, received_at, source, sender_identity, raw_text) "
+            "VALUES ('legacy', '2026-01-01', 'telegram', 'viewer-1', 'I will be away')"
+        )
+        connection.execute("PRAGMA user_version = 19")
+        connection.commit()
+    finally:
+        connection.close()
+
+    run_migrations(db_path)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+        row = connection.execute(
+            "SELECT availability_start, availability_end, absence_reason FROM events WHERE event_id = 'legacy'"
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert {"availability_start", "availability_end", "absence_reason"} <= columns
+    assert row == (None, None, None)
+
+
+def test_migration_twenty_is_present_on_a_fresh_database(tmp_path):
+    db_path = str(tmp_path / "fresh-availability.db")
+    run_migrations(db_path)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        connection.close()
+
+    assert {"availability_start", "availability_end", "absence_reason"} <= columns
+    assert version == 20
+
+
+def test_migration_twenty_reruns_without_error_when_columns_already_exist(tmp_path):
+    db_path = str(tmp_path / "rerun-availability.db")
+    run_migrations(db_path)
+
+    run_migrations(db_path)  # must not raise on a database already at version 20
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+    finally:
+        connection.close()
+    assert {"availability_start", "availability_end", "absence_reason"} <= columns
+
+
 def test_history_query_indexes_are_present_on_a_fresh_database(tmp_path):
     import sqlite3
 

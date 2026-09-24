@@ -21,8 +21,11 @@ This English catalog describes every tracked or pending first-party file in the 
 | `unsafe_system.md` | Documentation | Internal | Defines the approved safe/open Telegram admission design, implementation stages, and verification criteria. |
 | `agents/__init__.py` | Production | Public facade | Exposes the public agent facade and compatibility module aliases. |
 | `agents/contracts.py` | Production | Private implementation | Defines agent results, descriptors, tool metadata, parsing, and typed errors. |
+| `agents/fire_station_agents.py` | Production | Private implementation | Implements the Fire and Rescue dispatch and hazmat-assessment specialists (docs/bar_improves.md). |
 | `agents/friendly_forces_agent.py` | Production | Private implementation | Implements the tactical coordination and dispatch specialist for friendly forces. |
 | `agents/provider_telemetry.py` | Production | Private implementation | Correlates CrewAI provider-call events with AgentsHub traces, stages, latency, and usage. |
+| `agents/response_team_agents.py` | Production | Private implementation | Implements the Response Team security-operations and surveillance-fault specialists (docs/bar_improves.md). |
+| `agents/roster_agent.py` | Production | Private implementation | Implements the shared team/crew availability-reporting specialist (docs/bar_improves.md). |
 | `agents/runtime.py` | Production | Private implementation | Constructs and invokes agents, enforces tools, adapts CrewAI, and owns the runtime registry. |
 | `agents/standard_agents.py` | Production | Private implementation | Implements the standard History and Reference agents. |
 | `agents/surveillance_agent.py` | Production | Private implementation | Implements the visual-surveillance, camera-monitoring, and tactical-drone specialist. |
@@ -72,6 +75,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `docs/agent_authoring.md` | Documentation | Internal | Documents agent authoring. |
 | `docs/allowed_calls.md` | Documentation | Internal | Documents allowed calls. |
 | `docs/api_spec.md` | Documentation | Internal | Documents api spec. |
+| `docs/bar_improves.md` | Documentation | Internal | Specifies the operational-profiles improvement task: availability fields, the Response Team and Fire and Rescue Station profiles, their simulation deployments, and acceptance scenarios. |
 | `docs/bot_simulation_mode_design.md` | Documentation | Internal | Documents the simulation-mode bot process's architecture: reusing real handlers/background loops with stubbed Telegram network legs. |
 | `docs/code_example.py` | Documentation | Internal | Documents code example. |
 | `docs/cost_latency_review.md` | Documentation | Internal | Documents cost latency review. |
@@ -141,8 +145,12 @@ This English catalog describes every tracked or pending first-party file in the 
 | `persistence/team_status_store.py` | Production | Private implementation | Implements the isolated SQLite store for readiness-team roster and attendance state. |
 | `profiles/__init__.py` | Production | Public facade | Exposes profile contracts, loading, registries, and compatibility aliases. |
 | `profiles/contracts.py` | Production | Private implementation | Defines profile declarations, loaded-profile state, and area/event-type registries. |
+| `profiles/fire_station.py` | Production | Private implementation | Defines the Fire and Rescue Station profile (structure/hazmat fire, rescue, mutual-aid dispatch, attendance) (docs/bar_improves.md). |
+| `profiles/fire_station_sim.py` | Production | Private implementation | Defines the Fire and Rescue Station simulation deployment, reusing the live profile's declared content (docs/bar_improves.md). |
 | `profiles/firefighting.py` | Production | Private implementation | Defines the Firefighting profile (crew status, visual surveillance, mutual-aid dispatch) and the FIRE_002 simulations (docs/Profile_Split_Plan.md). |
 | `profiles/loader.py` | Production | Private implementation | Imports, validates, hashes, and constructs deployment profiles and registries. |
+| `profiles/response_team.py` | Production | Private implementation | Defines the Response Team profile (perimeter/external-force observation, surveillance faults, team status, attendance) (docs/bar_improves.md). |
+| `profiles/response_team_sim.py` | Production | Private implementation | Defines the Response Team simulation deployment, reusing the live profile's declared content (docs/bar_improves.md). |
 | `profiles/simulation.py` | Production | Private implementation | Defines simulation persona, group, scenario, and roster declarations and the reserved Telegram ID scheme. |
 | `profiles/simulation_provisioning.py` | Production | Private implementation | Ensures a profile's declared simulation users and groups exist, and registers/approves any of them on the agent-owned rosters they declare. |
 | `profiles/standby_squad.py` | Production | Private implementation | Defines the Standby Squad profile (readiness-team status, visual surveillance, friendly-forces dispatch) and the SEC_001 simulations (docs/Profile_Split_Plan.md). |
@@ -218,6 +226,8 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_migrations.py` | Test | Internal | Verifies migrations behavior and edge cases. |
 | `tests/test_messages.py` | Test | Internal | Verifies language catalogs, key and placeholder parity, strict formatting, and selection. |
 | `tests/test_observability.py` | Test | Internal | Verifies tracing and structured logging behavior. |
+| `tests/test_operational_profiles.py` | Test | Internal | Verifies the Response Team and Fire and Rescue Station profiles, their simulation deployments, and the tool-result rule (docs/bar_improves.md). |
+| `tests/test_operational_scenarios.py` | Test | Internal | Verifies the operational-profile acceptance scenarios offline through the real API with the model boundary faked (docs/bar_improves.md). |
 | `tests/test_orchestrator_flows.py` | Test | Internal | Verifies orchestrator flows behavior and edge cases. |
 | `tests/test_orchestrator_capabilities.py` | Test | Internal | Verifies role-aware capability descriptor and system-context behavior. |
 | `tests/test_orchestrator_holds.py` | Test | Internal | Verifies orchestrator holds behavior and edge cases. |

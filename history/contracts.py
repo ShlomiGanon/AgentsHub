@@ -19,6 +19,12 @@ class ExtractionResult:
     occurred_at: str | None
     occurred_at_is_fallback: bool
     missing_fields: tuple[str, ...]
+    # Availability fields (Stage 3, docs/bar_improves.md) — nullable like
+    # every other extracted field; kept unknown rather than guessed when the
+    # reporter did not state them.
+    availability_start: str | None = None
+    availability_end: str | None = None
+    absence_reason: str | None = None
 
 
 @dataclass(frozen=True)

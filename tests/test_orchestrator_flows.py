@@ -333,6 +333,146 @@ def test_required_fields_gate_asks_only_for_the_field_extraction_could_not_resol
     assert not any("RISK_SCORE" in call for call in agent.calls)  # risk assessment never ran
 
 
+# -- Availability fields for absence reports (Stage 3, docs/bar_improves.md) -
+
+
+def _attendance_gated_deps(deps):
+    return replace(
+        deps,
+        event_type_registry=EventTypeRegistry(
+            types=(*deps.event_type_registry.types, "attendance"),
+            required_fields={"attendance": ("availability_start", "availability_end")},
+        ),
+    )
+
+
+def test_absence_with_interval_proceeds_without_a_hold(deps):
+    """The reporter stated both ends of the interval up front — the
+    required-fields gate has nothing to ask for, and the event runs
+    normally."""
+    gated_deps = _attendance_gated_deps(deps)
+    agent = _happy_path_agent(risk_score="0.1", selected="status_check")
+    agent._dispatch["Extract this operational event"] = (
+        '{"classification": "attendance", "area": null, "entities": [], "description": "unavailable", '
+        '"severity": null, "occurred_at": "2026-08-20T09:00:00", '
+        '"availability_start": "2026-08-25T00:00:00Z", "availability_end": "2026-08-27T00:00:00Z", '
+        '"absence_reason": "family matter"}'
+    )
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    result = process_report(
+        gated_deps, agent, insights_agent, "Michael: I won't be available June 25-27, family matter",
+        "telegram", "2026-08-20T10:00:00", "michael",
+    )
+
+    assert result.outcome == "succeeded"
+    event = gated_deps.persistence.fetch_event(result.event_id)
+    assert event["availability_start"] == "2026-08-25T00:00:00"
+    assert event["availability_end"] == "2026-08-27T00:00:00"
+    assert event["absence_reason"] == "family matter"
+    assert gated_deps.persistence.list_held_events("event_data") == []
+
+
+def test_absence_without_interval_holds_for_exactly_the_two_missing_fields(deps):
+    """"Michael: I won't be available, family matter" — the reason is stated,
+    the interval isn't. Stored as reported; the event_data hold asks for
+    exactly the two missing fields, never a guessed range."""
+    gated_deps = _attendance_gated_deps(deps)
+    agent = _ScriptedAgent(
+        {
+            "Extract this operational event": (
+                '{"classification": "attendance", "area": null, "entities": [], "description": "unavailable", '
+                '"severity": null, "occurred_at": "2026-08-20T09:00:00", '
+                '"availability_start": null, "availability_end": null, "absence_reason": "family matter"}'
+            ),
+            "Write one concise question": "When does this start and end?",
+        }
+    )
+    insights_agent = _ScriptedAgent({})
+
+    result = process_report(
+        gated_deps, agent, insights_agent, "Michael: I won't be available, family matter",
+        "telegram", "2026-08-20T10:00:00", "michael",
+    )
+
+    assert result.outcome == "waiting_for_event_data"
+    event = gated_deps.persistence.fetch_event(result.event_id)
+    assert event["classification"] == "attendance"
+    assert event["absence_reason"] == "family matter"
+    assert event["availability_start"] is None
+    assert event["availability_end"] is None
+    [hold] = gated_deps.persistence.list_held_events("event_data")
+    assert set(hold["missing_fields"]) == {"availability_start", "availability_end"}
+
+
+def test_absence_reply_fills_interval_and_resumes(deps):
+    gated_deps = _attendance_gated_deps(deps)
+    agent = _happy_path_agent(risk_score="0.1", selected="status_check")
+    agent._dispatch["Extract this operational event"] = (
+        '{"classification": "attendance", "area": null, "entities": [], "description": "unavailable", '
+        '"severity": null, "occurred_at": "2026-08-20T09:00:00", '
+        '"availability_start": null, "availability_end": null, "absence_reason": "family matter"}'
+    )
+    agent._dispatch["Write one concise question"] = "When does this start and end?"
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    event_id = begin_report(
+        gated_deps, "Michael: I won't be available, family matter", "telegram", "2026-08-20T10:00:00", "michael",
+        conversation_id="c-michael",
+    )
+    held = run_report_extraction(gated_deps, event_id, agent, insights_agent)
+    assert held.outcome == "waiting_for_event_data"
+
+    reply_agent = _ScriptedAgent(
+        {
+            "pending request for missing event details": (
+                '{"addresses_request": true, "updates": {"availability_start": "2026-08-25T00:00:00Z", '
+                '"availability_end": "2026-08-27T00:00:00Z"}, "reply_text": "Recorded, thank you."}'
+            )
+        }
+    )
+    reply = apply_event_data_reply(gated_deps, reply_agent, "from the 25th to the 27th", "michael", "c-michael")
+
+    assert reply is not None
+    assert reply.updates["availability_start"] == "2026-08-25T00:00:00"
+    assert reply.updates["availability_end"] == "2026-08-27T00:00:00"
+    assert gated_deps.persistence.list_held_events("event_data") == []
+
+    resumed = resume_after_event_data(gated_deps, held.event_id, agent, insights_agent)
+
+    assert resumed.outcome == "succeeded"
+    event = gated_deps.persistence.fetch_event(held.event_id)
+    assert event["availability_start"] == "2026-08-25T00:00:00"
+    assert event["availability_end"] == "2026-08-27T00:00:00"
+
+
+def test_absence_reply_with_end_before_start_is_rejected(deps):
+    from orchestrator.main_agent import OrchestrationParseError
+
+    gated_deps = _attendance_gated_deps(deps)
+    event_id = begin_report(
+        gated_deps, "Michael: I won't be available, family matter", "telegram", "2026-08-20T10:00:00", "michael",
+        conversation_id="c-michael",
+    )
+    gated_deps.persistence.update_event(event_id, {"classification": "attendance"})
+    create_event_data_hold(
+        gated_deps.persistence, event_id, ("availability_start", "availability_end"),
+        "When does this start and end?", (),
+    )
+
+    reply_agent = _ScriptedAgent(
+        {
+            "pending request for missing event details": (
+                '{"addresses_request": true, "updates": {"availability_start": "2026-08-27T00:00:00Z", '
+                '"availability_end": "2026-08-25T00:00:00Z"}, "reply_text": "Recorded."}'
+            )
+        }
+    )
+
+    with pytest.raises(OrchestrationParseError):
+        apply_event_data_reply(gated_deps, reply_agent, "from the 27th to the 25th", "michael", "c-michael")
+
+
 def test_required_fields_gate_resumes_into_risk_assessment_once_resolved(deps):
     """Once the gate's missing field is resolved, the event proceeds through
     risk assessment and protocol selection exactly as it would have if the
@@ -962,6 +1102,93 @@ def test_begin_report_returns_immediately_with_no_model_call(deps):
     event = deps.persistence.fetch_event(event_id)
     assert event["raw_text"] == "smoke at gate 3"
     assert event["classification"] is None  # extraction hasn't run yet
+
+
+class _TimeoutThenScriptedAgent:
+    """Stage 2 (docs/bar_improves.md): duck-typed agent stand-in whose
+    extraction call fails a fixed number of times with a model-layer error
+    before behaving like `_ScriptedAgent` — used to verify the one-retry
+    behavior without needing a real model or crewai."""
+
+    def __init__(self, dispatch: dict[str, str], *, extraction_failures: int, error_cls=None):
+        self._dispatch = dispatch
+        self._extraction_failures = extraction_failures
+        self._error_cls = error_cls
+        self.calls = []
+        self._extraction_attempts = 0
+
+    def process(self, text, allowed_tools):
+        self.calls.append(text)
+        if "Extract this operational event" in text:
+            self._extraction_attempts += 1
+            if self._extraction_attempts <= self._extraction_failures:
+                raise self._error_cls("main_agent", "the model call failed")
+        for keyword, response_text in self._dispatch.items():
+            if keyword in text:
+                return _FakeResult("success", response_text)
+        raise AssertionError(f"no scripted response for prompt starting: {text[:150]!r}")
+
+
+def test_extraction_retries_once_on_a_model_timeout_then_succeeds(deps, caplog):
+    from agents.errors import AgentTimeoutError
+
+    agent = _TimeoutThenScriptedAgent(
+        {
+            "Extract this operational event": _extraction_response(),
+            "RISK_SCORE": "RISK_SCORE: 0.1\nREASON: assessed",
+            "Choose the protocol": "SELECTED: status_check\nREASON: fits",
+            "participating in the": "AGENT: reference_agent\nTASK: check gate 3",
+            "VERDICT:": "VERDICT: success\nREASONING: matches expected output",
+        },
+        extraction_failures=1,
+        error_cls=AgentTimeoutError,
+    )
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    with caplog.at_level("INFO"):
+        result = process_report(deps, agent, insights_agent, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    assert result.outcome == "succeeded"
+    assert agent._extraction_attempts == 2  # exactly one retry, never more
+    retries = [r for r in caplog.records if getattr(r, "event", None) == "extraction_retry"]
+    assert len(retries) == 1
+    assert retries[0].cause == "AgentTimeoutError"
+
+
+def test_extraction_retries_once_on_a_model_error_then_succeeds(deps):
+    from agents.errors import AgentModelError
+
+    agent = _TimeoutThenScriptedAgent(
+        {
+            "Extract this operational event": _extraction_response(),
+            "RISK_SCORE": "RISK_SCORE: 0.1\nREASON: assessed",
+            "Choose the protocol": "SELECTED: status_check\nREASON: fits",
+            "participating in the": "AGENT: reference_agent\nTASK: check gate 3",
+            "VERDICT:": "VERDICT: success\nREASONING: matches expected output",
+        },
+        extraction_failures=1,
+        error_cls=AgentModelError,
+    )
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    result = process_report(deps, agent, insights_agent, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    assert result.outcome == "succeeded"
+    assert agent._extraction_attempts == 2
+
+
+def test_extraction_fails_after_two_timeouts_never_attempts_a_third_time(deps):
+    from agents.errors import AgentTimeoutError
+
+    agent = _TimeoutThenScriptedAgent({}, extraction_failures=2, error_cls=AgentTimeoutError)
+    insights_agent = _ScriptedAgent({})
+
+    result = process_report(deps, agent, insights_agent, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    assert result.outcome == "failed"
+    assert agent._extraction_attempts == 2  # never more than two attempts
+    event = deps.persistence.fetch_event(result.event_id)
+    assert event["outcome"] == "failed"
 
 
 def test_run_report_extraction_continues_from_a_begin_report_event_id(deps):

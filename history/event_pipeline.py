@@ -1,27 +1,57 @@
 """Event extraction, timestamp handling, and history writes."""
 
 import json
+import logging
 from dataclasses import asdict
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Callable
 
 from history.contracts import ExtractionExecutionError, ExtractionResult, InitialEventEnvelope, StepExecutionEnvelope
-from tools import stage_context
+from tools import get_trace_id, stage_context
+
+logger = logging.getLogger(__name__)
 
 
-def _prompt(raw_text: str, source: str, received_at: str, event_types, areas) -> str:
+def _prompt(raw_text: str, source: str, received_at: str, event_types, areas, event_type_descriptions=None) -> str:
     timestamp_rule = (
         "Set occurred_at to null; the caller supplies the sensor occurrence time."
         if source == "sensor"
         else f"Resolve occurred_at relative to received_at={received_at}; use null if it cannot be resolved."
     )
 
+    # Optional, profile-declared English descriptions next to the event type
+    # names they belong to (docs/bar_improves.md's follow-up to Stage 4:
+    # event-type descriptions previously had no structural home, so
+    # classification only ever saw the bare type-name list). A type with no
+    # declared description still appears in the list above, name only,
+    # exactly as before — this block is additive and empty when the active
+    # profile declares no EVENT_TYPE_DESCRIPTIONS at all, which is what
+    # keeps this prompt byte-for-byte unchanged for every profile that
+    # doesn't use the new attribute.
+    event_types_list = list(event_types)
+    descriptions_block = ""
+    if event_type_descriptions:
+        described = [
+            f"{event_type}: {event_type_descriptions[event_type]}"
+            for event_type in event_types_list
+            if event_type in event_type_descriptions
+        ]
+        if described:
+            descriptions_block = "Event type descriptions: " + " | ".join(described) + ". "
+
     return (
         "Extract this operational event into one JSON object with exactly these keys: "
-        "classification, area, entities, description, severity, occurred_at. "
-        f"classification must be one of {list(event_types)} or null. "
+        "classification, area, entities, description, severity, occurred_at, availability_start, "
+        "availability_end, absence_reason. "
+        f"classification must be one of {event_types_list} or null. "
+        f"{descriptions_block}"
         f"area must be one of {list(areas)} or null. "
-        "entities must be an array of strings. Do not guess missing values. "
+        "entities must be an array of strings — list every identifier the report refers to, e.g. "
+        "equipment or unit identifiers. Do not guess missing values. availability_start and "
+        "availability_end are only present when the report is someone stating their own "
+        "unavailability and they gave a time interval — ISO-8601 timestamps, or null if no interval "
+        "was stated; never infer or estimate one. absence_reason is the reporter's own stated reason "
+        "for being unavailable, or null if none was given. "
         f"{timestamp_rule}\nEvent text:\n{raw_text}"
     )
 
@@ -38,12 +68,47 @@ def _strip_code_fence(raw_response: str) -> str:
     return "\n".join(lines[1:-1]).strip()
 
 
+def _log_optional_field_dropped(key: str, received_value: object) -> None:
+    """Stage 1 (docs/bar_improves.md): a malformed OPTIONAL extracted field is
+    dropped, never the whole report. Log only the field name and the received
+    Python type — never the value itself, which may carry the reporter's raw
+    text."""
+
+    logger.info(
+        "extraction optional field dropped",
+        extra={
+            "event": "extraction_optional_field_dropped",
+            "field": key,
+            "received_type": type(received_value).__name__,
+            "trace_id": get_trace_id(),
+        },
+    )
+
+
 def _optional_string(payload: dict, key: str) -> str | None:
+    """Return `payload[key]` as a string, or `None`.
+
+    Every field this is called for (classification, area, description,
+    severity, occurred_at) is optional in the domain vocabulary
+    (docs/vocabulary.md) — required-ness for a *specific* event type is
+    enforced later, downstream, by the event-type-required-fields gate
+    (`profiles.contracts.EventTypeRegistry.required_fields_for`), not here.
+    A `None` value is a normal, expected "not extracted" result and is
+    returned as-is. A non-null value of the wrong type (the model returned an
+    object or a list where a string was expected) used to reject the entire
+    report; it is now normalized to `None` and logged instead (Stage 1,
+    docs/bar_improves.md) — we never invent a value the source did not
+    establish, so dropping is the only alternative to full rejection. This
+    does not change how an out-of-registry classification/area value (a
+    correctly-typed string just not in the profile's own list) is handled —
+    that check runs afterward, unchanged, in `extract_event`."""
+
     extracted_value = payload.get(key)
     if extracted_value is None:
         return None
     if not isinstance(extracted_value, str):
-        raise ExtractionExecutionError(f"extraction field '{key}' must be a string or null")
+        _log_optional_field_dropped(key, extracted_value)
+        return None
     return extracted_value
 
 
@@ -67,6 +132,7 @@ def extract_event(
         received_at,
         getattr(event_type_registry, "types", ()),
         getattr(area_registry, "areas", ()),
+        getattr(event_type_registry, "descriptions", None),
     )
 
     try:
@@ -91,6 +157,9 @@ def extract_event(
     description = _optional_string(payload, "description")
     severity = _optional_string(payload, "severity")
     model_occurred_at = _optional_string(payload, "occurred_at")
+    availability_start = _optional_string(payload, "availability_start")
+    availability_end = _optional_string(payload, "availability_end")
+    absence_reason = _optional_string(payload, "absence_reason")
 
     entities_value = payload.get("entities")
     if entities_value is None:
@@ -98,7 +167,11 @@ def extract_event(
     elif isinstance(entities_value, list) and all(isinstance(item, str) for item in entities_value):
         entities = tuple(entities_value)
     else:
-        raise ExtractionExecutionError("extraction field 'entities' must be an array of strings")
+        # Stage 1 (docs/bar_improves.md): entities is also an OPTIONAL field —
+        # a malformed value (not a list of strings) is dropped, not treated as
+        # a reason to reject the whole report.
+        _log_optional_field_dropped("entities", entities_value)
+        entities = ()
 
     if classification is not None and not event_type_registry.is_valid(classification):
         classification = None
@@ -114,6 +187,26 @@ def extract_event(
         except (TypeError, ValueError) as exc:
             raise ExtractionExecutionError("extraction field 'occurred_at' must be an ISO-8601 timestamp or null") from exc
 
+    # Stage 3 (docs/bar_improves.md): availability_start/availability_end are
+    # OPTIONAL timestamp fields, same as the other fields above — unlike
+    # occurred_at (which has a sensor fallback and pre-existing behavior we
+    # must not change), an unparseable value here is treated the same way
+    # Stage 1 treats any other malformed optional field: dropped and logged,
+    # never rejecting the whole report. We never guess a time range that was
+    # not stated — the required-fields gate is what asks the reporter for it.
+    if availability_start is not None:
+        try:
+            availability_start = storage_timestamp(parse_timestamp(availability_start))
+        except (TypeError, ValueError):
+            _log_optional_field_dropped("availability_start", availability_start)
+            availability_start = None
+    if availability_end is not None:
+        try:
+            availability_end = storage_timestamp(parse_timestamp(availability_end))
+        except (TypeError, ValueError):
+            _log_optional_field_dropped("availability_end", availability_end)
+            availability_end = None
+
     missing = []
     for field_name, extracted_value in (
         ("classification", classification),
@@ -121,6 +214,9 @@ def extract_event(
         ("description", description),
         ("severity", severity),
         ("occurred_at", occurred_at),
+        ("availability_start", availability_start),
+        ("availability_end", availability_end),
+        ("absence_reason", absence_reason),
     ):
         if extracted_value is None:
             missing.append(field_name)
@@ -138,6 +234,9 @@ def extract_event(
         occurred_at=occurred_at,
         occurred_at_is_fallback=False,
         missing_fields=tuple(missing),
+        availability_start=availability_start,
+        availability_end=availability_end,
+        absence_reason=absence_reason,
     )
 
 
@@ -229,7 +328,12 @@ STATE_UPDATE_FIELDS = frozenset(
 )
 
 EVENT_DATA_UPDATE_FIELDS = frozenset(
-    {"classification", "area", "entities", "description", "severity", "occurred_at", "occurred_at_is_fallback"}
+    {
+        "classification", "area", "entities", "description", "severity", "occurred_at", "occurred_at_is_fallback",
+        # Stage 3, docs/bar_improves.md: lets a reporter's follow-up reply
+        # fill these in through the same existing event_data reply path.
+        "availability_start", "availability_end", "absence_reason",
+    }
 )
 
 
@@ -269,6 +373,9 @@ def record_extracted_fields(
             "severity": extraction_result.severity,
             "occurred_at": extraction_result.occurred_at,
             "occurred_at_is_fallback": extraction_result.occurred_at_is_fallback,
+            "availability_start": extraction_result.availability_start,
+            "availability_end": extraction_result.availability_end,
+            "absence_reason": extraction_result.absence_reason,
         },
     )
 

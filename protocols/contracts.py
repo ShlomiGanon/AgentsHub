@@ -11,6 +11,13 @@ EVENT_DATA_FIELDS = (
     "description",
     "severity",
     "occurred_at",
+    # Availability fields (Stage 3, docs/bar_improves.md): a team member's own
+    # reported absence interval and reason. Nullable/optional like every other
+    # field here — the required-fields gate is what makes them mandatory for a
+    # specific event type (e.g. "attendance"), never this tuple itself.
+    "availability_start",
+    "availability_end",
+    "absence_reason",
 )
 
 

@@ -183,5 +183,11 @@ jobs:
           tests/test_response_improvements.py
           tests/test_standby_squad_role_and_security.py
 
+      - name: Mission 10 - Operational profiles
+        run: >
+          python -m pytest -v --color=yes
+          tests/test_operational_profiles.py
+          tests/test_operational_scenarios.py
+
       - name: Confirm tests did not modify tracked files
         run: git diff --exit-code

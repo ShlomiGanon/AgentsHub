@@ -26,6 +26,28 @@ alongside this rather than expecting this document to reproduce it.
    same agent class run on different models in different profiles without
    the profile module itself ever touching `os.environ`.
 
+## A tool result proves only the tool's own effect (docs/bar_improves.md Stage 7)
+
+A recorded request is not a confirmed execution. Write every side-effecting tool's return
+text so it states only what the tool itself did — its own defined effect — and never an
+unobserved real-world outcome:
+
+- Right: `"friendly-force dispatch request recorded for 'west_gate'"` — this is exactly
+  what the tool did: it wrote a record. Nothing more happened as far as this system can
+  ever know.
+- Wrong: `"force dispatched to west_gate"` or `"force arrived at west_gate"` — this system
+  never contacted a real force, vehicle, or person, so it has no way to know that, and a
+  tool must never claim otherwise.
+
+This applies with equal force to the success judgment that reads a tool's result back
+later (`orchestrator.reasoning.judge_success`'s prompt, `_build_judgment_prompt`): judging
+a run a success because a tool recorded a request is judging that the *request* was
+recorded, never that the requested real-world action actually happened. See
+`docs/bar_improves.md`'s own framing: "a tool result proves only the tool's own defined
+effect; tools must word results accordingly; unobserved real-world outcomes are never
+claimed" — a rule this document and the judgment prompt both now state explicitly, not
+only a convention every tool in this codebase already happens to follow.
+
 ## `name`/`role`/tool `description` may reach a commander directly
 
 `orchestrator/capabilities.py`'s role-aware system context includes every

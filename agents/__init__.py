@@ -55,6 +55,9 @@ from agents.standard_agents import HistoryAgent, ReferenceAgent
 from agents.team_status_agent import TeamStatusAgent
 from agents.surveillance_agent import SurveillanceAgent
 from agents.friendly_forces_agent import FriendlyForcesAgent
+from agents.roster_agent import RosterAgent
+from agents.response_team_agents import SecurityOpsAgent, SurveillanceFaultAgent
+from agents.fire_station_agents import DispatchAgent, HazmatAgent
 
 history = standard_agents
 reference = standard_agents
@@ -92,6 +95,11 @@ __all__ = [
     "TeamStatusAgent",
     "SurveillanceAgent",
     "FriendlyForcesAgent",
+    "RosterAgent",
+    "SecurityOpsAgent",
+    "SurveillanceFaultAgent",
+    "DispatchAgent",
+    "HazmatAgent",
     "ToolInfo",
     "build_agent_registry",
     "make_exact_result_capture",

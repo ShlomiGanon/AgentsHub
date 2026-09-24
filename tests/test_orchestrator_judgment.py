@@ -103,6 +103,62 @@ def test_judge_success_passes_no_tools():
     assert agent.calls[0][1] == []
 
 
+def test_judgment_prompt_states_a_tool_result_proves_only_its_own_effect():
+    """Stage 7, docs/bar_improves.md: the success-judgment prompt itself now
+    states the rule — a tool result proves only its own recorded effect,
+    never an unobserved real-world outcome. Asserted on the built prompt
+    text (deterministic, this codebase's own words), never on any model's
+    wording."""
+
+    agent = _ScriptedMainAgent("VERDICT: success\nREASONING: r")
+    step = Step(agent_name="a1", task_text="dispatch a friendly force to west_gate", allowed_tools=())
+    outcomes = (
+        StepOutcome(
+            step=step,
+            result_text="friendly-force dispatch request recorded for 'west_gate'",
+            attempt_count=1,
+            succeeded=True,
+        ),
+    )
+
+    judge_success(agent, _protocol(), outcomes)
+
+    prompt = agent.calls[0][0]
+    assert "proves only the tool's own recorded effect" in prompt
+    assert "never an unobserved real-world outcome" in prompt
+    # The tool's own result text is carried into the prompt verbatim — the
+    # judge is told exactly what was recorded, nothing more.
+    assert "friendly-force dispatch request recorded for 'west_gate'" in prompt
+
+
+def test_judge_success_never_produces_a_stored_step_result_claiming_arrival():
+    """A tool's own persisted result never claims an unobserved outcome —
+    checked here on the STORED step result (what protocols.executor would
+    persist), independent of whatever verdict the (scripted) judge returns."""
+
+    agent = _ScriptedMainAgent("VERDICT: success\nREASONING: the recorded dispatch request matches what was expected")
+    step = Step(agent_name="a1", task_text="dispatch a friendly force to west_gate", allowed_tools=())
+    outcomes = (
+        StepOutcome(
+            step=step,
+            result_text="friendly-force dispatch request recorded for 'west_gate'",
+            attempt_count=1,
+            succeeded=True,
+        ),
+    )
+
+    verdict = judge_success(agent, _protocol(), outcomes)
+
+    assert verdict.verdict == "success"
+    # The tool's own stored result — not the judge's reasoning — is the
+    # thing this rule actually governs; it must never claim the force
+    # arrived, only that the request was recorded.
+    for outcome in outcomes:
+        assert "recorded" in outcome.result_text
+        for forbidden in ("arrived", "dispatched successfully", "force is on scene", "completed the dispatch"):
+            assert forbidden not in outcome.result_text.lower()
+
+
 def test_unclear_task_status_raises():
     agent = _ScriptedMainAgent("missing info", status="unclear_task")
 

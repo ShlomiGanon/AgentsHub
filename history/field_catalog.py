@@ -148,6 +148,24 @@ EVENT_FIELD_CATALOG: tuple[EventFieldDefinition, ...] = (
         "narrative",
     ),
     EventFieldDefinition(
+        "availability_start", "Availability start",
+        "When the reporter's stated unavailability begins — only meaningful for an absence/attendance report; null "
+        "means the interval was not yet given and is still being asked for.",
+        "narrative",
+    ),
+    EventFieldDefinition(
+        "availability_end", "Availability end",
+        "When the reporter's stated unavailability ends — only meaningful for an absence/attendance report; null "
+        "means the interval was not yet given and is still being asked for.",
+        "narrative",
+    ),
+    EventFieldDefinition(
+        "absence_reason", "Absence reason",
+        "The reporter's own stated reason for being unavailable, if they gave one — optional even once the interval "
+        "is known.",
+        "narrative",
+    ),
+    EventFieldDefinition(
         "steps", "Executed steps",
         "The ordered specialist tasks that ran for this event, the tools each was allowed to use, and each step's "
         "result.",

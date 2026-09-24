@@ -56,6 +56,57 @@ token), but the advanced concurrent mode above genuinely requires two distinct b
 both profiles at once with the same token means whichever started polling second gets Telegram's
 `409 Conflict` until the other is stopped.
 
+## Running a simulation deployment (docs/bar_improves.md Stage 5)
+
+A simulation is not a special in-process mode — it is simply another ordinary deployment
+of the same profile content, with its own `DB_PATH`, `API_PORT`, and `BOT_TOKEN_ENV` (a
+second, separate Telegram bot). `profiles/response_team_sim.py` and
+`profiles/fire_station_sim.py` import their `AGENTS`/`PROTOCOLS`/`EVENT_TYPES`/`AREAS`/
+`EVENT_TYPE_REQUIRED_FIELDS` content unchanged from `profiles/response_team.py` /
+`profiles/fire_station.py` respectively, and override only those deployment-specific
+values plus `PROFILE_NAME` (with a `"(Simulation)"` suffix). This gives the rehearsal
+complete isolation from the live deployment — separate events, precedents, summaries,
+notifications, conversation memory, users, and queue — with zero new isolation code,
+the same way any other two profiles are isolated from each other.
+
+**Starting it:** run the simulation profile exactly like any other deployment, e.g.
+`python -m api.app profiles.response_team_sim ...` and `python -m bot.app
+profiles.response_team_sim ...` (or via `run_stack.py`, pointed at the simulation module).
+It listens on its own port (`8917` for the Response Team simulation, `8918` for the Fire
+and Rescue Station simulation) and polls its own bot token
+(`RESPONSE_TEAM_SIM_BOT_TOKEN` / `FIRE_STATION_SIM_BOT_TOKEN` — a real, distinct Telegram
+bot, never the live profile's token). The bot process's own single-instance lock file is
+named from `loaded_profile.db_path` (`bot/app.py`, `bot/background_services.py`'s
+`SingleInstanceLock`), so it is automatically per-deployment too — nothing stops the live
+and simulation bots for the same organization from running concurrently, on two real,
+independent long-polling connections.
+
+**Provisioning its users:** exactly like any other deployment — `cli/user_admin`, run
+against the *simulation* profile module, never the live one:
+
+```
+python -m cli.user_admin --profile profiles.response_team_sim add --telegram-id <id> --level viewer|commander
+python -m cli.user_admin --profile profiles.response_team_sim add --telegram-id bot-service --level commander
+```
+
+The `bot-service` identity above is required for the simulation's own bot process, exactly
+as described in "The bot's own service identity" below — it is a second, separate
+row, in the simulation's own `users` table, from the live deployment's `bot-service` row.
+
+**Simulation data can never reach the live database.** `DB_PATH` is a distinct SQLite file
+(`data/response_team_sim/response_team_sim_history.db` /
+`data/fire_station_sim/fire_station_sim_history.db` by default) — every event, precedent,
+summary, notification, conversation turn, and user row a rehearsal produces is written
+there, never to `profiles/response_team.py` / `profiles/fire_station.py`'s own live
+database file. There is no shared table, no shared connection, and no code path that
+writes to two profiles' databases from one request.
+
+**Participants use the simulation bot.** A real person joins a rehearsal by messaging the
+*simulation* Telegram bot (the one behind `RESPONSE_TEAM_SIM_BOT_TOKEN` /
+`FIRE_STATION_SIM_BOT_TOKEN`), not the live one. Their live registration under the real
+profile is completely untouched by anything that happens in the simulation, since the
+simulation deployment resolves their identity against its own `users` table only.
+
 ## Writing a profile from scratch
 
 A profile is a plain Python module — see `docs/profile_spec.md` for the
