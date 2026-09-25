@@ -61,6 +61,7 @@ _EVENT_COLUMNS = (
     "availability_start",
     "availability_end",
     "absence_reason",
+    "simulation_context",
     "trace_id",
     "conversation_id",
     "deadline_at",
@@ -73,7 +74,7 @@ _EVENT_BOOL_COLUMNS = {"occurred_at_is_fallback", "clarification_held", "approva
 _EVENT_IMMUTABLE_COLUMNS = {
     "event_id", "received_at", "source", "sender_identity", "sender_permission_level",
     "source_message_id", "raw_text",
-    "trace_id", "conversation_id", "deadline_at", "ingestion_key",
+    "trace_id", "conversation_id", "deadline_at", "ingestion_key", "simulation_context",
 }
 _UPDATABLE_EVENT_COLUMNS = frozenset(_EVENT_COLUMNS) - _EVENT_IMMUTABLE_COLUMNS
 

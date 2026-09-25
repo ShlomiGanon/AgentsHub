@@ -435,6 +435,7 @@ SIMULATOR_BODY = """
     return {
       scenario: {
         id: meta.id ? String(meta.id) : '',
+        run_id: meta.run_id ? String(meta.run_id) : '',
         title: meta.title ? String(meta.title) : t('untitled'),
         description: meta.description ? String(meta.description) : '',
         tags: Array.isArray(meta.tags) ? meta.tags.map(String) : [],
@@ -457,7 +458,7 @@ SIMULATOR_BODY = """
     state.chatsByKey = parsed.chatsByKey;
     state.queues = {};
     state.busy = false;
-    state.runId = Date.now().toString(36);
+    state.runId = parsed.scenario.run_id || Date.now().toString(36);
     parsed.chats.forEach(function (chat) { state.queues[chat.key] = []; });
     parsed.steps.forEach(function (step) { state.queues[step.chat].push(step); });
 
@@ -655,7 +656,9 @@ SIMULATOR_BODY = """
       // A unique id per run unless the scenario pins one — the real bot handler re-derives
       // its own numeric message_id from this string, deterministically, so a re-run with the
       // same id still gets /Msg's existing dedup-on-source_message_id behavior.
-      source_message_id: step.source_message_id || ('sim-' + state.runId + '-' + step.step),
+      event_time: step.timestamp || null,
+      protocol_hint: step.protocol_hint || null,
+      source_message_id: step.source_message_id || ('sim-' + state.runId + '-' + (state.scenario.id || 'scenario') + '-' + step.step),
     };
     return { url: '/admin/simulator/bot-msg', body: body, identity: null };
   }

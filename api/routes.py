@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from flask import Blueprint, jsonify, request
 
 from api.request_boundary import BOT_SERVICE_IDENTITY, AuthorizationError, ConflictError, InvalidInputError, NotFoundError, RunFailureError, ServiceUnavailableError, authenticate, require
-from history import record_event_outcome, storage_timestamp
+from history import parse_timestamp, record_event_outcome, storage_timestamp
 
 from orchestrator.flows import begin_report, run_report_extraction
 
@@ -70,6 +70,15 @@ if TYPE_CHECKING:
 
 def _now() -> str:
     return storage_timestamp(datetime.now(timezone.utc))
+
+
+SIMULATION_REPORT_PROTOCOLS = frozenset({
+    "record_crew_shift_status",
+    "record_crew_availability_response",
+    "update_camera_observation",
+    "report_fire_incident",
+    "record_incident_update",
+})
 
 
 def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
@@ -270,6 +279,18 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
         event_data_event_id = request_payload.get("event_data_event_id")
         telegram_chat_id = request_payload.get("telegram_chat_id")
         telegram_chat_type = request_payload.get("telegram_chat_type")
+        event_time = request_payload.get("event_time")
+        simulation_context = request_payload.get("simulation_context")
+
+        if event_time is not None:
+            if not isinstance(event_time, str) or not event_time.strip() or len(event_time) > 80:
+                raise InvalidInputError("event_time must be an ISO-8601 timestamp", field="event_time")
+            try:
+                event_time = storage_timestamp(parse_timestamp(event_time))
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise InvalidInputError("event_time must be an ISO-8601 timestamp", field="event_time") from exc
+        if simulation_context is not None and simulation_context != "FIRE_SIMULATION":
+            raise InvalidInputError("simulation_context is not recognized", field="simulation_context")
 
         try:
             scoped_agent = resolve_scope(
@@ -560,11 +581,16 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
         # Fast Path for known buttons / deterministic protocol selection
         # button -> known protocol -> RBAC -> approval if required -> agent -> approved tool
         matched_protocol_name = request_payload.get("protocol_hint") or KNOWN_BUTTON_PROTOCOLS.get(str(text).strip())
+        simulation_report_hint = (
+            simulation_context == "FIRE_SIMULATION"
+            and matched_protocol_name in SIMULATION_REPORT_PROTOCOLS
+        )
         if (
             matched_protocol_name is not None
             and is_scoped_target(scoped_agent)
             and ctx.deps.protocol_set.get(matched_protocol_name) is None
             and app_ctx.deps.protocol_set.get(matched_protocol_name) is not None
+            and not simulation_report_hint
         ):
             # An explicit button/hint for a protocol this group's agent does not
             # own: refuse loudly rather than silently re-routing it elsewhere.
@@ -577,6 +603,54 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
         if matched_protocol_name is None and _is_team_roster_query(str(text), prior_messages):
             matched_protocol_name = "report_team_availability"
         matched_protocol = ctx.deps.protocol_set.get(matched_protocol_name) if matched_protocol_name else None
+        if matched_protocol is None and simulation_report_hint:
+            matched_protocol = app_ctx.deps.protocol_set.get(matched_protocol_name)
+
+        if (
+            simulation_context == "FIRE_SIMULATION"
+            and matched_protocol is not None
+            and matched_protocol.name in SIMULATION_REPORT_PROTOCOLS
+        ):
+            require(level, RequestedOperation.REPORT_EVENT)
+            report_deps = app_ctx.deps if simulation_report_hint else ctx.deps
+            reservation = ctx.queue.reserve(False)
+            if reservation is None:
+                raise ServiceUnavailableError(messages.text("api.queue_full"))
+            received_at = _now()
+            deadline_at = storage_timestamp(
+                datetime.now(timezone.utc) + timedelta(seconds=optimization_policy.job_deadline_seconds)
+            )
+            try:
+                event_id = begin_report(
+                    report_deps, text, "telegram", received_at, sender_identity, source_message_id,
+                    conversation_id=conversation_id, deadline_at=deadline_at,
+                    sender_permission_level=level.name.lower(), occurred_at=event_time,
+                    simulation_context=simulation_context,
+                )
+            except Exception:
+                ctx.queue.release_reservation(reservation)
+                raise
+
+            def _work_simulation_report() -> None:
+                with trace_context(trace_id):
+                    run_report_extraction(
+                        report_deps, event_id, app_ctx.main_agent, app_ctx.insights_agent,
+                        selected_protocol_name=matched_protocol.name,
+                    )
+
+            ctx.queue.submit(
+                WorkItem(
+                    (event_id, _work_simulation_report), trace_id=trace_id,
+                    deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
+                    concurrency_keys=(f"sender:{sender_identity}",),
+                ),
+                reservation,
+            )
+            _remember("assistant", messages.text("api.queued_report_debug", task_id=event_id), event_id)
+            return jsonify({
+                "taken_as": "report", "event_id": event_id, "status": "queued",
+                "answer": _queued_answer_text(messages, "report", event_id),
+            }), 202
 
         if matched_protocol is not None:
             received_at = _now()
@@ -596,6 +670,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                         ctx.deps, text, received_at, sender_identity, source_message_id,
                         conversation_id=conversation_id, deadline_at=deadline_at,
                         sender_permission_level=level.name.lower(),
+                        occurred_at=event_time, simulation_context=simulation_context,
                     )
                 except Exception:
                     ctx.queue.release_reservation(reservation)
@@ -804,6 +879,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     ctx.deps, text, "telegram", received_at, sender_identity, source_message_id,
                     conversation_id=conversation_id, deadline_at=deadline_at,
                     sender_permission_level=level.name.lower(),
+                    occurred_at=event_time, simulation_context=simulation_context,
                 )
             except Exception:
                 ctx.queue.release_reservation(reservation)
@@ -841,6 +917,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 ctx.deps, text, received_at, sender_identity, source_message_id,
                 conversation_id=conversation_id, deadline_at=deadline_at,
                 sender_permission_level=level.name.lower(),
+                occurred_at=event_time, simulation_context=simulation_context,
             )
         except Exception:
             ctx.queue.release_reservation(reservation)

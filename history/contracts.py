@@ -44,6 +44,7 @@ class InitialEventEnvelope:
     trace_id: str | None = None
     conversation_id: str | None = None
     deadline_at: str | None = None
+    simulation_context: str | None = None
 
 
 @dataclass(frozen=True)

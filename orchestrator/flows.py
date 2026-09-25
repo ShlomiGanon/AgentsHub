@@ -224,6 +224,8 @@ def begin_report(
     conversation_id: str | None = None,
     deadline_at: str | None = None,
     sender_permission_level: str = "viewer",
+    occurred_at: str | None = None,
+    simulation_context: str | None = None,
 ) -> str:
     """The synchronous prefix of a report: write the raw text and return the event ID, before any model call runs (§7.2's own requirement — "before any processing begins")."""
 
@@ -232,8 +234,9 @@ def begin_report(
         InitialEventEnvelope(
             raw_text=raw_text, source=source, received_at=received_at, sender_identity=sender_identity,
             sender_permission_level=sender_permission_level,
-            source_message_id=source_message_id,
+            source_message_id=source_message_id, occurred_at=occurred_at,
             trace_id=get_trace_id() or None, conversation_id=conversation_id, deadline_at=deadline_at,
+            simulation_context=simulation_context,
         ),
     )
 
@@ -248,7 +251,13 @@ def begin_report(
     return event_id
 
 
-def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent") -> FlowResult:
+def run_report_extraction(
+    deps: FlowDeps,
+    event_id: str,
+    main_agent: "MainAgent",
+    insights_agent: "InsightsAgent",
+    selected_protocol_name: str | None = None,
+) -> FlowResult:
     """The rest of a report: extraction through outcome."""
 
     deadline_failure = _deadline_failure(deps, event_id, "extraction")
@@ -267,6 +276,17 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
         record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
         _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="extraction")
         return FlowResult(event_id, "failed", str(exc))
+
+    if (
+        event.get("simulation_context") == "FIRE_SIMULATION"
+        and event.get("occurred_at")
+    ):
+        # The scenario clock is authoritative in FIRE simulation mode.  A
+        # model must not replace 2026-09-09 with a date inferred from stale
+        # precedent or from the machine's current clock.
+        extraction_result = replace(extraction_result, occurred_at=event["occurred_at"])
+    elif event.get("occurred_at") and extraction_result.occurred_at is None:
+        extraction_result = replace(extraction_result, occurred_at=event["occurred_at"])
 
     logger.info(
         "extraction result",
@@ -298,7 +318,10 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
     if gate_result is not None:
         return gate_result
 
-    return _continue_after_required_fields(deps, event_id, main_agent, insights_agent, raw_text, resolved_classification)
+    return _continue_after_required_fields(
+        deps, event_id, main_agent, insights_agent, raw_text, resolved_classification,
+        selected_protocol_name=selected_protocol_name,
+    )
 
 
 def _apply_required_fields_gate(
@@ -367,7 +390,7 @@ def _apply_required_fields_gate(
 
 def _continue_after_required_fields(
     deps: "FlowDeps", event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent",
-    raw_text: str, classification: str,
+    raw_text: str, classification: str, selected_protocol_name: str | None = None,
 ) -> "FlowResult":
     """What extraction would have done next, had the event type's required
     fields already been present — shared by the fresh path
@@ -383,7 +406,10 @@ def _continue_after_required_fields(
         )
         return FlowResult(event_id, "held_for_clarification")
 
-    return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent)
+    selected_protocol = deps.protocol_set.get(selected_protocol_name) if selected_protocol_name else None
+    return continue_from_risk_assessment(
+        deps, event_id, main_agent, insights_agent, selected_protocol=selected_protocol,
+    )
 
 
 def process_report(
@@ -394,10 +420,15 @@ def process_report(
     source: Literal["sensor", "telegram"],
     received_at: str,
     sender_identity: str,
+    occurred_at: str | None = None,
+    simulation_context: str | None = None,
 ) -> FlowResult:
     """A report of something that happened, run synchronously start to finish — `begin_report` + `run_report_extraction` composed back into one call."""
 
-    event_id = begin_report(deps, raw_text, source, received_at, sender_identity)
+    event_id = begin_report(
+        deps, raw_text, source, received_at, sender_identity,
+        occurred_at=occurred_at, simulation_context=simulation_context,
+    )
     return run_report_extraction(deps, event_id, main_agent, insights_agent)
 
 
@@ -410,6 +441,8 @@ def begin_request(
     conversation_id: str | None = None,
     deadline_at: str | None = None,
     sender_permission_level: str = "viewer",
+    occurred_at: str | None = None,
+    simulation_context: str | None = None,
 ) -> str:
     """The synchronous prefix of a request: write the raw text, already classified `human_activation` (§6.13 — there is nothing to extract), and return the event ID."""
 
@@ -418,8 +451,9 @@ def begin_request(
         InitialEventEnvelope(
             raw_text=raw_text, source="telegram", received_at=received_at, sender_identity=sender_identity,
             sender_permission_level=sender_permission_level,
-            source_message_id=source_message_id, occurred_at=received_at, occurred_at_is_fallback=False,
+            source_message_id=source_message_id, occurred_at=occurred_at or received_at, occurred_at_is_fallback=False,
             trace_id=get_trace_id() or None, conversation_id=conversation_id, deadline_at=deadline_at,
+            simulation_context=simulation_context,
         ),
     )
     record_event_state(deps.persistence, event_id, {"classification": HUMAN_ACTIVATION_TYPE})
@@ -986,13 +1020,23 @@ def _execute_protocol_plan(
     # ``record_attendance_response``.  Those values already exist in persistence
     # and the authenticated execution context; exposing them here prevents a
     # needless UNCLEAR_TASK refusal without allowing the model to invent them.
+    tool_time = (
+        event.get("occurred_at")
+        if event.get("simulation_context") == "FIRE_SIMULATION" and event.get("occurred_at")
+        else event.get("received_at")
+    )
     event_envelope = {
         "event_id": event.get("event_id"),
         "sender_identity": event.get("sender_identity"),
         "sender_permission_level": event.get("sender_permission_level"),
         "source": event.get("source"),
         "source_message_id": event.get("source_message_id"),
-        "received_at": event.get("received_at"),
+        # Write tools historically call this field `received_at`; in a FIRE
+        # simulation its authoritative operational clock is the scripted event
+        # time, while `processing_received_at` remains available for audit.
+        "received_at": tool_time,
+        "processing_received_at": event.get("received_at"),
+        "occurred_at": event.get("occurred_at"),
         "raw_text": event.get("raw_text"),
         "validated_event_fields": {name: event.get(name) for name in EVENT_DATA_FIELDS},
     }
@@ -1011,6 +1055,34 @@ def _execute_protocol_plan(
         )
         for step in steps
     )
+
+    # A passive FIRE incident record has no tool to invoke.  Treating it as a
+    # real persisted protocol step avoids an unnecessary specialist/LLM call
+    # while still leaving a complete, auditable Job step and history event.
+    if (
+        execution_steps
+        and all(not step.allowed_tools for step in execution_steps)
+        and event.get("simulation_context") == "FIRE_SIMULATION"
+        and protocol.name in {"report_fire_incident", "record_incident_update"}
+    ):
+        if not persisted_rows:
+            _persist_step_plan(deps, event_id, steps)
+        passive_outcomes = tuple(
+            StepOutcome(
+                step=step,
+                result_text="הדיווח נשמר ביומן האירוע.",
+                attempt_count=0,
+                succeeded=True,
+                status="succeeded",
+            )
+            for step in execution_steps
+        )
+        _persist_step_outcomes(deps, event_id, steps, passive_outcomes)
+        return _finish_protocol_assessment(
+            deps, event_id, main_agent, insights_agent, protocol, passive_outcomes,
+            precedent_matches, enforce_deadline=not resumed,
+        )
+
     with authenticated_request_identity(event["sender_identity"]):
         run_result = execute_steps(
             list(execution_steps),
@@ -1023,6 +1095,30 @@ def _execute_protocol_plan(
     if run_result.waiting_for_event_data and not persisted_rows:
         _persist_step_plan(deps, event_id, steps)
     _persist_step_outcomes(deps, event_id, steps, run_result.step_outcomes)
+
+    # FIRE's simulator may need to accept a late attendance message so the
+    # scenario clock, rather than the machine clock, remains the source of
+    # truth.  The provenance guard is persisted on the event; a live request
+    # can never enter this branch merely because the FIRE profile is loaded.
+    if (
+        deps.optimization_policy.auto_approve_simulations
+        and event.get("simulation_context") == "FIRE_SIMULATION"
+        and protocol.name == "record_crew_availability_response"
+    ):
+        team_agent = agents_by_name.get("team_status_agent")
+        status_store = getattr(team_agent, "status_store", None)
+        if status_store is not None:
+            for pending in status_store.pending_late_responses():
+                if (
+                    pending.get("telegram_identity") == event.get("sender_identity")
+                    and pending.get("original_text") == event.get("raw_text")
+                ):
+                    status_store.review_late_response(
+                        pending["response_id"],
+                        approved=True,
+                        commander_identity="simulation:auto-approval",
+                        reviewed_at=event.get("occurred_at") or event.get("received_at"),
+                    )
 
     if run_result.waiting_for_event_data:
         latest_event = deps.persistence.fetch_event(event_id)
@@ -1121,7 +1217,15 @@ def _finish_protocol_assessment(
 
     fast_simple = getattr(deps.optimization_policy, "fast_simple_reports", False)
     if fast_simple and len(protocol.participating_agents) == 1:
-        all_succeeded = all(outcome.succeeded for outcome in step_outcomes)
+        failure_markers = (
+            "not stored", "failed:", "clarification required", "was not recorded",
+            "not found", "no attendance cycle",
+        )
+        all_succeeded = all(
+            outcome.succeeded
+            and not any(marker in (outcome.result_text or "").casefold() for marker in failure_markers)
+            for outcome in step_outcomes
+        )
         insight_text = "הפעולה הושלמה ונשמרה בהצלחה." if all_succeeded else "העדכון נכשל, אנא ודא את תקינות הנתונים."
         verdict = type("DummyVerdict", (), {"verdict": "success" if all_succeeded else "failure"})()
     else:

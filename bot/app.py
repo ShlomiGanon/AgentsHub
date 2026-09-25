@@ -21,6 +21,7 @@ from auth.permissions import InvalidFullNameError, normalize_full_name
 
 from bot import interactions
 from bot.transports import HttpApiClient, PTBTelegramClient, telegram_request_context
+from bot.simulator_transport import simulation_metadata_for_update
 from bot.contracts import (
     ApiNotImplementedError,
     ApiRequestError,
@@ -376,10 +377,17 @@ async def _submit_and_format_message(
     protocol_hint: str | None = None,
     telegram_chat_id: str | None = None,
     telegram_chat_type: str | None = None,
+    event_time: str | None = None,
+    simulation_context: str | None = None,
 ) -> tuple[str, MessageSubmissionResult | None]:
     """Submit one message and return both presentation text and semantic result."""
 
     try:
+        submit_kwargs = {}
+        if event_time is not None:
+            submit_kwargs["event_time"] = event_time
+        if simulation_context is not None:
+            submit_kwargs["simulation_context"] = simulation_context
         submission_result = await deps.api_client.submit_message(
             text,
             telegram_identity,
@@ -390,6 +398,7 @@ async def _submit_and_format_message(
             protocol_hint,
             telegram_chat_id=telegram_chat_id,
             telegram_chat_type=telegram_chat_type,
+            **submit_kwargs,
         )
     except ApiRequestError as exc:
         messages = interactions.message_catalog_for(deps)
@@ -471,6 +480,8 @@ async def present_incoming_message(
     event_data_event_id: str | None = None,
     protocol_hint: str | None = None,
     telegram_chat_type: str | None = None,
+    event_time: str | None = None,
+    simulation_context: str | None = None,
 ) -> str | None:
     """Present one free-form message with the shared status/edit lifecycle.
 
@@ -506,6 +517,8 @@ async def present_incoming_message(
             protocol_hint,
             telegram_chat_id=chat_id if telegram_chat_type is not None else None,
             telegram_chat_type=telegram_chat_type,
+            event_time=event_time,
+            simulation_context=simulation_context,
         )
     except ApiNotImplementedError as exc:
         logger.info(
@@ -756,6 +769,10 @@ async def _on_text_message(update, context) -> None:
         return
 
     protocol_hint = BUTTON_PROTOCOL_HINTS.get(incoming_text)
+    simulation_metadata = simulation_metadata_for_update(update)
+    simulation_protocol_hint = simulation_metadata.get("protocol_hint")
+    if simulation_protocol_hint:
+        protocol_hint = simulation_protocol_hint
     if is_attendance_submission:
         # The multi-turn workflow already collected every required field.
         # Pin it to the attendance protocol so the model cannot misroute the
@@ -794,6 +811,8 @@ async def _on_text_message(update, context) -> None:
             event_data_event_id,
             protocol_hint=protocol_hint,
             telegram_chat_type=chat_type,
+            event_time=simulation_metadata.get("event_time"),
+            simulation_context=simulation_metadata.get("simulation_context"),
         )
     finally:
         activity_task.cancel()

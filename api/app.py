@@ -2,6 +2,7 @@
 
 import os
 import logging
+import importlib
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -81,6 +82,14 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
 
     persistence = open_persistence(loaded_profile.db_path)
     configure_logging(loaded_profile.module_path, persistence=persistence)
+
+    # Profiles may own additional persistence (FIRE cameras, drones, and crew
+    # roster).  Seed it through the profile's idempotent entry point before
+    # constructing agents, so every reader sees the same canonical store.
+    profile_module = importlib.import_module(module_path)
+    seed_data = getattr(profile_module, "ensure_seed_data", None)
+    if callable(seed_data):
+        seed_data()
 
     # On every profile load, ensure this profile's declared simulation users/groups
     # exist (docs/profile_simulations_design.md) — before group_routing below does its

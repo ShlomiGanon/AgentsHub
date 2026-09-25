@@ -343,6 +343,8 @@ class BotApiClient(ABC):
         protocol_hint: str | None = None,
         telegram_chat_id: str | None = None,
         telegram_chat_type: str | None = None,
+        event_time: str | None = None,
+        simulation_context: str | None = None,
     ) -> MessageSubmissionResult:
         """`source_message_id` — the incoming Telegram message's own ID — is what an eventual asynchronous job result (§8.9) or failure notification (§8.11) needs to send its reply *as a r...
 
@@ -446,6 +448,7 @@ class UnimplementedApiClient(BotApiClient):
         conversation_id: str | None = None, trace_id: str | None = None,
         event_data_event_id: str | None = None, protocol_hint: str | None = None,
         telegram_chat_id: str | None = None, telegram_chat_type: str | None = None,
+        event_time: str | None = None, simulation_context: str | None = None,
     ) -> MessageSubmissionResult:
         raise ApiNotImplementedError("submit_message", "§7.4 (POST /Msg)")
 

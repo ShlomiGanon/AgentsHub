@@ -32,6 +32,17 @@ from telegram.request import RequestData
 
 from bot.transports import TelegramClient
 
+_SIMULATION_METADATA: dict[int, dict] = {}
+
+
+def simulation_metadata_for_update(update: telegram.Update) -> dict:
+    """Read and remove simulator-only metadata for one synthetic update."""
+
+    update_id = getattr(update, "update_id", None)
+    if update_id is None:
+        return {}
+    return _SIMULATION_METADATA.pop(int(update_id), {})
+
 # A fixed, fake bot identity — never presented to Telegram, never checked
 # against anything real. Only `Bot.initialize()`'s own `User(**this)`
 # parsing needs it to look like a valid Bot API `User` object.
@@ -202,6 +213,9 @@ def build_synthetic_text_update(
     text: str,
     bot: "telegram.Bot",
     date: float | None = None,
+    event_time: str | None = None,
+    simulation_context: str | None = None,
+    protocol_hint: str | None = None,
 ) -> telegram.Update:
     """One simulated text message, as a real `telegram.Update` — built the
     same way PTB itself deserializes a real webhook/getUpdates payload
@@ -223,4 +237,13 @@ def build_synthetic_text_update(
             "text": text,
         },
     }
-    return telegram.Update.de_json(payload, bot)
+    update = telegram.Update.de_json(payload, bot)
+    # Update objects are frozen after PTB deserialization, so keep simulator
+    # metadata on a private attribute of the update rather than pretending it
+    # is a Telegram Message field.
+    _SIMULATION_METADATA[int(update.update_id)] = {
+        "event_time": event_time,
+        "simulation_context": simulation_context,
+        "protocol_hint": protocol_hint,
+    }
+    return update

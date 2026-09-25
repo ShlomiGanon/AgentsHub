@@ -267,6 +267,8 @@ class HttpApiClient(BotApiClient):
         protocol_hint: str | None = None,
         telegram_chat_id: str | None = None,
         telegram_chat_type: str | None = None,
+        event_time: str | None = None,
+        simulation_context: str | None = None,
     ) -> MessageSubmissionResult:
         body = {"text": text, "sender_identity": sender_identity, "source_message_id": source_message_id}
         if conversation_id is not None:
@@ -279,6 +281,10 @@ class HttpApiClient(BotApiClient):
             body["telegram_chat_id"] = telegram_chat_id
         if telegram_chat_type is not None:
             body["telegram_chat_type"] = telegram_chat_type
+        if event_time is not None:
+            body["event_time"] = event_time
+        if simulation_context is not None:
+            body["simulation_context"] = simulation_context
         status, response_payload = await self._call(
             "POST", "/Msg", sender_identity, body, trace_id_override=trace_id
         )

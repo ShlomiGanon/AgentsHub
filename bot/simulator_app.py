@@ -154,6 +154,13 @@ class SimulatorRuntime:
             chat_type=chat_type,
             text=text,
             bot=self.bot,
+            event_time=payload.get("event_time"),
+            simulation_context=(
+                "FIRE_SIMULATION"
+                if payload.get("event_time") or payload.get("protocol_hint")
+                else None
+            ),
+            protocol_hint=payload.get("protocol_hint"),
         )
         await self.application.process_update(update)
         reply_text = self.telegram_client.reply_since(mark, chat_id)

@@ -61,6 +61,14 @@ ON attendance_responses(telegram_identity, received_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_attendance_responses_cycle
 ON attendance_responses(cycle_id, telegram_identity, received_at DESC);
+
+CREATE TABLE IF NOT EXISTS team_vehicles (
+    vehicle_id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    current_location TEXT NOT NULL,
+    last_updated TEXT NOT NULL
+);
 """
 
 
@@ -148,6 +156,57 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         with self._connect() as connection:
             rows = connection.execute(
                 f"SELECT telegram_identity, full_name, registered_at, approved FROM team_members {where} ORDER BY full_name"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def register_vehicle(
+        self,
+        vehicle_id: str,
+        display_name: str,
+        *,
+        status: str = "available",
+        current_location: str = "fire_station",
+        last_updated: str | None = None,
+    ) -> None:
+        now = last_updated or _utc_now()
+        _parse_timestamp(now)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO team_vehicles(vehicle_id, display_name, status, current_location, last_updated)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(vehicle_id) DO UPDATE SET display_name = excluded.display_name
+                """,
+                (vehicle_id.strip(), display_name.strip(), status.strip(), current_location.strip(), now),
+            )
+
+    def update_vehicle(
+        self,
+        vehicle_id: str,
+        *,
+        status: str,
+        current_location: str,
+        last_updated: str | None = None,
+    ) -> dict:
+        now = last_updated or _utc_now()
+        _parse_timestamp(now)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE team_vehicles SET status = ?, current_location = ?, last_updated = ? WHERE vehicle_id = ?",
+                (status.strip(), current_location.strip(), now, vehicle_id.strip()),
+            )
+            if cursor.rowcount != 1:
+                raise TeamStatusPersistenceError(f"vehicle not found: {vehicle_id}")
+            row = connection.execute(
+                "SELECT vehicle_id, display_name, status, current_location, last_updated FROM team_vehicles WHERE vehicle_id = ?",
+                (vehicle_id.strip(),),
+            ).fetchone()
+            return dict(row)
+
+    def list_vehicles(self) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT vehicle_id, display_name, status, current_location, last_updated FROM team_vehicles ORDER BY vehicle_id"
             ).fetchall()
         return [dict(row) for row in rows]
 
