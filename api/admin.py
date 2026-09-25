@@ -1586,10 +1586,14 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             if source_message_id and sender_identity:
                 try:
                     import zlib
+                    import time
                     hashed_msg_id = str(zlib.crc32(source_message_id.encode("utf-8")) & 0x7FFFFFFF)
-                    event = ctx.deps.persistence.fetch_event_by_source_message("telegram", sender_identity, hashed_msg_id)
-                    if event:
-                        body["event_id"] = event["event_id"]
+                    for _ in range(10): # Wait up to 1 second
+                        event = ctx.deps.persistence.fetch_event_by_source_message("telegram", sender_identity, hashed_msg_id)
+                        if event:
+                            body["event_id"] = event["event_id"]
+                            break
+                        time.sleep(0.1)
                 except Exception:
                     pass
             return jsonify(body), 200

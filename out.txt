@@ -1,0 +1,15 @@
+[20:15:39] INFO  0f36d0c2  provider request failed → anthropic/anthropic/claude-sonnet-4.6 (Error code: 400 - {'error': {'message': 'Provider returned error', 'c…)
+
+[20:15:39] ERROR 0f36d0c2  Error executing listener ensure_force_final_answer: Error code: 400 - {'error': {'message': 'Provid…
+
+[20:19:20] INFO  722baa0d  provider request failed → anthropic/anthropic/claude-sonnet-4.6 (Error code: 400 - {'error': {'message': 'Provider returned error', 'c…)
+
+[20:19:20] ERROR 722baa0d  Error executing listener ensure_force_final_answer: Error code: 400 - {'error': {'message': 'Provid…
+
+[10:36:40] INFO  2cc376cd  provider request failed → anthropic/anthropic/claude-sonnet-4.6 (Error code: 400 - {'error': {'message': 'Provider returned error', 'c…)
+
+[10:36:40] ERROR 2cc376cd  Error executing listener ensure_force_final_answer: Error code: 400 - {'error': {'message': 'Provid…
+
+[10:37:08] INFO  2cc376cd  provider request failed → anthropic/anthropic/claude-sonnet-4.6 (Error code: 400 - {'error': {'message': 'Provider returned error', 'c…)
+
+[10:37:08] ERROR 2cc376cd  Error executing listener ensure_force_final_answer: Error code: 400 - {'error': {'message': 'Provid…

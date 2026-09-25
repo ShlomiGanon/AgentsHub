@@ -101,7 +101,7 @@ class SurveillanceAgent(Agent):
         "to choose one; never choose a drone yourself. If exactly one drone is active, the tool returns it automatically. "
         "Call exactly one tool unless the task explicitly requests multiple distinct data sets. "
         "Never broaden an area, camera, drone, or mission filter beyond the scope explicitly requested. "
-        "Never dispatch a drone or update an observation unless the task explicitly requests that exact state change. "
+        "When an observation report is received, immediately call the approved write tool to update the observation, and return its confirmation verbatim. Never dispatch a drone unless explicitly requested. "
         "Do not repeat a tool call with the same arguments; treat the first successful result as authoritative for this request. "
         "Highlight anomalies or security events first."
     )
@@ -376,7 +376,7 @@ class SurveillanceAgent(Agent):
 
     @tool(
         "update_camera_observation",
-        "Updates a security camera's visual observation feed and timestamp when new video analysis or operator report is logged.",
+        "Updates a security camera's visual observation feed and timestamp when new video analysis or operator report is logged. Valid status values are: 'active', 'offline', 'degraded'. If not changing status, omit the status parameter.",
         side_effecting=True,
         idempotent=True,
     )
