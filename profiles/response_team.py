@@ -81,7 +81,7 @@ API_PORT = 8907
 # deletion; reused here unchanged since this profile now carries SEC_001.
 SIMULATOR_PORT = 8915
 
-BOT_TOKEN_ENV = "RESPONSE_TEAM_BOT_TOKEN"
+BOT_TOKEN_ENV = "BOT_TOKEN"
 MODEL_CREDENTIAL_ENVS: list[str] = []
 
 RETRY_COUNT = 2

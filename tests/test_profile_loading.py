@@ -628,7 +628,7 @@ def test_response_team_profile_declares_area_required_for_its_flagged_event_type
     repointed from the now-deleted profiles.demo, then docs/responce_improve.md
     -- repointed again from the now-deleted profiles.standby_squad), not a
     test double."""
-    monkeypatch.setenv("RESPONSE_TEAM_BOT_TOKEN", "token")
+    monkeypatch.setenv("BOT_TOKEN", "token")
 
     from profiles.loader import load_profile
 

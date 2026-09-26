@@ -106,7 +106,7 @@ def test_extraction_prompt_carries_a_real_response_team_profiles_declared_descri
     from profiles import build_event_type_registry
     from profiles.loader import load_profile
 
-    monkeypatch.setenv("RESPONSE_TEAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("BOT_TOKEN", "test-token")
     core_model = TierModel(model="openai/test-core-model", api_key="test-key")
     sub_model = TierModel(model="openai/test-sub-model", api_key="test-key")
     loaded = load_profile("profiles.response_team", core_model, sub_model)

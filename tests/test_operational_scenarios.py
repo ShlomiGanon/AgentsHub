@@ -76,8 +76,7 @@ def _mock_crewai(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _bot_tokens(monkeypatch):
-    monkeypatch.setenv("RESPONSE_TEAM_BOT_TOKEN", "response-team-test-token")
-    monkeypatch.setenv("FIRE_STATION_BOT_TOKEN", "fire-station-test-token")
+    monkeypatch.setenv("BOT_TOKEN", "operational-test-token")
 
 
 @pytest.fixture

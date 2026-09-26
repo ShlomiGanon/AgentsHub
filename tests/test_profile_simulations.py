@@ -489,7 +489,7 @@ def test_response_team_declares_the_migrated_sec001_series(test_core_model, test
     SIMULATIONS declarations, with recurring characters sharing one reserved ID
     across the phases they appear in — not re-declared per phase."""
 
-    monkeypatch.setenv("RESPONSE_TEAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("BOT_TOKEN", "fake-token")
     from profiles.loader import load_profile
 
     loaded = load_profile("profiles.response_team", core_model=test_core_model, sub_model=test_sub_model)
@@ -603,7 +603,7 @@ def test_response_team_personas_become_approved_roster_members(
     from persistence.sqlite_store import SQLitePersistence
     from profiles.loader import load_profile
 
-    monkeypatch.setenv("RESPONSE_TEAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("BOT_TOKEN", "fake-token")
     loaded = load_profile("profiles.response_team", core_model=test_core_model, sub_model=test_sub_model)
 
     isolated_db_path = str(tmp_path / "team_status.db")

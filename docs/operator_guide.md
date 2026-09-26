@@ -36,26 +36,32 @@ there — normally a few seconds. If it hasn't reconnected within a minute, it s
 and previous profile's admin URLs as plain links so you can navigate manually. Only one
 profile's admin panel/bot is reachable at a time in this mode.
 
-**Advanced mode: run both profiles concurrently.** Since the two profiles use distinct
-`API_PORT`/`SIMULATOR_PORT`s and distinct `DB_PATH`s, nothing stops running two independent
-`run_stack.py` supervisors side by side — one admin panel per profile, reachable at the same
-time (`:8907/admin/simulator` and `:8906/admin/simulator`). This needs one extra step:
-`config/server_control.py`'s control channel (`status.json`/`command.json`) defaults to one
-shared `data/server_control/` directory, so the second supervisor must be started with its own
-`AGENTSHUB_CONTROL_DIR` (e.g. `AGENTSHUB_CONTROL_DIR=data/server_control_firefighting`), or
-the two instances will overwrite each other's status/command files. Only use this mode if you
-specifically need both profiles live at once (e.g. side-by-side demos); otherwise prefer the
-primary switch-in-place workflow above.
-
-`profiles.firefighting` uses `BOT_TOKEN` from `.env`; `profiles.response_team` uses its own
-`RESPONSE_TEAM_BOT_TOKEN` (both are still read directly from the process environment, no
-profile indirection beyond the variable name each profile's `BOT_TOKEN_ENV` names).
+**Advanced mode: run both profiles concurrently — not with a shared bot token.** Since the
+two profiles use distinct `API_PORT`/`SIMULATOR_PORT`s and distinct `DB_PATH`s, nothing at the
+API/admin-panel level stops running two independent `run_stack.py` supervisors side by side —
+one admin panel per profile, reachable at the same time (`:8907/admin/simulator` and
+`:8906/admin/simulator`), and this needs one extra step: `config/server_control.py`'s control
+channel (`status.json`/`command.json`) defaults to one shared `data/server_control/`
+directory, so the second supervisor must be started with its own `AGENTSHUB_CONTROL_DIR`
+(e.g. `AGENTSHUB_CONTROL_DIR=data/server_control_firefighting`), or the two instances will
+overwrite each other's status/command files. **However**, `profiles.firefighting` and
+`profiles.response_team` both read the same `BOT_TOKEN` from `.env` (each profile's own
+`BOT_TOKEN_ENV` names `"BOT_TOKEN"` — deliberately unified across every production profile so
+switch-in-place never has to duplicate the same secret under two names). Telegram allows only
+one long-poll per bot token at a time, so **running both profiles' bot processes concurrently
+with the same `BOT_TOKEN` value is not supported** — the second bot process's `getUpdates`
+call will conflict with the first's. If you genuinely need both organizations live at once,
+either give one profile a different token by overriding `BOT_TOKEN` in that process's own
+environment before starting it (the profile module itself always names `"BOT_TOKEN"`; nothing
+stops two different *processes* from resolving that name to two different real values), or run
+only the API/admin side of the second profile and skip its bot process. Otherwise prefer the
+primary switch-in-place workflow above, which never has this problem.
 
 ## Running a simulation deployment (docs/bar_improves.md Stage 5)
 
 A simulation is not a special in-process mode — it is simply another ordinary deployment
-of the same profile content, with its own `DB_PATH`, `API_PORT`, and `BOT_TOKEN_ENV` (a
-second, separate Telegram bot). `profiles/fire_station_sim.py` imports its
+of the same profile content, with its own `DB_PATH` and `API_PORT`. `profiles/fire_station_sim.py`
+imports its
 `AGENTS`/`PROTOCOLS`/`EVENT_TYPES`/`AREAS`/`EVENT_TYPE_REQUIRED_FIELDS` content unchanged
 from `profiles/fire_station.py`, and overrides only those deployment-specific values plus
 `PROFILE_NAME` (with a `"(Simulation)"` suffix). This gives the rehearsal complete isolation
@@ -75,12 +81,20 @@ profile *file* the way Fire and Rescue Station's is.
 **Starting Fire and Rescue Station's simulation:** run the simulation profile exactly like any
 other deployment, e.g. `python -m api.app profiles.fire_station_sim ...` and `python -m bot.app
 profiles.fire_station_sim ...` (or via `run_stack.py`, pointed at the simulation module). It
-listens on its own port (`8918`) and polls its own bot token (`FIRE_STATION_SIM_BOT_TOKEN` — a
-real, distinct Telegram bot, never the live profile's token). The bot process's own
-single-instance lock file is named from `loaded_profile.db_path` (`bot/app.py`,
-`bot/background_services.py`'s `SingleInstanceLock`), so it is automatically per-deployment
-too — nothing stops the live and simulation bots for the same organization from running
-concurrently, on two real, independent long-polling connections.
+listens on its own port (`8918`). The bot process's own single-instance lock file is named
+from `loaded_profile.db_path` (`bot/app.py`, `bot/background_services.py`'s
+`SingleInstanceLock`), so it is automatically per-deployment on the persistence side.
+
+**Bot token tradeoff:** `profiles/fire_station_sim.py` reads `BOT_TOKEN_ENV = "BOT_TOKEN"` —
+the same shared name as the live `profiles.fire_station` (and every other production profile;
+see "Running Response Team and Firefighting," above). This means the live and simulation bot
+processes **cannot** poll concurrently with the default `.env` value: Telegram allows only one
+long-poll per token, so starting both at once makes the second bot process's `getUpdates` call
+conflict with the first's. Run the simulation's bot process only while the live one is stopped
+(or vice versa), or override `BOT_TOKEN` for one of the two processes to a distinct, real
+Telegram bot token at the environment level before starting it, if you genuinely need both
+running at the same time. This does not affect API-only access (no polling involved) or the
+persistence-level isolation described below, which holds regardless.
 
 **Provisioning its users:** exactly like any other deployment — `cli/user_admin`, run
 against the *simulation* profile module, never the live one:
@@ -102,7 +116,8 @@ table, no shared connection, and no code path that writes to two profiles' datab
 one request.
 
 **Participants use the simulation bot.** A real person joins a rehearsal by messaging the
-*simulation* Telegram bot (the one behind `FIRE_STATION_SIM_BOT_TOKEN`), not the live one.
+*simulation* Telegram bot, not the live one — remembering the tradeoff above, that bot cannot
+be running concurrently with the live deployment's bot unless it's been given a distinct token.
 Their live registration under the real profile is completely untouched by anything that
 happens in the simulation, since the simulation deployment resolves their identity against
 its own `users` table only.

@@ -15,10 +15,7 @@ SUB_MODEL = TierModel(model="openai/test-sub-model", api_key="test-key")
 
 @pytest.fixture(autouse=True)
 def _bot_tokens(monkeypatch):
-    monkeypatch.setenv("RESPONSE_TEAM_BOT_TOKEN", "response-team-test-token")
-    monkeypatch.setenv("FIRE_STATION_BOT_TOKEN", "fire-station-test-token")
-    monkeypatch.setenv("RESPONSE_TEAM_SIM_BOT_TOKEN", "response-team-sim-test-token")
-    monkeypatch.setenv("FIRE_STATION_SIM_BOT_TOKEN", "fire-station-sim-test-token")
+    monkeypatch.setenv("BOT_TOKEN", "operational-test-token")
 
 
 @pytest.fixture

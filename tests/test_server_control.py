@@ -10,8 +10,7 @@ from profiles.loader import load_profile
 
 
 def test_only_the_two_operational_profiles_are_selectable(monkeypatch):
-    monkeypatch.setenv("RESPONSE_TEAM_BOT_TOKEN", "response-team-test-token")
-    monkeypatch.setenv("FIREFIGHTING_BOT_TOKEN", "firefighting-test-token")
+    monkeypatch.setenv("BOT_TOKEN", "operational-test-token")
 
     profiles = server_control.discover_profiles()
 
@@ -22,8 +21,7 @@ def test_only_the_two_operational_profiles_are_selectable(monkeypatch):
 
 
 def test_each_selectable_profile_has_three_simulations(monkeypatch):
-    monkeypatch.setenv("RESPONSE_TEAM_BOT_TOKEN", "response-team-test-token")
-    monkeypatch.setenv("FIREFIGHTING_BOT_TOKEN", "firefighting-test-token")
+    monkeypatch.setenv("BOT_TOKEN", "operational-test-token")
 
     for profile in server_control.discover_profiles():
         module = importlib.import_module(profile.module_path)
@@ -31,8 +29,7 @@ def test_each_selectable_profile_has_three_simulations(monkeypatch):
 
 
 def test_selectable_profiles_share_the_environment_runtime_ports(monkeypatch):
-    monkeypatch.setenv("RESPONSE_TEAM_BOT_TOKEN", "response-team-test-token")
-    monkeypatch.setenv("FIREFIGHTING_BOT_TOKEN", "firefighting-test-token")
+    monkeypatch.setenv("BOT_TOKEN", "operational-test-token")
     monkeypatch.setenv("API_PORT", "7777")
     monkeypatch.setenv("SIMULATOR_PORT", "7778")
     core_model = TierModel(model="openai/test-core", api_key="test-key")
