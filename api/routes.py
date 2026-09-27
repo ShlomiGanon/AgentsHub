@@ -560,19 +560,11 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
 
         # Fast Path for known buttons / deterministic protocol selection
         # button -> known protocol -> RBAC -> approval if required -> agent -> approved tool
+        # An explicit hint/button names any declared protocol regardless of which agent the
+        # group is bound to -- the bound agent is a context hint for LLM-driven protocol
+        # selection only (orchestrator/group_routing.py::scope_deps), never a restriction on
+        # an explicit, caller-asserted protocol name.
         matched_protocol_name = request_payload.get("protocol_hint") or KNOWN_BUTTON_PROTOCOLS.get(str(text).strip())
-        if (
-            matched_protocol_name is not None
-            and is_scoped_target(scoped_agent)
-            and ctx.deps.protocol_set.get(matched_protocol_name) is None
-            and app_ctx.deps.protocol_set.get(matched_protocol_name) is not None
-        ):
-            # An explicit button/hint for a protocol this group's agent does not
-            # own: refuse loudly rather than silently re-routing it elsewhere.
-            raise InvalidInputError(
-                messages.text("api.protocol_out_of_group_scope", protocol=matched_protocol_name, agent=scoped_agent),
-                field="protocol_hint",
-            )
         if matched_protocol_name is None and _is_situational_picture_query(str(text)):
             matched_protocol_name = SITUATIONAL_PICTURE_PROTOCOL
         if matched_protocol_name is None and _is_team_roster_query(str(text), prior_messages):

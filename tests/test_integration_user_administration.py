@@ -93,7 +93,12 @@ def test_a_commander_added_via_the_admin_command_can_approve_a_real_held_run(tmp
         ctx.deps.persistence.close()
 
 
-def test_user_api_exposes_reads_self_name_update_and_commander_approval(tmp_path):
+def test_user_api_exposes_reads_self_name_update_and_commander_approval(tmp_path, monkeypatch):
+    # Isolate from the admin panel: api/app.py registers /admin/* routes (including
+    # /admin/users and friends) only when both are set, so this test's fixed route
+    # list must not depend on whether the ambient shell happens to have them set.
+    monkeypatch.delenv("ADMIN_USERNAME", raising=False)
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
     ctx = build_context(tmp_path)
     try:
         app = build_app(ctx)

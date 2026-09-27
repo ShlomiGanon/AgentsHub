@@ -204,6 +204,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_friendly_forces_agent.py` | Test | Internal | Verifies friendly forces agent dispatch tools and coordination records. |
 | `tests/test_firefighting_external_forces_agent.py` | Test | Internal | Verifies FirefightingExternalForcesAgent's two new mutual-aid tools (docs/Profile_Split_Plan.md). |
 | `tests/test_group_routing.py` | Test | Internal | Verifies the group routing table, staleness refresh, scope resolution, and dependency scoping. |
+| `tests/test_group_scoping_safety_critical.py` | Test | Internal | Regression: a safety_critical protocol (e.g. report_security_incident, report_fire_incident) stays a selection candidate from every declared simulation group in a profile, regardless of which specialist that group is bound to. |
 | `tests/test_history_agent.py` | Test | Internal | Verifies history agent behavior and edge cases. |
 | `tests/test_history_event_pipeline.py` | Test | Internal | Verifies extraction, time normalization, and durable history writes. |
 | `tests/test_history_logging.py` | Test | Internal | Verifies history logging behavior and edge cases. |

@@ -1,10 +1,20 @@
 """Telegram group -> agent routing table (in-memory, DB-backed, write-through).
 
 A deployment may bind a Telegram group chat to one specialist agent (or to
-`main_agent` for full, unscoped routing). Messages that arrive from a bound
-group are *hard-scoped*: the Main Agent still classifies intent, but the
-`FlowDeps` it reasons over only expose that agent's protocols and tools (plus
-`history_agent`, so historical questions keep working everywhere).
+`main_agent` for full, unscoped routing). A bound group's agent is a context
+hint and priority for protocol selection only -- never a hard filter. Every
+protocol stays a selection candidate from every group; `scope_deps` carries
+the bound agent through as `FlowDeps.preferred_agent_hint`, which
+`orchestrator/reasoning.py`'s selection prompt builders surface as a
+preference the model may use to break a genuine tie, never as a restriction
+on what it may pick. This closes a real failure mode found in production: a
+security-relevant field report arriving in a channel not bound to
+`surveillance_agent` (e.g. an attendance or external-forces channel) must
+never become structurally unreachable from `report_security_incident` just
+because of which channel carried it. `Protocol.safety_critical`
+(protocols/contracts.py) is retained as a declarative marker of which
+protocols this matters most for, but no longer gates candidate inclusion
+here -- inclusion is now unconditional for every protocol, every group.
 
 The table is loaded from persistence once at API startup and updated
 write-through on every `upsert`/`remove` made through the running process.
@@ -20,20 +30,12 @@ import time
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
-from protocols import ProtocolSet
-
 if TYPE_CHECKING:
     from orchestrator.flows import FlowDeps
     from persistence import PersistenceInterface
 
 MAIN_AGENT_TARGET = "main_agent"
 GROUP_CHAT_TYPES = frozenset({"group", "supergroup"})
-
-# Core agents every scoped view keeps, regardless of which specialist a group
-# is bound to: the orchestrator itself, its insight/judgment helper, and the
-# history narrator (history questions are allowed in every group).
-_ALWAYS_VISIBLE_AGENTS = frozenset({"main_agent", "insights_agent", "history_agent"})
-_HISTORY_AGENT = "history_agent"
 
 
 class GroupNotRegisteredError(Exception):
@@ -222,24 +224,15 @@ def is_scoped_target(agent_name: str | None) -> bool:
 
 
 def scope_deps(deps: "FlowDeps", agent_name: str) -> "FlowDeps":
-    """A `FlowDeps` whose registry and protocol set only expose `agent_name` (+ history).
+    """A `FlowDeps` carrying `agent_name` as `preferred_agent_hint` for protocol
+    selection's prompt -- registry and protocol set are otherwise unchanged.
 
-    Protocols survive only if every participating agent is the bound agent or
-    `history_agent` — multi-agent protocols drop out of a single-agent group by
-    design. Everything else on `deps` (persistence, settings, registries) is
-    shared with the unscoped instance."""
+    Every protocol stays a selection candidate and every agent stays available to
+    execute one, from every group, regardless of which specialist that group is
+    bound to: the bound agent is context/priority for the selection prompt only,
+    never a filter that can make a protocol or its agent structurally unreachable.
+    Everything on `deps` besides the hint is shared with the unscoped instance."""
 
     if not is_scoped_target(agent_name):
         return deps
-    visible_agents = _ALWAYS_VISIBLE_AGENTS | {agent_name}
-    allowed_participants = {agent_name, _HISTORY_AGENT}
-    scoped_protocols = tuple(
-        protocol
-        for protocol in deps.protocol_set.all()
-        if set(protocol.participating_agents) <= allowed_participants
-    )
-    return replace(
-        deps,
-        registry=deps.registry.restricted_to(visible_agents),
-        protocol_set=ProtocolSet(protocols=scoped_protocols),
-    )
+    return replace(deps, preferred_agent_hint=agent_name)

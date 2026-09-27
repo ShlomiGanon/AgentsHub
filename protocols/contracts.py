@@ -40,6 +40,12 @@ class Protocol:
     approval_flag: bool
     requires_confirmation: bool = False
     commander_only: bool = False
+    # A group's bound agent (orchestrator/group_routing.py) is a context hint for
+    # protocol selection, never a hard filter that can make this protocol
+    # structurally unreachable from a channel: a safety_critical protocol stays a
+    # selection candidate from every group regardless of which specialist that
+    # group is bound to.
+    safety_critical: bool = False
 
 
 @dataclass(frozen=True)

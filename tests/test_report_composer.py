@@ -137,6 +137,16 @@ def test_prompt_instructs_the_model_to_reply_in_english_for_an_english_deploymen
     assert "English" in prompt
 
 
+def test_prompt_forbids_greetings_and_content_free_acknowledgements_for_every_audience():
+    for audience in ("viewer", "commander"):
+        prompt = build_prompt(_summary(), audience, "en")
+
+        assert "Never open with a greeting" in prompt
+        assert "never open with a content-free acknowledgement" in prompt
+        assert "in any language" in prompt
+        assert "1-2 sentences" in prompt
+
+
 # -- build_prompt: audience scoping -------------------------------------------
 
 

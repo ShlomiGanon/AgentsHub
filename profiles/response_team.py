@@ -493,6 +493,10 @@ PROTOCOLS = [
         approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
+        # A field/civilian security report can arrive in any group, not only the
+        # camera-ops channel this protocol's own agent (surveillance_agent) is bound
+        # to -- keep it selectable everywhere (orchestrator/group_routing.py).
+        safety_critical=True,
     ),
     Protocol(
         name="dispatch_neighboring_force",

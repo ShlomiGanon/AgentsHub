@@ -574,7 +574,19 @@ def answer_conversationally(
     return agent_result.text.strip()
 
 
-def _build_selection_prompt(raw_text: str, classification: str | None, area: str | None, description: str | None, protocols: tuple[Protocol, ...]) -> str:
+def _preferred_agent_hint_block(preferred_agent_hint: str | None) -> str:
+    if not preferred_agent_hint:
+        return ""
+    return (
+        f"\nContext: this message arrived in a channel normally used for {preferred_agent_hint}'s "
+        "domain. Treat that only as a mild preference for breaking a genuine tie between "
+        "equally-fitting protocols — never as a reason to pick a worse-fitting protocol over a "
+        "better-fitting one from a different domain, and never as a reason to force NO_MATCH when "
+        "a protocol outside that domain actually fits.\n"
+    )
+
+
+def _build_selection_prompt(raw_text: str, classification: str | None, area: str | None, description: str | None, protocols: tuple[Protocol, ...], preferred_agent_hint: str | None = None) -> str:
     protocol_lines = "\n".join(f"- {protocol.name}: {protocol.description}" for protocol in protocols)
     return (
         "Choose the protocol whose description best fits the following event. Selection is by "
@@ -582,7 +594,8 @@ def _build_selection_prompt(raw_text: str, classification: str | None, area: str
         f"Raw report text: {raw_text}\n"
         f"Classification: {classification or '(unresolved)'}\n"
         f"Area: {area or '(unresolved)'}\n"
-        f"Description: {description or '(none provided)'}\n\n"
+        f"Description: {description or '(none provided)'}\n"
+        f"{_preferred_agent_hint_block(preferred_agent_hint)}\n"
         "Available protocols:\n"
         f"{protocol_lines}\n\n"
         "If exactly one protocol clearly fits, respond in exactly this format, two lines:\n"
@@ -616,9 +629,9 @@ def _parse_selection_response(raw_text: str) -> ProtocolSelectionResult:
     raise OrchestrationParseError(f"could not parse protocol selection response: {raw_text!r}")
 
 
-def select_protocol(main_agent: MainAgent, raw_text: str, classification: str | None, area: str | None, description: str | None, protocols: tuple[Protocol, ...], risk_level: Literal["high", "low"]) -> ProtocolSelectionResult:
+def select_protocol(main_agent: MainAgent, raw_text: str, classification: str | None, area: str | None, description: str | None, protocols: tuple[Protocol, ...], risk_level: Literal["high", "low"], preferred_agent_hint: str | None = None) -> ProtocolSelectionResult:
     with stage_context("protocol_selection"):
-        agent_result = main_agent.process(_build_selection_prompt(raw_text, classification, area, description, protocols), [])
+        agent_result = main_agent.process(_build_selection_prompt(raw_text, classification, area, description, protocols, preferred_agent_hint), [])
     if agent_result.status != "success":
         raise OrchestrationParseError(f"protocol selection did not produce a usable response: {agent_result.text}")
     selection = _parse_selection_response(agent_result.text)
@@ -651,6 +664,7 @@ def make_operational_decision(
     severity: str | None,
     protocols: tuple[Protocol, ...],
     risk_threshold: float,
+    preferred_agent_hint: str | None = None,
 ) -> OperationalDecision:
     protocol_data = [
         {"name": protocol.name, "description": protocol.description, "criticality": int(protocol.criticality)}
@@ -661,6 +675,7 @@ def make_operational_decision(
         "risk_score must be between 0 and 1. Select only a listed protocol, report ambiguity with listed candidates, "
         "or no_match. Return exactly: risk_score, risk_reason, protocol_status, protocol_name, candidate_names, "
         "protocol_reason.\n"
+        f"{_preferred_agent_hint_block(preferred_agent_hint)}"
         f"Protocols JSON: {json.dumps(protocol_data, ensure_ascii=False, sort_keys=True)}\n"
         f"Event JSON: {json.dumps({'raw_text': raw_text, 'classification': classification, 'area': area, 'description': description, 'severity': severity}, ensure_ascii=False, sort_keys=True)}"
     )

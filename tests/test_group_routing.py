@@ -223,7 +223,7 @@ class _NamedAgent:
         self.descriptor = None
 
 
-def _protocol(name, *agents):
+def _protocol(name, *agents, safety_critical=False):
     return Protocol(
         name=name,
         description=f"{name} description",
@@ -232,6 +232,7 @@ def _protocol(name, *agents):
         expected_success_output="ok",
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
+        safety_critical=safety_critical,
     )
 
 
@@ -253,22 +254,22 @@ def _deps():
     )
 
 
-def test_scope_deps_restricts_registry_to_bound_agent_plus_core_agents():
-    scoped = scope_deps(_deps(), "team_status_agent")
+def test_scope_deps_leaves_the_registry_and_protocol_set_fully_visible():
+    # Every protocol and every agent stays selectable/executable from every group --
+    # the bound agent is a context hint for the selection prompt only, never a filter.
+    deps = _deps()
+    scoped = scope_deps(deps, "team_status_agent")
 
-    assert {a.name for a in scoped.registry.all()} == {"main_agent", "insights_agent", "history_agent", "team_status_agent"}
-    assert scoped.registry.get("team_status_agent") is not None
-    with pytest.raises(KeyError):
-        scoped.registry.get("surveillance_agent")
+    assert scoped.registry is deps.registry
+    assert scoped.protocol_set is deps.protocol_set
+    assert scoped.protocol_set.get("overall_situational_picture") is not None
+    assert scoped.registry.get("surveillance_agent") is deps.registry.get("surveillance_agent")
 
 
-def test_scope_deps_keeps_only_protocols_whose_participants_are_the_bound_agent_or_history():
-    scoped = scope_deps(_deps(), "team_status_agent")
+def test_scope_deps_carries_the_bound_agent_as_a_preferred_hint():
+    scoped = scope_deps(_deps(), "surveillance_agent")
 
-    assert {p.name for p in scoped.protocol_set.all()} == {
-        "report_team_availability", "record_attendance_response", "history_and_status",
-    }
-    assert scoped.protocol_set.get("overall_situational_picture") is None
+    assert scoped.preferred_agent_hint == "surveillance_agent"
 
 
 def test_scope_deps_shares_agent_instances_and_other_deps_with_the_unscoped_instance():
@@ -285,3 +286,4 @@ def test_scope_deps_with_main_agent_or_none_returns_the_same_deps():
 
     assert scope_deps(deps, MAIN_AGENT_TARGET) is deps
     assert scope_deps(deps, None) is deps
+    assert deps.preferred_agent_hint is None

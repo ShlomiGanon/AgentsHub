@@ -183,7 +183,11 @@ def test_a_message_from_an_unregistered_group_is_refused(tmp_path, teardown_ctx)
     assert agent.calls == []  # refused before any model call
 
 
-def test_a_message_from_a_bound_group_only_sees_that_agent_and_its_protocols(tmp_path, teardown_ctx):
+def test_a_message_from_a_bound_group_still_sees_every_agent_and_protocol(tmp_path, teardown_ctx):
+    """The group's bound agent is a context hint/priority for protocol selection only,
+    never a hard filter (orchestrator/group_routing.py::scope_deps) -- every agent and
+    protocol stays visible from every group, including this group's own."""
+
     agent = happy_path_agent(intent="conversational")
     agent._dispatch["Reply naturally and directly"] = "scoped hi"
     ctx = _two_agent_ctx(tmp_path, agent)
@@ -198,8 +202,8 @@ def test_a_message_from_a_bound_group_only_sees_that_agent_and_its_protocols(tmp
     prompt = next(call for call in agent.calls if "Reply naturally and directly" in call)
     assert '"name": "reference_agent"' in prompt
     assert '"name": "status_check"' in prompt
-    assert '"name": "other_agent"' not in prompt
-    assert '"name": "other_protocol"' not in prompt
+    assert '"name": "other_agent"' in prompt
+    assert '"name": "other_protocol"' in prompt
 
 
 def test_a_group_bound_to_main_agent_is_unscoped(tmp_path, teardown_ctx):
@@ -218,7 +222,11 @@ def test_a_group_bound_to_main_agent_is_unscoped(tmp_path, teardown_ctx):
     assert '"name": "other_protocol"' in prompt
 
 
-def test_a_protocol_hint_outside_the_group_scope_is_rejected(tmp_path, teardown_ctx):
+def test_a_protocol_hint_outside_the_group_scope_is_accepted(tmp_path, teardown_ctx):
+    """An explicit protocol_hint names a declared protocol regardless of which agent the
+    group is bound to -- the bound agent is a selection-prompt hint only, never a
+    restriction on an explicit, caller-asserted protocol name."""
+
     agent = happy_path_agent(intent="conversational")
     ctx = _two_agent_ctx(tmp_path, agent)
     teardown_ctx.append(ctx)
@@ -230,9 +238,8 @@ def test_a_protocol_hint_outside_the_group_scope_is_rejected(tmp_path, teardown_
         json=_group_message("run it", COMMANDER_IDENTITY, protocol_hint="other_protocol"),
     )
 
-    assert resp.status_code == 400
-    assert "other_protocol" in resp.get_json()["message"]
-    assert agent.calls == []
+    assert resp.status_code == 200
+    assert resp.get_json()["protocol"] == "other_protocol"
 
 
 def test_a_protocol_hint_inside_the_group_scope_takes_the_fast_path(tmp_path, teardown_ctx):

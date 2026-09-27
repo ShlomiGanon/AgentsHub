@@ -279,6 +279,10 @@ PROTOCOLS = [
         approval_flag=True,
         requires_confirmation=True,
         commander_only=False,
+        # A field/citizen fire report can arrive in any group, not only the
+        # camera-ops channel this protocol's own agent (surveillance_agent) is bound
+        # to -- keep it selectable everywhere (orchestrator/group_routing.py).
+        safety_critical=True,
     ),
     Protocol(
         name="dispatch_mutual_aid",

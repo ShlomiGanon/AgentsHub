@@ -162,6 +162,10 @@ class FlowDeps:
     # every FlowDeps built without opting in behaves exactly as before this feature existed.
     report_composer_agent: "ReportComposerAgent | None" = None
     message_catalog: "MessageCatalog" = field(default_factory=lambda: get_catalog("en"))
+    # orchestrator/group_routing.py::scope_deps: the Telegram group's bound agent, carried
+    # through as a context hint/priority for protocol_selection's prompt -- never a hard
+    # filter. None for an unscoped message (private chat, or a group bound to main_agent).
+    preferred_agent_hint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -740,6 +744,7 @@ def continue_from_risk_assessment(
                 combined_decision = make_operational_decision(
                     main_agent, raw_text, classification, area, description, severity,
                     deps.protocol_set.all(), deps.settings_store.get_risk_threshold(),
+                    preferred_agent_hint=deps.preferred_agent_hint,
                 )
             except OrchestrationParseError as exc:
                 logger.warning(
@@ -779,7 +784,10 @@ def continue_from_risk_assessment(
             selection = (
                 combined_decision.selection
                 if operational_mode == "merged" and combined_decision is not None
-                else select_protocol(main_agent, raw_text, classification, area, description, deps.protocol_set.all(), risk_assessment.level)
+                else select_protocol(
+                    main_agent, raw_text, classification, area, description, deps.protocol_set.all(),
+                    risk_assessment.level, preferred_agent_hint=deps.preferred_agent_hint,
+                )
             )
         except OrchestrationParseError as exc:
             _record_outcome_with_report(deps, event_id, "failed", failure_reason=str(exc))
