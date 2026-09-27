@@ -186,6 +186,25 @@ def test_on_start_command_greets_a_registered_caller_by_profile_name():
     assert telegram.sent[0].chat_id == "99"
 
 
+def test_fire_start_reports_the_api_link_state_instead_of_a_generic_welcome():
+    api = FakeBotApiClient(
+        users={"42": "commander"},
+        message_submission_result=MessageSubmissionResult(
+            kind="conversational", answer_text="השיחה מחוברת לריצת FIRE הפעילה."
+        ),
+    )
+    telegram = FakeTelegramClient()
+    profile = SimpleNamespace(profile_name="Firefighting", module_path="profiles.firefighting")
+    deps = BotDeps(loaded_profile=profile, telegram_client=telegram, api_client=api)
+
+    _run(app._on_start_command(_fake_update(text="/start"), _fake_context(deps)))
+
+    assert len(telegram.sent) == 1
+    assert telegram.sent[0].text == "השיחה מחוברת לריצת FIRE הפעילה."
+    assert ("submit_message", "לאיזו ריצה אני מחובר?", "42", "777") in api.calls
+    assert ("submit_message_conversation", "telegram:99:main") in api.calls
+
+
 def test_on_start_command_refuses_an_unregistered_caller():
     api = FakeBotApiClient()  # no users registered
     telegram = FakeTelegramClient()

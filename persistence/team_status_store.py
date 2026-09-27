@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS attendance_responses (
     unavailable_until TEXT,
     original_text TEXT NOT NULL,
     received_at TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
     approval_status TEXT NOT NULL CHECK (approval_status IN ('accepted', 'pending', 'rejected')),
     reviewed_by TEXT,
     reviewed_at TEXT
@@ -107,6 +108,9 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             }
             if "unavailable_from" not in response_columns:
                 connection.execute("ALTER TABLE attendance_responses ADD COLUMN unavailable_from TEXT")
+            if "occurred_at" not in response_columns:
+                connection.execute("ALTER TABLE attendance_responses ADD COLUMN occurred_at TEXT")
+                connection.execute("UPDATE attendance_responses SET occurred_at = received_at WHERE occurred_at IS NULL")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path, timeout=30)
@@ -290,6 +294,7 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         availability: str,
         original_text: str,
         received_at: str,
+        occurred_at: str | None = None,
         reason: str | None = None,
         unavailable_from: str | None = None,
         unavailable_until: str | None = None,
@@ -302,10 +307,11 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         if availability == "available" and (reason is not None or unavailable_from is not None or unavailable_until is not None):
             raise TeamStatusPersistenceError("an available response cannot include an unavailable period")
         received = _parse_timestamp(received_at)
+        occurred = _parse_timestamp(occurred_at or received_at)
         if unavailable_from is not None:
             _parse_timestamp(unavailable_from)
-        if unavailable_until is not None and _parse_timestamp(unavailable_until) <= received:
-            raise TeamStatusPersistenceError("unavailable_until must be after received_at")
+        if unavailable_until is not None and _parse_timestamp(unavailable_until) <= occurred:
+            raise TeamStatusPersistenceError("unavailable_until must be after occurred_at")
         if unavailable_from is not None and unavailable_until is not None:
             if _parse_timestamp(unavailable_until) <= _parse_timestamp(unavailable_from):
                 raise TeamStatusPersistenceError("unavailable_until must be after unavailable_from")
@@ -322,7 +328,7 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         if cycle is None:
             raise TeamStatusPersistenceError("no attendance cycle is open")
         deadline = _parse_timestamp(cycle["deadline_at"])
-        approval_status = "accepted" if received <= deadline else "pending"
+        approval_status = "accepted" if occurred <= deadline else "pending"
         response_id = f"response-{uuid.uuid4().hex}"
 
         with self._connect() as connection:
@@ -338,8 +344,8 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
                     INSERT INTO attendance_responses(
                         response_id, source_message_id, cycle_id, telegram_identity,
                         availability, reason, unavailable_from, unavailable_until, original_text,
-                        received_at, approval_status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        received_at, occurred_at, approval_status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         response_id,
@@ -352,6 +358,7 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
                         unavailable_until,
                         original_text,
                         received_at,
+                        occurred_at or received_at,
                         approval_status,
                     ),
                 )
@@ -440,7 +447,6 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
                     """
                     SELECT * FROM attendance_responses
                     WHERE telegram_identity = ? AND approval_status = 'accepted'
-                    ORDER BY received_at DESC
                     """,
                     (member["telegram_identity"],),
                 ).fetchall()
@@ -455,7 +461,17 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
                     "received_at": None,
                 }
                 if accepted_rows:
-                    rows = [dict(row) for row in accepted_rows]
+                    rows = [
+                        dict(row) for row in accepted_rows
+                        if _parse_timestamp(row["occurred_at"] or row["received_at"]) <= instant
+                    ]
+                    rows.sort(
+                        key=lambda row: (
+                            _parse_timestamp(row["occurred_at"] or row["received_at"]),
+                            _parse_timestamp(row["received_at"]),
+                        ),
+                        reverse=True,
+                    )
                     response = next(
                         (row for row in rows if cycle is not None and row["cycle_id"] == cycle["cycle_id"]),
                         None,
@@ -472,7 +488,8 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
                         )
                     if response is not None:
                         entry.update({key: response[key] for key in (
-                            "availability", "reason", "unavailable_from", "unavailable_until", "original_text", "received_at"
+                            "availability", "reason", "unavailable_from", "unavailable_until", "original_text",
+                            "received_at", "occurred_at",
                         )})
                         if response["availability"] == "unavailable":
                             start = _parse_timestamp(response["unavailable_from"]) if response["unavailable_from"] else None

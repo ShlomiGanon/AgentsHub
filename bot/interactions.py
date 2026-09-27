@@ -189,10 +189,12 @@ def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None
     }
     if result.simulation_context == "FIRE_SIMULATION" and result.protocol_name in fire_simulation_protocols:
         lines = [format_header("result", messages)]
-        if result.failure_reason:
-            lines.append(_short_failure_reason(result.failure_reason))
-        elif result.user_response:
+        if result.user_response:
             lines.append(result.user_response.strip())
+        elif result.failure_reason:
+            lines.append(messages.text("fire.reply.failed"))
+        elif result.outcome not in {"succeeded", "failed", "uncertain", "declined", "closed_on_precedent"}:
+            lines.append(messages.text("fire.reply.pending"))
         else:
             lines.append(messages.text("result.verdict", outcome=_outcome_word(result.outcome, messages)))
         return "\n".join(lines)

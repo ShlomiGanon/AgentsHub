@@ -6,6 +6,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 INCIDENT_ID = "EVT-FIRE-444-BRUSH"
@@ -37,7 +38,7 @@ CREATE TABLE IF NOT EXISTS incident_updates (
 CREATE TABLE IF NOT EXISTS external_force_state (
     force_id TEXT PRIMARY KEY,
     force_kind TEXT NOT NULL,
-    count INTEGER NOT NULL,
+    count INTEGER,
     status TEXT NOT NULL,
     location TEXT NOT NULL,
     notes TEXT NOT NULL,
@@ -52,6 +53,13 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _scenario_time(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ZoneInfo("Asia/Jerusalem"))
+    return parsed.astimezone(timezone.utc)
+
+
 class FirefightingOperationsStore:
     """Connection-per-operation store with source-message idempotency."""
 
@@ -64,6 +72,19 @@ class FirefightingOperationsStore:
             if "run_started_at" not in columns:
                 connection.execute("ALTER TABLE incident_state ADD COLUMN run_started_at TEXT")
                 connection.execute("UPDATE incident_state SET run_started_at = last_updated WHERE run_started_at IS NULL")
+            force_columns = {row[1]: row for row in connection.execute("PRAGMA table_info(external_force_state)")}
+            if force_columns.get("count", (None, None, None, 0))[3]:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute(
+                    "CREATE TABLE external_force_state_new ("
+                    "force_id TEXT PRIMARY KEY, force_kind TEXT NOT NULL, count INTEGER, "
+                    "status TEXT NOT NULL, location TEXT NOT NULL, notes TEXT NOT NULL, last_updated TEXT NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO external_force_state_new SELECT force_id, force_kind, count, status, location, notes, last_updated FROM external_force_state"
+                )
+                connection.execute("DROP TABLE external_force_state")
+                connection.execute("ALTER TABLE external_force_state_new RENAME TO external_force_state")
             connection.commit()
 
     def _connect(self) -> sqlite3.Connection:
@@ -78,7 +99,7 @@ class FirefightingOperationsStore:
                 """
                 INSERT INTO incident_state
                     (incident_id, status, area, spread_status, hazard_status, last_summary, last_updated, run_started_at)
-                VALUES (?, 'open', 'quarry_junction', 'contained_roadside', 'none_reported', ?, ?, ?)
+                VALUES (?, 'unknown', 'unknown', 'unknown', 'unknown', ?, ?, ?)
                 ON CONFLICT(incident_id) DO NOTHING
                 """,
                 (INCIDENT_ID, "Initial FIRE simulation incident state.", timestamp, timestamp),
@@ -108,14 +129,16 @@ class FirefightingOperationsStore:
         incident_id: str = INCIDENT_ID, occurred_at: str = "", received_at: str = "",
         status: str | None = None, area: str | None = None,
         spread_status: str | None = None, hazard_status: str | None = None,
+        external_force: dict | None = None,
     ) -> dict:
         self.ensure_initial_state(now=received_at or None)
         occurred = occurred_at or received_at or _now()
         received = received_at or occurred
-        update_id = f"fire-update-{source_message_id}"
+        scoped_source_id = f"{event_id}:{source_message_id}" if event_id else source_message_id
+        update_id = f"fire-update-{scoped_source_id}"
         with self._connect() as connection:
             existing = connection.execute(
-                "SELECT * FROM incident_updates WHERE source_message_id = ?", (source_message_id,)
+                "SELECT * FROM incident_updates WHERE source_message_id = ?", (scoped_source_id,)
             ).fetchone()
             if existing is not None:
                 return {"inserted": False, "update": dict(existing)}
@@ -126,18 +149,53 @@ class FirefightingOperationsStore:
                      verification_status, summary, facts_json, occurred_at, received_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (update_id, source_message_id, event_id, incident_id, update_kind,
+                (update_id, scoped_source_id, event_id, incident_id, update_kind,
                  verification_status, summary.strip(), json.dumps(facts or {}, ensure_ascii=False, sort_keys=True),
                  occurred, received),
             )
             if update_kind != "fire_incident":
+                current_state_applied = True
+                if external_force is not None:
+                    count = external_force.get("count")
+                    if count is not None and (type(count) is not int or count < 0):
+                        raise ValueError("external-force count must be a non-negative integer or unknown")
+                    current_force = connection.execute(
+                        "SELECT last_updated FROM external_force_state WHERE force_id = ?",
+                        (external_force["force_id"],),
+                    ).fetchone()
+                    current_state_applied = (
+                        current_force is None
+                        or _scenario_time(occurred) >= _scenario_time(current_force["last_updated"])
+                    )
+                    if current_state_applied:
+                        connection.execute(
+                            """
+                            INSERT INTO external_force_state
+                                (force_id, force_kind, count, status, location, notes, last_updated)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(force_id) DO UPDATE SET
+                                force_kind = excluded.force_kind, count = excluded.count,
+                                status = excluded.status, location = excluded.location,
+                                notes = excluded.notes, last_updated = excluded.last_updated
+                            """,
+                            (
+                                external_force["force_id"], external_force["force_kind"], count,
+                                external_force["status"], external_force["location"],
+                                external_force["notes"], occurred,
+                            ),
+                        )
                 row = connection.execute(
                     "SELECT * FROM incident_updates WHERE update_id = ?", (update_id,)
                 ).fetchone()
-                return {"inserted": True, "update": dict(row)}
+                return {"inserted": True, "update": dict(row), "current_state_applied": current_state_applied}
             current = connection.execute(
                 "SELECT * FROM incident_state WHERE incident_id = ?", (incident_id,)
             ).fetchone()
+            if current is not None and _scenario_time(occurred) < _scenario_time(current["last_updated"]):
+                row = connection.execute(
+                    "SELECT * FROM incident_updates WHERE update_id = ?", (update_id,)
+                ).fetchone()
+                return {"inserted": True, "update": dict(row), "current_state_applied": False}
             if current is None:
                 root = connection.execute(
                     "SELECT run_started_at FROM incident_state WHERE incident_id = ?", (INCIDENT_ID,)
@@ -173,29 +231,6 @@ class FirefightingOperationsStore:
                 "SELECT * FROM incident_updates WHERE update_id = ?", (update_id,)
             ).fetchone()
             return {"inserted": True, "update": dict(row)}
-
-    def update_external_force(
-        self, *, force_id: str, force_kind: str, count: int, status: str,
-        location: str, notes: str, updated_at: str = "",
-    ) -> dict:
-        timestamp = updated_at or _now()
-        with self._connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO external_force_state
-                    (force_id, force_kind, count, status, location, notes, last_updated)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(force_id) DO UPDATE SET
-                    force_kind = excluded.force_kind, count = excluded.count,
-                    status = excluded.status, location = excluded.location,
-                    notes = excluded.notes, last_updated = excluded.last_updated
-                """,
-                (force_id, force_kind, max(0, int(count)), status, location, notes, timestamp),
-            )
-            row = connection.execute(
-                "SELECT * FROM external_force_state WHERE force_id = ?", (force_id,)
-            ).fetchone()
-            return dict(row)
 
     def get_incident(self, incident_id: str = INCIDENT_ID) -> dict | None:
         with self._connect() as connection:

@@ -2,6 +2,7 @@
 surveillance (fire cameras/thermal sensors), and mutual-aid dispatch (Profile Split Plan,
 docs/Profile_Split_Plan.md)."""
 
+import json
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -69,6 +70,14 @@ class FirefightingSurveillanceAgent(SurveillanceAgent):
         self.operations_store = FirefightingOperationsStore(FIREFIGHTING_OPERATIONS_DB_PATH)
 
     @tool(
+        "get_surveillance_overview",
+        "Returns a FIRE tactical picture. Pass the scenario timestamp as as_of_iso to avoid using later camera, drone, or mission state.",
+        side_effecting=False,
+    )
+    def get_surveillance_overview(self, area: str = "", as_of_iso: str = "") -> str:
+        return self._format_surveillance_overview(area, as_of_iso)
+
+    @tool(
         "record_fire_incident_update",
         "Persists a structured FIRE incident update and links it to the existing incident.",
         side_effecting=True,
@@ -76,8 +85,8 @@ class FirefightingSurveillanceAgent(SurveillanceAgent):
     )
     def record_fire_incident_update(
         self,
-        incident_id: str = "EVT-FIRE-444-BRUSH",
-        update_kind: str = "incident_update",
+        incident_id: str = "",
+        update_kind: str = "fire_incident",
         summary: str = "",
         verification_status: str = "reported",
         source_message_id: str = "",
@@ -94,15 +103,19 @@ class FirefightingSurveillanceAgent(SurveillanceAgent):
             return "The FIRE incident update was not stored: summary and source message ID are required."
         result = self.operations_store.record_incident_update(
             source_message_id=source_message_id.strip(), event_id=event_id.strip(),
-            incident_id=incident_id.strip() or "EVT-FIRE-444-BRUSH",
-            update_kind=update_kind.strip() or "incident_update", summary=summary,
+            incident_id=incident_id.strip() or f"EVT-FIRE-{source_message_id.strip()}",
+            update_kind="fire_incident", summary=summary,
             verification_status=verification_status.strip() or "reported",
             facts=facts,
             occurred_at=occurred_at, received_at=received_at, area=area or None,
             spread_status=spread_status or None, hazard_status=hazard_status or None,
             status=status or None,
         )
-        return "FIRE incident update already recorded." if not result["inserted"] else "FIRE incident update recorded."
+        if not result["inserted"]:
+            return "FIRE incident update already recorded."
+        if result.get("current_state_applied") is False:
+            return "FIRE incident report recorded; current state unchanged because this event is older."
+        return "FIRE incident update recorded."
 
 
 class FirefightingCrewStatusAgent(TeamStatusAgent):
@@ -148,19 +161,71 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         side_effecting=False,
     )
     def report_team_availability(self, as_of_iso: str = "") -> str:
-        report = super().report_team_availability(as_of_iso)
+        cycles = [cycle for cycle in self.status_store.list_cycles()
+                  if cycle["cycle_key"].startswith("shift-")]
+        if not cycles:
+            return json.dumps({"profile": "FIRE", "crew": None, "reason": "No FIRE shift recorded"})
+        if as_of_iso:
+            as_of = datetime.fromisoformat(as_of_iso.replace("Z", "+00:00"))
+            if as_of.tzinfo is None:
+                as_of = as_of.replace(tzinfo=timezone.utc)
+            cycle_key = f"shift-{as_of.astimezone(ZoneInfo(self.timezone_name)).date().isoformat()}"
+            cycle = self.status_store.find_cycle(cycle_key)
+        else:
+            cycle = max(cycles, key=lambda item: item["opened_at"])
+        if cycle is None:
+            return json.dumps({"profile": "FIRE", "crew": None, "reason": "Requested FIRE shift not found"})
+        responses = [row for row in self.status_store.list_responses(cycle_id=cycle["cycle_id"])
+                     if row["approval_status"] == "accepted"]
+        clock = as_of_iso or max([cycle["opened_at"], *(row["received_at"] for row in responses)])
+        as_of = datetime.fromisoformat(clock.replace("Z", "+00:00"))
+        if as_of.tzinfo is None:
+            as_of = as_of.replace(tzinfo=timezone.utc)
+        responses = [row for row in responses if datetime.fromisoformat(
+            (row.get("occurred_at") or row["received_at"]).replace("Z", "+00:00")
+        ).astimezone(timezone.utc) <= as_of.astimezone(timezone.utc)]
         vehicles = self.status_store.list_vehicles()
-        if not vehicles:
-            return report
-        vehicle_lines = [
-            "",
-            "Vehicle status:",
-            *(
-                f"- {vehicle['display_name']}: {vehicle['status']}; location: {vehicle['current_location']}"
-                for vehicle in vehicles
-            ),
-        ]
-        return report + "\n" + "\n".join(vehicle_lines)
+        for vehicle in vehicles:
+            updated = datetime.fromisoformat(vehicle["last_updated"].replace("Z", "+00:00"))
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            if updated.astimezone(timezone.utc) > as_of.astimezone(timezone.utc):
+                vehicle.update(status="unknown", current_location="unknown", last_updated="unknown")
+        return json.dumps({
+            "profile": "FIRE", "as_of": clock, "shift": cycle["cycle_key"],
+            "confirmed_opening": len({row["telegram_identity"] for row in responses
+                                      if row["availability"] == "available"}),
+            "crew": self.status_store.availability_snapshot(clock, cycle_id=cycle["cycle_id"]),
+            "vehicles": vehicles,
+        }, ensure_ascii=False)
+
+    @tool(
+        "record_attendance_response",
+        "Records the authenticated FIRE member's report against the scenario-date shift, never a daily readiness cycle.",
+        side_effecting=True, idempotent=True,
+    )
+    def record_attendance_response(
+        self, source_message_id: str = "direct-response", availability: str = "",
+        original_text: str = "", reason: str = "", unavailable_days: int = 0,
+        received_at: str = "", occurred_at: str = "", unavailable_from: str = "",
+        unavailable_until: str = "", cycle_id: str = "", event_id: str = "",
+    ) -> str:
+        if not received_at:
+            return "Clarification required: the FIRE report needs its scenario timestamp."
+        instant = datetime.fromisoformat((occurred_at or received_at).replace("Z", "+00:00"))
+        if instant.tzinfo is None:
+            instant = instant.replace(tzinfo=timezone.utc)
+        key = f"shift-{instant.astimezone(ZoneInfo(self.timezone_name)).date().isoformat()}"
+        cycle = self.status_store.find_cycle(key)
+        if cycle is None or (cycle_id and cycle_id != cycle["cycle_id"]):
+            return "The attendance response was not stored: the matching FIRE shift is unavailable."
+        return super().record_attendance_response(
+            source_message_id=f"{event_id}:{source_message_id}" if event_id else source_message_id,
+            availability=availability,
+            original_text=original_text, reason=reason, unavailable_days=unavailable_days,
+            received_at=received_at, occurred_at=instant.isoformat(), unavailable_from=unavailable_from,
+            unavailable_until=unavailable_until, cycle_id=cycle["cycle_id"],
+        )
 
     @tool(
         "record_crew_shift_status",
@@ -178,6 +243,8 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         source_message_id: str = "",
         original_text: str = "",
         received_at: str = "",
+        occurred_at: str = "",
+        event_id: str = "",
     ) -> str:
         if not get_authenticated_request_identity():
             return "The crew shift status was not stored: authenticated requester identity is unavailable."
@@ -219,8 +286,9 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
             if not selected_members:
                 return "Clarification required: specify which approved crew members are included."
 
-        now_iso = received_at.strip() or datetime.now(timezone.utc).isoformat()
-        source_base = source_message_id.strip() or f"crew-shift-{int(datetime.now(timezone.utc).timestamp())}"
+        received_iso = received_at.strip() or datetime.now(timezone.utc).isoformat()
+        now_iso = occurred_at.strip() or received_iso
+        source_base = event_id.strip() or source_message_id.strip() or f"crew-shift-{int(datetime.now(timezone.utc).timestamp())}"
         text = original_text.strip() or f"crew shift status: {normalized}"
         stored = 0
         try:
@@ -247,7 +315,8 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
                     source_message_id=f"{source_base}:{member['telegram_identity']}",
                     availability=normalized,
                     original_text=text,
-                    received_at=now_iso,
+                    received_at=received_iso,
+                    occurred_at=now_iso,
                     cycle_id=active_cycle["cycle_id"],
                 )
                 stored += 1
@@ -281,7 +350,7 @@ class FirefightingExternalForcesAgent(FriendlyForcesAgent):
         self,
         force_id: str = "",
         force_kind: str = "",
-        count: int = 0,
+        count: int | None = None,
         status: str = "reported",
         location: str = "",
         notes: str = "",
@@ -295,18 +364,26 @@ class FirefightingExternalForcesAgent(FriendlyForcesAgent):
     ) -> str:
         if not force_id.strip() or not source_message_id.strip():
             return "The external-force update was not stored: force ID and source message ID are required."
-        self.operations_store.update_external_force(
-            force_id=force_id.strip(), force_kind=force_kind.strip() or "external_force",
-            count=count, status=status.strip() or "reported", location=location.strip() or "unknown",
-            notes=notes.strip() or summary.strip(), updated_at=occurred_at or received_at,
-        )
-        self.operations_store.record_incident_update(
+        force_kind = force_kind.strip() or "external_force"
+        notes = notes.strip() or summary.strip()
+        force = {
+            "force_id": force_id.strip(), "force_kind": force_kind, "count": count,
+            "status": status.strip() or "reported", "location": location.strip() or "unknown",
+            "notes": notes,
+        }
+        source_facts = dict(facts or {})
+        source_facts["external_force"] = force
+        result = self.operations_store.record_incident_update(
             source_message_id=source_message_id.strip(), event_id=event_id.strip(),
-            update_kind="external_force", summary=summary.strip() or notes.strip() or force_kind,
+            update_kind="external_force", summary=summary.strip() or notes or force_kind,
             verification_status=verification_status.strip() or "reported",
-            facts=facts,
+            facts=source_facts, external_force=force,
             occurred_at=occurred_at, received_at=received_at,
         )
+        if not result["inserted"]:
+            return "External-force status already recorded."
+        if not result.get("current_state_applied", True):
+            return "External-force report recorded; current state unchanged because this event is older."
         return "External-force status recorded."
 
     @tool(
@@ -504,13 +581,12 @@ PROTOCOLS = [
     Protocol(
         name="overall_situational_picture",
         description=(
-            "Applies when a commander asks for a combined snapshot spanning both the crew's "
-            "roster/vehicle availability and the camera/surveillance picture in one request -- "
-            "e.g. 'what's our force and vehicle availability' or 'urgent picture: exact fire "
-            "location and crew status'; does not apply when only one of the two domains is "
-            "asked about."
+            "Read-only FIRE operational analysis, current status, changes since a previous answer, "
+            "or a follow-up asking to check deeply with the agents. These are information questions, "
+            "not activation or dispatch requests. Focus on the domains the user asks about; "
+            "recommendations never authorize dispatch."
         ),
-        participating_agents=("surveillance_agent", "team_status_agent"),
+        participating_agents=("surveillance_agent", "team_status_agent", "friendly_forces_agent"),
         approved_tools=("get_surveillance_overview", "report_team_availability"),
         expected_success_output="One combined report covering both current camera status and crew availability.",
         criticality=CriticalityLevel.LOW,

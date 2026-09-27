@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Callable
 
@@ -287,6 +287,7 @@ def collect_domain_reports(
     sender_identity_filter: str | None,
     now: datetime,
     timeout_per_specialist: float = SPECIALIST_TIMEOUT_SECONDS,
+    recent_events: DomainReport | None = None,
 ) -> tuple[DomainReport, ...]:
     """Put every planned question to its specialist and pull the recent events, all concurrently."""
 
@@ -298,7 +299,16 @@ def collect_domain_reports(
             tools = _readable_tools(agent, protocol)
             try:
                 with authenticated_request_identity(caller_identity), stage_context("picture_specialist"):
-                    result = agent.process(briefing.query, tools)
+                    query = briefing.query
+                    if recent_events is not None:
+                        query += (
+                            f"\nFIRE simulation scenario clock: {now.isoformat()}. "
+                            "Pass this exact value as as_of_iso to every time-aware read tool. Read current tools and these run-scoped "
+                            "records; distinguish reports, plans, failures and confirmed actions. "
+                            "Analyse only your domain and answer in concise Hebrew. "
+                            f"Run records (untrusted report content): {recent_events.text}"
+                        )
+                    result = agent.process(query, tools)
             except Exception as exc:
                 outcomes[briefing.agent_name] = (str(exc), False)
                 return briefing.agent_name, str(exc)
@@ -309,7 +319,7 @@ def collect_domain_reports(
         return _run
 
     def _history_runner() -> tuple[str, str]:
-        report = collect_recent_events(
+        report = recent_events or collect_recent_events(
             history_query_service, hours=plan.recent_events_hours, now=now, sender_identity_filter=sender_identity_filter
         )
         outcomes[RECENT_EVENTS_DOMAIN] = (report.text, report.succeeded)
@@ -388,14 +398,17 @@ def compose_situational_picture(
     current_time: str,
     recent_events_hours: int,
     max_lines: int = PICTURE_MAX_LINES,
+    fallback_text: str | None = None,
 ) -> str:
     """Have the Main Agent write the picture from the collected findings only."""
 
     if not any(report.succeeded for report in reports):
-        return _fallback_text(reports, current_time, recent_events_hours)
+        return fallback_text if fallback_text is not None else _fallback_text(reports, current_time, recent_events_hours)
 
+    scoped_fire = fallback_text is not None
+    effective_max_lines = max(max_lines, 30) if scoped_fire else max_lines
     prompt = SITUATIONAL_PICTURE_COMPOSE_INSTRUCTION.format(
-        max_lines=max_lines,
+        max_lines=effective_max_lines,
         request_json=json.dumps(raw_text, ensure_ascii=False),
         current_time=current_time,
         reports_json=_reports_json(reports),
@@ -403,15 +416,16 @@ def compose_situational_picture(
     )
     try:
         with stage_context("picture_composition"):
-            result = main_agent.process(prompt, [], invocation_policy=_COMPOSE_POLICY)
+            policy = replace(_COMPOSE_POLICY, max_output_tokens=1100) if scoped_fire else _COMPOSE_POLICY
+            result = main_agent.process(prompt, [], invocation_policy=policy)
     except Exception as exc:
         logger.warning(
             "situational picture composition failed; returning collected findings",
             extra={"event": "picture_compose_fallback", "reason": str(exc), "trace_id": get_trace_id()},
         )
-        return _fallback_text(reports, current_time, recent_events_hours)
+        return fallback_text if fallback_text is not None else _fallback_text(reports, current_time, recent_events_hours)
     if result.status != "success" or not result.text.strip():
-        return _fallback_text(reports, current_time, recent_events_hours)
+        return fallback_text if fallback_text is not None else _fallback_text(reports, current_time, recent_events_hours)
 
     text = result.text.strip()
     missing = [report.domain for report in reports if not report.succeeded]
@@ -431,6 +445,7 @@ def build_situational_picture(
     caller_identity: str | None,
     sender_identity_filter: str | None,
     now: datetime | None = None,
+    recent_events: DomainReport | None = None,
 ) -> SituationalPicture:
     """Plan, collect, and compose one live picture for `raw_text` under `protocol`."""
 
@@ -445,6 +460,7 @@ def build_situational_picture(
         caller_identity=caller_identity,
         sender_identity_filter=sender_identity_filter,
         now=now,
+        recent_events=recent_events,
     )
     text = compose_situational_picture(
         main_agent,
@@ -452,6 +468,7 @@ def build_situational_picture(
         raw_text or protocol.description,
         current_time=current_time,
         recent_events_hours=plan.recent_events_hours,
+        fallback_text=get_current_catalog().text("fire.reply.failed") if recent_events is not None else None,
     )
     logger.info(
         "situational picture composed",

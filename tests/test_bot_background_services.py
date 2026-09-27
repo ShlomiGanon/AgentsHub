@@ -185,6 +185,19 @@ def test_surveillance_job_result_is_compact_and_identifies_the_job():
     assert len(text.splitlines()) <= 7
 
 
+def test_fire_pending_job_does_not_render_null_outcome_as_success():
+    from messages import get_catalog
+
+    result = JobResult(
+        job_id="j1", outcome="queued", protocol_name="report_fire_incident",
+        simulation_context="FIRE_SIMULATION",
+    )
+    text = format_job_result(result, get_catalog("he"))
+    assert "העדכון עדיין בעיבוד" in text
+    assert "הושלם בהצלחה" not in text
+    assert "queued" not in text
+
+
 def test_declined_job_result_uses_the_declined_header():
     result = JobResult(job_id="j1", outcome="declined")
     text = format_job_result(result)

@@ -61,8 +61,10 @@ from orchestrator.situational_picture import (  # re-exported: api may only impo
     SituationalPicture,
     build_situational_picture,
     compose_picture_from_step_outcomes,
+    compose_situational_picture,
+    DomainReport,
 )
-from orchestrator.firefighting_picture import build_fire_situational_picture
+from orchestrator.firefighting_picture import build_fire_situational_picture, fire_run_context
 from orchestrator.event_queue import PolicyAwareEventQueue, SerialEventQueue, WorkItem
 from orchestrator.group_routing import (  # re-exported: api may only import orchestrator.flows
     GROUP_CHAT_TYPES,
@@ -270,19 +272,39 @@ def run_report_extraction(
     event = deps.persistence.fetch_event(event_id)
     raw_text, source, received_at = event["raw_text"], event["source"], event["received_at"]
 
-    # FIRE simulation messages already carry a trusted protocol hint from the
-    # scenario.  They are structured demo inputs, not open-ended live traffic;
-    # execute the selected write directly so a report does not pay for
-    # extraction, precedent search, task formulation, and a success judge.
-    if event.get("simulation_context") == "FIRE_SIMULATION" and selected_protocol_name:
+    # A protocol hint identifies a capability, not the meaning of free text.
+    # Reports still require extraction and validated tool execution.
+    if event.get("simulation_context") == "FIRE_SIMULATION" and selected_protocol_name in {
+        "overall_situational_picture", "query_historical_incidents",
+    }:
         protocol = deps.protocol_set.get(selected_protocol_name)
         if protocol is not None:
-            return _run_fire_simulation_action(deps, event_id, protocol)
+            return _run_fire_simulation_action(deps, event_id, protocol, main_agent)
 
+    extraction_invoker = _model_invoker_for(main_agent)
+    extraction_time = received_at
+    if event.get("simulation_context") == "FIRE_SIMULATION":
+        extraction_time = event.get("occurred_at") or received_at
+        surveillance = deps.registry.get("surveillance_agent")
+        reference_data = {
+            "cameras": surveillance.surveillance_store.list_cameras(),
+            "vehicles": deps.registry.get("team_status_agent").status_store.list_vehicles(),
+            "conversation": deps.persistence.fetch_conversation_messages(event["conversation_id"], 12)
+            if event.get("conversation_id") else [],
+        }
+        base_invoker = extraction_invoker
+
+        def extraction_invoker(prompt):
+            return base_invoker(
+                prompt + "\nFIRE simulation reference data (not a new report): "
+                + json.dumps(reference_data, ensure_ascii=False)
+                + "\nResolve aliases only when uniquely supported. If ambiguous, leave the field null. "
+                "Use the scenario date supplied above, never today's date."
+            )
     try:
         extraction_result = extract_event(
-            raw_text, source, received_at, deps.event_type_registry, deps.area_registry,
-            model_invoker=_model_invoker_for(main_agent),
+            raw_text, source, extraction_time, deps.event_type_registry, deps.area_registry,
+            model_invoker=extraction_invoker,
         )
     except ExtractionExecutionError as exc:
         record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
@@ -878,11 +900,6 @@ def _run_protocol(
     area: str | None,
     description: str | None,
 ) -> FlowResult:
-    if (
-        deps.persistence.fetch_event(event_id).get("simulation_context") == "FIRE_SIMULATION"
-        and protocol.name == "dispatch_drone_to_incident"
-    ):
-        return _run_fire_simulation_action(deps, event_id, protocol)
     deadline_failure = _deadline_failure(deps, event_id, "formulation")
     if deadline_failure is not None:
         return deadline_failure
@@ -1054,8 +1071,8 @@ def _execute_protocol_plan(
         "sender_permission_level": event.get("sender_permission_level"),
         "source": event.get("source"),
         "source_message_id": event.get("source_message_id"),
-        "received_at": tool_time,
-        "processing_received_at": event.get("received_at"),
+        "received_at": event.get("received_at"),
+        "scenario_time": tool_time,
         "occurred_at": event.get("occurred_at"),
         "raw_text": event.get("raw_text"),
         "validated_event_fields": {name: event.get(name) for name in EVENT_DATA_FIELDS},
@@ -1064,6 +1081,44 @@ def _execute_protocol_plan(
         "\n\nAuthoritative event envelope (use these values; do not ask the caller to provide them): "
         + json.dumps(event_envelope, ensure_ascii=False, sort_keys=True)
     )
+    if event.get("simulation_context") == "FIRE_SIMULATION":
+        surveillance = deps.registry.get("surveillance_agent")
+        team = deps.registry.get("team_status_agent")
+        if protocol.name == "record_crew_shift_status":
+            shifts = [cycle for cycle in team.status_store.list_cycles()
+                      if cycle["cycle_key"].startswith("shift-")]
+            previous = max(shifts, key=lambda row: row["opened_at"]) if shifts else None
+            if previous is None or parse_timestamp(tool_time) <= parse_timestamp(previous["opened_at"]):
+                team.status_store.reset_operational_state(now_iso=tool_time)
+                surveillance.surveillance_store.reset_operational_state(now_iso=tool_time)
+                surveillance.operations_store.reset_current_state(
+                    now=tool_time, run_started_at=event["received_at"],
+                )
+        run = fire_run_context(deps.registry, deps.persistence, as_of_iso=tool_time or "")
+        event_envelope_text += (
+            "\nFIRE simulation: interpret the current report using these registered assets and run records. "
+            "Resolve an alias only when unambiguous; otherwise ask a short Hebrew clarification. "
+            "A protocol hint does not supply missing parameters. Never hard-code a vehicle or drone. "
+            "A police patrol remains a police unit, never a firefighting vehicle or dispatched fire crew. "
+            "Do not classify a unit as dispatched unless the report explicitly says it was sent. "
+            "Use scenario_time for the event's operational time and received_at for actual receipt/audit time. "
+            "Pass scenario_time as as_of_iso to time-aware read tools. "
+            "A status report is not authorization to dispatch. Execute only the permitted tool. "
+            "Use the same incident for an explicitly continuing report; do not infer an exact location. "
+            "After the tool succeeds, answer in one or two natural Hebrew sentences about the actual update. "
+            "No IDs, tool names, steps_completed, generic success text or full situation report. "
+            + json.dumps({
+                "cameras": surveillance.surveillance_store.list_cameras(),
+                "drones": surveillance.surveillance_store.list_drones(),
+                "vehicles": team.status_store.list_vehicles(),
+                "crew": team.report_team_availability(tool_time or ""),
+                "incidents": surveillance.operations_store.list_incidents(),
+                "run_reports": [
+                    {key: row.get(key) for key in ("raw_text", "occurred_at", "selected_protocol", "outcome")}
+                    for row in (run or {}).get("events", [])
+                ],
+            }, ensure_ascii=False)
+        )
     execution_steps = tuple(
         replace(
             step,
@@ -1076,29 +1131,6 @@ def _execute_protocol_plan(
         for step in steps
     )
 
-    if (
-        execution_steps
-        and all(not step.allowed_tools for step in execution_steps)
-        and event.get("simulation_context") == "FIRE_SIMULATION"
-        and protocol.name in {"report_fire_incident", "record_incident_update"}
-    ):
-        if not persisted_rows:
-            _persist_step_plan(deps, event_id, steps)
-        passive_outcomes = tuple(
-            StepOutcome(
-                step=step,
-                result_text="\u05d4\u05d3\u05d9\u05d5\u05d5\u05d7 \u05e0\u05e9\u05de\u05e8 \u05d1\u05d9\u05d5\u05de\u05df \u05d4\u05d0\u05d9\u05e8\u05d5\u05e2.",
-                attempt_count=0,
-                succeeded=True,
-                status="succeeded",
-            )
-            for step in execution_steps
-        )
-        _persist_step_outcomes(deps, event_id, steps, passive_outcomes)
-        return _finish_protocol_assessment(
-            deps, event_id, main_agent, insights_agent, protocol, passive_outcomes,
-            precedent_matches, enforce_deadline=not resumed,
-        )
 
     with authenticated_request_identity(event["sender_identity"]):
         run_result = execute_steps(
@@ -1200,337 +1232,26 @@ def _execute_protocol_plan(
     )
 
 
-def _fire_text_has(text: str, *terms: str) -> bool:
-    normalized = " ".join(text.casefold().split())
-    return any(term.casefold() in normalized for term in terms)
-
-
-def _fire_camera_id(text: str) -> str:
-    match = re.search(r"CAM[- ]?0?([123])", text.upper())
-    if match:
-        return f"CAM-0{match.group(1)}"
-    match = re.search(r"\u05de\u05e6\u05dc\u05de\u05d4\s*0?([123])", text)
-    if match:
-        return f"CAM-0{match.group(1)}"
-    if _fire_text_has(text, "\u05de\u05d2\u05d3\u05dc \u05ea\u05e6\u05e4\u05d9\u05ea"):
-        return "CAM-01"
-    if _fire_text_has(text, "\u05e6\u05d5\u05de\u05ea \u05d4\u05de\u05d7\u05e6\u05d1\u05d4"):
-        return "CAM-02"
-    if _fire_text_has(text, "\u05e8\u05db\u05e1 \u05d0\u05d5\u05e8\u05e0\u05d9\u05dd"):
-        return "CAM-03"
-    return ""
-
-
-def _fire_area(text: str, camera_id: str = "") -> str:
-    if camera_id in {"CAM-01", "CAM-03"}:
-        return "pine_ridge"
-    if camera_id == "CAM-02":
-        return "quarry_junction"
-    if _fire_text_has(text, "\u05dc\u05db\u05d9\u05d5\u05d5\u05df \u05e4\u05d0\u05e8\u05e7", "toward the industrial park"):
-        return ""
-    if _fire_text_has(text, "industrial", "park", "\u05e4\u05d0\u05e8\u05e7 \u05d4\u05ea\u05e2\u05e9\u05d9\u05d9\u05d4"):
-        return "industrial_park"
-    if _fire_text_has(text, "chemical", "\u05db\u05d9\u05de\u05d9"):
-        return "chemical_plant"
-    if _fire_text_has(text, "444", "\u05db\u05d1\u05d9\u05e9 444"):
-        return "route_444"
-    if _fire_text_has(text, "street", "\u05e8\u05d7\u05d5\u05d1 \u05d0\u05d5\u05e8\u05e0\u05d9\u05dd"):
-        return "ornim_street"
-    if _fire_text_has(text, "\u05e8\u05db\u05e1 \u05d0\u05d5\u05e8\u05e0\u05d9\u05dd", "pine ridge"):
-        return "pine_ridge"
-    return ""
-
-
-def _fire_aware_iso(value: str) -> str:
-    return parse_timestamp(value).isoformat(timespec="seconds")
-
-
-def _fire_absence_window(event: dict) -> tuple[str | None, str | None]:
-    times = re.findall(r"\b(\d{1,2}):(\d{2})\b", event.get("raw_text", ""))
-    if len(times) < 2:
-        return None, None
-    try:
-        local_date = parse_timestamp(event.get("occurred_at") or event["received_at"]).astimezone(ZoneInfo("Asia/Jerusalem")).date()
-        values = [
-            datetime(local_date.year, local_date.month, local_date.day, int(hour), int(minute), tzinfo=ZoneInfo("Asia/Jerusalem")).astimezone(timezone.utc)
-            for hour, minute in times[:2]
-        ]
-        if values[1] <= values[0]:
-            return None, None
-        return storage_timestamp(values[0]), storage_timestamp(values[1])
-    except (TypeError, ValueError):
-        return None, None
-
-
-def _fire_event_fields(event: dict, protocol_name: str) -> dict:
-    text = event.get("raw_text", "")
-    camera_id = _fire_camera_id(text)
-    if protocol_name in {"record_crew_shift_status", "record_crew_availability_response", "update_vehicle_status"}:
-        classification = "crew_availability"
-    elif protocol_name == "update_camera_observation":
-        classification = "surveillance_report"
-    elif protocol_name == "report_fire_incident":
-        classification = "fire_incident"
-    elif protocol_name == "query_historical_incidents":
-        classification = "historical_query"
-    else:
-        classification = "mutual_aid_dispatch"
-    entities = [value for value in (camera_id, "ASHED-3" if _fire_text_has(text, "ASHED", "\u05d0\u05e9\u05d3 3") else "") if value]
-    if _fire_text_has(text, "DRONE-01", "\u05e8\u05d7\u05e4\u05df \u05ea\u05e6\u05e4\u05d9\u05ea 01"):
-        entities.append("DRONE-01")
-    if protocol_name in {"report_fire_incident", "record_incident_update"}:
-        entities.append("EVT-FIRE-444-BRUSH")
-    severity = "high" if protocol_name == "report_fire_incident" else "low"
-    if _fire_text_has(text, "\u05d7\u05d5\u05de\u05e1", "\u05d0\u05de\u05d5\u05e0\u05d9\u05d4", "ammonia"):
-        severity = "critical"
-    return {
-        "classification": classification,
-        "area": _fire_area(text, camera_id),
-        "entities": list(dict.fromkeys(entities)),
-        "description": text,
-        "severity": severity,
-    }
-
-
-def _fire_incident_update(event: dict) -> tuple[dict, dict]:
-    text = event.get("raw_text", "")
-    verification = "reported"
-    if _fire_text_has(text, "\u05d8\u05e8\u05dd \u05d0\u05d5\u05de\u05ea", "\u05d0\u05d6\u05e8\u05d7\u05d9"):
-        verification = "unverified"
-    if _fire_text_has(text, "\u05e1\u05e8\u05e7", "\u05d4\u05d1\u05d9\u05ea \u05e8\u05d9\u05e7"):
-        verification = "debunked"
-    spread = "spreading" if _fire_text_has(text, "\u05d4\u05ea\u05e4\u05e9\u05d8\u05d5\u05ea", "\u05e0\u05db\u05e0\u05e1\u05d4", "\u05d3\u05d9\u05dc\u05d2\u05d4") else "reported"
-    if _fire_text_has(text, "\u05e0\u05d1\u05dc\u05de\u05d5", "\u05d4\u05db\u05dc\u05d4"):
-        spread = "contained"
-    hazard = "hazardous_materials_threat" if _fire_text_has(text, "\u05d7\u05d5\u05de\u05e1", "\u05d2\u05d6", "\u05d0\u05de\u05d5\u05e0\u05d9\u05d4", "ammonia") else "none_reported"
-    area = _fire_area(text)
-    if _fire_text_has(text, "\u05e6\u05d5\u05d1\u05e8 \u05d2\u05d6", "\u05de\u05db\u05dc \u05d4\u05d2\u05d6"):
-        area = "chemical_plant"
-    direction = "industrial_park" if _fire_text_has(text, "\u05dc\u05db\u05d9\u05d5\u05d5\u05df \u05e4\u05d0\u05e8\u05e7", "toward the industrial park") else ""
-    return (
-        {
-            "update_kind": "fire_incident",
-            "verification_status": verification,
-            "summary": text,
-            "area": area,
-            "spread_status": spread,
-            "hazard_status": hazard,
-            "status": "open",
-        },
-        {"verification_status": verification, "spread_status": spread, "hazard_status": hazard,
-         "reported_area": area, "reported_direction": direction},
-    )
-
-
-def _fire_external_update(event: dict) -> dict:
-    text = event.get("raw_text", "")
-    if _fire_text_has(text, "\u05e7\u05e7\u05dc", "\u05e7\u05e7\u05f4\u05dc", "\u05e7\u05e7\u05f3\u05dc", "\u05d8\u05e8\u05e7\u05d8\u05d5\u05e8\u05d9", "\u05e1\u05d9\u05d5\u05e8\u05d9 \u05d9\u05e2\u05e8", "\u05d9\u05e2\u05e8\u05e0\u05d9\u05dd", "\u05e1\u05e8\u05d9\u05e7\u05d5\u05ea"):
-        dispatched = _fire_text_has(text, "\u05de\u05e7\u05e4\u05d9\u05e6\u05d9\u05dd", "\u05d1\u05d3\u05e8\u05da", "\u05e9\u05d5\u05dc\u05d7\u05d9\u05dd")
-        return {
-            "force_id": "kkl_tractors", "force_kind": "KKL firefighting tractors",
-            "count": 2 if dispatched else 0,
-            "status": "en_route" if dispatched else "reported",
-            "location": _fire_area(text) or "unknown", "notes": text,
-            "verification_status": "reported",
-            "facts": {
-                "fire_ban": _fire_text_has(text, "\u05d0\u05d9\u05e1\u05d5\u05e8 \u05d4\u05d3\u05dc\u05e7\u05ea \u05d0\u05e9"),
-                "forest_patrols": "reported" if _fire_text_has(text, "\u05d9\u05e2\u05e8\u05e0\u05d9\u05dd", "\u05e1\u05d9\u05d5\u05e8\u05d9 \u05d9\u05e2\u05e8") else "",
-            },
-        }
-    if _fire_text_has(text, "\u05de\u05e9\u05d8\u05e8\u05d4", "\u05e0\u05d9\u05d9\u05d3\u05ea", "\u05e2\u05d5\u05de\u05e1\u05d9 \u05ea\u05e0\u05d5\u05e2\u05d4", "\u05e4\u05d9\u05e0\u05d5\u05d9"):
-        status = "reported_on_scene" if _fire_text_has(text, "\u05e0\u05d9\u05d9\u05d3\u05ea \u05d1\u05de\u05e7\u05d5\u05dd") else "reported"
-        location = _fire_area(text) or "unknown"
-        return {"force_id": "police", "force_kind": "police", "count": 1, "status": status, "location": location, "notes": text, "verification_status": "reported"}
-    if _fire_text_has(text, "\u05d0\u05d6\u05e8\u05d7", "\u05d9\u05dc\u05d3\u05d9\u05dd \u05dc\u05db\u05d5\u05d3\u05d9\u05dd"):
-        debunked = _fire_text_has(text, "\u05e1\u05e8\u05e7", "\u05d4\u05d1\u05d9\u05ea \u05e8\u05d9\u05e7")
-        return {"force_id": "citizen_trapped_report", "force_kind": "citizen trapped-person report", "count": 0, "status": "debunked" if debunked else "unverified", "location": "ornim_street", "notes": text, "verification_status": "debunked" if debunked else "unverified"}
-    if _fire_text_has(text, "\u05e8\u05db\u05d1\u05d9 \u05d0\u05dc\u05d5\u05df", "\u05de\u05d8\u05d5\u05e1\u05d9 \u05db\u05d9\u05d1\u05d5\u05d9"):
-        arrived = _fire_text_has(text, "\u05d4\u05e1\u05d9\u05d5\u05e2 \u05d4\u05de\u05d7\u05d5\u05d6\u05d9 \u05d4\u05d2\u05d9\u05e2")
-        return {"force_id": "district_support", "force_kind": "district firefighting support", "count": 6, "status": "arrived" if arrived else "en_route", "location": "chemical_plant", "notes": text, "verification_status": "confirmed" if arrived else "reported"}
-    return {"force_id": "external_report", "force_kind": "external report", "count": 0, "status": "reported", "location": _fire_area(text) or "unknown", "notes": text, "verification_status": "reported"}
-
-
-def _fire_local_clock(value: str | None) -> str:
-    if not value:
-        return ""
-    try:
-        from zoneinfo import ZoneInfo
-
-        return parse_timestamp(value).astimezone(ZoneInfo("Asia/Jerusalem")).strftime("%H:%M")
-    except (TypeError, ValueError, KeyError):
-        return ""
-
-
-def _fire_user_response(deps: "FlowDeps", event: dict, protocol: "Protocol", *, failed: bool) -> str:
-    """Build the only user-facing answer for a FIRE report.
-
-    Tool results remain in the job record.  This function deliberately emits a
-    short, content-specific Hebrew acknowledgement for ordinary reports and
-    leaves the full situational picture to the picture protocols.
-    """
-    from messages import get_catalog
-
-    catalog = get_catalog("he")
-    if failed:
-        return catalog.text("fire.reply.failed")
-    text = event.get("raw_text", "")
-    if protocol.name == "record_crew_shift_status":
-        count = len(deps.registry.get("team_status_agent").status_store.list_members(approved_only=True))
-        return catalog.text("fire.reply.shift", count=count)
-    if protocol.name == "record_crew_availability_response":
-        name = event.get("sender_identity", "")
-        member = deps.persistence.read_user(name)
-        display_name = (member or {}).get("full_name") or catalog.text("fire.reply.member")
-        _start, end = _fire_absence_window(event)
-        return catalog.text("fire.reply.absence", name=display_name, until=_fire_local_clock(end) or catalog.text("fire.reply.unknown_time"))
-    if protocol.name == "update_camera_observation":
-        camera_id = _fire_camera_id(text) or catalog.text("fire.reply.camera")
-        if _fire_text_has(text, "\u05d7\u05d5\u05dd", "\u05d4\u05ea\u05e8\u05d0\u05ea"):
-            return catalog.text("fire.reply.camera_heat", camera=camera_id)
-        camera = deps.registry.get("surveillance_agent").surveillance_store.get_camera(camera_id)
-        status = (camera or {}).get("status", "unknown")
-        detail_key = status if status in {"offline", "degraded", "active"} else "active"
-        detail = catalog.text(f"fire.reply.camera_detail.{detail_key}")
-        if status == "offline" and _fire_text_has(text, "\u05e0\u05d9\u05e7\u05d5\u05d9"):
-            detail += " \u05dc\u05ea\u05d7\u05d6\u05d5\u05e7\u05d4"
-        return catalog.text("fire.reply.camera_update", camera=camera_id, status=_status_reply_label(catalog, status), detail=detail)
-    if protocol.name == "update_vehicle_status":
-        return catalog.text("fire.reply.vehicle")
-    if protocol.name == "record_incident_update":
-        if _fire_text_has(text, "\u05e7\u05e7\u05dc", "\u05e7\u05e7\u05f4\u05dc", "\u05e7\u05e7\u05f3\u05dc", "\u05d8\u05e8\u05e7\u05d8\u05d5\u05e8\u05d9", "\u05e1\u05d9\u05d5\u05e8\u05d9 \u05d9\u05e2\u05e8", "\u05d9\u05e2\u05e8\u05e0\u05d9\u05dd", "\u05e1\u05e8\u05d9\u05e7\u05d5\u05ea"):
-            force_update = _fire_external_update({"raw_text": text})
-            if force_update["status"] == "en_route":
-                return catalog.text("fire.reply.kkl_dispatch")
-            if force_update["facts"].get("fire_ban") or force_update["facts"].get("forest_patrols"):
-                return catalog.text("fire.reply.kkl_report")
-            return catalog.text("fire.reply.generic")
-        if _fire_text_has(text, "\u05de\u05e9\u05d8\u05e8\u05d4", "\u05e0\u05d9\u05d9\u05d3\u05ea", "444"):
-            return catalog.text("fire.reply.police")
-    if protocol.name == "report_fire_incident":
-        return catalog.text("fire.reply.fire", area=_area_reply_label(catalog, _fire_area(text)))
-    if protocol.name == "dispatch_drone_to_incident":
-        return catalog.text("fire.reply.drone")
-    return catalog.text("fire.reply.generic")
-
-
-def _area_reply_label(catalog, area: str) -> str:
-    try:
-        return catalog.text(f"fire.picture.area.{area}")
-    except Exception:
-        return catalog.text("fire.picture.area.unknown")
-
-
-def _status_reply_label(catalog, status: str) -> str:
-    try:
-        return catalog.text(f"fire.picture.status.{status}")
-    except Exception:
-        return catalog.text("fire.picture.unknown")
-
-
-def _run_fire_simulation_action(deps: "FlowDeps", event_id: str, protocol: "Protocol") -> FlowResult:
+def _run_fire_simulation_action(deps: "FlowDeps", event_id: str, protocol: "Protocol", main_agent) -> FlowResult:
+    """Read-only FIRE queries use the existing multi-agent orchestration."""
     event = deps.persistence.fetch_event(event_id)
-    fields = _fire_event_fields(event, protocol.name)
-    if protocol.name == "record_crew_availability_response":
-        absence_start, absence_end = _fire_absence_window(event)
-        fields.update({"availability_start": absence_start, "availability_end": absence_end, "absence_reason": "planned medical checkup"})
-    record_event_data_update(deps.persistence, event_id, fields)
-    record_event_state(
-        deps.persistence,
-        event_id,
-        {"selected_protocol": protocol.name, "protocol_reason": "Deterministic FIRE simulation route"},
+    record_event_state(deps.persistence, event_id, {
+        "classification": HUMAN_ACTIVATION_TYPE, "selected_protocol": protocol.name,
+    })
+    conversation = ()
+    if event.get("conversation_id"):
+        conversation = tuple(deps.persistence.fetch_conversation_messages(event["conversation_id"], 12))
+    picture = build_fire_situational_picture(
+        deps.registry, event["raw_text"], as_of_iso=event.get("occurred_at") or "",
+        main_agent=main_agent, history_query_service=deps.history_query_service,
+        protocol=protocol, caller_identity=event["sender_identity"], persistence=deps.persistence,
+        sender_identity_filter=None if event.get("sender_permission_level") == "commander" else event["sender_identity"],
+        conversation_messages=conversation,
     )
-    agent = deps.registry.get(protocol.participating_agents[0])
-    source_message_id = event.get("source_message_id") or event_id
-    event_time = storage_timestamp(parse_timestamp(event.get("occurred_at") or event["received_at"]))
-    operational_result = ""
-    user_response = ""
-    try:
-        if protocol.name == "record_crew_shift_status":
-            timestamp = event_time
-            agent.status_store.reset_operational_state(now_iso=timestamp)
-            surveillance_agent = deps.registry.get("surveillance_agent")
-            surveillance_agent.operations_store.reset_current_state(
-                now=timestamp, run_started_at=event.get("received_at") or timestamp
-            )
-            surveillance_agent.surveillance_store.reset_operational_state(now_iso=timestamp)
-        with authenticated_request_identity(event["sender_identity"]):
-            if protocol.name == "record_crew_shift_status":
-                operational_result = agent.record_crew_shift_status("all", "available", source_message_id, event["raw_text"], _fire_aware_iso(event.get("occurred_at") or event["received_at"]))
-            elif protocol.name == "record_crew_availability_response":
-                absence_start, absence_end = _fire_absence_window(event)
-                from zoneinfo import ZoneInfo
-
-                event_date = parse_timestamp(event.get("occurred_at") or event["received_at"]).astimezone(ZoneInfo("Asia/Jerusalem")).date().isoformat()
-                shift_cycle = agent.status_store.find_cycle(f"shift-{event_date}")
-                shift_cycle_id = shift_cycle["cycle_id"] if shift_cycle is not None else ""
-                operational_result = agent.record_attendance_response(
-                    source_message_id=source_message_id, availability="unavailable", original_text=event["raw_text"],
-                    reason="planned medical checkup", unavailable_days=0,
-                    unavailable_from=_fire_aware_iso(absence_start) if absence_start else "",
-                    unavailable_until=_fire_aware_iso(absence_end) if absence_end else "",
-                    cycle_id=shift_cycle_id,
-                    received_at=_fire_aware_iso(event.get("occurred_at") or event["received_at"]),
-                )
-            elif protocol.name == "update_vehicle_status":
-                operational_result = agent.update_vehicle_status("ASHED-3", "dispatched", "incident", source_message_id, event_time)
-            elif protocol.name == "update_camera_observation":
-                camera_id = _fire_camera_id(event["raw_text"])
-                status = "degraded" if _fire_text_has(event["raw_text"], "\u05e7\u05e4\u05d5\u05d0\u05d4", "\u05d1\u05dc\u05d1\u05d5\u05dc \u05ea\u05e8\u05de\u05d9") else ("offline" if _fire_text_has(event["raw_text"], "\u05d4\u05d5\u05e4\u05e1\u05e7\u05d4", "\u05e0\u05d9\u05e7\u05d5\u05d9") else "active")
-                operational_result = agent.update_camera_observation(camera_id, event["raw_text"], status, event_time)
-            elif protocol.name == "report_fire_incident":
-                update, facts = _fire_incident_update(event)
-                source_user = deps.persistence.read_user(event["sender_identity"])
-                facts["reported_by"] = (source_user or {}).get("full_name") or ""
-                update["facts"] = facts
-                operational_result = agent.record_fire_incident_update(
-                    incident_id=f"EVT-FIRE-{source_message_id}", source_message_id=source_message_id, event_id=event_id,
-                    occurred_at=event_time, received_at=event["received_at"], **update,
-                )
-            elif protocol.name == "record_incident_update":
-                update = _fire_external_update(event)
-                source_user = deps.persistence.read_user(event["sender_identity"])
-                update.setdefault("facts", {})
-                update["facts"]["reported_by"] = (source_user or {}).get("full_name") or ""
-                update["facts"]["force_id"] = update["force_id"]
-                operational_result = agent.record_external_force_update(
-                    source_message_id=source_message_id, event_id=event_id,
-                    occurred_at=event_time, received_at=event["received_at"],
-                    summary=event["raw_text"], **update,
-                )
-            elif protocol.name == "dispatch_drone_to_incident":
-                operational_result = agent.dispatch_drone_to_area(
-                    target_area="industrial_park", incident_description=event["raw_text"],
-                    specific_drone_id="DRONE-01", dispatched_by="commander",
-                )
-            elif protocol.name == "overall_situational_picture":
-                operational_result = build_fire_situational_picture(
-                    deps.registry, event.get("raw_text", ""),
-                    as_of_iso=_fire_aware_iso(event.get("occurred_at") or event["received_at"]),
-                )
-                user_response = operational_result
-            elif protocol.name == "query_historical_incidents":
-                operational_result = build_fire_situational_picture(
-                    deps.registry, event.get("raw_text", ""),
-                    as_of_iso=_fire_aware_iso(event.get("occurred_at") or event["received_at"]),
-                )
-                user_response = operational_result
-            else:
-                raise ValueError(f"unsupported FIRE simulation protocol: {protocol.name}")
-    except Exception as exc:
-        operational_result = f"FIRE operation failed: {exc}"
-
-    failed = any(marker in operational_result.casefold() for marker in ("failed", "not stored", "not found", "clarification required"))
-    if not user_response:
-        user_response = _fire_user_response(deps, event, protocol, failed=failed)
-    step = Step(agent_name=agent.name, task_text=f"FIRE simulation action: {protocol.name}", allowed_tools=protocol.approved_tools, step_id="fire_action")
-    outcome = StepOutcome(step=step, result_text=operational_result, attempt_count=1, succeeded=not failed, status="succeeded" if not failed else "failed", failure_reason=operational_result if failed else None)
-    _persist_step_plan(deps, event_id, (step,))
-    _persist_step_outcomes(deps, event_id, (step,), (outcome,))
-    if failed:
-        record_event_outcome(deps.persistence, event_id, "failed", failure_reason=operational_result, user_response=user_response)
-        return FlowResult(event_id, "failed", operational_result)
-    record_event_outcome(deps.persistence, event_id, "succeeded", insight_text="FIRE simulation action applied to the shared operational state.", user_response=user_response)
-    return FlowResult(event_id, "succeeded", operational_result)
+    succeeded = bool(picture.reports) and all(report.succeeded for report in picture.reports)
+    outcome = "succeeded" if succeeded else "uncertain"
+    record_event_outcome(deps.persistence, event_id, outcome, user_response=picture.text)
+    return FlowResult(event_id, outcome, "")
 
 
 def _finish_protocol_assessment(
@@ -1550,6 +1271,36 @@ def _finish_protocol_assessment(
             return deadline_failure
     final_assessment = None
     persisted_event = deps.persistence.fetch_event(event_id)
+    if persisted_event.get("simulation_context") == "FIRE_SIMULATION":
+        failed_tool_results = (
+            "not stored", "not updated", "dispatch failed", "clarification required",
+            "not found", "invalid iso", "could not be opened",
+        )
+        succeeded = all(
+            outcome.succeeded
+            and not any(marker in (outcome.result_text or "").casefold() for marker in failed_tool_results)
+            for outcome in step_outcomes
+        )
+        reports = tuple(DomainReport(
+            outcome.step.agent_name, outcome.step.task_text,
+            outcome.result_text or "",
+            outcome.succeeded and not any(
+                marker in (outcome.result_text or "").casefold() for marker in failed_tool_results
+            ),
+        ) for outcome in step_outcomes)
+        from messages import get_catalog
+        answer = compose_situational_picture(
+            main_agent, reports,
+            "Confirm ONLY what the tools actually saved for this report, in one or two short Hebrew "
+            "sentences. No full report, internal IDs, technical details or generic success. "
+            "Distinguish a failed action from a performed one. Current report: " + persisted_event["raw_text"],
+            current_time=persisted_event.get("occurred_at") or persisted_event["received_at"],
+            recent_events_hours=0, max_lines=2,
+            fallback_text=get_catalog("he").text("fire.reply.failed"),
+        )
+        outcome = "succeeded" if succeeded else "failed"
+        record_event_outcome(deps.persistence, event_id, outcome, user_response=answer)
+        return FlowResult(event_id, outcome, "")
     if deps.optimization_policy.final_assessment_mode == "low_risk_merged" and persisted_event.get("risk_level") == "low":
         try:
             final_assessment = assess_final_once(main_agent, protocol, step_outcomes, precedent_matches)

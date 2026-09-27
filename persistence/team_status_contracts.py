@@ -45,6 +45,7 @@ class TeamStatusPersistenceInterface(ABC):
         availability: str,
         original_text: str,
         received_at: str,
+        occurred_at: str | None = None,
         reason: str | None = None,
         unavailable_until: str | None = None,
     ) -> dict: ...

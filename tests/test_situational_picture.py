@@ -288,6 +288,26 @@ def test_composition_falls_back_to_the_collected_findings_when_the_model_cannot_
     assert catalog.text("orchestrator.picture.recent_events_label", hours=6) + ": 1. Event abc." in text
 
 
+def test_recent_events_in_other_profiles_keep_their_existing_composition_policy():
+    from orchestrator.situational_picture import _COMPOSE_POLICY
+
+    class PolicyRecorder:
+        invocation_policy = None
+        prompt = ""
+        def process(self, prompt, tools, *, invocation_policy=None):
+            self.prompt = prompt
+            self.invocation_policy = invocation_policy
+            return AgentResult("success", "Current picture.")
+
+    main = PolicyRecorder()
+    compose_situational_picture(
+        main, (DomainReport(RECENT_EVENTS_DOMAIN, "recent", "Event one.", True),),
+        "picture", current_time="T", recent_events_hours=6,
+    )
+    assert main.invocation_policy is _COMPOSE_POLICY
+    assert "in at most 8 short lines" in main.prompt
+
+
 def test_nothing_collected_skips_the_model_and_reports_every_domain_unavailable():
     reports = (
         DomainReport("surveillance_agent", "q1", "boom", False),

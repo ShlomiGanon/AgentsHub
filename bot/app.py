@@ -242,8 +242,21 @@ async def _on_start_command(update, context) -> None:
         elif resolution.caller.level == PermissionLevel.VIEWER:
             keyboard = getattr(profile_mod, "VIEWER_KEYBOARD", None) if profile_mod else None
 
-    profile_name = getattr(deps.loaded_profile, "profile_name", None) or "AgentsHub"
-    welcome_text = messages.text("bot.welcome", profile_name=profile_name)
+    if getattr(deps.loaded_profile, "module_path", None) == "profiles.firefighting":
+        thread_id = getattr(getattr(update, "message", None), "message_thread_id", None)
+        conversation_id = f"telegram:{chat_id}:{thread_id if thread_id is not None else 'main'}"
+        welcome_text, _ = await _submit_and_format_message(
+            deps,
+            telegram_identity,
+            "\u05dc\u05d0\u05d9\u05d6\u05d5 \u05e8\u05d9\u05e6\u05d4 \u05d0\u05e0\u05d9 \u05de\u05d7\u05d5\u05d1\u05e8?",
+            str(getattr(getattr(update, "message", None), "message_id", "start")),
+            conversation_id,
+            telegram_chat_id=chat_id,
+            telegram_chat_type=getattr(getattr(update, "effective_chat", None), "type", None),
+        )
+    else:
+        profile_name = getattr(deps.loaded_profile, "profile_name", None) or "AgentsHub"
+        welcome_text = messages.text("bot.welcome", profile_name=profile_name)
     await deps.telegram_client.send_text(chat_id, welcome_text, keyboard=keyboard)
 
 

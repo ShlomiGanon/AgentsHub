@@ -446,14 +446,47 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
             updated = conn.execute("SELECT * FROM drone_missions WHERE mission_id = ?", (mission_id,)).fetchone()
             return dict(updated)
 
-    def surveillance_overview(self, area: str | None = None) -> dict:
+    def surveillance_overview(self, area: str | None = None, *, as_of_iso: str | None = None) -> dict:
         cameras = self.list_cameras(area=area)
         drones = self.list_drones()
         active_missions = self.get_active_missions()
+        as_of = None
+        if as_of_iso:
+            as_of = datetime.fromisoformat(as_of_iso.replace("Z", "+00:00"))
+            if as_of.tzinfo is None:
+                as_of = as_of.replace(tzinfo=timezone.utc)
+            as_of = as_of.astimezone(timezone.utc)
+
+            def timestamp(value: str) -> datetime:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return parsed.astimezone(timezone.utc)
+
+            for camera in cameras:
+                if timestamp(camera["last_updated"]) > as_of:
+                    camera.update(status="unknown", feed_summary="No camera state is available as of the requested time.")
+            for drone in drones:
+                if timestamp(drone["last_updated"]) > as_of:
+                    drone.update(status="unknown", battery_percent=None, current_area="unknown")
+            with self._connect() as conn:
+                missions = [dict(row) for row in conn.execute(
+                    "SELECT m.*, d.callsign, d.model, d.battery_percent FROM drone_missions m "
+                    "JOIN drones d ON m.drone_id = d.drone_id ORDER BY m.dispatched_at"
+                ).fetchall()]
+            active_missions = []
+            for mission in missions:
+                if timestamp(mission["dispatched_at"]) > as_of:
+                    continue
+                if timestamp(mission["updated_at"]) > as_of:
+                    mission.update(status="unknown", notes="Mission state is unavailable as of the requested time.")
+                    active_missions.append(mission)
+                elif mission["status"] in {"dispatched", "en_route", "on_station"}:
+                    active_missions.append(mission)
         if area:
             active_missions = [m for m in active_missions if m["target_area"].lower() == area.lower()]
 
-        return {
+        overview = {
             "area": area or "all_sectors",
             "cameras": cameras,
             "drones": drones,
@@ -461,5 +494,10 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
             "active_camera_count": sum(1 for c in cameras if c["status"] == "active"),
             "ready_drone_count": sum(1 for d in drones if d["status"] == "ready"),
             "in_flight_drone_count": sum(1 for d in drones if d["status"] == "in_flight"),
-            "as_of": _utc_now(),
+            "as_of": as_of_iso or _utc_now(),
         }
+        if as_of is not None:
+            overview["active_mission_count"] = sum(
+                1 for mission in active_missions if mission["status"] in {"dispatched", "en_route", "on_station"}
+            )
+        return overview

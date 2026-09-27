@@ -3,6 +3,7 @@
 import dataclasses
 from datetime import datetime, timedelta, timezone
 import time
+from zoneinfo import ZoneInfo
 
 from typing import TYPE_CHECKING
 
@@ -49,6 +50,7 @@ from orchestrator.flows import (
     classify_intent,
     build_situational_picture,
     build_fire_situational_picture,
+    fire_run_context,
     plan_message,
     protocol_requires_approval,
     WorkItem,
@@ -56,6 +58,7 @@ from orchestrator.flows import (
     run_report_extraction,
     resume_after_event_data,
 )
+from orchestrator.firefighting_picture import format_fire_run_history
 
 from protocols import CriticalityLevel, Protocol, ProtocolEditError, add_protocol, remove_protocol, replace_protocol
 from profiles.loader import hash_profile_file
@@ -82,7 +85,6 @@ SIMULATION_REPORT_PROTOCOLS = frozenset({
     "record_incident_update",
     "dispatch_drone_to_incident",
     "overall_situational_picture",
-    "query_historical_incidents",
 })
 
 
@@ -259,6 +261,27 @@ def _queued_answer_text(messages, kind: str, task_id: str) -> str:
     return messages.text(f"api.queued_{kind}")
 
 
+def _is_fire_connection_query(text: str) -> bool:
+    normalized = " ".join(str(text).strip().lower().rstrip("?!.,:; ").split())
+    return normalized in {
+        "\u05dc\u05de\u05d4", "\u05dc\u05de\u05d4 \u05d6\u05d4", "\u05dc\u05de\u05d4 \u05e6\u05e8\u05d9\u05da", "\u05d0\u05d9\u05da \u05de\u05ea\u05d7\u05d1\u05e8\u05d9\u05dd", "\u05d0\u05d9\u05da \u05dc\u05d4\u05ea\u05d7\u05d1\u05e8",
+        "\u05d0\u05d9\u05da \u05d0\u05e0\u05d9 \u05de\u05ea\u05d7\u05d1\u05e8", "\u05dc\u05d0\u05d9\u05d6\u05d5 \u05e8\u05d9\u05e6\u05d4 \u05d0\u05e0\u05d9 \u05de\u05d7\u05d5\u05d1\u05e8", "\u05dc\u05d0\u05d9\u05d6\u05d4 \u05e8\u05d9\u05e6\u05d4 \u05d0\u05e0\u05d9 \u05de\u05d7\u05d5\u05d1\u05e8",
+        "\u05dc\u05d0\u05d9\u05d6\u05d5 \u05e8\u05d9\u05e6\u05d4 \u05d4\u05e9\u05d9\u05d7\u05d4 \u05de\u05d7\u05d5\u05d1\u05e8\u05ea", "\u05d1\u05d3\u05d5\u05e7 \u05dc\u05d0\u05d9\u05d6\u05d5 \u05e8\u05d9\u05e6\u05d4 \u05d0\u05e0\u05d9 \u05de\u05d7\u05d5\u05d1\u05e8",
+        "why", "why do i need to", "how do i connect", "how to connect",
+        "which run am i connected to", "what run am i connected to",
+        "\u05d7\u05d1\u05e8 \u05d0\u05d5\u05ea\u05d9 \u05dc\u05e8\u05d9\u05e6\u05d4 \u05d4\u05e4\u05e2\u05d9\u05dc\u05d4", "\u05d7\u05d1\u05e8 \u05d0\u05ea \u05d4\u05e9\u05d9\u05d7\u05d4 \u05dc\u05e8\u05d9\u05e6\u05d4 \u05d4\u05e4\u05e2\u05d9\u05dc\u05d4",
+        "connect me to the active run",
+    }
+
+
+def _is_fire_relink_query(text: str) -> bool:
+    normalized = " ".join(str(text).strip().lower().rstrip("?!.,:; ").split())
+    return normalized in {
+        "\u05d7\u05d1\u05e8 \u05d0\u05d5\u05ea\u05d9 \u05dc\u05e8\u05d9\u05e6\u05d4 \u05d4\u05e4\u05e2\u05d9\u05dc\u05d4", "\u05d7\u05d1\u05e8 \u05d0\u05ea \u05d4\u05e9\u05d9\u05d7\u05d4 \u05dc\u05e8\u05d9\u05e6\u05d4 \u05d4\u05e4\u05e2\u05d9\u05dc\u05d4",
+        "connect me to the active run",
+    }
+
+
 def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
     blueprint = Blueprint("messages", __name__)
     messages = app_ctx.loaded_profile.message_catalog
@@ -290,12 +313,21 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
         telegram_chat_type = request_payload.get("telegram_chat_type")
         event_time = request_payload.get("event_time")
         simulation_context = request_payload.get("simulation_context")
+        protocol_hint = request_payload.get("protocol_hint")
 
         if event_time is not None:
             if not isinstance(event_time, str) or not event_time.strip() or len(event_time) > 80:
                 raise InvalidInputError("event_time must be an ISO-8601 timestamp", field="event_time")
             try:
-                event_time = storage_timestamp(parse_timestamp(event_time))
+                parsed_event_time = datetime.fromisoformat(event_time.replace("Z", "+00:00"))
+                if (
+                    parsed_event_time.tzinfo is None
+                    and ctx.loaded_profile.module_path == "profiles.firefighting"
+                    and simulation_context == "FIRE_SIMULATION"
+                ):
+                    event_time = parsed_event_time.replace(tzinfo=ZoneInfo("Asia/Jerusalem")).isoformat()
+                else:
+                    event_time = storage_timestamp(parse_timestamp(event_time))
             except (TypeError, ValueError, OverflowError) as exc:
                 raise InvalidInputError("event_time must be an ISO-8601 timestamp", field="event_time") from exc
         if simulation_context is not None and simulation_context != "FIRE_SIMULATION":
@@ -378,7 +410,90 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
         if conversation_id is not None and history_turns > 0:
             prior_messages = tuple(ctx.deps.persistence.fetch_conversation_messages(conversation_id, history_turns * 2))
 
-        _remember("user", text)
+        fire_simulation = (
+            ctx.loaded_profile.module_path == "profiles.firefighting"
+            and simulation_context == "FIRE_SIMULATION"
+        )
+        fire_link_event_id = None
+        # Telegram must carry an explicit, persisted conversation-to-run link.
+        # A profile name alone never attaches an unrelated chat: only the current
+        # run root is eligible, and the authenticated caller must be allowed to ask
+        # questions or submit reports before the conversation is linked.
+        if ctx.loaded_profile.module_path == "profiles.firefighting" and simulation_context is None:
+            run = fire_run_context(ctx.deps.registry, ctx.deps.persistence)
+            run_event_ids = {event["event_id"] for event in run["events"]} if run else set()
+            linked = any(item.get("event_id") in run_event_ids for item in prior_messages)
+            prior_fire_link = False
+            if not linked:
+                for item in prior_messages:
+                    event_id = item.get("event_id")
+                    if event_id:
+                        prior_event = ctx.deps.persistence.fetch_event(event_id)
+                        if prior_event and prior_event.get("simulation_context") == "FIRE_SIMULATION":
+                            prior_fire_link = True
+                            break
+            connection_query = _is_fire_connection_query(str(text))
+            explicit_relink = _is_fire_relink_query(str(text))
+            can_access_run = (
+                is_permitted(level, RequestedOperation.ASK_QUESTION)
+                or is_permitted(level, RequestedOperation.REPORT_EVENT)
+            )
+
+            if connection_query:
+                if run is None:
+                    answer = messages.text("fire.context.run_required")
+                elif prior_fire_link and not linked and not explicit_relink:
+                    answer = messages.text("fire.context.run_changed")
+                elif not can_access_run:
+                    answer = messages.text("fire.context.run_forbidden")
+                else:
+                    link_event_id = run["events"][0]["event_id"]
+                    if not linked or explicit_relink:
+                        _remember("user", text, link_event_id)
+                    normalized_connection_query = " ".join(
+                        str(text).strip().lower().rstrip("?!.,:; ").split()
+                    )
+                    if not linked:
+                        answer = messages.text("fire.context.linked_explained")
+                    elif normalized_connection_query in {"\u05dc\u05de\u05d4", "\u05dc\u05de\u05d4 \u05d6\u05d4", "\u05dc\u05de\u05d4 \u05e6\u05e8\u05d9\u05da", "why", "why do i need to"}:
+                        answer = messages.text("fire.context.link_why")
+                    else:
+                        answer = messages.text("fire.context.already_linked")
+                    _remember("assistant", answer, link_event_id)
+                return jsonify({"taken_as": "conversational", "answer": answer})
+
+            if not linked:
+                if run is None:
+                    answer = messages.text("fire.context.run_required")
+                    _remember("assistant", answer)
+                    return jsonify({"taken_as": "clarification", "answer": answer})
+                if prior_fire_link:
+                    answer = messages.text("fire.context.run_changed")
+                    _remember("assistant", answer)
+                    return jsonify({"taken_as": "clarification", "answer": answer})
+                if not can_access_run:
+                    answer = messages.text("fire.context.run_forbidden")
+                    _remember("assistant", answer)
+                    return jsonify({"taken_as": "clarification", "answer": answer})
+                fire_link_event_id = run["events"][0]["event_id"]
+            simulation_context = "FIRE_SIMULATION"
+            fire_simulation = True
+            event_time = run["clock"]
+
+        if fire_simulation and event_time is None:
+            run = fire_run_context(ctx.deps.registry, ctx.deps.persistence)
+            if run is None:
+                answer = messages.text("fire.context.run_required")
+                _remember("assistant", answer)
+                return jsonify({"taken_as": "clarification", "answer": answer})
+            event_time = run["clock"]
+
+        if fire_simulation and _is_team_roster_query(str(text), ()):
+            answer = messages.text("fire.context.foreign_profile")
+            _remember("assistant", answer)
+            return jsonify({"taken_as": "clarification", "answer": answer})
+
+        _remember("user", text, fire_link_event_id)
 
         # A correction/cancellation of an incomplete report is conversation
         # control, not a fresh operational request (and especially not a drone
@@ -589,7 +704,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
 
         # Fast Path for known buttons / deterministic protocol selection
         # button -> known protocol -> RBAC -> approval if required -> agent -> approved tool
-        matched_protocol_name = request_payload.get("protocol_hint") or KNOWN_BUTTON_PROTOCOLS.get(str(text).strip())
+        matched_protocol_name = protocol_hint or KNOWN_BUTTON_PROTOCOLS.get(str(text).strip())
         simulation_report_hint = (
             simulation_context == "FIRE_SIMULATION"
             and matched_protocol_name in SIMULATION_REPORT_PROTOCOLS
@@ -609,7 +724,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             )
         if matched_protocol_name is None and _is_situational_picture_query(str(text)):
             matched_protocol_name = SITUATIONAL_PICTURE_PROTOCOL
-        if matched_protocol_name is None and _is_team_roster_query(str(text), prior_messages):
+        if not fire_simulation and matched_protocol_name is None and _is_team_roster_query(str(text), prior_messages):
             matched_protocol_name = "report_team_availability"
         matched_protocol = ctx.deps.protocol_set.get(matched_protocol_name) if matched_protocol_name else None
         if matched_protocol is None and simulation_report_hint:
@@ -705,6 +820,20 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
 
             if matched_protocol.name == "query_historical_incidents":
                 require(level, RequestedOperation.ASK_QUESTION)
+                if fire_simulation:
+                    run = fire_run_context(ctx.deps.registry, ctx.deps.persistence)
+                    run_events = run["events"] if run else []
+                    if not is_commander:
+                        run_events = [
+                            event for event in run_events
+                            if event.get("sender_identity") == caller_identity
+                        ]
+                    answer = format_fire_run_history(
+                        run_events,
+                        getattr(ctx.deps.registry.get("team_status_agent"), "timezone_name", "Asia/Jerusalem"),
+                    )
+                    _remember("assistant", answer, run_events[-1].get("event_id") if run_events else None)
+                    return jsonify({"taken_as": "question", "answer": answer, "protocol": matched_protocol.name})
                 caller_filter = None if is_commander else caller_identity
                 try:
                     history_ans = ctx.deps.history_query_service.query(text, sender_identity_filter=caller_filter)
@@ -714,11 +843,18 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 _remember("assistant", answer)
                 return jsonify({"taken_as": "question", "answer": answer, "protocol": matched_protocol.name})
 
-            if matched_protocol.name == SITUATIONAL_PICTURE_PROTOCOL and hasattr(ctx.deps.registry.get("surveillance_agent"), "operations_store"):
+            if fire_simulation and matched_protocol.name in {SITUATIONAL_PICTURE_PROTOCOL, "report_crew_status"}:
                 require(level, RequestedOperation.ASK_QUESTION)
-                picture_text = build_fire_situational_picture(ctx.deps.registry, str(text))
-                _remember("assistant", picture_text)
-                return jsonify({"taken_as": "question", "answer": picture_text, "protocol": matched_protocol.name})
+                picture = build_fire_situational_picture(
+                    ctx.deps.registry, str(text), as_of_iso=event_time or "",
+                    main_agent=ctx.main_agent, history_query_service=ctx.deps.history_query_service,
+                    protocol=ctx.deps.protocol_set.get(SITUATIONAL_PICTURE_PROTOCOL),
+                    caller_identity=caller_identity, persistence=ctx.deps.persistence,
+                    sender_identity_filter=None if is_commander else caller_identity,
+                    conversation_messages=prior_messages,
+                )
+                _remember("assistant", picture.text)
+                return jsonify({"taken_as": "question", "answer": picture.text, "protocol": matched_protocol.name})
 
             if len(matched_protocol.participating_agents) > 1:
                 # A multi-domain, read-only picture: the Main Agent decides what to ask each
@@ -783,7 +919,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             return jsonify({"taken_as": "conversational", "answer": answer})
 
         message_plan = None
-        planner_mode = optimization_policy.planner_mode
+        planner_mode = "merged" if fire_simulation else optimization_policy.planner_mode
         if planner_mode in {"shadow", "merged"}:
             try:
                 message_plan = plan_message(
@@ -842,6 +978,17 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
 
         if intent.intent == "question":
             require(level, RequestedOperation.ASK_QUESTION)
+            if fire_simulation:
+                picture = build_fire_situational_picture(
+                    ctx.deps.registry, str(text), as_of_iso=event_time or "",
+                    main_agent=ctx.main_agent, history_query_service=ctx.deps.history_query_service,
+                    protocol=ctx.deps.protocol_set.get(SITUATIONAL_PICTURE_PROTOCOL),
+                    caller_identity=caller_identity, persistence=ctx.deps.persistence,
+                    sender_identity_filter=None if level is PermissionLevel.COMMANDER else caller_identity,
+                    conversation_messages=prior_messages,
+                )
+                _remember("assistant", picture.text)
+                return jsonify({"taken_as": "question", "answer": picture.text})
             # Ownership scoping (docs/Next_Plan.md §5 decision record): a viewer's
             # ask_question is restricted to events they themselves submitted,
             # matched by their own authenticated identity. A commander is

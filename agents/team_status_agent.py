@@ -165,6 +165,7 @@ class TeamStatusAgent(Agent):
         reason: str = "",
         unavailable_days: int = 0,
         received_at: str = "",
+        occurred_at: str = "",
         unavailable_from: str = "",
         unavailable_until: str = "",
         cycle_id: str = "",
@@ -172,7 +173,8 @@ class TeamStatusAgent(Agent):
         telegram_identity = get_authenticated_request_identity()
         if not telegram_identity:
             return "The attendance response was not stored: authenticated requester identity is unavailable."
-        now = _aware_datetime(received_at or None)
+        received = _aware_datetime(received_at or None)
+        now = _aware_datetime(occurred_at or received_at or None)
         if not source_message_id:
             source_message_id = f"msg-{int(now.timestamp())}"
         if not original_text:
@@ -207,7 +209,8 @@ class TeamStatusAgent(Agent):
                 source_message_id=source_message_id,
                 availability=normalized,
                 original_text=original_text,
-                received_at=now.isoformat(),
+                received_at=received.isoformat(),
+                occurred_at=now.isoformat(),
                 reason=reason or None,
                 unavailable_from=explicit_from,
                 unavailable_until=explicit_until,

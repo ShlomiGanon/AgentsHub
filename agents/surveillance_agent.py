@@ -332,11 +332,16 @@ class SurveillanceAgent(Agent):
 
     @tool(
         "get_surveillance_overview",
-        "Returns a combined tactical picture of all visual assets (cameras, drone fleet, and active airborne missions) for a specific sector or entire perimeter.",
+        "Returns a combined tactical picture of cameras, drones, and active missions for a specific sector or the entire perimeter.",
         side_effecting=False,
     )
     def get_surveillance_overview(self, area: str = "") -> str:
-        overview = self.surveillance_store.surveillance_overview(area=area.strip() or None)
+        return self._format_surveillance_overview(area)
+
+    def _format_surveillance_overview(self, area: str = "", as_of_iso: str = "") -> str:
+        overview = self.surveillance_store.surveillance_overview(
+            area=area.strip() or None, as_of_iso=as_of_iso.strip() or None,
+        )
         target = f"Sector '{area}'" if area.strip() else "All Sectors"
 
         lines = [
@@ -357,17 +362,23 @@ class SurveillanceAgent(Agent):
             )
         )
         for d in overview["drones"]:
+            battery = f"{d['battery_percent']}%" if d["battery_percent"] is not None else "unknown"
             lines.append(
-                f"  - [{d['drone_id']}] {d['callsign']}: {d['status'].upper()} (Battery: {d['battery_percent']}%, Area: {d['current_area']})"
+                f"  - [{d['drone_id']}] {d['callsign']}: {d['status'].upper()} (Battery: {battery}, Area: {d['current_area']})"
             )
 
         lines.extend(
             (
                 "",
-                f"Active Drone Missions: {len(overview['active_missions'])}",
+                f"Active Drone Missions: {overview.get('active_mission_count', len(overview['active_missions']))}",
             )
         )
         for m in overview["active_missions"]:
+            if m["status"] == "unknown":
+                lines.append(
+                    f"  - [{m['mission_id']}] {m['callsign']}: mission state unknown as of the requested time; target: {m['target_area']}"
+                )
+                continue
             lines.append(
                 f"  - [{m['mission_id']}] {m['callsign']} -> {m['target_area']} ({m['status'].upper()}) - ETA: {m['eta_seconds']}s"
             )

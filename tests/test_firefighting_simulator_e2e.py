@@ -1,185 +1,241 @@
+"""Local HTTP/SimulatorRuntime contracts; model replies are explicitly scripted."""
+
 import asyncio
-import os
+import dataclasses
+import json
 import time
-import zlib
 from types import SimpleNamespace
 
+from agents.contracts import AgentResult
 from api.app import ApiContext, build_app, build_group_routing
 from bot.simulator_app import SimulatorRuntime
 from bot.transports import HttpApiClient
 from history.interface import SummaryScheduler
-from history.query import HistoryQueryService
 from messages import get_catalog
-from orchestrator.flows import FlowDeps, SerialEventQueue
-from persistence.sqlite_store import SQLitePersistence
-from profiles import AreaRegistry, EventTypeRegistry
+from orchestrator.flows import SerialEventQueue, begin_report
+from orchestrator.reasoning import IntentResult, MessagePlan
 from profiles import firefighting as fire
-from profiles.simulation import simulation_group_chat_id, simulation_user_telegram_id
-from protocols.loader import ProtocolSet
-from tests.api_fakes import FakeSettings, RunningApiServer
-from tests.test_firefighting_demo_acceptance import _temporary_fire_paths
-from agents.history import HistoryAgent
-from agents.runtime import build_agent_registry
+from profiles.simulation import simulation_user_telegram_id
+from tests.api_fakes import RunningApiServer
+from tests.test_firefighting_demo_acceptance import build_fire_deps, seed_fire_run
+from tests.test_situational_picture import FakeMainAgent
 
 
-def test_fire_picture_through_real_simulator_http_and_job(tmp_path, monkeypatch):
-    history_path, surveillance_path, crew_path, operations_path = _temporary_fire_paths(tmp_path, monkeypatch)
-    persistence = SQLitePersistence(history_path)
-    for persona in fire.SIMULATION_USERS:
-        persistence.write_user(
-            simulation_user_telegram_id(persona.offset), persona.permission_level, persona.full_name
-        )
-    persistence.write_user("bot-service", "commander")
+def _fire_http_context(tmp_path, deps, monkeypatch, main=None, history_service=None):
+    deps.persistence.write_user("bot-service", "commander")
     monkeypatch.setenv("BOT_SERVICE_KEY", "e2e-key")
-
-    history_agent = HistoryAgent(model="m")
-    profile_agents = [
-        fire.FirefightingSurveillanceAgent(model="m"),
-        fire.FirefightingCrewStatusAgent(model="m"),
-        fire.FirefightingExternalForcesAgent(model="m"),
-    ]
-    registry = build_agent_registry({"history_agent": history_agent}, profile_agents)
-    settings = FakeSettings()
-    deps = FlowDeps(
-        persistence=persistence,
-        settings_store=settings,
-        registry=registry,
-        protocol_set=ProtocolSet(protocols=fire.PROTOCOLS),
-        event_type_registry=EventTypeRegistry(types=tuple(fire.EVENT_TYPES) + ("human_activation",)),
-        area_registry=AreaRegistry(areas=tuple(fire.AREAS)),
-        history_query_service=HistoryQueryService(persistence, history_agent, settings),
-        optimization_policy=fire.OPTIMIZATION_POLICY,
+    main = main or FakeMainAgent(
+        plan_text=json.dumps({"domains": [], "recent_events_hours": 12}),
+        compose_text="תמונת מצב מקומית",
     )
     queue = SerialEventQueue(lambda item: item[1]())
     queue.start()
     loaded = SimpleNamespace(
-        module_path="profiles.firefighting",
-        profile_name="Firefighting",
-        db_path=str(tmp_path / "bot.db"),
-        default_language="he",
-        message_catalog=get_catalog("he"),
-        api_port=0,
-        simulation_users=tuple(fire.SIMULATION_USERS),
-        simulation_groups=tuple(fire.SIMULATION_GROUPS),
-        simulator_port=0,
+        module_path="profiles.firefighting", profile_name="Firefighting",
+        db_path=str(tmp_path / "bot.db"), default_language="he",
+        message_catalog=get_catalog("he"), api_port=0, simulator_port=0,
+        simulation_users=tuple(fire.SIMULATION_USERS), simulation_groups=tuple(fire.SIMULATION_GROUPS),
+        conversation_history_turns=6, conversation_history_ttl_hours=24,
+    )
+    api_deps = dataclasses.replace(deps, history_query_service=history_service) if history_service else deps
+    ctx = ApiContext(
+        deps=api_deps, main_agent=main, insights_agent=main, loaded_profile=loaded, queue=queue,
+        scheduler=SummaryScheduler(deps.persistence, deps.registry.get("history_agent")),
+        group_routing=build_group_routing(deps.persistence, deps.registry),
+    )
+    return ctx, queue
+
+
+def test_fire_followup_through_simulator_http_has_one_reply_and_fresh_run_context(tmp_path, monkeypatch):
+    deps = build_fire_deps(tmp_path, monkeypatch)
+    seed_fire_run(deps)
+    deps.persistence.write_user("bot-service", "commander")
+    monkeypatch.setenv("BOT_SERVICE_KEY", "e2e-key")
+    final_text = "לפי דיווחי הריצה, חזרת עמרי טרם אומתה. מומלץ לאמת את זמינות הכוח לפני הקצאה נוספת."
+    main = FakeMainAgent(
+        plan_text=json.dumps({"domains": [], "recent_events_hours": 12}),
+        compose_text=final_text,
+    )
+    specialist_calls = []
+    for name in ("surveillance_agent", "team_status_agent", "friendly_forces_agent"):
+        agent = deps.registry.get(name)
+        def read(prompt, tools, *, invocation_policy=None, agent=agent):
+            specialist_calls.append((agent.name, prompt, tools))
+            if agent.name == "team_status_agent":
+                return AgentResult("success", agent.report_team_availability("2026-09-09T12:50:00+00:00"))
+            if agent.name == "surveillance_agent":
+                return AgentResult("success", agent.get_surveillance_overview())
+            return AgentResult("success", "טרם אושרה הגעת סיוע")
+        monkeypatch.setattr(agent, "process", read)
+    plans = []
+    def plan(_main, protocols, text, registry, history, previous, context):
+        plans.append((text, previous))
+        return MessagePlan(IntentResult("question", "local scripted follow-up classification"))
+    monkeypatch.setattr("api.routes.plan_message", plan)
+    queue = SerialEventQueue(lambda item: item[1]())
+    queue.start()
+    loaded = SimpleNamespace(
+        module_path="profiles.firefighting", profile_name="Firefighting",
+        db_path=str(tmp_path / "bot.db"), default_language="he",
+        message_catalog=get_catalog("he"), api_port=0, simulator_port=0,
+        simulation_users=tuple(fire.SIMULATION_USERS), simulation_groups=tuple(fire.SIMULATION_GROUPS),
+        conversation_history_turns=6, conversation_history_ttl_hours=24,
     )
     ctx = ApiContext(
-        deps=deps,
-        main_agent=SimpleNamespace(),
-        insights_agent=SimpleNamespace(),
-        loaded_profile=loaded,
-        queue=queue,
-        scheduler=SummaryScheduler(persistence, history_agent),
-        group_routing=build_group_routing(persistence, registry),
+        deps=deps, main_agent=main, insights_agent=main, loaded_profile=loaded, queue=queue,
+        scheduler=SummaryScheduler(deps.persistence, deps.registry.get("history_agent")),
+        group_routing=build_group_routing(deps.persistence, deps.registry),
     )
 
-    async def scenario(server_url):
-        loop = asyncio.get_running_loop()
-        runtime = SimulatorRuntime(
-            loaded,
-            loop,
-            api_client=HttpApiClient(server_url, bot_service_key="e2e-key"),
-        )
+    async def scenario(url):
+        runtime = SimulatorRuntime(loaded, asyncio.get_running_loop(),
+                                   api_client=HttpApiClient(url, bot_service_key="e2e-key"))
         await runtime.startup()
+        sender = simulation_user_telegram_id(5)
         try:
-            async def send_step(scenario_key, step):
-                sender = next(persona for persona in fire.SIMULATION_USERS if persona.key == step["sender_identity"])
-                sender_id = simulation_user_telegram_id(sender.offset)
-                group = next((item for item in fire.SIMULATION_GROUPS if item.key == step["chat"]), None)
-                chat_id = simulation_group_chat_id(group.offset) if group else sender_id
-                chat_type = "supergroup" if group else "private"
-                source = f"e2e-{scenario_key}-{step['step']}"
+            for index, text in enumerate(("תמונת מצב", "תבדוק לעומק עם כל הסוכנים ותן תמונה עדכנית")):
                 started = time.perf_counter()
-                initial = await runtime.handle_message({
-                    "sender_identity": sender_id,
-                    "chat_id": chat_id,
-                    "chat_type": chat_type,
-                    "text": step["text"],
-                    "event_time": step["timestamp"],
-                    "protocol_hint": step["protocol_hint"],
-                    "source_message_id": source,
+                result = await runtime.handle_message({
+                    "sender_identity": sender, "chat_id": sender, "chat_type": "private",
+                    "text": text, "event_time": "2026-09-09T14:30:00",
+                    "source_message_id": f"local-contract-{index}",
                 })
-                assert "FIRE picture collected" not in (initial["reply_text"] or "")
-                hashed = str(zlib.crc32(source.encode("utf-8")) & 0x7FFFFFFF)
-                event = None
-                for _ in range(40):
-                    event = persistence.fetch_event_by_source_message("telegram", sender_id, hashed)
-                    if event and event.get("outcome") in {"succeeded", "failed"}:
-                        break
-                    await asyncio.sleep(0.1)
-                assert event is not None and event["outcome"] == "succeeded", (
-                    scenario_key, step["step"], event.get("failure_reason"), event.get("result_text"), event
-                )
-                job = await runtime.api_client.get_job_result(event["event_id"], sender_id)
-                assert job is not None and job.user_response
-                assert initial["reply_text"] == job.user_response
-                await asyncio.sleep(0.05)
-                watermark = initial["watermark"]
-                assert runtime.poll_chat(
-                    chat_id, (watermark["status_len"], watermark["sent_len"])
-                )["reply_text"] is None
-                elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
-                return event, job, elapsed_ms
-
-            outputs = {}
-            for scenario in fire.SIMULATIONS[:2]:
-                for step in scenario.raw["steps"]:
-                    event, job, elapsed = await send_step(scenario.key, step)
-                    outputs[(scenario.key, step["step"])] = (event, job, elapsed)
-                    if scenario.key == "fire002_phase1" and step["step"] == 1:
-                        cycle = registry.get("team_status_agent").status_store.find_cycle("shift-2026-09-09")
-                        before_omri = registry.get("team_status_agent").status_store.availability_snapshot(
-                            "2026-09-09T07:45:00Z", cycle_id=cycle["cycle_id"]
-                        )
-                        assert len(before_omri) == 6
-                        assert all(row["availability"] == "available" for row in before_omri)
-                    if scenario.key == "fire002_phase1" and step["step"] == 2:
-                        cycle = registry.get("team_status_agent").status_store.find_cycle("shift-2026-09-09")
-                        after_omri = registry.get("team_status_agent").status_store.availability_snapshot(
-                            "2026-09-09T11:30:00Z", cycle_id=cycle["cycle_id"]
-                        )
-                        assert sum(row["availability"] == "available" for row in after_omri) == 5
-                        omri = next(row for row in after_omri if row["full_name"].startswith("רס\"ל עמרי"))
-                        assert omri["availability"] == "unavailable"
-                        assert omri["unavailable_from"] == "2026-09-09T09:00:00+00:00"
-                        assert omri["unavailable_until"] == "2026-09-09T12:00:00+00:00"
-
-            for key in (("fire002_phase1", 7), ("fire002_phase2", 8)):
-                picture = outputs[key][1].user_response
-                assert "תמונת מצב מבצעית" in picture
-                assert "סיכונים" in picture and "פערי מידע" in picture
-                assert "steps_completed" not in picture
-                assert "FIRE simulation action applied" not in picture
-                assert "המלצות להמשך" in picture
-            phase1_picture = outputs[("fire002_phase1", 7)][1].user_response
-            assert "6 מתוך 6" in phase1_picture and "5 זמינים" in phase1_picture
-            assert "12:00–15:00" in phase1_picture
-            assert "כביש 444" in phase1_picture and "התראת חום נמוכה" in phase1_picture
-            assert "אין כרגע מידע המקשר" in phase1_picture
-            assert "קק״ל" in phase1_picture and "שני" not in phase1_picture
-            assert "אשד 3" in phase1_picture and "כרמל 1" in phase1_picture
-            assert "נרשמו כזמינים" in outputs[("fire002_phase1", 1)][1].user_response
-            assert "היעדרות מתוכננת" in outputs[("fire002_phase1", 2)][1].user_response
-            assert "התראת חום נמוכה" in outputs[("fire002_phase1", 3)][1].user_response
-            assert "איסור הדלקת אש" in outputs[("fire002_phase1", 4)][1].user_response
-            assert "לא מקוון" in outputs[("fire002_phase1", 5)][1].user_response
-            assert "כביש 444" in outputs[("fire002_phase1", 6)][1].user_response
-            phase2_picture = outputs[("fire002_phase2", 8)][1].user_response
-            assert "לא נשמר מיקום נקודתי מדויק" in phase2_picture
-            assert "דיווח אש מאת רוני - מפעיל תצפיות" in phase2_picture
-            assert "דיווח אש מאת רס\"ל יובל - מפקד צוות אשד 3" in phase2_picture
-            assert "גזרה לפי הדיווח: רכס אורנים" in phase2_picture
-            assert "גזרה לפי הדיווח: לא ידועה" in phase2_picture
-            assert "הקפצת שני טרקטורי כיבוי" in outputs[("fire002_phase2", 6)][1].user_response
-            assert "הקפצת כוננות" in outputs[("fire002_phase2", 8)][0].get("raw_text", "") or "המלצות להמשך" in phase2_picture
-            varied = dict(fire.SIMULATIONS[0].raw["steps"][6])
-            varied["text"] = "מפקד, תן עכשיו סטטוס מבצעי עדכני של הכוח והנכסים, ומה עדיין לא אומת."
-            varied["step"] = 99
-            varied_event, varied_job, _ = await send_step("varied-picture", varied)
-            assert "תמונת מצב מבצעית" in varied_job.user_response
-            assert "המלצות להמשך" in varied_job.user_response
+                assert time.perf_counter() - started < 10  # local transport, not a model latency claim
+                assert result["reply_text"] == final_text
+                mark = result["watermark"]
+                extra = runtime.poll_chat(sender, (mark["status_len"], mark["sent_len"]))
+                assert not extra["reply_text"]
+            assert plans and any(row["content"] == final_text for row in plans[-1][1])
+            assert plans[-1][0] == "תבדוק לעומק עם כל הסוכנים ותן תמונה עדכנית"
+            assert len(specialist_calls) == 6
+            assert all("2026-09-09" in item[1] for item in specialist_calls)
+            assert all("2026-09-09T14:30:00+03:00" in item[1] for item in specialist_calls), [
+                item[1][item[1].find("FIRE simulation scenario clock"):][:100] for item in specialist_calls
+            ]
         finally:
             await runtime.shutdown()
 
-    with RunningApiServer(ctx) as server:
-        asyncio.run(scenario(server.base_url))
+    try:
+        with RunningApiServer(ctx) as server:
+            asyncio.run(scenario(server.base_url))
+    finally:
+        queue.stop()
+        deps.persistence.close()
+
+
+def test_fire_first_message_links_one_active_run_and_history_uses_that_same_run(tmp_path, monkeypatch):
+    deps = build_fire_deps(tmp_path, monkeypatch)
+    old_run_event = begin_report(
+        deps, "דיווח ישן שאינו שייך לריצה הנוכחית", "telegram", "2026-09-27T08:00:00",
+        simulation_user_telegram_id(5), source_message_id="old-run-report",
+        occurred_at="2026-09-09T07:30:00", simulation_context="FIRE_SIMULATION",
+    )
+    run_event = seed_fire_run(deps)
+    sender = simulation_user_telegram_id(5)
+    conversation = f"telegram:{sender}:main"
+    ctx, queue = _fire_http_context(tmp_path, deps, monkeypatch)
+
+    try:
+        client = build_app(ctx).test_client()
+        headers = {"X-Identity": sender}
+        linked = client.post("/Msg", headers=headers, json={
+            "text": "למה?", "sender_identity": sender, "source_message_id": "link-1",
+            "conversation_id": conversation,
+        })
+        assert "חיברתי את השיחה" in linked.json["answer"]
+        rows = deps.persistence.fetch_conversation_messages(conversation, 10)
+        assert any(row["event_id"] == run_event for row in rows)
+        why_again = client.post("/Msg", headers=headers, json={
+            "text": "למה?", "sender_identity": sender, "source_message_id": "why-again",
+            "conversation_id": conversation,
+        })
+        assert "מבודד את ההיסטוריה" in why_again.json["answer"]
+
+        history = client.post("/Msg", headers=headers, json={
+            "text": "תן היסטוריה של דיווחים", "sender_identity": sender,
+            "source_message_id": "history-1", "conversation_id": conversation,
+            "protocol_hint": "query_historical_incidents",
+        })
+        assert "פתיחת משמרת: שישה כבאים זמינים" in history.json["answer"]
+        assert "דיווח ישן שאינו שייך לריצה הנוכחית" not in history.json["answer"]
+
+        first_request_conversation = f"telegram:{sender}:first-request"
+        team_agent = deps.registry.get("team_status_agent")
+        monkeypatch.setattr(
+            team_agent, "process",
+            lambda *_args, **_kwargs: AgentResult("success", "סד״כ הפתיחה המאומת הוא שישה כבאים."),
+        )
+        first_request = client.post("/Msg", headers=headers, json={
+            "text": "מה מצב הצוות?", "sender_identity": sender, "source_message_id": "first-fire-request",
+            "conversation_id": first_request_conversation, "protocol_hint": "report_crew_status",
+        })
+        assert first_request.status_code == 200
+        linked_first_request = deps.persistence.fetch_conversation_messages(first_request_conversation, 10)
+        assert any(row["event_id"] == run_event for row in linked_first_request)
+        assert old_run_event not in {row["event_id"] for row in deps.persistence.fetch_conversation_messages(conversation, 10)}
+    finally:
+        queue.stop()
+        deps.persistence.close()
+
+
+def test_fire_unlinked_chat_gets_friendly_no_run_and_unregistered_user_cannot_link(tmp_path, monkeypatch):
+    deps = build_fire_deps(tmp_path, monkeypatch)
+    ctx, queue = _fire_http_context(tmp_path, deps, monkeypatch)
+    sender = simulation_user_telegram_id(5)
+    conversation = f"telegram:{sender}:main"
+
+    try:
+        client = build_app(ctx).test_client()
+        headers = {"X-Identity": sender}
+        no_run = client.post("/Msg", headers=headers, json={
+            "text": "איך מתחברים?", "sender_identity": sender, "source_message_id": "connect-1",
+            "conversation_id": conversation,
+        })
+        assert "אין כרגע ריצת FIRE פעילה" in no_run.json["answer"]
+        denied = client.post("/Msg", headers={"X-Identity": "unregistered-fire-user"}, json={
+            "text": "תמונת מצב", "sender_identity": "unregistered-fire-user",
+            "source_message_id": "blocked-1", "conversation_id": "telegram:bad:main",
+        })
+        assert denied.status_code == 401
+        assert deps.persistence.fetch_conversation_messages("telegram:bad:main", 10) == []
+    finally:
+        queue.stop()
+        deps.persistence.close()
+
+
+def test_fire_chat_does_not_switch_to_a_new_run_without_explicit_relink(tmp_path, monkeypatch):
+    deps = build_fire_deps(tmp_path, monkeypatch)
+    previous_run_event = seed_fire_run(deps, source="run-before")
+    sender = simulation_user_telegram_id(5)
+    conversation = f"telegram:{sender}:main"
+    ctx, queue = _fire_http_context(tmp_path, deps, monkeypatch)
+
+    try:
+        client = build_app(ctx).test_client()
+        headers = {"X-Identity": sender}
+        linked = client.post("/Msg", headers=headers, json={
+            "text": "לאיזו ריצה אני מחובר?", "sender_identity": sender,
+            "source_message_id": "run-before-link", "conversation_id": conversation,
+        })
+        assert "חיברתי את השיחה" in linked.json["answer"]
+        assert any(row["event_id"] == previous_run_event for row in deps.persistence.fetch_conversation_messages(conversation, 10))
+
+        current_run_event = seed_fire_run(
+            deps, source="run-after", received="2026-09-27T10:00:00",
+        )
+        denied_switch = client.post("/Msg", headers=headers, json={
+            "text": "תמונת מצב", "sender_identity": sender,
+            "source_message_id": "no-implicit-switch", "conversation_id": conversation,
+        })
+        assert "לא העברתי אותה אוטומטית" in denied_switch.json["answer"]
+        assert not any(row["event_id"] == current_run_event for row in deps.persistence.fetch_conversation_messages(conversation, 10))
+
+        relinked = client.post("/Msg", headers=headers, json={
+            "text": "חבר אותי לריצה הפעילה", "sender_identity": sender,
+            "source_message_id": "explicit-switch", "conversation_id": conversation,
+        })
+        assert "חיברתי את השיחה" in relinked.json["answer"]
+        assert any(row["event_id"] == current_run_event for row in deps.persistence.fetch_conversation_messages(conversation, 10))
+    finally:
+        queue.stop()
+        deps.persistence.close()
