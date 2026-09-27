@@ -360,6 +360,68 @@ def test_settings_file_lives_beside_the_database_not_the_profile(tmp_path):
     assert (tmp_path / "sub" / "deployment.db.settings.json").exists()
 
 
+def test_migration_twenty_two_adds_telegram_delivery_columns_to_an_existing_database(tmp_path):
+    db_path = str(tmp_path / "version-twenty-one.db")
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "CREATE TABLE events ("
+            "event_id TEXT PRIMARY KEY, received_at TEXT NOT NULL, source TEXT NOT NULL, "
+            "sender_identity TEXT NOT NULL, raw_text TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO events(event_id, received_at, source, sender_identity, raw_text) "
+            "VALUES ('legacy', '2026-01-01', 'telegram', 'viewer-1', 'I will be away')"
+        )
+        connection.execute("PRAGMA user_version = 21")
+        connection.commit()
+    finally:
+        connection.close()
+
+    run_migrations(db_path)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+        row = connection.execute(
+            "SELECT telegram_chat_id, telegram_chat_type, ack_message_id FROM events WHERE event_id = 'legacy'"
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert {"telegram_chat_id", "telegram_chat_type", "ack_message_id"} <= columns
+    assert row == (None, None, None)
+
+
+def test_migration_twenty_two_is_present_on_a_fresh_database(tmp_path):
+    db_path = str(tmp_path / "fresh-telegram-delivery.db")
+    run_migrations(db_path)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        connection.close()
+
+    assert {"telegram_chat_id", "telegram_chat_type", "ack_message_id"} <= columns
+    assert version == MIGRATIONS[-1][0]
+
+
+def test_migration_twenty_two_reruns_without_error_when_columns_already_exist(tmp_path):
+    db_path = str(tmp_path / "rerun-telegram-delivery.db")
+    run_migrations(db_path)
+
+    run_migrations(db_path)  # must not raise on a database already at the latest version
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+    finally:
+        connection.close()
+    assert {"telegram_chat_id", "telegram_chat_type", "ack_message_id"} <= columns
+
+
 def test_rich_reports_enabled_defaults_to_true(tmp_path):
     db_path = str(tmp_path / "deployment.db")
 

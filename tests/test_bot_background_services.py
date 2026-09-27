@@ -48,6 +48,64 @@ def test_failure_notification_uses_the_server_composed_report_text_when_present(
     assert telegram.sent[0].text == "We couldn't finish checking the gate after several attempts."
 
 
+def test_failure_always_sends_a_new_reply_never_edits_the_ack_with_the_full_text():
+    # Telegram doesn't notify a user of an edit — only a genuinely new message pings them,
+    # so a failure (unlike a success) must always go out as a new reply.
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
+
+    notice = FailureNotice(
+        event_id="e1", failed_step_agent_name="reference_agent", failure_reason="exhausted retries after 3 attempts",
+        report_text="We couldn't finish checking the gate after several attempts.",
+    )
+    notification = BotNotification(
+        kind="job_failed", target_chat_ids=("chat-1",), payload=notice,
+        reply_to_message_id="msg-1", ack_message_id="ack-1",
+    )
+
+    _run(deliver_failure_notification(deps, notification))
+
+    assert telegram.sent[0].text == "We couldn't finish checking the gate after several attempts."
+    assert telegram.sent[0].reply_to_message_id == "msg-1"
+
+
+def test_failure_edits_the_ack_to_a_short_neutral_line_pointing_at_the_new_reply():
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
+
+    notice = FailureNotice(event_id="e1", failed_step_agent_name="reference_agent", failure_reason="boom")
+    notification = BotNotification(
+        kind="job_failed", target_chat_ids=("chat-1",), payload=notice,
+        reply_to_message_id="msg-1", ack_message_id="ack-1",
+    )
+
+    _run(deliver_failure_notification(deps, notification))
+
+    assert telegram.status_events == [("edit", "chat-1", "ack-1", "Not completed — details below")]
+
+
+def test_failure_sends_the_new_reply_even_when_editing_the_ack_fails():
+    class _RaisingEditTelegramClient(FakeTelegramClient):
+        async def edit_status(self, chat_id, message_id, text):
+            raise RuntimeError("message to edit not found")
+
+    telegram = _RaisingEditTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
+
+    notice = FailureNotice(
+        event_id="e1", failed_step_agent_name="reference_agent", failure_reason="boom",
+        report_text="This run did not complete.",
+    )
+    notification = BotNotification(
+        kind="job_failed", target_chat_ids=("chat-1",), payload=notice,
+        reply_to_message_id="msg-1", ack_message_id="ack-1",
+    )
+
+    _run(deliver_failure_notification(deps, notification))
+
+    assert telegram.sent[0].text == "This run did not complete."
+
+
 def test_failed_run_is_distinguishable_from_a_declined_or_uncertain_one():
     from bot.formatting import format_header
 
@@ -525,6 +583,7 @@ import asyncio
 
 from bot.api_client import BotNotification, JobResult
 from bot.deps import BotDeps
+from bot.formatting import TELEGRAM_MESSAGE_LIMIT
 from bot.notifications import deliver_job_result
 from tests.bot_fakes import FakeBotApiClient, FakeTelegramClient
 
@@ -580,3 +639,56 @@ def test_falls_back_to_the_fixed_template_when_report_text_is_absent():
     _run(deliver_job_result(deps, notification))
 
     assert "Verdict: succeeded" in telegram.sent[0].text
+
+
+def test_delivery_edits_the_ack_message_in_place_when_one_is_recorded():
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
+
+    result = JobResult(job_id="job-1", outcome="succeeded", report_text="All clear at the gate.")
+    notification = BotNotification(
+        kind="job_finished", target_chat_ids=("group-chat-1",), payload=result,
+        reply_to_message_id="msg-123", ack_message_id="ack-1",
+    )
+
+    _run(deliver_job_result(deps, notification))
+
+    assert telegram.status_events == [("edit", "group-chat-1", "ack-1", "All clear at the gate.")]
+    assert telegram.sent == []  # no new message — the ack was edited in place
+
+
+def test_delivery_falls_back_to_a_new_reply_when_editing_the_ack_fails():
+    class _RaisingEditTelegramClient(FakeTelegramClient):
+        async def edit_status(self, chat_id, message_id, text):
+            raise RuntimeError("message to edit not found")
+
+    telegram = _RaisingEditTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
+
+    result = JobResult(job_id="job-1", outcome="succeeded", report_text="All clear at the gate.")
+    notification = BotNotification(
+        kind="job_finished", target_chat_ids=("group-chat-1",), payload=result,
+        reply_to_message_id="msg-123", ack_message_id="ack-1",
+    )
+
+    _run(deliver_job_result(deps, notification))
+
+    assert telegram.sent[0].text == "All clear at the gate."
+    assert telegram.sent[0].reply_to_message_id == "msg-123"
+
+
+def test_delivery_skips_editing_and_sends_a_new_reply_when_the_text_is_too_long_to_fit():
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
+
+    long_text = "a" * (TELEGRAM_MESSAGE_LIMIT + 1)
+    result = JobResult(job_id="job-1", outcome="succeeded", report_text=long_text)
+    notification = BotNotification(
+        kind="job_finished", target_chat_ids=("group-chat-1",), payload=result,
+        reply_to_message_id="msg-123", ack_message_id="ack-1",
+    )
+
+    _run(deliver_job_result(deps, notification))
+
+    assert telegram.status_events == []  # never attempted
+    assert telegram.sent[0].reply_to_message_id == "msg-123"

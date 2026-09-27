@@ -7,7 +7,7 @@ from history.event_pipeline import record_event_outcome, record_initial_event, r
 from messages import get_catalog
 from orchestrator.holds import create_approval_hold, create_clarification_hold, create_event_data_hold
 from orchestrator.reasoning import ProtocolSelectionResult, RiskAssessment
-from orchestrator.run_report import build_run_summary, render_summary
+from orchestrator.run_report import build_run_summary, render_summary, resolve_audience
 from persistence import open_persistence
 
 
@@ -25,6 +25,7 @@ def _new_event(persistence, **overrides) -> str:
         received_at="2026-08-24T10:00:00",
         sender_identity="viewer-1",
         sender_permission_level=overrides.pop("sender_permission_level", "viewer"),
+        telegram_chat_type=overrides.pop("telegram_chat_type", None),
     )
     event_id = record_initial_event(persistence, envelope)
     if overrides:
@@ -247,3 +248,43 @@ def test_render_summary_works_in_hebrew_too(persistence):
     text = render_summary(summary, "viewer", get_catalog("he"))
 
     assert "הצליח" in text
+
+
+# -- resolve_audience ----------------------------------------------------------
+
+
+def test_resolve_audience_is_viewer_for_a_group_chat_even_when_the_sender_is_a_commander(persistence):
+    event_id = _new_event(persistence, sender_permission_level="commander", telegram_chat_type="supergroup")
+    summary = build_run_summary(persistence, event_id)
+
+    assert resolve_audience(summary) == "viewer"
+
+
+def test_resolve_audience_is_viewer_for_a_plain_group_chat_type_too(persistence):
+    event_id = _new_event(persistence, sender_permission_level="commander", telegram_chat_type="group")
+    summary = build_run_summary(persistence, event_id)
+
+    assert resolve_audience(summary) == "viewer"
+
+
+def test_resolve_audience_is_commander_for_a_private_chat_with_a_commander(persistence):
+    event_id = _new_event(persistence, sender_permission_level="commander", telegram_chat_type="private")
+    summary = build_run_summary(persistence, event_id)
+
+    assert resolve_audience(summary) == "commander"
+
+
+def test_resolve_audience_is_viewer_for_a_private_chat_with_a_viewer(persistence):
+    event_id = _new_event(persistence, sender_permission_level="viewer", telegram_chat_type="private")
+    summary = build_run_summary(persistence, event_id)
+
+    assert resolve_audience(summary) == "viewer"
+
+
+def test_resolve_audience_falls_back_to_sender_level_when_chat_type_is_unknown(persistence):
+    # No telegram_chat_type recorded at all (e.g. a non-Telegram "sensor" source, or an event
+    # that predates this column) — treated like a private chat, not a group.
+    event_id = _new_event(persistence, sender_permission_level="commander")
+    summary = build_run_summary(persistence, event_id)
+
+    assert resolve_audience(summary) == "commander"

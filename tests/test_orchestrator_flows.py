@@ -918,6 +918,26 @@ def test_report_text_is_absent_when_rich_reports_disabled(deps):
     assert event.get("report_text") is None
 
 
+def test_report_composed_for_a_group_message_uses_viewer_audience_even_from_a_commander(deps):
+    # A message posted in a group is a shared, visible surface — protocol/agent/risk
+    # internals must not leak into it just because the poster happens to be a commander.
+    deps.settings_store.rich_reports_enabled = True
+    composer = _ScriptedComposerAgent("Understood: smoke at gate 3. Handled successfully.")
+    deps_with_composer = replace(deps, report_composer_agent=composer)
+    agent = _happy_path_agent(risk_score="0.1", selected="status_check", verdict="success")
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "no notable precedent")})()
+
+    event_id = begin_report(
+        deps_with_composer, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "commander-1",
+        sender_permission_level="commander", telegram_chat_type="supergroup",
+    )
+    run_report_extraction(deps_with_composer, event_id, agent, insights_agent)
+
+    prompt = composer.calls[0]
+    assert "status_check" not in prompt  # protocol name — commander-only detail
+    assert "reference_agent" not in prompt  # agent name — commander-only detail
+
+
 def test_attendance_protocol_is_never_closed_on_precedent(deps):
     prior_id = begin_report(
         deps, "availability report", "telegram", "2026-08-20T09:00:00", "viewer-1"

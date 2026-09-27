@@ -11,15 +11,18 @@ from messages import MessageCatalogError, get_catalog, validate_catalogs
 # Standard emoji-carrying Unicode blocks: emoticons, misc symbols &
 # pictographs (and its Extended-A block), transport/map symbols,
 # supplemental symbols & pictographs, symbols & pictographs extended-A,
-# dingbats, miscellaneous symbols (☀ ⚠ etc.), regional-indicator flag
-# letters, and the variation selector / ZWJ used to render emoji sequences.
-# Deliberately excludes the plain Arrows block (U+2190-U+21FF) and general
-# punctuation like "…" — those are ordinary typographic symbols, not
-# emoji, and this codebase's own dev-facing tooling (`tools/observability.py`)
-# uses "→" intentionally in non-user-facing debug output.
+# dingbats, miscellaneous symbols (☀ ⚠ etc.), the Miscellaneous Technical
+# block (⌚ ⏳ ⏰ etc. — watches, hourglasses, clocks/timers), regional-
+# indicator flag letters, and the variation selector / ZWJ used to render
+# emoji sequences. Deliberately excludes the plain Arrows block
+# (U+2190-U+21FF) and general punctuation like "…" — those are ordinary
+# typographic symbols, not emoji, and this codebase's own dev-facing
+# tooling (`tools/observability.py`) uses "→" intentionally in non-user-
+# facing debug output.
 _EMOJI_PATTERN = re.compile(
     "["
     "\U0001F300-\U0001FAFF"
+    "\U00002300-\U000023FF"
     "\U00002600-\U000026FF"
     "\U00002700-\U000027BF"
     "\U0001F1E6-\U0001F1FF"
@@ -28,6 +31,11 @@ _EMOJI_PATTERN = re.compile(
     "\U0000200D"
     "]"
 )
+
+
+@pytest.mark.parametrize("emoji", ["⏳", "⚠️", "⌚", "⏰", "☀", "🔥", "🇮🇱"])
+def test_emoji_pattern_catches_every_range_it_claims_to(emoji):
+    assert _EMOJI_PATTERN.findall(emoji)
 
 
 def test_no_emoji_in_any_catalog_message():

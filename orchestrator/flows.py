@@ -35,7 +35,7 @@ from orchestrator.holds import (
 from orchestrator.capabilities import CapabilityDescriptor, build_role_aware_system_context, visible_capabilities
 from orchestrator.reasoning import build_insight, construct_insights_agent
 from orchestrator.report_composer import ReportComposerAgent, compose_report  # re-exported: api may only import orchestrator.flows
-from orchestrator.run_report import build_run_summary
+from orchestrator.run_report import build_run_summary, resolve_audience
 from orchestrator.reasoning import (
     OrchestrationParseError,
     answer_conversationally,
@@ -249,8 +249,7 @@ def _record_outcome_with_report(
             outcome_failure_reason=failure_reason,
             insight_text=insight_text if insight_text is not None else summary.insight_text,
         )
-        audience = "commander" if summary.sender_permission_level == "commander" else "viewer"
-        report_text = compose_report(deps.report_composer_agent, summary, audience, deps.message_catalog)
+        report_text = compose_report(deps.report_composer_agent, summary, resolve_audience(summary), deps.message_catalog)
 
     record_event_outcome(
         deps.persistence, event_id, outcome,
@@ -268,6 +267,9 @@ def begin_report(
     conversation_id: str | None = None,
     deadline_at: str | None = None,
     sender_permission_level: str = "viewer",
+    telegram_chat_id: str | None = None,
+    telegram_chat_type: str | None = None,
+    ack_message_id: str | None = None,
 ) -> str:
     """The synchronous prefix of a report: write the raw text and return the event ID, before any model call runs (§7.2's own requirement — "before any processing begins")."""
 
@@ -278,6 +280,7 @@ def begin_report(
             sender_permission_level=sender_permission_level,
             source_message_id=source_message_id,
             trace_id=get_trace_id() or None, conversation_id=conversation_id, deadline_at=deadline_at,
+            telegram_chat_id=telegram_chat_id, telegram_chat_type=telegram_chat_type, ack_message_id=ack_message_id,
         ),
     )
 
@@ -454,6 +457,9 @@ def begin_request(
     conversation_id: str | None = None,
     deadline_at: str | None = None,
     sender_permission_level: str = "viewer",
+    telegram_chat_id: str | None = None,
+    telegram_chat_type: str | None = None,
+    ack_message_id: str | None = None,
 ) -> str:
     """The synchronous prefix of a request: write the raw text, already classified `human_activation` (§6.13 — there is nothing to extract), and return the event ID."""
 
@@ -464,6 +470,7 @@ def begin_request(
             sender_permission_level=sender_permission_level,
             source_message_id=source_message_id, occurred_at=received_at, occurred_at_is_fallback=False,
             trace_id=get_trace_id() or None, conversation_id=conversation_id, deadline_at=deadline_at,
+            telegram_chat_id=telegram_chat_id, telegram_chat_type=telegram_chat_type, ack_message_id=ack_message_id,
         ),
     )
     record_event_state(deps.persistence, event_id, {"classification": HUMAN_ACTIVATION_TYPE})

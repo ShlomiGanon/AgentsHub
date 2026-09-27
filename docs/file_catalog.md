@@ -92,6 +92,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `docs/progress.md` | Documentation | Internal | Documents progress. |
 | `docs/questions.txt` | Documentation | Internal | Documents questions. |
 | `docs/responce_improve.md` | Documentation | Internal | Specifies the Response Team unification and operational-state design: one profile, one database, profile-only tables and tools, and SEC_001 treated as live events. |
+| `docs/result.md` | Documentation | Internal | A read-only architecture report (as-is picture of agents, flows, data model, and known drift from the legacy scenario-JSON shape) written for a scenario-based-simulation redesign discussion. |
 | `docs/server_report.md` | Documentation | Internal | Documents server report. |
 | `docs/unified_command_guide.md` | Documentation | Internal | Operational and architectural guide for Unified Command Hub profile (Hebrew). |
 | `docs/vocabulary.md` | Documentation | Internal | Documents vocabulary. |

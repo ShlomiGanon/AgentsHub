@@ -29,6 +29,7 @@ def _summary(**overrides) -> RunSummary:
         event_id="evt-1",
         raw_text="a fire was seen near the north gate",
         sender_permission_level="viewer",
+        telegram_chat_type="private",
         classification="fire",
         area="north_sector",
         entities=None,

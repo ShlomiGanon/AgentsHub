@@ -267,6 +267,7 @@ class HttpApiClient(BotApiClient):
         protocol_hint: str | None = None,
         telegram_chat_id: str | None = None,
         telegram_chat_type: str | None = None,
+        ack_message_id: str | None = None,
     ) -> MessageSubmissionResult:
         body = {"text": text, "sender_identity": sender_identity, "source_message_id": source_message_id}
         if conversation_id is not None:
@@ -279,6 +280,8 @@ class HttpApiClient(BotApiClient):
             body["telegram_chat_id"] = telegram_chat_id
         if telegram_chat_type is not None:
             body["telegram_chat_type"] = telegram_chat_type
+        if ack_message_id is not None:
+            body["ack_message_id"] = ack_message_id
         status, response_payload = await self._call(
             "POST", "/Msg", sender_identity, body, trace_id_override=trace_id
         )
@@ -450,6 +453,7 @@ class HttpApiClient(BotApiClient):
                 target_chat_ids=tuple(entry["target_chat_ids"]),
                 payload=self._parse_notification_payload(entry["kind"], entry["payload"]),
                 reply_to_message_id=entry.get("reply_to_message_id"),
+                ack_message_id=entry.get("ack_message_id"),
                 trace_id=entry.get("trace_id"),
             )
             for entry in response_payload["notifications"]
@@ -558,8 +562,11 @@ class TelegramClient(ABC):
     async def send_text(self, chat_id: str, text: str, keyboard: Sequence[Sequence[str]] | None = None) -> None: ...
 
     @abstractmethod
-    async def send_status(self, chat_id: str, text: str) -> str:
-        """Send a temporary status and return its transport-specific message ID."""
+    async def send_status(self, chat_id: str, text: str, reply_to_message_id: str | None = None) -> str:
+        """Send a temporary status and return its transport-specific message ID. When given,
+        `reply_to_message_id` threads the status (and, since an edit preserves a message's own
+        reply-to relationship, whatever it is later edited into) as a reply to the original
+        message — important in a busy group chat."""
 
     @abstractmethod
     async def edit_status(self, chat_id: str, message_id: str, text: str) -> None:
@@ -616,9 +623,12 @@ class PTBTelegramClient(TelegramClient):
             else:
                 await self._application.bot.send_message(chat_id=chat_id, text=chunks[-1])
 
-    async def send_status(self, chat_id: str, text: str) -> str:
+    async def send_status(self, chat_id: str, text: str, reply_to_message_id: str | None = None) -> str:
         with stage_context("telegram_send"):
-            message = await self._application.bot.send_message(chat_id=chat_id, text=text)
+            message = await self._application.bot.send_message(
+                chat_id=chat_id, text=text,
+                reply_to_message_id=int(reply_to_message_id) if reply_to_message_id is not None else None,
+            )
         return str(message.message_id)
 
     async def edit_status(self, chat_id: str, message_id: str, text: str) -> None:

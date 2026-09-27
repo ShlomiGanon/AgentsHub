@@ -6,10 +6,12 @@ itself, including its thread/asyncio-loop bridge (docs/bot_simulation_mode_desig
 
 import asyncio
 import threading
+import types
 from types import SimpleNamespace
 
 from profiles import SimulationGroup, SimulationPersona, simulation_group_chat_id, simulation_user_telegram_id
 
+from agents import adapter
 from bot.contracts import BOT_SERVICE_IDENTITY, BotDeps, MessageSubmissionResult
 from bot.simulator_app import SimulatorRequestRefused, SimulatorRuntime, build_flask_app
 from bot.transports import HttpApiClient
@@ -370,6 +372,88 @@ def test_handle_message_persists_real_state_through_a_real_running_api_server(tm
         result = _run(scenario())
 
     assert result["reply_text"] == "Hello from the real bot handler!"
+
+
+def test_a_report_in_a_group_is_answered_in_the_group_with_viewer_audience(tmp_path, monkeypatch):
+    """docs/responce_improve.md: a report submitted in a Telegram group ("כיתת כוננות") must be
+    answered back in that same group — not the sender's own private chat — and, because a group
+    is a shared, visible surface, with the viewer-scoped report even when the poster is a
+    commander. Exercises the real queue, the real notification poll dispatch, and the real
+    edit-in-place delivery mechanism, through the real `SimulatorRuntime`/bot handlers, not
+    fakes standing in for any of them."""
+
+    from bot.background_services import run_notification_poll_once
+
+    # reference_agent (built for real by build_context, not scripted) executes its
+    # protocol step through the real crewai adapter — fake the framework boundary
+    # exactly like tests/test_orchestrator_flows.py's own autouse fixture does, so
+    # this never reaches a real model provider.
+    class _FakeOutput:
+        def __init__(self, raw):
+            self.raw = raw
+
+    class _FakeCrewAgent:
+        def __init__(self, **kwargs):
+            pass
+
+        def kickoff(self, text):
+            return _FakeOutput("status nominal, no anomalies")
+
+    fake_module = types.SimpleNamespace(
+        Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object)
+    )
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+
+    monkeypatch.setenv("BOT_SERVICE_KEY", "test-service-key")
+    agent = happy_path_agent(intent="report")  # already scripted for "smoke at gate 3" -> status_check/reference_agent/success
+    ctx = build_context(tmp_path, main_agent=agent, users=((_PERSONA_ID, "commander"), (BOT_SERVICE_IDENTITY, "commander")))
+    ctx.deps.persistence.write_user(_PERSONA_ID, "commander", "Persona V")
+    ctx.deps.settings_store.rich_reports_enabled = True  # deterministic render_summary fallback (no model)
+
+    # Bind the group unscoped ("main_agent") so the message routes through the same
+    # full registry every other test in this file already exercises for a private chat.
+    ctx.deps.persistence.write_group(_GROUP_ID, "main_agent", "Team")
+    ctx.group_routing.load()
+
+    with RunningApiServer(ctx) as running:
+        loaded = _fake_loaded_profile(tmp_path, simulation_users=(_PERSONA,), simulation_groups=(_GROUP,), api_port=running.port)
+        real_api_client = HttpApiClient(running.base_url, bot_service_key="test-service-key")
+
+        async def scenario():
+            loop = asyncio.get_event_loop()
+            runtime = SimulatorRuntime(loaded, loop, api_client=real_api_client)
+            await runtime.startup()
+            try:
+                mark = runtime.telegram_client.mark()
+                ack = await runtime.handle_message(
+                    {"sender_identity": _PERSONA_ID, "chat_id": _GROUP_ID, "chat_type": "supergroup",
+                     "text": "smoke at gate 3", "source_message_id": "sim-step-1"}
+                )
+                ctx.queue.wait_until_idle()
+                await run_notification_poll_once(runtime.deps)
+                final = runtime.poll_chat(_GROUP_ID, mark)
+                private_chat = runtime.poll_chat(_PERSONA_ID, mark)
+                return ack, final, private_chat
+            finally:
+                await runtime.shutdown()
+
+        ack_result, final_result, private_chat_result = _run(scenario())
+
+    # The immediate ack landed in the group (never the sender's private chat).
+    assert "Handling it" in ack_result["reply_text"]
+
+    # The final result also landed in the group — as an EDIT of the same message
+    # (reply_since replays a sent-then-edited message to its final text, not both).
+    final_text = final_result["reply_text"]
+    assert final_text is not None
+    assert final_text != ack_result["reply_text"]  # genuinely updated, not still "Handling it..."
+
+    # Group audience: no protocol/agent internals, even though the poster is a commander.
+    assert "status_check" not in final_text
+    assert "reference_agent" not in final_text
+
+    # Never delivered to the persona's own private chat.
+    assert private_chat_result["reply_text"] is None
 
 
 # -- SimulatorRuntime.poll_chat / GET /Simulator-msg/poll: Priority 3 -----------------------

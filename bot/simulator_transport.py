@@ -111,7 +111,7 @@ class SimulatorTelegramClient(TelegramClient):
     async def send_text(self, chat_id: str, text: str, keyboard: Sequence[Sequence[str]] | None = None) -> None:
         self.sent.append(SentMessage(chat_id=chat_id, text=text))
 
-    async def send_status(self, chat_id: str, text: str) -> str:
+    async def send_status(self, chat_id: str, text: str, reply_to_message_id: str | None = None) -> str:
         message_id = str(self._next_status_id)
         self._next_status_id += 1
         self.status_events.append(("send", chat_id, message_id, text))

@@ -17,6 +17,7 @@ from bot.contracts import (
 )
 
 from bot.interactions import (
+    TELEGRAM_MESSAGE_LIMIT,
     format_failure_notice,
     format_header,
     format_job_result,
@@ -268,11 +269,46 @@ if TYPE_CHECKING:
     from bot.contracts import BotDeps, BotNotification
 
 
+async def _deliver_editing_the_ack_first(deps: "BotDeps", chat_id: str, text: str, notification: "BotNotification") -> None:
+    """One message per report (docs/responce_improve.md): edit the ack message in place when
+    possible — it already carries the original message's own reply threading, so nothing else
+    needs to reference it. Only send a genuinely new message (a reply to the original) when
+    there's no ack to edit, the text no longer fits in one message, or editing it fails outright
+    (deleted, too old, or any other transport error)."""
+
+    if notification.ack_message_id and len(text) <= TELEGRAM_MESSAGE_LIMIT:
+        try:
+            await deps.telegram_client.edit_status(chat_id, notification.ack_message_id, text)
+            return
+        except Exception as exc:
+            logger.warning(
+                "editing the ack message failed; sending a new reply instead",
+                extra={"event": "ack_edit_failed", "reason": str(exc)},
+            )
+
+    await deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id)
+
+
 async def deliver_failure_notification(deps: "BotDeps", notification: "BotNotification") -> None:
+    """Telegram never notifies a user that a message was *edited* — only a new message pings
+    them. So unlike a successful result, a failure always goes out as a genuinely new reply (the
+    thing that actually notifies the user something needs their attention); the ack is only
+    best-effort edited to a short neutral line pointing at it, never left showing "Handling
+    it..." — but that edit's success or failure never gates sending the real reply below."""
+
     notice = notification.payload
     text = notice.report_text or format_failure_notice(notice, message_catalog_for(deps))
+    messages = message_catalog_for(deps)
 
     for chat_id in notification.target_chat_ids:
+        if notification.ack_message_id:
+            try:
+                await deps.telegram_client.edit_status(chat_id, notification.ack_message_id, messages.text("failure.ack_not_completed"))
+            except Exception as exc:
+                logger.warning(
+                    "editing the ack message to the neutral failure line failed; sending the real reply regardless",
+                    extra={"event": "ack_edit_failed", "reason": str(exc)},
+                )
         await deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id)
 
 
@@ -285,7 +321,7 @@ async def deliver_job_result(deps: "BotDeps", notification: "BotNotification") -
     text = job_result.report_text or format_job_result(job_result, message_catalog_for(deps))
 
     for chat_id in notification.target_chat_ids:
-        await deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id)
+        await _deliver_editing_the_ack_first(deps, chat_id, text, notification)
 
 
 if TYPE_CHECKING:

@@ -78,6 +78,7 @@ jobs:
         run: >
           python -m pytest -v --color=yes
           tests/test_architecture.py
+          tests/test_cli_group_admin.py
           tests/test_environment_config.py
           tests/test_file_catalog.py
           tests/test_legacy_imports.py
@@ -86,6 +87,9 @@ jobs:
           tests/test_observability.py
           tests/test_permissions.py
           tests/test_profile_loading.py
+          tests/test_profile_simulations.py
+          tests/test_run_stack.py
+          tests/test_server_control.py
           tests/test_user_admin.py
 
       - name: Mission 2 - Data Layer
@@ -136,24 +140,30 @@ jobs:
           tests/test_orchestrator_judgment.py
           tests/test_orchestrator_reasoning.py
           tests/test_orchestrator_selection.py
+          tests/test_group_routing.py
           tests/test_question_answering.py
           tests/test_report_composer.py
           tests/test_run_report.py
+          tests/test_situational_picture.py
 
       - name: Mission 7 - API Layer
         run: >
           python -m pytest -v --color=yes
           tests/test_api_admin.py
           tests/test_api_app.py
+          tests/test_api_groups.py
           tests/test_api_holds.py
           tests/test_api_jobs.py
           tests/test_api_messages.py
           tests/test_api_notifications.py
           tests/test_api_protocols.py
           tests/test_api_request_boundary.py
+          tests/test_api_simulations.py
+          tests/test_api_situational_picture.py
           tests/test_api_system.py
           tests/test_api_trace.py
           tests/test_api_unified_ingestion.py
+          tests/test_unsafe_system.py
 
       - name: Mission 8 - Telegram Frontend
         run: >
@@ -161,9 +171,12 @@ jobs:
           tests/test_approvals_queue.py
           tests/test_bot_app.py
           tests/test_bot_background_services.py
+          tests/test_bot_groups.py
           tests/test_bot_holds.py
           tests/test_bot_interactions.py
           tests/test_bot_presentation.py
+          tests/test_bot_simulator_app.py
+          tests/test_bot_simulator_transport.py
           tests/test_bot_transports.py
 
       - name: Mission 9 - Integration and Hardening
@@ -179,6 +192,7 @@ jobs:
           tests/test_integration_profile_editing_and_settings.py
           tests/test_integration_profile_isolation.py
           tests/test_integration_profile_loading.py
+          tests/test_integration_profile_simulations.py
           tests/test_integration_retry_exhaustion.py
           tests/test_integration_serial_processing_under_load.py
           tests/test_integration_user_administration.py

@@ -44,6 +44,13 @@ class InitialEventEnvelope:
     trace_id: str | None = None
     conversation_id: str | None = None
     deadline_at: str | None = None
+    # Where an async job_finished/job_failed reply must be delivered (the chat the
+    # message came from — group or private, not necessarily the sender's own private
+    # chat) and the id of the status/ack message to edit in place when it's ready.
+    # Immutable request-time facts, exactly like source_message_id.
+    telegram_chat_id: str | None = None
+    telegram_chat_type: str | None = None
+    ack_message_id: str | None = None
 
 
 @dataclass(frozen=True)

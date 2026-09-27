@@ -264,7 +264,7 @@ def test_on_text_message_replies_in_the_same_chat():
     _run(app._on_text_message(update, _fake_context(deps)))
 
     assert telegram.status_events == [
-        ("send", "99", "1", "The model is thinking..."),
+        ("send", "99", "1", "The model is thinking...", "777"),
         ("edit", "99", "1", "42 events"),
     ]
 

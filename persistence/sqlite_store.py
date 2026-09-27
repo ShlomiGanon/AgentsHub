@@ -66,6 +66,9 @@ _EVENT_COLUMNS = (
     "conversation_id",
     "deadline_at",
     "ingestion_key",
+    "telegram_chat_id",
+    "telegram_chat_type",
+    "ack_message_id",
 )
 
 _EVENT_JSON_COLUMNS = {"entities", "precedent_matched_event_ids"}
@@ -75,6 +78,7 @@ _EVENT_IMMUTABLE_COLUMNS = {
     "event_id", "received_at", "source", "sender_identity", "sender_permission_level",
     "source_message_id", "raw_text",
     "trace_id", "conversation_id", "deadline_at", "ingestion_key",
+    "telegram_chat_id", "telegram_chat_type", "ack_message_id",
 }
 _UPDATABLE_EVENT_COLUMNS = frozenset(_EVENT_COLUMNS) - _EVENT_IMMUTABLE_COLUMNS
 

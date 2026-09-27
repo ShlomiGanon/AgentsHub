@@ -96,6 +96,70 @@ def test_job_finished_and_job_failed_are_delivered_to_the_original_submitter(tmp
     assert by_event[failed_id]["target_chat_ids"] == ["bob"]
 
 
+def test_job_finished_targets_the_original_chat_not_the_senders_private_chat(tmp_path, teardown_ctx):
+    # The bug this fixes: a report submitted in a group used to be answered in the
+    # sender's own private chat. It must now go back to the group it came from.
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    event_id = _minimal_event(
+        ctx.deps.persistence, sender_identity="eli",
+        telegram_chat_id="-100200300", telegram_chat_type="supergroup",
+    )
+    record_event_outcome(ctx.deps.persistence, event_id, "succeeded", insight_text="all good")
+
+    resp = client.get("/Notifications", headers=auth_headers(COMMANDER_IDENTITY))
+    notification = resp.get_json()["notifications"][0]
+
+    assert notification["target_chat_ids"] == ["-100200300"]
+
+
+def test_job_finished_falls_back_to_the_sender_when_no_chat_id_was_recorded(tmp_path, teardown_ctx):
+    # A sensor-sourced event (or one from before this column existed) has no
+    # telegram_chat_id at all — falls back to the sender's own identity, unchanged.
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    event_id = _minimal_event(ctx.deps.persistence, sender_identity="alice")
+    record_event_outcome(ctx.deps.persistence, event_id, "succeeded", insight_text="all good")
+
+    resp = client.get("/Notifications", headers=auth_headers(COMMANDER_IDENTITY))
+    notification = resp.get_json()["notifications"][0]
+
+    assert notification["target_chat_ids"] == ["alice"]
+
+
+def test_job_finished_carries_the_ack_message_id_when_one_was_recorded(tmp_path, teardown_ctx):
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    event_id = _minimal_event(ctx.deps.persistence, sender_identity="eli", ack_message_id="ack-42")
+    record_event_outcome(ctx.deps.persistence, event_id, "succeeded", insight_text="all good")
+
+    resp = client.get("/Notifications", headers=auth_headers(COMMANDER_IDENTITY))
+    notification = resp.get_json()["notifications"][0]
+
+    assert notification["ack_message_id"] == "ack-42"
+
+
+def test_ack_message_id_is_absent_for_kinds_other_than_job_finished_or_job_failed(tmp_path, teardown_ctx):
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    event_id = _minimal_event(ctx.deps.persistence, ack_message_id="ack-42")
+    create_clarification_hold(ctx.deps.persistence, event_id, "raw text")
+
+    resp = client.get("/Notifications", headers=auth_headers(COMMANDER_IDENTITY))
+    notification = resp.get_json()["notifications"][0]
+
+    assert notification["kind"] == "clarification_hold"
+    assert notification["ack_message_id"] is None
+
+
 def test_job_finished_payload_carries_the_protocol_and_reason_already_computed_during_the_run(tmp_path, teardown_ctx):
     """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 3 (item #9): sourced from
     data already written during the run, no new model call."""

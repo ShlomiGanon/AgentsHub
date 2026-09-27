@@ -270,6 +270,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
         event_data_event_id = request_payload.get("event_data_event_id")
         telegram_chat_id = request_payload.get("telegram_chat_id")
         telegram_chat_type = request_payload.get("telegram_chat_type")
+        ack_message_id = request_payload.get("ack_message_id")
 
         try:
             scoped_agent = resolve_scope(
@@ -804,6 +805,9 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     ctx.deps, text, "telegram", received_at, sender_identity, source_message_id,
                     conversation_id=conversation_id, deadline_at=deadline_at,
                     sender_permission_level=level.name.lower(),
+                    telegram_chat_id=str(telegram_chat_id) if telegram_chat_id is not None else None,
+                    telegram_chat_type=str(telegram_chat_type) if telegram_chat_type is not None else None,
+                    ack_message_id=str(ack_message_id) if ack_message_id is not None else None,
                 )
             except Exception:
                 ctx.queue.release_reservation(reservation)
@@ -841,6 +845,9 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 ctx.deps, text, received_at, sender_identity, source_message_id,
                 conversation_id=conversation_id, deadline_at=deadline_at,
                 sender_permission_level=level.name.lower(),
+                telegram_chat_id=str(telegram_chat_id) if telegram_chat_id is not None else None,
+                telegram_chat_type=str(telegram_chat_type) if telegram_chat_type is not None else None,
+                ack_message_id=str(ack_message_id) if ack_message_id is not None else None,
             )
         except Exception:
             ctx.queue.release_reservation(reservation)
@@ -1885,7 +1892,10 @@ _PAYLOAD_BUILDERS = {
 
 
 def _target_chat_ids(ctx: "ApiContext", kind: str, event_id: str) -> list[str]:
-    """Reporter-facing job, hold and event-data notifications target the original submitter."""
+    """Reporter-facing job, hold and event-data notifications target the original submitter's
+    chat. For `job_finished`/`job_failed` specifically, that's the chat the report actually came
+    from — group or private — stored on the event at submission time (`telegram_chat_id`); the
+    other kinds are unchanged (holds keep their current sender-private-chat behavior for now)."""
 
     if kind not in ("job_finished", "job_failed", "event_data_hold", "uncertain_verdict_reporter", "approval_hold", "clarification_hold"):
         return []
@@ -1901,17 +1911,36 @@ def _target_chat_ids(ctx: "ApiContext", kind: str, event_id: str) -> list[str]:
         and bool(sender_record.get("auto_register", False))
     ):
         return []
-    return [sender] if sender != "bot-service" else []
+    if sender == "bot-service":
+        return []
+    if kind in ("job_finished", "job_failed"):
+        # Falls back to the sender's own identity for events that predate this column, or
+        # weren't submitted with a known chat (e.g. a non-Telegram "sensor" source).
+        return [event.get("telegram_chat_id") or sender]
+    return [sender]
 
 
 def _reply_to_message_id(ctx: "ApiContext", kind: str, event_id: str) -> str | None:
-    """Attach reporter-facing notifications to the originating Telegram message when available."""
+    """The reply target for a *new* message — the fallback path when there's no ack message to
+    edit in place, or editing it failed. Attaches to the originating Telegram message."""
 
     if kind not in ("job_finished", "job_failed", "event_data_hold", "uncertain_verdict_reporter"):
         return None
 
     event = ctx.deps.persistence.fetch_event(event_id)
     return event.get("source_message_id")
+
+
+def _ack_message_id(ctx: "ApiContext", kind: str, event_id: str) -> str | None:
+    """The status/ack message to edit in place with the final result — job_finished/job_failed
+    only; None for every other kind, and None when the event has no stored ack (predates this
+    column, or wasn't submitted through the normal ack lifecycle)."""
+
+    if kind not in ("job_finished", "job_failed"):
+        return None
+
+    event = ctx.deps.persistence.fetch_event(event_id)
+    return event.get("ack_message_id") if event is not None else None
 
 
 def _format_notification(ctx: "ApiContext", notification_row: dict) -> dict:
@@ -1923,6 +1952,7 @@ def _format_notification(ctx: "ApiContext", notification_row: dict) -> dict:
         "payload": builder(ctx, notification_row["event_id"]),
         "target_chat_ids": _target_chat_ids(ctx, notification_row["kind"], notification_row["event_id"]),
         "reply_to_message_id": _reply_to_message_id(ctx, notification_row["kind"], notification_row["event_id"]),
+        "ack_message_id": _ack_message_id(ctx, notification_row["kind"], notification_row["event_id"]),
         "trace_id": event.get("trace_id") if event is not None else None,
     }
 

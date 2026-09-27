@@ -649,9 +649,19 @@ def test_status_message_can_be_sent_edited_and_deleted(client, monkeypatch):
     _run(client.delete_status("chat-1", message_id))
 
     assert message_id == "73"
-    send.assert_awaited_once_with(chat_id="chat-1", text="thinking")
+    send.assert_awaited_once_with(chat_id="chat-1", text="thinking", reply_to_message_id=None)
     edit.assert_awaited_once_with(chat_id="chat-1", message_id=73, text="done")
     delete.assert_awaited_once_with(chat_id="chat-1", message_id=73)
+
+
+def test_status_message_can_be_sent_as_a_reply_to_the_original_message(client, monkeypatch):
+    sent_message = type("Sent", (), {"message_id": 73})()
+    send = AsyncMock(return_value=sent_message)
+    monkeypatch.setattr(type(client._application.bot), "send_message", send)
+
+    _run(client.send_status("chat-1", "thinking", reply_to_message_id="555"))
+
+    send.assert_awaited_once_with(chat_id="chat-1", text="thinking", reply_to_message_id=555)
 
 
 def test_send_with_buttons_attaches_an_inline_keyboard(client, monkeypatch):

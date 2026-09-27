@@ -80,7 +80,7 @@ def test_the_real_bot_path_converges_with_a_sensor_submission(tmp_path):
         # "api.queued_report" (server-side, docs/work_process.md §17) — confirms this
         # became a queued job, same as before; the raw task ID is no longer in the
         # default reply — the bot now purely relays whatever /Msg's own "answer" says.
-        assert "working on it" in reply
+        assert "Handling it" in reply
         bot_ctx.queue.wait_until_idle()
         via_bot = bot_ctx.deps.persistence.fetch_events_range("2000-01-01T00:00:00", "2100-01-01T00:00:00")[0]
 

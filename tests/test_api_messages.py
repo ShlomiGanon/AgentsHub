@@ -140,7 +140,7 @@ def test_a_report_returns_202_with_a_job_id(tmp_path, teardown_ctx):
     # docs/work_process.md §17: /Msg itself is the single source of truth for this
     # reply text now — the bot purely relays it — so the friendly, default
     # (non-DEEP_DEBUG) wording is asserted here, not reconstructed bot-side.
-    assert "working on it" in body["answer"]
+    assert "Handling it" in body["answer"]
     assert body["event_id"] not in body["answer"]
     ctx.queue.wait_until_idle()
     assert job_status(ctx, body["event_id"])["status"] == "succeeded"
@@ -250,7 +250,7 @@ def test_a_request_returns_202_and_is_classified_human_activation(tmp_path, tear
     assert resp.status_code == 202
     body = resp.get_json()
     assert body["taken_as"] == "request"
-    assert "working on it" in body["answer"]
+    assert "Handling it" in body["answer"]
     assert body["event_id"] not in body["answer"]
 
     event = ctx.deps.persistence.fetch_event(body["event_id"])

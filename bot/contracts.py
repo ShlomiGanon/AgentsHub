@@ -297,6 +297,9 @@ class BotNotification:
         | EventDataNeededNotice
     )
     reply_to_message_id: str | None = None
+    # job_finished/job_failed only: the status/ack message to edit in place with the final
+    # result. None for every other kind, or when the event has no stored ack.
+    ack_message_id: str | None = None
     trace_id: str | None = None
 
 
@@ -348,12 +351,15 @@ class BotApiClient(ABC):
         protocol_hint: str | None = None,
         telegram_chat_id: str | None = None,
         telegram_chat_type: str | None = None,
+        ack_message_id: str | None = None,
     ) -> MessageSubmissionResult:
         """`source_message_id` — the incoming Telegram message's own ID — is what an eventual asynchronous job result (§8.9) or failure notification (§8.11) needs to send its reply *as a r...
 
         `telegram_chat_id`/`telegram_chat_type` (Telegram's own `chat.id`/`chat.type`) let the
         server scope a group's message to the agent the group is bound to; a private chat sends
-        `chat_type="private"` and is never scoped."""
+        `chat_type="private"` and is never scoped. `ack_message_id` is the status/ack message's
+        own Telegram message ID — stored with the event so a later job_finished/job_failed
+        notification can edit that same message in place instead of sending a new one."""
 
 
     @abstractmethod
@@ -451,6 +457,7 @@ class UnimplementedApiClient(BotApiClient):
         conversation_id: str | None = None, trace_id: str | None = None,
         event_data_event_id: str | None = None, protocol_hint: str | None = None,
         telegram_chat_id: str | None = None, telegram_chat_type: str | None = None,
+        ack_message_id: str | None = None,
     ) -> MessageSubmissionResult:
         raise ApiNotImplementedError("submit_message", "§7.4 (POST /Msg)")
 

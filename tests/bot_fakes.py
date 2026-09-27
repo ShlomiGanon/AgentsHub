@@ -54,10 +54,10 @@ class FakeTelegramClient(TelegramClient):
     async def send_text(self, chat_id: str, text: str, keyboard: Sequence[Sequence[str]] | None = None) -> None:
         self.sent.append(SentMessage(chat_id=chat_id, text=text, keyboard=tuple(tuple(row) for row in keyboard) if keyboard else None))
 
-    async def send_status(self, chat_id: str, text: str) -> str:
+    async def send_status(self, chat_id: str, text: str, reply_to_message_id: str | None = None) -> str:
         message_id = str(self._next_status_id)
         self._next_status_id += 1
-        self.status_events.append(("send", chat_id, message_id, text))
+        self.status_events.append(("send", chat_id, message_id, text, reply_to_message_id))
         return message_id
 
     async def edit_status(self, chat_id: str, message_id: str, text: str) -> None:
@@ -202,6 +202,7 @@ class FakeBotApiClient(BotApiClient):
         protocol_hint: str | None = None,
         telegram_chat_id: str | None = None,
         telegram_chat_type: str | None = None,
+        ack_message_id: str | None = None,
     ) -> MessageSubmissionResult:
         if sender_identity not in self.users:
             raise ApiRequestError(401, f"'{sender_identity}' is not a registered identity")
@@ -217,6 +218,8 @@ class FakeBotApiClient(BotApiClient):
             self.calls.append(("submit_message_protocol_hint", protocol_hint))
         if telegram_chat_id is not None or telegram_chat_type is not None:
             self.calls.append(("submit_message_chat", telegram_chat_id, telegram_chat_type))
+        if ack_message_id is not None:
+            self.calls.append(("submit_message_ack", ack_message_id))
         assert self.message_submission_result is not None, "test must set message_submission_result"
         return self.message_submission_result
 

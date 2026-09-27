@@ -376,6 +376,7 @@ async def _submit_and_format_message(
     protocol_hint: str | None = None,
     telegram_chat_id: str | None = None,
     telegram_chat_type: str | None = None,
+    ack_message_id: str | None = None,
 ) -> tuple[str, MessageSubmissionResult | None]:
     """Submit one message and return both presentation text and semantic result."""
 
@@ -390,6 +391,7 @@ async def _submit_and_format_message(
             protocol_hint,
             telegram_chat_id=telegram_chat_id,
             telegram_chat_type=telegram_chat_type,
+            ack_message_id=ack_message_id,
         )
     except ApiRequestError as exc:
         messages = interactions.message_catalog_for(deps)
@@ -482,6 +484,7 @@ async def present_incoming_message(
     status_message_id = await deps.telegram_client.send_status(
         chat_id,
         messages.text("status.thinking"),
+        reply_to_message_id=message_id,
     )
     trace_id = new_trace_id()
     trace_stop = asyncio.Event()
@@ -506,6 +509,7 @@ async def present_incoming_message(
             protocol_hint,
             telegram_chat_id=chat_id if telegram_chat_type is not None else None,
             telegram_chat_type=telegram_chat_type,
+            ack_message_id=status_message_id,
         )
     except ApiNotImplementedError as exc:
         logger.info(

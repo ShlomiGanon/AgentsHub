@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from messages import MessageCatalog, MessageCatalogError
+from orchestrator.group_routing import GROUP_CHAT_TYPES
 
 Audience = Literal["viewer", "commander"]
 
@@ -41,6 +42,7 @@ class RunSummary:
     event_id: str
     raw_text: str
     sender_permission_level: str
+    telegram_chat_type: str | None
     classification: str | None
     area: str | None
     entities: list | None
@@ -105,6 +107,7 @@ def build_run_summary(persistence, event_id: str) -> RunSummary:
         event_id=event_id,
         raw_text=event.get("raw_text") or "",
         sender_permission_level=event.get("sender_permission_level") or "viewer",
+        telegram_chat_type=event.get("telegram_chat_type"),
         classification=event.get("classification"),
         area=event.get("area"),
         entities=event.get("entities"),
@@ -120,6 +123,17 @@ def build_run_summary(persistence, event_id: str) -> RunSummary:
         insight_text=event.get("insight_text"),
         outcome_failure_reason=event.get("outcome_failure_reason"),
     )
+
+
+def resolve_audience(summary: RunSummary) -> Audience:
+    """Group chat -> viewer always, regardless of the poster's own permission level — a group
+    is a shared, visible surface, and protocol/agent/risk internals must not leak into it just
+    because whoever happened to post is a commander. Private chat -> the sender's own level,
+    exactly as before (a private chat's identity is always the sender, per Telegram itself)."""
+
+    if summary.telegram_chat_type in GROUP_CHAT_TYPES:
+        return "viewer"
+    return "commander" if summary.sender_permission_level == "commander" else "viewer"
 
 
 def _translated(prefix: str, value: str | None, catalog: MessageCatalog) -> str | None:
