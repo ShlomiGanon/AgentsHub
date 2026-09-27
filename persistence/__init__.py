@@ -25,6 +25,7 @@ from persistence.surveillance_contracts import (
     SurveillancePersistenceInterface,
     open_surveillance_persistence,
 )
+from persistence.firefighting_operations import FirefightingOperationsStore
 
 sqlite = sqlite_store
 sqlite_backend = sqlite_store
@@ -47,4 +48,5 @@ __all__ = [
     "SurveillancePersistenceError",
     "SurveillancePersistenceInterface",
     "open_surveillance_persistence",
+    "FirefightingOperationsStore",
 ]

@@ -380,7 +380,7 @@ class SurveillanceAgent(Agent):
         side_effecting=True,
         idempotent=True,
     )
-    def update_camera_observation(self, camera_id: str, new_observation: str, status: str = "") -> str:
+    def update_camera_observation(self, camera_id: str, new_observation: str, status: str = "", updated_at: str = "") -> str:
         if not camera_id.strip():
             return "Clarification required: camera_id is required."
         if not new_observation.strip():
@@ -391,6 +391,7 @@ class SurveillanceAgent(Agent):
                 camera_id=camera_id.strip(),
                 feed_summary=new_observation.strip(),
                 status=status.strip() or None,
+                updated_at=updated_at.strip() or None,
             )
         except SurveillancePersistenceError as exc:
             return f"Failed to update camera feed: {exc}"

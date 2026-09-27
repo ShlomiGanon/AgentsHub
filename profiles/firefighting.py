@@ -7,7 +7,12 @@ from pathlib import Path
 
 from agents import FriendlyForcesAgent, SurveillanceAgent, TeamStatusAgent, get_authenticated_request_identity, tool
 from messages import get_catalog
-from persistence import open_persistence, open_surveillance_persistence, open_team_status_persistence
+from persistence import (
+    FirefightingOperationsStore,
+    open_persistence,
+    open_surveillance_persistence,
+    open_team_status_persistence,
+)
 from profiles.contracts import AgentSpec, OptimizationPolicy
 from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
 from protocols import CriticalityLevel, Protocol
@@ -33,7 +38,13 @@ _PROFILE_DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_history.db")
 FIREFIGHTING_SURVEILLANCE_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_surveillance.db")
 FIREFIGHTING_CREW_STATUS_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_crew_status.db")
-RESETTABLE_DATABASES = (DB_PATH, FIREFIGHTING_SURVEILLANCE_DB_PATH, FIREFIGHTING_CREW_STATUS_DB_PATH)
+FIREFIGHTING_OPERATIONS_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_operations.db")
+RESETTABLE_DATABASES = (
+    DB_PATH,
+    FIREFIGHTING_SURVEILLANCE_DB_PATH,
+    FIREFIGHTING_CREW_STATUS_DB_PATH,
+    FIREFIGHTING_OPERATIONS_DB_PATH,
+)
 
 # The dashboard runs exactly one profile at a time.  Both selectable profiles
 # therefore use the deployment's single Telegram bot token; the supervisor
@@ -52,6 +63,44 @@ class FirefightingSurveillanceAgent(SurveillanceAgent):
 
     surveillance_db_path = FIREFIGHTING_SURVEILLANCE_DB_PATH
 
+    def __init__(self, model: str, api_key: str | None = None):
+        super().__init__(model, api_key)
+        self.operations_store = FirefightingOperationsStore(FIREFIGHTING_OPERATIONS_DB_PATH)
+
+    @tool(
+        "record_fire_incident_update",
+        "Persists a structured FIRE incident update and links it to the existing incident.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def record_fire_incident_update(
+        self,
+        incident_id: str = "EVT-FIRE-444-BRUSH",
+        update_kind: str = "incident_update",
+        summary: str = "",
+        verification_status: str = "reported",
+        source_message_id: str = "",
+        event_id: str = "",
+        occurred_at: str = "",
+        received_at: str = "",
+        area: str = "",
+        spread_status: str = "",
+        hazard_status: str = "",
+        status: str = "",
+    ) -> str:
+        if not summary.strip() or not source_message_id.strip():
+            return "The FIRE incident update was not stored: summary and source message ID are required."
+        result = self.operations_store.record_incident_update(
+            source_message_id=source_message_id.strip(), event_id=event_id.strip(),
+            incident_id=incident_id.strip() or "EVT-FIRE-444-BRUSH",
+            update_kind=update_kind.strip() or "incident_update", summary=summary,
+            verification_status=verification_status.strip() or "reported",
+            occurred_at=occurred_at, received_at=received_at, area=area or None,
+            spread_status=spread_status or None, hazard_status=hazard_status or None,
+            status=status or None,
+        )
+        return "FIRE incident update already recorded." if not result["inserted"] else "FIRE incident update recorded."
+
 
 class FirefightingCrewStatusAgent(TeamStatusAgent):
     """Binds the reusable readiness-status specialist to this profile's own DB -- the
@@ -61,6 +110,34 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
     timezone_name = "Asia/Jerusalem"
     attendance_check_hour = 8
     response_window_hours = 1
+
+    @tool(
+        "update_vehicle_status",
+        "Updates one of the two canonical FIRE vehicles in the shared readiness store.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def update_vehicle_status(
+        self,
+        vehicle_id: str = "",
+        status: str = "",
+        current_location: str = "",
+        source_message_id: str = "",
+        updated_at: str = "",
+    ) -> str:
+        vehicle = vehicle_id.strip().upper()
+        if vehicle not in {"ASHED-3", "CARMEL-1"}:
+            return "The vehicle status was not stored: only ASHED-3 and CARMEL-1 are in the FIRE registry."
+        if not status.strip() or not current_location.strip():
+            return "The vehicle status was not stored: status and location are required."
+        try:
+            row = self.status_store.update_vehicle(
+                vehicle, status=status.strip(), current_location=current_location.strip(),
+                last_updated=updated_at.strip() or None,
+            )
+        except Exception as exc:
+            return f"The vehicle status was not stored: {exc}"
+        return f"{row['display_name']} status updated to {row['status']} at {row['current_location']}."
 
     @tool(
         "report_team_availability",
@@ -144,15 +221,20 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         text = original_text.strip() or f"crew shift status: {normalized}"
         stored = 0
         try:
-            # Ensure an active cycle exists for this shift
-            active_cycle = self.status_store.latest_cycle()
-            if not active_cycle:
+            # The FIRE shift cycle is explicit.  It must not accidentally use a
+            # scheduler-created attendance cycle from the host's current date.
+            cycle_key = f"shift-{now_iso.split('T')[0]}"
+            active_cycle = self.status_store.find_cycle(cycle_key)
+            if active_cycle is None:
                 self.status_store.open_cycle(
-                    cycle_key=f"shift-{now_iso.split('T')[0]}",
+                    cycle_key=cycle_key,
                     opened_at=now_iso,
                     deadline_at=(datetime.fromisoformat(now_iso) + timedelta(hours=12)).isoformat(),
                 )
-                
+                active_cycle = self.status_store.find_cycle(cycle_key)
+            if active_cycle is None:
+                return "The crew shift status was not stored: the shift attendance cycle could not be opened."
+
             for member in selected_members:
                 self.status_store.record_response(
                     telegram_identity=member["telegram_identity"],
@@ -160,6 +242,7 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
                     availability=normalized,
                     original_text=text,
                     received_at=now_iso,
+                    cycle_id=active_cycle["cycle_id"],
                 )
                 stored += 1
             for vehicle_id, display_name in (("ASHED-3", "Ashed 3"), ("CARMEL-1", "Carmel 1")):
@@ -177,6 +260,48 @@ class FirefightingExternalForcesAgent(FriendlyForcesAgent):
     and firefighting-aircraft dispatch, actions the base class's four tools (ambulance/police/
     firefighters/military) do not cover. dispatch_police/dispatch_ambulance are inherited unchanged
     for the police-cordon and casualty-adjacent needs elsewhere in the scenario."""
+
+    def __init__(self, model: str, api_key: str | None = None):
+        super().__init__(model, api_key)
+        self.operations_store = FirefightingOperationsStore(FIREFIGHTING_OPERATIONS_DB_PATH)
+
+    @tool(
+        "record_external_force_update",
+        "Persists an external-force report as reported, en_route, arrived, or debunked.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def record_external_force_update(
+        self,
+        force_id: str = "",
+        force_kind: str = "",
+        count: int = 0,
+        status: str = "reported",
+        location: str = "",
+        notes: str = "",
+        source_message_id: str = "",
+        event_id: str = "",
+        occurred_at: str = "",
+        received_at: str = "",
+        verification_status: str = "reported",
+        summary: str = "",
+        facts: dict | None = None,
+    ) -> str:
+        if not force_id.strip() or not source_message_id.strip():
+            return "The external-force update was not stored: force ID and source message ID are required."
+        self.operations_store.update_external_force(
+            force_id=force_id.strip(), force_kind=force_kind.strip() or "external_force",
+            count=count, status=status.strip() or "reported", location=location.strip() or "unknown",
+            notes=notes.strip() or summary.strip(), updated_at=occurred_at or received_at,
+        )
+        self.operations_store.record_incident_update(
+            source_message_id=source_message_id.strip(), event_id=event_id.strip(),
+            update_kind="external_force", summary=summary.strip() or notes.strip() or force_kind,
+            verification_status=verification_status.strip() or "reported",
+            facts=facts,
+            occurred_at=occurred_at, received_at=received_at,
+        )
+        return "External-force status recorded."
 
     @tool(
         "dispatch_water_tankers",
@@ -254,6 +379,20 @@ PROTOCOLS = [
         commander_only=True,
     ),
     Protocol(
+        name="update_vehicle_status",
+        description=(
+            "Applies when a FIRE report changes the operational status or location of ASHED-3 "
+            "or CARMEL-1, such as a vehicle leaving the station or arriving at an incident."
+        ),
+        participating_agents=("team_status_agent",),
+        approved_tools=("update_vehicle_status",),
+        expected_success_output="Confirmation that the canonical vehicle status was updated.",
+        criticality=CriticalityLevel.LOW,
+        approval_flag=False,
+        requires_confirmation=False,
+        commander_only=False,
+    ),
+    Protocol(
         name="report_crew_status",
         description=(
             "Applies when someone asks for a read-only picture of the firefighting crew's shift "
@@ -316,7 +455,7 @@ PROTOCOLS = [
             "itself (use dispatch_mutual_aid for that)."
         ),
         participating_agents=("surveillance_agent",),
-        approved_tools=(),
+        approved_tools=("record_fire_incident_update",),
         expected_success_output="Confirmation that the fire report was recorded and linked to the active incident.",
         criticality=CriticalityLevel.HIGH,
         approval_flag=False,
@@ -331,8 +470,8 @@ PROTOCOLS = [
             "Does not apply to an initial report of a new active fire (use report_fire_incident for that), "
             "and does not apply if an active resource dispatch is required (use dispatch_mutual_aid for that)."
         ),
-        participating_agents=("surveillance_agent",),
-        approved_tools=(),
+        participating_agents=("friendly_forces_agent",),
+        approved_tools=("record_external_force_update",),
         expected_success_output="Confirmation that the incident update was recorded in the operational log.",
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
@@ -560,7 +699,7 @@ SIMULATIONS = [
                 "text": _catalog_text("firefighting.simulation.fire002.phase2.step2.text"),
             },
             {
-                "step": 3, "chat": "fire_response_team", "sender_identity": "lahav_avi_shift_commander", "timestamp": "2026-09-09T12:30:00Z", "protocol_hint": "record_incident_update",
+                "step": 3, "chat": "fire_response_team", "sender_identity": "lahav_avi_shift_commander", "timestamp": "2026-09-09T12:30:00Z", "protocol_hint": "update_vehicle_status",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.lahav_avi_shift_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase2.step3.text"),
             },
@@ -739,6 +878,8 @@ def ensure_seed_data() -> None:
     and ensures the bot-service identity exists in the history DB.
     Mirrors `profiles.standby_squad.ensure_seed_data` in purpose.
     """
+
+    FirefightingOperationsStore(FIREFIGHTING_OPERATIONS_DB_PATH).ensure_initial_state()
 
     hist_store = open_persistence(DB_PATH)
     try:

@@ -165,6 +165,8 @@ class TeamStatusAgent(Agent):
         reason: str = "",
         unavailable_days: int = 0,
         received_at: str = "",
+        unavailable_until: str = "",
+        cycle_id: str = "",
     ) -> str:
         telegram_identity = get_authenticated_request_identity()
         if not telegram_identity:
@@ -184,12 +186,12 @@ class TeamStatusAgent(Agent):
             return "Clarification required: specify whether the member is available or unavailable."
         if normalized == "unavailable" and not reason.strip():
             return "Clarification required: an unavailable member must provide a reason."
-        if normalized == "unavailable" and unavailable_days < 1:
+        if normalized == "unavailable" and unavailable_days < 1 and not unavailable_until.strip():
             return "Clarification required: specify how many days the member will be unavailable."
 
-        unavailable_until = None
-        if normalized == "unavailable":
-            unavailable_until = (now + timedelta(days=unavailable_days)).isoformat()
+        explicit_until = unavailable_until.strip() or None
+        if normalized == "unavailable" and explicit_until is None:
+            explicit_until = (now + timedelta(days=unavailable_days)).isoformat()
 
         try:
             response = self.status_store.record_response(
@@ -199,7 +201,8 @@ class TeamStatusAgent(Agent):
                 original_text=original_text,
                 received_at=now.isoformat(),
                 reason=reason or None,
-                unavailable_until=unavailable_until,
+                unavailable_until=explicit_until,
+                cycle_id=cycle_id.strip() or None,
             )
         except TeamStatusPersistenceError as exc:
             return f"The attendance response was not stored: {exc}"

@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS events (
     precedent_closed_by_event_id TEXT,
 
     insight_text TEXT,
+    user_response TEXT,
     outcome TEXT,
     outcome_failure_reason TEXT,
 
@@ -275,6 +276,7 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "ALTER TABLE events ADD COLUMN absence_reason TEXT;",
     ),
     (21, "add simulation provenance to events", "ALTER TABLE events ADD COLUMN simulation_context TEXT;"),
+    (22, "add dedicated user response to events", "ALTER TABLE events ADD COLUMN user_response TEXT;"),
 ]
 
 
@@ -328,6 +330,10 @@ def run_migrations(db_path: str) -> None:
                 columns = {row[1] for row in connection.execute("PRAGMA table_info(events)").fetchall()}
                 if "simulation_context" not in columns:
                     connection.execute("ALTER TABLE events ADD COLUMN simulation_context TEXT")
+            elif version == 22:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(events)").fetchall()}
+                if columns and "user_response" not in columns:
+                    connection.execute("ALTER TABLE events ADD COLUMN user_response TEXT")
             elif version == 20:
                 columns = {row[1] for row in connection.execute("PRAGMA table_info(events)").fetchall()}
                 if columns:  # the events table may not exist yet in a partial/synthetic fixture database

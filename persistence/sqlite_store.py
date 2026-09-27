@@ -56,6 +56,7 @@ _EVENT_COLUMNS = (
     "precedent_matched_event_ids",
     "precedent_closed_by_event_id",
     "insight_text",
+    "user_response",
     "outcome",
     "outcome_failure_reason",
     "availability_start",

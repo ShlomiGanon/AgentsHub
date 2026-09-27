@@ -458,7 +458,10 @@ SIMULATOR_BODY = """
     state.chatsByKey = parsed.chatsByKey;
     state.queues = {};
     state.busy = false;
-    state.runId = parsed.scenario.run_id || Date.now().toString(36);
+    // The fixture's run_id identifies the scenario lineage, not one execution.
+    // Give every load a fresh execution suffix so a new run cannot collide with
+    // the previous run's source-message idempotency keys.
+    state.runId = (parsed.scenario.run_id || 'simulation') + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
     parsed.chats.forEach(function (chat) { state.queues[chat.key] = []; });
     parsed.steps.forEach(function (step) { state.queues[step.chat].push(step); });
 
@@ -701,7 +704,9 @@ SIMULATOR_BODY = """
   }
 
   function jobBodyText(job) {
+    if (job.user_response) return job.user_response;
     const parts = [];
+    if (job.simulation_context === 'FIRE_SIMULATION') return '';
     if (job.insight_text) parts.push(job.insight_text);
     if (job.question) parts.push(job.question);
     if (job.detail) parts.push(job.detail);

@@ -182,6 +182,20 @@ def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None
         "record_crew_availability_response", "report_crew_status", "dispatch_drone_to_incident",
         "report_fire_incident", "dispatch_mutual_aid",
     }
+    fire_simulation_protocols = {
+        "record_crew_availability_response", "record_crew_shift_status", "update_vehicle_status",
+        "update_camera_observation", "report_fire_incident", "record_incident_update",
+        "dispatch_drone_to_incident", "overall_situational_picture", "query_historical_incidents",
+    }
+    if result.simulation_context == "FIRE_SIMULATION" and result.protocol_name in fire_simulation_protocols:
+        lines = [format_header("result", messages)]
+        if result.failure_reason:
+            lines.append(_short_failure_reason(result.failure_reason))
+        elif result.user_response:
+            lines.append(result.user_response.strip())
+        else:
+            lines.append(messages.text("result.verdict", outcome=_outcome_word(result.outcome, messages)))
+        return "\n".join(lines)
     if result.protocol_name in surveillance_protocols:
         lines = [
             format_header("result", messages),

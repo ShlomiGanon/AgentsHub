@@ -210,6 +210,19 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def reset_operational_state(self, *, now_iso: str | None = None) -> None:
+        """Reset current attendance/vehicle state while retaining the approved roster."""
+
+        now = now_iso or _utc_now()
+        _parse_timestamp(now)
+        with self._connect() as connection:
+            connection.execute("DELETE FROM attendance_responses")
+            connection.execute("DELETE FROM attendance_cycles")
+            connection.execute(
+                "UPDATE team_vehicles SET status = 'available', current_location = 'fire_station', last_updated = ?",
+                (now,),
+            )
+
     def open_cycle(self, cycle_key: str, opened_at: str, deadline_at: str) -> AttendanceCycle:
         if not self.roster_is_approved():
             raise TeamStatusPersistenceError("the commander must approve the roster before attendance checks begin")
@@ -240,6 +253,14 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             ).fetchone()
         return dict(row) if row is not None else None
 
+    def find_cycle(self, cycle_key: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT cycle_id, cycle_key, opened_at, deadline_at FROM attendance_cycles WHERE cycle_key = ?",
+                (cycle_key,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
     def record_response(
         self,
         *,
@@ -250,6 +271,7 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         received_at: str,
         reason: str | None = None,
         unavailable_until: str | None = None,
+        cycle_id: str | None = None,
     ) -> dict:
         if availability not in {"available", "unavailable"}:
             raise TeamStatusPersistenceError("availability must be 'available' or 'unavailable'")
@@ -261,7 +283,15 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         if unavailable_until is not None and _parse_timestamp(unavailable_until) <= received:
             raise TeamStatusPersistenceError("unavailable_until must be after received_at")
 
-        cycle = self.latest_cycle()
+        cycle = None
+        if cycle_id:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT cycle_id, cycle_key, opened_at, deadline_at FROM attendance_cycles WHERE cycle_id = ?",
+                    (cycle_id,),
+                ).fetchone()
+            cycle = dict(row) if row is not None else None
+        cycle = cycle or self.latest_cycle()
         if cycle is None:
             raise TeamStatusPersistenceError("no attendance cycle is open")
         deadline = _parse_timestamp(cycle["deadline_at"])
@@ -350,9 +380,17 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def availability_snapshot(self, as_of: str) -> list[dict]:
+    def availability_snapshot(self, as_of: str, *, cycle_id: str | None = None) -> list[dict]:
         instant = _parse_timestamp(as_of)
-        cycle = self.latest_cycle()
+        cycle = None
+        if cycle_id:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT cycle_id, cycle_key, opened_at, deadline_at FROM attendance_cycles WHERE cycle_id = ?",
+                    (cycle_id,),
+                ).fetchone()
+            cycle = dict(row) if row is not None else None
+        cycle = cycle or self.latest_cycle()
         members = self.list_members()
         snapshot: list[dict] = []
         with self._connect() as connection:
@@ -361,9 +399,10 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
                     """
                     SELECT * FROM attendance_responses
                     WHERE telegram_identity = ? AND approval_status = 'accepted'
+                    AND (? IS NULL OR cycle_id = ?)
                     ORDER BY received_at DESC LIMIT 1
                     """,
-                    (member["telegram_identity"],),
+                    (member["telegram_identity"], cycle["cycle_id"] if cycle else None, cycle["cycle_id"] if cycle else None),
                 ).fetchone()
                 entry = {
                     "telegram_identity": member["telegram_identity"],

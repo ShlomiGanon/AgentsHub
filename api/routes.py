@@ -48,6 +48,7 @@ from orchestrator.flows import (
     begin_request,
     classify_intent,
     build_situational_picture,
+    build_fire_situational_picture,
     plan_message,
     protocol_requires_approval,
     WorkItem,
@@ -75,9 +76,12 @@ def _now() -> str:
 SIMULATION_REPORT_PROTOCOLS = frozenset({
     "record_crew_shift_status",
     "record_crew_availability_response",
+    "update_vehicle_status",
     "update_camera_observation",
     "report_fire_incident",
     "record_incident_update",
+    "overall_situational_picture",
+    "query_historical_incidents",
 })
 
 
@@ -646,10 +650,12 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 ),
                 reservation,
             )
-            _remember("assistant", messages.text("api.queued_report_debug", task_id=event_id), event_id)
+            queued_key = "api.queued_report" if simulation_context == "FIRE_SIMULATION" else "api.queued_report_debug"
+            queued_text = messages.text(queued_key, task_id=event_id) if queued_key.endswith("debug") else messages.text(queued_key)
+            _remember("assistant", queued_text, event_id)
             return jsonify({
                 "taken_as": "report", "event_id": event_id, "status": "queued",
-                "answer": _queued_answer_text(messages, "report", event_id),
+                "answer": messages.text("api.queued_report") if simulation_context == "FIRE_SIMULATION" else _queued_answer_text(messages, "report", event_id),
             }), 202
 
         if matched_protocol is not None:
@@ -711,6 +717,12 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     answer = f"\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05e9\u05dc\u05d9\u05e4\u05ea \u05d4\u05d9\u05e1\u05d8\u05d5\u05e8\u05d9\u05d4: {exc}"
                 _remember("assistant", answer)
                 return jsonify({"taken_as": "question", "answer": answer, "protocol": matched_protocol.name})
+
+            if matched_protocol.name == SITUATIONAL_PICTURE_PROTOCOL and hasattr(ctx.deps.registry.get("surveillance_agent"), "operations_store"):
+                require(level, RequestedOperation.ASK_QUESTION)
+                picture_text = build_fire_situational_picture(ctx.deps.registry, str(text))
+                _remember("assistant", picture_text)
+                return jsonify({"taken_as": "question", "answer": picture_text, "protocol": matched_protocol.name})
 
             if len(matched_protocol.participating_agents) > 1:
                 # A multi-domain, read-only picture: the Main Agent decides what to ask each
@@ -1920,6 +1932,7 @@ def _job_payload(ctx: "ApiContext", event_id: str) -> dict:
         "job_id": event_id,
         "outcome": event["outcome"],
         "insight_text": event.get("insight_text") or "",
+        "user_response": event.get("user_response") or "",
         "steps_completed": _steps_completed(event),
         "failure_reason": event.get("outcome_failure_reason"),
         "failed_step_agent_name": _failed_step_agent_name(event),
@@ -1929,6 +1942,7 @@ def _job_payload(ctx: "ApiContext", event_id: str) -> dict:
         "protocol_name": event.get("selected_protocol"),
         "risk_level": event.get("risk_level"),
         "protocol_reason": event.get("protocol_reason"),
+        "simulation_context": event.get("simulation_context"),
     }
 
 

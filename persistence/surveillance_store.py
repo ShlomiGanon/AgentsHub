@@ -193,6 +193,24 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
             updated = conn.execute("SELECT * FROM cameras WHERE camera_id = ?", (camera_id.strip(),)).fetchone()
             return dict(updated)
 
+    def reset_operational_state(self, *, now_iso: str | None = None) -> None:
+        """Reset current FIRE demo assets without deleting mission history."""
+
+        now = now_iso or _utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE cameras SET status = 'active', feed_summary = ?, last_updated = ? WHERE camera_id IN ('CAM-01', 'CAM-02', 'CAM-03')",
+                ("FIRE simulation reset: feed available.", now),
+            )
+            conn.execute(
+                "UPDATE drone_missions SET status = 'aborted', notes = 'superseded by a new FIRE simulation run', updated_at = ? WHERE status IN ('dispatched', 'en_route', 'on_station')",
+                (now,),
+            )
+            conn.execute(
+                "UPDATE drones SET status = 'ready', current_area = 'fire_station', assigned_mission_id = NULL, last_updated = ? WHERE drone_id IN ('DRONE-01', 'DRONE-02')",
+                (now,),
+            )
+
     def list_drones(self, status: str | None = None) -> list[dict]:
         query = "SELECT * FROM drones WHERE 1=1"
         params: list[object] = []

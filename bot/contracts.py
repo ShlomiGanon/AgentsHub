@@ -150,6 +150,8 @@ class JobResult:
     protocol_name: str | None = None
     risk_level: str | None = None
     protocol_reason: str | None = None
+    simulation_context: str | None = None
+    user_response: str = ""
 
 
 @dataclass(frozen=True)

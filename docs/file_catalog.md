@@ -130,6 +130,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `orchestrator/__init__.py` | Production | Public facade | Exposes orchestration capabilities and compatibility module aliases. |
 | `orchestrator/capabilities.py` | Production | Private implementation | Builds the role-aware, per-caller Main Agent capability and system context. |
 | `orchestrator/event_queue.py` | Production | Private implementation | Serializes event processing on a dedicated worker. |
+| `orchestrator/firefighting_picture.py` | Production | Private implementation | Reads the current FIRE operational stores on every request and composes a Hebrew situational picture. |
 | `orchestrator/flows.py` | Production | Private implementation | Coordinates report, request, hold-resume, protocol, and outcome workflows. |
 | `orchestrator/group_routing.py` | Production | Private implementation | Holds the in-memory, DB-backed Telegram group to agent routing table and scopes flow dependencies per group. |
 | `orchestrator/holds.py` | Production | Private implementation | Creates and resolves clarification and approval holds. |
@@ -137,6 +138,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `orchestrator/situational_picture.py` | Production | Private implementation | Builds the multi-domain situational picture at request time: the Main Agent plans one live question per specialist, gathers their answers and the recent event log concurrently, and composes the picture from those findings only. |
 | `persistence/__init__.py` | Production | Public facade | Exposes persistence contracts, constructors, and compatibility aliases. |
 | `persistence/contracts.py` | Production | Private implementation | Defines persistence interfaces and domain errors. |
+| `persistence/firefighting_operations.py` | Production | Private implementation | Stores the FIRE incident, external-force, and append-only operational update state. |
 | `persistence/schema.py` | Production | Private implementation | Owns immutable migration DDL and the current SQLite schema. |
 | `persistence/sqlite_store.py` | Production | Private implementation | Implements serialized SQLite persistence, transactions, and row conversion. |
 | `persistence/surveillance_contracts.py` | Production | Private implementation | Defines camera, drone, and surveillance-mission persistence contracts. |
@@ -199,6 +201,8 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_cli_group_admin.py` | Test | Internal | Verifies the Telegram group routing administration command. |
 | `tests/test_environment_config.py` | Test | Internal | Verifies environment-backed model and runtime configuration. |
 | `tests/test_file_catalog.py` | Test | Internal | Ensures this catalog exactly matches the first-party repository tree. |
+| `tests/test_firefighting_demo_acceptance.py` | Test | Internal | Exercises the complete FIRE_002 stateful demo path and fresh situational-picture responses. |
+| `tests/test_firefighting_simulator_e2e.py` | Test | Internal | Drives a FIRE message through the real simulator handler, HTTP API, worker queue, and notification reply. |
 | `tests/test_friendly_forces_agent.py` | Test | Internal | Verifies friendly forces agent dispatch tools and coordination records. |
 | `tests/test_firefighting_external_forces_agent.py` | Test | Internal | Verifies FirefightingExternalForcesAgent's two new mutual-aid tools (docs/Profile_Split_Plan.md). |
 | `tests/test_group_routing.py` | Test | Internal | Verifies the group routing table, staleness refresh, scope resolution, and dependency scoping. |

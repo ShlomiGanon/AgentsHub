@@ -434,9 +434,14 @@ class HttpApiClient(BotApiClient):
             job_id=job_id,
             outcome=outcome,
             insight_text=response_payload.get("insight_text", ""),
+            user_response=response_payload.get("user_response", ""),
             steps_completed=tuple(response_payload.get("steps_completed", ())),
             failure_reason=response_payload.get("detail") if outcome == "failed" else None,
             failed_step_agent_name=response_payload.get("failed_step_agent_name"),
+            protocol_name=response_payload.get("protocol_name"),
+            risk_level=response_payload.get("risk_level"),
+            protocol_reason=response_payload.get("protocol_reason"),
+            simulation_context=response_payload.get("simulation_context"),
         )
 
     async def poll_pending_notifications(self, since: int, wait_seconds: int = 0) -> tuple[tuple[BotNotification, ...], int]:
@@ -534,13 +539,15 @@ class HttpApiClient(BotApiClient):
                 job_id=payload["job_id"],
                 outcome=payload["outcome"],
                 insight_text=payload.get("insight_text", ""),
+                user_response=payload.get("user_response", ""),
                 steps_completed=tuple(payload.get("steps_completed", ())),
                 failure_reason=payload.get("failure_reason"),
                 failed_step_agent_name=payload.get("failed_step_agent_name"),
-                protocol_name=payload.get("protocol_name"),
-                risk_level=payload.get("risk_level"),
-                protocol_reason=payload.get("protocol_reason"),
-            )
+            protocol_name=payload.get("protocol_name"),
+            risk_level=payload.get("risk_level"),
+            protocol_reason=payload.get("protocol_reason"),
+            simulation_context=payload.get("simulation_context"),
+        )
         if kind == "job_failed":
             return FailureNotice(
                 event_id=payload["job_id"],
