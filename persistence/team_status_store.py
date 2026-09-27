@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS attendance_responses (
     telegram_identity TEXT NOT NULL REFERENCES team_members(telegram_identity),
     availability TEXT NOT NULL CHECK (availability IN ('available', 'unavailable')),
     reason TEXT,
+    unavailable_from TEXT,
     unavailable_until TEXT,
     original_text TEXT NOT NULL,
     received_at TEXT NOT NULL,
@@ -101,6 +102,11 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(_SCHEMA)
+            response_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(attendance_responses)").fetchall()
+            }
+            if "unavailable_from" not in response_columns:
+                connection.execute("ALTER TABLE attendance_responses ADD COLUMN unavailable_from TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path, timeout=30)
@@ -285,6 +291,7 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         original_text: str,
         received_at: str,
         reason: str | None = None,
+        unavailable_from: str | None = None,
         unavailable_until: str | None = None,
         cycle_id: str | None = None,
     ) -> dict:
@@ -292,11 +299,16 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             raise TeamStatusPersistenceError("availability must be 'available' or 'unavailable'")
         if availability == "unavailable" and not (reason or "").strip():
             raise TeamStatusPersistenceError("an unavailable response requires a reason")
-        if availability == "available" and (reason is not None or unavailable_until is not None):
-            raise TeamStatusPersistenceError("an available response cannot include an unavailable reason or end time")
+        if availability == "available" and (reason is not None or unavailable_from is not None or unavailable_until is not None):
+            raise TeamStatusPersistenceError("an available response cannot include an unavailable period")
         received = _parse_timestamp(received_at)
+        if unavailable_from is not None:
+            _parse_timestamp(unavailable_from)
         if unavailable_until is not None and _parse_timestamp(unavailable_until) <= received:
             raise TeamStatusPersistenceError("unavailable_until must be after received_at")
+        if unavailable_from is not None and unavailable_until is not None:
+            if _parse_timestamp(unavailable_until) <= _parse_timestamp(unavailable_from):
+                raise TeamStatusPersistenceError("unavailable_until must be after unavailable_from")
 
         cycle = None
         if cycle_id:
@@ -325,9 +337,9 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
                     """
                     INSERT INTO attendance_responses(
                         response_id, source_message_id, cycle_id, telegram_identity,
-                        availability, reason, unavailable_until, original_text,
+                        availability, reason, unavailable_from, unavailable_until, original_text,
                         received_at, approval_status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         response_id,
@@ -336,6 +348,7 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
                         telegram_identity,
                         availability,
                         reason.strip() if reason else None,
+                        unavailable_from,
                         unavailable_until,
                         original_text,
                         received_at,
@@ -409,6 +422,7 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
 
     def availability_snapshot(self, as_of: str, *, cycle_id: str | None = None) -> list[dict]:
         instant = _parse_timestamp(as_of)
+        explicit_cycle = cycle_id is not None
         cycle = None
         if cycle_id:
             with self._connect() as connection:
@@ -422,35 +436,60 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         snapshot: list[dict] = []
         with self._connect() as connection:
             for member in members:
-                accepted = connection.execute(
+                accepted_rows = connection.execute(
                     """
                     SELECT * FROM attendance_responses
                     WHERE telegram_identity = ? AND approval_status = 'accepted'
-                    AND (? IS NULL OR cycle_id = ?)
-                    ORDER BY received_at DESC LIMIT 1
+                    ORDER BY received_at DESC
                     """,
-                    (member["telegram_identity"], cycle["cycle_id"] if cycle else None, cycle["cycle_id"] if cycle else None),
-                ).fetchone()
+                    (member["telegram_identity"],),
+                ).fetchall()
                 entry = {
                     "telegram_identity": member["telegram_identity"],
                     "full_name": member["full_name"],
                     "availability": "awaiting_response",
                     "reason": None,
+                    "unavailable_from": None,
                     "unavailable_until": None,
                     "original_text": None,
                     "received_at": None,
                 }
-                if accepted is not None:
-                    response = dict(accepted)
-                    active_unavailability = (
-                        response["availability"] == "unavailable"
-                        and response["unavailable_until"] is not None
-                        and _parse_timestamp(response["unavailable_until"]) > instant
+                if accepted_rows:
+                    rows = [dict(row) for row in accepted_rows]
+                    response = next(
+                        (row for row in rows if cycle is not None and row["cycle_id"] == cycle["cycle_id"]),
+                        None,
                     )
-                    belongs_to_current_cycle = cycle is not None and response["cycle_id"] == cycle["cycle_id"]
-                    if active_unavailability or belongs_to_current_cycle:
+                    if response is None and not explicit_cycle:
+                        response = next(
+                            (
+                                row for row in rows
+                                if row["availability"] == "unavailable"
+                                and row["unavailable_until"]
+                                and _parse_timestamp(row["unavailable_until"]) > instant
+                            ),
+                            None,
+                        )
+                    if response is not None:
                         entry.update({key: response[key] for key in (
-                            "availability", "reason", "unavailable_until", "original_text", "received_at"
+                            "availability", "reason", "unavailable_from", "unavailable_until", "original_text", "received_at"
                         )})
+                        if response["availability"] == "unavailable":
+                            start = _parse_timestamp(response["unavailable_from"]) if response["unavailable_from"] else None
+                            end = _parse_timestamp(response["unavailable_until"]) if response["unavailable_until"] else None
+                            if end is not None and instant >= end and explicit_cycle:
+                                entry["availability"] = "planned_return"
+                            elif start is not None and instant < start:
+                                previous_available = next(
+                                    (dict(row) for row in accepted_rows[1:] if row["availability"] == "available"),
+                                    None,
+                                )
+                                if previous_available is not None:
+                                    entry["availability"] = "available"
+                                    entry["opening_text"] = previous_available["original_text"]
+                                else:
+                                    entry["availability"] = "awaiting_response"
+                            elif end is None or instant < end:
+                                entry["availability"] = "unavailable"
                 snapshot.append(entry)
         return snapshot

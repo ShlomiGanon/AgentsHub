@@ -1,9 +1,4 @@
-"""Fresh, source-aware FIRE situational-picture composition.
-
-Every call reads the current profile stores.  The answer is assembled from the
-stored state and current-run updates; it is not a scenario-step response and it
-never reuses a previously rendered picture.
-"""
+"""Fresh FIRE status from the existing specialist stores."""
 
 from __future__ import annotations
 
@@ -14,36 +9,7 @@ from zoneinfo import ZoneInfo
 from messages import get_catalog
 
 
-def _catalog(language: str = "he"):
-    return get_catalog(language)
-
-
-def _label(catalog, key: str, fallback: str = "") -> str:
-    try:
-        return catalog.text(key)
-    except Exception:
-        return fallback or key.rsplit(".", 1)[-1]
-
-
-def _status(catalog, value: str | None) -> str:
-    return _label(catalog, f"fire.picture.status.{(value or '').strip().lower() or 'unknown'}")
-
-
-def _area(catalog, value: str | None) -> str:
-    return _label(catalog, f"fire.picture.area.{(value or '').strip().lower() or 'unknown'}")
-
-
-def _vehicle_name(catalog, vehicle: dict) -> str:
-    vehicle_id = str(vehicle.get("vehicle_id") or "").upper()
-    key = {
-        "ASHED-3": "fire.picture.vehicle.ashed_3",
-        "CARMEL-1": "fire.picture.vehicle.carmel_1",
-    }.get(vehicle_id)
-    return _label(catalog, key, vehicle.get("display_name", vehicle_id)) if key else vehicle.get("display_name", vehicle_id)
-
-
-def _force_name(catalog, force_id: str) -> str:
-    return _label(catalog, f"fire.picture.force.{force_id}", force_id)
+JERUSALEM = ZoneInfo("Asia/Jerusalem")
 
 
 def _parse(value: str | None) -> datetime | None:
@@ -53,82 +19,100 @@ def _parse(value: str | None) -> datetime | None:
         parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return None
-    return (parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
-def _fresh_shift_snapshot(team_agent, as_of_iso: str) -> tuple[list[dict], dict | None, list[dict]]:
-    """Select the FIRE shift cycle, never an unrelated scheduler cycle."""
+def _label(catalog, prefix: str, value: str | None) -> str:
+    key = f"{prefix}.{(value or '').strip().lower() or 'unknown'}"
+    try:
+        return catalog.text(key)
+    except Exception:
+        return value or catalog.text("fire.picture.unknown")
+
+
+def _local_time(value: str | None) -> str:
+    parsed = _parse(value)
+    return parsed.astimezone(JERUSALEM).strftime("%H:%M") if parsed else "לא ידועה"
+
+
+def _shift_snapshot(team_agent, as_of_iso: str) -> tuple[list[dict], dict | None, list[dict]]:
     store = team_agent.status_store
     as_of = _parse(as_of_iso) or datetime.now(timezone.utc)
-    expected_key = f"shift-{as_of.date().isoformat()}"
-    cycle = store.find_cycle(expected_key)
-    if cycle is None:
-        cycle = next(
-            (item for item in store.list_cycles() if str(item.get("cycle_key", "")).startswith("shift-")),
-            None,
-        )
+    cycle_key = f"shift-{as_of.astimezone(JERUSALEM).date().isoformat()}"
+    cycle = store.find_cycle(cycle_key)
     if cycle is None:
         return [], None, []
-    return (
-        store.availability_snapshot(as_of.isoformat(), cycle_id=cycle["cycle_id"]),
-        cycle,
-        store.list_responses(cycle_id=cycle["cycle_id"]),
-    )
+    responses = [
+        response for response in store.list_responses(cycle_id=cycle["cycle_id"])
+        if response.get("approval_status") == "accepted"
+    ]
+    return store.availability_snapshot(as_of.isoformat(), cycle_id=cycle["cycle_id"]), cycle, responses
 
 
-def _facts(update: dict) -> dict:
+def _run_updates(operations_store, run_started: datetime | None) -> list[dict]:
+    updates = operations_store.list_updates()
+    if run_started is not None:
+        updates = [
+            update for update in updates
+            if (_parse(update.get("received_at")) or datetime.min.replace(tzinfo=timezone.utc)) >= run_started
+        ]
+    return updates
+
+
+def _source(update: dict, facts: dict, force_by_id: dict, catalog) -> str:
+    if facts.get("reported_by"):
+        return str(facts["reported_by"])
+    force = force_by_id.get(facts.get("force_id"))
+    if force:
+        return _label(catalog, "fire.picture.force", force["force_id"])
+    return "דיווח שטח"
+
+
+def _format_update(update: dict, force_by_id: dict, catalog) -> str:
     try:
-        value = json.loads(update.get("facts_json") or "{}")
+        facts = json.loads(update.get("facts_json") or "{}")
     except (TypeError, ValueError):
-        value = {}
-    return value if isinstance(value, dict) else {}
+        facts = {}
+    source = _source(update, facts, force_by_id, catalog)
+    verification = _label(catalog, "fire.picture.status", update.get("verification_status"))
+    summary = str(update.get("summary") or "").strip()
+    return catalog.text("fire.picture.change_line", source=source, summary=summary, verification=verification)
 
 
-def _current_run_updates(updates: list[dict], run_started: datetime | None) -> list[dict]:
-    if run_started is None:
-        return updates
-    # Receipt time is the execution boundary.  Scenario timestamps repeat when
-    # the demo is rerun, so filtering by occurred_at would leak the old run.
-    return [item for item in updates if (_parse(item.get("received_at")) or datetime.min.replace(tzinfo=timezone.utc)) >= run_started]
-
-
-def _dedupe_updates(updates: list[dict]) -> list[dict]:
-    """Collapse the incident mirror of an external-force report."""
-    chosen: dict[str, dict] = {}
-    for item in updates:
-        source = str(item.get("source_message_id") or item.get("update_id") or "")
-        base = source.removesuffix(":incident")
-        previous = chosen.get(base)
-        if previous is None or item.get("update_kind") == "external_force":
-            chosen[base] = item
-    return list(chosen.values())
+def _section(catalog, title_key: str, lines: list[str]) -> list[str]:
+    return [f"{catalog.text(title_key)}:", *(f"• {line}" for line in lines)] if lines else []
 
 
 def build_fire_situational_picture(registry, request_text: str = "", *, as_of_iso: str = "") -> str:
-    """Read every current FIRE source and return one operational Hebrew answer."""
-
-    del request_text  # The same fresh cross-source read serves text and button requests.
-    catalog = _catalog("he")
+    """Read the current FIRE stores and compose a source-aware Hebrew answer."""
+    catalog = get_catalog("he")
+    normalized_request = request_text.casefold()
+    asks_crew_or_vehicles = any(term in normalized_request for term in ("סד\"כ", "כוח", "כוחות", "צוות", "רכב", "רכבים"))
+    asks_other_context = any(
+        term in normalized_request
+        for term in ("אש", "שריפה", "מצלמ", "רחפ", "חוץ", "כוננות", "תצפית", "חומס", "לא אומת", "סיכון", "אירוע", "דחוף", "שרב")
+    )
+    crew_vehicle_only = asks_crew_or_vehicles and not asks_other_context
     surveillance = registry.get("surveillance_agent")
-    team = registry.get("team_status_agent")
-    external_agent = registry.get("friendly_forces_agent")
-    as_of = as_of_iso or datetime.now(timezone.utc).isoformat()
+    team_agent = registry.get("team_status_agent")
+    operations = surveillance.operations_store
+    as_of = _parse(as_of_iso) or datetime.now(timezone.utc)
+    run_started = _parse((operations.get_incident() or {}).get("run_started_at"))
 
-    cameras = list(surveillance.surveillance_store.list_cameras())
-    drones = list(surveillance.surveillance_store.list_drones())
-    missions = list(surveillance.surveillance_store.get_active_missions())
-    incident = surveillance.operations_store.get_incident()
-    updates = list(surveillance.operations_store.list_updates())
-    updates += list(external_agent.operations_store.list_updates())
-    forces = list(surveillance.operations_store.list_external_forces())
-    forces += list(external_agent.operations_store.list_external_forces())
-
-    run_started = _parse((incident or {}).get("run_started_at"))
-    updates = _dedupe_updates(_current_run_updates(updates, run_started))
-    force_by_id = {item.get("force_id"): item for item in forces}
-    forces = list(force_by_id.values())
-    crew, cycle, responses = _fresh_shift_snapshot(team, as_of)
-    vehicles = list(team.status_store.list_vehicles())
+    cameras = surveillance.surveillance_store.list_cameras()
+    drones = surveillance.surveillance_store.list_drones()
+    missions = surveillance.surveillance_store.get_active_missions()
+    updates = _run_updates(operations, run_started) if not crew_vehicle_only else []
+    forces = (
+        {row["force_id"]: row for row in operations.list_external_forces()}
+        if not crew_vehicle_only else {}
+    )
+    if crew_vehicle_only:
+        cameras, drones, missions = [], [], []
+    crew, cycle, responses = _shift_snapshot(team_agent, as_of.isoformat())
+    vehicles = team_agent.status_store.list_vehicles()
 
     current: list[str] = []
     changes: list[str] = []
@@ -137,157 +121,202 @@ def build_fire_situational_picture(registry, request_text: str = "", *, as_of_is
     conclusions: list[str] = []
     recommendations: list[str] = []
 
-    latest_incident_update = max(
-        (item for item in updates if item.get("update_kind") == "fire_incident"),
-        key=lambda item: item.get("received_at", ""),
-        default=None,
+    local_as_of = as_of.astimezone(JERUSALEM)
+    current.append(catalog.text("fire.picture.as_of", date=local_as_of.strftime("%d.%m.%Y"), time=local_as_of.strftime("%H:%M")))
+
+    incident_updates = [row for row in updates if row.get("update_kind") == "fire_incident"]
+    incident_states = {
+        row["incident_id"]: row for row in operations.list_incidents()
+        if row.get("incident_id") != "EVT-FIRE-444-BRUSH"
+        and (run_started is None or (_parse(row.get("run_started_at")) or datetime.min.replace(tzinfo=timezone.utc)) >= run_started)
+    }
+    for update in incident_updates:
+        try:
+            facts = json.loads(update.get("facts_json") or "{}")
+        except (TypeError, ValueError):
+            facts = {}
+        state = incident_states.get(update.get("incident_id"), {})
+        source = _source(update, facts, forces, catalog)
+        current.append(catalog.text(
+            "fire.picture.incident", source=source,
+            status=_label(catalog, "fire.picture.status", state.get("status")),
+            area=_label(catalog, "fire.picture.area", facts.get("reported_area")),
+            spread=_label(catalog, "fire.picture.status", facts.get("spread_status")),
+            hazard=_label(catalog, "fire.picture.status", facts.get("hazard_status")),
+            verification=_label(catalog, "fire.picture.status", update.get("verification_status")),
+        ))
+        direction = facts.get("reported_direction")
+        if direction:
+            current.append(catalog.text("fire.picture.direction", area=_label(catalog, "fire.picture.area", direction)))
+        changes.append(_format_update(update, forces, catalog))
+        if update.get("verification_status") in {"reported", "unverified"}:
+            risks.append(f"דיווח האש של {source} טרם אומת במקור נוסף.")
+            recommendations.append(catalog.text("fire.picture.recommendation.verify"))
+    if not incident_updates and not forces and not crew_vehicle_only:
+        gaps.append("לא נשמר דיווח אש בריצה הנוכחית.")
+
+    asks_exact_location = (
+        ("מדויק" in request_text and any(term in request_text for term in ("מיקום", "נקודה", "איפה")))
+        or "קואורדינט" in request_text
     )
-    incident_verification = (latest_incident_update or {}).get("verification_status") or "reported"
-    if incident:
-        current.append(catalog.text(
-            "fire.picture.incident",
-            status=_status(catalog, incident.get("status")),
-            area=_area(catalog, incident.get("area")),
-            spread=_status(catalog, incident.get("spread_status")),
-            hazard=_status(catalog, incident.get("hazard_status")),
-            verification=_status(catalog, incident_verification),
-        ))
-    else:
-        gaps.append(catalog.text("fire.picture.gap.no_incident"))
+    if asks_exact_location:
+        current.append(catalog.text("fire.picture.location.precise_unknown"))
 
-    active_cameras = sum(1 for camera in cameras if camera.get("status") == "active")
     if cameras:
+        active_cameras = sum(camera.get("status") == "active" for camera in cameras)
         current.append(catalog.text("fire.picture.cameras", active=active_cameras, total=len(cameras)))
+        cycle_opened = _parse((cycle or {}).get("opened_at"))
         for camera in cameras:
-            camera_id = camera.get("camera_id", "")
-            status = camera.get("status")
-            summary = str(camera.get("feed_summary") or "")
-            if camera_id == "CAM-01" and "\u05d7\u05d5\u05dd" in summary:
-                current.append(catalog.text("fire.picture.camera_heat"))
-                changes.append(catalog.text("fire.picture.change.camera_heat"))
-                conclusions.append(catalog.text("fire.picture.conclusion.no_link"))
-            elif camera_id == "CAM-02" and status in {"offline", "degraded"}:
-                current.append(catalog.text("fire.picture.camera_degraded", camera=camera_id, status=_status(catalog, status)))
-                changes.append(catalog.text("fire.picture.change.camera_degraded", camera=camera_id))
-                risks.append(catalog.text("fire.picture.risk.camera", camera=camera_id, status=_status(catalog, status)))
-                gaps.append(catalog.text("fire.picture.gap.camera_coverage", camera=camera_id))
+            summary = str(camera.get("feed_summary") or "").strip()
+            is_reset = summary.startswith("FIRE simulation reset:")
+            area = _label(catalog, "fire.picture.area", camera.get("area"))
+            observation = summary if summary and not is_reset else "לא התקבל עדכון תצפית נוסף."
+            if "\u05d7\u05d5\u05dd" in summary and "\u05e0\u05de\u05d5\u05db\u05d4" in summary:
+                observation += " " + catalog.text("fire.picture.camera_heat")
+            current.append(catalog.text(
+                "fire.picture.camera", camera=camera["camera_id"], area=area,
+                status=_label(catalog, "fire.picture.status", camera.get("status")), observation=observation,
+            ))
+            updated = _parse(camera.get("last_updated"))
+            if not is_reset and updated and cycle_opened and updated > cycle_opened:
+                changes.append(f"{camera['camera_id']} ({area}): {summary}")
+            if camera.get("status") in {"offline", "degraded"}:
+                risks.append(catalog.text(
+                    "fire.picture.risk.camera", camera=camera["camera_id"],
+                    status=_label(catalog, "fire.picture.status", camera.get("status")),
+                ))
+                gaps.append(catalog.text("fire.picture.gap.camera_coverage", camera=camera["camera_id"]))
+                recommendations.append(catalog.text("fire.picture.recommendation.coverage"))
     else:
-        gaps.append(catalog.text("fire.picture.gap.camera"))
+        gaps.append("לא זמינים נתוני מצלמות מהסוכן.")
 
+    mission_by_drone = {mission.get("drone_id"): mission for mission in missions}
     if drones:
-        current.append(catalog.text(
-            "fire.picture.drones",
-            details=", ".join(f"{drone['drone_id']} — {_status(catalog, drone.get('status'))}" for drone in drones),
-        ))
-    else:
-        gaps.append(catalog.text("fire.picture.gap.camera"))
-    for mission in missions:
-        current.append(catalog.text(
-            "fire.picture.mission",
-            drone=mission.get("drone_id", _label(catalog, "fire.picture.unknown")),
-            status=_status(catalog, mission.get("status")),
-            location=_area(catalog, mission.get("target_area")),
-        ))
+        drone_lines = []
+        for drone in drones:
+            mission = mission_by_drone.get(drone["drone_id"])
+            if mission:
+                drone_lines.append(catalog.text(
+                    "fire.picture.mission", drone=drone["drone_id"],
+                    status=_label(catalog, "fire.picture.status", mission.get("status")),
+                    location=_label(catalog, "fire.picture.area", mission.get("target_area")),
+                ))
+            else:
+                drone_lines.append(f"{drone['drone_id']}: {_label(catalog, 'fire.picture.status', drone.get('status'))}.")
+        current.append(catalog.text("fire.picture.drones", details="; ".join(drone_lines)))
 
     if crew:
-        counts = {"available": 0, "unavailable": 0, "awaiting_response": 0}
+        counts = {"available": 0, "unavailable": 0, "planned_return": 0, "awaiting_response": 0}
         for member in crew:
             state = member.get("availability", "awaiting_response")
             counts[state] = counts.get(state, 0) + 1
-        opening_by_member: dict[str, dict] = {}
+        opening = {}
         for response in responses:
-            opening_by_member.setdefault(response["telegram_identity"], response)
-        opening_available = sum(1 for response in opening_by_member.values() if response.get("availability") == "available")
+            if response.get("availability") == "available":
+                opening.setdefault(response["telegram_identity"], response)
         current.append(catalog.text(
-            "fire.picture.crew",
-            opening=opening_available if opening_by_member else _label(catalog, "fire.picture.unknown"),
-            total=len(crew),
-            available=counts.get("available", 0),
-            unavailable=counts.get("unavailable", 0),
-            awaiting=counts.get("awaiting_response", 0),
+            "fire.picture.crew", opening=len(opening), total=len(crew),
+            available=counts["available"], unavailable=counts["unavailable"],
+            planned_return=counts["planned_return"], awaiting=counts["awaiting_response"],
         ))
         for member in crew:
-            if member.get("availability") == "unavailable":
-                until = _parse(member.get("unavailable_until"))
-                until_text = until.astimezone(ZoneInfo("Asia/Jerusalem")).strftime("%H:%M") if until else _label(catalog, "fire.picture.unknown")
-                current.append(catalog.text("fire.picture.crew_unavailable", name=member["full_name"], until=until_text))
-                risks.append(catalog.text("fire.picture.risk.crew", name=member["full_name"]))
-                conclusions.append(catalog.text("fire.picture.conclusion.crew", available=counts.get("available", 0)))
-                recommendations.append(catalog.text("fire.picture.recommendation.crew", name=member["full_name"]))
-        if counts.get("awaiting_response", 0):
+            if member.get("availability") in {"unavailable", "planned_return"}:
+                current.append(catalog.text(
+                    "fire.picture.crew_unavailable", name=member["full_name"],
+                    from_time=_local_time(member.get("unavailable_from")),
+                    until=_local_time(member.get("unavailable_until")),
+                ))
+                risks.append(f"{member['full_name']}: החזרה המתוכננת לא אומתה.")
+                changes.append(f"{member['full_name']}: {member.get('original_text') or 'דווחה היעדרות מתוכננת'}")
+        if counts["awaiting_response"]:
             gaps.append(catalog.text("fire.picture.gap.crew_pending"))
     else:
-        gaps.append(catalog.text("fire.picture.gap.crew"))
+        gaps.append("מחזור המשמרת של התאריך המבוקש אינו זמין.")
 
     if vehicles:
-        current.append(catalog.text(
-            "fire.picture.vehicles",
-            details=", ".join(
-                f"{_vehicle_name(catalog, vehicle)} — {_status(catalog, vehicle.get('status'))} ({_area(catalog, vehicle.get('current_location'))})"
-                for vehicle in vehicles
-            ),
-        ))
+        vehicle_lines = []
+        for vehicle in vehicles:
+            vehicle_id = str(vehicle.get("vehicle_id") or "")
+            name = _label(catalog, "fire.picture.vehicle", vehicle_id.lower().replace("-", "_"))
+            location = _label(catalog, "fire.picture.area", vehicle.get("current_location"))
+            vehicle_lines.append(f"{name}: {_label(catalog, 'fire.picture.status', vehicle.get('status'))} ({location})")
+            if vehicle.get("status") not in {"available", "ready"}:
+                changes.append(f"{name}: {_label(catalog, 'fire.picture.status', vehicle.get('status'))}; מיקום: {location}.")
+        current.append(catalog.text("fire.picture.vehicles", details="; ".join(vehicle_lines)))
     else:
-        gaps.append(catalog.text("fire.picture.gap.vehicles"))
+        gaps.append("לא נשמר מצב עדכני לרכבי הכיבוי.")
 
-    known_force_ids = {"police", "kkl_tractors", "district_support", "citizen_trapped_report"}
-    for force in forces:
-        force_id = force.get("force_id")
-        if force_id not in known_force_ids:
-            continue
-        if force_id == "police":
-            current.append(catalog.text("fire.picture.force.police_detail", status=_status(catalog, "reported"), location=_area(catalog, force.get("location"))))
-            changes.append(catalog.text("fire.picture.change.police"))
-        elif force_id == "kkl_tractors":
-            current.append(catalog.text("fire.picture.force.kkl_detail", count=force.get("count", 0), status=_status(catalog, force.get("status"))))
-            changes.append(catalog.text("fire.picture.change.kkl"))
-        else:
-            current.append(catalog.text("fire.picture.force", name=_force_name(catalog, force_id), status=_status(catalog, force.get("status")), location=_area(catalog, force.get("location"))))
+    for force in forces.values():
+        source = _label(catalog, "fire.picture.force", force["force_id"])
+        location = _label(catalog, "fire.picture.area", force.get("location"))
+        current.append(catalog.text(
+            "fire.picture.force_detail", source=source,
+            summary=force.get("notes") or "לא נמסר פירוט נוסף.", location=location,
+            status=_label(catalog, "fire.picture.status", force.get("status")),
+            verification=_label(catalog, "fire.picture.status", "reported"),
+        ))
+        if force.get("status") in {"reported", "reported_on_scene", "en_route"}:
+            risks.append(f"דיווח {source} טרם אומת בנפרד.")
+            recommendations.append(catalog.text("fire.picture.recommendation.verify"))
     for update in updates:
-        facts = _facts(update)
-        if facts.get("fire_ban") is True:
-            current.append(catalog.text("fire.picture.directive.fire_ban"))
+        try:
+            facts = json.loads(update.get("facts_json") or "{}")
+        except (TypeError, ValueError):
+            facts = {}
+        if facts.get("reported_by") or update.get("update_kind") == "external_force":
+            if update.get("update_kind") == "external_force":
+                changes.append(_format_update(update, forces, catalog))
+        if facts.get("fire_ban"):
+            current.append("קק״ל דיווחה על איסור הדלקת אש בשטחים הפתוחים.")
         if facts.get("forest_patrols"):
-            current.append(catalog.text("fire.picture.directive.patrols"))
+            current.append("קק״ל דיווחה על סיורי יער.")
 
-    if incident and incident.get("spread_status") == "spreading":
-        risks.append(catalog.text("fire.picture.risk.spread"))
-    if incident and incident.get("hazard_status") == "hazardous_materials_threat":
-        risks.append(catalog.text("fire.picture.risk.hazard"))
-    if any(update.get("verification_status") in {"reported", "unverified"} for update in updates):
-        risks.append(catalog.text("fire.picture.risk.unverified"))
-    if forces and any(force.get("force_id") == "police" for force in forces):
-        conclusions.append(catalog.text("fire.picture.conclusion.police"))
-        recommendations.append(catalog.text("fire.picture.recommendation.police"))
-    if any(force.get("force_id") == "kkl_tractors" for force in forces):
-        conclusions.append(catalog.text("fire.picture.conclusion.kkl"))
+    if any(force.get("status") == "en_route" for force in forces.values()):
+        conclusions.append("כוח שדווח בדרך טרם נחשב לכוח שהגיע; נדרשת הודעת הגעה לפני הקצאתו בזירה.")
+        recommendations.append("לתאם גזרות ולוודא הגעה מול הכוח החיצוני.")
+    if any(vehicle.get("status") == "dispatched" for vehicle in vehicles) and any(
+        member.get("availability") in {"unavailable", "planned_return"} for member in crew
+    ):
+        conclusions.append("רכב יצא בזמן שחבר צוות בהיעדרות מתוכננת; הרישום אינו מציין היכן נמצאים יתר אנשי הצוות.")
+        recommendations.append(catalog.text("fire.picture.recommendation.resources"))
+    if any(camera.get("status") in {"offline", "degraded"} for camera in cameras) and any(
+        update.get("spread_status") == "spreading" for update in incident_updates
+    ):
+        conclusions.append("התפשטות דווחה בזמן שכיסוי מצלמה מוגבל; תמונת המצב מהגזרה אינה מלאה.")
 
-    # Keep only commander-relevant changes; external-force incident mirrors were
-    # already collapsed above, and generic unknown reports are intentionally not
-    # rendered as a change.
-    if not changes:
-        changes.append(catalog.text("fire.picture.no_changes"))
-    if not risks:
-        risks.append(catalog.text("fire.picture.no_risks"))
-    if not gaps:
-        gaps.append(catalog.text("fire.picture.no_gaps"))
-    if not conclusions:
-        conclusions.append(catalog.text("fire.picture.conclusion.no_extra"))
-    if not recommendations:
-        recommendations.append(catalog.text("fire.picture.recommendation.no_extra"))
+    heat_cameras = [
+        camera for camera in cameras
+        if "\u05d7\u05d5\u05dd" in str(camera.get("feed_summary") or "")
+        and "\u05e0\u05de\u05d5\u05db\u05d4" in str(camera.get("feed_summary") or "")
+    ]
+    reported_areas = set()
+    for update in incident_updates:
+        try:
+            reported_areas.add(json.loads(update.get("facts_json") or "{}").get("reported_area") or "unknown")
+        except (TypeError, ValueError):
+            reported_areas.add("unknown")
+    reported_areas.update(force.get("location") for force in forces.values() if force.get("location"))
+    if heat_cameras and reported_areas:
+        separate_areas = [
+            _label(catalog, "fire.picture.area", camera.get("area"))
+            for camera in heat_cameras
+            if camera.get("area") not in reported_areas
+        ]
+        if separate_areas:
+            conclusions.append(
+                f"אין כרגע מידע המקשר בין התראת החום ב{', '.join(separate_areas)} לדיווחי האש והכוחות החיצוניים."
+            )
 
-    return "\n".join((
+    if not changes and cycle:
+        changes.append("לא נשמר שינוי משמעותי מאז פתיחת המשמרת.")
+
+    sections = [
         catalog.text("fire.picture.header"),
-        "",
-        f"{catalog.text('fire.picture.current')}:\n" + "\n".join(f"• {line}" for line in current),
-        "",
-        f"{catalog.text('fire.picture.changes')}:\n" + "\n".join(f"• {line}" for line in dict.fromkeys(changes)),
-        "",
-        f"{catalog.text('fire.picture.risks')}:\n" + "\n".join(f"• {line}" for line in dict.fromkeys(risks)),
-        "",
-        f"{catalog.text('fire.picture.gaps')}:\n" + "\n".join(f"• {line}" for line in dict.fromkeys(gaps)),
-        "",
-        f"{catalog.text('fire.picture.conclusions')}:\n" + "\n".join(f"• {line}" for line in dict.fromkeys(conclusions)),
-        "",
-        f"{catalog.text('fire.picture.recommendations')}:\n" + "\n".join(f"• {line}" for line in dict.fromkeys(recommendations)),
-    ))
+        *_section(catalog, "fire.picture.current", list(dict.fromkeys(current))),
+        *_section(catalog, "fire.picture.changes", list(dict.fromkeys(changes))),
+        *_section(catalog, "fire.picture.risks", list(dict.fromkeys(risks))),
+        *_section(catalog, "fire.picture.gaps", list(dict.fromkeys(gaps))),
+        *_section(catalog, "fire.picture.conclusions", list(dict.fromkeys(conclusions))),
+        *_section(catalog, "fire.picture.recommendations", list(dict.fromkeys(recommendations))),
+    ]
+    return "\n\n".join(sections)

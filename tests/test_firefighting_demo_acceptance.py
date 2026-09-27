@@ -104,7 +104,7 @@ def test_fire002_three_phases_share_state_and_a_new_run_is_clean(tmp_path, monke
     camera_two = open_surveillance_persistence(surveillance_path).get_camera("CAM-02")
     assert camera_two["last_updated"] == "2026-09-09T10:00:00"
     incident_updates = FirefightingOperationsStore(operations_path).list_updates()
-    assert any(update["source_message_id"].endswith(":incident") for update in incident_updates)
+    assert not any(update["source_message_id"].endswith(":incident") for update in incident_updates)
 
     # A second opening step has a different execution/source ID. It resets only
     # current operational state; the first run's event/update history remains.

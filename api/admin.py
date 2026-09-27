@@ -1591,7 +1591,9 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
                     for _ in range(10): # Wait up to 1 second
                         event = ctx.deps.persistence.fetch_event_by_source_message("telegram", sender_identity, hashed_msg_id)
                         if event:
-                            body["event_id"] = event["event_id"]
+                            terminal = event.get("outcome") in {"succeeded", "failed", "uncertain", "declined", "closed_on_precedent"}
+                            if not (event.get("simulation_context") == "FIRE_SIMULATION" and terminal and event.get("user_response")):
+                                body["event_id"] = event["event_id"]
                             break
                         time.sleep(0.1)
                 except Exception:

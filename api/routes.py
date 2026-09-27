@@ -185,6 +185,10 @@ _SITUATIONAL_PICTURE_TERMS = (
     "\u05ea\u05de\u05d5\u05e0\u05ea-\u05de\u05e6\u05d1",  # (Hebrew) situational-picture
     "\u05de\u05e6\u05d1 \u05d4\u05d2\u05d6\u05e8\u05d4",  # (Hebrew) the sector's state
     "\u05e1\u05d8\u05d8\u05d5\u05e1 \u05d2\u05d6\u05e8\u05d4",  # (Hebrew) sector status
+    "\u05e1\u05d8\u05d8\u05d5\u05e1 \u05de\u05d1\u05e6\u05e2\u05d9",  # operational status
+    "\u05de\u05e6\u05d1 \u05de\u05d1\u05e6\u05e2\u05d9",  # operational situation
+    "\u05de\u05d4 \u05e2\u05d5\u05d3 \u05dc\u05d0 \u05d0\u05d5\u05de\u05ea",  # remaining unverified information
+    "\u05e1\u05db\u05dd \u05d0\u05ea \u05d4\u05de\u05e6\u05d1",  # summarize the current situation
     "situational picture",
     "situation picture",
     "sector status",
@@ -616,48 +620,39 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             and matched_protocol is not None
             and matched_protocol.name in SIMULATION_REPORT_PROTOCOLS
         ):
-            require(level, RequestedOperation.REPORT_EVENT)
+            operation = (
+                RequestedOperation.ASK_QUESTION
+                if matched_protocol.name in {SITUATIONAL_PICTURE_PROTOCOL, "query_historical_incidents"}
+                else RequestedOperation.REPORT_EVENT
+            )
+            require(level, operation)
             report_deps = app_ctx.deps if simulation_report_hint else ctx.deps
-            reservation = ctx.queue.reserve(False)
-            if reservation is None:
-                raise ServiceUnavailableError(messages.text("api.queue_full"))
             received_at = _now()
             deadline_at = storage_timestamp(
                 datetime.now(timezone.utc) + timedelta(seconds=optimization_policy.job_deadline_seconds)
             )
-            try:
-                event_id = begin_report(
-                    report_deps, text, "telegram", received_at, sender_identity, source_message_id,
-                    conversation_id=conversation_id, deadline_at=deadline_at,
-                    sender_permission_level=level.name.lower(), occurred_at=event_time,
-                    simulation_context=simulation_context,
-                )
-            except Exception:
-                ctx.queue.release_reservation(reservation)
-                raise
-
-            def _work_simulation_report() -> None:
-                with trace_context(trace_id):
+            event_id = begin_report(
+                report_deps, text, "telegram", received_at, sender_identity, source_message_id,
+                conversation_id=conversation_id, deadline_at=deadline_at,
+                sender_permission_level=level.name.lower(), occurred_at=event_time,
+                simulation_context=simulation_context,
+            )
+            with trace_context(trace_id):
+                existing_event = report_deps.persistence.fetch_event(event_id)
+                if existing_event.get("outcome") not in {"succeeded", "failed", "uncertain", "declined", "closed_on_precedent"}:
                     run_report_extraction(
                         report_deps, event_id, app_ctx.main_agent, app_ctx.insights_agent,
                         selected_protocol_name=matched_protocol.name,
                     )
-
-            ctx.queue.submit(
-                WorkItem(
-                    (event_id, _work_simulation_report), trace_id=trace_id,
-                    deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
-                    concurrency_keys=(f"sender:{sender_identity}",),
-                ),
-                reservation,
+            completed_event = report_deps.persistence.fetch_event(event_id)
+            answer = completed_event.get("user_response") or messages.text(
+                "fire.reply.failed" if completed_event.get("outcome") != "succeeded" else "fire.reply.generic"
             )
-            queued_key = "api.queued_report" if simulation_context == "FIRE_SIMULATION" else "api.queued_report_debug"
-            queued_text = messages.text(queued_key, task_id=event_id) if queued_key.endswith("debug") else messages.text(queued_key)
-            _remember("assistant", queued_text, event_id)
+            _remember("assistant", answer, event_id)
             return jsonify({
-                "taken_as": "report", "event_id": event_id, "status": "queued",
-                "answer": messages.text("api.queued_report") if simulation_context == "FIRE_SIMULATION" else _queued_answer_text(messages, "report", event_id),
-            }), 202
+                "taken_as": "question" if operation == RequestedOperation.ASK_QUESTION else "report",
+                "status": completed_event.get("outcome"), "answer": answer,
+            })
 
         if matched_protocol is not None:
             received_at = _now()

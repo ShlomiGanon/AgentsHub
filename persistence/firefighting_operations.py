@@ -130,9 +130,32 @@ class FirefightingOperationsStore:
                  verification_status, summary.strip(), json.dumps(facts or {}, ensure_ascii=False, sort_keys=True),
                  occurred, received),
             )
+            if update_kind != "fire_incident":
+                row = connection.execute(
+                    "SELECT * FROM incident_updates WHERE update_id = ?", (update_id,)
+                ).fetchone()
+                return {"inserted": True, "update": dict(row)}
             current = connection.execute(
                 "SELECT * FROM incident_state WHERE incident_id = ?", (incident_id,)
             ).fetchone()
+            if current is None:
+                root = connection.execute(
+                    "SELECT run_started_at FROM incident_state WHERE incident_id = ?", (INCIDENT_ID,)
+                ).fetchone()
+                run_started = root["run_started_at"] if root is not None else received
+                connection.execute(
+                    """
+                    INSERT INTO incident_state
+                        (incident_id, status, area, spread_status, hazard_status,
+                         last_summary, last_updated, run_started_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (incident_id, status or "open", area or "unknown", spread_status or "unknown",
+                     hazard_status or "unknown", summary.strip(), occurred, run_started),
+                )
+                current = connection.execute(
+                    "SELECT * FROM incident_state WHERE incident_id = ?", (incident_id,)
+                ).fetchone()
             next_status = status or current["status"]
             next_area = area or current["area"]
             next_spread = spread_status or current["spread_status"]
@@ -181,12 +204,24 @@ class FirefightingOperationsStore:
             ).fetchone()
         return dict(row) if row is not None else None
 
-    def list_updates(self, incident_id: str = INCIDENT_ID) -> list[dict]:
+    def list_incidents(self) -> list[dict]:
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM incident_updates WHERE incident_id = ? ORDER BY occurred_at, update_id",
-                (incident_id,),
+                "SELECT * FROM incident_state ORDER BY last_updated, incident_id"
             ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_updates(self, incident_id: str | None = None) -> list[dict]:
+        with self._connect() as connection:
+            if incident_id is None:
+                rows = connection.execute(
+                    "SELECT * FROM incident_updates ORDER BY occurred_at, update_id"
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM incident_updates WHERE incident_id = ? ORDER BY occurred_at, update_id",
+                    (incident_id,),
+                ).fetchall()
         return [dict(row) for row in rows]
 
     def list_external_forces(self) -> list[dict]:

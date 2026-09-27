@@ -165,6 +165,7 @@ class TeamStatusAgent(Agent):
         reason: str = "",
         unavailable_days: int = 0,
         received_at: str = "",
+        unavailable_from: str = "",
         unavailable_until: str = "",
         cycle_id: str = "",
     ) -> str:
@@ -189,9 +190,16 @@ class TeamStatusAgent(Agent):
         if normalized == "unavailable" and unavailable_days < 1 and not unavailable_until.strip():
             return "Clarification required: specify how many days the member will be unavailable."
 
+        explicit_from = unavailable_from.strip() or None
         explicit_until = unavailable_until.strip() or None
         if normalized == "unavailable" and explicit_until is None:
             explicit_until = (now + timedelta(days=unavailable_days)).isoformat()
+        if normalized == "unavailable" and explicit_from is not None and explicit_until is not None:
+            try:
+                if _aware_datetime(explicit_until) <= _aware_datetime(explicit_from):
+                    return "The attendance response was not stored: unavailable_until must be after unavailable_from."
+            except ValueError:
+                return "The attendance response was not stored: the unavailable period must use ISO timestamps."
 
         try:
             response = self.status_store.record_response(
@@ -201,6 +209,7 @@ class TeamStatusAgent(Agent):
                 original_text=original_text,
                 received_at=now.isoformat(),
                 reason=reason or None,
+                unavailable_from=explicit_from,
                 unavailable_until=explicit_until,
                 cycle_id=cycle_id.strip() or None,
             )
@@ -226,14 +235,15 @@ class TeamStatusAgent(Agent):
             "available": "available",
             "unavailable": "unavailable",
             "awaiting_response": "awaiting response",
+            "planned_return": "planned return unconfirmed",
         }
         lines = ["Readiness-team status:"]
-        counts = {"available": 0, "unavailable": 0, "awaiting_response": 0}
+        counts = {"available": 0, "unavailable": 0, "awaiting_response": 0, "planned_return": 0}
         for entry in snapshot:
             status = entry["availability"]
             counts[status] += 1
             detail = ""
-            if status == "unavailable":
+            if status in {"unavailable", "planned_return"}:
                 detail = f" — reason: {entry['reason']}; unavailable until: {entry['unavailable_until']}"
             if entry["original_text"]:
                 detail += f"; original response: {entry['original_text']}; received at: {entry['received_at']}"
@@ -246,6 +256,7 @@ class TeamStatusAgent(Agent):
                 f"Available: {counts['available']}",
                 f"Unavailable: {counts['unavailable']}",
                 f"Awaiting response: {counts['awaiting_response']}",
+                f"Planned return unconfirmed: {counts['planned_return']}",
             )
         )
         return "\n".join(lines)

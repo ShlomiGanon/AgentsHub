@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal
+from zoneinfo import ZoneInfo
 
 from history import (
     ExtractionExecutionError,
@@ -1225,6 +1226,8 @@ def _fire_area(text: str, camera_id: str = "") -> str:
         return "pine_ridge"
     if camera_id == "CAM-02":
         return "quarry_junction"
+    if _fire_text_has(text, "\u05dc\u05db\u05d9\u05d5\u05d5\u05df \u05e4\u05d0\u05e8\u05e7", "toward the industrial park"):
+        return ""
     if _fire_text_has(text, "industrial", "park", "\u05e4\u05d0\u05e8\u05e7 \u05d4\u05ea\u05e2\u05e9\u05d9\u05d9\u05d4"):
         return "industrial_park"
     if _fire_text_has(text, "chemical", "\u05db\u05d9\u05de\u05d9"):
@@ -1233,7 +1236,9 @@ def _fire_area(text: str, camera_id: str = "") -> str:
         return "route_444"
     if _fire_text_has(text, "street", "\u05e8\u05d7\u05d5\u05d1 \u05d0\u05d5\u05e8\u05e0\u05d9\u05dd"):
         return "ornim_street"
-    return "pine_ridge"
+    if _fire_text_has(text, "\u05e8\u05db\u05e1 \u05d0\u05d5\u05e8\u05e0\u05d9\u05dd", "pine ridge"):
+        return "pine_ridge"
+    return ""
 
 
 def _fire_aware_iso(value: str) -> str:
@@ -1245,8 +1250,6 @@ def _fire_absence_window(event: dict) -> tuple[str | None, str | None]:
     if len(times) < 2:
         return None, None
     try:
-        from zoneinfo import ZoneInfo
-
         local_date = parse_timestamp(event.get("occurred_at") or event["received_at"]).astimezone(ZoneInfo("Asia/Jerusalem")).date()
         values = [
             datetime(local_date.year, local_date.month, local_date.day, int(hour), int(minute), tzinfo=ZoneInfo("Asia/Jerusalem")).astimezone(timezone.utc)
@@ -1303,6 +1306,7 @@ def _fire_incident_update(event: dict) -> tuple[dict, dict]:
     area = _fire_area(text)
     if _fire_text_has(text, "\u05e6\u05d5\u05d1\u05e8 \u05d2\u05d6", "\u05de\u05db\u05dc \u05d4\u05d2\u05d6"):
         area = "chemical_plant"
+    direction = "industrial_park" if _fire_text_has(text, "\u05dc\u05db\u05d9\u05d5\u05d5\u05df \u05e4\u05d0\u05e8\u05e7", "toward the industrial park") else ""
     return (
         {
             "update_kind": "fire_incident",
@@ -1311,19 +1315,31 @@ def _fire_incident_update(event: dict) -> tuple[dict, dict]:
             "area": area,
             "spread_status": spread,
             "hazard_status": hazard,
-            "status": "open" if verification != "debunked" else "open",
+            "status": "open",
         },
-        {"verification_status": verification, "spread_status": spread, "hazard_status": hazard},
+        {"verification_status": verification, "spread_status": spread, "hazard_status": hazard,
+         "reported_area": area, "reported_direction": direction},
     )
 
 
 def _fire_external_update(event: dict) -> dict:
     text = event.get("raw_text", "")
     if _fire_text_has(text, "\u05e7\u05e7\u05dc", "\u05e7\u05e7\u05f4\u05dc", "\u05e7\u05e7\u05f3\u05dc", "\u05d8\u05e8\u05e7\u05d8\u05d5\u05e8\u05d9", "\u05e1\u05d9\u05d5\u05e8\u05d9 \u05d9\u05e2\u05e8", "\u05d9\u05e2\u05e8\u05e0\u05d9\u05dd", "\u05e1\u05e8\u05d9\u05e7\u05d5\u05ea"):
-        return {"force_id": "kkl_tractors", "force_kind": "KKL firefighting tractors", "count": 2, "status": "en_route", "location": "pine_ridge", "notes": text, "verification_status": "reported", "facts": {"fire_ban": True, "forest_patrols": "reported"}}
+        dispatched = _fire_text_has(text, "\u05de\u05e7\u05e4\u05d9\u05e6\u05d9\u05dd", "\u05d1\u05d3\u05e8\u05da", "\u05e9\u05d5\u05dc\u05d7\u05d9\u05dd")
+        return {
+            "force_id": "kkl_tractors", "force_kind": "KKL firefighting tractors",
+            "count": 2 if dispatched else 0,
+            "status": "en_route" if dispatched else "reported",
+            "location": _fire_area(text) or "unknown", "notes": text,
+            "verification_status": "reported",
+            "facts": {
+                "fire_ban": _fire_text_has(text, "\u05d0\u05d9\u05e1\u05d5\u05e8 \u05d4\u05d3\u05dc\u05e7\u05ea \u05d0\u05e9"),
+                "forest_patrols": "reported" if _fire_text_has(text, "\u05d9\u05e2\u05e8\u05e0\u05d9\u05dd", "\u05e1\u05d9\u05d5\u05e8\u05d9 \u05d9\u05e2\u05e8") else "",
+            },
+        }
     if _fire_text_has(text, "\u05de\u05e9\u05d8\u05e8\u05d4", "\u05e0\u05d9\u05d9\u05d3\u05ea", "\u05e2\u05d5\u05de\u05e1\u05d9 \u05ea\u05e0\u05d5\u05e2\u05d4", "\u05e4\u05d9\u05e0\u05d5\u05d9"):
-        status = "arrived" if _fire_text_has(text, "\u05de\u05ea\u05d7\u05d9\u05dc\u05d9\u05dd \u05e4\u05d9\u05e0\u05d5\u05d9") else "active"
-        location = "route_444" if _fire_text_has(text, "444", "\u05db\u05d1\u05d9\u05e9 444") else "ornim_street"
+        status = "reported_on_scene" if _fire_text_has(text, "\u05e0\u05d9\u05d9\u05d3\u05ea \u05d1\u05de\u05e7\u05d5\u05dd") else "reported"
+        location = _fire_area(text) or "unknown"
         return {"force_id": "police", "force_kind": "police", "count": 1, "status": status, "location": location, "notes": text, "verification_status": "reported"}
     if _fire_text_has(text, "\u05d0\u05d6\u05e8\u05d7", "\u05d9\u05dc\u05d3\u05d9\u05dd \u05dc\u05db\u05d5\u05d3\u05d9\u05dd"):
         debunked = _fire_text_has(text, "\u05e1\u05e8\u05e7", "\u05d4\u05d1\u05d9\u05ea \u05e8\u05d9\u05e7")
@@ -1331,7 +1347,7 @@ def _fire_external_update(event: dict) -> dict:
     if _fire_text_has(text, "\u05e8\u05db\u05d1\u05d9 \u05d0\u05dc\u05d5\u05df", "\u05de\u05d8\u05d5\u05e1\u05d9 \u05db\u05d9\u05d1\u05d5\u05d9"):
         arrived = _fire_text_has(text, "\u05d4\u05e1\u05d9\u05d5\u05e2 \u05d4\u05de\u05d7\u05d5\u05d6\u05d9 \u05d4\u05d2\u05d9\u05e2")
         return {"force_id": "district_support", "force_kind": "district firefighting support", "count": 6, "status": "arrived" if arrived else "en_route", "location": "chemical_plant", "notes": text, "verification_status": "confirmed" if arrived else "reported"}
-    return {"force_id": "external_report", "force_kind": "external report", "count": 0, "status": "reported", "location": _fire_area(text), "notes": text, "verification_status": "reported"}
+    return {"force_id": "external_report", "force_kind": "external report", "count": 0, "status": "reported", "location": _fire_area(text) or "unknown", "notes": text, "verification_status": "reported"}
 
 
 def _fire_local_clock(value: str | None) -> str:
@@ -1359,7 +1375,7 @@ def _fire_user_response(deps: "FlowDeps", event: dict, protocol: "Protocol", *, 
         return catalog.text("fire.reply.failed")
     text = event.get("raw_text", "")
     if protocol.name == "record_crew_shift_status":
-        count = len(deps.registry.get("team_status_agent").status_store.list_members())
+        count = len(deps.registry.get("team_status_agent").status_store.list_members(approved_only=True))
         return catalog.text("fire.reply.shift", count=count)
     if protocol.name == "record_crew_availability_response":
         name = event.get("sender_identity", "")
@@ -1371,12 +1387,23 @@ def _fire_user_response(deps: "FlowDeps", event: dict, protocol: "Protocol", *, 
         camera_id = _fire_camera_id(text) or catalog.text("fire.reply.camera")
         if _fire_text_has(text, "\u05d7\u05d5\u05dd", "\u05d4\u05ea\u05e8\u05d0\u05ea"):
             return catalog.text("fire.reply.camera_heat", camera=camera_id)
-        return catalog.text("fire.reply.camera_update", camera=camera_id)
+        camera = deps.registry.get("surveillance_agent").surveillance_store.get_camera(camera_id)
+        status = (camera or {}).get("status", "unknown")
+        detail_key = status if status in {"offline", "degraded", "active"} else "active"
+        detail = catalog.text(f"fire.reply.camera_detail.{detail_key}")
+        if status == "offline" and _fire_text_has(text, "\u05e0\u05d9\u05e7\u05d5\u05d9"):
+            detail += " \u05dc\u05ea\u05d7\u05d6\u05d5\u05e7\u05d4"
+        return catalog.text("fire.reply.camera_update", camera=camera_id, status=_status_reply_label(catalog, status), detail=detail)
     if protocol.name == "update_vehicle_status":
         return catalog.text("fire.reply.vehicle")
     if protocol.name == "record_incident_update":
         if _fire_text_has(text, "\u05e7\u05e7\u05dc", "\u05e7\u05e7\u05f4\u05dc", "\u05e7\u05e7\u05f3\u05dc", "\u05d8\u05e8\u05e7\u05d8\u05d5\u05e8\u05d9", "\u05e1\u05d9\u05d5\u05e8\u05d9 \u05d9\u05e2\u05e8", "\u05d9\u05e2\u05e8\u05e0\u05d9\u05dd", "\u05e1\u05e8\u05d9\u05e7\u05d5\u05ea"):
-            return catalog.text("fire.reply.kkl")
+            force_update = _fire_external_update({"raw_text": text})
+            if force_update["status"] == "en_route":
+                return catalog.text("fire.reply.kkl_dispatch")
+            if force_update["facts"].get("fire_ban") or force_update["facts"].get("forest_patrols"):
+                return catalog.text("fire.reply.kkl_report")
+            return catalog.text("fire.reply.generic")
         if _fire_text_has(text, "\u05de\u05e9\u05d8\u05e8\u05d4", "\u05e0\u05d9\u05d9\u05d3\u05ea", "444"):
             return catalog.text("fire.reply.police")
     if protocol.name == "report_fire_incident":
@@ -1391,6 +1418,13 @@ def _area_reply_label(catalog, area: str) -> str:
         return catalog.text(f"fire.picture.area.{area}")
     except Exception:
         return catalog.text("fire.picture.area.unknown")
+
+
+def _status_reply_label(catalog, status: str) -> str:
+    try:
+        return catalog.text(f"fire.picture.status.{status}")
+    except Exception:
+        return catalog.text("fire.picture.unknown")
 
 
 def _run_fire_simulation_action(deps: "FlowDeps", event_id: str, protocol: "Protocol") -> FlowResult:
@@ -1423,19 +1457,16 @@ def _run_fire_simulation_action(deps: "FlowDeps", event_id: str, protocol: "Prot
             if protocol.name == "record_crew_shift_status":
                 operational_result = agent.record_crew_shift_status("all", "available", source_message_id, event["raw_text"], _fire_aware_iso(event.get("occurred_at") or event["received_at"]))
             elif protocol.name == "record_crew_availability_response":
-                _absence_start, absence_end = _fire_absence_window(event)
-                event_date = parse_timestamp(event.get("occurred_at") or event["received_at"]).date().isoformat()
+                absence_start, absence_end = _fire_absence_window(event)
+                from zoneinfo import ZoneInfo
+
+                event_date = parse_timestamp(event.get("occurred_at") or event["received_at"]).astimezone(ZoneInfo("Asia/Jerusalem")).date().isoformat()
                 shift_cycle = agent.status_store.find_cycle(f"shift-{event_date}")
-                if shift_cycle is None:
-                    shift_cycle = next(
-                        (item for item in agent.status_store.list_cycles()
-                         if str(item.get("cycle_key", "")).startswith("shift-")),
-                        None,
-                    )
                 shift_cycle_id = shift_cycle["cycle_id"] if shift_cycle is not None else ""
                 operational_result = agent.record_attendance_response(
                     source_message_id=source_message_id, availability="unavailable", original_text=event["raw_text"],
                     reason="planned medical checkup", unavailable_days=0,
+                    unavailable_from=_fire_aware_iso(absence_start) if absence_start else "",
                     unavailable_until=_fire_aware_iso(absence_end) if absence_end else "",
                     cycle_id=shift_cycle_id,
                     received_at=_fire_aware_iso(event.get("occurred_at") or event["received_at"]),
@@ -1447,25 +1478,25 @@ def _run_fire_simulation_action(deps: "FlowDeps", event_id: str, protocol: "Prot
                 status = "degraded" if _fire_text_has(event["raw_text"], "\u05e7\u05e4\u05d5\u05d0\u05d4", "\u05d1\u05dc\u05d1\u05d5\u05dc \u05ea\u05e8\u05de\u05d9") else ("offline" if _fire_text_has(event["raw_text"], "\u05d4\u05d5\u05e4\u05e1\u05e7\u05d4", "\u05e0\u05d9\u05e7\u05d5\u05d9") else "active")
                 operational_result = agent.update_camera_observation(camera_id, event["raw_text"], status, event_time)
             elif protocol.name == "report_fire_incident":
-                update, _ = _fire_incident_update(event)
+                update, facts = _fire_incident_update(event)
+                source_user = deps.persistence.read_user(event["sender_identity"])
+                facts["reported_by"] = (source_user or {}).get("full_name") or ""
+                update["facts"] = facts
                 operational_result = agent.record_fire_incident_update(
-                    incident_id="EVT-FIRE-444-BRUSH", source_message_id=source_message_id, event_id=event_id,
+                    incident_id=f"EVT-FIRE-{source_message_id}", source_message_id=source_message_id, event_id=event_id,
                     occurred_at=event_time, received_at=event["received_at"], **update,
                 )
             elif protocol.name == "record_incident_update":
                 update = _fire_external_update(event)
+                source_user = deps.persistence.read_user(event["sender_identity"])
+                update.setdefault("facts", {})
+                update["facts"]["reported_by"] = (source_user or {}).get("full_name") or ""
+                update["facts"]["force_id"] = update["force_id"]
                 operational_result = agent.record_external_force_update(
                     source_message_id=source_message_id, event_id=event_id,
                     occurred_at=event_time, received_at=event["received_at"],
                     summary=event["raw_text"], **update,
                 )
-                if _fire_text_has(event["raw_text"], "\u05e9\u05e8\u05d9\u05e4\u05ea", "\u05e2\u05e9\u05df", "\u05d0\u05e9"):
-                    incident_update, _ = _fire_incident_update(event)
-                    surveillance_agent = deps.registry.get("surveillance_agent")
-                    surveillance_agent.record_fire_incident_update(
-                        incident_id="EVT-FIRE-444-BRUSH", source_message_id=f"{source_message_id}:incident", event_id=event_id,
-                        occurred_at=event_time, received_at=event["received_at"], **incident_update,
-                    )
             elif protocol.name == "dispatch_drone_to_incident":
                 operational_result = agent.dispatch_drone_to_area(
                     target_area="industrial_park", incident_description=event["raw_text"],

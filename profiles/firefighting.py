@@ -4,6 +4,7 @@ docs/Profile_Split_Plan.md)."""
 
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from agents import FriendlyForcesAgent, SurveillanceAgent, TeamStatusAgent, get_authenticated_request_identity, tool
 from messages import get_catalog
@@ -83,6 +84,7 @@ class FirefightingSurveillanceAgent(SurveillanceAgent):
         event_id: str = "",
         occurred_at: str = "",
         received_at: str = "",
+        facts: dict | None = None,
         area: str = "",
         spread_status: str = "",
         hazard_status: str = "",
@@ -95,6 +97,7 @@ class FirefightingSurveillanceAgent(SurveillanceAgent):
             incident_id=incident_id.strip() or "EVT-FIRE-444-BRUSH",
             update_kind=update_kind.strip() or "incident_update", summary=summary,
             verification_status=verification_status.strip() or "reported",
+            facts=facts,
             occurred_at=occurred_at, received_at=received_at, area=area or None,
             spread_status=spread_status or None, hazard_status=hazard_status or None,
             status=status or None,
@@ -223,7 +226,10 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         try:
             # The FIRE shift cycle is explicit.  It must not accidentally use a
             # scheduler-created attendance cycle from the host's current date.
-            cycle_key = f"shift-{now_iso.split('T')[0]}"
+            local_date = datetime.fromisoformat(now_iso.replace("Z", "+00:00")).astimezone(
+                ZoneInfo(self.timezone_name)
+            ).date()
+            cycle_key = f"shift-{local_date.isoformat()}"
             active_cycle = self.status_store.find_cycle(cycle_key)
             if active_cycle is None:
                 self.status_store.open_cycle(

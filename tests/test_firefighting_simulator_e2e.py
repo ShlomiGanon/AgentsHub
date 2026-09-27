@@ -107,11 +107,18 @@ def test_fire_picture_through_real_simulator_http_and_job(tmp_path, monkeypatch)
                     if event and event.get("outcome") in {"succeeded", "failed"}:
                         break
                     await asyncio.sleep(0.1)
-                assert event is not None and event["outcome"] == "succeeded", event
+                assert event is not None and event["outcome"] == "succeeded", (
+                    scenario_key, step["step"], event.get("failure_reason"), event.get("result_text"), event
+                )
                 job = await runtime.api_client.get_job_result(event["event_id"], sender_id)
                 assert job is not None and job.user_response
+                assert initial["reply_text"] == job.user_response
+                await asyncio.sleep(0.05)
+                watermark = initial["watermark"]
+                assert runtime.poll_chat(
+                    chat_id, (watermark["status_len"], watermark["sent_len"])
+                )["reply_text"] is None
                 elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
-                print(f"CHAT {scenario_key}/{step['step']} ({elapsed_ms} ms): {job.user_response}")
                 return event, job, elapsed_ms
 
             outputs = {}
@@ -124,13 +131,18 @@ def test_fire_picture_through_real_simulator_http_and_job(tmp_path, monkeypatch)
                         before_omri = registry.get("team_status_agent").status_store.availability_snapshot(
                             "2026-09-09T07:45:00Z", cycle_id=cycle["cycle_id"]
                         )
-                        print(f"CREW BEFORE OMRI: {before_omri}")
+                        assert len(before_omri) == 6
+                        assert all(row["availability"] == "available" for row in before_omri)
                     if scenario.key == "fire002_phase1" and step["step"] == 2:
                         cycle = registry.get("team_status_agent").status_store.find_cycle("shift-2026-09-09")
                         after_omri = registry.get("team_status_agent").status_store.availability_snapshot(
                             "2026-09-09T11:30:00Z", cycle_id=cycle["cycle_id"]
                         )
-                        print(f"CREW AFTER OMRI: {after_omri}")
+                        assert sum(row["availability"] == "available" for row in after_omri) == 5
+                        omri = next(row for row in after_omri if row["full_name"].startswith("רס\"ל עמרי"))
+                        assert omri["availability"] == "unavailable"
+                        assert omri["unavailable_from"] == "2026-09-09T09:00:00+00:00"
+                        assert omri["unavailable_until"] == "2026-09-09T12:00:00+00:00"
 
             for key in (("fire002_phase1", 7), ("fire002_phase2", 8)):
                 picture = outputs[key][1].user_response
@@ -138,12 +150,34 @@ def test_fire_picture_through_real_simulator_http_and_job(tmp_path, monkeypatch)
                 assert "סיכונים" in picture and "פערי מידע" in picture
                 assert "steps_completed" not in picture
                 assert "FIRE simulation action applied" not in picture
+                assert "המלצות להמשך" in picture
+            phase1_picture = outputs[("fire002_phase1", 7)][1].user_response
+            assert "6 מתוך 6" in phase1_picture and "5 זמינים" in phase1_picture
+            assert "12:00–15:00" in phase1_picture
+            assert "כביש 444" in phase1_picture and "התראת חום נמוכה" in phase1_picture
+            assert "אין כרגע מידע המקשר" in phase1_picture
+            assert "קק״ל" in phase1_picture and "שני" not in phase1_picture
+            assert "אשד 3" in phase1_picture and "כרמל 1" in phase1_picture
+            assert "נרשמו כזמינים" in outputs[("fire002_phase1", 1)][1].user_response
+            assert "היעדרות מתוכננת" in outputs[("fire002_phase1", 2)][1].user_response
+            assert "התראת חום נמוכה" in outputs[("fire002_phase1", 3)][1].user_response
+            assert "איסור הדלקת אש" in outputs[("fire002_phase1", 4)][1].user_response
+            assert "לא מקוון" in outputs[("fire002_phase1", 5)][1].user_response
+            assert "כביש 444" in outputs[("fire002_phase1", 6)][1].user_response
+            phase2_picture = outputs[("fire002_phase2", 8)][1].user_response
+            assert "לא נשמר מיקום נקודתי מדויק" in phase2_picture
+            assert "דיווח אש מאת רוני - מפעיל תצפיות" in phase2_picture
+            assert "דיווח אש מאת רס\"ל יובל - מפקד צוות אשד 3" in phase2_picture
+            assert "גזרה לפי הדיווח: רכס אורנים" in phase2_picture
+            assert "גזרה לפי הדיווח: לא ידועה" in phase2_picture
+            assert "הקפצת שני טרקטורי כיבוי" in outputs[("fire002_phase2", 6)][1].user_response
+            assert "הקפצת כוננות" in outputs[("fire002_phase2", 8)][0].get("raw_text", "") or "המלצות להמשך" in phase2_picture
             varied = dict(fire.SIMULATIONS[0].raw["steps"][6])
             varied["text"] = "מפקד, תן עכשיו סטטוס מבצעי עדכני של הכוח והנכסים, ומה עדיין לא אומת."
             varied["step"] = 99
             varied_event, varied_job, _ = await send_step("varied-picture", varied)
             assert "תמונת מצב מבצעית" in varied_job.user_response
-            assert "לא ניתן" not in varied_job.user_response
+            assert "המלצות להמשך" in varied_job.user_response
         finally:
             await runtime.shutdown()
 
