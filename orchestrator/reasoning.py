@@ -147,6 +147,29 @@ _JSON_CODE_FENCE_PATTERN = re.compile(r"```(?:json)?\s*\n?(.*?)\n?```", re.IGNOR
 _VERDICT_PATTERN = re.compile(r"VERDICT:\s*(success|failure|uncertain)", re.IGNORECASE)
 _REASONING_PATTERN = re.compile(r"REASONING:\s*(.+)", re.IGNORECASE | re.DOTALL)
 
+
+def _unwrap_json_code_fence(raw_text: str) -> str:
+    """Strip a Markdown code fence around a JSON object, if present.
+
+    A model asked for a bare JSON object commonly wraps it in a ```json ... ``` fence anyway.
+    Every JSON-expecting parser in this module used to see that fence as unparseable text and
+    fail outright — for `classify_intent` specifically, that meant a guaranteed second model
+    call every time the model fenced its response (observed ~40% of the time in a real-model
+    diagnostic run), silently doubling cost for zero benefit since the re-asked response carries
+    the same content unfenced. Returns the fenced content when it looks like a JSON object;
+    otherwise returns the input stripped, unchanged, so a non-JSON response (e.g. the legacy
+    INTENT:/REASON: format) is unaffected.
+    """
+    stripped = raw_text.strip()
+    if stripped.startswith("{"):
+        return stripped
+    fence_match = _JSON_CODE_FENCE_PATTERN.search(stripped)
+    if fence_match:
+        candidate = fence_match.group(1).strip()
+        if candidate.startswith("{"):
+            return candidate
+    return stripped
+
 _OPERATIONAL_DECISION_SCHEMA = {
     "type": "object",
     "properties": {
@@ -482,10 +505,11 @@ def _parse_structured_intent_response(raw_text: str, message_text: str, protocol
 
 
 def _parse_intent_response(raw_text: str, message_text: str | None = None, protocols: tuple[Protocol, ...] = ()) -> IntentResult:
-    if raw_text.lstrip().startswith("{"):
+    unwrapped = _unwrap_json_code_fence(raw_text)
+    if unwrapped.startswith("{"):
         if message_text is None:
             raise OrchestrationParseError("structured intent parsing requires the original message")
-        return _parse_structured_intent_response(raw_text, message_text, protocols)
+        return _parse_structured_intent_response(unwrapped, message_text, protocols)
 
     legacy_match = _LEGACY_INTENT_PATTERN.fullmatch(raw_text)
     if legacy_match is None:
@@ -721,15 +745,8 @@ def _formulation_json_candidate(raw_text: str) -> str | None:
     with. Genuine legacy-format text (no fence, doesn't start with '{') is left for that parser
     exactly as before.
     """
-    stripped = raw_text.strip()
-    if stripped.startswith("{"):
-        return stripped
-    fence_match = _JSON_CODE_FENCE_PATTERN.search(stripped)
-    if fence_match:
-        candidate = fence_match.group(1).strip()
-        if candidate.startswith("{"):
-            return candidate
-    return None
+    unwrapped = _unwrap_json_code_fence(raw_text)
+    return unwrapped if unwrapped.startswith("{") else None
 
 
 def formulate_tasks(

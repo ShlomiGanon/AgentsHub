@@ -417,6 +417,28 @@ def test_a_greeting_classifies_as_conversational():
     assert result.intent == "conversational"
 
 
+def test_classify_intent_unwraps_a_fenced_json_response_without_a_retry():
+    # A model asked for bare JSON commonly wraps it in a ```json fence anyway. Before the
+    # fence-stripping fix, this shape failed to parse on the first attempt and silently cost a
+    # second, otherwise-identical model call every time (observed ~40% of messages in a real-model
+    # diagnostic run) — assert here that a fenced response is accepted on the first call.
+    fenced_response = (
+        "```json\n"
+        '{"primary_intent":"report","asks_for_information":false,"reports_occurrence":true,'
+        '"requests_action":false,"social_only":false,"is_quoted":false,"is_hypothetical":false,'
+        '"is_followup_without_context":false,"evidence":{"report":"smoke seen near gate 3"},'
+        '"matched_protocol_names":[],"reason":"reports an occurrence",'
+        '"ambiguity_reason":null,"clarification_question":null}\n'
+        "```"
+    )
+    agent = _ScriptedMainAgent(fenced_response)
+
+    result = classify_intent(agent, _protocols(), "smoke seen near gate 3")
+
+    assert result.intent == "report"
+    assert len(agent.calls) == 1
+
+
 def test_a_question_asking_for_real_capability_stays_a_question_not_conversational():
     # The line this session's fix must draw correctly: "do I have any
     # tasks?" asks the system to check something real — it's a QUESTION
