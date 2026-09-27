@@ -84,14 +84,23 @@ class FirefightingOperationsStore:
                 (INCIDENT_ID, "Initial FIRE simulation incident state.", timestamp, timestamp),
             )
 
-    def reset_current_state(self, *, now: str | None = None) -> None:
+    def reset_current_state(self, *, now: str | None = None, run_started_at: str | None = None) -> None:
         """Start a clean demo state while retaining the append-only update log."""
 
         timestamp = now or _now()
         with self._connect() as connection:
             connection.execute("DELETE FROM incident_state")
             connection.execute("DELETE FROM external_force_state")
+        # ``now`` is the scenario/event timestamp shown to the commander;
+        # ``run_started_at`` is the receipt boundary used to isolate this
+        # execution from earlier executions with the same scenario timestamps.
         self.ensure_initial_state(now=timestamp)
+        if run_started_at:
+            with self._connect() as connection:
+                connection.execute(
+                    "UPDATE incident_state SET run_started_at = ? WHERE incident_id = ?",
+                    (run_started_at, INCIDENT_ID),
+                )
 
     def record_incident_update(
         self, *, source_message_id: str, event_id: str, update_kind: str, summary: str,

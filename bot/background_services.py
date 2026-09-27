@@ -35,6 +35,16 @@ logger = logging.getLogger(__name__)
 
 
 async def dispatch_notification(deps: "BotDeps", notification: "BotNotification") -> None:
+    # FIRE simulator jobs are rendered by the admin UI's single job bubble.
+    # Keep their notifications in the diagnostics/cursor stream, but do not
+    # deliver a second terminal message through the simulated Telegram client.
+    if notification.kind in {"job_finished", "job_failed"} and getattr(notification.payload, "simulation_context", None) == "FIRE_SIMULATION":
+        if notification.kind == "job_finished":
+            interactions.unregister_event_data_reply_target(notification.payload.job_id)
+        else:
+            interactions.unregister_event_data_reply_target(notification.payload.event_id)
+        return
+
     if notification.kind == "clarification_hold":
         await interactions.push_clarification_prompt(deps, notification.payload)
         return

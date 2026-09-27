@@ -253,6 +253,21 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             ).fetchone()
         return dict(row) if row is not None else None
 
+    def list_cycles(self) -> list[dict]:
+        """Return attendance cycles newest first for read-side reconciliation.
+
+        The scheduler may open a non-shift attendance cycle after a FIRE shift
+        was opened.  Situational-picture reads must therefore be able to select
+        the cycle belonging to the operational run instead of blindly using
+        ``latest_cycle``.
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT cycle_id, cycle_key, opened_at, deadline_at "
+                "FROM attendance_cycles ORDER BY opened_at DESC"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def find_cycle(self, cycle_key: str) -> dict | None:
         with self._connect() as connection:
             row = connection.execute(
@@ -377,6 +392,18 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
                 WHERE r.approval_status = 'pending'
                 ORDER BY r.received_at
                 """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_responses(self, *, cycle_id: str | None = None) -> list[dict]:
+        """Return accepted/pending attendance reports for diagnostics and reconciliation."""
+        where = "WHERE cycle_id = ?" if cycle_id else ""
+        params = (cycle_id,) if cycle_id else ()
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT r.*, m.full_name FROM attendance_responses r "
+                f"JOIN team_members m USING (telegram_identity) {where} ORDER BY r.received_at",
+                params,
             ).fetchall()
         return [dict(row) for row in rows]
 

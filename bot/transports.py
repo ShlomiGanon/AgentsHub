@@ -554,6 +554,7 @@ class HttpApiClient(BotApiClient):
                 failed_step_agent_name=payload.get("failed_step_agent_name"),
                 failure_reason=payload.get("failure_reason") or "",
                 steps_completed_before_failure=tuple(payload.get("steps_completed", ())),
+                simulation_context=payload.get("simulation_context"),
             )
         raise ValueError(f"unknown notification kind: {kind!r}")
 

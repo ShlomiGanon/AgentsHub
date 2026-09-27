@@ -80,6 +80,7 @@ SIMULATION_REPORT_PROTOCOLS = frozenset({
     "update_camera_observation",
     "report_fire_incident",
     "record_incident_update",
+    "dispatch_drone_to_incident",
     "overall_situational_picture",
     "query_historical_incidents",
 })
@@ -1607,6 +1608,13 @@ def job_status(ctx: "ApiContext", event_id: str) -> dict | None:
         response_payload = {"event_id": event_id, "status": event["outcome"]}
         if event.get("insight_text") is not None:
             response_payload["insight_text"] = event["insight_text"]
+        # User-facing text is a first-class terminal result.  The detailed
+        # steps/IDs remain available to diagnostics, but /Job must expose the
+        # same single response that the simulator bubble renders.
+        if event.get("user_response"):
+            response_payload["user_response"] = event["user_response"]
+        if event.get("simulation_context") is not None:
+            response_payload["simulation_context"] = event["simulation_context"]
 
         steps_completed = _steps_completed(event)
         if steps_completed:

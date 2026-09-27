@@ -842,7 +842,9 @@ SIMULATOR_BODY = """
     
     let completed = true;
     if (payload.event_id) {
-        const header = t('event_id', { event_id: payload.event_id });
+        // FIRE's job record is diagnostic-only; the user bubble contains the
+        // single Hebrew user_response, without event IDs or tool metadata.
+        const header = '';
         completed = await pollJob(payload.event_id, step.sender_identity, reply, header);
     }
     

@@ -1,5 +1,7 @@
 import asyncio
 import os
+import time
+import zlib
 from types import SimpleNamespace
 
 from api.app import ApiContext, build_app, build_group_routing
@@ -12,7 +14,7 @@ from orchestrator.flows import FlowDeps, SerialEventQueue
 from persistence.sqlite_store import SQLitePersistence
 from profiles import AreaRegistry, EventTypeRegistry
 from profiles import firefighting as fire
-from profiles.simulation import simulation_user_telegram_id
+from profiles.simulation import simulation_group_chat_id, simulation_user_telegram_id
 from protocols.loader import ProtocolSet
 from tests.api_fakes import FakeSettings, RunningApiServer
 from tests.test_firefighting_demo_acceptance import _temporary_fire_paths
@@ -80,41 +82,68 @@ def test_fire_picture_through_real_simulator_http_and_job(tmp_path, monkeypatch)
         )
         await runtime.startup()
         try:
-            opening = fire.SIMULATIONS[0].raw["steps"][0]
-            commander_id = simulation_user_telegram_id(0)
-            first = await runtime.handle_message({
-                "sender_identity": commander_id,
-                "chat_id": commander_id,
-                "chat_type": "private",
-                "text": opening["text"],
-                "event_time": opening["timestamp"],
-                "protocol_hint": opening["protocol_hint"],
-                "source_message_id": "e2e-opening",
-            })
-            assert "FIRE picture collected" not in first["reply_text"]
-            await asyncio.sleep(0.25)
-            picture_step = fire.SIMULATIONS[0].raw["steps"][6]
-            second = await runtime.handle_message({
-                "sender_identity": simulation_user_telegram_id(5),
-                "chat_id": simulation_user_telegram_id(5),
-                "chat_type": "private",
-                "text": picture_step["text"],
-                "event_time": picture_step["timestamp"],
-                "protocol_hint": picture_step["protocol_hint"],
-                "source_message_id": "e2e-picture",
-            })
-            assert "FIRE picture collected" not in second["reply_text"]
-            watermark = (second["watermark"]["status_len"], second["watermark"]["sent_len"])
-            delivered = ""
-            for _ in range(30):
-                await asyncio.sleep(0.2)
-                delivered = runtime.poll_chat(simulation_user_telegram_id(5), watermark)["reply_text"]
-                if delivered:
-                    break
-            assert "תמונת מצב מבצעית" in delivered
-            assert "סיכונים" in delivered and "פערי מידע" in delivered
-            assert "מספר רשומות" not in delivered
-            assert "steps_completed" not in delivered
+            async def send_step(scenario_key, step):
+                sender = next(persona for persona in fire.SIMULATION_USERS if persona.key == step["sender_identity"])
+                sender_id = simulation_user_telegram_id(sender.offset)
+                group = next((item for item in fire.SIMULATION_GROUPS if item.key == step["chat"]), None)
+                chat_id = simulation_group_chat_id(group.offset) if group else sender_id
+                chat_type = "supergroup" if group else "private"
+                source = f"e2e-{scenario_key}-{step['step']}"
+                started = time.perf_counter()
+                initial = await runtime.handle_message({
+                    "sender_identity": sender_id,
+                    "chat_id": chat_id,
+                    "chat_type": chat_type,
+                    "text": step["text"],
+                    "event_time": step["timestamp"],
+                    "protocol_hint": step["protocol_hint"],
+                    "source_message_id": source,
+                })
+                assert "FIRE picture collected" not in (initial["reply_text"] or "")
+                hashed = str(zlib.crc32(source.encode("utf-8")) & 0x7FFFFFFF)
+                event = None
+                for _ in range(40):
+                    event = persistence.fetch_event_by_source_message("telegram", sender_id, hashed)
+                    if event and event.get("outcome") in {"succeeded", "failed"}:
+                        break
+                    await asyncio.sleep(0.1)
+                assert event is not None and event["outcome"] == "succeeded", event
+                job = await runtime.api_client.get_job_result(event["event_id"], sender_id)
+                assert job is not None and job.user_response
+                elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+                print(f"CHAT {scenario_key}/{step['step']} ({elapsed_ms} ms): {job.user_response}")
+                return event, job, elapsed_ms
+
+            outputs = {}
+            for scenario in fire.SIMULATIONS[:2]:
+                for step in scenario.raw["steps"]:
+                    event, job, elapsed = await send_step(scenario.key, step)
+                    outputs[(scenario.key, step["step"])] = (event, job, elapsed)
+                    if scenario.key == "fire002_phase1" and step["step"] == 1:
+                        cycle = registry.get("team_status_agent").status_store.find_cycle("shift-2026-09-09")
+                        before_omri = registry.get("team_status_agent").status_store.availability_snapshot(
+                            "2026-09-09T07:45:00Z", cycle_id=cycle["cycle_id"]
+                        )
+                        print(f"CREW BEFORE OMRI: {before_omri}")
+                    if scenario.key == "fire002_phase1" and step["step"] == 2:
+                        cycle = registry.get("team_status_agent").status_store.find_cycle("shift-2026-09-09")
+                        after_omri = registry.get("team_status_agent").status_store.availability_snapshot(
+                            "2026-09-09T11:30:00Z", cycle_id=cycle["cycle_id"]
+                        )
+                        print(f"CREW AFTER OMRI: {after_omri}")
+
+            for key in (("fire002_phase1", 7), ("fire002_phase2", 8)):
+                picture = outputs[key][1].user_response
+                assert "תמונת מצב מבצעית" in picture
+                assert "סיכונים" in picture and "פערי מידע" in picture
+                assert "steps_completed" not in picture
+                assert "FIRE simulation action applied" not in picture
+            varied = dict(fire.SIMULATIONS[0].raw["steps"][6])
+            varied["text"] = "מפקד, תן עכשיו סטטוס מבצעי עדכני של הכוח והנכסים, ומה עדיין לא אומת."
+            varied["step"] = 99
+            varied_event, varied_job, _ = await send_step("varied-picture", varied)
+            assert "תמונת מצב מבצעית" in varied_job.user_response
+            assert "לא ניתן" not in varied_job.user_response
         finally:
             await runtime.shutdown()
 

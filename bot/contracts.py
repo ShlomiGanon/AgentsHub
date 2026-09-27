@@ -276,6 +276,7 @@ class FailureNotice:
     failed_step_agent_name: str | None
     failure_reason: str
     steps_completed_before_failure: tuple[str, ...] = ()
+    simulation_context: str | None = None
 
 
 @dataclass(frozen=True)
