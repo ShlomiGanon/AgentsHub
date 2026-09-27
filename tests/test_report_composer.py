@@ -24,6 +24,25 @@ class _ScriptedComposerAgent:
         return _Result()
 
 
+class _SequentialComposerAgent:
+    """Returns a different response text on each successive call -- for testing the
+    banned-opener retry (report_composer.py::compose_report)."""
+
+    def __init__(self, response_texts):
+        self._responses = list(response_texts)
+        self.calls = []
+
+    def process(self, text, allowed_tools, *, invocation_policy=None):
+        self.calls.append((text, allowed_tools, invocation_policy))
+        response_text = self._responses[len(self.calls) - 1]
+
+        class _Result:
+            status = "success"
+            text = response_text
+
+        return _Result()
+
+
 def _summary(**overrides) -> RunSummary:
     defaults = dict(
         event_id="evt-1",
@@ -97,6 +116,35 @@ def test_compose_report_falls_back_when_no_agent_is_available():
     assert text  # render_summary directly, no model attempted
 
 
+# -- compose_report: banned-opener retry/fallback -----------------------------
+
+
+def test_compose_report_retries_once_after_a_banned_opener_then_uses_the_clean_retry():
+    agent = _SequentialComposerAgent([
+        "Your report was received. The update was completed successfully.",
+        "The small fire near the access road was logged; suppression is already underway.",
+    ])
+
+    text = compose_report(agent, _summary(), "viewer", get_catalog("en"))
+
+    assert text == "The small fire near the access road was logged; suppression is already underway."
+    assert len(agent.calls) == 2
+    assert "banned phrase" in agent.calls[1][0]
+
+
+def test_compose_report_falls_back_when_the_retry_still_uses_a_banned_opener():
+    agent = _SequentialComposerAgent([
+        "Your report was received and logged for the record.",
+        "Your report was received a second time, still no real content.",
+    ])
+
+    text = compose_report(agent, _summary(), "viewer", get_catalog("en"))
+
+    assert len(agent.calls) == 2
+    assert text  # render_summary's deterministic fallback, never empty
+    assert not text.startswith("Your report was received")
+
+
 def test_compose_report_never_raises_even_on_a_broken_agent():
     agent = _ScriptedComposerAgent(raises=ValueError("boom"))
 
@@ -137,14 +185,19 @@ def test_prompt_instructs_the_model_to_reply_in_english_for_an_english_deploymen
     assert "English" in prompt
 
 
-def test_prompt_forbids_greetings_and_content_free_acknowledgements_for_every_audience():
+def test_prompt_forbids_greetings_banned_openers_and_internal_labels_for_every_audience():
+    catalog = get_catalog("en")
     for audience in ("viewer", "commander"):
-        prompt = build_prompt(_summary(), audience, "en")
+        prompt = build_prompt(_summary(), audience, "en", catalog)
 
         assert "Never open with a greeting" in prompt
-        assert "never open with a content-free acknowledgement" in prompt
-        assert "in any language" in prompt
+        assert 'was received" (in any language' in prompt
+        assert "Never surface an internal label" in prompt
+        assert "concretely, and specifically" in prompt
         assert "1-2 sentences" in prompt
+        # the catalog-driven tone examples were actually injected, not left as a blank placeholder
+        assert "Bad example:" in prompt
+        assert "Good example:" in prompt
 
 
 # -- build_prompt: audience scoping -------------------------------------------

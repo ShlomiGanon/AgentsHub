@@ -385,13 +385,16 @@ def test_classify_intent_returns_the_parsed_result():
     assert result.intent == "request"
 
 
-def test_protocols_appear_in_the_prompt():
+def test_protocol_names_appear_in_the_prompt_without_their_full_descriptions():
+    # Trimmed for prompt size (Phase A): intent classification only needs to validate
+    # matched_protocol_names against real protocol names, never the full description --
+    # that's `select_protocol`'s job, not this stage's.
     agent = _ScriptedMainAgent("INTENT: question\nREASON: r")
 
     classify_intent(agent, _protocols(), "is gate 3 ok?")
 
     assert "dispatch_response" in agent.calls[0][0]
-    assert "applies when a response must be dispatched" in agent.calls[0][0]
+    assert "applies when a response must be dispatched" not in agent.calls[0][0]
 
 
 def test_classify_intent_passes_no_tools():

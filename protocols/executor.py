@@ -42,6 +42,50 @@ def _can_retry(step: Step, agent: Agent) -> bool:
     return True
 
 
+# Known failure-reporting conventions shared across every direct-callable tool method today
+# (agents/team_status_agent.py, profiles/response_team.py's ResponseTeamRosterAgent/
+# ResponseTeamSurveillanceAgent) — a plain, human-readable string return, never a structured
+# status object. A direct_tool step has no specialist-agent LLM turn to judge its own result,
+# so this substring check is what stands in for that judgment (deliberately conservative:
+# false negatives here just fall through to a normal "succeeded" reading, which matches how a
+# specialist agent would read an ambiguous-but-not-explicitly-failed tool result today).
+_DIRECT_TOOL_FAILURE_MARKERS = ("Clarification required:", "was not stored:", "update failed:")
+
+
+def _direct_tool_call_failed(result_text: str) -> bool:
+    return any(marker in result_text for marker in _DIRECT_TOOL_FAILURE_MARKERS)
+
+
+def _execute_direct_tool_step(agent: Agent, step: Step) -> StepOutcome:
+    """Call `step.direct_tool_name` as a plain Python method — no crewai, no LLM call at all.
+
+    `direct_tool_kwargs` is already fully bound by the profile's `direct_tool_binder`
+    (protocols/contracts.py::Protocol.direct_tool_binder) before this step ever reaches the
+    executor; a missing/invalid required field is caught upstream by the ordinary
+    `required_event_fields` check every step already goes through (`_missing_event_fields`,
+    below) — this function is only ever reached once that check has already passed."""
+
+    side_effect_locks = _locks_for_step(agent, step)
+    for side_effect_lock in side_effect_locks:
+        side_effect_lock.acquire()
+    try:
+        tool_method = getattr(agent, step.direct_tool_name)
+        result_text = tool_method(**step.direct_tool_kwargs)
+    except Exception as exc:
+        logger.info(
+            "direct tool step raised",
+            extra={"event": "direct_tool_step_error", "agent": step.agent_name, "tool": step.direct_tool_name, "cause": str(exc), "trace_id": get_trace_id()},
+        )
+        return StepOutcome(step=step, result_text=None, attempt_count=1, succeeded=False, failure_reason=str(exc), status="failed")
+    finally:
+        for side_effect_lock in reversed(side_effect_locks):
+            side_effect_lock.release()
+
+    if _direct_tool_call_failed(result_text):
+        return StepOutcome(step=step, result_text=result_text, attempt_count=1, succeeded=False, failure_reason=result_text, status="failed")
+    return StepOutcome(step=step, result_text=result_text, attempt_count=1, succeeded=True)
+
+
 def execute_step_with_retry(
     agent: Agent,
     step: Step,
@@ -51,6 +95,9 @@ def execute_step_with_retry(
     sleep_fn: Callable[[float], None] = time.sleep,
     backoff_seconds: float = 1.0,
 ) -> StepOutcome:
+    if step.kind == "direct_tool":
+        return _execute_direct_tool_step(agent, step)
+
     current_task_text = step.task_text
     attempts = 0
     last_failure_reason = "attempt limit exhausted"

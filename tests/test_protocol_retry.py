@@ -175,3 +175,85 @@ def test_backoff_is_applied_between_attempts_via_injectable_sleep_fn():
     execute_step_with_retry(agent, _step(), _FakeSettings(3), sleep_fn=sleep_fn, backoff_seconds=2.5)
 
     assert sleeps == [2.5, 2.5]  # between attempts 1->2 and 2->3, not after the last
+
+
+# -- direct_tool steps: no crewai, no LLM call at all -------------------------
+
+
+class _DirectToolAgent:
+    """A duck-typed stand-in exposing a plain callable tool method -- no .process(), no
+    crewai — proves execute_step_with_retry never touches the LLM path for kind='direct_tool'."""
+
+    name = "scripted_agent"
+
+    def __init__(self, tool_result=None, raises=None):
+        self._tool_result = tool_result
+        self._raises = raises
+        self.calls = []
+
+    def record_attendance_response(self, **kwargs):
+        self.calls.append(kwargs)
+        if self._raises is not None:
+            raise self._raises
+        return self._tool_result
+
+    def exposed_tools(self):
+        return READ_ONLY_TOOL
+
+    def process(self, text, allowed_tools):
+        raise AssertionError("a direct_tool step must never call .process() (no LLM call)")
+
+
+def _direct_tool_step(kwargs, allowed_tools=("record_attendance_response",)):
+    return Step(
+        agent_name="scripted_agent", task_text="record attendance", allowed_tools=allowed_tools,
+        kind="direct_tool", direct_tool_name="record_attendance_response", direct_tool_kwargs=kwargs,
+    )
+
+
+def test_direct_tool_step_calls_the_tool_method_directly_with_the_bound_kwargs():
+    agent = _DirectToolAgent(tool_result="The attendance response was stored.")
+
+    outcome = execute_step_with_retry(agent, _direct_tool_step({"availability": "available"}), _FakeSettings(2))
+
+    assert agent.calls == [{"availability": "available"}]
+    assert outcome.succeeded
+    assert outcome.result_text == "The attendance response was stored."
+
+
+def test_direct_tool_step_never_calls_process_even_when_it_would_raise():
+    agent = _DirectToolAgent(tool_result="The attendance response was stored.")
+
+    outcome = execute_step_with_retry(agent, _direct_tool_step({}), _FakeSettings(2))
+
+    assert outcome.succeeded  # would have raised AssertionError above if .process() were ever called
+
+
+def test_direct_tool_step_fails_on_a_known_failure_marker_in_the_tool_result():
+    agent = _DirectToolAgent(tool_result="Clarification required: specify whether available or unavailable.")
+
+    outcome = execute_step_with_retry(agent, _direct_tool_step({}), _FakeSettings(2))
+
+    assert not outcome.succeeded
+    assert outcome.status == "failed"
+    assert "Clarification required" in outcome.failure_reason
+
+
+def test_direct_tool_step_fails_when_the_tool_method_raises():
+    agent = _DirectToolAgent(raises=RuntimeError("persistence unavailable"))
+
+    outcome = execute_step_with_retry(agent, _direct_tool_step({}), _FakeSettings(2))
+
+    assert not outcome.succeeded
+    assert "persistence unavailable" in outcome.failure_reason
+
+
+def test_direct_tool_step_has_no_retry_loop():
+    # A single call, attempt_count=1, regardless of the configured retry limit -- there is no
+    # crewai loop here to retry within.
+    agent = _DirectToolAgent(tool_result="Clarification required: area is required.")
+
+    outcome = execute_step_with_retry(agent, _direct_tool_step({}), _FakeSettings(5))
+
+    assert len(agent.calls) == 1
+    assert outcome.attempt_count == 1

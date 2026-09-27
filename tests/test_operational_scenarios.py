@@ -123,6 +123,14 @@ def _operational_ctx(tmp_path, module_path, main_agent):
 def _sec_ctx(tmp_path, teardown_ctx, main_agent):
     ctx = _operational_ctx(tmp_path, "profiles.response_team", main_agent)
     teardown_ctx.append(ctx)
+    # Phase A: record_attendance/report_team_movement's direct-tool steps call the real
+    # roster_agent tool method directly (no crewai turn to intercept), which itself checks
+    # `approved_members` — register and approve the scenario personas that report their own
+    # attendance/movement, the same way a real deployment's roster approval would.
+    roster_agent = ctx.deps.registry.get("roster_agent")
+    for identity, full_name in (("michael", "Michael"), ("gil", "Gil")):
+        roster_agent.register_member(identity, full_name)
+    roster_agent.approve_roster(COMMANDER_IDENTITY)
     return ctx
 
 
@@ -304,6 +312,11 @@ def test_scenario_3_team_member_in_transit(tmp_path, teardown_ctx):
 
 
 def test_scenario_4_two_cameras_in_one_message(tmp_path, teardown_ctx):
+    # Phase A: update_camera_status's direct_tool_binder (profiles/response_team.py)
+    # produces one real step per camera identifier and calls the real tool for each —
+    # no formulate_tasks call at all (deliberately no "participating in the" dispatch entry;
+    # ScriptedAgent raises if it's ever reached), and no scripted crewai echo either, since
+    # the real update_camera_status tool method runs directly for both cameras.
     agent = ScriptedAgent(
         {
             "Extract this operational event": _extraction(
@@ -312,19 +325,6 @@ def test_scenario_4_two_cameras_in_one_message(tmp_path, teardown_ctx):
             ),
             "RISK_SCORE": "RISK_SCORE: 0.2\nREASON: equipment fault",
             "Choose the protocol": "SELECTED: update_camera_status\nREASON: two cameras reported offline",
-            # This architecture formulates exactly one step per PARTICIPATING
-            # agent (orchestrator.reasoning.formulate_tasks rejects more than
-            # one step for the same agent) — a real model handling this task
-            # would call update_camera_status twice within its one step, once
-            # per camera identifier, exactly as
-            # profiles.response_team.ResponseTeamSurveillanceAgent's
-            # update_camera_status tool description instructs. What this test
-            # can actually observe offline is the guarantee upstream of that:
-            # extraction captured both identifiers, and the one formulated
-            # task names both.
-            "participating in the": _single_agent_formulation(
-                "surveillance_agent", "record the status update for CAM-01 and the status update for CAM-02"
-            ),
             "VERDICT:": _VERDICT_SUCCESS,
         }
     )
@@ -338,10 +338,18 @@ def test_scenario_4_two_cameras_in_one_message(tmp_path, teardown_ctx):
     assert event["classification"] == "camera_status"
     assert set(event["entities"]) == {"CAM-01", "CAM-02"}
     assert event["selected_protocol"] == "update_camera_status"
-    [step] = event["steps"]
-    assert step["agent_name"] == "surveillance_agent"
-    assert "CAM-01" in step["task_text"] and "CAM-02" in step["task_text"]
+    steps = event["steps"]
+    assert len(steps) == 2
+    assert {step["agent_name"] for step in steps} == {"surveillance_agent"}
+    assert all(step["status"] == "succeeded" for step in steps)
     assert job_status(ctx, event_id)["status"] == "succeeded"
+
+    surveillance_agent = ctx.deps.registry.get("surveillance_agent")
+    cameras = {c["camera_id"]: c for c in surveillance_agent.surveillance_store.list_cameras()}
+    assert cameras["CAM-01"]["feed_summary"] == "CAM-01 and CAM-02 are offline"
+    assert cameras["CAM-02"]["feed_summary"] == "CAM-01 and CAM-02 are offline"
+    assert cameras["CAM-01"]["status"] == "offline"  # "offline" keyword in the raw text
+    assert cameras["CAM-02"]["status"] == "offline"
 
 
 def test_scenario_5_cut_communications_cable(tmp_path, teardown_ctx):

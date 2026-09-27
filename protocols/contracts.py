@@ -1,7 +1,8 @@
 """The protocol model (work_plan.md §4.1) and the Step contract (§1.2/§4.4)."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum
+from typing import Callable, Literal
 
 
 EVENT_DATA_FIELDS = (
@@ -46,6 +47,21 @@ class Protocol:
     # selection candidate from every group regardless of which specialist that
     # group is bound to.
     safety_critical: bool = False
+    # False skips build_insight/judge_success (orchestrator/flows.py::_finish_protocol_assessment)
+    # entirely in favor of a deterministic verdict (every step succeeded -> succeeded, else
+    # failed) — for protocols whose steps are all "direct_tool" kind (below): recording a
+    # report exactly as given IS correct behavior for these, not something that needs a model's
+    # judgment call, and there is no specialist-agent reasoning left to synthesize an insight
+    # about.
+    needs_insight: bool = True
+    # A profile-supplied callable: event dict -> tuple[Step, ...], each already fully bound
+    # (concrete direct_tool_kwargs resolved from the event's own extracted fields) or carrying
+    # required_event_fields naming what's still missing. When set, orchestrator/flows.py's
+    # _run_protocol calls this INSTEAD of formulate_tasks — skipping task_formulation (and its
+    # task_rewrite fallback) entirely, so precedent text can never reach these protocols'
+    # instructions, and no crewai/LLM call happens for the step(s) themselves. Global mechanism;
+    # each profile supplies its own binder per protocol (this field IS the config).
+    direct_tool_binder: "Callable[[dict], tuple[Step, ...]] | None" = None
 
 
 @dataclass(frozen=True)
@@ -58,6 +74,13 @@ class Step:
     step_id: str = ""
     depends_on: tuple[str, ...] = ()
     required_event_fields: tuple[str, ...] = ()
+    # "agent" (default): executed via the specialist agent's own LLM turn (protocols/executor.py's
+    # existing crewai-backed retry loop), unchanged. "direct_tool": `direct_tool_name` is called as
+    # a plain Python method on the resolved agent instance with `direct_tool_kwargs` -- no crewai,
+    # no LLM call, no task_formulation/task_rewrite for this step at all.
+    kind: Literal["agent", "direct_tool"] = "agent"
+    direct_tool_name: str = ""
+    direct_tool_kwargs: dict = field(default_factory=dict)
 
 
 class ProtocolEditError(Exception):

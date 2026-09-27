@@ -6,6 +6,7 @@ import pytest
 
 from agents import adapter
 from config.base import BaseConfig, TierModel
+from messages import get_catalog
 from orchestrator.main_agent import OrchestrationParseError
 from orchestrator.main_agent import (
     MainAgent,
@@ -14,6 +15,7 @@ from orchestrator.main_agent import (
     _parse_risk_assessment_response,
     assess_risk,
     construct_core_agents,
+    formulate_event_data_question,
 )
 
 
@@ -273,3 +275,56 @@ def test_construct_core_agents_returns_the_main_agent_with_the_configured_model(
     assert core_agents["main_agent"].model == "the-main-model"
     assert core_agents["main_agent"].descriptor.api_key == "the-core-key"
     assert isinstance(core_agents["main_agent"], MainAgent)
+
+
+# -- formulate_event_data_question: banned-opener retry/fallback -------------
+
+
+class _SequentialScriptedMainAgent:
+    def __init__(self, response_texts):
+        self._responses = list(response_texts)
+        self.calls = []
+
+    def process(self, text, allowed_tools):
+        self.calls.append((text, allowed_tools))
+
+        class _Result:
+            status = "success"
+            text = self._responses[len(self.calls) - 1]
+
+        return _Result()
+
+
+def test_event_data_question_retries_once_after_a_banned_opener():
+    agent = _SequentialScriptedMainAgent([
+        "Your report was received. Please provide the missing area.",
+        "Which area were you reporting from?",
+    ])
+
+    question = formulate_event_data_question(agent, {"raw_text": "camera issue"}, ("area",), (), get_catalog("en"))
+
+    assert question == "Which area were you reporting from?"
+    assert len(agent.calls) == 2
+    assert "banned phrase" in agent.calls[1][0]
+
+
+def test_event_data_question_falls_back_to_the_deterministic_catalog_template():
+    agent = _SequentialScriptedMainAgent([
+        "Your report was received, please clarify the area.",
+        "Your report was received once more, still missing the area.",
+    ])
+
+    question = formulate_event_data_question(agent, {"raw_text": "camera issue"}, ("area",), (), get_catalog("en"))
+
+    assert len(agent.calls) == 2
+    assert not question.startswith("Your report was received")
+    assert "Additional details are needed" in question
+
+
+def test_event_data_question_without_a_catalog_skips_the_tone_check():
+    agent = _SequentialScriptedMainAgent(["Your report was received, please clarify the area."])
+
+    question = formulate_event_data_question(agent, {"raw_text": "camera issue"}, ("area",), ())
+
+    assert question == "Your report was received, please clarify the area."
+    assert len(agent.calls) == 1

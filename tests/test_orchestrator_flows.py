@@ -36,7 +36,7 @@ from orchestrator.insights import InsightsAgent
 from orchestrator.main_agent import MainAgent
 from persistence.sqlite_store import SQLitePersistence
 from protocols.loader import ProtocolSet
-from protocols.model import CriticalityLevel, Protocol
+from protocols.model import CriticalityLevel, Protocol, Step
 from profiles import AreaRegistry
 from profiles import EventTypeRegistry
 
@@ -335,6 +335,67 @@ def test_required_fields_gate_asks_only_for_the_field_extraction_could_not_resol
     [hold] = gated_deps.persistence.list_held_events("event_data")
     assert hold["missing_fields"] == ["severity"]  # not "area" — already resolved by extraction
     assert not any("RISK_SCORE" in call for call in agent.calls)  # risk assessment never ran
+
+
+# -- direct_tool_binder protocols (Phase A): no formulate_tasks, no judge_success ---
+
+
+def _direct_tool_protocol(name="log_status"):
+    def binder(event):
+        return (
+            Step(
+                agent_name="reference_agent", task_text="record it directly", allowed_tools=("record_action",),
+                step_id="1", kind="direct_tool", direct_tool_name="record_action",
+                direct_tool_kwargs={"location": "gate-3", "note": "reported via direct lane"},
+            ),
+        )
+
+    return Protocol(
+        name=name,
+        description="applies to a direct-tool logging report",
+        participating_agents=("reference_agent",),
+        approved_tools=("record_action",),
+        expected_success_output="confirmation the action was recorded",
+        criticality=CriticalityLevel.LOW,
+        approval_flag=False,
+        needs_insight=False,
+        direct_tool_binder=binder,
+    )
+
+
+def test_direct_tool_protocol_never_calls_task_formulation_or_judge_success(deps):
+    # _happy_path_agent's dispatch deliberately has no entry for "participating in the"
+    # (task_formulation) or "VERDICT:" (judge_success) — _ScriptedAgent.process raises
+    # AssertionError on an unscripted prompt, so this fails loudly if either is ever reached.
+    direct_deps = replace(deps, protocol_set=ProtocolSet(protocols=(*deps.protocol_set.all(), _direct_tool_protocol())))
+    agent = _happy_path_agent(risk_score="0.1", selected="log_status")
+    insights_agent = _ScriptedAgent({})  # never called either -- needs_insight=False
+
+    result = process_report(direct_deps, agent, insights_agent, "log this please", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    assert result.outcome == "succeeded"
+    reference_agent = direct_deps.registry.get("reference_agent")
+    assert reference_agent.actions_taken == ["gate-3: reported via direct lane"]
+
+
+def test_direct_tool_protocol_fails_deterministically_without_a_model_call(deps):
+    def failing_binder(event):
+        return (
+            Step(
+                agent_name="reference_agent", task_text="x", allowed_tools=("record_action",),
+                step_id="1", kind="direct_tool", direct_tool_name="record_action",
+                direct_tool_kwargs={},  # record_action requires `location` -- TypeError -> failed
+            ),
+        )
+
+    failing_protocol = replace(_direct_tool_protocol("log_status_bad"), direct_tool_binder=failing_binder)
+    direct_deps = replace(deps, protocol_set=ProtocolSet(protocols=(*deps.protocol_set.all(), failing_protocol)))
+    agent = _happy_path_agent(risk_score="0.1", selected="log_status_bad")
+    insights_agent = _ScriptedAgent({})
+
+    result = process_report(direct_deps, agent, insights_agent, "log this please", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    assert result.outcome == "failed"
 
 
 # -- Availability fields for absence reports (Stage 3, docs/bar_improves.md) -

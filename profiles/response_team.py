@@ -50,7 +50,7 @@ from persistence import (
 )
 from profiles.contracts import AgentSpec, OptimizationPolicy
 from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
-from protocols import CriticalityLevel, Protocol
+from protocols import CriticalityLevel, Protocol, Step
 
 DEFAULT_LANGUAGE = "he"
 
@@ -427,6 +427,126 @@ AGENTS = [
 ]
 
 
+# == Direct-tool step binders (Phase A, docs/responce_improve.md) ===========
+#
+# Each binds a protocol's tool call parameters straight from the event's own extracted
+# fields -- no formulate_tasks/task_rewrite call, no specialist-agent LLM turn for the tool
+# call itself (protocols/executor.py::_execute_direct_tool_step). A binder that cannot
+# confidently produce every parameter leaves the corresponding EVENT_DATA_FIELDS name(s) in
+# `required_event_fields` instead of guessing -- the ordinary missing-fields check
+# (protocols/executor.py::_missing_event_fields) then raises the same event_data hold any
+# other protocol would, before this step ever executes.
+
+def _infer_camera_status(raw_text: str) -> str:
+    lowered = (raw_text or "").casefold()
+    catalog = get_catalog(DEFAULT_LANGUAGE)
+    recovery_words = catalog.text("response_team.camera_status.recovery_words").split("|")
+    offline_words = catalog.text("response_team.camera_status.offline_words").split("|")
+    if any(word.casefold() in lowered for word in recovery_words):
+        return "active"
+    if any(word.casefold() in lowered for word in offline_words):
+        return "offline"
+    return "degraded"
+
+
+def _as_aware_iso(value: str) -> str:
+    """A persisted event timestamp is stored without an explicit offset but is always UTC
+    (config/environment.py's own timestamp convention) — agents/team_status_agent.py's
+    `_aware_datetime` rejects a naive string outright, so make it explicit before handing it
+    to a tool, the same way a real model call would when it reformats a timestamp itself."""
+
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.isoformat()
+
+
+def _bind_record_attendance(event: dict) -> tuple[Step, ...]:
+    absence_reason = (event.get("absence_reason") or "").strip()
+    received_at = event.get("received_at") or ""
+    base_kwargs = {
+        "source_message_id": event.get("source_message_id") or "",
+        "original_text": event.get("raw_text") or "",
+        "received_at": _as_aware_iso(received_at) if received_at else "",
+    }
+    if not absence_reason:
+        kwargs = {**base_kwargs, "availability": "available", "reason": "", "unavailable_days": 0}
+        required: tuple[str, ...] = ()
+    else:
+        missing = tuple(name for name in ("availability_start", "availability_end") if not event.get(name))
+        kwargs = {**base_kwargs, "availability": "unavailable", "reason": absence_reason}
+        if missing:
+            required = missing
+        else:
+            start = datetime.fromisoformat(event["availability_start"])
+            end = datetime.fromisoformat(event["availability_end"])
+            days = (end - start).total_seconds() / 86400
+            kwargs["unavailable_days"] = max(1, int(days + 0.999999))
+            required = ()
+    return (
+        Step(
+            agent_name="roster_agent",
+            task_text="Record the reporter's own attendance/availability response, bound directly from the event's extracted fields.",
+            allowed_tools=("record_attendance_response",),
+            step_id="1",
+            required_event_fields=required,
+            kind="direct_tool",
+            direct_tool_name="record_attendance_response",
+            direct_tool_kwargs=kwargs,
+        ),
+    )
+
+
+def _bind_update_camera_status(event: dict) -> tuple[Step, ...]:
+    entities = event.get("entities") or []
+    description = (event.get("description") or "").strip()
+    missing = tuple(name for name in ("entities", "description") if not event.get(name))
+    if missing:
+        return (
+            Step(
+                agent_name="surveillance_agent",
+                task_text="Record the reported camera(s) status, bound directly from the event's extracted fields.",
+                allowed_tools=("update_camera_status",),
+                step_id="1",
+                required_event_fields=missing,
+                kind="direct_tool",
+                direct_tool_name="update_camera_status",
+                direct_tool_kwargs={},
+            ),
+        )
+    status = _infer_camera_status(event.get("raw_text") or "")
+    return tuple(
+        Step(
+            agent_name="surveillance_agent",
+            task_text=f"Record camera {camera_id}'s reported status, bound directly from the event's extracted fields.",
+            allowed_tools=("update_camera_status",),
+            step_id=str(index + 1),
+            kind="direct_tool",
+            direct_tool_name="update_camera_status",
+            direct_tool_kwargs={"camera_id": camera_id, "observation": description, "status": status},
+        )
+        for index, camera_id in enumerate(entities)
+    )
+
+
+def _bind_report_team_movement(event: dict) -> tuple[Step, ...]:
+    area = (event.get("area") or "").strip()
+    required = () if area else ("area",)
+    kwargs = {"area": area} if area else {}
+    return (
+        Step(
+            agent_name="roster_agent",
+            task_text="Record the reporter's own current area, bound directly from the event's extracted fields.",
+            allowed_tools=("report_team_movement",),
+            step_id="1",
+            required_event_fields=required,
+            kind="direct_tool",
+            direct_tool_name="report_team_movement",
+            direct_tool_kwargs=kwargs,
+        ),
+    )
+
+
 # == Protocols (authored for SEC_001; docs/responce_improve.md) ==============
 #
 # All seven: approval_flag=False, commander_only=False, requires_confirmation=False.
@@ -449,6 +569,11 @@ PROTOCOLS = [
         approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
+        # Phase A: parameters bound straight from extracted fields, no model call for the
+        # step itself. Recording a report exactly as given is correct behavior, not something
+        # that needs a model's insight/judgment.
+        needs_insight=False,
+        direct_tool_binder=_bind_record_attendance,
     ),
     Protocol(
         name="update_camera_status",
@@ -467,6 +592,8 @@ PROTOCOLS = [
         approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
+        needs_insight=False,
+        direct_tool_binder=_bind_update_camera_status,
     ),
     Protocol(
         name="report_security_incident",
@@ -530,6 +657,8 @@ PROTOCOLS = [
         approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
+        needs_insight=False,
+        direct_tool_binder=_bind_report_team_movement,
     ),
     Protocol(
         name="query_situational_picture",

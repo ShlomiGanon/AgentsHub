@@ -598,6 +598,23 @@ MESSAGES = {
     "orchestrator.picture.domain_unavailable": "לא התקבל דיווח מ-{domain}.",
     "orchestrator.picture.fallback_header": "תמונת מצב נכון ל-{time}:",
     "orchestrator.picture.missing_note": "(הערה מבצעית: לא התקבל דיווח מ-{domains})",
+    # A composed reply must never open with an acknowledgement-only phrase (nothing
+    # said about what actually happened) and must never surface internal labels
+    # (classification, severity, protocol name). Pipe-delimited; split in code
+    # (orchestrator/report_composer.py, orchestrator/reasoning.py) for the
+    # deterministic post-check that catches a banned opener the model still used.
+    "orchestrator.report_tone.banned_openers": "התקבל|התקבלה|העדכון התקבל|הדיווח התקבל|נקלט|העדכון נקלט|הדיווח נקלט|סווג|חומרה|בדרגת",
+    "orchestrator.report_tone.examples": (
+        "דוגמה גרועה: \"הדיווח התקבל. הטיפול הסתיים בהצלחה.\" "
+        "דוגמה טובה: \"שריפה קטנה ליד כביש הגישה נרשמה; הכיבוי כבר בטיפול.\"\n"
+        "דוגמה גרועה: \"הדיווח התקבל, אך הטיפול בפנייה נכשל ולא הושלם.\" "
+        "דוגמה טובה: \"לא ניתן היה לאמת את הממצא מול פיד המצלמה בפועל, לכן העדכון לא נקלט.\""
+    ),
+    "orchestrator.event_data_question.fallback": "נדרשים פרטים נוספים כדי להמשיך: {missing_fields}.",
+    # Deterministic camera-status inference keywords (Phase A direct-tool binder,
+    # profiles/response_team.py::_infer_camera_status) -- pipe-delimited, split in code.
+    "response_team.camera_status.recovery_words": "חזר|תקין|back online|resolved|fixed|restored",
+    "response_team.camera_status.offline_words": "נחתך|חבלה|לא פעיל|אינה מספקת תמונה חיה|sabotage|cut|damaged|severed|offline|down",
     "response_team.friendly_forces.confirm_ambulance": "נרשמה בהצלחה הזנקת צוות רפואה/מד\"א ליעד '{location}'.",
     "response_team.friendly_forces.confirm_firefighters": "נרשמה בהצלחה הזנקת כוחות כיבוי והצלה ליעד '{location}'.",
     "response_team.friendly_forces.confirm_military": "נרשמה בהצלחה הזנקת כוחות צבא וביטחון ליעד '{location}'.",

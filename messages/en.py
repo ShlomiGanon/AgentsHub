@@ -602,6 +602,23 @@ MESSAGES = {
     "orchestrator.picture.domain_unavailable": "No report was received from {domain}.",
     "orchestrator.picture.fallback_header": "Situational picture as of {time}:",
     "orchestrator.picture.missing_note": "(Operational note: no report was received from {domains})",
+    # A composed reply must never open with an acknowledgement-only phrase (nothing
+    # said about what actually happened) and must never surface internal labels
+    # (classification, severity, protocol name). Pipe-delimited; split in code
+    # (orchestrator/report_composer.py, orchestrator/reasoning.py) for the
+    # deterministic post-check that catches a banned opener the model still used.
+    "orchestrator.report_tone.banned_openers": "Your request was received|Your report was received|The update was received|The report was received|classified as|severity|at a",
+    "orchestrator.report_tone.examples": (
+        "Bad example: \"Your report was received. The update was completed successfully.\" "
+        "Good example: \"The small fire near the access road was logged; suppression is already underway.\"\n"
+        "Bad example: \"Your report was received, but the request could not be completed.\" "
+        "Good example: \"The finding could not be verified against the live camera feed, so the update was not recorded.\""
+    ),
+    "orchestrator.event_data_question.fallback": "Additional details are needed to continue: {missing_fields}.",
+    # Deterministic camera-status inference keywords (Phase A direct-tool binder,
+    # profiles/response_team.py::_infer_camera_status) -- pipe-delimited, split in code.
+    "response_team.camera_status.recovery_words": "back online|resolved|fixed|restored",
+    "response_team.camera_status.offline_words": "sabotage|cut|damaged|severed|offline|down",
     "response_team.friendly_forces.confirm_ambulance": "Medical/EMS team dispatch to '{location}' recorded successfully.",
     "response_team.friendly_forces.confirm_firefighters": "Firefighting and rescue force dispatch to '{location}' recorded successfully.",
     "response_team.friendly_forces.confirm_military": "Military and security force dispatch to '{location}' recorded successfully.",

@@ -138,6 +138,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `orchestrator/report_composer.py` | Production | Private implementation | Composes a grounded, audience-scoped run report with a SUB-tier model call, falling back to render_summary on any failure, timeout, or empty response. |
 | `orchestrator/run_report.py` | Production | Private implementation | Builds a structured RunSummary from persisted event/step/hold data and renders it deterministically, audience-aware, without a model call. |
 | `orchestrator/situational_picture.py` | Production | Private implementation | Builds the multi-domain situational picture at request time: the Main Agent plans one live question per specialist, gathers their answers and the recent event log concurrently, and composes the picture from those findings only. |
+| `orchestrator/tone.py` | Production | Private implementation | Shared, catalog-driven banned-opener check for every model-composed user-facing reply (report composition, event-data questions) -- deterministic post-check, no raw Hebrew/English literals outside the message catalog. |
 | `persistence/__init__.py` | Production | Public facade | Exposes persistence contracts, constructors, and compatibility aliases. |
 | `persistence/contracts.py` | Production | Private implementation | Defines persistence interfaces and domain errors. |
 | `persistence/response_team_store.py` | Production | Private implementation | Implements the Response Team profile's own roster/attendance, surveillance, and neighboring-force-dispatch tables against the profile's shared DB_PATH (docs/responce_improve.md). |
@@ -250,6 +251,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_reference_agent.py` | Test | Internal | Verifies reference agent behavior and edge cases. |
 | `tests/test_report_composer.py` | Test | Internal | Verifies model-composed run report text, its fallback to render_summary, and audience/language scoping of the prompt. |
 | `tests/test_response_improvements.py` | Test | Internal | Verifies conversation retention, long polling, trace propagation, queue ordering, idempotency, and removal of the obsolete stream route. |
+| `tests/test_response_team_direct_tool_binders.py` | Test | Internal | Verifies response_team's direct-tool step binders (Phase A) -- record_attendance/update_camera_status/report_team_movement parameter binding, missing-field detection, and camera-status inference. |
 | `tests/test_run_report.py` | Test | Internal | Verifies RunSummary construction from persisted event/step/hold data and audience-aware deterministic rendering. |
 | `tests/test_run_stack.py` | Test | Internal | Verifies profile-database reset removes only declared databases and known sidecars, and refuses a non-database path. |
 | `tests/test_server_control.py` | Test | Internal | Verifies safe profile discovery and supervisor command and selection persistence. |
@@ -259,6 +261,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_surveillance_persistence.py` | Test | Internal | Verifies surveillance database initialization, updates, dispatch, and mission state. |
 | `tests/test_team_status_agent.py` | Test | Internal | Verifies daily attendance, multi-day unavailability, late approval, and protocol execution. |
 | `tests/test_team_status_persistence.py` | Test | Internal | Verifies readiness-team roster approval, message idempotency, late-response isolation, and separate SQLite schemas. |
+| `tests/test_tone.py` | Test | Internal | Verifies the shared banned-opener check (orchestrator/tone.py) against known Hebrew/English phrases and the opener-only detection window. |
 | `tests/test_unsafe_system.py` | Test | Internal | Verifies safe/open Telegram admission, automatic registration, approval, and API isolation. |
 | `tests/test_user_admin.py` | Test | Internal | Verifies user admin behavior and edge cases. |
 | `tools/__init__.py` | Production | Public facade | Exposes shared observability helpers and lazy terminal compatibility aliases. |

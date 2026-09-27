@@ -146,6 +146,7 @@ jobs:
           tests/test_report_composer.py
           tests/test_run_report.py
           tests/test_situational_picture.py
+          tests/test_tone.py
 
       - name: Mission 7 - API Layer
         run: >
@@ -204,6 +205,7 @@ jobs:
           python -m pytest -v --color=yes
           tests/test_operational_profiles.py
           tests/test_operational_scenarios.py
+          tests/test_response_team_direct_tool_binders.py
 
       - name: Confirm tests did not modify tracked files
         run: git diff --exit-code

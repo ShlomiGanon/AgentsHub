@@ -394,7 +394,7 @@ def _apply_required_fields_gate(
             deps.persistence.fetch_conversation_messages(event["conversation_id"], deps.conversation_history_turns * 2)
         )
 
-    question = formulate_event_data_question(main_agent, event, missing, conversation_messages)
+    question = formulate_event_data_question(main_agent, event, missing, conversation_messages, deps.message_catalog)
 
     if event.get("conversation_id") and deps.conversation_history_turns > 0:
         deps.persistence.append_conversation_message(
@@ -877,6 +877,16 @@ def _run_protocol(
     deadline_failure = _deadline_failure(deps, event_id, "formulation")
     if deadline_failure is not None:
         return deadline_failure
+    if protocol.direct_tool_binder is not None:
+        # Declared direct-tool steps (Phase A): parameters are bound from the event's own
+        # extracted fields by the profile's own binder, never by the model — no
+        # formulate_tasks/task_rewrite call at all, so precedent_matches (whatever comparable
+        # history this event has) structurally cannot reach or escalate a direct-tool step's
+        # instructions, since no instructions are ever written for one.
+        direct_tool_steps = protocol.direct_tool_binder(deps.persistence.fetch_event(event_id))
+        return _execute_protocol_plan(
+            deps, event_id, main_agent, insights_agent, protocol, direct_tool_steps, precedent_matches,
+        )
     formulation = formulate_tasks(
         main_agent, protocol, deps.registry, raw_text, classification, area, description,
         precedent_context=precedent_matches, event_data=deps.persistence.fetch_event(event_id),
@@ -1080,7 +1090,7 @@ def _execute_protocol_plan(
                 deps.persistence.fetch_conversation_messages(latest_event["conversation_id"], 12)
             )
         question = formulate_event_data_question(
-            main_agent, latest_event, run_result.missing_event_fields, conversation_messages
+            main_agent, latest_event, run_result.missing_event_fields, conversation_messages, deps.message_catalog
         )
         waiting_step_ids = tuple(
             outcome.step.step_id for outcome in run_result.step_outcomes
@@ -1156,6 +1166,17 @@ def _finish_protocol_assessment(
         deadline_failure = _deadline_failure(deps, event_id, "final_assessment")
         if deadline_failure is not None:
             return deadline_failure
+    if not protocol.needs_insight:
+        # Deterministic verdict, no build_insight/judge_success call at all (Phase A): every
+        # step succeeded -> succeeded, else failed with the first failing step's own reason.
+        # Recording a report exactly as given IS correct behavior for a direct-tool step, not
+        # something that needs a model's judgment call.
+        first_failure = next((outcome for outcome in step_outcomes if not outcome.succeeded), None)
+        outcome = "succeeded" if first_failure is None else "failed"
+        failure_reason = first_failure.failure_reason if first_failure is not None else None
+        _record_outcome_with_report(deps, event_id, outcome, failure_reason=failure_reason, insight_text="")
+        _log_event_outcome(event_id, outcome, failure_reason=failure_reason)
+        return FlowResult(event_id, outcome, failure_reason or "")
     final_assessment = None
     persisted_event = deps.persistence.fetch_event(event_id)
     if deps.optimization_policy.final_assessment_mode == "low_risk_merged" and persisted_event.get("risk_level") == "low":
@@ -1355,8 +1376,15 @@ def resume_after_event_data(
         reason = "the selected protocol is no longer available"
         _record_outcome_with_report(deps, event_id, "failed", failure_reason=reason)
         return FlowResult(event_id, "failed", reason)
-    rows = event.get("steps", [])
-    steps = tuple(_step_from_row(row) for row in rows)
+    if protocol.direct_tool_binder is not None:
+        # Re-bind from the event's own now-more-complete fields rather than reconstructing
+        # from the persisted row (_step_from_row doesn't round-trip kind/direct_tool_name/
+        # direct_tool_kwargs — and re-binding is the more correct choice anyway: the whole
+        # point of resuming is that the previously-missing field just arrived).
+        steps = protocol.direct_tool_binder(event)
+    else:
+        rows = event.get("steps", [])
+        steps = tuple(_step_from_row(row) for row in rows)
     precedent_matches = _look_up_precedent_if_possible(deps, event_id, event)
     return _execute_protocol_plan(
         deps, event_id, main_agent, insights_agent, protocol, steps, precedent_matches, resumed=True,

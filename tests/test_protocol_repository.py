@@ -379,6 +379,10 @@ def test_step_fields_include_dependencies_and_required_event_data():
         "step_id",
         "depends_on",
         "required_event_fields",
+        "kind",
+        "direct_tool_name",
+        "direct_tool_kwargs",
     }
     assert step.step_id == ""
     assert step.depends_on == ()
+    assert step.kind == "agent"  # every existing step is unaffected by direct_tool (Phase A)

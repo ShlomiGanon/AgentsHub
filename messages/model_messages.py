@@ -26,6 +26,9 @@ Do not invent facts, data, names, tools, or capabilities absent from the system 
 
 EVENT_DATA_QUESTION_INSTRUCTION = """Write one concise question to the event reporter asking for all missing details listed below. Make clear only that the report was accepted and is waiting for these details. Explicitly do not claim that emergency actions, dispatch, or protocol execution have started; no operational action starts before required details and approvals are complete. Use the reporter's language. Do not mention database fields, schemas, internal agents, or implementation details. Return only the message to send.
 
+Tone: never open by announcing that the report/request/update "was received" — ask directly for what is missing instead. Never surface an internal label (classification, severity, protocol name).
+{tone_examples}
+
 Original report JSON: {original_report_json}
 Known event data JSON: {known_event_data_json}
 Missing details JSON: {missing_details_json}
@@ -76,9 +79,10 @@ REPORT_COMPOSE_COMMANDER_AUDIENCE_RULES = (
     "acted, the risk level, and any step failures."
 )
 
-REPORT_COMPOSE_INSTRUCTION = """Write the reply to the user's own message below, reporting back what was understood and what was done — lead with that, not with any ID. Use ONLY the facts in the context JSON below; never invent actions, results, units, times, or names beyond what it contains. If a step failed or something is still pending, say so plainly rather than glossing over it. Reply naturally in {language}. Keep it short, plain prose, no markdown headings or bullet lists, no internal jargon.
+REPORT_COMPOSE_INSTRUCTION = """Write the reply to the user's own message below, reporting back what was understood and what was done — lead with that, not with any ID. Use ONLY the facts in the context JSON below; never invent actions, results, units, times, or names beyond what it contains. Reply naturally in {language}. Keep it short, plain prose, no markdown headings or bullet lists, no internal jargon.
 
-Tone: the same plain, short tone for every report, regardless of audience, outcome, or language. Never open with a greeting (e.g. "Good morning") and never open with a content-free acknowledgement (e.g. "Your request was received successfully") in any language — start directly with what was understood. State what was understood and what was done in 1-2 sentences; do not pad with extra pleasantries or filler beyond that.
+Tone: the same plain, short tone for every report, regardless of audience, outcome, or language. Never open with a greeting (e.g. "Good morning") and never open by announcing that the report/request/update "was received" (in any language, in any phrasing of that idea) — start directly with what was understood and what was done, in 1-2 sentences. Never surface an internal label — classification, severity, or protocol name — as a bare word or category; describe the substance instead. If a step failed or something is still pending, say so plainly, concretely, and specifically: state what did not happen and why (e.g. what could not be verified, what was missing), never a vague "the request failed" with no reason.
+{tone_examples}
 
 {audience_rules}
 

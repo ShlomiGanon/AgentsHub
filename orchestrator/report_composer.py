@@ -17,6 +17,7 @@ from messages.model_messages import (
     REPORT_COMPOSE_VIEWER_AUDIENCE_RULES,
 )
 from orchestrator.run_report import Audience, RunSummary, render_summary
+from orchestrator.tone import banned_opener
 from tools import get_trace_id, stage_context
 
 logger = logging.getLogger(__name__)
@@ -95,12 +96,14 @@ def _commander_context(summary: RunSummary) -> dict:
     return context
 
 
-def build_prompt(summary: RunSummary, audience: Audience, language: str) -> str:
+def build_prompt(summary: RunSummary, audience: Audience, language: str, catalog: MessageCatalog | None = None) -> str:
     context = _commander_context(summary) if audience == "commander" else _viewer_context(summary)
     audience_rules = REPORT_COMPOSE_COMMANDER_AUDIENCE_RULES if audience == "commander" else REPORT_COMPOSE_VIEWER_AUDIENCE_RULES
+    tone_examples = catalog.text("orchestrator.report_tone.examples") if catalog is not None else ""
     return REPORT_COMPOSE_INSTRUCTION.format(
         language=_LANGUAGE_NAMES.get(language, language),
         audience_rules=audience_rules,
+        tone_examples=tone_examples,
         raw_text_json=json.dumps(summary.raw_text, ensure_ascii=False),
         context_json=json.dumps(context, ensure_ascii=False, sort_keys=True),
     )
@@ -120,34 +123,56 @@ def compose_report(
     if agent is None:
         return fallback
 
-    prompt = build_prompt(summary, audience, catalog.language)
+    prompt = build_prompt(summary, audience, catalog.language, catalog)
     started = time.monotonic()
-    try:
-        with stage_context("report_composition"):
-            result = agent.process(prompt, [], invocation_policy=_COMPOSE_POLICY)
-    except Exception as exc:
-        logger.warning(
-            "report composition failed; using deterministic fallback",
-            extra={
-                "event": "report_composed", "source": "fallback", "reason": str(exc),
-                "duration_seconds": time.monotonic() - started, "trace_id": get_trace_id(),
-            },
-        )
-        return fallback
+    for attempt in (1, 2):
+        try:
+            with stage_context("report_composition"):
+                result = agent.process(prompt, [], invocation_policy=_COMPOSE_POLICY)
+        except Exception as exc:
+            logger.warning(
+                "report composition failed; using deterministic fallback",
+                extra={
+                    "event": "report_composed", "source": "fallback", "reason": str(exc),
+                    "duration_seconds": time.monotonic() - started, "trace_id": get_trace_id(),
+                },
+            )
+            return fallback
 
-    duration = time.monotonic() - started
-    if result.status != "success" or not result.text.strip():
-        logger.warning(
-            "report composition returned no usable text; using deterministic fallback",
-            extra={
-                "event": "report_composed", "source": "fallback", "reason": "empty_or_unclear",
-                "duration_seconds": duration, "trace_id": get_trace_id(),
-            },
-        )
-        return fallback
+        if result.status != "success" or not result.text.strip():
+            logger.warning(
+                "report composition returned no usable text; using deterministic fallback",
+                extra={
+                    "event": "report_composed", "source": "fallback", "reason": "empty_or_unclear",
+                    "duration_seconds": time.monotonic() - started, "trace_id": get_trace_id(),
+                },
+            )
+            return fallback
 
-    logger.info(
-        "report composed",
-        extra={"event": "report_composed", "source": "model", "duration_seconds": duration, "trace_id": get_trace_id()},
+        text = result.text.strip()
+        banned = banned_opener(text, catalog)
+        if banned is None:
+            logger.info(
+                "report composed",
+                extra={
+                    "event": "report_composed", "source": "model",
+                    "duration_seconds": time.monotonic() - started, "trace_id": get_trace_id(),
+                },
+            )
+            return text
+
+        if attempt == 1:
+            logger.info(
+                "report composition used a banned opener; retrying once",
+                extra={"event": "report_composed_retry", "banned_phrase": banned, "trace_id": get_trace_id()},
+            )
+            prompt = prompt + f"\n\nYour previous reply opened with a banned phrase (\"{banned}\"). Rewrite it, starting directly with what was understood and done."
+
+    logger.warning(
+        "report composition kept using a banned opener after retry; using deterministic fallback",
+        extra={
+            "event": "report_composed", "source": "fallback", "reason": "banned_opener",
+            "duration_seconds": time.monotonic() - started, "trace_id": get_trace_id(),
+        },
     )
-    return result.text.strip()
+    return fallback
