@@ -22,7 +22,14 @@ from config import ModelTierError, SettingsStore, TierModel, load_base_config, r
 from history import SummaryScheduler
 from messages import set_current_catalog
 from history.query import HistoryQueryService
-from orchestrator.flows import FlowDeps, GroupRoutingTable, PolicyAwareEventQueue, SerialEventQueue, assemble_core_agents
+from orchestrator.flows import (
+    FlowDeps,
+    GroupRoutingTable,
+    PolicyAwareEventQueue,
+    ReportComposerAgent,
+    SerialEventQueue,
+    assemble_core_agents,
+)
 from persistence import open_persistence
 from profiles import build_area_registry, build_event_type_registry, ensure_simulation_entities
 from profiles.loader import load_profile
@@ -116,6 +123,8 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
         persistence.close()
         raise
 
+    report_composer_agent = ReportComposerAgent(model=sub_model.model, api_key=sub_model.api_key)
+
     history_agent = registry.get("history_agent")
     history_query_service = HistoryQueryService(
         persistence,
@@ -136,6 +145,8 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
         area_registry=build_area_registry(loaded_profile),
         history_query_service=history_query_service,
         optimization_policy=loaded_profile.optimization_policy,
+        report_composer_agent=report_composer_agent,
+        message_catalog=loaded_profile.message_catalog,
         conversation_history_turns=loaded_profile.conversation_history_turns,
         conversation_history_ttl_hours=loaded_profile.conversation_history_ttl_hours,
     )

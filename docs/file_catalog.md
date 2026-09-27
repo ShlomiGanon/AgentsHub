@@ -134,6 +134,8 @@ This English catalog describes every tracked or pending first-party file in the 
 | `orchestrator/group_routing.py` | Production | Private implementation | Holds the in-memory, DB-backed Telegram group to agent routing table and scopes flow dependencies per group. |
 | `orchestrator/holds.py` | Production | Private implementation | Creates and resolves clarification and approval holds. |
 | `orchestrator/reasoning.py` | Production | Private implementation | Prompts and parses Main/Insights decisions, questions, selection, formulation, and judgment. |
+| `orchestrator/report_composer.py` | Production | Private implementation | Composes a grounded, audience-scoped run report with a SUB-tier model call, falling back to render_summary on any failure, timeout, or empty response. |
+| `orchestrator/run_report.py` | Production | Private implementation | Builds a structured RunSummary from persisted event/step/hold data and renders it deterministically, audience-aware, without a model call. |
 | `orchestrator/situational_picture.py` | Production | Private implementation | Builds the multi-domain situational picture at request time: the Main Agent plans one live question per specialist, gathers their answers and the recent event log concurrently, and composes the picture from those findings only. |
 | `persistence/__init__.py` | Production | Public facade | Exposes persistence contracts, constructors, and compatibility aliases. |
 | `persistence/contracts.py` | Production | Private implementation | Defines persistence interfaces and domain errors. |
@@ -244,7 +246,9 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_provider_telemetry.py` | Test | Internal | Verifies CrewAI provider-event correlation, usage fields, failures, and race recovery. |
 | `tests/test_question_answering.py` | Test | Internal | Verifies question routing and read-only specialist/history answers. |
 | `tests/test_reference_agent.py` | Test | Internal | Verifies reference agent behavior and edge cases. |
+| `tests/test_report_composer.py` | Test | Internal | Verifies model-composed run report text, its fallback to render_summary, and audience/language scoping of the prompt. |
 | `tests/test_response_improvements.py` | Test | Internal | Verifies conversation retention, long polling, trace propagation, queue ordering, idempotency, and removal of the obsolete stream route. |
+| `tests/test_run_report.py` | Test | Internal | Verifies RunSummary construction from persisted event/step/hold data and audience-aware deterministic rendering. |
 | `tests/test_run_stack.py` | Test | Internal | Verifies profile-database reset removes only declared databases and known sidecars, and refuses a non-database path. |
 | `tests/test_server_control.py` | Test | Internal | Verifies safe profile discovery and supervisor command and selection persistence. |
 | `tests/test_situational_picture.py` | Test | Internal | Verifies picture planning, per-domain live questioning, recent-events window and scope, unavailable-domain handling, and composition fallbacks. |

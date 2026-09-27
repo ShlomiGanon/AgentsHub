@@ -397,12 +397,18 @@ def record_event_outcome(
     outcome: str,
     failure_reason: str | None = None,
     insight_text: str | None = None,
+    report_text: str | None = None,
 ) -> None:
     if outcome not in VALID_OUTCOMES:
         raise ValueError(f"invalid event outcome: '{outcome}'")
     persistence.update_event(
         event_id,
-        {"outcome": outcome, "outcome_failure_reason": failure_reason, "insight_text": insight_text},
+        {
+            "outcome": outcome,
+            "outcome_failure_reason": failure_reason,
+            "insight_text": insight_text,
+            "report_text": report_text,
+        },
     )
 
 

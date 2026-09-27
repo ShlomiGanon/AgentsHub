@@ -150,6 +150,10 @@ class JobResult:
     protocol_name: str | None = None
     risk_level: str | None = None
     protocol_reason: str | None = None
+    # Composed once, server-side, when the run finished (orchestrator.run_report /
+    # orchestrator.report_composer) — None when rich reporting is disabled, in which case the
+    # bot falls back to format_job_result's fixed-template rendering.
+    report_text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -274,6 +278,7 @@ class FailureNotice:
     failed_step_agent_name: str | None
     failure_reason: str
     steps_completed_before_failure: tuple[str, ...] = ()
+    report_text: str | None = None
 
 
 @dataclass(frozen=True)

@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS events (
     insight_text TEXT,
     outcome TEXT,
     outcome_failure_reason TEXT,
+    report_text TEXT,
 
     availability_start TEXT,
     availability_end TEXT,
@@ -273,6 +274,11 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "ALTER TABLE events ADD COLUMN availability_end TEXT;"
         "ALTER TABLE events ADD COLUMN absence_reason TEXT;",
     ),
+    (
+        21,
+        "add report_text to events",
+        "ALTER TABLE events ADD COLUMN report_text TEXT;",
+    ),
 ]
 
 
@@ -328,6 +334,12 @@ def run_migrations(db_path: str) -> None:
                     for column_name in ("availability_start", "availability_end", "absence_reason"):
                         if column_name not in columns:
                             connection.execute(f"ALTER TABLE events ADD COLUMN {column_name} TEXT")
+            elif version == 21:
+                # Fresh databases already get the column from EVENTS_TABLE_DDL (migration 2);
+                # only databases created before this migration need the ALTER TABLE.
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(events)").fetchall()}
+                if columns and "report_text" not in columns:
+                    connection.execute("ALTER TABLE events ADD COLUMN report_text TEXT")
             else:
                 connection.executescript(sql)
 

@@ -270,7 +270,7 @@ if TYPE_CHECKING:
 
 async def deliver_failure_notification(deps: "BotDeps", notification: "BotNotification") -> None:
     notice = notification.payload
-    text = format_failure_notice(notice, message_catalog_for(deps))
+    text = notice.report_text or format_failure_notice(notice, message_catalog_for(deps))
 
     for chat_id in notification.target_chat_ids:
         await deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id)
@@ -282,7 +282,7 @@ if TYPE_CHECKING:
 
 async def deliver_job_result(deps: "BotDeps", notification: "BotNotification") -> None:
     job_result = notification.payload
-    text = format_job_result(job_result, message_catalog_for(deps))
+    text = job_result.report_text or format_job_result(job_result, message_catalog_for(deps))
 
     for chat_id in notification.target_chat_ids:
         await deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id)

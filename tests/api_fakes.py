@@ -65,11 +65,12 @@ class ScriptedAgent:
 
 
 class FakeSettings:
-    def __init__(self, risk_threshold=0.5, retry_count=3, lookback_window_days=30, safe_mode=False):
+    def __init__(self, risk_threshold=0.5, retry_count=3, lookback_window_days=30, safe_mode=False, rich_reports_enabled=False):
         self.risk_threshold = risk_threshold
         self.retry_count = retry_count
         self.lookback_window_days = lookback_window_days
         self.safe_mode = safe_mode
+        self.rich_reports_enabled = rich_reports_enabled
 
     def get_retry_count(self):
         return self.retry_count
@@ -83,6 +84,9 @@ class FakeSettings:
     def get_safe_mode(self):
         return self.safe_mode
 
+    def get_rich_reports_enabled(self):
+        return self.rich_reports_enabled
+
     def set_retry_count(self, value):
         self.retry_count = value
 
@@ -94,6 +98,9 @@ class FakeSettings:
 
     def set_safe_mode(self, value):
         self.safe_mode = value
+
+    def set_rich_reports_enabled(self, value):
+        self.rich_reports_enabled = value
 
 
 def protocols() -> tuple[Protocol, ...]:

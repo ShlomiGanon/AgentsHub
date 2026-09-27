@@ -13,13 +13,20 @@ class SettingsStore:
         starting_risk_threshold: float,
         starting_lookback_window_days: int,
         starting_safe_mode: bool = False,
+        starting_rich_reports_enabled: bool = True,
     ):
         self._settings_path = Path(f"{db_path}.settings.json")
 
         if self._settings_path.exists():
             self._values = json.loads(self._settings_path.read_text(encoding="utf-8"))
+            changed = False
             if not isinstance(self._values.get("safe_mode"), bool):
                 self._values["safe_mode"] = bool(starting_safe_mode)
+                changed = True
+            if not isinstance(self._values.get("rich_reports_enabled"), bool):
+                self._values["rich_reports_enabled"] = bool(starting_rich_reports_enabled)
+                changed = True
+            if changed:
                 self._write()
         else:
             self._values = {
@@ -27,6 +34,7 @@ class SettingsStore:
                 "risk_threshold": starting_risk_threshold,
                 "lookback_window_days": starting_lookback_window_days,
                 "safe_mode": bool(starting_safe_mode),
+                "rich_reports_enabled": bool(starting_rich_reports_enabled),
             }
             self._write()
 
@@ -41,6 +49,9 @@ class SettingsStore:
 
     def get_safe_mode(self) -> bool:
         return bool(self._values["safe_mode"])
+
+    def get_rich_reports_enabled(self) -> bool:
+        return bool(self._values["rich_reports_enabled"])
 
     def set_retry_count(self, value: int) -> None:
         self._values["retry_count"] = value
@@ -58,6 +69,12 @@ class SettingsStore:
         if not isinstance(value, bool):
             raise TypeError("safe_mode must be a bool")
         self._values["safe_mode"] = value
+        self._write()
+
+    def set_rich_reports_enabled(self, value: bool) -> None:
+        if not isinstance(value, bool):
+            raise TypeError("rich_reports_enabled must be a bool")
+        self._values["rich_reports_enabled"] = value
         self._write()
 
     def _write(self) -> None:

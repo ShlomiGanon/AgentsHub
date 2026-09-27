@@ -135,6 +135,24 @@ def test_job_status_reports_every_terminal_outcome(ctx, outcome, expected_detail
         assert "detail" in status
 
 
+def test_job_status_reports_the_stored_report_text_when_present(ctx):
+    event_id = _new_event(ctx)
+    record_event_outcome(ctx.deps.persistence, event_id, "succeeded", report_text="We checked the gate; all clear.")
+
+    status = job_status(ctx, event_id)
+
+    assert status["report_text"] == "We checked the gate; all clear."
+
+
+def test_job_status_omits_report_text_when_rich_reporting_was_disabled(ctx):
+    event_id = _new_event(ctx)
+    record_event_outcome(ctx.deps.persistence, event_id, "succeeded")  # report_text defaults to None
+
+    status = job_status(ctx, event_id)
+
+    assert "report_text" not in status
+
+
 def test_job_status_reports_steps_completed_on_a_successful_run(ctx):
     event_id = _new_event(ctx)
     record_step_execution(ctx.deps.persistence, event_id, StepExecutionEnvelope(0, "reference_agent", "check gate 3", ["check_status"], "gate 3 is nominal", 1))

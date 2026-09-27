@@ -33,6 +33,21 @@ def test_names_failed_step_and_reason_and_includes_prior_successes():
     assert telegram.sent[0].reply_to_message_id == "msg-1"
 
 
+def test_failure_notification_uses_the_server_composed_report_text_when_present():
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
+
+    notice = FailureNotice(
+        event_id="e1", failed_step_agent_name="reference_agent", failure_reason="exhausted retries after 3 attempts",
+        report_text="We couldn't finish checking the gate after several attempts.",
+    )
+    notification = BotNotification(kind="job_failed", target_chat_ids=("chat-1",), payload=notice, reply_to_message_id="msg-1")
+
+    _run(deliver_failure_notification(deps, notification))
+
+    assert telegram.sent[0].text == "We couldn't finish checking the gate after several attempts."
+
+
 def test_failed_run_is_distinguishable_from_a_declined_or_uncertain_one():
     from bot.formatting import format_header
 
@@ -166,23 +181,25 @@ def test_drone_selection_is_rendered_as_required_input_not_completed_action():
     assert "Job ID: j1" in text
 
 
-def test_surveillance_job_result_is_compact_and_identifies_the_job():
+def test_surveillance_job_result_uses_the_generic_format_not_a_profile_specific_one():
+    # bot/interactions.py::format_job_result no longer special-cases protocol names from
+    # specific profiles (that hardcoded profile leak was removed) — every protocol, including
+    # these tactical ones, goes through the same generic rendering.
     result = JobResult(
         job_id="dispatch-123",
         outcome="succeeded",
         protocol_name="dispatch_drone_to_incident",
-        protocol_reason="a very long model-generated protocol reason that should not be displayed",
-        insight_text="a very long generated insight that should not be displayed",
+        protocol_reason="a model-generated protocol reason",
+        insight_text="a generated insight",
         steps_completed=("surveillance_agent: dispatched Eagle-1\n- Mission: MSN-1\n- Target: north gate\n- ETA: 150s",),
     )
 
     text = format_job_result(result)
 
-    assert "Job ID: dispatch-123" in text
     assert "dispatched Eagle-1" in text
-    assert "Insight:" not in text
-    assert "Protocol:" not in text
-    assert len(text.splitlines()) <= 7
+    assert "Insight:" in text
+    assert "a generated insight" in text
+    assert "Protocol: dispatch_drone_to_incident" in text
 
 
 def test_declined_job_result_uses_the_declined_header():
@@ -532,3 +549,34 @@ def test_delivers_to_the_original_chat_referencing_the_original_message():
     assert "Verdict: succeeded" in sent.text
     assert "checked status" in sent.text
     assert "all clear" in sent.text
+
+
+def test_delivers_the_server_composed_report_text_verbatim_when_present():
+    # rich reports (orchestrator.report_composer): when the server already composed
+    # report_text, the bot sends it as-is instead of rendering its own fixed template.
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
+
+    result = JobResult(
+        job_id="job-1", outcome="succeeded", insight_text="all clear", steps_completed=("checked status",),
+        report_text="We checked the gate and everything is fine.",
+    )
+    notification = BotNotification(kind="job_finished", target_chat_ids=("chat-9",), payload=result, reply_to_message_id="msg-123")
+
+    _run(deliver_job_result(deps, notification))
+
+    sent = telegram.sent[0]
+    assert sent.text == "We checked the gate and everything is fine."
+    assert "Verdict:" not in sent.text
+
+
+def test_falls_back_to_the_fixed_template_when_report_text_is_absent():
+    telegram = FakeTelegramClient()
+    deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
+
+    result = JobResult(job_id="job-1", outcome="succeeded", report_text=None)
+    notification = BotNotification(kind="job_finished", target_chat_ids=("chat-9",), payload=result, reply_to_message_id="msg-123")
+
+    _run(deliver_job_result(deps, notification))
+
+    assert "Verdict: succeeded" in telegram.sent[0].text

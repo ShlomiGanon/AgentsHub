@@ -177,12 +177,10 @@ def test_migration_twenty_is_present_on_a_fresh_database(tmp_path):
     connection = sqlite3.connect(db_path)
     try:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
-        version = connection.execute("PRAGMA user_version").fetchone()[0]
     finally:
         connection.close()
 
     assert {"availability_start", "availability_end", "absence_reason"} <= columns
-    assert version == 20
 
 
 def test_migration_twenty_reruns_without_error_when_columns_already_exist(tmp_path):
@@ -197,6 +195,68 @@ def test_migration_twenty_reruns_without_error_when_columns_already_exist(tmp_pa
     finally:
         connection.close()
     assert {"availability_start", "availability_end", "absence_reason"} <= columns
+
+
+def test_migration_twenty_one_adds_report_text_to_an_existing_database(tmp_path):
+    # An existing database created before migration 21 gets the new nullable
+    # column without losing data.
+    db_path = str(tmp_path / "version-twenty.db")
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "CREATE TABLE events ("
+            "event_id TEXT PRIMARY KEY, received_at TEXT NOT NULL, source TEXT NOT NULL, "
+            "sender_identity TEXT NOT NULL, raw_text TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO events(event_id, received_at, source, sender_identity, raw_text) "
+            "VALUES ('legacy', '2026-01-01', 'telegram', 'viewer-1', 'I will be away')"
+        )
+        connection.execute("PRAGMA user_version = 20")
+        connection.commit()
+    finally:
+        connection.close()
+
+    run_migrations(db_path)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+        row = connection.execute("SELECT report_text FROM events WHERE event_id = 'legacy'").fetchone()
+    finally:
+        connection.close()
+
+    assert "report_text" in columns
+    assert row == (None,)
+
+
+def test_migration_twenty_one_is_present_on_a_fresh_database(tmp_path):
+    db_path = str(tmp_path / "fresh-report-text.db")
+    run_migrations(db_path)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        connection.close()
+
+    assert "report_text" in columns
+    assert version == MIGRATIONS[-1][0]
+
+
+def test_migration_twenty_one_reruns_without_error_when_column_already_exists(tmp_path):
+    db_path = str(tmp_path / "rerun-report-text.db")
+    run_migrations(db_path)
+
+    run_migrations(db_path)  # must not raise on a database already at the latest version
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+    finally:
+        connection.close()
+    assert "report_text" in columns
 
 
 def test_history_query_indexes_are_present_on_a_fresh_database(tmp_path):
@@ -298,3 +358,37 @@ def test_settings_file_lives_beside_the_database_not_the_profile(tmp_path):
     SettingsStore(db_path, starting_retry_count=1, starting_risk_threshold=0.1, starting_lookback_window_days=1)
 
     assert (tmp_path / "sub" / "deployment.db.settings.json").exists()
+
+
+def test_rich_reports_enabled_defaults_to_true(tmp_path):
+    db_path = str(tmp_path / "deployment.db")
+
+    store = SettingsStore(db_path, starting_retry_count=3, starting_risk_threshold=0.5, starting_lookback_window_days=30)
+
+    assert store.get_rich_reports_enabled() is True
+
+
+def test_rich_reports_enabled_can_be_turned_off_and_persists(tmp_path):
+    db_path = str(tmp_path / "deployment.db")
+
+    first = SettingsStore(db_path, starting_retry_count=3, starting_risk_threshold=0.5, starting_lookback_window_days=30)
+    first.set_rich_reports_enabled(False)
+
+    second = SettingsStore(db_path, starting_retry_count=3, starting_risk_threshold=0.5, starting_lookback_window_days=30)
+
+    assert second.get_rich_reports_enabled() is False
+
+
+def test_rich_reports_enabled_is_backfilled_for_a_settings_file_from_before_this_feature(tmp_path):
+    db_path = str(tmp_path / "deployment.db")
+    settings_path = tmp_path / "deployment.db.settings.json"
+    settings_path.write_text(
+        json.dumps({"retry_count": 3, "risk_threshold": 0.5, "lookback_window_days": 30, "safe_mode": False}),
+        encoding="utf-8",
+    )
+
+    store = SettingsStore(db_path, starting_retry_count=3, starting_risk_threshold=0.5, starting_lookback_window_days=30)
+
+    assert store.get_rich_reports_enabled() is True
+    on_disk = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert on_disk["rich_reports_enabled"] is True

@@ -58,6 +58,7 @@ _EVENT_COLUMNS = (
     "insight_text",
     "outcome",
     "outcome_failure_reason",
+    "report_text",
     "availability_start",
     "availability_end",
     "absence_reason",

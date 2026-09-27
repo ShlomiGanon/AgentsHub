@@ -967,7 +967,7 @@ def build_protocols_blueprint(ctx: "ApiContext") -> Blueprint:
 if TYPE_CHECKING:
     from api.app import ApiContext
 
-_SETTINGS_FIELDS = {"retry_count", "risk_threshold", "lookback_window_days", "safe_mode"}
+_SETTINGS_FIELDS = {"retry_count", "risk_threshold", "lookback_window_days", "safe_mode", "rich_reports_enabled"}
 
 
 def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
@@ -1011,6 +1011,7 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
                 "risk_threshold": ctx.deps.settings_store.get_risk_threshold(),
                 "lookback_window_days": ctx.deps.settings_store.get_lookback_window_days(),
                 "safe_mode": ctx.deps.settings_store.get_safe_mode(),
+                "rich_reports_enabled": ctx.deps.settings_store.get_rich_reports_enabled(),
             }
 
         return jsonify(response_payload)
@@ -1056,6 +1057,12 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
                 raise InvalidInputError(messages.text("api.safe_mode_boolean"), field="safe_mode")
             validated["safe_mode"] = setting_value
 
+        if "rich_reports_enabled" in request_payload:
+            setting_value = request_payload["rich_reports_enabled"]
+            if not isinstance(setting_value, bool):
+                raise InvalidInputError(messages.text("api.rich_reports_enabled_boolean"), field="rich_reports_enabled")
+            validated["rich_reports_enabled"] = setting_value
+
         previous_safe_mode = ctx.deps.settings_store.get_safe_mode()
         if "retry_count" in validated:
             ctx.deps.settings_store.set_retry_count(validated["retry_count"])
@@ -1075,12 +1082,15 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
                     "trace_id": get_trace_id(),
                 },
             )
+        if "rich_reports_enabled" in validated:
+            ctx.deps.settings_store.set_rich_reports_enabled(validated["rich_reports_enabled"])
 
         return jsonify({
             "retry_count": ctx.deps.settings_store.get_retry_count(),
             "risk_threshold": ctx.deps.settings_store.get_risk_threshold(),
             "lookback_window_days": ctx.deps.settings_store.get_lookback_window_days(),
             "safe_mode": ctx.deps.settings_store.get_safe_mode(),
+            "rich_reports_enabled": ctx.deps.settings_store.get_rich_reports_enabled(),
         })
 
     @blueprint.route("/Trace/<trace_id>", methods=["GET"])
@@ -1518,6 +1528,8 @@ def job_status(ctx: "ApiContext", event_id: str) -> dict | None:
         response_payload = {"event_id": event_id, "status": event["outcome"]}
         if event.get("insight_text") is not None:
             response_payload["insight_text"] = event["insight_text"]
+        if event.get("report_text"):
+            response_payload["report_text"] = event["report_text"]
 
         steps_completed = _steps_completed(event)
         if steps_completed:
@@ -1852,6 +1864,10 @@ def _job_payload(ctx: "ApiContext", event_id: str) -> dict:
         "protocol_name": event.get("selected_protocol"),
         "risk_level": event.get("risk_level"),
         "protocol_reason": event.get("protocol_reason"),
+        # Composed once, when the run finished (orchestrator.flows._record_outcome_with_report)
+        # — a pure read here, never a model call. Absent (not just empty) when rich reporting
+        # was disabled for this run, so the bot falls back to its own fixed-template rendering.
+        **({"report_text": event["report_text"]} if event.get("report_text") else {}),
     }
 
 

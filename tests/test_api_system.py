@@ -140,7 +140,10 @@ def test_get_system_reports_current_settings(tmp_path, teardown_ctx):
 
     resp = client.get("/SYSTEM", headers=auth_headers(COMMANDER_IDENTITY))
 
-    assert resp.get_json()["settings"] == {"retry_count": 3, "risk_threshold": 0.5, "lookback_window_days": 30, "safe_mode": False}
+    assert resp.get_json()["settings"] == {
+        "retry_count": 3, "risk_threshold": 0.5, "lookback_window_days": 30, "safe_mode": False,
+        "rich_reports_enabled": False,
+    }
 
 
 def test_get_system_viewer_response_omits_internals_and_settings(tmp_path, teardown_ctx):
@@ -235,6 +238,29 @@ def test_put_system_rejects_invalid_values(tmp_path, teardown_ctx, field, value)
 
     assert resp.status_code == 400
     assert resp.get_json()["field"] == field
+
+
+def test_put_system_toggles_rich_reports_enabled(tmp_path, teardown_ctx):
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    resp = client.put("/SYSTEM", headers=auth_headers(COMMANDER_IDENTITY), json={"rich_reports_enabled": True})
+
+    assert resp.status_code == 200
+    assert resp.get_json()["rich_reports_enabled"] is True
+    assert ctx.deps.settings_store.get_rich_reports_enabled() is True
+
+
+def test_put_system_rejects_a_non_boolean_rich_reports_enabled(tmp_path, teardown_ctx):
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    resp = client.put("/SYSTEM", headers=auth_headers(COMMANDER_IDENTITY), json={"rich_reports_enabled": "yes"})
+
+    assert resp.status_code == 400
+    assert resp.get_json()["field"] == "rich_reports_enabled"
 
 
 def test_put_system_accepts_a_zero_retry_count(tmp_path, teardown_ctx):

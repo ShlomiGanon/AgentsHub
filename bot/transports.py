@@ -431,6 +431,7 @@ class HttpApiClient(BotApiClient):
             steps_completed=tuple(response_payload.get("steps_completed", ())),
             failure_reason=response_payload.get("detail") if outcome == "failed" else None,
             failed_step_agent_name=response_payload.get("failed_step_agent_name"),
+            report_text=response_payload.get("report_text"),
         )
 
     async def poll_pending_notifications(self, since: int, wait_seconds: int = 0) -> tuple[tuple[BotNotification, ...], int]:
@@ -534,6 +535,7 @@ class HttpApiClient(BotApiClient):
                 protocol_name=payload.get("protocol_name"),
                 risk_level=payload.get("risk_level"),
                 protocol_reason=payload.get("protocol_reason"),
+                report_text=payload.get("report_text"),
             )
         if kind == "job_failed":
             return FailureNotice(
@@ -541,6 +543,7 @@ class HttpApiClient(BotApiClient):
                 failed_step_agent_name=payload.get("failed_step_agent_name"),
                 failure_reason=payload.get("failure_reason") or "",
                 steps_completed_before_failure=tuple(payload.get("steps_completed", ())),
+                report_text=payload.get("report_text"),
             )
         raise ValueError(f"unknown notification kind: {kind!r}")
 

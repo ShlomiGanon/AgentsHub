@@ -167,46 +167,6 @@ def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None
                 f"{messages.text('result.job_id', job_id=result.job_id)}\n\n{selection_text}"
             )
 
-    # Compact-format protocol names for the two current tactical profiles (Profile Split
-    # Plan, docs/Profile_Split_Plan.md §5.1/§5.2) -- profiles/standby_squad.py's 7 and
-    # profiles/firefighting.py's 8, unioned (update_camera_observation/overall_situational_picture/
-    # query_historical_incidents are shared by name across both). Not profile-scoped: this
-    # formatter has no access to which profile is loaded, so it recognizes protocol names
-    # from either.
-    surveillance_protocols = {
-        # profiles/standby_squad.py
-        "record_attendance_response", "report_team_availability", "update_camera_observation",
-        "report_security_incident", "dispatch_emergency_forces", "overall_situational_picture",
-        "query_historical_incidents",
-        # profiles/firefighting.py
-        "record_crew_availability_response", "report_crew_status", "dispatch_drone_to_incident",
-        "report_fire_incident", "dispatch_mutual_aid",
-    }
-    if result.protocol_name in surveillance_protocols:
-        lines = [
-            format_header("result", messages),
-            messages.text("result.job_id", job_id=result.job_id),
-        ]
-        if result.failure_reason:
-            lines.append(_short_failure_reason(result.failure_reason))
-        elif result.protocol_name == "overall_situational_picture" and result.insight_text and any("\u0590" <= c <= "\u05ea" for c in result.insight_text):
-            lines.append(result.insight_text.strip())
-        elif result.steps_completed:
-            compact_lines: list[str] = []
-            for step in result.steps_completed:
-                for line in step.splitlines():
-                    cleaned = line.strip().replace("**", "")
-                    if cleaned and cleaned not in compact_lines:
-                        compact_lines.append(cleaned[:240])
-                    if len(compact_lines) >= 8:
-                        break
-                if len(compact_lines) >= 8:
-                    break
-            lines.extend(compact_lines)
-        else:
-            lines.append(messages.text("result.verdict", outcome=_outcome_word(result.outcome, messages)))
-        return "\n".join(lines)
-
     kind: MessageKind = "result" if result.outcome != "declined" else "declined"
     lines = [format_header(kind, messages), "", messages.text("result.verdict", outcome=_outcome_word(result.outcome, messages))]
 

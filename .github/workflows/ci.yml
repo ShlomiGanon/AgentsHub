@@ -137,6 +137,8 @@ jobs:
           tests/test_orchestrator_reasoning.py
           tests/test_orchestrator_selection.py
           tests/test_question_answering.py
+          tests/test_report_composer.py
+          tests/test_run_report.py
 
       - name: Mission 7 - API Layer
         run: >

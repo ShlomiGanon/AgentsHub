@@ -122,10 +122,11 @@ class _ScriptedAgent:
 
 
 class _FakeSettings:
-    def __init__(self, risk_threshold=0.5, retry_count=3, lookback_window_days=30):
+    def __init__(self, risk_threshold=0.5, retry_count=3, lookback_window_days=30, rich_reports_enabled=False):
         self.risk_threshold = risk_threshold
         self.retry_count = retry_count
         self.lookback_window_days = lookback_window_days
+        self.rich_reports_enabled = rich_reports_enabled
 
     def get_risk_threshold(self):
         return self.risk_threshold
@@ -135,6 +136,9 @@ class _FakeSettings:
 
     def get_lookback_window_days(self):
         return self.lookback_window_days
+
+    def get_rich_reports_enabled(self):
+        return self.rich_reports_enabled
 
 
 def _protocols():
@@ -864,6 +868,54 @@ def test_process_report_low_risk_unflagged_protocol_runs_to_success(deps, caplog
 
     outcome_records = [r for r in caplog.records if getattr(r, "event", None) == "event_outcome" and r.event_id == result.event_id]
     assert outcome_records[-1].outcome == "succeeded"
+
+
+class _ScriptedComposerAgent:
+    """A duck-typed ReportComposerAgent stand-in — no crewai/model involved."""
+
+    def __init__(self, response_text):
+        self._response_text = response_text
+        self.calls = []
+
+    def process(self, text, allowed_tools, *, invocation_policy=None):
+        self.calls.append(text)
+        return _FakeResult("success", self._response_text)
+
+
+def test_report_text_is_composed_and_persisted_when_rich_reports_enabled(deps):
+    deps.settings_store.rich_reports_enabled = True
+    composer = _ScriptedComposerAgent("Understood: smoke at gate 3. Handled successfully.")
+    deps_with_composer = replace(deps, report_composer_agent=composer)
+    agent = _happy_path_agent(risk_score="0.1", selected="status_check", verdict="success")
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "no notable precedent")})()
+
+    result = process_report(deps_with_composer, agent, insights_agent, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    event = deps.persistence.fetch_event(result.event_id)
+    assert event["report_text"] == "Understood: smoke at gate 3. Handled successfully."
+    assert composer.calls  # the composer was actually invoked, once
+
+
+def test_report_text_falls_back_to_render_summary_when_no_composer_agent_is_available(deps):
+    deps.settings_store.rich_reports_enabled = True  # deps.report_composer_agent stays None
+    agent = _happy_path_agent(risk_score="0.1", selected="status_check", verdict="success")
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "no notable precedent")})()
+
+    result = process_report(deps, agent, insights_agent, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    event = deps.persistence.fetch_event(result.event_id)
+    assert event["report_text"]  # a non-empty deterministic fallback, never a model call
+
+
+def test_report_text_is_absent_when_rich_reports_disabled(deps):
+    # deps.settings_store.rich_reports_enabled defaults to False (_FakeSettings)
+    agent = _happy_path_agent(risk_score="0.1", selected="status_check", verdict="success")
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "no notable precedent")})()
+
+    result = process_report(deps, agent, insights_agent, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    event = deps.persistence.fetch_event(result.event_id)
+    assert event.get("report_text") is None
 
 
 def test_attendance_protocol_is_never_closed_on_precedent(deps):

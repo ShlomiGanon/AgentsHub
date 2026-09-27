@@ -3,7 +3,7 @@
 import functools
 import json
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal
 
@@ -34,6 +34,8 @@ from orchestrator.holds import (
 )
 from orchestrator.capabilities import CapabilityDescriptor, build_role_aware_system_context, visible_capabilities
 from orchestrator.reasoning import build_insight, construct_insights_agent
+from orchestrator.report_composer import ReportComposerAgent, compose_report  # re-exported: api may only import orchestrator.flows
+from orchestrator.run_report import build_run_summary
 from orchestrator.reasoning import (
     OrchestrationParseError,
     answer_conversationally,
@@ -76,6 +78,7 @@ from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYP
 from protocols import CriticalityLevel, EVENT_DATA_FIELDS, Step, StepOutcome
 from protocols.executor import execute_steps
 from agents import AgentModelError, AgentTimeoutError, authenticated_request_identity
+from messages import get_catalog
 from tools import get_trace_id
 
 if TYPE_CHECKING:
@@ -90,6 +93,7 @@ if TYPE_CHECKING:
     from profiles.loader import LoadedProfile
     from protocols import Protocol, ProtocolSet
     from profiles import AreaRegistry, EventTypeRegistry
+    from messages import MessageCatalog
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +118,7 @@ def _deadline_failure(deps: "FlowDeps", event_id: str, next_stage: str) -> "Flow
     if datetime.now(timezone.utc) < deadline:
         return None
     reason = f"event deadline exceeded before {next_stage}"
-    record_event_outcome(deps.persistence, event_id, "failed", failure_reason=reason)
+    _record_outcome_with_report(deps, event_id, "failed", failure_reason=reason)
     _log_event_outcome(event_id, "failed", failure_reason=reason, stage=next_stage)
     return FlowResult(event_id, "failed", reason)
 
@@ -152,6 +156,12 @@ class FlowDeps:
     optimization_policy: OptimizationPolicy = OptimizationPolicy()
     conversation_history_turns: int = 0
     conversation_history_ttl_hours: int = 24
+    # Rich run-report composition (docs/responce_improve.md): the SUB-tier agent that writes
+    # report_text, and the deployment's own message catalog for its language/fallback rendering.
+    # `report_composer_agent=None` (the default) means "compose_report always falls back" —
+    # every FlowDeps built without opting in behaves exactly as before this feature existed.
+    report_composer_agent: "ReportComposerAgent | None" = None
+    message_catalog: "MessageCatalog" = field(default_factory=lambda: get_catalog("en"))
 
 
 @dataclass(frozen=True)
@@ -214,6 +224,40 @@ def _log_event_outcome(event_id: str, outcome: str, **detail) -> None:
     )
 
 
+def _record_outcome_with_report(
+    deps: FlowDeps,
+    event_id: str,
+    outcome: str,
+    failure_reason: str | None = None,
+    insight_text: str | None = None,
+) -> None:
+    """The one place every terminal outcome is persisted — wraps `record_event_outcome` to also
+    compose `report_text` exactly once, before the `job_finished`/`job_failed` notification this
+    same write inserts, so no read path (`/Job`, `/Notifications`) ever triggers a model call.
+
+    `report_text` stays `None` (old bot-side rendering, unchanged) unless rich reporting is on;
+    when it is on, `compose_report` itself never raises and always returns usable text — the
+    model's reply, or its own deterministic fallback — so a stored `report_text` is never partial.
+    """
+
+    report_text = None
+    if deps.settings_store.get_rich_reports_enabled():
+        summary = build_run_summary(deps.persistence, event_id)
+        summary = replace(
+            summary,
+            outcome=outcome,
+            outcome_failure_reason=failure_reason,
+            insight_text=insight_text if insight_text is not None else summary.insight_text,
+        )
+        audience = "commander" if summary.sender_permission_level == "commander" else "viewer"
+        report_text = compose_report(deps.report_composer_agent, summary, audience, deps.message_catalog)
+
+    record_event_outcome(
+        deps.persistence, event_id, outcome,
+        failure_reason=failure_reason, insight_text=insight_text, report_text=report_text,
+    )
+
+
 def begin_report(
     deps: FlowDeps,
     raw_text: str,
@@ -264,7 +308,7 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
             model_invoker=_model_invoker_for(main_agent),
         )
     except ExtractionExecutionError as exc:
-        record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
+        _record_outcome_with_report(deps, event_id, "failed", failure_reason=str(exc))
         _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="extraction")
         return FlowResult(event_id, "failed", str(exc))
 
@@ -596,7 +640,7 @@ def resolve_approval(
 def decline(deps: FlowDeps, event_id: str) -> FlowResult:
     """Record a rejected approval hold's outcome as declined — the synchronous, no-continuation-needed branch `resume_after_approval` and `api.operations`'s deny path (§7.11) both share."""
 
-    record_event_outcome(deps.persistence, event_id, "declined")
+    _record_outcome_with_report(deps, event_id, "declined")
     _log_event_outcome(event_id, "declined")
     return FlowResult(event_id, "declined")
 
@@ -696,7 +740,7 @@ def continue_from_risk_assessment(
                     extra={"event": "operational_decision_invalid", "mode": operational_mode, "reason": str(exc), "trace_id": get_trace_id()},
                 )
                 if operational_mode == "merged":
-                    record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
+                    _record_outcome_with_report(deps, event_id, "failed", failure_reason=str(exc))
                     return FlowResult(event_id, "failed", str(exc))
 
         try:
@@ -709,7 +753,7 @@ def continue_from_risk_assessment(
                 )
             )
         except OrchestrationParseError as exc:
-            record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
+            _record_outcome_with_report(deps, event_id, "failed", failure_reason=str(exc))
             _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="risk_assessment")
             return FlowResult(event_id, "failed", str(exc))
         record_event_state(deps.persistence, event_id, {"risk_level": risk_assessment.level, "risk_reason": risk_assessment.reason})
@@ -731,7 +775,7 @@ def continue_from_risk_assessment(
                 else select_protocol(main_agent, raw_text, classification, area, description, deps.protocol_set.all(), risk_assessment.level)
             )
         except OrchestrationParseError as exc:
-            record_event_outcome(deps.persistence, event_id, "failed", failure_reason=str(exc))
+            _record_outcome_with_report(deps, event_id, "failed", failure_reason=str(exc))
             _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="protocol_selection")
             return FlowResult(event_id, "failed", str(exc))
 
@@ -777,13 +821,13 @@ def continue_from_risk_assessment(
     )
     if closing_event_id is not None:
         record_event_state(deps.persistence, event_id, {"precedent_closed_by_event_id": closing_event_id})
-        record_event_outcome(deps.persistence, event_id, "closed_on_precedent")
+        _record_outcome_with_report(deps, event_id, "closed_on_precedent")
         _log_event_outcome(event_id, "closed_on_precedent", precedent_event_id=closing_event_id)
         return FlowResult(event_id, "closed_on_precedent", f"closed against resolved precedent '{closing_event_id}'")
 
     # No-match is terminal because there is no actionable hold to resolve.
     if selection.status == "no_match":
-        record_event_outcome(deps.persistence, event_id, "no_match_protocol", failure_reason=selection.reason)
+        _record_outcome_with_report(deps, event_id, "no_match_protocol", failure_reason=selection.reason)
         _log_event_outcome(event_id, "no_match_protocol", reason=selection.reason)
         return FlowResult(event_id, "no_match_protocol", selection.reason)
 
@@ -828,7 +872,7 @@ def _run_protocol(
         required_fields_floor=deps.event_type_registry.required_fields_for(classification),
     )
     if not formulation.success:
-        record_event_outcome(deps.persistence, event_id, "failed", failure_reason=formulation.failure_reason)
+        _record_outcome_with_report(deps, event_id, "failed", failure_reason=formulation.failure_reason)
         _log_event_outcome(event_id, "failed", failure_reason=formulation.failure_reason, stage="formulation")
         return FlowResult(event_id, "failed", formulation.failure_reason or "")
     return _execute_protocol_plan(
@@ -1051,7 +1095,7 @@ def _execute_protocol_plan(
         return FlowResult(event_id, "waiting_for_event_data", question)
 
     if not run_result.completed:
-        record_event_outcome(deps.persistence, event_id, "failed", failure_reason=run_result.failure_cause)
+        _record_outcome_with_report(deps, event_id, "failed", failure_reason=run_result.failure_cause)
         _log_event_outcome(
             event_id, "failed", failure_reason=run_result.failure_cause, stage="execution",
             failed_step_agent=run_result.failed_step_agent,
@@ -1158,15 +1202,15 @@ def _finish_protocol_assessment(
             try:
                 verdict = judge_success(main_agent, protocol, step_outcomes, insight_text=insight_text)
             except OrchestrationParseError as exc:
-                record_event_outcome(
-                    deps.persistence, event_id, "failed",
+                _record_outcome_with_report(
+                    deps, event_id, "failed",
                     failure_reason=f"success judgment failed: {exc}", insight_text=insight_text,
                 )
                 _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="judgment")
                 return FlowResult(event_id, "failed", str(exc))
 
     outcome = _VERDICT_TO_OUTCOME[verdict.verdict]
-    record_event_outcome(deps.persistence, event_id, outcome, insight_text=insight_text)
+    _record_outcome_with_report(deps, event_id, outcome, insight_text=insight_text)
     logger.info(
         "final verdict",
         extra={
@@ -1294,7 +1338,7 @@ def resume_after_event_data(
     protocol = deps.protocol_set.get(event.get("selected_protocol"))
     if protocol is None:
         reason = "the selected protocol is no longer available"
-        record_event_outcome(deps.persistence, event_id, "failed", failure_reason=reason)
+        _record_outcome_with_report(deps, event_id, "failed", failure_reason=reason)
         return FlowResult(event_id, "failed", reason)
     rows = event.get("steps", [])
     steps = tuple(_step_from_row(row) for row in rows)
