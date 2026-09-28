@@ -85,12 +85,12 @@ def test_shift_tools_ignore_scheduler_cycle_and_do_not_confirm_planned_return(tm
     with authenticated_request_identity(simulation_user_telegram_id(1)):
         result = team.record_attendance_response(
             source_message_id="omri", availability="unavailable",
-            original_text="נעדר לבדיקה מ-12 עד 15", reason="בדיקה",
+            original_text="נעדר לבדיקה מ-12 עד 15", absence_reason="בדיקה",
             event_id="attendance-event-omri",
             received_at="2026-09-27T10:00:00+00:00",
             occurred_at="2026-09-09T09:00:00+00:00",
-            unavailable_from="2026-09-09T09:00:00+00:00",
-            unavailable_until="2026-09-09T12:00:00+00:00",
+            availability_start="2026-09-09T09:00:00+00:00",
+            availability_end="2026-09-09T12:00:00+00:00",
         )
     assert result == "The attendance response was stored."
     after = json.loads(team.report_team_availability("2026-09-09T11:30:00+00:00"))
@@ -118,6 +118,66 @@ def test_shift_tools_ignore_scheduler_cycle_and_do_not_confirm_planned_return(tm
     deps.persistence.close()
 
 
+def test_commander_roster_label_resolves_seeded_simulation_members_and_stays_out_of_daily_survey(tmp_path, monkeypatch):
+    import json
+    from agents import authenticated_request_identity
+
+    deps = build_fire_deps(tmp_path, monkeypatch)
+    team = deps.registry.get("team_status_agent")
+    commander = simulation_user_telegram_id(0)
+    named_members = ",".join(simulation_user_telegram_id(offset) for offset in (0, 1, 6))
+    with authenticated_request_identity(commander):
+        result = team.record_crew_shift_status(
+            named_members, "available", "opening-all-six",
+            "אבי אישר שכל ששת חברי צוות א זמינים: אבי, עמרי, יובל ושלושת אנשי צוות הסימולציה",
+            "2026-09-27T09:00:00+00:00", "2026-09-09T07:00:00+00:00",
+        )
+    assert "6 approved member(s)" in result
+    shift = team.status_store.find_cycle("shift-2026-09-09")
+    stored = team.status_store.list_responses(cycle_id=shift["cycle_id"])
+    assert len(stored) == 6
+    assert {row["full_name"] for row in stored if "סימולציה" in row["full_name"]} == {
+        persona.full_name for persona in fire.SIMULATION_USERS
+        if persona.key in {"firefighter_team_a_4", "firefighter_team_a_5", "firefighter_team_a_6"}
+    }
+
+    with authenticated_request_identity(simulation_user_telegram_id(1)):
+        assert team.record_attendance_response(
+            source_message_id="omri-absence", availability="unavailable", original_text="בדיקה",
+            absence_reason="בדיקה", event_id="omri-absence-event", received_at="2026-09-27T09:01:00+00:00",
+            occurred_at="2026-09-09T09:00:00+00:00", availability_start="2026-09-09T09:00:00+00:00",
+            availability_end="2026-09-09T12:00:00+00:00",
+        ) == "The attendance response was stored."
+    picture = json.loads(team.report_team_availability("2026-09-09T11:30:00+00:00"))
+    assert picture["confirmed_opening"] == 6
+    assert sum(row["availability"] == "available" for row in picture["crew"]) == 5
+    omri = next(row for row in picture["crew"] if row["telegram_identity"] == simulation_user_telegram_id(1))
+    assert omri["availability"] == "unavailable"
+    assert omri["unavailable_until"] == "2026-09-09T12:00:00+00:00"
+
+    # The shared bot polls this hook for scheduled roll calls; FIRE must not create one.
+    assert team.open_scheduled_cycle("2026-09-27T18:00:00+00:00", force=True) is None
+    assert team.status_store.find_cycle("2026-09-27") is None
+    deps.persistence.close()
+
+
+def test_fire_drone_dispatch_is_readable_at_its_scenario_time(tmp_path, monkeypatch):
+    from agents import authenticated_request_identity
+
+    deps = build_fire_deps(tmp_path, monkeypatch)
+    seed_fire_run(deps)
+    surveillance = deps.registry.get("surveillance_agent")
+    with authenticated_request_identity(simulation_user_telegram_id(5)):
+        result = surveillance.dispatch_drone_to_area(
+            target_area="pine_ridge", incident_description="reported smoke", occurred_at="2026-09-09T14:30:00+03:00",
+        )
+    assert "Simulated drone dispatch recorded" in result
+    overview = surveillance.get_surveillance_overview(as_of_iso="2026-09-09T14:31:00+03:00")
+    assert "DRONE-01" in overview and "IN_FLIGHT" in overview
+    assert "pine_ridge" in overview
+    deps.persistence.close()
+
+
 def test_current_run_history_contains_all_report_types_not_other_runs(tmp_path, monkeypatch):
     from orchestrator.firefighting_picture import fire_run_context
     deps = build_fire_deps(tmp_path, monkeypatch)
@@ -137,6 +197,20 @@ def test_current_run_history_contains_all_report_types_not_other_runs(tmp_path, 
     deps.persistence.close()
 
 
+def test_history_fallback_labels_field_reports_and_user_questions_separately():
+    from orchestrator.firefighting_picture import format_fire_run_history
+
+    history = format_fire_run_history((
+        {"occurred_at": "2026-09-09T11:00:00+03:00", "sender_name": "אבי",
+         "classification": "fire_incident", "raw_text": "עשן ליד הכביש"},
+        {"occurred_at": "2026-09-09T11:05:00+03:00", "sender_name": "מפקד",
+         "classification": "human_activation", "raw_text": "מה השתנה?"},
+    ))
+
+    assert "אבי (דיווח שטח): עשן ליד הכביש" in history
+    assert "מפקד (שאלת משתמש): מה השתנה?" in history
+
+
 def test_picture_excludes_same_run_reports_and_state_updates_after_requested_time(tmp_path, monkeypatch):
     import json
     from agents.contracts import AgentResult
@@ -146,6 +220,13 @@ def test_picture_excludes_same_run_reports_and_state_updates_after_requested_tim
 
     deps = build_fire_deps(tmp_path, monkeypatch)
     seed_fire_run(deps, received="2026-09-27T09:00:00")
+    deps.registry.get("surveillance_agent").operations_store.record_incident_update(
+        source_message_id="stale-force-projection", event_id="previous-run-force",
+        update_kind="external_force", summary="force from previous run",
+        occurred_at="2026-09-09T13:00:00+03:00", received_at="2026-09-27T08:59:00+00:00",
+        external_force={"force_id": "previous-run-force", "force_kind": "police", "count": 1,
+                        "status": "reported", "location": "old area", "notes": "stale projection"},
+    )
     future_event = begin_report(
         deps, "כוח נוסף יצא בשעה 15:00", "telegram", "2026-09-27T09:10:00",
         simulation_user_telegram_id(4), source_message_id="future-force-event",
@@ -172,6 +253,7 @@ def test_picture_excludes_same_run_reports_and_state_updates_after_requested_tim
     data = json.loads(recent.text)
     assert not any(row["event_id"] == future_event for row in data["events"])
     assert not any(row["force_id"] == "future-kkl-force" for row in data["external_forces"])
+    assert not any(row["force_id"] == "previous-run-force" for row in data["external_forces"])
     deps.persistence.close()
 
 
@@ -265,6 +347,49 @@ def test_tool_business_failure_does_not_become_successful_fire_event(tmp_path, m
     assert result.outcome == "failed"
     assert deps.persistence.fetch_event(event_id)["outcome"] == "failed"
     deps.persistence.close()
+
+
+def test_fire_executor_requires_invocation_and_uses_the_exact_tool_result():
+    from agents.contracts import AgentResult, ToolInfo
+    from protocols import Step
+    from protocols.executor import execute_step_with_retry
+
+    tool_info = ToolInfo("record_attendance_response", "records availability", True, True)
+    step = Step("team_status_agent", "רשום היעדרות", (tool_info.name,))
+
+    class ScriptedAgent:
+        name = "team_status_agent"
+
+        def __init__(self, result):
+            self.result = result
+
+        def exposed_tools(self):
+            return (tool_info,)
+
+        def process(self, *_args, **_kwargs):
+            return self.result
+
+    no_call = execute_step_with_retry(
+        ScriptedAgent(AgentResult("success", "ההיעדרות נשמרה.")), step, FakeSettings(), fire_simulation=True,
+    )
+    assert not no_call.succeeded and no_call.status == "failed"
+
+    rejected = execute_step_with_retry(
+        ScriptedAgent(AgentResult(
+            "success", "ההיעדרות נשמרה.",
+            ((tool_info.name, "The attendance response was not stored: no matching FIRE shift."),),
+        )), step, FakeSettings(), fire_simulation=True,
+    )
+    assert not rejected.succeeded and rejected.status == "failed"
+    assert "not stored" in rejected.result_text
+
+    stored = execute_step_with_retry(
+        ScriptedAgent(AgentResult(
+            "success", "החבר חזר למשמרת.", ((tool_info.name, "The attendance response was stored."),),
+        )), step, FakeSettings(), fire_simulation=True,
+    )
+    assert stored.succeeded
+    assert stored.result_text == "The attendance response was stored."
 
 
 def test_fire_execution_envelope_preserves_event_time_and_receipt_time(tmp_path, monkeypatch):

@@ -10,9 +10,11 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from contextvars import ContextVar
 from typing import Awaitable, Callable
 
 from config import ModelTierError, TierModel, resolve_tier_model_from_env
+from config.server_control import control_dir, discover_profiles
 from profiles.loader import LoadedProfile, ProfileLoadError, ProfileValidationError, load_profile
 from tools import configure_logging, deep_debug_enabled, new_trace_id
 
@@ -63,6 +65,7 @@ class _PendingNameAction:
 
 
 _PENDING_NAME_ACTIONS: dict[tuple[str, str], _PendingNameAction] = {}
+_ACTIVE_UPDATE_DEPS: ContextVar[BotDeps | None] = ContextVar("active_update_deps", default=None)
 
 # Telegram's own chat.type values for multi-member chats. Mirrors
 # orchestrator.group_routing.GROUP_CHAT_TYPES (bot may not import orchestrator).
@@ -118,6 +121,110 @@ async def _group_is_handled(deps: BotDeps, update) -> bool:
     return True
 
 
+def _deps_for_update(context) -> BotDeps:
+    """Return the profile selected for this update, isolated by its async task."""
+
+    return _ACTIVE_UPDATE_DEPS.get() or context.bot_data["deps"]
+
+
+async def _resolve_update_profile(update, context, primary: BotDeps) -> tuple[BotDeps | None, bool]:
+    """Route shared-bot traffic by its persisted group binding or explicit private-chat choice.
+
+    The boolean marks a private-chat selection that may be saved only after the selected
+    profile's normal Telegram admission check succeeds.
+    """
+
+    profiles: dict[str, BotDeps] = context.bot_data.get("profile_deps") or {}
+    if len(profiles) <= 1:
+        return primary, False
+
+    chat_type = _chat_type(update)
+    chat_id = str(update.effective_chat.id)
+    if chat_type in GROUP_CHAT_TYPES:
+        owners = [
+            scoped
+            for scoped in profiles.values()
+            if await _group_binding_cached(scoped.api_client, chat_id) is not None
+        ]
+        if len(owners) == 1:
+            return owners[0], False
+        messages = interactions.message_catalog_for(primary)
+        if len(owners) > 1:
+            logger.error(
+                "Telegram group is bound to multiple profiles; refusing cross-profile routing",
+                extra={"event": "bot_group_profile_conflict", "chat_id": chat_id},
+            )
+            await primary.telegram_client.send_text(chat_id, messages.text("bot.shared_group_conflict"))
+        elif getattr(update, "my_chat_member", None) is not None:
+            await primary.telegram_client.send_text(
+                chat_id, messages.text("bot.shared_group_unbound", chat_id=chat_id)
+            )
+        else:
+            logger.info(
+                "ignoring update from a group with no profile binding",
+                extra={"event": "bot_group_unregistered", "chat_id": chat_id, "chat_type": chat_type},
+            )
+        return None, False
+
+    chat_data = getattr(context, "chat_data", None)
+    selected_module = chat_data.get("agentshub_profile_module") if isinstance(chat_data, dict) else None
+    explicit_module = None
+    message_text = getattr(getattr(update, "message", None), "text", "") or ""
+    if message_text.startswith("/"):
+        args = getattr(context, "args", None) or []
+        if len(args) >= 2 and args[0].casefold() == "use":
+            explicit_module = _profile_module_for_choice(profiles, args[1])
+            if explicit_module is None:
+                await primary.telegram_client.send_text(
+                    chat_id,
+                    interactions.message_catalog_for(primary).text(
+                        "bot.shared_profile_choose", choices=_profile_choices(profiles)
+                    ),
+                )
+                return None, False
+    if explicit_module is not None:
+        return profiles[explicit_module], True
+
+    if selected_module in profiles:
+        return profiles[selected_module], False
+
+    telegram_identity = str(update.effective_user.id)
+    registered: list[BotDeps] = []
+    for scoped in profiles.values():
+        user = await scoped.api_client.resolve_user(telegram_identity)
+        if user.registered:
+            registered.append(scoped)
+    if len(registered) == 1:
+        return registered[0], True
+
+    messages = interactions.message_catalog_for(primary)
+    key = "bot.shared_profile_choose" if len(registered) > 1 else "bot.shared_profile_unbound"
+    await primary.telegram_client.send_text(
+        chat_id, messages.text(key, choices=_profile_choices(profiles))
+    )
+    return None, False
+
+
+def _profile_module_for_choice(profiles: dict[str, BotDeps], choice: str) -> str | None:
+    normalized = choice.strip().casefold()
+    for module_path, scoped in profiles.items():
+        module = importlib.import_module(module_path)
+        if normalized in {
+            module_path.casefold(),
+            module_path.rsplit(".", 1)[-1].casefold(),
+            scoped.loaded_profile.profile_name.casefold(),
+        }:
+            return module_path
+    return None
+
+
+def _profile_choices(profiles: dict[str, BotDeps]) -> str:
+    return ", ".join(
+        f"/profile use {module_path.rsplit('.', 1)[-1]} ({scoped.loaded_profile.profile_name})"
+        for module_path, scoped in profiles.items()
+    )
+
+
 async def _resolve_caller_cached(
     api_client, telegram_identity: str, messages
 ) -> interactions.UserResolutionResult:
@@ -154,17 +261,20 @@ def _resolve_bot_token(module_path: str, loaded_profile: LoadedProfile) -> str |
     return token
 
 
-def build_deps(module_path: str, core_model: TierModel, sub_model: TierModel) -> BotDeps | None:
-    """Returns `None` (never raises for this specific reason) when the configured bot token is missing/blank — see `_resolve_bot_token`."""
-
-    loaded_profile = load_profile(module_path, core_model=core_model, sub_model=sub_model)
-    configure_logging(loaded_profile.module_path)
-
-    bot_token = _resolve_bot_token(module_path, loaded_profile)
+def _build_deps_from_loaded_profile(
+    module_path: str,
+    loaded_profile: LoadedProfile,
+    bot_token: str | None,
+    *,
+    telegram_client=None,
+    configure_profile_logging: bool = True,
+) -> BotDeps | None:
+    if configure_profile_logging:
+        configure_logging(loaded_profile.module_path)
     if bot_token is None:
         return None
 
-    telegram_client = PTBTelegramClient(bot_token)
+    telegram_client = telegram_client or PTBTelegramClient(bot_token)
 
     bot_service_key = resolve_bot_service_key()
     if not bot_service_key:
@@ -177,6 +287,48 @@ def build_deps(module_path: str, core_model: TierModel, sub_model: TierModel) ->
     api_client = HttpApiClient(f"http://localhost:{loaded_profile.api_port}", bot_service_key=bot_service_key)
 
     return BotDeps(loaded_profile=loaded_profile, telegram_client=telegram_client, api_client=api_client)
+
+
+def build_deps(module_path: str, core_model: TierModel, sub_model: TierModel) -> BotDeps | None:
+    """Build one profile's API client and Telegram transport (the legacy/test entry point)."""
+
+    loaded_profile = load_profile(module_path, core_model=core_model, sub_model=sub_model)
+    bot_token = _resolve_bot_token(module_path, loaded_profile)
+    return _build_deps_from_loaded_profile(module_path, loaded_profile, bot_token)
+
+
+def build_shared_profile_deps(
+    core_model: TierModel,
+    sub_model: TierModel,
+    profile_modules: tuple[str, ...] | None = None,
+) -> dict[str, BotDeps]:
+    """Build profile-scoped API clients that share exactly one Telegram transport."""
+
+    modules = profile_modules or tuple(info.module_path for info in discover_profiles())
+    if not modules:
+        raise BotStartupError("no managed profiles are available for the shared Telegram bot")
+
+    loaded = [load_profile(module, core_model=core_model, sub_model=sub_model) for module in modules]
+    tokens = [_resolve_bot_token(profile.module_path, profile) for profile in loaded]
+    if any(token is None for token in tokens):
+        return {}
+    if len(set(tokens)) != 1:
+        raise BotStartupError("managed profiles must resolve to the same BOT_TOKEN for shared polling")
+
+    configure_logging("AgentsHub shared Telegram bot")
+    telegram_client = PTBTelegramClient(tokens[0])
+    result: dict[str, BotDeps] = {}
+    for profile, token in zip(loaded, tokens):
+        scoped = _build_deps_from_loaded_profile(
+            profile.module_path,
+            profile,
+            token,
+            telegram_client=telegram_client,
+            configure_profile_logging=False,
+        )
+        if scoped is not None:
+            result[profile.module_path] = scoped
+    return result
 
 
 _INVALID_TOKEN_MESSAGE = (
@@ -217,7 +369,7 @@ def _bot_commands(catalog) -> list[tuple[str, str]]:
 
 
 async def _on_start_command(update, context) -> None:
-    deps: BotDeps = context.bot_data["deps"]
+    deps = _deps_for_update(context)
     telegram_identity, chat_id = _identity_and_chat_id(update)
     messages = interactions.message_catalog_for(deps)
 
@@ -263,7 +415,7 @@ async def _on_start_command(update, context) -> None:
 async def _gate_on_full_name(handler, update, context) -> bool:
     """Return True after handling a missing-name interaction, so the handler must stop."""
 
-    deps: BotDeps = context.bot_data["deps"]
+    deps = _deps_for_update(context)
     messages = interactions.message_catalog_for(deps)
     if not await _group_is_handled(deps, update):
         return True
@@ -307,14 +459,20 @@ def _guarded(handler: Callable[..., Awaitable[None]], *, require_full_name: bool
     """Wrap a handler so `ApiNotImplementedError` and any other unexpected exception become a clear chat reply rather than a crash — never a leaked stack trace, matching the spirit of..."""
 
     async def _wrapped(update, context):
-        deps = context.bot_data["deps"]
-        messages = interactions.message_catalog_for(deps)
+        primary: BotDeps = context.bot_data["deps"]
+        deps = primary
+        active_token = None
         try:
             telegram_identity, chat_id = _identity_and_chat_id(update)
             chat_type = _chat_type(update)
             chat = getattr(update, "effective_chat", None)
             chat_label = str(getattr(chat, "title", None) or "")
             with telegram_request_context(chat_id, chat_type):
+                deps, save_private_selection = await _resolve_update_profile(update, context, primary)
+                if deps is None:
+                    return
+                active_token = _ACTIVE_UPDATE_DEPS.set(deps)
+                messages = interactions.message_catalog_for(deps)
                 admission = await deps.api_client.admit_telegram_update(
                     telegram_identity,
                     chat_id,
@@ -335,6 +493,10 @@ def _guarded(handler: Callable[..., Awaitable[None]], *, require_full_name: bool
                     if chat_type == "private":
                         await deps.telegram_client.send_text(chat_id, messages.text("auth.safe_mode_blocked"))
                     return
+                if chat_type == "private" and save_private_selection:
+                    chat_data = getattr(context, "chat_data", None)
+                    if isinstance(chat_data, dict):
+                        chat_data["agentshub_profile_module"] = deps.loaded_profile.module_path
                 if admission.reason == "auto_registered":
                     clear_caller_cache()
                 if require_full_name and await _gate_on_full_name(handler, update, context):
@@ -343,6 +505,7 @@ def _guarded(handler: Callable[..., Awaitable[None]], *, require_full_name: bool
         except ApiNotImplementedError as exc:
             logger.info("handler blocked on unimplemented API: %s", exc, extra={"event": "bot_api_not_implemented"})
             if update.effective_chat is not None:
+                messages = interactions.message_catalog_for(deps)
                 await deps.telegram_client.send_text(
                     str(update.effective_chat.id),
                     messages.text("bot.not_available", reason=exc),
@@ -350,10 +513,14 @@ def _guarded(handler: Callable[..., Awaitable[None]], *, require_full_name: bool
         except Exception:
             logger.exception("unhandled error in bot handler", extra={"event": "bot_handler_failed"})
             if update.effective_chat is not None:
+                messages = interactions.message_catalog_for(deps)
                 await deps.telegram_client.send_text(
                     str(update.effective_chat.id),
                     messages.text("bot.handler_error"),
                 )
+        finally:
+            if active_token is not None:
+                _ACTIVE_UPDATE_DEPS.reset(active_token)
 
     return _wrapped
 
@@ -648,7 +815,7 @@ QUEUE_SHORTCUT_PHRASES = {
 
 
 async def _on_text_message(update, context) -> None:
-    deps: BotDeps = context.bot_data["deps"]
+    deps = _deps_for_update(context)
     telegram_identity, chat_id = _identity_and_chat_id(update)
     messages = interactions.message_catalog_for(deps)
     chat_type = _chat_type(update)
@@ -877,7 +1044,7 @@ async def _on_attendance_callback(deps: BotDeps, update, choice: str) -> None:
 
 
 async def _on_callback_query(update, context) -> None:
-    deps: BotDeps = context.bot_data["deps"]
+    deps = _deps_for_update(context)
     query = update.callback_query
     if query is None:
         return
@@ -981,9 +1148,27 @@ async def _resolve_caller_or_refuse(deps: BotDeps, chat_id: str, telegram_identi
 
 
 async def _on_profile_command(update, context) -> None:
-    deps: BotDeps = context.bot_data["deps"]
+    deps = _deps_for_update(context)
     telegram_identity, chat_id = _identity_and_chat_id(update)
     args = context.args or []
+    if args and args[0].casefold() == "use":
+        if len(context.bot_data.get("profile_deps", {})) <= 1:
+            await deps.telegram_client.send_text(
+                chat_id, interactions.message_catalog_for(deps).text("command.profile_usage")
+            )
+            return
+        if _chat_type(update) != "private":
+            await deps.telegram_client.send_text(
+                chat_id, interactions.message_catalog_for(deps).text("command.profile_usage")
+            )
+            return
+        await deps.telegram_client.send_text(
+            chat_id,
+            interactions.message_catalog_for(deps).text(
+                "bot.shared_profile_selected", profile=deps.loaded_profile.profile_name
+            ),
+        )
+        return
     if not await _group_is_handled(deps, update):
         return
 
@@ -1040,7 +1225,7 @@ async def _on_profile_command(update, context) -> None:
 
 
 async def _on_settings_command(update, context) -> None:
-    deps: BotDeps = context.bot_data["deps"]
+    deps = _deps_for_update(context)
     telegram_identity, chat_id = _identity_and_chat_id(update)
     args = context.args or []
     if not await _group_is_handled(deps, update):
@@ -1080,7 +1265,7 @@ _JOINED_MEMBER_STATUSES = frozenset({"member", "administrator", "restricted"})
 async def _on_my_chat_member(update, context) -> None:
     """The bot was added to (or promoted in) a group: if that group has no binding yet, post its chat ID once so a commander can register it."""
 
-    deps: BotDeps = context.bot_data["deps"]
+    deps = _deps_for_update(context)
     change = getattr(update, "my_chat_member", None)
     if change is None:
         return
@@ -1101,10 +1286,16 @@ async def _on_my_chat_member(update, context) -> None:
     await deps.telegram_client.send_text(chat_id, messages.text("bot.group_added_hint", chat_id=chat_id))
 
 
-def register_handlers(application, deps: BotDeps) -> None:
+def register_handlers(
+    application,
+    deps: BotDeps,
+    profile_deps: dict[str, BotDeps] | None = None,
+) -> None:
     from telegram.ext import CallbackQueryHandler, ChatMemberHandler, CommandHandler, MessageHandler, filters
 
     application.bot_data["deps"] = deps
+    scoped_profiles = profile_deps or {deps.loaded_profile.module_path: deps}
+    application.bot_data["profile_deps"] = scoped_profiles
 
     assert REGISTERED_COMMANDS == ("profile", "settings")
     application.add_handler(CommandHandler("start", _guarded(_on_start_command)))
@@ -1118,55 +1309,68 @@ def register_handlers(application, deps: BotDeps) -> None:
     )
 
     async def _post_init(started_application) -> None:
-        await deps.api_client.start()
         from telegram import BotCommand
 
+        background_tasks: list[asyncio.Task] = []
+        started_application.bot_data["background_tasks"] = background_tasks
         messages = interactions.message_catalog_for(deps)
         await started_application.bot.set_my_commands(
             [BotCommand(name, description) for name, description in _bot_commands(messages)]
         )
-        cursor_store = NotificationCursorStore(Path(f"{deps.loaded_profile.db_path}.notification_cursor"))
-        # If the cursor is 0 (first run / reset), fast-forward to the current
-        # notification head so we don't redeliver old approval prompts from
-        # previous server sessions or test runs. Only new notifications from
-        # this point onward will be dispatched.
-        if cursor_store.read() == 0:
-            try:
-                _, head_cursor = await deps.api_client.poll_pending_notifications(since=0, wait_seconds=0)
-                if head_cursor > 0:
-                    cursor_store.write(head_cursor)
-                    logger.info(
-                        "notification cursor initialized to head=%d (skipping old notifications)",
-                        head_cursor,
-                        extra={"event": "notification_cursor_init"},
-                    )
-            except Exception as exc:
-                logger.warning("could not initialize notification cursor: %s", exc)
-        poll_task = asyncio.create_task(
-            run_notification_poll_loop(deps, NOTIFICATION_POLL_INTERVAL_SECONDS, cursor_store=cursor_store)
-        )
-        started_application.bot_data["notification_task"] = poll_task
-        attendance_task = asyncio.create_task(run_attendance_check_loop(deps, ATTENDANCE_CHECK_INTERVAL_SECONDS))
-        started_application.bot_data["attendance_task"] = attendance_task
+        for module_path, scoped in scoped_profiles.items():
+            await scoped.api_client.start()
+            cursor_store = NotificationCursorStore(Path(f"{scoped.loaded_profile.db_path}.notification_cursor"))
+            # Each profile owns its cursor and API stream; the shared Telegram transport
+            # does not make notification state or attendance cycles global.
+            if cursor_store.read() == 0:
+                try:
+                    _, head_cursor = await scoped.api_client.poll_pending_notifications(since=0, wait_seconds=0)
+                    if head_cursor > 0:
+                        cursor_store.write(head_cursor)
+                        logger.info(
+                            "notification cursor initialized to head=%d for %s",
+                            head_cursor,
+                            module_path,
+                            extra={"event": "notification_cursor_init", "profile_module": module_path},
+                        )
+                except Exception as exc:
+                    logger.warning("could not initialize notification cursor for %s: %s", module_path, exc)
+            background_tasks.append(asyncio.create_task(
+                run_notification_poll_loop(scoped, NOTIFICATION_POLL_INTERVAL_SECONDS, cursor_store=cursor_store)
+            ))
+            background_tasks.append(asyncio.create_task(
+                run_attendance_check_loop(scoped, ATTENDANCE_CHECK_INTERVAL_SECONDS)
+            ))
+        if len(scoped_profiles) == 1:
+            started_application.bot_data["notification_task"] = background_tasks[0]
+            started_application.bot_data["attendance_task"] = background_tasks[1]
 
     application.post_init = _post_init
 
     async def _post_shutdown(_stopped_application) -> None:
-        for task_key in ("notification_task", "attendance_task"):
-            background_task = _stopped_application.bot_data.get(task_key)
+        tasks = _stopped_application.bot_data.get("background_tasks", ())
+        if not tasks:
+            tasks = tuple(
+                _stopped_application.bot_data.get(task_key)
+                for task_key in ("notification_task", "attendance_task")
+            )
+        for background_task in tasks:
             if background_task is not None and not background_task.done():
                 background_task.cancel()
                 try:
                     await background_task
                 except (asyncio.CancelledError, Exception):
                     pass
-        await deps.api_client.close()
+        for api_client in {id(scoped.api_client): scoped.api_client for scoped in scoped_profiles.values()}.values():
+            await api_client.close()
 
     application.post_shutdown = _post_shutdown
 
 
-def run_bot(deps: BotDeps) -> None:
-    deps.telegram_client.run_polling(lambda application: register_handlers(application, deps))
+def run_bot(deps: BotDeps, profile_deps: dict[str, BotDeps] | None = None) -> None:
+    deps.telegram_client.run_polling(
+        lambda application: register_handlers(application, deps, profile_deps=profile_deps)
+    )
 
 
 def _tier_model_from_environ(prefix: str) -> TierModel:
@@ -1179,7 +1383,8 @@ def main(argv: list[str] | None = None) -> None:
     """One of the three real entry points (with `api.app.main`, `cli.user_admin.main`) that reads `os.environ` for model-tier config — everything below it takes already-resolved `TierM..."""
 
     parser = argparse.ArgumentParser(description="Run the Telegram bot frontend for one deployment (work_plan.md §8).")
-    parser.add_argument("profile_module", help="dotted module path of the profile to run, e.g. profiles.standby_squad")
+    parser.add_argument("profile_module", nargs="?", help="dotted module path for a single-profile compatibility run")
+    parser.add_argument("--shared", action="store_true", help="route all managed profiles through one Telegram polling process")
     args = parser.parse_args(argv)
 
     try:
@@ -1189,14 +1394,30 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"failed to start bot: {exc}") from exc
 
     try:
-        bot_dependencies = build_deps(args.profile_module, core_model=core_model, sub_model=sub_model)
+        if args.shared:
+            profile_dependencies = build_shared_profile_deps(core_model, sub_model)
+            if not profile_dependencies:
+                return
+            bot_dependencies = next(iter(profile_dependencies.values()))
+        else:
+            if not args.profile_module:
+                parser.error("profile_module is required unless --shared is used")
+            profile_dependencies = None
+            bot_dependencies = build_deps(args.profile_module, core_model=core_model, sub_model=sub_model)
     except (ProfileLoadError, ProfileValidationError) as exc:
+        raise SystemExit(f"failed to start bot: {exc}") from exc
+    except BotStartupError as exc:
         raise SystemExit(f"failed to start bot: {exc}") from exc
 
     if bot_dependencies is None:
         return
 
-    lock = SingleInstanceLock(Path(f"{bot_dependencies.loaded_profile.db_path}.bot.lock"))
+    lock_path = (
+        control_dir() / "shared-bot.lock"
+        if profile_dependencies is not None
+        else Path(f"{bot_dependencies.loaded_profile.db_path}.bot.lock")
+    )
+    lock = SingleInstanceLock(lock_path)
 
     try:
         lock.acquire()
@@ -1210,7 +1431,7 @@ def main(argv: list[str] | None = None) -> None:
     from telegram.error import InvalidToken
 
     try:
-        run_bot(bot_dependencies)
+        run_bot(bot_dependencies, profile_dependencies)
     except InvalidToken as exc:
         raise SystemExit(_INVALID_TOKEN_MESSAGE) from exc
     finally:

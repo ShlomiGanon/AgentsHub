@@ -42,6 +42,12 @@ _invocation_deadline: ContextVar[float | None] = ContextVar("invocation_deadline
 _authenticated_request_identity: ContextVar[str | None] = ContextVar(
     "authenticated_request_identity", default=None
 )
+_authenticated_request_event_context: ContextVar[dict | None] = ContextVar(
+    "authenticated_request_event_context", default=None
+)
+_current_tool_results: ContextVar[list[tuple[str, object]] | None] = ContextVar(
+    "current_tool_results", default=None
+)
 _tool_class_cache: dict[tuple[type, str, str, int], type] = {}
 _tool_class_cache_lock = threading.Lock()
 _llm_cache: "OrderedDict[tuple[str, str, str], object]" = OrderedDict()
@@ -57,12 +63,18 @@ def get_authenticated_request_identity() -> str | None:
     return _authenticated_request_identity.get()
 
 
+def get_authenticated_request_event_context() -> dict | None:
+    return _authenticated_request_event_context.get()
+
+
 @contextmanager
-def authenticated_request_identity(identity: str):
+def authenticated_request_identity(identity: str, *, event_context: dict | None = None):
     token = _authenticated_request_identity.set(identity)
+    event_token = _authenticated_request_event_context.set(event_context)
     try:
         yield
     finally:
+        _authenticated_request_event_context.reset(event_token)
         _authenticated_request_identity.reset(token)
 
 
@@ -123,7 +135,7 @@ class ExactResultCapture:
             with self._lock:
                 exact = self._results.pop(key, None)
             if exact is not None:
-                return AgentResult(status="success", text=exact)
+                return AgentResult(status="success", text=exact, tool_results=model_result.tool_results)
             return model_result
         finally:
             with self._lock:
@@ -195,6 +207,9 @@ def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> 
                 },
             )
             raise
+        captured_results = _current_tool_results.get()
+        if captured_results is not None:
+            captured_results.append((tool_info.name, tool_result))
         logger.info(
             "tool call",
             extra={
@@ -271,13 +286,17 @@ class Agent:
         invocation_tools = {name: wrapped for name, wrapped in self._wrapped_tools.items() if name in allowed}
 
         token = _current_allowed_tools.set(allowed)
+        tool_results: list[tuple[str, object]] = []
+        results_token = _current_tool_results.set(tool_results)
         try:
             if invocation_policy is None:
                 raw_text = invoke(invocation_descriptor, invocation_tools, text, self.timeout_seconds)
             else:
                 raw_text = invoke(invocation_descriptor, invocation_tools, text, self.timeout_seconds, invocation_policy)
-            return parse_agent_output(raw_text)
+            parsed = parse_agent_output(raw_text)
+            return AgentResult(parsed.status, parsed.text, tuple(tool_results))
         finally:
+            _current_tool_results.reset(results_token)
             _current_allowed_tools.reset(token)
 
 

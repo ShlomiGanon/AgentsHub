@@ -58,7 +58,7 @@ from orchestrator.flows import (
     run_report_extraction,
     resume_after_event_data,
 )
-from orchestrator.firefighting_picture import format_fire_run_history
+from orchestrator.firefighting_picture import answer_fire_run_history
 
 from protocols import CriticalityLevel, Protocol, ProtocolEditError, add_protocol, remove_protocol, replace_protocol
 from profiles.loader import hash_profile_file
@@ -320,12 +320,13 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 raise InvalidInputError("event_time must be an ISO-8601 timestamp", field="event_time")
             try:
                 parsed_event_time = datetime.fromisoformat(event_time.replace("Z", "+00:00"))
-                if (
-                    parsed_event_time.tzinfo is None
-                    and ctx.loaded_profile.module_path == "profiles.firefighting"
-                    and simulation_context == "FIRE_SIMULATION"
-                ):
-                    event_time = parsed_event_time.replace(tzinfo=ZoneInfo("Asia/Jerusalem")).isoformat()
+                if ctx.loaded_profile.module_path == "profiles.firefighting" and simulation_context == "FIRE_SIMULATION":
+                    scenario_zone = ZoneInfo("Asia/Jerusalem")
+                    if parsed_event_time.tzinfo is None:
+                        parsed_event_time = parsed_event_time.replace(tzinfo=scenario_zone)
+                    else:
+                        parsed_event_time = parsed_event_time.astimezone(scenario_zone)
+                    event_time = parsed_event_time.isoformat()
                 else:
                     event_time = storage_timestamp(parse_timestamp(event_time))
             except (TypeError, ValueError, OverflowError) as exc:
@@ -394,6 +395,20 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     max_turns=history_turns,
                     event_id=event_id,
                 )
+
+        def _fire_history_answer() -> tuple[str, str | None]:
+            run = fire_run_context(ctx.deps.registry, ctx.deps.persistence)
+            if run is None:
+                return messages.text("fire.context.run_required"), None
+            run_events = run["events"]
+            if level != PermissionLevel.COMMANDER:
+                run_events = [event for event in run_events if event.get("sender_identity") == caller_identity]
+            answer = answer_fire_run_history(
+                ctx.deps.registry.get("history_agent"), text, run_events,
+                getattr(ctx.deps.registry.get("team_status_agent"), "timezone_name", "Asia/Jerusalem"),
+            )
+            event_id = run_events[-1].get("event_id") if run_events else None
+            return answer, event_id
 
         if source_message_id:
             existing_event = ctx.deps.persistence.fetch_event_by_source_message("telegram", sender_identity, str(source_message_id))
@@ -821,18 +836,8 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             if matched_protocol.name == "query_historical_incidents":
                 require(level, RequestedOperation.ASK_QUESTION)
                 if fire_simulation:
-                    run = fire_run_context(ctx.deps.registry, ctx.deps.persistence)
-                    run_events = run["events"] if run else []
-                    if not is_commander:
-                        run_events = [
-                            event for event in run_events
-                            if event.get("sender_identity") == caller_identity
-                        ]
-                    answer = format_fire_run_history(
-                        run_events,
-                        getattr(ctx.deps.registry.get("team_status_agent"), "timezone_name", "Asia/Jerusalem"),
-                    )
-                    _remember("assistant", answer, run_events[-1].get("event_id") if run_events else None)
+                    answer, history_event_id = _fire_history_answer()
+                    _remember("assistant", answer, history_event_id)
                     return jsonify({"taken_as": "question", "answer": answer, "protocol": matched_protocol.name})
                 caller_filter = None if is_commander else caller_identity
                 try:
@@ -979,6 +984,13 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
         if intent.intent == "question":
             require(level, RequestedOperation.ASK_QUESTION)
             if fire_simulation:
+                if message_plan and message_plan.question_selection and message_plan.question_selection.status == "history":
+                    answer, history_event_id = _fire_history_answer()
+                    _remember("assistant", answer, history_event_id)
+                    return jsonify({
+                        "taken_as": "question", "answer": answer,
+                        "protocol": "query_historical_incidents",
+                    })
                 picture = build_fire_situational_picture(
                     ctx.deps.registry, str(text), as_of_iso=event_time or "",
                     main_agent=ctx.main_agent, history_query_service=ctx.deps.history_query_service,

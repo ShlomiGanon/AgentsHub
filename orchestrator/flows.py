@@ -79,7 +79,7 @@ from orchestrator.group_routing import (  # re-exported: api may only import orc
 )
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
 from protocols import CriticalityLevel, EVENT_DATA_FIELDS, Step, StepOutcome
-from protocols.executor import execute_steps
+from protocols.executor import execute_steps, fire_tool_result_failed
 from agents import AgentModelError, AgentTimeoutError, authenticated_request_identity
 from tools import get_trace_id
 
@@ -1132,7 +1132,10 @@ def _execute_protocol_plan(
     )
 
 
-    with authenticated_request_identity(event["sender_identity"]):
+    with authenticated_request_identity(
+        event["sender_identity"],
+        event_context=event_envelope if event.get("simulation_context") == "FIRE_SIMULATION" else None,
+    ):
         run_result = execute_steps(
             list(execution_steps),
             agents_by_name,
@@ -1272,21 +1275,15 @@ def _finish_protocol_assessment(
     final_assessment = None
     persisted_event = deps.persistence.fetch_event(event_id)
     if persisted_event.get("simulation_context") == "FIRE_SIMULATION":
-        failed_tool_results = (
-            "not stored", "not updated", "dispatch failed", "clarification required",
-            "not found", "invalid iso", "could not be opened",
-        )
         succeeded = all(
             outcome.succeeded
-            and not any(marker in (outcome.result_text or "").casefold() for marker in failed_tool_results)
+            and not fire_tool_result_failed(outcome.result_text)
             for outcome in step_outcomes
         )
         reports = tuple(DomainReport(
             outcome.step.agent_name, outcome.step.task_text,
             outcome.result_text or "",
-            outcome.succeeded and not any(
-                marker in (outcome.result_text or "").casefold() for marker in failed_tool_results
-            ),
+            outcome.succeeded and not fire_tool_result_failed(outcome.result_text),
         ) for outcome in step_outcomes)
         from messages import get_catalog
         answer = compose_situational_picture(

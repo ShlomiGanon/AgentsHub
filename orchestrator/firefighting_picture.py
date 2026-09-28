@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -11,6 +12,8 @@ from persistence import EventSearchCriteria
 from orchestrator.situational_picture import (
     DomainReport, RECENT_EVENTS_DOMAIN, SituationalPicture, build_situational_picture,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _scenario_datetime(value: str, scenario_zone: ZoneInfo) -> datetime:
@@ -76,8 +79,55 @@ def format_fire_run_history(events, timezone_name="Asia/Jerusalem"):
         source = event.get("sender_name") or event.get("sender_identity") or catalog.text("fire.history.unknown_source")
         report = str(event.get("raw_text") or "").strip()
         if report:
-            lines.append(f"• {when} — {source}: {report}")
+            kind_key = (
+                "fire.history.user_question"
+                if event.get("classification") == "human_activation"
+                else "fire.history.field_report"
+            )
+            lines.append(f"• {when} — {source} ({catalog.text(kind_key)}): {report}")
     return "\n".join(lines)
+
+
+def answer_fire_run_history(history_agent, question, events, timezone_name="Asia/Jerusalem"):
+    """Use the existing history specialist on current-run evidence; keep a faithful listing as fallback."""
+    scenario_zone = ZoneInfo(timezone_name)
+    evidence = []
+    for event in events:
+        occurred = event.get("occurred_at")
+        received = event.get("received_at")
+        if occurred:
+            local_time = _scenario_datetime(occurred, scenario_zone).astimezone(scenario_zone)
+        elif received:
+            local_time = _scenario_datetime(received, timezone.utc).astimezone(scenario_zone)
+        else:
+            local_time = None
+        evidence.append({
+            "local_time": local_time.strftime("%d/%m %H:%M") if local_time else "unknown",
+            "sender": event.get("sender_name") or event.get("sender_identity"),
+            "classification": event.get("classification"),
+            "report": event.get("raw_text"),
+            "outcome": event.get("outcome"),
+            "user_response": event.get("user_response"),
+        })
+    prompt = (
+        "Answer the commander's history question using only these chronological records from the active FIRE run. "
+        "Separate field reports from user questions using their classification. Preserve uncertainty and conflicting reports. "
+        "Do not infer that a planned action occurred; use only the recorded outcome and user response. "
+        "Reply in concise natural Hebrew, without internal IDs or tool names.\n"
+        f"Question: {question}\nEvidence: {json.dumps(evidence, ensure_ascii=False, default=str)}"
+    )
+    try:
+        result = history_agent.process(prompt, [])
+        if result.status == "success" and result.text.strip():
+            return result.text.strip()
+        reason = f"history agent returned {result.status}"
+    except Exception as exc:
+        reason = type(exc).__name__
+    logger.warning("FIRE history specialist unavailable", extra={"event": "fire_history_agent_failed", "reason": reason})
+    return (
+        get_catalog("he").text("fire.history.agent_unavailable")
+        + "\n" + format_fire_run_history(events, timezone_name)
+    )
 
 
 def build_fire_situational_picture(
@@ -130,28 +180,10 @@ def build_fire_situational_picture(
     )
     operations = registry.get("surveillance_agent").operations_store
     run_event_ids = {event["event_id"] for event in run["events"]}
-    force_states = {}
-    for update in operations.list_updates():
-        if update.get("update_kind") != "external_force" or update.get("event_id") not in run_event_ids:
-            continue
-        try:
-            facts = json.loads(update.get("facts_json") or "{}")
-            force = facts.get("external_force")
-            update_time = _scenario_datetime(update["occurred_at"], scenario_zone)
-        except (TypeError, ValueError, KeyError):
-            continue
-        current = force_states.get(force["force_id"]) if force else None
-        if force and update_time <= now and (
-            current is None or update_time >= _scenario_datetime(current["last_updated"], scenario_zone)
-        ):
-            force_states[force["force_id"]] = {**force, "last_updated": update["occurred_at"]}
-    for force in operations.list_external_forces():
-        update_time = _scenario_datetime(force["last_updated"], scenario_zone)
-        current = force_states.get(force["force_id"])
-        if update_time <= now and (
-            current is None or update_time >= _scenario_datetime(current["last_updated"], scenario_zone)
-        ):
-            force_states[force["force_id"]] = force
+    force_states = operations.list_external_forces_as_of(
+        as_of_iso=now.astimezone(timezone.utc).isoformat(),
+        run_started_at=run_started.isoformat(), event_ids=run_event_ids,
+    )
     incidents = [
         row for row in operations.list_incidents()
         if _scenario_datetime(row["run_started_at"], timezone.utc) == run_started
@@ -163,7 +195,7 @@ def build_fire_situational_picture(
         RECENT_EVENTS_DOMAIN, request_text,
         json.dumps({
             "events": evidence,
-            "external_forces": list(force_states.values()),
+            "external_forces": force_states,
             "incidents": incidents,
         }, ensure_ascii=False, default=str), True,
     )

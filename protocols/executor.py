@@ -19,6 +19,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 _side_effect_locks: dict[str, threading.Lock] = {}
 _side_effect_locks_guard = threading.Lock()
+_FIRE_TOOL_FAILURE_MARKERS = (
+    "not stored", "not updated", "not recorded", "dispatch failed",
+    "clarification required", "not found", "invalid iso", "could not be opened",
+)
+
+
+def fire_tool_result_failed(result_text: str | None) -> bool:
+    normalized = (result_text or "").casefold()
+    return any(marker in normalized for marker in _FIRE_TOOL_FAILURE_MARKERS)
 
 
 def _locks_for_step(agent: Agent, step: Step) -> list[threading.Lock]:
@@ -50,6 +59,7 @@ def execute_step_with_retry(
     task_rewriter: Callable[[Step, str], str] | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
     backoff_seconds: float = 1.0,
+    fire_simulation: bool = False,
 ) -> StepOutcome:
     current_task_text = step.task_text
     attempts = 0
@@ -110,6 +120,25 @@ def execute_step_with_retry(
             sleep_fn(backoff_seconds)
             continue
 
+        if fire_simulation:
+            if not agent_result.tool_results:
+                reason = "FIRE protocol tool was not invoked"
+                return StepOutcome(
+                    step=step, result_text=agent_result.text, attempt_count=attempts,
+                    succeeded=False, failure_reason=reason, status="failed",
+                )
+            actual_results = tuple((name, str(result)) for name, result in agent_result.tool_results)
+            result_text = "\n".join(result for _, result in actual_results)
+            failure = next(
+                (text for _, text in actual_results if fire_tool_result_failed(text)),
+                None,
+            )
+            if failure is not None:
+                return StepOutcome(
+                    step=step, result_text=result_text, attempt_count=attempts,
+                    succeeded=False, failure_reason=failure, status="failed",
+                )
+            return StepOutcome(step=step, result_text=result_text, attempt_count=attempts, succeeded=True)
         return StepOutcome(step=step, result_text=agent_result.text, attempt_count=attempts, succeeded=True)
 
 
@@ -180,7 +209,10 @@ def execute_steps(
             extra={"event": "step_start", "agent": step.agent_name, "step_index": index, "task_text": step.task_text, "trace_id": get_trace_id()},
         )
 
-        outcome = execute_step_with_retry(agent, step, settings_store, task_rewriter=task_rewriter, sleep_fn=sleep_fn)
+        outcome = execute_step_with_retry(
+            agent, step, settings_store, task_rewriter=task_rewriter, sleep_fn=sleep_fn,
+            fire_simulation=bool(event_data and event_data.get("simulation_context") == "FIRE_SIMULATION"),
+        )
         outcomes.append(outcome)
 
         logger.info(
@@ -274,6 +306,7 @@ def _execute_dependency_steps(
             outcome = execute_step_with_retry(
                 agents_by_name[step.agent_name], step, settings_store,
                 task_rewriter=task_rewriter, sleep_fn=sleep_fn,
+                fire_simulation=bool(event_data and event_data.get("simulation_context") == "FIRE_SIMULATION"),
             )
             return step_id, outcome
 

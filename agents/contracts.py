@@ -99,6 +99,7 @@ UNCLEAR_TASK_PROMPT_INSTRUCTION = (
 class AgentResult:
     status: Literal["success", "unclear_task"]
     text: str
+    tool_results: tuple[tuple[str, Any], ...] = ()
 
 
 def parse_agent_output(raw_text: str) -> AgentResult:

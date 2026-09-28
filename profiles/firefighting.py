@@ -7,16 +7,22 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from agents import FriendlyForcesAgent, SurveillanceAgent, TeamStatusAgent, get_authenticated_request_identity, tool
+from agents import (
+    FriendlyForcesAgent, SurveillanceAgent, TeamStatusAgent,
+    get_authenticated_request_event_context, get_authenticated_request_identity, tool,
+)
 from messages import get_catalog
 from persistence import (
     FirefightingOperationsStore,
+    SurveillancePersistenceError,
     open_persistence,
     open_surveillance_persistence,
     open_team_status_persistence,
 )
 from profiles.contracts import AgentSpec, OptimizationPolicy
-from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
+from profiles.simulation import (
+    SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario, simulation_user_telegram_id,
+)
 from protocols import CriticalityLevel, Protocol
 
 DEFAULT_LANGUAGE = "he"
@@ -78,6 +84,46 @@ class FirefightingSurveillanceAgent(SurveillanceAgent):
         return self._format_surveillance_overview(area, as_of_iso)
 
     @tool(
+        "dispatch_drone_to_area",
+        "Records a simulated FIRE drone dispatch at the supplied scenario time. Use the exact event occurred_at value; never substitute wall-clock time.",
+        side_effecting=True,
+        idempotent=False,
+    )
+    def dispatch_drone_to_area(
+        self,
+        target_area: str,
+        incident_description: str,
+        mission_type: str = "recon",
+        specific_drone_id: str = "",
+        dispatched_by: str = "commander",
+        occurred_at: str = "",
+    ) -> str:
+        event_context = get_authenticated_request_event_context() or {}
+        occurred_at = event_context.get("scenario_time") or occurred_at
+        if not target_area.strip() or not incident_description.strip():
+            return "Clarification required: target area and incident description are required."
+        if not occurred_at.strip():
+            return "Drone dispatch was not recorded: the FIRE scenario time is missing."
+        drone_id = specific_drone_id.strip()
+        if drone_id.casefold() in {"auto", "none", "null", "n/a", "-", "automatic", "any", "best", "default"}:
+            drone_id = ""
+        try:
+            mission = self.surveillance_store.dispatch_drone(
+                target_area=target_area.strip(), incident_description=incident_description.strip(),
+                mission_type=mission_type.strip() or "recon",
+                dispatched_by=get_authenticated_request_identity() or dispatched_by.strip() or "commander",
+                specific_drone_id=drone_id or None, now_iso=occurred_at.strip(),
+            )
+        except (SurveillancePersistenceError, ValueError) as exc:
+            return f"Drone dispatch failed: {exc}"
+        drone = mission["drone"]
+        return (
+            f"Simulated drone dispatch recorded: mission {mission['mission_id']}, {drone['callsign']} "
+            f"to {mission['target_area']} at {mission['dispatched_at']}; status {mission['status']}; "
+            f"estimated arrival in {mission['eta_seconds']} seconds."
+        )
+
+    @tool(
         "record_fire_incident_update",
         "Persists a structured FIRE incident update and links it to the existing incident.",
         side_effecting=True,
@@ -99,6 +145,20 @@ class FirefightingSurveillanceAgent(SurveillanceAgent):
         hazard_status: str = "",
         status: str = "",
     ) -> str:
+        event_context = get_authenticated_request_event_context() or {}
+        if event_context:
+            validated = event_context.get("validated_event_fields") or {}
+            source_message_id = event_context.get("source_message_id") or source_message_id
+            event_id = event_context.get("event_id") or event_id
+            occurred_at = event_context.get("scenario_time") or occurred_at
+            received_at = event_context.get("received_at") or received_at
+            summary = validated.get("description") or event_context.get("raw_text") or summary
+            area = validated.get("area") or ""
+            verification_status = "unverified"
+            facts = {
+                key: value for key, value in validated.items()
+                if value is not None
+            }
         if not summary.strip() or not source_message_id.strip():
             return "The FIRE incident update was not stored: summary and source message ID are required."
         result = self.operations_store.record_incident_update(
@@ -122,10 +182,32 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
     """Binds the reusable readiness-status specialist to this profile's own DB -- the
     firefighting crew's shift roster and attendance (docs/Profile_Split_Plan.md section 4.2)."""
 
+    system_prompt = (
+        "You maintain the FIRE firefighting shift roster, not the standby-squad daily roll call. "
+        "For a commander's opening-shift declaration, use record_crew_shift_status only for the "
+        "approved members explicitly covered by the report. For a member's own availability or "
+        "planned absence, use record_attendance_response. Its absence fields are named "
+        "availability_start, availability_end, and absence_reason; use only the validated event "
+        "values supplied in the task. A planned return time is not confirmation that the member "
+        "has returned. Treat the tool's exact result as authoritative and never claim a write "
+        "succeeded unless it confirms storage. Keep the user reply to one short Hebrew sentence."
+    )
+
     status_db_path = FIREFIGHTING_CREW_STATUS_DB_PATH
     timezone_name = "Asia/Jerusalem"
     attendance_check_hour = 8
     response_window_hours = 1
+
+    def open_scheduled_cycle(self, now_iso: str | None = None, *, force: bool = False) -> dict | None:
+        """FIRE shift readiness is declared by its commander, not polled as a personal roll call.
+
+        The shared bot's attendance loop calls this hook for whichever profile is active;
+        returning no cycle here keeps that generic delivery path from sending a readiness
+        survey into FIRE's response-team chat. Individual scenario reports still use the
+        explicit FIRE shift tools below.
+        """
+
+        return None
 
     @tool(
         "update_vehicle_status",
@@ -141,6 +223,9 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         source_message_id: str = "",
         updated_at: str = "",
     ) -> str:
+        event_context = get_authenticated_request_event_context() or {}
+        source_message_id = event_context.get("source_message_id") or source_message_id
+        updated_at = event_context.get("scenario_time") or updated_at
         vehicle = vehicle_id.strip().upper()
         if vehicle not in {"ASHED-3", "CARMEL-1"}:
             return "The vehicle status was not stored: only ASHED-3 and CARMEL-1 are in the FIRE registry."
@@ -206,10 +291,24 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
     )
     def record_attendance_response(
         self, source_message_id: str = "direct-response", availability: str = "",
-        original_text: str = "", reason: str = "", unavailable_days: int = 0,
-        received_at: str = "", occurred_at: str = "", unavailable_from: str = "",
-        unavailable_until: str = "", cycle_id: str = "", event_id: str = "",
+        original_text: str = "", absence_reason: str = "", unavailable_days: int = 0,
+        received_at: str = "", occurred_at: str = "", availability_start: str = "",
+        availability_end: str = "", cycle_id: str = "", event_id: str = "",
     ) -> str:
+        event_context = get_authenticated_request_event_context() or {}
+        validated = event_context.get("validated_event_fields") or {}
+        if event_context:
+            source_message_id = event_context.get("source_message_id") or source_message_id
+            event_id = event_context.get("event_id") or event_id
+            original_text = event_context.get("raw_text") or original_text
+            received_at = event_context.get("received_at") or received_at
+            occurred_at = event_context.get("scenario_time") or occurred_at
+            if validated.get("availability_start") or validated.get("availability_end") or validated.get("absence_reason"):
+                availability = "unavailable"
+            availability_start = validated.get("availability_start") or ""
+            availability_end = validated.get("availability_end") or ""
+            absence_reason = validated.get("absence_reason") or ""
+            cycle_id = ""
         if not received_at:
             return "Clarification required: the FIRE report needs its scenario timestamp."
         instant = datetime.fromisoformat((occurred_at or received_at).replace("Z", "+00:00"))
@@ -219,13 +318,30 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         cycle = self.status_store.find_cycle(key)
         if cycle is None or (cycle_id and cycle_id != cycle["cycle_id"]):
             return "The attendance response was not stored: the matching FIRE shift is unavailable."
-        return super().record_attendance_response(
+        def utc_timestamp(value: str) -> str:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.isoformat()
+
+        result = super().record_attendance_response(
             source_message_id=f"{event_id}:{source_message_id}" if event_id else source_message_id,
             availability=availability,
-            original_text=original_text, reason=reason, unavailable_days=unavailable_days,
-            received_at=received_at, occurred_at=instant.isoformat(), unavailable_from=unavailable_from,
-            unavailable_until=unavailable_until, cycle_id=cycle["cycle_id"],
+            original_text=original_text, reason=absence_reason, unavailable_days=unavailable_days,
+            received_at=utc_timestamp(received_at), occurred_at=instant.isoformat(),
+            unavailable_from=utc_timestamp(availability_start) if availability_start else "",
+            unavailable_until=utc_timestamp(availability_end) if availability_end else "",
+            cycle_id=cycle["cycle_id"],
         )
+        expected_source_id = f"{event_id}:{source_message_id}" if event_id else source_message_id
+        stored = any(
+            row["telegram_identity"] == get_authenticated_request_identity()
+            and row["source_message_id"] == expected_source_id
+            for row in self.status_store.list_responses(cycle_id=cycle["cycle_id"])
+        )
+        if not stored:
+            return "The attendance response was not stored: persisted state could not be verified."
+        return result
 
     @tool(
         "record_crew_shift_status",
@@ -246,6 +362,13 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         occurred_at: str = "",
         event_id: str = "",
     ) -> str:
+        event_context = get_authenticated_request_event_context() or {}
+        if event_context:
+            source_message_id = event_context.get("source_message_id") or source_message_id
+            event_id = event_context.get("event_id") or event_id
+            original_text = event_context.get("raw_text") or original_text
+            received_at = event_context.get("received_at") or received_at
+            occurred_at = event_context.get("scenario_time") or occurred_at
         if not get_authenticated_request_identity():
             return "The crew shift status was not stored: authenticated requester identity is unavailable."
 
@@ -259,8 +382,19 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         if not approved_members:
             return "The crew shift status was not stored: the approved roster is empty."
 
+        text = original_text.strip() or f"crew shift status: {normalized}"
         requested = member_identities.strip()
         all_tokens = {"all", "everyone", "entire crew", "all crew"}
+        simulation_marker = "\u05e1\u05d9\u05de\u05d5\u05dc\u05e6\u05d9\u05d4"
+        crew_markers = ("\u05e6\u05d5\u05d5\u05ea", "\u05db\u05d1\u05d0\u05d9")
+        simulation_member_ids = {
+            simulation_user_telegram_id(persona.offset)
+            for persona in SIMULATION_USERS
+            if persona.key in {"firefighter_team_a_4", "firefighter_team_a_5", "firefighter_team_a_6"}
+        }
+        simulation_members = [
+            member for member in approved_members if member["telegram_identity"] in simulation_member_ids
+        ]
         if requested.casefold() in {token.casefold() for token in all_tokens}:
             selected_members = approved_members
         else:
@@ -271,6 +405,9 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
             unknown = []
             for token in tokens:
                 token_clean = token.casefold()
+                if any(marker in token_clean for marker in ("simulation", simulation_marker)):
+                    selected_members.extend(member for member in simulation_members if member not in selected_members)
+                    continue
                 member = by_identity.get(token_clean) or by_name.get(token_clean)
                 if not member:
                     for name, m in by_name.items():
@@ -281,6 +418,15 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
                     unknown.append(token)
                 elif member not in selected_members:
                     selected_members.append(member)
+            # The commander's source text can identify the remaining approved members
+            # by their roster label even when the model only enumerated named members.
+            source_text = text.casefold()
+            describes_simulation_crew = (
+                any(marker in source_text for marker in ("simulation", simulation_marker))
+                and any(marker in source_text for marker in ("crew", "firefighter", *crew_markers))
+            )
+            if describes_simulation_crew:
+                selected_members.extend(member for member in simulation_members if member not in selected_members)
             if unknown:
                 return f"The crew shift status was not stored: unknown approved member(s): {', '.join(unknown)}."
             if not selected_members:
@@ -289,7 +435,6 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         received_iso = received_at.strip() or datetime.now(timezone.utc).isoformat()
         now_iso = occurred_at.strip() or received_iso
         source_base = event_id.strip() or source_message_id.strip() or f"crew-shift-{int(datetime.now(timezone.utc).timestamp())}"
-        text = original_text.strip() or f"crew shift status: {normalized}"
         stored = 0
         try:
             # The FIRE shift cycle is explicit.  It must not accidentally use a
@@ -326,6 +471,14 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
                 )
         except Exception as exc:
             return f"The crew shift status was not stored: {exc}"
+        saved_ids = {
+            row["telegram_identity"]
+            for row in self.status_store.list_responses(cycle_id=active_cycle["cycle_id"])
+            if row["source_message_id"].startswith(f"{source_base}:")
+            and row["availability"] == normalized
+        }
+        if not {member["telegram_identity"] for member in selected_members}.issubset(saved_ids):
+            return "The crew shift status was not stored: persisted roster state could not be verified."
         return f"Crew shift availability recorded for {stored} approved member(s)."
 
 
@@ -333,12 +486,82 @@ class FirefightingExternalForcesAgent(FriendlyForcesAgent):
     """Extends the reusable friendly-forces dispatch specialist with two fire-service-specific
     mutual-aid tools (docs/Profile_Split_Plan.md section 4.2) -- FIRE_002's phase 3 needs tanker-truck
     and firefighting-aircraft dispatch, actions the base class's four tools (ambulance/police/
-    firefighters/military) do not cover. dispatch_police/dispatch_ambulance are inherited unchanged
-    for the police-cordon and casualty-adjacent needs elsewhere in the scenario."""
+    firefighters/military) do not cover. FIRE's dispatch tools record requests in the operational
+    event log; they never contact an external service."""
+
+    timezone_name = "Asia/Jerusalem"
 
     def __init__(self, model: str, api_key: str | None = None):
         super().__init__(model, api_key)
         self.operations_store = FirefightingOperationsStore(FIREFIGHTING_OPERATIONS_DB_PATH)
+
+    def _record_dispatch_request(
+        self, resource_kind: str, count: int, location: str, details: dict,
+        source_message_id: str, event_id: str, occurred_at: str, received_at: str,
+    ) -> str:
+        if type(count) is not int or count < 1:
+            return "Simulated dispatch request was not stored: count must be a positive integer."
+        if not location.strip() or not source_message_id.strip() or not event_id.strip():
+            return "Simulated dispatch request was not stored: location and source event are required."
+        if not occurred_at.strip() or not received_at.strip():
+            return "Simulated dispatch request was not stored: event and receipt times are required."
+        requester = get_authenticated_request_identity()
+        if not requester:
+            return "Simulated dispatch request was not stored: authenticated requester is unavailable."
+        request = {
+            "resource_kind": resource_kind, "count": count, "location": location.strip(),
+            "details": details, "requested_by": requester, "state": "request_recorded",
+        }
+        summary = f"Simulated request for {count} {resource_kind} at {location.strip()}"
+        try:
+            saved = self.operations_store.record_incident_update(
+                source_message_id=f"dispatch:{resource_kind}:{source_message_id.strip()}",
+                event_id=event_id.strip(), update_kind="dispatch_request",
+                verification_status="simulated_request_recorded", summary=summary,
+                facts={"dispatch_request": request}, occurred_at=occurred_at.strip(),
+                received_at=received_at.strip(),
+            )
+        except (TypeError, ValueError, KeyError) as exc:
+            return f"Simulated dispatch request was not stored: {exc}"
+        if not saved["inserted"]:
+            return f"The simulated {resource_kind} request was already recorded; no real unit was dispatched."
+        return f"A simulated request for {count} {resource_kind} at {location.strip()} was recorded. No real unit was dispatched."
+
+    @tool(
+        "get_external_force_overview",
+        "Reads current-run external-force reports and simulated dispatch requests as of the supplied scenario time.",
+        side_effecting=False,
+    )
+    def get_external_force_overview(self, as_of_iso: str = "") -> str:
+        root = self.operations_store.get_incident()
+        run_started_at = (root or {}).get("run_started_at")
+        if not run_started_at:
+            return json.dumps({"external_forces": None, "dispatch_requests": None}, ensure_ascii=False)
+
+        def instant(value: str) -> datetime:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=ZoneInfo("Asia/Jerusalem"))
+            return parsed.astimezone(timezone.utc)
+
+        now = instant(as_of_iso) if as_of_iso.strip() else datetime.now(timezone.utc)
+        run_start = instant(run_started_at)
+        forces = self.operations_store.list_external_forces_as_of(
+            as_of_iso=now.isoformat(), run_started_at=run_start.isoformat(),
+        )
+        requests = []
+        for row in self.operations_store.list_updates():
+            if row["update_kind"] != "dispatch_request":
+                continue
+            if instant(row["received_at"]) < run_start or instant(row["occurred_at"]) > now:
+                continue
+            try:
+                request = json.loads(row["facts_json"]).get("dispatch_request")
+            except (TypeError, ValueError):
+                continue
+            if request:
+                requests.append({"occurred_at": row["occurred_at"], **request})
+        return json.dumps({"external_forces": forces, "dispatch_requests": requests}, ensure_ascii=False)
 
     @tool(
         "record_external_force_update",
@@ -362,6 +585,28 @@ class FirefightingExternalForcesAgent(FriendlyForcesAgent):
         summary: str = "",
         facts: dict | None = None,
     ) -> str:
+        event_context = get_authenticated_request_event_context() or {}
+        if event_context:
+            source_message_id = event_context.get("source_message_id") or source_message_id
+            event_id = event_context.get("event_id") or event_id
+            occurred_at = event_context.get("scenario_time") or occurred_at
+            received_at = event_context.get("received_at") or received_at
+            raw_text = event_context.get("raw_text") or ""
+            notes = raw_text or notes
+            summary = raw_text or summary
+            sender = get_authenticated_request_identity()
+            persona = next(
+                (item for item in SIMULATION_USERS if simulation_user_telegram_id(item.offset) == sender),
+                None,
+            )
+            if persona and persona.key in {"police_hub_agam", "fire_police_patrol"}:
+                force_kind = "police"
+                force_id = f"police-report:{event_id or source_message_id}"
+                verification_status = "unverified"
+            elif persona and persona.key == "kkl_mountains_sector":
+                force_kind = "kkl"
+                force_id = f"kkl-report:{event_id or source_message_id}"
+                verification_status = "unverified"
         if not force_id.strip() or not source_message_id.strip():
             return "The external-force update was not stored: force ID and source message ID are required."
         force_kind = force_kind.strip() or "external_force"
@@ -388,38 +633,49 @@ class FirefightingExternalForcesAgent(FriendlyForcesAgent):
 
     @tool(
         "dispatch_water_tankers",
-        "Records a request to send water-tanker trucks (mutual aid from another station) to a "
-        "named location. Side-effecting and not idempotent -- running it twice records two "
-        "dispatch requests, not one.",
+        "Persists a simulated request for water-tanker trucks. This records a request only; it does not dispatch a real unit.",
         side_effecting=True,
-        idempotent=False,
+        idempotent=True,
     )
     def dispatch_water_tankers(
-        self, location: str, tanker_count: int = 1, source_station: str = "", note: str = ""
+        self, location: str, tanker_count: int = 1, source_station: str = "", note: str = "",
+        source_message_id: str = "", event_id: str = "", occurred_at: str = "", received_at: str = "",
     ) -> str:
-        record = (
-            f"water tanker dispatch requested for '{location}': tanker_count={tanker_count}"
-            f"{f', source_station={source_station}' if source_station else ''}{f', note={note}' if note else ''}"
+        return self._record_dispatch_request(
+            "water tanker", tanker_count, location,
+            {"source_station": source_station, "note": note},
+            source_message_id, event_id, occurred_at, received_at,
         )
-        self.dispatches_recorded.append(record)
-        return f"recorded water tanker dispatch request for '{location}'"
 
     @tool(
         "dispatch_aircraft",
-        "Records a request to send firefighting aircraft to a named location. Side-effecting and "
-        "not idempotent -- running it twice records two dispatch requests, not one.",
+        "Persists a simulated request for firefighting aircraft. This records a request only; it does not dispatch a real unit.",
         side_effecting=True,
-        idempotent=False,
+        idempotent=True,
     )
     def dispatch_aircraft(
-        self, location: str, aircraft_count: int = 1, aircraft_type: str = "firefighting", note: str = ""
+        self, location: str, aircraft_count: int = 1, aircraft_type: str = "firefighting", note: str = "",
+        source_message_id: str = "", event_id: str = "", occurred_at: str = "", received_at: str = "",
     ) -> str:
-        record = (
-            f"aircraft dispatch requested for '{location}': aircraft_count={aircraft_count}, "
-            f"aircraft_type={aircraft_type}{f', note={note}' if note else ''}"
+        return self._record_dispatch_request(
+            f"{aircraft_type} aircraft", aircraft_count, location, {"note": note},
+            source_message_id, event_id, occurred_at, received_at,
         )
-        self.dispatches_recorded.append(record)
-        return f"recorded aircraft dispatch request for '{location}'"
+
+    @tool(
+        "dispatch_police",
+        "Persists a simulated request for police units. This records a request only; it does not dispatch a real unit.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def dispatch_police(
+        self, location: str, unit_count: int = 1, incident_type: str = "", note: str = "",
+        source_message_id: str = "", event_id: str = "", occurred_at: str = "", received_at: str = "",
+    ) -> str:
+        return self._record_dispatch_request(
+            "police unit", unit_count, location, {"incident_type": incident_type, "note": note},
+            source_message_id, event_id, occurred_at, received_at,
+        )
 
 
 AGENTS = [
@@ -520,7 +776,7 @@ PROTOCOLS = [
         participating_agents=("surveillance_agent",),
         approved_tools=("dispatch_drone_to_area",),
         expected_success_output=(
-            "Confirmation of drone dispatch to the reported location, with callsign, ETA, and mission ID."
+            "Confirmation that the simulated drone mission was recorded, with callsign, ETA, and mission ID."
         ),
         criticality=CriticalityLevel.MEDIUM,
         approval_flag=True,
@@ -564,15 +820,16 @@ PROTOCOLS = [
     Protocol(
         name="dispatch_mutual_aid",
         description=(
-            "Applies when a report requires dispatching a real external firefighting resource -- "
-            "water-tanker trucks, firefighting aircraft, bulldozers/engines, or a police cordon "
-            "for evacuation -- to a location; does not apply to a mere report or recon request "
+            "Applies when a commander authorizes recording a simulated request for an external "
+            "firefighting resource -- water-tanker trucks, firefighting aircraft, or police units -- "
+            "to a location. It records the authorized request only; it never dispatches a real unit. "
+            "It does not apply to a mere report or recon request "
             "with no dispatch decision yet (use report_fire_incident or "
             "overall_situational_picture first for those)."
         ),
         participating_agents=("friendly_forces_agent",),
         approved_tools=("dispatch_water_tankers", "dispatch_aircraft", "dispatch_police"),
-        expected_success_output="Confirmation that the requested mutual-aid resource(s) were dispatched.",
+        expected_success_output="Confirmation that the simulated request was recorded, without claiming a real dispatch.",
         criticality=CriticalityLevel.HIGH,
         approval_flag=True,
         requires_confirmation=True,
@@ -587,8 +844,8 @@ PROTOCOLS = [
             "recommendations never authorize dispatch."
         ),
         participating_agents=("surveillance_agent", "team_status_agent", "friendly_forces_agent"),
-        approved_tools=("get_surveillance_overview", "report_team_availability"),
-        expected_success_output="One combined report covering both current camera status and crew availability.",
+        approved_tools=("get_surveillance_overview", "report_team_availability", "get_external_force_overview"),
+        expected_success_output="One combined report based on current camera, crew, vehicle and external-force status.",
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
         requires_confirmation=False,

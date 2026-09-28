@@ -101,6 +101,28 @@ def test_a_persistence_handle_receives_a_full_copy_of_every_log_record(capsys):
         assert stdout_record[key] == value
 
 
+def test_telegram_credentials_are_redacted_before_console_and_persistence(capsys):
+    fake = _FakePersistence()
+    configure_logging("test-profile", persistence=fake)
+    token = "123456:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+    url = f"https://api.telegram.org/bot{token}/getUpdates"
+
+    logging.getLogger("httpx").info(
+        "HTTP Request: POST %s", url, extra={"request_url": url, "nested": {"credential": token}}
+    )
+
+    console = capsys.readouterr()
+    output = console.out + console.err
+    assert token not in output
+    assert f"bot{token}" not in output
+    assert "https://api.telegram.org/bot[REDACTED]" in output
+    assert len(fake.calls) == 1
+    _, details = fake.calls[0]
+    assert token not in str(details)
+    assert details["request_url"] == "https://api.telegram.org/bot[REDACTED]/getUpdates"
+    assert details["nested"]["credential"] == "[REDACTED_TELEGRAM_TOKEN]"
+
+
 def test_a_write_failure_in_the_db_sink_never_raises_into_the_caller(capsys):
     fake = _FakePersistence(raise_on_write=RuntimeError("disk full"))
     configure_logging("test_profile", persistence=fake)

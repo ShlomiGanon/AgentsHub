@@ -20,6 +20,8 @@ from dotenv import load_dotenv
 from config.server_control import (
     available_profile,
     consume_command,
+    control_dir,
+    discover_profiles,
     load_selected_profile,
     save_selected_profile,
     write_status,
@@ -69,76 +71,108 @@ class StackSupervisor:
     def __init__(self, profile_module: str, *, python_executable: str | None = None):
         self.profile_module = profile_module
         self.python_executable = python_executable or sys.executable
-        self.api_proc: subprocess.Popen | None = None
+        self.api_procs: dict[str, subprocess.Popen] = {}
         self.bot_proc: subprocess.Popen | None = None
-        # None for a profile that hasn't declared SIMULATOR_PORT (docs/bot_simulation_mode_design.md) —
-        # the third, simulation-mode bot subprocess is then never started at all.
         self.bot_sim_proc: subprocess.Popen | None = None
         self._logs: list[object] = []
         self.last_error = ""
 
+    def _open_logs(self, component: str, slug: str) -> tuple[object, object]:
+        handles = (
+            open(f"{component}-{slug}.stdout.log", "a", encoding="utf-8"),
+            open(f"{component}-{slug}.stderr.log", "a", encoding="utf-8"),
+        )
+        self._logs.extend(handles)
+        return handles
+
     def _status(self, state: str) -> None:
-        info = available_profile(self.profile_module)
+        profiles = discover_profiles()
+        info = next((profile for profile in profiles if profile.module_path == self.profile_module), None)
         write_status(
             supervisor_pid=os.getpid(),
             state=state,
             profile_module=self.profile_module,
             profile_name=info.profile_name if info else self.profile_module,
             api_port=info.api_port if info else None,
-            api_pid=self.api_proc.pid if self.api_proc and self.api_proc.poll() is None else None,
+            api_pid=(self.api_procs.get(self.profile_module).pid
+                     if self.api_procs.get(self.profile_module) and self.api_procs[self.profile_module].poll() is None
+                     else None),
+            api_pids={module: proc.pid for module, proc in self.api_procs.items() if proc.poll() is None},
             bot_pid=self.bot_proc.pid if self.bot_proc and self.bot_proc.poll() is None else None,
             bot_sim_pid=self.bot_sim_proc.pid if self.bot_sim_proc and self.bot_sim_proc.poll() is None else None,
+            bot_sim_profile_module=self.profile_module if self.bot_sim_proc else None,
             last_error=self.last_error,
         )
 
-    def start(self) -> None:
+    def _start_simulator(self) -> None:
         info = available_profile(self.profile_module)
-        if info is None:
+        if info is None or not info.simulator_port:
+            self.bot_sim_proc = None
+            return
+        stdout, stderr = self._open_logs("bot-sim", self.profile_module.rsplit(".", 1)[-1])
+        self.bot_sim_proc = subprocess.Popen(
+            [self.python_executable, "-m", "bot.simulator_app", self.profile_module],
+            stdout=stdout, stderr=stderr, env={**os.environ, "AGENTSHUB_SUPERVISOR": "1"},
+        )
+        time.sleep(1)
+        if self.bot_sim_proc.poll() is not None:
+            raise RuntimeError(f"simulation-mode bot exited during startup with code {self.bot_sim_proc.returncode}")
+
+    def _stop_simulator(self) -> None:
+        process, module_path = self.bot_sim_proc, self.profile_module
+        self.bot_sim_proc = None
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        module = __import__(module_path, fromlist=["DB_PATH"])
+        lock_path = Path(f"{module.DB_PATH}.bot-simulator.lock")
+        if process is not None and lock_path.is_file():
+            lock_path.unlink()
+
+    def start(self) -> None:
+        profiles = discover_profiles()
+        if not profiles or not any(profile.module_path == self.profile_module for profile in profiles):
             raise ValueError(f"unknown profile: {self.profile_module}")
         env = os.environ.copy()
         env["AGENTSHUB_SUPERVISOR"] = "1"
-        slug = self.profile_module.rsplit(".", 1)[-1]
-        components = ("api", "bot", "bot-sim") if info.simulator_port else ("api", "bot")
-        for component in components:
-            self._logs.append(open(f"{component}-{slug}.stdout.log", "a", encoding="utf-8"))
-            self._logs.append(open(f"{component}-{slug}.stderr.log", "a", encoding="utf-8"))
         self._status("starting")
-        self.api_proc = subprocess.Popen(
-            [self.python_executable, "-m", "api.app", self.profile_module],
-            stdout=self._logs[0], stderr=self._logs[1], env=env,
-        )
+        for profile in profiles:
+            slug = profile.module_path.rsplit(".", 1)[-1]
+            stdout, stderr = self._open_logs("api", slug)
+            self.api_procs[profile.module_path] = subprocess.Popen(
+                [self.python_executable, "-m", "api.app", profile.module_path],
+                stdout=stdout, stderr=stderr, env=env,
+            )
         time.sleep(3)
-        if self.api_proc.poll() is not None:
-            raise RuntimeError(f"API exited during startup with code {self.api_proc.returncode}")
+        for module_path, process in self.api_procs.items():
+            if process.poll() is not None:
+                raise RuntimeError(f"API for {module_path} exited during startup with code {process.returncode}")
+        stdout, stderr = self._open_logs("bot", "shared")
         self.bot_proc = subprocess.Popen(
-            [self.python_executable, "-m", "bot.app", self.profile_module],
-            stdout=self._logs[2], stderr=self._logs[3], env=env,
+            [self.python_executable, "-m", "bot.app", "--shared"],
+            stdout=stdout, stderr=stderr, env=env,
         )
         time.sleep(1)
         if self.bot_proc.poll() is not None:
             raise RuntimeError(f"bot exited during startup with code {self.bot_proc.returncode}")
-        if info.simulator_port:
-            self.bot_sim_proc = subprocess.Popen(
-                [self.python_executable, "-m", "bot.simulator_app", self.profile_module],
-                stdout=self._logs[4], stderr=self._logs[5], env=env,
-            )
-            time.sleep(1)
-            if self.bot_sim_proc.poll() is not None:
-                raise RuntimeError(f"simulation-mode bot exited during startup with code {self.bot_sim_proc.returncode}")
+        self._start_simulator()
         self.last_error = ""
         self._status("running")
-        logger.info(
-            "Stack started for %s (API %d, bot %d%s)",
-            self.profile_module, self.api_proc.pid, self.bot_proc.pid,
-            f", bot-sim {self.bot_sim_proc.pid}" if self.bot_sim_proc else "",
-        )
+        logger.info("Shared stack started for %d profiles (one Telegram bot, simulator: %s)",
+                    len(self.api_procs), self.profile_module)
 
     def stop(self) -> None:
         self._status("stopping")
-        for process in (self.bot_sim_proc, self.bot_proc, self.api_proc):
+        self._stop_simulator()
+        processes = [self.bot_proc, *self.api_procs.values()]
+        for process in processes:
             if process is not None and process.poll() is None:
                 process.terminate()
-        for process in (self.bot_sim_proc, self.bot_proc, self.api_proc):
+        for process in processes:
             if process is None:
                 continue
             try:
@@ -146,12 +180,11 @@ class StackSupervisor:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
-        self.api_proc = self.bot_proc = self.bot_sim_proc = None
-        # On Windows ``terminate`` does not run the bot's Python ``finally`` block, so remove
-        # only the now-stopped profile's declared lock files before the next start.
-        for artifact in reset_artifacts(self.profile_module):
-            if str(artifact).endswith((".bot.lock", ".bot-simulator.lock")) and artifact.is_file():
-                artifact.unlink()
+        shared_lock = control_dir() / "shared-bot.lock"
+        if self.bot_proc is not None and shared_lock.is_file():
+            shared_lock.unlink()
+        self.bot_proc = None
+        self.api_procs.clear()
         for handle in self._logs:
             handle.close()
         self._logs.clear()
@@ -162,18 +195,19 @@ class StackSupervisor:
             self._status("running")
             return
         previous = self.profile_module
-        self.stop()
+        self._stop_simulator()
         self.profile_module = requested_profile
         try:
-            self.start()
+            self._start_simulator()
             save_selected_profile(requested_profile)
+            self._status("running")
+            logger.info("Simulator profile selected: %s; shared APIs and Telegram bot unchanged", requested_profile)
         except Exception as exc:
-            logger.exception("Profile %s failed; rolling back to %s", requested_profile, previous)
-            self.stop()
+            logger.exception("Simulator %s failed; restoring %s", requested_profile, previous)
+            self._stop_simulator()
             self.profile_module = previous
             self.last_error = f"Could not load {requested_profile}; restored {previous}: {exc}"
-            self.start()
-            self.last_error = f"Could not load {requested_profile}; restored {previous}: {exc}"
+            self._start_simulator()
             self._status("running")
 
     def reset(self) -> None:
@@ -184,7 +218,11 @@ class StackSupervisor:
         self.start()
 
     def run(self) -> None:
-        self.start()
+        try:
+            self.start()
+        except Exception:
+            self.stop()
+            raise
         try:
             while True:
                 command = consume_command()
@@ -195,17 +233,25 @@ class StackSupervisor:
                         except Exception as exc:
                             self.last_error = f"Database reset/restart failed: {exc}"
                             logger.exception("Database reset/restart failed")
-                            if self.api_proc is None or self.api_proc.poll() is not None:
+                            if not self.api_procs or any(
+                                process.poll() is not None for process in self.api_procs.values()
+                            ):
+                                self.stop()
                                 self.start()
                             self._status("running")
                     elif command.get("action") == "switch_profile":
                         self.switch(str(command.get("profile_module", "")))
+                elif self.bot_sim_proc and self.bot_sim_proc.poll() is not None:
+                    self.last_error = "The selected simulator exited unexpectedly; it was restarted."
+                    logger.error(self.last_error)
+                    self._stop_simulator()
+                    time.sleep(1)
+                    self._start_simulator()
                 elif (
-                    (self.api_proc and self.api_proc.poll() is not None)
+                    any(process.poll() is not None for process in self.api_procs.values())
                     or (self.bot_proc and self.bot_proc.poll() is not None)
-                    or (self.bot_sim_proc and self.bot_sim_proc.poll() is not None)
                 ):
-                    self.last_error = "A child process exited unexpectedly; the active profile was restarted."
+                    self.last_error = "A shared API or Telegram bot exited unexpectedly; the managed stack was restarted."
                     logger.error(self.last_error)
                     self.stop()
                     time.sleep(1)

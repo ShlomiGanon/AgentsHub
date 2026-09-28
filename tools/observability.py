@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 _current_trace_id: ContextVar[str] = ContextVar("current_trace_id", default="")
 _current_stage: ContextVar[str] = ContextVar("current_stage", default="")
 _TRACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_TELEGRAM_BOT_URL = re.compile(r"https?://api\.telegram\.org/bot[^\s/?#]+", re.IGNORECASE)
+_TELEGRAM_TOKEN = re.compile(r"(?<![A-Za-z0-9_])[0-9]{6,}:[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_])")
 _latency_samples: dict[str, list[float]] = defaultdict(list)
 _latency_lock = threading.Lock()
 
@@ -553,6 +555,45 @@ class _RedundantCrewAIErrorFilter(logging.Filter):
         )
 
 
+def _redact_sensitive_log_value(value: Any) -> Any:
+    """Redact Telegram bot credentials wherever they enter a log record."""
+
+    if isinstance(value, str):
+        value = _TELEGRAM_BOT_URL.sub("https://api.telegram.org/bot[REDACTED]", value)
+        return _TELEGRAM_TOKEN.sub("[REDACTED_TELEGRAM_TOKEN]", value)
+    if isinstance(value, dict):
+        return {key: _redact_sensitive_log_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return tuple(_redact_sensitive_log_value(item) for item in value)
+    if isinstance(value, list):
+        return [_redact_sensitive_log_value(item) for item in value]
+    return value
+
+
+class _SensitiveLogFilter(logging.Filter):
+    """Sanitize a record before console, JSON, or persistence handlers see it."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            record.msg = _redact_sensitive_log_value(record.getMessage())
+            record.args = ()
+        except Exception:
+            record.msg = "[log message unavailable]"
+            record.args = ()
+
+        for key, value in tuple(record.__dict__.items()):
+            if key not in _RESERVED_LOG_RECORD_ATTRS:
+                record.__dict__[key] = _redact_sensitive_log_value(value)
+
+        if record.exc_info:
+            rendered = logging.Formatter().formatException(record.exc_info)
+            record.exc_info = None
+            record.exc_text = _redact_sensitive_log_value(rendered)
+        if record.stack_info:
+            record.stack_info = _redact_sensitive_log_value(record.stack_info)
+        return True
+
+
 class _HumanReadableFormatter(logging.Formatter):
     """`[HH:MM:SS] LEVEL <8-char trace> <short message>` — one line per record, for a human watching the process run rather than a machine parsing it."""
 
@@ -654,14 +695,18 @@ def configure_logging(profile_name: str, level: int | None = None, persistence: 
     if base_config.LOG_CONSOLE_JSON_ENABLED:
         json_handler = _RecoveringStreamHandler(stream=sys.stdout, fallback=sys.__stdout__)
         json_handler.setFormatter(_JsonFormatter())
+        json_handler.addFilter(_SensitiveLogFilter())
         root.addHandler(json_handler)
 
     console_handler = _RecoveringStreamHandler(stream=sys.stderr, fallback=sys.__stderr__)
     console_handler.setFormatter(_HumanReadableFormatter())
+    console_handler.addFilter(_SensitiveLogFilter())
     root.addHandler(console_handler)
 
     if persistence is not None:
-        root.addHandler(_PersistenceLogHandler(persistence))
+        persistence_handler = _PersistenceLogHandler(persistence)
+        persistence_handler.addFilter(_SensitiveLogFilter())
+        root.addHandler(persistence_handler)
 
 
 def verbose_logging_enabled() -> bool:

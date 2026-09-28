@@ -60,6 +60,13 @@ def _scenario_time(value: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _receipt_time(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 class FirefightingOperationsStore:
     """Connection-per-operation store with source-message idempotency."""
 
@@ -258,6 +265,36 @@ class FirefightingOperationsStore:
                     (incident_id,),
                 ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_external_forces_as_of(
+        self, *, as_of_iso: str, run_started_at: str, event_ids: set[str] | None = None,
+    ) -> list[dict]:
+        """Rebuild the external-force view from this run's append-only reports."""
+
+        cutoff = _scenario_time(as_of_iso)
+        run_start = _receipt_time(run_started_at)
+        allowed_event_ids = set(event_ids) if event_ids is not None else None
+        latest: dict[str, dict] = {}
+        for row in self.list_updates():
+            if row["update_kind"] != "external_force":
+                continue
+            if _receipt_time(row["received_at"]) < run_start:
+                continue
+            if allowed_event_ids is not None and row["event_id"] not in allowed_event_ids:
+                continue
+            occurred = _scenario_time(row["occurred_at"])
+            if occurred > cutoff:
+                continue
+            try:
+                force = json.loads(row["facts_json"]).get("external_force")
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(force, dict) or not force.get("force_id"):
+                continue
+            previous = latest.get(force["force_id"])
+            if previous is None or occurred >= _scenario_time(previous["last_updated"]):
+                latest[force["force_id"]] = {**force, "last_updated": row["occurred_at"]}
+        return [latest[force_id] for force_id in sorted(latest)]
 
     def list_external_forces(self) -> list[dict]:
         with self._connect() as connection:
