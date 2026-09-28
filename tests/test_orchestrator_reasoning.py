@@ -16,7 +16,9 @@ from orchestrator.main_agent import (
     assess_risk,
     construct_core_agents,
     formulate_event_data_question,
+    make_operational_decision,
 )
+from protocols.model import CriticalityLevel, Protocol
 
 
 def test_main_agent_has_no_tools_of_its_own():
@@ -194,7 +196,7 @@ class _ScriptedMainAgent:
         self._response_text = response_text
         self.calls = []
 
-    def process(self, text, allowed_tools):
+    def process(self, text, allowed_tools, *, invocation_policy=None):
         self.calls.append((text, allowed_tools))
 
         class _Result:
@@ -261,6 +263,144 @@ def test_assess_risk_end_to_end_through_the_mocked_adapter(monkeypatch):
 
     assert assessment.level == "high"
     assert assessment.score == 0.9
+
+
+# -- make_operational_decision: fence unwrapping / protocol_status alias -----
+
+
+def _one_protocol():
+    return (
+        Protocol(
+            name="record_attendance",
+            description="applies to an attendance report",
+            participating_agents=("reference_agent",),
+            approved_tools=("record_action",),
+            expected_success_output="confirmation attendance was recorded",
+            criticality=CriticalityLevel.LOW,
+            approval_flag=False,
+        ),
+    )
+
+
+def test_make_operational_decision_parses_a_markdown_fenced_response_on_the_first_attempt():
+    # A model asked for bare JSON commonly wraps it in a ```json fence anyway -- this must
+    # not cost a wasted repair call (_structured_call_with_one_repair's shared parsing path),
+    # since the fenced content itself is already well-formed.
+    fenced = (
+        "```json\n"
+        '{"risk_score": 0.1, "risk_reason": "routine", "protocol_status": "selected", '
+        '"protocol_name": "record_attendance", "candidate_names": [], "protocol_reason": "matches"}'
+        "\n```"
+    )
+    agent = _ScriptedMainAgent(fenced)
+
+    decision = make_operational_decision(agent, "x", "attendance", "north", "d", None, _one_protocol(), risk_threshold=0.5)
+
+    assert decision.risk.level == "low"
+    assert decision.selection.status == "selected"
+    assert decision.selection.protocol_name == "record_attendance"
+    assert len(agent.calls) == 1  # parsed on the first attempt -- no repair call spent
+
+
+def test_make_operational_decision_accepts_match_as_an_alias_for_selected():
+    # Observed in a live model response in place of the literal "selected" -- accepted as
+    # an alias rather than failing a decision the model otherwise expressed correctly.
+    agent = _ScriptedMainAgent(
+        '{"risk_score": 0.6, "risk_reason": "confirmed", "protocol_status": "MATCH", '
+        '"protocol_name": "record_attendance", "candidate_names": [], "protocol_reason": "matches"}'
+    )
+
+    decision = make_operational_decision(agent, "x", "attendance", "north", "d", None, _one_protocol(), risk_threshold=0.5)
+
+    assert decision.selection.status == "selected"
+    assert decision.selection.protocol_name == "record_attendance"
+    assert len(agent.calls) == 1
+
+
+def test_make_operational_decision_auto_resolves_a_high_risk_ambiguous_selection_to_the_most_critical_candidate():
+    # #20's exact live output from this session's own isolated-stack verification: a real
+    # ambiguous decision between report_security_incident (HIGH) and report_team_movement
+    # (LOW) at risk_score=0.93 -- must not stop for clarification on a message like this,
+    # mirroring select_protocol's own high-risk auto-resolve on the separate path.
+    agent = _ScriptedMainAgent(
+        '{"risk_score": 0.93, "risk_reason": "gunfire reported near the west gate", '
+        '"protocol_status": "ambiguous", "protocol_name": null, '
+        '"candidate_names": ["report_security_incident", "report_team_movement"], '
+        '"protocol_reason": "could not discriminate between an active incident report and a team movement update"}'
+    )
+    protocols = (
+        Protocol(
+            name="report_security_incident", description="applies to a security incident",
+            participating_agents=("surveillance_agent",), approved_tools=("dispatch_drone_to_area",),
+            expected_success_output="a logged incident", criticality=CriticalityLevel.HIGH, approval_flag=False,
+        ),
+        Protocol(
+            name="report_team_movement", description="applies to a team movement update",
+            participating_agents=("reference_agent",), approved_tools=("report_team_movement",),
+            expected_success_output="a logged movement", criticality=CriticalityLevel.LOW, approval_flag=False,
+        ),
+    )
+
+    decision = make_operational_decision(agent, "x", None, "west_gate", "d", None, protocols, risk_threshold=0.5)
+
+    assert decision.risk.level == "high"
+    assert decision.selection.status == "selected"
+    assert decision.selection.protocol_name == "report_security_incident"
+    assert "high risk" in decision.selection.reason
+
+
+def test_make_operational_decision_auto_resolves_an_ambiguous_selection_with_a_safety_critical_candidate_even_at_low_risk():
+    agent = _ScriptedMainAgent(
+        '{"risk_score": 0.1, "risk_reason": "seems routine", '
+        '"protocol_status": "ambiguous", "protocol_name": null, '
+        '"candidate_names": ["report_security_incident", "report_team_movement"], '
+        '"protocol_reason": "could not discriminate"}'
+    )
+    protocols = (
+        Protocol(
+            name="report_security_incident", description="applies to a security incident",
+            participating_agents=("surveillance_agent",), approved_tools=("dispatch_drone_to_area",),
+            expected_success_output="a logged incident", criticality=CriticalityLevel.HIGH, approval_flag=False,
+            safety_critical=True,
+        ),
+        Protocol(
+            name="report_team_movement", description="applies to a team movement update",
+            participating_agents=("reference_agent",), approved_tools=("report_team_movement",),
+            expected_success_output="a logged movement", criticality=CriticalityLevel.LOW, approval_flag=False,
+        ),
+    )
+
+    decision = make_operational_decision(agent, "x", None, "west_gate", "d", None, protocols, risk_threshold=0.5)
+
+    assert decision.risk.level == "low"  # the safety_critical candidate is what must trigger this, not risk
+    assert decision.selection.status == "selected"
+    assert decision.selection.protocol_name == "report_security_incident"
+
+
+def test_make_operational_decision_leaves_a_low_risk_non_safety_critical_ambiguity_unresolved():
+    agent = _ScriptedMainAgent(
+        '{"risk_score": 0.1, "risk_reason": "seems routine", '
+        '"protocol_status": "ambiguous", "protocol_name": null, '
+        '"candidate_names": ["record_attendance", "report_team_movement"], '
+        '"protocol_reason": "could not discriminate"}'
+    )
+    protocols = (
+        Protocol(
+            name="record_attendance", description="applies to an attendance report",
+            participating_agents=("reference_agent",), approved_tools=("record_action",),
+            expected_success_output="confirmation", criticality=CriticalityLevel.LOW, approval_flag=False,
+        ),
+        Protocol(
+            name="report_team_movement", description="applies to a team movement update",
+            participating_agents=("reference_agent",), approved_tools=("report_team_movement",),
+            expected_success_output="a logged movement", criticality=CriticalityLevel.LOW, approval_flag=False,
+        ),
+    )
+
+    decision = make_operational_decision(agent, "x", None, "west_gate", "d", None, protocols, risk_threshold=0.5)
+
+    assert decision.selection.status == "ambiguous"
+    assert decision.selection.candidate_names == ("record_attendance", "report_team_movement")
 
 
 # -- construct_core_agents ---------------------------------------------------
