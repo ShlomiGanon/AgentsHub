@@ -249,53 +249,137 @@ _BOOTSTRAP_CSS_LINK = (
     "{% endif %}"
 )
 
-# Both style blocks below follow the design references (user-admin-bootstrap.html, login.html)
-# rather than being merged into one shared stylesheet — the two pages diverge in real ways
-# (status-pill's font-size and centering differ between them, the login page has no table/block-console
-# rules at all) and keeping each page's CSS as designed avoids introducing any drift. The one
-# deliberate departure: physical left/right properties are written as CSS logical properties
-# (`border-inline-start`, `inset-inline-start`, `margin-inline-end`) so the same stylesheet lays
-# out correctly under both `dir="ltr"` and `dir="rtl"`.
+# Shared LeadSpotting-style chrome for every authenticated admin page. Physical left/right
+# properties are written as CSS logical properties so the same stylesheet lays out correctly
+# under both `dir="ltr"` (sidebar on the start/left edge) and `dir="rtl"` (sidebar on the
+# start/right edge).
 _DASHBOARD_STYLE = """
 <style>
   :root {
-    --bg: #AFCBE3;
-    --panel: #C4DAEC;
-    --line: #9BB9D3;
-    --line-strong: #7A9CBC;
-    --text: #10233A;
-    --text-dim: #2E4C6B;
-    --text-faint: #55738F;
-    --commander: #0A6553;
-    --commander-dim: #B9DFD2;
-    --viewer: #164C82;
-    --viewer-dim: #B9D2E9;
+    --bg: #F3F6FB;
+    --panel: #FFFFFF;
+    --line: #E2EAF3;
+    --line-strong: #C5D4E3;
+    --text: #0B1F3A;
+    --text-dim: #5A6B80;
+    --text-faint: #8A9BB0;
+    --sidebar: #0B1F3A;
+    --sidebar-text: #C5D4E8;
+    --teal: #1AB5C4;
+    --lime: #8CC63F;
+    --lime-hover: #7AB32E;
+    --blue: #1E5AA8;
+    --blue-hover: #174A8C;
+    --commander: #1AB5C4;
+    --commander-dim: #D4F3F6;
+    --viewer: #1E5AA8;
+    --viewer-dim: #D7E5F6;
     --danger: #9A302B;
-    --danger-dim: #E8C4C0;
+    --danger-dim: #F3D6D4;
     --mono: 'SF Mono', 'JetBrains Mono', ui-monospace, Consolas, monospace;
   }
+  * { box-sizing: border-box; }
   body {
     background: var(--bg);
     color: var(--text);
     font-family: -apple-system, 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif;
     font-size: 16px;
-    padding: 56px 0 100px;
+    margin: 0;
+    min-height: 100vh;
   }
-  .container-narrow { max-width: 760px; }
+  .ls-app { display: flex; min-height: 100vh; background: var(--bg); }
+  .ls-sidebar {
+    width: 248px;
+    flex-shrink: 0;
+    background: var(--sidebar);
+    color: var(--sidebar-text);
+    display: flex;
+    flex-direction: column;
+    padding: 20px 12px 12px;
+    transition: width .2s ease;
+  }
+  .ls-app.ls-sidebar-collapsed .ls-sidebar { width: 76px; padding-inline: 10px; }
+  .ls-brand {
+    display: flex; align-items: center; justify-content: center;
+    gap: 8px; text-decoration: none; color: inherit;
+    padding: 4px 8px 22px; min-height: 48px;
+  }
+  .ls-wordmark { font-size: 18px; font-weight: 700; font-style: italic; letter-spacing: -.02em; white-space: nowrap; }
+  .ls-wordmark-lead { color: #fff; }
+  .ls-wordmark-spot { color: var(--teal); }
+  .ls-mark {
+    display: none; width: 36px; height: 36px; border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, #5ED4E0, #1AB5C4 58%, #0E6F8A);
+    box-shadow: 0 0 0 3px rgba(26,181,196,.25);
+  }
+  .ls-app.ls-sidebar-collapsed .ls-wordmark { display: none; }
+  .ls-app.ls-sidebar-collapsed .ls-mark { display: block; }
+  .ls-nav { display: flex; flex-direction: column; gap: 4px; flex: 1; overflow: auto; }
+  .ls-nav-item {
+    display: flex; align-items: center; gap: 12px;
+    color: var(--sidebar-text); text-decoration: none;
+    padding: 9px 12px; border-radius: 10px; font-size: 13.5px; font-weight: 500;
+  }
+  .ls-nav-item:hover, .ls-nav-item.is-active { background: rgba(255,255,255,.08); color: #fff; }
+  .ls-icon { width: 20px; height: 20px; flex-shrink: 0; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .ls-app.ls-sidebar-collapsed .ls-nav-label { display: none; }
+  .ls-app.ls-sidebar-collapsed .ls-nav-item { justify-content: center; padding: 10px; }
+  .ls-sidebar-toggle {
+    margin-top: 8px; border: 0; background: rgba(255,255,255,.06); color: var(--sidebar-text);
+    border-radius: 10px; padding: 8px; cursor: pointer;
+  }
+  .ls-app.ls-sidebar-collapsed .ls-sidebar-toggle .ls-icon { transform: rotate(180deg); }
+  [dir="rtl"] .ls-sidebar-toggle .ls-icon { transform: scaleX(-1); }
+  [dir="rtl"] .ls-app.ls-sidebar-collapsed .ls-sidebar-toggle .ls-icon { transform: scaleX(-1) rotate(180deg); }
+  .ls-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .ls-topbar {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 16px 28px 8px; background: transparent;
+  }
+  .ls-topbar-end { margin-inline-start: auto; display: flex; align-items: center; gap: 10px; }
+  .ls-btn-fill, .ls-btn-outline, .ls-user-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    border-radius: 999px; font-size: 13px; font-weight: 700; letter-spacing: .02em;
+    text-decoration: none; border: 1.5px solid transparent; padding: 8px 18px; cursor: default;
+  }
+  .ls-btn-fill { background: var(--blue); color: #fff; }
+  .ls-btn-fill:hover { background: var(--blue-hover); color: #fff; }
+  .ls-btn-outline { background: #fff; color: var(--blue); border-color: var(--blue); }
+  .ls-user-btn {
+    background: #fff; color: var(--text); border-color: var(--line-strong); cursor: pointer;
+  }
+  .ls-user-btn:hover { border-color: var(--blue); color: var(--blue); }
+  .ls-content { flex: 1; padding: 12px 28px 48px; }
+  .ls-page { max-width: 1080px; }
+  .ls-page-wide { max-width: 1400px; }
+  .container-narrow, .container-wide { max-width: none; padding: 0; }
 
-  h1 { font-size: 25px; font-weight: 500; letter-spacing: -0.01em; }
-  .status-pill {
-    font-family: var(--mono);
-    font-size: 13px;
-    color: var(--text-faint);
+  h1 { font-size: 28px; font-weight: 700; letter-spacing: -.02em; color: var(--text); }
+  .ls-home-title { text-align: center; font-size: 32px; margin-bottom: 6px; }
+  .ls-home-sub { text-align: center; max-width: 640px; margin: 0 auto 32px; }
+  .ls-service-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+  .ls-service-card {
+    display: block; background: #fff; border-radius: 16px; padding: 26px 22px 22px;
+    text-decoration: none; color: inherit; height: 100%;
+    box-shadow: 0 8px 24px rgba(11, 31, 58, .06);
+    border: 1px solid rgba(255,255,255,.8);
   }
+  .ls-service-card:hover { box-shadow: 0 12px 28px rgba(11, 31, 58, .10); color: inherit; }
+  .ls-service-icon {
+    width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center;
+    background: #EEF6FF; color: var(--blue); margin-bottom: 14px;
+  }
+  .ls-service-card h2 { font-size: 16px; font-weight: 700; margin: 0 0 6px; }
+  @media (max-width: 980px) { .ls-service-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 640px) {
+    .ls-service-grid { grid-template-columns: 1fr; }
+    .ls-sidebar { position: sticky; top: 0; align-self: flex-start; max-height: 100vh; }
+  }
+
+  .status-pill { font-size: 13px; color: var(--text-faint); }
   .status-pill .dot {
-    display: inline-block;
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: var(--commander);
-    box-shadow: 0 0 0 3px var(--commander-dim);
-    margin-inline-end: 6px;
+    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--lime); box-shadow: 0 0 0 3px rgba(140,198,63,.28); margin-inline-end: 6px;
   }
   .subtitle { color: var(--text-dim); font-size: 15px; }
   .nav-console { font-size: 14px; color: var(--text-dim); text-decoration: none; }
@@ -303,11 +387,10 @@ _DASHBOARD_STYLE = """
 
   .alert-console {
     background: var(--commander-dim);
-    border: 1px solid #9DCFC0;
-    border-inline-start: 3px solid var(--commander);
-    border-radius: 4px;
-    color: #075A47;
-    font-family: var(--mono);
+    border: 1px solid #9AD7DF;
+    border-inline-start: 3px solid var(--teal);
+    border-radius: 10px;
+    color: #0B5C66;
     font-size: 14px;
   }
   .alert-console b { font-weight: 600; }
@@ -315,9 +398,8 @@ _DASHBOARD_STYLE = """
     background: var(--danger-dim);
     border: 1px solid #C98782;
     border-inline-start: 3px solid var(--danger);
-    border-radius: 4px;
+    border-radius: 10px;
     color: #6B1F1B;
-    font-family: var(--mono);
     font-size: 14px;
   }
   .alert-console-error b { font-weight: 600; }
@@ -329,7 +411,7 @@ _DASHBOARD_STYLE = """
   }
   table.table-console thead th {
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 600;
     color: var(--text-faint);
     letter-spacing: 0.04em;
     border-bottom: 1px solid var(--line-strong) !important;
@@ -347,6 +429,10 @@ _DASHBOARD_STYLE = """
 
   .identity { font-family: var(--mono); font-size: 15px; }
   .identity .tag { font-family: inherit; font-size: 13px; color: var(--text-faint); margin-inline-start: 8px; }
+  .tag {
+    display: inline-block; font-size: 12px; color: var(--text-dim);
+    background: #EEF3F9; border-radius: 999px; padding: 2px 10px;
+  }
 
   .level-dot {
     display: inline-block;
@@ -362,47 +448,52 @@ _DASHBOARD_STYLE = """
 
   .form-select-console, .form-control-console {
     background: #fff;
-    border: 1px solid var(--line-strong);
+    border: 1px solid var(--line);
+    border-radius: 12px;
     color: var(--text);
-    font-family: var(--mono);
     font-size: 14px;
+    padding: 10px 14px;
   }
   .form-select-console:focus, .form-control-console:focus {
-    border-color: var(--text-dim);
-    box-shadow: 0 0 0 0.2rem rgba(46, 76, 107, 0.15);
+    border-color: var(--blue);
+    box-shadow: 0 0 0 0.2rem rgba(30, 90, 168, 0.15);
   }
 
   .btn-console {
     background: #fff;
-    color: var(--text-dim);
-    border: 1px solid var(--line-strong);
+    color: var(--blue);
+    border: 1.5px solid var(--blue);
+    border-radius: 999px;
     font-size: 14px;
-    font-weight: 500;
-    box-shadow: 0 1px 2px rgba(16, 35, 58, 0.15);
+    font-weight: 600;
   }
-  .btn-console:hover { border-color: var(--text-dim); color: var(--text); background: #fff; box-shadow: 0 2px 4px rgba(16, 35, 58, 0.22); }
+  .btn-console:hover { border-color: var(--blue-hover); color: var(--blue-hover); background: #fff; }
 
-  .btn-console-danger { color: var(--danger); border-color: #C98782; background: #fff; }
+  .btn-console-danger { color: var(--danger); border-color: #C98782; background: #fff; border-radius: 999px; }
   .btn-console-danger:hover { border-color: var(--danger); color: var(--danger); background: var(--danger-dim); }
 
-  .btn-console-primary { background: var(--commander); border-color: var(--commander); color: #fff; }
-  .btn-console-primary:hover { background: #0A5A49; border-color: #0A5A49; color: #fff; }
+  .btn-console-primary {
+    background: var(--lime); border-color: var(--lime); color: #fff;
+    border-radius: 999px; font-weight: 700;
+  }
+  .btn-console-primary:hover { background: var(--lime-hover); border-color: var(--lime-hover); color: #fff; }
 
   .block-console {
-    border: 1px solid var(--line-strong);
-    border-radius: 6px;
-    padding: 20px 24px 24px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 22px 24px 24px;
     position: relative;
     background: var(--panel);
+    box-shadow: 0 8px 24px rgba(11, 31, 58, .05);
   }
   .block-label {
     position: absolute;
     top: -11px;
     inset-inline-start: 18px;
-    background: var(--bg);
+    background: var(--panel);
     padding: 0 8px;
-    font-size: 14px;
-    font-weight: 500;
+    font-size: 13px;
+    font-weight: 600;
     color: var(--text-dim);
   }
   .form-label-console {
@@ -425,51 +516,54 @@ _DASHBOARD_STYLE = """
 _LOGIN_STYLE = """
 <style>
   :root {
-    --bg: #AFCBE3;
-    --panel: #C4DAEC;
-    --line: #9BB9D3;
-    --line-strong: #7A9CBC;
-    --text: #10233A;
-    --text-dim: #2E4C6B;
-    --text-faint: #55738F;
-    --commander: #0A6553;
-    --commander-dim: #B9DFD2;
-    --viewer: #164C82;
-    --viewer-dim: #B9D2E9;
+    --bg: #F7FAFD;
+    --text: #0B1F3A;
+    --text-dim: #5A6B80;
+    --text-faint: #8A9BB0;
+    --teal: #1AB5C4;
+    --lime: #8CC63F;
+    --lime-hover: #7AB32E;
     --danger: #9A302B;
-    --danger-dim: #E8C4C0;
-    --mono: 'SF Mono', 'JetBrains Mono', ui-monospace, Consolas, monospace;
+    --danger-dim: #F3D6D4;
   }
-  body {
+  body.ls-login {
     background: var(--bg);
     color: var(--text);
     font-family: -apple-system, 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif;
     font-size: 16px;
     min-height: 100vh;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     padding: 24px;
+    margin: 0;
   }
+  .login-brand { margin-bottom: 28px; text-align: center; }
+  .ls-wordmark { font-size: 28px; font-weight: 700; font-style: italic; letter-spacing: -.02em; }
+  .ls-wordmark-lead { color: var(--text); }
+  .ls-wordmark-spot { color: var(--teal); }
   .login-card {
     width: 100%;
-    max-width: 380px;
-    background: var(--panel);
-    border: 1px solid var(--line-strong);
-    border-radius: 6px;
-    padding: 32px 32px 28px;
+    max-width: 440px;
+    background: #E4F0FB;
+    border: 1.5px solid #B7D4EE;
+    border-radius: 24px;
+    padding: 40px 36px 32px;
+    box-shadow: 0 12px 40px rgba(30, 90, 168, 0.08);
   }
   .login-card h1 {
     font-size: 22px;
-    font-weight: 500;
-    letter-spacing: -0.01em;
-    margin-bottom: 4px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0 0 8px;
+    text-align: center;
   }
   .login-card .subtitle {
     font-size: 13px;
     color: var(--text-faint);
-    font-family: var(--mono);
     margin-bottom: 24px;
+    text-align: center;
   }
   .form-label-console {
     font-size: 12px;
@@ -480,25 +574,27 @@ _LOGIN_STYLE = """
   }
   .form-control-console {
     background: #fff;
-    border: 1px solid var(--line-strong);
+    border: 0;
+    border-radius: 12px;
     color: var(--text);
-    font-family: var(--mono);
-    font-size: 14px;
+    font-size: 15px;
     width: 100%;
+    padding: 14px 16px;
+    box-shadow: 0 1px 2px rgba(11, 31, 58, 0.04);
   }
+  .form-control-console::placeholder { color: #4AA0D5; }
   .form-control-console:focus {
-    border-color: var(--text-dim);
-    box-shadow: 0 0 0 0.2rem rgba(46, 76, 107, 0.15);
+    outline: none;
+    box-shadow: 0 0 0 0.2rem rgba(30, 90, 168, 0.18);
   }
-  .field-group { margin-bottom: 18px; }
+  .field-group { margin-bottom: 14px; }
 
   .alert-console-error {
     background: var(--danger-dim);
     border: 1px solid #C98782;
     border-inline-start: 3px solid var(--danger);
-    border-radius: 4px;
+    border-radius: 10px;
     color: #6B1F1B;
-    font-family: var(--mono);
     font-size: 13px;
     padding: 10px 14px;
     margin-bottom: 20px;
@@ -516,33 +612,34 @@ _LOGIN_STYLE = """
     background: var(--danger);
   }
 
+  .login-actions { text-align: center; margin-top: 8px; }
   .btn-console-primary {
-    background: var(--commander);
-    border-color: var(--commander);
+    background: var(--lime);
+    border: 0;
     color: #fff;
-    font-size: 14px;
-    font-weight: 500;
-    width: 100%;
-    padding: 8px 0;
-    box-shadow: 0 1px 2px rgba(16, 35, 58, 0.15);
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    border-radius: 999px;
+    padding: 12px 48px;
+    min-width: 180px;
   }
-  .btn-console-primary:hover { background: #0A5A49; border-color: #0A5A49; color: #fff; }
+  .btn-console-primary:hover { background: var(--lime-hover); color: #fff; }
 
   .status-pill {
-    font-family: var(--mono);
     font-size: 12px;
     color: var(--text-faint);
     display: flex;
     align-items: center;
     justify-content: center;
-    margin-top: 18px;
+    margin-top: 22px;
   }
   .status-pill .dot {
     display: inline-block;
     width: 6px; height: 6px;
     border-radius: 50%;
-    background: var(--commander);
-    box-shadow: 0 0 0 3px var(--commander-dim);
+    background: var(--lime);
+    box-shadow: 0 0 0 3px rgba(140,198,63,.28);
     margin-inline-end: 6px;
   }
 </style>
@@ -556,8 +653,11 @@ _LOGIN_TEMPLATE = """<!DOCTYPE html>
 <title>{{ t('admin.login_title') }}</title>
 """ + _BOOTSTRAP_CSS_LINK + _LOGIN_STYLE + """
 </head>
-<body>
+<body class="ls-login">
 
+  <div class="login-brand">
+    <span class="ls-wordmark" aria-label="LeadSpotting"><span class="ls-wordmark-lead">Lead</span><span class="ls-wordmark-spot">Spotting</span></span>
+  </div>
   <div class="login-card">
     <h1>{{ t('admin.login_title') }}</h1>
     <p class="subtitle">{{ t('admin.login_subtitle') }}</p>
@@ -579,14 +679,16 @@ _LOGIN_TEMPLATE = """<!DOCTYPE html>
 
     <form id="loginForm" method="post">
       <div class="field-group">
-        <label class="form-label-console" for="username">{{ t('admin.username') }}</label>
+        <label class="form-label-console visually-hidden" for="username">{{ t('admin.username') }}</label>
         <input type="text" class="form-control-console" id="username" name="username" placeholder="{{ t('admin.username') }}" autofocus required>
       </div>
       <div class="field-group">
-        <label class="form-label-console" for="password">{{ t('admin.password') }}</label>
-        <input type="password" class="form-control-console" id="password" name="password" placeholder="••••••••" required>
+        <label class="form-label-console visually-hidden" for="password">{{ t('admin.password') }}</label>
+        <input type="password" class="form-control-console" id="password" name="password" placeholder="{{ t('admin.password') }}" required>
       </div>
-      <button type="submit" class="btn-console-primary">{{ t('admin.sign_in') }}</button>
+      <div class="login-actions">
+        <button type="submit" class="btn-console-primary">{{ t('admin.sign_in') }}</button>
+      </div>
     </form>
 
     <div class="status-pill"><span class="dot"></span>{{ t('admin.connected') }}</div>
@@ -594,6 +696,75 @@ _LOGIN_TEMPLATE = """<!DOCTYPE html>
 
 </body>
 </html>
+"""
+
+_ICON_HOME = '<svg class="ls-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>'
+_ICON_PROFILES = '<svg class="ls-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16"/><path d="M4 12h16"/><path d="M4 16h16"/><path d="M8 6v4"/><path d="M12 10v4"/><path d="M16 14v4"/></svg>'
+_ICON_PROTOCOLS = '<svg class="ls-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h12"/><path d="M8 12h12"/><path d="M8 18h12"/><circle cx="4.5" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="4.5" cy="18" r="1.2" fill="currentColor" stroke="none"/></svg>'
+_ICON_EVENTS = '<svg class="ls-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M8 3v4"/><path d="M16 3v4"/></svg>'
+_ICON_USERS = '<svg class="ls-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.8-3 2.8-4.5 5.5-4.5S13.7 16 14.5 19"/><circle cx="17" cy="9" r="2.4"/><path d="M16.2 14.6c2.2.3 3.8 1.6 4.3 4.4"/></svg>'
+_ICON_GROUPS = '<svg class="ls-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="9" r="2.5"/><circle cx="16" cy="9" r="2.5"/><circle cx="12" cy="8" r="2.7"/><path d="M4 19c.7-2.6 2.4-4 5-4"/><path d="M20 19c-.7-2.6-2.4-4-5-4"/><path d="M8.5 19c.7-2.4 2-3.6 3.5-3.6s2.8 1.2 3.5 3.6"/></svg>'
+_ICON_SIMULATOR = '<svg class="ls-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M10 8.5v7l6-3.5z" fill="currentColor" stroke="none"/></svg>'
+_ICON_SERVER = '<svg class="ls-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c3 3.2 4.5 6.2 4.5 9S15 17.8 12 21"/><path d="M12 3c-3 3.2-4.5 6.2-4.5 9S9 17.8 12 21"/></svg>'
+_ICON_TOGGLE = '<svg class="ls-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>'
+_ICON_PERSON = '<svg class="ls-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.2"/><path d="M5 19c1-3.4 3.4-5 7-5s6 1.6 7 5"/></svg>'
+
+_SHELL_SCRIPT = """
+<script>
+(function () {
+  const root = document.querySelector('.ls-app');
+  if (!root) return;
+  const key = 'admin-sidebar-collapsed';
+  if (window.localStorage.getItem(key) === '1') root.classList.add('ls-sidebar-collapsed');
+  const toggle = document.getElementById('ls-sidebar-toggle');
+  if (toggle) toggle.addEventListener('click', function () {
+    root.classList.toggle('ls-sidebar-collapsed');
+    window.localStorage.setItem(key, root.classList.contains('ls-sidebar-collapsed') ? '1' : '0');
+  });
+})();
+</script>
+"""
+
+_SHELL_OPEN = """
+<body class="ls-app"{% if api_identity is defined %} data-api-identity="{{ api_identity }}"{% endif %}>
+<aside class="ls-sidebar">
+  <a class="ls-brand" href="{{ url_for('admin.dashboard') }}">
+    <span class="ls-mark"></span>
+    <span class="ls-wordmark" aria-label="LeadSpotting"><span class="ls-wordmark-lead">Lead</span><span class="ls-wordmark-spot">Spotting</span></span>
+  </a>
+  <nav class="ls-nav" aria-label="{{ t('admin.menu_title') }}">
+    <a class="ls-nav-item{% if request.endpoint == 'admin.dashboard' %} is-active{% endif %}" href="{{ url_for('admin.dashboard') }}">""" + _ICON_HOME + """<span class="ls-nav-label">{{ t('admin.menu_title') }}</span></a>
+    <a class="ls-nav-item{% if request.endpoint == 'admin.profiles' %} is-active{% endif %}" href="{{ url_for('admin.profiles') }}">""" + _ICON_PROFILES + """<span class="ls-nav-label">{{ t('admin.menu_profiles') }}</span></a>
+    <a class="ls-nav-item{% if request.endpoint == 'admin.protocols' %} is-active{% endif %}" href="{{ url_for('admin.protocols') }}">""" + _ICON_PROTOCOLS + """<span class="ls-nav-label">{{ t('admin.menu_protocols') }}</span></a>
+    <a class="ls-nav-item{% if request.endpoint == 'admin.events' %} is-active{% endif %}" href="{{ url_for('admin.events') }}">""" + _ICON_EVENTS + """<span class="ls-nav-label">{{ t('admin.menu_events') }}</span></a>
+    <a class="ls-nav-item{% if request.endpoint == 'admin.users' %} is-active{% endif %}" href="{{ url_for('admin.users') }}">""" + _ICON_USERS + """<span class="ls-nav-label">{{ t('admin.menu_users') }}</span></a>
+    <a class="ls-nav-item{% if request.endpoint == 'admin.groups' %} is-active{% endif %}" href="{{ url_for('admin.groups') }}">""" + _ICON_GROUPS + """<span class="ls-nav-label">{{ t('admin.menu_groups') }}</span></a>
+    <a class="ls-nav-item{% if request.endpoint == 'admin.simulator' %} is-active{% endif %}" href="{{ url_for('admin.simulator') }}">""" + _ICON_SIMULATOR + """<span class="ls-nav-label">{{ t('admin.menu_simulator') }}</span></a>
+    <a class="ls-nav-item{% if request.endpoint == 'admin.server' %} is-active{% endif %}" href="{{ url_for('admin.server') }}">""" + _ICON_SERVER + """<span class="ls-nav-label">{{ t('admin.menu_server') }}</span></a>
+  </nav>
+  <button type="button" class="ls-sidebar-toggle" id="ls-sidebar-toggle" aria-label="{{ t('admin.menu_title') }}">""" + _ICON_TOGGLE + """</button>
+</aside>
+<div class="ls-main">
+  <header class="ls-topbar">
+    <a class="ls-btn-fill" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a>
+    <span class="ls-btn-outline"><span class="dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#8CC63F;margin-inline-end:8px;vertical-align:middle;"></span>{{ t('admin.connected') }}</span>
+    <div class="ls-topbar-end">
+      {% if csrf_token %}
+      <form method="post" action="{{ url_for('admin.logout') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="ls-user-btn">""" + _ICON_PERSON + """<span>{{ t('admin.log_out') }}</span></button>
+      </form>
+      {% endif %}
+    </div>
+  </header>
+  <div class="ls-content">
+"""
+
+_SHELL_CLOSE = """
+  </div>
+</div>
+""" + _SHELL_SCRIPT + """
+</body></html>
 """
 
 _DASHBOARD_TEMPLATE = """<!DOCTYPE html>
@@ -772,13 +943,10 @@ _MENU_TEMPLATE = """<!DOCTYPE html>
 <html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{ t('admin.menu_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """
-</head><body><div class="container container-narrow">
-  <div class="d-flex justify-content-between align-items-baseline mb-1">
-    <h1>{{ t('admin.menu_title') }}</h1>
-    <form method="post" action="{{ url_for('admin.logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <button class="btn btn-console-danger btn-sm">{{ t('admin.log_out') }}</button></form>
-  </div>
-  <p class="subtitle mb-4">{{ t('admin.menu_subtitle') }}</p>
+</head>""" + _SHELL_OPEN + """
+<div class="ls-page">
+  <h1 class="ls-home-title">{{ t('admin.menu_title') }}</h1>
+  <p class="subtitle ls-home-sub">{{ t('admin.menu_subtitle') }}</p>
   {% for category, message in get_flashed_messages(with_categories=true) %}
     <div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>
   {% endfor %}
@@ -793,16 +961,25 @@ _MENU_TEMPLATE = """<!DOCTYPE html>
     {% for table in admin_tables %}
     <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.admin_table_list', table_key=table.key) }}"><h2 class="h5">{{ table.label }}</h2><span class="subtitle">{{ t('admin.tables.menu_subtitle') }}</span></a></div>
     {% endfor %}
+  <div class="ls-service-grid">
+    <a class="ls-service-card" href="{{ url_for('admin.profiles') }}"><span class="ls-service-icon">""" + _ICON_PROFILES + """</span><h2>{{ t('admin.menu_profiles') }}</h2><span class="subtitle">{{ t('admin.profiles.subtitle') }}</span></a>
+    <a class="ls-service-card" href="{{ url_for('admin.protocols') }}"><span class="ls-service-icon">""" + _ICON_PROTOCOLS + """</span><h2>{{ t('admin.menu_protocols') }}</h2><span class="subtitle">{{ t('admin.protocols.subtitle') }}</span></a>
+    <a class="ls-service-card" href="{{ url_for('admin.events') }}"><span class="ls-service-icon">""" + _ICON_EVENTS + """</span><h2>{{ t('admin.menu_events') }}</h2><span class="subtitle">{{ t('admin.events.subtitle') }}</span></a>
+    <a class="ls-service-card" href="{{ url_for('admin.users') }}"><span class="ls-service-icon">""" + _ICON_USERS + """</span><h2>{{ t('admin.menu_users') }}</h2><span class="subtitle">{{ t('admin.users_subtitle') }}</span></a>
+    <a class="ls-service-card" href="{{ url_for('admin.groups') }}"><span class="ls-service-icon">""" + _ICON_GROUPS + """</span><h2>{{ t('admin.menu_groups') }}</h2><span class="subtitle">{{ t('admin.groups_page_subtitle') }}</span></a>
+    <a class="ls-service-card" href="{{ url_for('admin.simulator') }}"><span class="ls-service-icon">""" + _ICON_SIMULATOR + """</span><h2>{{ t('admin.menu_simulator') }}</h2><span class="subtitle">{{ t('admin.simulator.subtitle') }}</span></a>
+    <a class="ls-service-card" href="{{ url_for('admin.server') }}"><span class="ls-service-icon">""" + _ICON_SERVER + """</span><h2>{{ t('admin.menu_server') }}</h2><span class="subtitle">{{ t('admin.server_subtitle') }}</span></a>
   </div>
-</div></body></html>"""
+</div>
+""" + _SHELL_CLOSE
 
 
 _USERS_TEMPLATE = """<!DOCTYPE html>
 <html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{ t('admin.users_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """
-</head><body><div class="container container-narrow">
-  <div class="d-flex justify-content-between align-items-baseline mb-1"><h1>{{ t('admin.users_title') }}</h1>
-    <a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div>
+</head>""" + _SHELL_OPEN + """
+<div class="ls-page">
+  <h1>{{ t('admin.users_title') }}</h1>
   <p class="subtitle mb-4">{{ t('admin.users_subtitle') }}</p>
   {% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>{% endfor %}
   <table class="table table-console mb-5"><thead><tr><th>{{ t('admin.col_identity') }}</th><th>{{ t('admin.col_full_name') }}</th><th>{{ t('admin.col_level') }}</th><th></th></tr></thead><tbody>
@@ -819,23 +996,26 @@ _USERS_TEMPLATE = """<!DOCTYPE html>
     <div class="col-auto"><div class="form-label-console">{{ t('admin.col_level') }}</div><select name="permission_level" class="form-select form-select-console">{% for level in levels %}<option value="{{ level }}">{{ level }}</option>{% endfor %}</select></div>
     <div class="col-auto"><button class="btn btn-console-primary">{{ t('admin.add') }}</button></div></form></div>
   <div class="block-console"><span class="block-label">{{ t('admin.bot_service_title') }}</span><p class="subtitle">{{ t('admin.bot_service_help', identity=bot_service_identity) }}</p><form method="post" action="{{ url_for('admin.provision_bot_service') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console">{{ t('admin.bot_service_button') }}</button></form></div>
-</div></body></html>"""
+</div>
+""" + _SHELL_CLOSE
 
 
 _GROUPS_TEMPLATE = """<!DOCTYPE html>
 <html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.groups_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """</head>
-<body><div class="container container-narrow"><div class="d-flex justify-content-between align-items-baseline"><h1>{{ t('admin.groups_title') }}</h1><a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div><p class="subtitle mb-4">{{ t('admin.groups_page_subtitle') }}</p>
+""" + _SHELL_OPEN + """
+<div class="ls-page"><h1>{{ t('admin.groups_title') }}</h1><p class="subtitle mb-4">{{ t('admin.groups_page_subtitle') }}</p>
 {% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>{% endfor %}
 <table class="table table-console mb-4"><thead><tr><th>{{ t('admin.col_chat_id') }}</th><th>{{ t('admin.col_label') }}</th><th>{{ t('admin.col_routed_to') }}</th><th></th></tr></thead><tbody>
 {% for group in groups %}<tr><td class="identity">{{ group.chat_id }}<div class="mt-2"><span class="tag">{% if group.auto_register %}{{ t('admin.registration_automatic') }}{% else %}{{ t('admin.registration_approved') }}{% endif %}</span> <span class="tag">{% if safe_mode and group.auto_register %}{{ t('admin.registration_blocked') }}{% else %}{{ t('admin.registration_active') }}{% endif %}</span></div><form class="d-flex gap-2 mt-2" method="post" action="{{ url_for('admin.rename_group', chat_id=group.chat_id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input name="new_chat_id" class="form-control form-control-console form-control-sm" placeholder="{{ t('admin.new_chat_id_placeholder') }}" title="{{ t('admin.group_rename_help') }}"><button class="btn btn-console btn-sm" title="{{ t('admin.group_rename_help') }}">{{ t('admin.rename_group') }}</button></form></td><td colspan="2"><form class="d-flex gap-2" method="post" action="{{ url_for('admin.write_group') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="chat_id" value="{{ group.chat_id }}"><input name="label" value="{{ group.label }}" maxlength="200" class="form-control form-control-console" placeholder="{{ t('admin.col_label') }}"><select name="agent_name" class="form-select form-select-console">{% for agent_name in routable_agents %}<option value="{{ agent_name }}" {% if agent_name == group.agent_name %}selected{% endif %}>{{ agent_name }}</option>{% endfor %}</select><button class="btn btn-console">{{ t('admin.save') }}</button></form></td><td><div class="d-flex gap-2">{% if group.auto_register %}<form method="post" action="{{ url_for('admin.approve_group', chat_id=group.chat_id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-primary">{{ t('admin.approve_registration') }}</button></form>{% endif %}<form method="post" action="{{ url_for('admin.remove_group', chat_id=group.chat_id) }}" onsubmit="return confirm({{ t('admin.confirm_remove_group', chat_id=group.chat_id)|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-danger">{{ t('admin.remove') }}</button></form></div></td></tr>{% else %}<tr><td colspan="4">{{ t('admin.no_groups') }}</td></tr>{% endfor %}</tbody></table>
 <div class="block-console"><span class="block-label">{{ t('admin.add_group') }}</span><p class="subtitle">{{ t('admin.add_group_help', main_agent='main_agent') }}</p><form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.write_group') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="col"><div class="form-label-console">{{ t('admin.col_chat_id') }}</div><input name="chat_id" class="form-control form-control-console" placeholder="-1001234567890" required></div><div class="col"><div class="form-label-console">{{ t('admin.col_label') }}</div><input name="label" class="form-control form-control-console" maxlength="200"></div><div class="col-auto"><select name="agent_name" class="form-select form-select-console">{% for agent_name in routable_agents %}<option value="{{ agent_name }}">{{ agent_name }}</option>{% endfor %}</select></div><div class="col-auto"><button class="btn btn-console-primary">{{ t('admin.add') }}</button></div></form></div>
-</div></body></html>"""
+</div>
+""" + _SHELL_CLOSE
 
 
-_PROFILES_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.profiles.title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + """</head>""" + PROFILES_BODY + """</html>"""
+_PROFILES_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.profiles.title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + """</head>""" + _SHELL_OPEN + PROFILES_BODY + _SHELL_CLOSE
 
 
-_PROTOCOLS_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.protocols.title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + """</head>""" + PROTOCOLS_BODY + """</html>"""
+_PROTOCOLS_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.protocols.title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + """</head>""" + _SHELL_OPEN + PROTOCOLS_BODY + _SHELL_CLOSE
 
 
 _ADMIN_TABLES_LIST_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ table.label }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """</head>""" + ADMIN_TABLES_LIST_BODY + """</html>"""
@@ -845,6 +1025,7 @@ _ADMIN_TABLES_EDIT_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ 
 
 
 _EVENTS_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.events.title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + """</head>""" + EVENTS_BODY + """</html>"""
+_EVENTS_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.events.title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + """</head>""" + _SHELL_OPEN + EVENTS_BODY + _SHELL_CLOSE
 
 
 _SERVER_STYLE = """
@@ -941,7 +1122,8 @@ _SERVER_STYLE = """
 
 _SERVER_TEMPLATE = """<!DOCTYPE html>
 <html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.server_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + _SERVER_STYLE + """</head>
-<body data-api-identity="{{ api_identity }}"><div class="container container-narrow"><div class="d-flex justify-content-between align-items-baseline"><h1>{{ t('admin.server_title') }}</h1><a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div>
+""" + _SHELL_OPEN + """
+<div class="ls-page"><h1>{{ t('admin.server_title') }}</h1>
 <p class="subtitle mb-4">{{ t('admin.server_subtitle') }}</p>
 {% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>{% endfor %}
 """ + IDENTITY_BAR + """
@@ -996,7 +1178,7 @@ _SERVER_TEMPLATE = """<!DOCTYPE html>
 })();
 </script>
 <pre id="safe-mode-api-output" class="d-none" hidden></pre>
-</body></html>"""
+""" + _SHELL_CLOSE
 
 
 # docs/Admin_Profile_Switch_Investigation.md §1/§4.1: the wait page must never navigate the
@@ -1012,7 +1194,7 @@ _SERVER_TEMPLATE = """<!DOCTYPE html>
 _RESTART_POLL_MS = 1500
 _RESTART_TIMEOUT_MS = 60000
 
-_SERVER_WAIT_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.server_restarting') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """</head><body><div class="container container-narrow"><div class="block-console">
+_SERVER_WAIT_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.server_restarting') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """</head>""" + _SHELL_OPEN + """<div class="ls-page"><div class="block-console">
 <div id="wait-status"><h1>{{ t('admin.server_restarting') }}</h1><p class="subtitle">{{ t('admin.server_restarting_help') }}</p></div>
 <div id="wait-timeout" hidden><h1>{{ t('admin.server_restart_timeout_title') }}</h1><p class="subtitle">{{ t('admin.server_restart_timeout_help') }}</p><p><a id="target-link" href="{{ target_url }}">{{ t('admin.server_restart_timeout_target_link') }}</a></p><p><a id="old-link" href="{{ old_url }}">{{ t('admin.server_restart_timeout_previous_link') }}</a></p></div>
 </div></div><script>
@@ -1041,7 +1223,8 @@ _SERVER_WAIT_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}
   }
   setTimeout(tick, {{ poll_ms }});
 })();
-</script></body></html>"""
+</script>
+""" + _SHELL_CLOSE
 
 
 # The simulator page shares the dashboard's chrome (Bootstrap build, palette, header) and adds
@@ -1055,11 +1238,7 @@ _SIMULATOR_TEMPLATE = """<!DOCTYPE html>
 <title>{{ t('admin.simulator.title') }}</title>
 """ + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + SIMULATOR_STYLE + """
 </head>
-<body>
-""" + SIMULATOR_BODY + """
-</body>
-</html>
-"""
+""" + _SHELL_OPEN + SIMULATOR_BODY + _SHELL_CLOSE
 
 
 def _client_source() -> str:
@@ -1573,6 +1752,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             old_url=old_url,
             timeout_ms=_RESTART_TIMEOUT_MS,
             poll_ms=_RESTART_POLL_MS,
+            csrf_token=session.get("csrf_token", ""),
         )
 
     @blueprint.route("/server/profile", methods=["POST"])
@@ -1944,10 +2124,11 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         return _render(
             '<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8">'
             "<title>{{ t('admin.error_title') }}</title>" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE
-            + '</head><body><div class="container container-narrow">'
-            '<h1 class="mb-2">{{ t(\'admin.error_title\') }}</h1>'
-            '<p class="subtitle">{{ t(\'admin.error_subtitle\') }}</p>'
-            "</div></body></html>"
+            + "</head>" + _SHELL_OPEN
+            + '<div class="ls-page"><h1 class="mb-2">{{ t(\'admin.error_title\') }}</h1>'
+            '<p class="subtitle">{{ t(\'admin.error_subtitle\') }}</p></div>'
+            + _SHELL_CLOSE,
+            csrf_token=session.get("csrf_token", ""),
         ), 500
 
     return blueprint

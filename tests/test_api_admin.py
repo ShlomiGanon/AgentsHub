@@ -1263,7 +1263,7 @@ def test_dashboard_links_to_the_simulator_and_back(tmp_path, teardown_ctx, _admi
 
     simulator = client.get("/admin/simulator").data
     assert b'href="/admin/"' in simulator
-    assert b"User administration" in simulator
+    assert b"Administration menu" in simulator
 
 
 def _embedded_simulator_data(page: bytes) -> dict:
