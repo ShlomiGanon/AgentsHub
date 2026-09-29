@@ -150,6 +150,12 @@ class SurveillanceAgent(Agent):
             cameras = self.surveillance_store.list_cameras(area=area.strip() or None)
 
         if not cameras:
+            cleaned_area = area.strip()
+            if cleaned_area:
+                # Deterministic, from the store's own list_cameras count — never inferred from
+                # any wording — so an incident-handling step that relies on camera coverage for
+                # an area gets the same resource-unavailable treatment as a failed dispatch.
+                self.signal_resource_unavailable("camera", cleaned_area, "no active camera covering the area")
             scope = f"in area '{area}'" if area.strip() else "in the surveillance registry"
             return f"No cameras found {scope}."
 
@@ -240,6 +246,7 @@ class SurveillanceAgent(Agent):
                 specific_drone_id=cleaned_drone_id or None,
             )
         except SurveillancePersistenceError as exc:
+            self.signal_resource_unavailable("drone", target_area.strip(), str(exc))
             return f"Drone dispatch failed: {exc}"
 
         drone = mission["drone"]

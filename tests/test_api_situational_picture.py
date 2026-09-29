@@ -1,6 +1,8 @@
 """`POST /Msg` answers a multi-domain picture protocol from live specialist data gathered for
 that request - with the Main Agent's own per-domain questions and the caller-scoped recent
-event log - whether the picture was asked for by button/hint or in plain words."""
+event log - when the picture is asked for by an explicit button/hint. Plain-words phrasing is
+no longer matched by a keyword shortcut; it is left to the model's own question routing
+(orchestrator/reasoning.py), so it does not reach this multi-domain picture builder at all."""
 
 from __future__ import annotations
 
@@ -14,7 +16,7 @@ from agents import adapter
 from agents.contracts import AgentDescriptor, AgentResult, ToolInfo
 from agents.runtime import AgentRegistry
 from api.app import build_app, build_group_routing
-from api.routes import SITUATIONAL_PICTURE_PROTOCOL, _is_situational_picture_query
+from api.routes import SITUATIONAL_PICTURE_PROTOCOL
 from history import HistoryAnswer
 from history.query import HistoryQueryError
 from protocols import CriticalityLevel, Protocol, ProtocolSet
@@ -164,7 +166,12 @@ def test_hinted_picture_is_built_from_live_specialist_answers_and_recent_events(
     assert ctx.deps.persistence.fetch_events_range("2000-01-01", "2100-01-01") == []  # read-only, no event written
 
 
-def test_plain_words_asking_for_the_picture_route_to_the_live_picture(tmp_path, teardown_ctx):
+def test_plain_words_asking_for_the_picture_no_longer_shortcut_to_the_live_picture(tmp_path, teardown_ctx):
+    """A keyword-matched shortcut used to force this exact phrasing into the live picture
+    builder without any model classification. That shortcut is gone: the phrasing is now just
+    a normal message for `_PictureMainAgent` to classify, and since this fake never returns an
+    intent classification (only the picture-building prompts it was built for), the request
+    fails loudly instead of silently reaching `build_situational_picture` again."""
     ctx, surveillance, team, history = _picture_ctx(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -175,22 +182,8 @@ def test_plain_words_asking_for_the_picture_route_to_the_live_picture(tmp_path, 
         json={"text": "\u05de\u05d4 \u05ea\u05de\u05d5\u05e0\u05ea \u05d4\u05de\u05e6\u05d1 \u05db\u05e8\u05d2\u05e2?", "sender_identity": VIEWER_IDENTITY},
     )
 
-    assert resp.status_code == 200
-    body = resp.get_json()
-    assert body["protocol"] == SITUATIONAL_PICTURE_PROTOCOL
-    assert surveillance.calls and team.calls
-    # A viewer's recent-events view keeps their ownership scope, and "no events" is a fact in the picture.
-    assert history.calls[0][1] == VIEWER_IDENTITY
-    assert ctx.loaded_profile.message_catalog.text("orchestrator.picture.no_recent_events", hours=3) in body["answer"]
-    assert body["provenance"]["domains"][-1]["succeeded"] is True
-
-
-def test_picture_phrase_detection_is_conservative():
-    assert _is_situational_picture_query("\u05de\u05d4 \u05ea\u05de\u05d5\u05e0\u05ea \u05d4\u05de\u05e6\u05d1 \u05db\u05e8\u05d2\u05e2?")
-    assert _is_situational_picture_query("  \u05ea\u05de\u05d5\u05e0\u05ea   \u05de\u05e6\u05d1 ")
-    assert _is_situational_picture_query("Give me the situational picture")
-    assert not _is_situational_picture_query("\u05de\u05d4 \u05de\u05e6\u05d1 \u05d4\u05e8\u05d7\u05e4\u05e0\u05d9\u05dd?")
-    assert not _is_situational_picture_query("what happened yesterday?")
+    assert resp.status_code >= 500  # this fake agent only knows the picture-building prompts
+    assert not surveillance.calls and not team.calls  # never reached the live picture builder
 
 
 def test_picture_phrase_without_the_protocol_in_scope_falls_through(tmp_path, teardown_ctx):

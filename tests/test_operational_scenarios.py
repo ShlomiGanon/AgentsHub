@@ -312,11 +312,14 @@ def test_scenario_3_team_member_in_transit(tmp_path, teardown_ctx):
 
 
 def test_scenario_4_two_cameras_in_one_message(tmp_path, teardown_ctx):
-    # Phase A: update_camera_status's direct_tool_binder (profiles/response_team.py)
-    # produces one real step per camera identifier and calls the real tool for each —
-    # no formulate_tasks call at all (deliberately no "participating in the" dispatch entry;
-    # ScriptedAgent raises if it's ever reached), and no scripted crewai echo either, since
-    # the real update_camera_status tool method runs directly for both cameras.
+    # update_camera_status's direct_tool_binder (profiles/response_team.py) produces one
+    # step per camera identifier straight from the event's own extracted `entities` -- no
+    # formulate_tasks call at all (deliberately no "participating in the" dispatch entry;
+    # ScriptedAgent raises if it's ever reached). Each step's resulting status is now a
+    # genuine per-camera model decision (kind="agent"), not a keyword heuristic, so this
+    # fake crewai stand-in's fixed echo never actually calls update_camera_status for real --
+    # real store mutation for this case is a live-verification concern
+    # (docs/pending_live_verification.md), not something an offline scripted agent can prove.
     agent = ScriptedAgent(
         {
             "Extract this operational event": _extraction(
@@ -343,13 +346,9 @@ def test_scenario_4_two_cameras_in_one_message(tmp_path, teardown_ctx):
     assert {step["agent_name"] for step in steps} == {"surveillance_agent"}
     assert all(step["status"] == "succeeded" for step in steps)
     assert job_status(ctx, event_id)["status"] == "succeeded"
-
-    surveillance_agent = ctx.deps.registry.get("surveillance_agent")
-    cameras = {c["camera_id"]: c for c in surveillance_agent.surveillance_store.list_cameras()}
-    assert cameras["CAM-01"]["feed_summary"] == "CAM-01 and CAM-02 are offline"
-    assert cameras["CAM-02"]["feed_summary"] == "CAM-01 and CAM-02 are offline"
-    assert cameras["CAM-01"]["status"] == "offline"  # "offline" keyword in the raw text
-    assert cameras["CAM-02"]["status"] == "offline"
+    task_texts = {step["task_text"] for step in steps}
+    assert any("CAM-01" in text for text in task_texts)
+    assert any("CAM-02" in text for text in task_texts)
 
 
 def test_scenario_5_cut_communications_cable(tmp_path, teardown_ctx):

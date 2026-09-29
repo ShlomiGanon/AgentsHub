@@ -138,6 +138,7 @@ def make_exact_result_capture(namespace: str) -> ExactResultCapture:
     return ExactResultCapture(namespace)
 
 
+
 def configure_provider_concurrency(limit: int) -> None:
     global _provider_semaphore
     if not 1 <= limit <= 64:
@@ -225,6 +226,7 @@ class Agent:
         self.model = model
         self.api_key = api_key
         self._wrapped_tools: dict[str, Callable] = {}
+        self._resource_unavailable_signal: "tuple[str, str, str] | None" = None
 
         tool_infos = exposed_tools_for(self)
         for attribute_name in dir(type(self)):
@@ -244,6 +246,33 @@ class Agent:
 
     def exposed_tools(self) -> tuple[ToolInfo, ...]:
         return self.descriptor.tools
+
+    def signal_resource_unavailable(self, resource_kind: str, area: str, reason: str) -> None:
+        """Call from inside a resource-dispatch tool method, with the resource kind (e.g.
+        "drone", "camera", "police", "squad_member"), the area it was needed for, and why --
+        all three should already be plain facts the tool itself computed, not composed for a
+        reader.
+
+        Deliberately stored as plain instance state, not a `ContextVar` (unlike
+        `ExactResultCapture`, above): CrewAI's own tool-calling machinery does not guarantee it
+        runs a tool call in the same thread/task as the `Agent.process()` call that triggered
+        it, so a `ContextVar.set()` made inside the tool can silently fail to propagate back —
+        confirmed live (crewai 1.15.17, a real dispatch failure genuinely invoking the tool,
+        the resulting ContextVar read as unset after `process()` returned). `self` is the same
+        object regardless of which thread actually executed the tool call, so instance state
+        set here is always visible to `take_resource_unavailable_signal()`, called from the
+        same `self` right after `process()` returns."""
+
+        self._resource_unavailable_signal = (resource_kind, area, reason)
+
+    def take_resource_unavailable_signal(self) -> "tuple[str, str, str] | None":
+        """Read-and-clear. Called once per step, right after that step's own tool-using call
+        finishes, so a later step's tool call can never leak into an earlier step's outcome."""
+
+        value = self._resource_unavailable_signal
+        if value is not None:
+            self._resource_unavailable_signal = None
+        return value
 
     def process(self, text: str, allowed_tools: list[str], *, invocation_policy: InvocationPolicy | None = None) -> AgentResult:
         allowed = frozenset(allowed_tools)

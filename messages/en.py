@@ -36,6 +36,7 @@ MESSAGES = {
     "header.approval_needed": "[APPROVAL NEEDED — please reply]",
     "header.precedent_closure": "[NOTICE — closed on precedent — no reply needed]",
     "header.uncertain_verdict": "[NOTICE — uncertain verdict — no reply needed]",
+    "header.resource_unavailable_alert": "[COMMANDER ALERT — decision needed]",
     "header.uncertain_reporter": "[UPDATE]",
     "header.no_match": "[NOTICE — no protocol available — no reply needed]",
     "header.result": "[RESULT]",
@@ -50,6 +51,7 @@ MESSAGES = {
     "outcome.closed_on_precedent": "closed on precedent",
     "outcome.declined": "declined",
     "outcome.no_match_protocol": "no matching protocol",
+    "outcome.handled_resource_unavailable": "handled — resource unavailable",
     "risk.high": "high",
     "risk.low": "low",
     "result.what_was_done": "What was done:",
@@ -115,6 +117,7 @@ MESSAGES = {
     "clarification.already_resolved": "This clarification was already resolved{who}. {message}",
     "common.by_identity": " by {identity}",
     "notice.uncertain": "{header}\n\nEvent {event_id} finished with an uncertain verdict.\n\nInsight:\n{insight}",
+    "notice.resource_unavailable_alert": "{header}\n\nEvent {event_id}: {alert}",
     "notice.uncertain_reporter": "{header}\n\nYour reported event is still being reviewed. "
         "We'll update you if there's more to share.",
     "notice.no_match": "{header}\n\nNo existing protocol can fulfill this request.\nRaw text: {raw_text}\n"
@@ -615,10 +618,39 @@ MESSAGES = {
         "Good example: \"The finding could not be verified against the live camera feed, so the update was not recorded.\""
     ),
     "orchestrator.event_data_question.fallback": "Additional details are needed to continue: {missing_fields}.",
-    # Deterministic camera-status inference keywords (Phase A direct-tool binder,
-    # profiles/response_team.py::_infer_camera_status) -- pipe-delimited, split in code.
-    "response_team.camera_status.recovery_words": "back online|resolved|fixed|restored",
-    "response_team.camera_status.offline_words": "sabotage|cut|damaged|severed|offline|down",
+    # Resource-unavailable mechanism (orchestrator/flows.py::_finish_with_resource_unavailable):
+    # `fact`/`alternatives` are supplied by the profile's own resource_unavailable_description
+    # hook (already localized there) -- core never composes resource/area names itself.
+    "orchestrator.resource_unavailable.commander_alert": "Commander alert — decision needed: {fact} Alternatives: {alternatives}",
+    "orchestrator.resource_unavailable.no_alternatives": "no alternatives could be determined from current data.",
+    # Resource-unavailable mechanism (profiles/response_team.py::_describe_resource_unavailable):
+    # resource-kind and area display names -- never the raw internal identifier in user-facing
+    # text (e.g. "drone"/"east_gate").
+    "response_team.resource_kind.drone": "drone",
+    "response_team.resource_kind.camera": "camera",
+    "response_team.resource_kind.squad_member": "squad member",
+    "response_team.resource_kind.police": "police",
+    "response_team.resource_kind.ambulance": "ambulance",
+    "response_team.resource_kind.k9": "K9 unit",
+    "response_team.resource_kind.yasam": "YASAM unit",
+    "response_team.area.west_gate": "the west gate",
+    "response_team.area.east_gate": "the east gate",
+    "response_team.area.east_fence": "the east fence",
+    "response_team.area.east_orchards": "the east orchards",
+    "response_team.area.expansion_neighborhood": "the expansion neighborhood",
+    "response_team.area.old_public_building": "the old public building",
+    "response_team.area.south_corner": "the south corner",
+    "response_team.area.access_road": "the access road",
+    "response_team.area.drones_warehouse": "the drone warehouse",
+    "response_team.resource_unavailable.fact": "{resource} was not available for {area}. ({reason})",
+    "response_team.resource_unavailable.alternatives.cameras_covering": "cameras covering {area}: {cameras}",
+    "response_team.resource_unavailable.alternatives.no_cameras": "no cameras cover {area}",
+    "response_team.resource_unavailable.alternatives.ready_drones": "ready drones: {count}",
+    "response_team.resource_unavailable.alternatives.available_members": "available roster members: {members}",
+    "response_team.resource_unavailable.alternatives.no_members": "no roster members currently available",
+    "response_team.resource_unavailable.alternatives.forces": "neighboring forces: {forces}",
+    "response_team.resource_unavailable.squad_reason": "only {available} of the requested {unit_count} roster member(s) are currently available",
+    "response_team.resource_unavailable.force_reason": "only {remaining} of {pool_size} {resource} unit(s) currently available, {unit_count} requested",
     "response_team.friendly_forces.confirm_ambulance": "Medical/EMS team dispatch to '{location}' recorded successfully.",
     "response_team.friendly_forces.confirm_firefighters": "Firefighting and rescue force dispatch to '{location}' recorded successfully.",
     "response_team.friendly_forces.confirm_military": "Military and security force dispatch to '{location}' recorded successfully.",

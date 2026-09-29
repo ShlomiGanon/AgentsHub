@@ -7,7 +7,6 @@ from profiles.response_team import (
     _bind_record_attendance,
     _bind_report_team_movement,
     _bind_update_camera_status,
-    _infer_camera_status,
 )
 
 
@@ -70,14 +69,23 @@ def test_as_aware_iso_leaves_an_already_aware_timestamp_untouched():
 
 
 # -- _bind_update_camera_status ------------------------------------------------
+#
+# camera_id is bound deterministically (from the event's own already-extracted `entities`),
+# but the resulting status is a judgment call from free text, not a keyword heuristic -- so
+# these bind a normal `kind="agent"` step and let the specialist agent decide and call the
+# tool itself, instead of a local `_infer_camera_status` pre-deciding it.
 
 
-def test_update_camera_status_single_camera():
+def test_update_camera_status_single_camera_binds_a_model_driven_step():
     event = {"entities": ["CAM-03"], "description": "intermittent reception", "raw_text": "CAM-03 is flaky"}
 
     (step,) = _bind_update_camera_status(event)
 
-    assert step.direct_tool_kwargs == {"camera_id": "CAM-03", "observation": "intermittent reception", "status": "degraded"}
+    assert step.kind == "agent"
+    assert step.direct_tool_kwargs == {}
+    assert step.allowed_tools == ("update_camera_status",)
+    assert "CAM-03" in step.task_text
+    assert "intermittent reception" in step.task_text
 
 
 def test_update_camera_status_multi_camera_produces_one_step_per_camera():
@@ -85,9 +93,10 @@ def test_update_camera_status_multi_camera_produces_one_step_per_camera():
 
     steps = _bind_update_camera_status(event)
 
-    assert [s.direct_tool_kwargs["camera_id"] for s in steps] == ["CAM-01", "CAM-02"]
-    assert all(s.direct_tool_kwargs["observation"] == "both down" for s in steps)
     assert {s.step_id for s in steps} == {"1", "2"}
+    assert "CAM-01" in steps[0].task_text and "CAM-01" not in steps[1].task_text
+    assert "CAM-02" in steps[1].task_text and "CAM-02" not in steps[0].task_text
+    assert all("both down" in s.task_text for s in steps)
 
 
 def test_update_camera_status_missing_fields_raises_no_camera_calls():
@@ -98,12 +107,6 @@ def test_update_camera_status_missing_fields_raises_no_camera_calls():
     assert len(steps) == 1
     assert set(steps[0].required_event_fields) == {"entities", "description"}
     assert steps[0].direct_tool_kwargs == {}
-
-
-def test_infer_camera_status_detects_damage_and_recovery_and_defaults_to_degraded():
-    assert _infer_camera_status("the cable was cut, sabotage suspected") == "offline"
-    assert _infer_camera_status("the camera is back online now") == "active"
-    assert _infer_camera_status("intermittent reception, cause unknown") == "degraded"
 
 
 # -- _bind_report_team_movement -------------------------------------------------

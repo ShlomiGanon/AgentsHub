@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping
 
 if TYPE_CHECKING:
     from agents import Agent
@@ -103,6 +103,17 @@ class LoadedProfile:
     # into that mechanism — the admin simulator's message-kind steps then have no bot-side
     # proxy target and the feature is simply unavailable, not broken.
     simulator_port: int | None = None
+    # Optional profile-supplied describer for the resource-unavailable mechanism
+    # (protocols/executor.py's `ResourceUnavailable` signal, consumed in
+    # orchestrator/flows.py's `_finish_with_resource_unavailable`): (resource_kind, area, reason,
+    # registry) -> (fact_sentence, alternatives_text). `fact_sentence` is a short, plain-language,
+    # already-localized statement of what happened -- fed into the normal report composer as an
+    # input fact, and used verbatim by its deterministic fallback -- never raw internal
+    # identifiers like "drone" or "east_gate". `alternatives_text` is the commander-facing
+    # rundown of what else could cover the area right now. None (the default) means a profile
+    # hasn't supplied one -- core then falls back to its own generic (English) phrasing rather
+    # than crashing.
+    resource_unavailable_description: "Callable[[str, str, str, object], tuple[str, str]] | None" = None
 
 REQUIRED_PROFILE_ATTRS = (
     "PROFILE_NAME",

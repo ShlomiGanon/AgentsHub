@@ -19,6 +19,7 @@ class _ScriptedAgent:
         self._tool_infos = tool_infos
         self._responses = list(responses)
         self.calls = []
+        self._resource_unavailable_signal = None
 
     def exposed_tools(self):
         return self._tool_infos
@@ -29,6 +30,14 @@ class _ScriptedAgent:
         if isinstance(response, Exception):
             raise response
         return response
+
+    def signal_resource_unavailable(self, resource_kind, area, reason):
+        self._resource_unavailable_signal = (resource_kind, area, reason)
+
+    def take_resource_unavailable_signal(self):
+        value = self._resource_unavailable_signal
+        self._resource_unavailable_signal = None
+        return value
 
 
 class _FakeSettings:
@@ -177,6 +186,82 @@ def test_backoff_is_applied_between_attempts_via_injectable_sleep_fn():
     assert sleeps == [2.5, 2.5]  # between attempts 1->2 and 2->3, not after the last
 
 
+# -- resource-unavailable signal: deterministic, set by a tool, never by wording -------------
+
+
+class _SignalingAgent(_ScriptedAgent):
+    """A tool method calling self.signal_resource_unavailable right before returning, exactly
+    as a real dispatch tool would after its own persistence layer confirms no unit is
+    available -- the process() override here stands in for that tool call. Instance state
+    (not a ContextVar): a real dispatch tool proved this must survive CrewAI running the tool
+    call in a thread/context the caller's ContextVar reads never saw."""
+
+    def __init__(self, *args, signal_on_calls=frozenset({1}), **kwargs):
+        super().__init__(*args, **kwargs)
+        self._signal_on_calls = signal_on_calls
+        self._call_number = 0
+
+    def process(self, text, allowed_tools):
+        self._call_number += 1
+        if self._call_number in self._signal_on_calls:
+            self.signal_resource_unavailable("drone", "east_gate", "no ready drones available")
+        return super().process(text, allowed_tools)
+
+
+def test_resource_unavailable_signal_is_attached_to_a_successful_agent_step_outcome():
+    agent = _SignalingAgent(
+        tool_infos=READ_ONLY_TOOL,
+        responses=[AgentResult(status="success", text="Drone dispatch failed: no ready drones available")],
+    )
+
+    outcome = execute_step_with_retry(agent, _step(), _FakeSettings(3), sleep_fn=lambda s: None)
+
+    assert outcome.succeeded  # the specialist agent still produced a normal final answer
+    assert outcome.resource_unavailable is not None
+    assert outcome.resource_unavailable.resource_kind == "drone"
+    assert outcome.resource_unavailable.area == "east_gate"
+    assert outcome.resource_unavailable.reason == "no ready drones available"
+
+
+def test_resource_unavailable_signal_is_absent_when_no_tool_signaled_it():
+    agent = _ScriptedAgent(tool_infos=READ_ONLY_TOOL, responses=[AgentResult(status="success", text="ok")])
+
+    outcome = execute_step_with_retry(agent, _step(), _FakeSettings(3), sleep_fn=lambda s: None)
+
+    assert outcome.resource_unavailable is None
+
+
+def test_resource_unavailable_signal_does_not_leak_into_a_later_step_on_the_same_agent():
+    # The same agent instance is reused across a multi-step protocol -- a signal from an
+    # earlier step, once read by the executor, must not still be set for a later step whose
+    # own tool call never signals anything.
+    agent = _SignalingAgent(
+        tool_infos=READ_ONLY_TOOL,
+        responses=[
+            AgentResult(status="success", text="Drone dispatch failed: no ready drones available"),
+            AgentResult(status="success", text="ok"),
+        ],
+        signal_on_calls=frozenset({1}),
+    )
+    first = execute_step_with_retry(agent, _step(), _FakeSettings(3), sleep_fn=lambda s: None)
+    assert first.resource_unavailable is not None
+
+    second = execute_step_with_retry(agent, _step(), _FakeSettings(3), sleep_fn=lambda s: None)
+    assert second.resource_unavailable is None
+
+
+def test_resource_unavailable_signal_from_a_call_outside_any_step_never_leaks_into_the_next_step():
+    # Fix (c): a viewer's read-only lookup (e.g. camera status) never goes through
+    # execute_step_with_retry at all, so nothing ever consumes a signal it sets. The NEXT real
+    # protocol step on that same agent instance must still start clean.
+    agent = _ScriptedAgent(tool_infos=READ_ONLY_TOOL, responses=[AgentResult(status="success", text="ok")])
+    agent.signal_resource_unavailable("camera", "east_gate", "no camera covers this area")  # never consumed by anything
+
+    outcome = execute_step_with_retry(agent, _step(), _FakeSettings(3), sleep_fn=lambda s: None)
+
+    assert outcome.resource_unavailable is None
+
+
 # -- direct_tool steps: no crewai, no LLM call at all -------------------------
 
 
@@ -190,6 +275,15 @@ class _DirectToolAgent:
         self._tool_result = tool_result
         self._raises = raises
         self.calls = []
+        self._resource_unavailable_signal = None
+
+    def signal_resource_unavailable(self, resource_kind, area, reason):
+        self._resource_unavailable_signal = (resource_kind, area, reason)
+
+    def take_resource_unavailable_signal(self):
+        value = self._resource_unavailable_signal
+        self._resource_unavailable_signal = None
+        return value
 
     def record_attendance_response(self, **kwargs):
         self.calls.append(kwargs)
@@ -257,3 +351,19 @@ def test_direct_tool_step_has_no_retry_loop():
 
     assert len(agent.calls) == 1
     assert outcome.attempt_count == 1
+
+
+class _SignalingDirectToolAgent(_DirectToolAgent):
+    def record_attendance_response(self, **kwargs):
+        self.signal_resource_unavailable("squad_member", "west_gate", "no roster members available")
+        return super().record_attendance_response(**kwargs)
+
+
+def test_direct_tool_step_also_attaches_a_resource_unavailable_signal():
+    agent = _SignalingDirectToolAgent(tool_result="The attendance response was stored.")
+
+    outcome = execute_step_with_retry(agent, _direct_tool_step({}), _FakeSettings(2))
+
+    assert outcome.succeeded
+    assert outcome.resource_unavailable is not None
+    assert outcome.resource_unavailable.resource_kind == "squad_member"

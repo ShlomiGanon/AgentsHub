@@ -206,6 +206,7 @@ jobs:
           tests/test_operational_profiles.py
           tests/test_operational_scenarios.py
           tests/test_response_team_direct_tool_binders.py
+          tests/test_response_team_resource_unavailable.py
 
       - name: Confirm tests did not modify tracked files
         run: git diff --exit-code

@@ -5,7 +5,7 @@ import json
 import logging
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Callable, Literal
 
 from history import (
     ExtractionExecutionError,
@@ -75,7 +75,7 @@ from orchestrator.group_routing import (  # re-exported: api may only import orc
     scope_deps,
 )
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
-from protocols import CriticalityLevel, EVENT_DATA_FIELDS, Step, StepOutcome
+from protocols import CriticalityLevel, EVENT_DATA_FIELDS, ResourceUnavailable, Step, StepOutcome
 from protocols.executor import execute_steps
 from agents import AgentModelError, AgentTimeoutError, authenticated_request_identity
 from messages import get_catalog
@@ -125,6 +125,7 @@ def _deadline_failure(deps: "FlowDeps", event_id: str, next_stage: str) -> "Flow
 FlowOutcome = Literal[
     "closed_on_precedent", "declined", "succeeded", "failed", "uncertain", "no_match_protocol",
     "held_for_clarification", "held_for_approval", "waiting_for_event_data", "waiting_for_drone_selection",
+    "handled_resource_unavailable",
 ]
 
 _VERDICT_TO_OUTCOME: dict[str, FlowOutcome] = {
@@ -166,6 +167,11 @@ class FlowDeps:
     # through as a context hint/priority for protocol_selection's prompt -- never a hard
     # filter. None for an unscoped message (private chat, or a group bound to main_agent).
     preferred_agent_hint: str | None = None
+    # Profile-supplied resource-unavailable describer (profiles.contracts.LoadedProfile
+    # .resource_unavailable_description) -- (resource_kind, area, reason, registry) ->
+    # (fact_sentence, alternatives_text). None means a profile hasn't supplied one; core then
+    # falls back to its own generic phrasing rather than raising.
+    resource_unavailable_description: "Callable[[str, str, str, object], tuple[str, str]] | None" = None
 
 
 @dataclass(frozen=True)
@@ -234,6 +240,8 @@ def _record_outcome_with_report(
     outcome: str,
     failure_reason: str | None = None,
     insight_text: str | None = None,
+    resource_unavailable_fact: str | None = None,
+    commander_alert_text: str | None = None,
 ) -> None:
     """The one place every terminal outcome is persisted — wraps `record_event_outcome` to also
     compose `report_text` exactly once, before the `job_finished`/`job_failed` notification this
@@ -242,22 +250,33 @@ def _record_outcome_with_report(
     `report_text` stays `None` (old bot-side rendering, unchanged) unless rich reporting is on;
     when it is on, `compose_report` itself never raises and always returns usable text — the
     model's reply, or its own deterministic fallback — so a stored `report_text` is never partial.
+
+    `resource_unavailable_fact`, when given (`_finish_with_resource_unavailable` only), forces
+    composition regardless of the rich-reports toggle — the reporter must be told concretely
+    what could not be dispatched every time, not only when that optional setting is on — and is
+    fed to the composer (and its deterministic fallback) as an ordinary summary field, visible
+    to every audience, never a raw internal identifier. `commander_alert_text` is never part of
+    `report_text` or any composer input; it is persisted on its own column, read only by the
+    separate, commander-only `resource_unavailable_alert` notification (api/routes.py) — the
+    reporter's own reply must never carry it, and the model must never paraphrase it.
     """
 
     report_text = None
-    if deps.settings_store.get_rich_reports_enabled():
+    if deps.settings_store.get_rich_reports_enabled() or resource_unavailable_fact is not None:
         summary = build_run_summary(deps.persistence, event_id)
         summary = replace(
             summary,
             outcome=outcome,
             outcome_failure_reason=failure_reason,
             insight_text=insight_text if insight_text is not None else summary.insight_text,
+            resource_unavailable_fact=resource_unavailable_fact,
         )
         report_text = compose_report(deps.report_composer_agent, summary, resolve_audience(summary), deps.message_catalog)
 
     record_event_outcome(
         deps.persistence, event_id, outcome,
         failure_reason=failure_reason, insight_text=insight_text, report_text=report_text,
+        commander_alert_text=commander_alert_text,
     )
 
 
@@ -1151,6 +1170,58 @@ def _execute_protocol_plan(
     )
 
 
+def _finish_with_resource_unavailable(
+    deps: FlowDeps, event_id: str, resource: "ResourceUnavailable",
+) -> FlowResult:
+    """The resource-unavailable outcome. Two strictly separate texts, both grounded in
+    `resource` alone, never in each other:
+
+    - `fact_sentence`: what happened, in plain already-localized language (the profile's own
+      `resource_unavailable_description` hook translates `resource`, which is why core never
+      hardcodes "drone"/"east_gate"-style identifiers into user-facing text itself). Fed to the
+      *reporter's own* report composer as an ordinary input fact (`resource_unavailable_fact`
+      on `RunSummary`) — reaches the reporter through the normal composed reply (or its
+      deterministic fallback), for every audience. Never contains alternatives.
+    - `commander_alert_text`: the fact plus concrete alternatives, persisted on its own column,
+      read only by the separate `resource_unavailable_alert` notification (api/routes.py),
+      delivered only to each commander's own private chat (bot/interactions.py). Never part of
+      `report_text`, never reaches the reporter's own chat, never model-composed.
+    """
+
+    fact_sentence = f"{resource.resource_kind} was unavailable for {resource.area}: {resource.reason}"
+    alternatives = ""
+    if deps.resource_unavailable_description is not None:
+        try:
+            fact_sentence, alternatives = deps.resource_unavailable_description(
+                resource.resource_kind, resource.area, resource.reason, deps.registry
+            )
+        except Exception as exc:
+            logger.warning(
+                "resource unavailable description failed",
+                extra={"event": "resource_unavailable_description_failed", "resource_kind": resource.resource_kind, "reason": str(exc), "trace_id": get_trace_id()},
+            )
+    if not alternatives:
+        alternatives = deps.message_catalog.text("orchestrator.resource_unavailable.no_alternatives")
+
+    commander_alert_text = deps.message_catalog.text(
+        "orchestrator.resource_unavailable.commander_alert", fact=fact_sentence, alternatives=alternatives,
+    )
+
+    _record_outcome_with_report(
+        deps, event_id, "handled_resource_unavailable",
+        resource_unavailable_fact=fact_sentence, commander_alert_text=commander_alert_text,
+    )
+    logger.info(
+        "resource unavailable, alerting commanders",
+        extra={
+            "event": "resource_unavailable_alert", "event_id": event_id, "resource_kind": resource.resource_kind,
+            "area": resource.area, "reason": resource.reason, "trace_id": get_trace_id(),
+        },
+    )
+    _log_event_outcome(event_id, "handled_resource_unavailable", resource_kind=resource.resource_kind, area=resource.area)
+    return FlowResult(event_id, "handled_resource_unavailable", fact_sentence)
+
+
 def _finish_protocol_assessment(
     deps: FlowDeps,
     event_id: str,
@@ -1166,6 +1237,18 @@ def _finish_protocol_assessment(
         deadline_failure = _deadline_failure(deps, event_id, "final_assessment")
         if deadline_failure is not None:
             return deadline_failure
+
+    resource_unavailable = next(
+        (outcome.resource_unavailable for outcome in step_outcomes if outcome.resource_unavailable is not None), None
+    )
+    if resource_unavailable is not None:
+        # A deterministic, DB-sourced signal always wins over the normal judgment path (below)
+        # for THIS aspect of the outcome, regardless of `protocol.needs_insight` — a model
+        # judging "no drone was available" as plain failure would be both wrong (the report
+        # itself was handled correctly) and inconsistent across protocols, since only some
+        # declare needs_insight=False. See `_finish_with_resource_unavailable`.
+        return _finish_with_resource_unavailable(deps, event_id, resource_unavailable)
+
     if not protocol.needs_insight:
         # Deterministic verdict, no build_insight/judge_success call at all (Phase A): every
         # step succeeded -> succeeded, else failed with the first failing step's own reason.

@@ -201,6 +201,17 @@ class UncertainVerdictReporterNotice:
 
 
 @dataclass(frozen=True)
+class ResourceUnavailableAlertNotice:
+    """Commander-only: a resource the run needed was unavailable, plus concrete alternatives.
+    Delivered to every commander's own private chat (bot/interactions.py's
+    `notify_resource_unavailable_alert`, mirroring `notify_uncertain_verdict`) — never to the
+    reporter's own chat, which gets only its own plain job_finished reply."""
+
+    event_id: str
+    alert_text: str
+
+
+@dataclass(frozen=True)
 class NoMatchNotice:
     event_id: str
     raw_text: str
@@ -269,6 +280,7 @@ BotNotificationKind = Literal[
     "job_finished",
     "job_failed",
     "event_data_hold",
+    "resource_unavailable_alert",
 ]
 
 

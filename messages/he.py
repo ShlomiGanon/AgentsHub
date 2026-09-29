@@ -36,6 +36,7 @@ MESSAGES = {
     "header.approval_needed": "[נדרש אישור — נא להשיב]",
     "header.precedent_closure": "[הודעה — נסגר על סמך תקדים — אין צורך להשיב]",
     "header.uncertain_verdict": "[הודעה — תוצאה לא ודאית — אין צורך להשיב]",
+    "header.resource_unavailable_alert": "[התראה למפקד — נדרשת החלטה]",
     "header.uncertain_reporter": "[עדכון]",
     "header.no_match": "[הודעה — אין פרוטוקול מתאים — אין צורך להשיב]",
     "header.result": "[תוצאה]",
@@ -50,6 +51,7 @@ MESSAGES = {
     "outcome.closed_on_precedent": "נסגר על סמך תקדים",
     "outcome.declined": "נדחה",
     "outcome.no_match_protocol": "לא נמצא פרוטוקול מתאים",
+    "outcome.handled_resource_unavailable": "טופל — משאב אינו זמין",
     "risk.high": "גבוה",
     "risk.low": "נמוך",
     "result.what_was_done": "מה בוצע:",
@@ -115,6 +117,7 @@ MESSAGES = {
     "clarification.already_resolved": "ההבהרה כבר נפתרה{who}. {message}",
     "common.by_identity": " על ידי {identity}",
     "notice.uncertain": "{header}\n\nאירוע {event_id} הסתיים בתוצאה לא ודאית.\n\nתובנה:\n{insight}",
+    "notice.resource_unavailable_alert": "{header}\n\nאירוע {event_id}: {alert}",
     "notice.uncertain_reporter": "{header}\n\nהאירוע שדיווחת עליו עדיין נבדק.\nנעדכן אותך כשיהיה מידע נוסף.",
     "notice.no_match": "{header}\n\nאין פרוטוקול קיים שיכול למלא בקשה זו.\nטקסט מקורי: {raw_text}\n"
         "{reason}\nסיכון: {risk_level} ({risk_reason})",
@@ -611,10 +614,39 @@ MESSAGES = {
         "דוגמה טובה: \"לא ניתן היה לאמת את הממצא מול פיד המצלמה בפועל, לכן העדכון לא נקלט.\""
     ),
     "orchestrator.event_data_question.fallback": "נדרשים פרטים נוספים כדי להמשיך: {missing_fields}.",
-    # Deterministic camera-status inference keywords (Phase A direct-tool binder,
-    # profiles/response_team.py::_infer_camera_status) -- pipe-delimited, split in code.
-    "response_team.camera_status.recovery_words": "חזר|תקין|back online|resolved|fixed|restored",
-    "response_team.camera_status.offline_words": "נחתך|חבלה|לא פעיל|אינה מספקת תמונה חיה|sabotage|cut|damaged|severed|offline|down",
+    # Resource-unavailable mechanism (orchestrator/flows.py::_finish_with_resource_unavailable):
+    # `fact`/`alternatives` are supplied by the profile's own resource_unavailable_description
+    # hook (already localized there) -- core never composes resource/area names itself.
+    "orchestrator.resource_unavailable.commander_alert": "התראה למפקד — נדרשת החלטה: {fact} חלופות: {alternatives}",
+    "orchestrator.resource_unavailable.no_alternatives": "לא ניתן היה לקבוע חלופות מהנתונים הקיימים.",
+    # Resource-unavailable mechanism (profiles/response_team.py::_describe_resource_unavailable):
+    # resource-kind and area display names -- never the raw internal identifier in user-facing
+    # text (e.g. "drone"/"east_gate").
+    "response_team.resource_kind.drone": "רחפן",
+    "response_team.resource_kind.camera": "מצלמה",
+    "response_team.resource_kind.squad_member": "חבר צוות",
+    "response_team.resource_kind.police": "משטרה",
+    "response_team.resource_kind.ambulance": "מד\"א",
+    "response_team.resource_kind.k9": "יחידת כלבנים",
+    "response_team.resource_kind.yasam": "יס\"מ",
+    "response_team.area.west_gate": "השער המערבי",
+    "response_team.area.east_gate": "השער המזרחי",
+    "response_team.area.east_fence": "הגדר המזרחית",
+    "response_team.area.east_orchards": "המטעים המזרחיים",
+    "response_team.area.expansion_neighborhood": "שכונת ההרחבה",
+    "response_team.area.old_public_building": "המבנה הציבורי הישן",
+    "response_team.area.south_corner": "הפינה הדרומית",
+    "response_team.area.access_road": "כביש הגישה",
+    "response_team.area.drones_warehouse": "מחסן הרחפנים",
+    "response_team.resource_unavailable.fact": "{resource} לא היה זמין עבור {area}. ({reason})",
+    "response_team.resource_unavailable.alternatives.cameras_covering": "מצלמות המשקיפות על {area}: {cameras}",
+    "response_team.resource_unavailable.alternatives.no_cameras": "אין מצלמות המשקיפות על {area}",
+    "response_team.resource_unavailable.alternatives.ready_drones": "רחפנים מוכנים לשיגור: {count}",
+    "response_team.resource_unavailable.alternatives.available_members": "חברי צוות זמינים: {members}",
+    "response_team.resource_unavailable.alternatives.no_members": "אין חברי צוות זמינים כרגע",
+    "response_team.resource_unavailable.alternatives.forces": "כוחות חוץ: {forces}",
+    "response_team.resource_unavailable.squad_reason": "רק {available} מתוך {unit_count} חברי הצוות המבוקשים זמינים כרגע",
+    "response_team.resource_unavailable.force_reason": "רק {remaining} מתוך {pool_size} יחידות {resource} זמינות כרגע, התבקשו {unit_count}",
     "response_team.friendly_forces.confirm_ambulance": "נרשמה בהצלחה הזנקת צוות רפואה/מד\"א ליעד '{location}'.",
     "response_team.friendly_forces.confirm_firefighters": "נרשמה בהצלחה הזנקת כוחות כיבוי והצלה ליעד '{location}'.",
     "response_team.friendly_forces.confirm_military": "נרשמה בהצלחה הזנקת כוחות צבא וביטחון ליעד '{location}'.",

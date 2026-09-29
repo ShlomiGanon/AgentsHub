@@ -304,7 +304,14 @@ def iter_years(start: datetime, end: datetime):
 
 
 VALID_OUTCOMES = frozenset(
-    {"succeeded", "failed", "uncertain", "closed_on_precedent", "declined", "no_match_protocol"}
+    {
+        "succeeded", "failed", "uncertain", "closed_on_precedent", "declined", "no_match_protocol",
+        # The report/request was genuinely handled -- deterministically detected, from the DB,
+        # not the model's wording -- but a resource it needed was unavailable. Never "failed":
+        # commanders are alerted with concrete alternatives (orchestrator/flows.py's
+        # `_finish_protocol_assessment`) and decide from there; nothing is auto-retried.
+        "handled_resource_unavailable",
+    }
 )
 
 STATE_UPDATE_FIELDS = frozenset(
@@ -398,6 +405,7 @@ def record_event_outcome(
     failure_reason: str | None = None,
     insight_text: str | None = None,
     report_text: str | None = None,
+    commander_alert_text: str | None = None,
 ) -> None:
     if outcome not in VALID_OUTCOMES:
         raise ValueError(f"invalid event outcome: '{outcome}'")
@@ -408,6 +416,7 @@ def record_event_outcome(
             "outcome_failure_reason": failure_reason,
             "insight_text": insight_text,
             "report_text": report_text,
+            "commander_alert_text": commander_alert_text,
         },
     )
 

@@ -115,6 +115,75 @@ def test_job_finished_targets_the_original_chat_not_the_senders_private_chat(tmp
     assert notification["target_chat_ids"] == ["-100200300"]
 
 
+# -- Resource-unavailable outcome: job_finished (reporter only) + a separate, commander-only,
+# never-target_chat_ids-targeted resource_unavailable_alert notification -----------------------
+
+
+def test_resource_unavailable_outcome_produces_a_job_finished_and_a_separate_commander_alert(tmp_path, teardown_ctx):
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    event_id = _minimal_event(ctx.deps.persistence, sender_identity="submitter-1")
+    record_event_outcome(
+        ctx.deps.persistence, event_id, "handled_resource_unavailable",
+        report_text="The report was handled. A drone could not be dispatched for the east gate.",
+        commander_alert_text="Commander alert — decision needed: a drone was unavailable. Alternatives: none.",
+    )
+
+    resp = client.get("/Notifications", headers=auth_headers(COMMANDER_IDENTITY))
+    notifications = resp.get_json()["notifications"]
+
+    kinds = {n["kind"] for n in notifications}
+    assert kinds == {"job_finished", "resource_unavailable_alert"}
+
+    job = next(n for n in notifications if n["kind"] == "job_finished")
+    # The reporter's own chat only -- never widened to include commanders.
+    assert job["target_chat_ids"] == ["submitter-1"]
+    assert "could not be dispatched" in job["payload"]["report_text"]
+    assert "Commander alert" not in job["payload"]["report_text"]
+
+    alert = next(n for n in notifications if n["kind"] == "resource_unavailable_alert")
+    # Never targeted via target_chat_ids -- delivered by the bot to every commander's own
+    # private chat instead (bot/interactions.py::notify_resource_unavailable_alert), the same
+    # mechanism uncertain_verdict already uses.
+    assert alert["target_chat_ids"] == []
+    assert alert["payload"]["alert_text"] == "Commander alert — decision needed: a drone was unavailable. Alternatives: none."
+
+
+def test_resource_unavailable_alert_payload_is_empty_when_no_alert_text_was_recorded(tmp_path, teardown_ctx):
+    # Defensive: a "handled_resource_unavailable" outcome always sets commander_alert_text in
+    # practice (orchestrator/flows.py), but the payload builder itself must never crash if not.
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    event_id = _minimal_event(ctx.deps.persistence, sender_identity="submitter-1")
+    record_event_outcome(ctx.deps.persistence, event_id, "handled_resource_unavailable")
+
+    resp = client.get("/Notifications", headers=auth_headers(COMMANDER_IDENTITY))
+    alert = next(n for n in resp.get_json()["notifications"] if n["kind"] == "resource_unavailable_alert")
+
+    assert alert["payload"]["alert_text"] == ""
+
+
+def test_job_finished_targets_only_the_submitter_for_an_ordinary_succeeded_outcome(tmp_path, teardown_ctx):
+    ctx = build_context(
+        tmp_path,
+        users=((VIEWER_IDENTITY, "viewer"), (COMMANDER_IDENTITY, "commander"), ("commander-2", "commander")),
+    )
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    event_id = _minimal_event(ctx.deps.persistence, sender_identity="submitter-1")
+    record_event_outcome(ctx.deps.persistence, event_id, "succeeded", insight_text="all good")
+
+    resp = client.get("/Notifications", headers=auth_headers(COMMANDER_IDENTITY))
+    [notification] = resp.get_json()["notifications"]
+
+    assert notification["target_chat_ids"] == ["submitter-1"]
+
+
 def test_job_finished_falls_back_to_the_sender_when_no_chat_id_was_recorded(tmp_path, teardown_ctx):
     # A sensor-sourced event (or one from before this column existed) has no
     # telegram_chat_id at all — falls back to the sender's own identity, unchanged.

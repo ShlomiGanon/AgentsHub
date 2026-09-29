@@ -59,6 +59,7 @@ _EVENT_COLUMNS = (
     "outcome",
     "outcome_failure_reason",
     "report_text",
+    "commander_alert_text",
     "availability_start",
     "availability_end",
     "absence_reason",
@@ -92,6 +93,12 @@ _OUTCOME_TO_NOTIFICATION_KINDS: dict[str, tuple[str, ...]] = {
     "uncertain": ("job_finished", "uncertain_verdict", "uncertain_verdict_reporter"),
     "closed_on_precedent": ("job_finished", "precedent_closure"),
     "no_match_protocol": ("job_finished", "no_match_notice"),
+    # A genuine completion, not a failure -- job_finished, same as "succeeded", to the
+    # reporter's own chat only. The commander alert is its own separate notification kind
+    # (resource_unavailable_alert), delivered only to each commander's private chat
+    # (bot/interactions.py::notify_resource_unavailable_alert) -- never widened into
+    # job_finished's own target_chat_ids, which would leak it into the reporter's chat.
+    "handled_resource_unavailable": ("job_finished", "resource_unavailable_alert"),
 }
 
 

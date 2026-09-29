@@ -498,6 +498,7 @@ def load_profile(module_path: str, core_model: TierModel, sub_model: TierModel) 
         simulator_port=resolve_runtime_port(
             "SIMULATOR_PORT", getattr(profile_module, "SIMULATOR_PORT", None)
         ),
+        resource_unavailable_description=getattr(profile_module, "RESOURCE_UNAVAILABLE_DESCRIPTION", None),
     )
 
     failures = validate_profile(loaded, declared_event_types=profile_module.EVENT_TYPES)

@@ -58,6 +58,10 @@ async def dispatch_notification(deps: "BotDeps", notification: "BotNotification"
         await interactions.notify_uncertain_verdict(deps, notification.payload)
         return
 
+    if notification.kind == "resource_unavailable_alert":
+        await interactions.notify_resource_unavailable_alert(deps, notification.payload)
+        return
+
     if notification.kind == "uncertain_verdict_reporter":
         text = interactions.format_uncertain_verdict_reporter_notice(message_catalog_for(deps))
         for chat_id in notification.target_chat_ids:

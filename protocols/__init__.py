@@ -9,6 +9,7 @@ from protocols.contracts import (
     Protocol,
     ProtocolEditError,
     ProtocolRunResult,
+    ResourceUnavailable,
     Step,
     StepOutcome,
 )
@@ -43,6 +44,7 @@ __all__ = [
     "ProtocolEditError",
     "ProtocolRunResult",
     "ProtocolSet",
+    "ResourceUnavailable",
     "Step",
     "StepOutcome",
     "add_protocol",

@@ -86,6 +86,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `docs/links.txt` | Documentation | Internal | Documents links. |
 | `docs/Next_Plan.md` | Documentation | Internal | Defines deferred optimizations that remain disabled until the current speed changes pass their gates. |
 | `docs/operator_guide.md` | Documentation | Internal | Documents operator guide. |
+| `docs/pending_live_verification.md` | Documentation | Internal | Checklist of items still needing live model verification (blocked by OpenRouter credits): the resource-unavailable mechanism's 6 cases, the situational-picture no-alert case, and other unverified items from this session, each with exact messages, what to look for, and pass criteria. |
 | `docs/profile_simulations_design.md` | Documentation | Internal | Documents the per-profile simulation mechanism's architecture, data model, reserved ID scheme, and file impact. |
 | `docs/Profile_Split_Plan.md` | Documentation | Internal | Plans and records the Standby Squad/Firefighting profile split: architecture, protocol traceability, migration, and implementation deviations. |
 | `docs/profile_spec.md` | Documentation | Internal | Documents profile spec. |
@@ -252,6 +253,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_report_composer.py` | Test | Internal | Verifies model-composed run report text, its fallback to render_summary, and audience/language scoping of the prompt. |
 | `tests/test_response_improvements.py` | Test | Internal | Verifies conversation retention, long polling, trace propagation, queue ordering, idempotency, and removal of the obsolete stream route. |
 | `tests/test_response_team_direct_tool_binders.py` | Test | Internal | Verifies response_team's direct-tool step binders (Phase A) -- record_attendance/update_camera_status/report_team_movement parameter binding, missing-field detection, and camera-status inference. |
+| `tests/test_response_team_resource_unavailable.py` | Test | Internal | Verifies response_team's resource-unavailable wiring -- dispatch_neighboring_force's per-force-kind capacity and its roster-backed "squad" kind, and the _find_resource_alternatives alternatives finder. |
 | `tests/test_run_report.py` | Test | Internal | Verifies RunSummary construction from persisted event/step/hold data and audience-aware deterministic rendering. |
 | `tests/test_run_stack.py` | Test | Internal | Verifies profile-database reset removes only declared databases and known sidecars, and refuses a non-database path. |
 | `tests/test_server_control.py` | Test | Internal | Verifies safe profile discovery and supervisor command and selection persistence. |

@@ -171,6 +171,27 @@ FORCE_BASES = {
     "yasam": "east_gate",
 }
 
+# Fixed capacity per external force kind -- NeighboringForceStore itself has no standing-units
+# table (its own docstring: request/response log only), so this profile enforces a small,
+# realistic pool here. Mirrors the drone fleet's own size (2) so the same kind of "resource ran
+# out under sustained load" scenario is reproducible for forces, not just drones.
+FORCE_POOL_SIZE = 2
+
+# A dispatched unit stays busy for this long after dispatch, regardless of the dispatch's own
+# en_route/arrived status -- arriving on scene doesn't free the unit; it's still occupied
+# handling the incident. NeighboringForceStore's own en_route->arrived transition (computed
+# from ETA alone) answers "has it gotten there yet", a genuinely different question from "is it
+# still busy", so capacity here is checked against dispatched_at + this window, not status.
+FORCE_BUSY_SECONDS = 2 * 60 * 60
+
+# The response team's own roster, dispatched through the same tool as an external force
+# (the resource-unavailable mechanism, orchestrator/flows.py) -- deliberately NOT in
+# FORCE_BASES above (it is not a neighboring/external force; NeighboringForcesAgent contacts
+# no real squad any more than it contacts a real ambulance). Checked against the roster's own
+# live available-member count instead of FORCE_POOL_SIZE.
+SQUAD_KIND = "squad"
+SQUAD_ORIGIN_AREA = FORCE_BASES["police"]
+
 # ETA matrix (seconds, symmetric; same cell = 45) -- docs/responce_improve.md.
 _ETA_AREA_ORDER = (
     "west_gate",
@@ -349,45 +370,81 @@ class NeighboringForcesAgent(Agent):
     system_prompt = (
         "You are the neighboring-forces dispatch specialist. You have two tools: "
         "dispatch_neighboring_force records a dispatch request for one force kind (ambulance, "
-        "police, k9, or yasam) to a named target area, with the unit count and any note given; "
-        "list_neighboring_force_dispatches returns the current dispatch log, optionally filtered "
-        "by status ('en_route' or 'arrived'). Neither tool contacts a real ambulance, police unit, "
-        "K9 team, or YASAM unit -- each only logs the request and its computed ETA. Report back "
-        "plainly what was recorded; never claim a dispatched force has arrived on scene yourself "
-        "-- that transition is computed automatically from elapsed time, not something you report."
+        "police, k9, yasam, or squad -- the response team's own roster) to a named target area, "
+        "with the unit count and any note given; list_neighboring_force_dispatches returns the "
+        "current dispatch log, optionally filtered by status ('en_route' or 'arrived'). Neither "
+        "tool contacts a real ambulance, police unit, K9 team, or YASAM unit -- each only logs "
+        "the request and its computed ETA. Each force kind, including squad, has a limited "
+        "number of units currently available; if a dispatch fails for that reason, state that "
+        "plainly and do not retry. Report back plainly what was recorded; never claim a "
+        "dispatched force has arrived on scene yourself -- that transition is computed "
+        "automatically from elapsed time, not something you report."
     )
 
     def __init__(self, model: str, api_key: str | None = None):
         self.dispatch_store = open_neighboring_force_store(DB_PATH)
+        self.roster_store = open_response_team_roster_store(DB_PATH)
         super().__init__(model, api_key)
 
     @tool(
         "dispatch_neighboring_force",
-        "Records a request to dispatch a neighboring/external force (ambulance, police, k9, or "
-        "yasam) to a named target area, with the unit count and an optional note. Returns the "
-        "recorded request, its en_route status, and computed ETA. Side-effecting and not "
-        "idempotent -- running it twice records two dispatch requests, not one.",
+        "Records a request to dispatch a neighboring/external force (ambulance, police, k9, "
+        "yasam) or the response team's own roster (squad) to a named target area, with the unit "
+        "count and an optional note. Returns the recorded request, its en_route status, and "
+        "computed ETA -- or a clear statement that too few units/members are currently available. "
+        "Side-effecting and not idempotent -- running it twice records two dispatch requests, not one.",
         side_effecting=True,
         idempotent=False,
     )
     def dispatch_neighboring_force(self, kind: str, target_area: str, unit_count: int = 1, note: str = "") -> str:
         kind_norm = kind.strip().lower()
-        if kind_norm not in FORCE_BASES:
+        if kind_norm != SQUAD_KIND and kind_norm not in FORCE_BASES:
             return (
                 f"Clarification required: unknown force kind '{kind}'. "
-                f"Valid kinds: {', '.join(sorted(FORCE_BASES))}."
+                f"Valid kinds: {', '.join(sorted((*FORCE_BASES, SQUAD_KIND)))}."
             )
         if not target_area.strip():
             return "Clarification required: target_area is required."
         if unit_count < 1:
             return "Clarification required: unit_count must be at least 1."
 
-        origin_area = FORCE_BASES[kind_norm]
-        eta = eta_seconds(origin_area, target_area.strip())
+        cleaned_area = target_area.strip()
+
+        if kind_norm == SQUAD_KIND:
+            origin_area = SQUAD_ORIGIN_AREA
+            now_iso = datetime.now(timezone.utc).isoformat()
+            available = sum(
+                1 for entry in self.roster_store.availability_snapshot(now_iso)
+                if entry["availability"] == "available"
+            )
+            if available < unit_count:
+                reason = _catalog_text(
+                    "response_team.resource_unavailable.squad_reason", available=available, unit_count=unit_count,
+                )
+                self.signal_resource_unavailable("squad_member", cleaned_area, reason)
+                return f"Squad dispatch failed: {reason}"
+        else:
+            origin_area = FORCE_BASES[kind_norm]
+            busy_since = (datetime.now(timezone.utc) - timedelta(seconds=FORCE_BUSY_SECONDS)).isoformat()
+            busy_units = sum(
+                dispatch["unit_count"] for dispatch in self.dispatch_store.list_dispatches()
+                if dispatch["force_kind"] == kind_norm and dispatch["dispatched_at"] > busy_since
+            )
+            remaining = max(FORCE_POOL_SIZE - busy_units, 0)
+            if remaining < unit_count:
+                reason = _catalog_text(
+                    "response_team.resource_unavailable.force_reason",
+                    remaining=remaining, pool_size=FORCE_POOL_SIZE,
+                    resource=_RESOURCE_KIND_LABELS.get(kind_norm, kind_norm), unit_count=unit_count,
+                )
+                self.signal_resource_unavailable(kind_norm, cleaned_area, reason)
+                return f"{kind_norm} dispatch failed: {reason}"
+
+        eta = eta_seconds(origin_area, cleaned_area)
         record = self.dispatch_store.dispatch(
             force_kind=kind_norm,
             origin_area=origin_area,
-            target_area=target_area.strip(),
+            target_area=cleaned_area,
             unit_count=unit_count,
             eta_seconds=eta,
             note=note.strip(),
@@ -420,6 +477,100 @@ class NeighboringForcesAgent(Agent):
         return "\n".join(lines)
 
 
+# == Resource-unavailable description (orchestrator/flows.py's shared mechanism) ============
+#
+# Registered below as RESOURCE_UNAVAILABLE_DESCRIPTION. Two responsibilities, both localized
+# here (core never composes resource/area names itself, per this module's own Hebrew-only-in-
+# messages rule -- _catalog_text is still the one place this module reads Hebrew):
+#   - the reporter-facing fact sentence (resource + area + reason, translated);
+#   - the commander-facing alternatives: the SAME full picture of everything else that could
+#     cover the area right now -- cameras, ready drones, available roster members, and force
+#     kinds with remaining capacity -- not just alternatives within one resource's own category.
+
+_RESOURCE_KIND_LABELS = {
+    "drone": _catalog_text("response_team.resource_kind.drone"),
+    "camera": _catalog_text("response_team.resource_kind.camera"),
+    "squad_member": _catalog_text("response_team.resource_kind.squad_member"),
+    "police": _catalog_text("response_team.resource_kind.police"),
+    "ambulance": _catalog_text("response_team.resource_kind.ambulance"),
+    "k9": _catalog_text("response_team.resource_kind.k9"),
+    "yasam": _catalog_text("response_team.resource_kind.yasam"),
+}
+
+_AREA_LABELS = {
+    "west_gate": _catalog_text("response_team.area.west_gate"),
+    "east_gate": _catalog_text("response_team.area.east_gate"),
+    "east_fence": _catalog_text("response_team.area.east_fence"),
+    "east_orchards": _catalog_text("response_team.area.east_orchards"),
+    "expansion_neighborhood": _catalog_text("response_team.area.expansion_neighborhood"),
+    "old_public_building": _catalog_text("response_team.area.old_public_building"),
+    "south_corner": _catalog_text("response_team.area.south_corner"),
+    "access_road": _catalog_text("response_team.area.access_road"),
+    "drones_warehouse": _catalog_text("response_team.area.drones_warehouse"),
+}
+
+
+def _force_remaining_capacity(neighboring_forces_agent) -> dict[str, int]:
+    """Remaining capacity per external force kind, using the SAME busy-window definition
+    `dispatch_neighboring_force`'s own capacity check uses (fix d) -- a dispatched unit stays
+    busy for FORCE_BUSY_SECONDS regardless of en_route/arrived status, so this must never be
+    computed from status="en_route" alone or the two would disagree."""
+
+    busy_since = (datetime.now(timezone.utc) - timedelta(seconds=FORCE_BUSY_SECONDS)).isoformat()
+    busy_by_kind: dict[str, int] = {}
+    for dispatch in neighboring_forces_agent.dispatch_store.list_dispatches():
+        if dispatch["dispatched_at"] > busy_since:
+            busy_by_kind[dispatch["force_kind"]] = busy_by_kind.get(dispatch["force_kind"], 0) + dispatch["unit_count"]
+    return {kind: max(FORCE_POOL_SIZE - busy_by_kind.get(kind, 0), 0) for kind in FORCE_BASES}
+
+
+def _find_resource_alternatives(area: str, registry) -> str:
+    parts: list[str] = []
+
+    surveillance_agent = registry.get("surveillance_agent")
+    cameras = surveillance_agent.surveillance_store.list_cameras(area=area)
+    area_label = _AREA_LABELS.get(area, area)
+    if cameras:
+        camera_text = ", ".join(f"{camera['camera_id']} ({camera['status']})" for camera in cameras)
+        parts.append(_catalog_text("response_team.resource_unavailable.alternatives.cameras_covering", area=area_label, cameras=camera_text))
+    else:
+        parts.append(_catalog_text("response_team.resource_unavailable.alternatives.no_cameras", area=area_label))
+
+    ready_drones = surveillance_agent.surveillance_store.list_drones(status="ready")
+    parts.append(_catalog_text("response_team.resource_unavailable.alternatives.ready_drones", count=len(ready_drones)))
+
+    roster_agent = registry.get("roster_agent")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    available_members = [
+        entry["full_name"] for entry in roster_agent.status_store.availability_snapshot(now_iso)
+        if entry["availability"] == "available"
+    ]
+    if available_members:
+        parts.append(_catalog_text("response_team.resource_unavailable.alternatives.available_members", members=", ".join(available_members)))
+    else:
+        parts.append(_catalog_text("response_team.resource_unavailable.alternatives.no_members"))
+
+    neighboring_forces_agent = registry.get("neighboring_forces_agent")
+    remaining_by_kind = _force_remaining_capacity(neighboring_forces_agent)
+    force_lines = [
+        f"{_RESOURCE_KIND_LABELS[kind]} ({remaining_by_kind[kind]}/{FORCE_POOL_SIZE})" for kind in sorted(FORCE_BASES)
+    ]
+    parts.append(_catalog_text("response_team.resource_unavailable.alternatives.forces", forces=", ".join(force_lines)))
+
+    return "; ".join(parts)
+
+
+def _describe_resource_unavailable(resource_kind: str, area: str, reason: str, registry) -> tuple[str, str]:
+    resource_label = _RESOURCE_KIND_LABELS.get(resource_kind, resource_kind)
+    area_label = _AREA_LABELS.get(area, area)
+    fact = _catalog_text("response_team.resource_unavailable.fact", resource=resource_label, area=area_label, reason=reason)
+    alternatives = _find_resource_alternatives(area, registry)
+    return fact, alternatives
+
+
+RESOURCE_UNAVAILABLE_DESCRIPTION = _describe_resource_unavailable
+
+
 AGENTS = [
     AgentSpec(cls=ResponseTeamRosterAgent, tier="sub"),
     AgentSpec(cls=ResponseTeamSurveillanceAgent, tier="sub"),
@@ -429,25 +580,20 @@ AGENTS = [
 
 # == Direct-tool step binders (Phase A, docs/responce_improve.md) ===========
 #
-# Each binds a protocol's tool call parameters straight from the event's own extracted
-# fields -- no formulate_tasks/task_rewrite call, no specialist-agent LLM turn for the tool
-# call itself (protocols/executor.py::_execute_direct_tool_step). A binder that cannot
+# Each skips formulate_tasks/task_rewrite by binding a protocol's step(s) straight from the
+# event's own extracted fields, which are always already model-produced (classify_intent's
+# extraction), never re-derived from raw text by a local heuristic. A binder that cannot
 # confidently produce every parameter leaves the corresponding EVENT_DATA_FIELDS name(s) in
 # `required_event_fields` instead of guessing -- the ordinary missing-fields check
 # (protocols/executor.py::_missing_event_fields) then raises the same event_data hold any
 # other protocol would, before this step ever executes.
-
-def _infer_camera_status(raw_text: str) -> str:
-    lowered = (raw_text or "").casefold()
-    catalog = get_catalog(DEFAULT_LANGUAGE)
-    recovery_words = catalog.text("response_team.camera_status.recovery_words").split("|")
-    offline_words = catalog.text("response_team.camera_status.offline_words").split("|")
-    if any(word.casefold() in lowered for word in recovery_words):
-        return "active"
-    if any(word.casefold() in lowered for word in offline_words):
-        return "offline"
-    return "degraded"
-
+#
+# Most of these bind a `kind="direct_tool"` step (protocols/executor.py::_execute_direct_tool_step):
+# no specialist-agent LLM turn for the tool call itself, since every parameter is already known.
+# `_bind_update_camera_status` instead binds a normal `kind="agent"` step once entities/description
+# are present: camera_id is deterministic (from `entities`), but the resulting status is a genuine
+# judgment call from the free-text report, so the specialist agent decides and calls the tool
+# itself rather than a keyword heuristic pre-deciding it.
 
 def _as_aware_iso(value: str) -> str:
     """A persisted event timestamp is stored without an explicit offset but is always UTC
@@ -514,16 +660,16 @@ def _bind_update_camera_status(event: dict) -> tuple[Step, ...]:
                 direct_tool_kwargs={},
             ),
         )
-    status = _infer_camera_status(event.get("raw_text") or "")
     return tuple(
         Step(
             agent_name="surveillance_agent",
-            task_text=f"Record camera {camera_id}'s reported status, bound directly from the event's extracted fields.",
+            task_text=(
+                f"Camera {camera_id} was reported on. Determine its resulting status (active, offline, "
+                f"or degraded) from the report below, and call update_camera_status for {camera_id} with "
+                f"that status and a short observation.\n\nReport: {description}"
+            ),
             allowed_tools=("update_camera_status",),
             step_id=str(index + 1),
-            kind="direct_tool",
-            direct_tool_name="update_camera_status",
-            direct_tool_kwargs={"camera_id": camera_id, "observation": description, "status": status},
         )
         for index, camera_id in enumerate(entities)
     )

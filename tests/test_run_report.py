@@ -2,6 +2,8 @@
 
 import pytest
 
+from dataclasses import replace
+
 from history.contracts import InitialEventEnvelope, StepExecutionEnvelope
 from history.event_pipeline import record_event_outcome, record_initial_event, record_step_execution
 from messages import get_catalog
@@ -184,6 +186,34 @@ def test_render_summary_viewer_omits_protocol_agent_task_and_risk(persistence):
     assert "surveillance_agent" not in text
     assert "dispatch a drone to the north gate" not in text
     assert "active flame" not in text
+
+
+def test_render_summary_shows_the_resource_unavailable_fact_to_a_viewer(persistence):
+    # Unlike insight_text (commander-only), this fact must reach every audience.
+    summary = _summary_with_steps_and_protocol(persistence)
+    summary = replace(summary, resource_unavailable_fact="a drone could not be dispatched to the north gate")
+
+    text = render_summary(summary, "viewer", get_catalog("en"))
+
+    assert "a drone could not be dispatched to the north gate" in text
+
+
+def test_render_summary_shows_the_resource_unavailable_fact_to_a_commander_too(persistence):
+    summary = _summary_with_steps_and_protocol(persistence)
+    summary = replace(summary, resource_unavailable_fact="a drone could not be dispatched to the north gate")
+
+    text = render_summary(summary, "commander", get_catalog("en"))
+
+    assert "a drone could not be dispatched to the north gate" in text
+
+
+def test_render_summary_omits_the_resource_unavailable_line_when_not_set(persistence):
+    summary = _summary_with_steps_and_protocol(persistence)
+    assert summary.resource_unavailable_fact is None
+
+    text = render_summary(summary, "viewer", get_catalog("en"))
+
+    assert text  # unaffected, no crash, no stray blank section
 
 
 def test_render_summary_always_works_without_any_step_or_protocol(persistence):

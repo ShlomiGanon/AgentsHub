@@ -57,6 +57,12 @@ class RunSummary:
     outcome: str | None
     insight_text: str | None
     outcome_failure_reason: str | None
+    # Set only for outcome="handled_resource_unavailable" (orchestrator/flows.py's
+    # `_finish_with_resource_unavailable`): a short, plain-language, already-localized fact --
+    # never a raw internal identifier like "drone" or "east_gate" -- fed to the composer as
+    # input and shown by this fallback too, for every audience (unlike `insight_text`, which is
+    # commander-only).
+    resource_unavailable_fact: str | None = None
 
 
 def _pending_from_hold(kind: str, hold: dict) -> PendingSummary:
@@ -181,6 +187,8 @@ def render_summary(summary: RunSummary, audience: Audience, catalog: MessageCata
         lines.append(catalog.text("report.outcome", outcome=outcome_word))
         if summary.outcome == "failed" and summary.outcome_failure_reason:
             lines.append(catalog.text("report.failure_reason", reason=summary.outcome_failure_reason))
+        if summary.resource_unavailable_fact:
+            lines.append(summary.resource_unavailable_fact)
 
     if audience == "commander" and summary.steps:
         lines.append("")

@@ -40,6 +40,7 @@ MessageKind = Literal[
     "failed",
     "declined",
     "event_data_needed",
+    "resource_unavailable_alert",
 ]
 
 _HEADER_KEYS: dict[MessageKind, str] = {
@@ -53,6 +54,7 @@ _HEADER_KEYS: dict[MessageKind, str] = {
     "failed": "header.failed",
     "declined": "header.declined",
     "event_data_needed": "header.event_data_needed",
+    "resource_unavailable_alert": "header.resource_unavailable_alert",
 }
 
 
@@ -460,7 +462,7 @@ async def change_setting(deps: "BotDeps", caller: CallerContext, field: str, raw
     return messages.text("settings.saved", message=setting_write_result.message)
 
 if TYPE_CHECKING:
-    from bot.contracts import BotDeps, HeldApprovalNotice, NoMatchNotice, UncertainVerdictNotice
+    from bot.contracts import BotDeps, HeldApprovalNotice, NoMatchNotice, ResourceUnavailableAlertNotice, UncertainVerdictNotice
 
 CALLBACK_PREFIX = "approve"
 
@@ -574,6 +576,34 @@ async def notify_uncertain_verdict(deps: "BotDeps", notice: "UncertainVerdictNot
             await deps.telegram_client.send_text(chat_id, text)
         except Exception as exc:
             logger.warning("failed to send uncertain verdict notice to %s: %s", chat_id, exc)
+
+
+def format_resource_unavailable_alert_notice(
+    notice: "ResourceUnavailableAlertNotice", catalog: MessageCatalog | None = None
+) -> str:
+    messages = _catalog(catalog)
+    return messages.text(
+        "notice.resource_unavailable_alert",
+        header=format_header("resource_unavailable_alert", messages),
+        event_id=notice.event_id,
+        alert=notice.alert_text,
+    )
+
+
+async def notify_resource_unavailable_alert(deps: "BotDeps", notice: "ResourceUnavailableAlertNotice") -> None:
+    """Commander-only, private-chat delivery — mirrors `notify_uncertain_verdict` exactly.
+    Never sent to the reporter's own chat: that chat only ever gets the plain job_finished
+    reply, built from `report_text`, which never carries this alert's alternatives."""
+
+    text = format_resource_unavailable_alert_notice(notice, message_catalog_for(deps))
+
+    for chat_id in await deps.api_client.list_commander_chat_ids():
+        if not chat_id or chat_id == "bot-service":
+            continue
+        try:
+            await deps.telegram_client.send_text(chat_id, text)
+        except Exception as exc:
+            logger.warning("failed to send resource unavailable alert to %s: %s", chat_id, exc)
 
 
 def format_uncertain_verdict_reporter_notice(catalog: MessageCatalog | None = None) -> str:

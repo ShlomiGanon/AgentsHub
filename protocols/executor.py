@@ -10,7 +10,7 @@ from contextvars import copy_context
 from typing import TYPE_CHECKING, Callable
 
 from agents import AgentInvocationError
-from protocols.contracts import ProtocolRunResult, Step, StepOutcome
+from protocols.contracts import ProtocolRunResult, ResourceUnavailable, Step, StepOutcome
 from tools import get_trace_id, stage_context
 
 if TYPE_CHECKING:
@@ -56,6 +56,16 @@ def _direct_tool_call_failed(result_text: str) -> bool:
     return any(marker in result_text for marker in _DIRECT_TOOL_FAILURE_MARKERS)
 
 
+def _take_resource_unavailable_signal(agent: Agent) -> "tuple[str, str, str] | None":
+    """`agent.take_resource_unavailable_signal()`, tolerant of a duck-typed test stand-in that
+    predates this mechanism and never implements it — every real `agents.runtime.Agent`
+    subclass has it; a fake exposing only `.process()`/`.exposed_tools()` degrades to "no
+    signal" rather than an AttributeError."""
+
+    method = getattr(agent, "take_resource_unavailable_signal", None)
+    return method() if method is not None else None
+
+
 def _execute_direct_tool_step(agent: Agent, step: Step) -> StepOutcome:
     """Call `step.direct_tool_name` as a plain Python method — no crewai, no LLM call at all.
 
@@ -68,6 +78,10 @@ def _execute_direct_tool_step(agent: Agent, step: Step) -> StepOutcome:
     side_effect_locks = _locks_for_step(agent, step)
     for side_effect_lock in side_effect_locks:
         side_effect_lock.acquire()
+    # Discard any stale signal left over from unrelated earlier activity on this same agent
+    # instance (e.g. a read-only lookup or question answered before this step ever started) —
+    # only a signal set during *this* call, below, may ever be attributed to this step's outcome.
+    _take_resource_unavailable_signal(agent)
     try:
         tool_method = getattr(agent, step.direct_tool_name)
         result_text = tool_method(**step.direct_tool_kwargs)
@@ -76,14 +90,20 @@ def _execute_direct_tool_step(agent: Agent, step: Step) -> StepOutcome:
             "direct tool step raised",
             extra={"event": "direct_tool_step_error", "agent": step.agent_name, "tool": step.direct_tool_name, "cause": str(exc), "trace_id": get_trace_id()},
         )
+        _take_resource_unavailable_signal(agent)
         return StepOutcome(step=step, result_text=None, attempt_count=1, succeeded=False, failure_reason=str(exc), status="failed")
     finally:
         for side_effect_lock in reversed(side_effect_locks):
             side_effect_lock.release()
 
+    signal = _take_resource_unavailable_signal(agent)
+    resource_unavailable = ResourceUnavailable(*signal) if signal is not None else None
     if _direct_tool_call_failed(result_text):
-        return StepOutcome(step=step, result_text=result_text, attempt_count=1, succeeded=False, failure_reason=result_text, status="failed")
-    return StepOutcome(step=step, result_text=result_text, attempt_count=1, succeeded=True)
+        return StepOutcome(
+            step=step, result_text=result_text, attempt_count=1, succeeded=False, failure_reason=result_text,
+            status="failed", resource_unavailable=resource_unavailable,
+        )
+    return StepOutcome(step=step, result_text=result_text, attempt_count=1, succeeded=True, resource_unavailable=resource_unavailable)
 
 
 def execute_step_with_retry(
@@ -110,13 +130,20 @@ def execute_step_with_retry(
             side_effect_locks = _locks_for_step(agent, step)
             for side_effect_lock in side_effect_locks:
                 side_effect_lock.acquire()
+            # Discard any stale signal from unrelated earlier activity on this same agent
+            # instance -- only a signal set during this attempt's own process() call, below,
+            # may be attributed to this step's outcome (e.g. a viewer's read-only camera lookup,
+            # answered outside any protocol run, must never leak into a later incident step).
+            _take_resource_unavailable_signal(agent)
             try:
                 with stage_context("step_execution"):
                     agent_result = agent.process(current_task_text, list(step.allowed_tools))
+                resource_signal = _take_resource_unavailable_signal(agent)
             finally:
                 for side_effect_lock in reversed(side_effect_locks):
                     side_effect_lock.release()
         except AgentInvocationError as exc:
+            _take_resource_unavailable_signal(agent)
             last_failure_reason = str(exc)
             logger.info(
                 "step execution failed",
@@ -157,7 +184,11 @@ def execute_step_with_retry(
             sleep_fn(backoff_seconds)
             continue
 
-        return StepOutcome(step=step, result_text=agent_result.text, attempt_count=attempts, succeeded=True)
+        resource_unavailable = ResourceUnavailable(*resource_signal) if resource_signal is not None else None
+        return StepOutcome(
+            step=step, result_text=agent_result.text, attempt_count=attempts, succeeded=True,
+            resource_unavailable=resource_unavailable,
+        )
 
 
 def _missing_event_fields(step: Step, event_data: dict | None) -> tuple[str, ...]:

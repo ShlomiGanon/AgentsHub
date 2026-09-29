@@ -656,58 +656,6 @@ async def _on_text_message(update, context) -> None:
     unavailable_button = incoming_text == "\u274c \u05d0\u05d9\u05e0\u05d9 \u05d6\u05de\u05d9\u05df"
     is_attendance_submission = False
 
-    exact_approval_words = {
-        "\u05d0\u05d9\u05e9\u05d5\u05e8", "\u05d0\u05e9\u05e8", "\u05de\u05d0\u05e9\u05e8",
-        "\u05de\u05d0\u05d5\u05e9\u05e8", "approve", "yes", "\u05db\u05df",
-    }
-    prefix_approval_words = (
-        "\u05de\u05d0\u05d5\u05e9\u05e8 ", "\u05de\u05d0\u05e9\u05e8 ", "\u05d0\u05e9\u05e8 ",
-        "\u05d0\u05d9\u05e9\u05d5\u05e8 ", "approve ",
-        "\u05db\u05df \u05d0\u05e9\u05e8", "\u05db\u05df \u05ea\u05d0\u05e9\u05e8",
-        "\u05db\u05df, \u05d0\u05e9\u05e8", "\u05db\u05df, \u05ea\u05d0\u05e9\u05e8",
-        "\u05db\u05df \u05dc\u05e9\u05d2\u05e8", "\u05de\u05d0\u05d5\u05e9\u05e8 \u05ea\u05e9\u05dc\u05d7",
-        "\u05de\u05d0\u05d5\u05e9\u05e8 \u05dc\u05e9\u05dc\u05d5\u05d7",
-    )
-    exact_rejection_words = {
-        "\u05d1\u05d9\u05d8\u05d5\u05dc", "\u05d1\u05d8\u05dc", "\u05d3\u05d7\u05d4",
-        "\u05d3\u05d7\u05d9\u05d9\u05d4", "reject", "no", "\u05dc\u05d0",
-    }
-    prefix_rejection_words = (
-        "\u05d1\u05d8\u05dc ", "\u05d1\u05d9\u05d8\u05d5\u05dc ", "\u05d3\u05d7\u05d4 ",
-        "\u05d3\u05d7\u05d9\u05d9\u05d4 ", "reject ",
-        "\u05dc\u05d0 \u05d1\u05d8\u05dc", "\u05dc\u05d0, \u05d1\u05d8\u05dc",
-        "\u05d3\u05d7\u05d4 \u05e9\u05d9\u05d2\u05d5\u05e8", "\u05d1\u05d8\u05dc \u05e9\u05d9\u05d2\u05d5\u05e8",
-    )
-    norm_text = incoming_text.strip().lower()
-
-    def _is_approval(txt: str) -> bool:
-        return txt in exact_approval_words or any(txt.startswith(p) for p in prefix_approval_words)
-
-    def _is_rejection(txt: str) -> bool:
-        return txt in exact_rejection_words or any(txt.startswith(p) for p in prefix_rejection_words)
-
-    is_appr = _is_approval(norm_text)
-    is_rej = _is_rejection(norm_text)
-    if resolution.caller and resolution.caller.level == PermissionLevel.COMMANDER and (is_appr or is_rej):
-        db_path = getattr(deps.loaded_profile, "db_path", None)
-        open_holds = interactions.get_open_approval_holds(db_path)
-        choice = "approved" if is_appr else "rejected"
-        if len(open_holds) == 1:
-            hold_event_id = open_holds[0]
-            await interactions.handle_approval_answer(deps, chat_id, telegram_identity, hold_event_id, choice)
-            return
-        elif len(open_holds) > 1:
-            await deps.telegram_client.send_text(
-                chat_id,
-                "\u05e7\u05d9\u05d9\u05de\u05d5\u05ea \u05de\u05e1\u05e4\u05e8 \u05d1\u05e7\u05e9\u05d5\u05ea \u05d4\u05de\u05de\u05ea\u05d9\u05e0\u05d5\u05ea \u05dc\u05d0\u05d9\u05e9\u05d5\u05e8\u05da. \u05d0\u05e0\u05d0 \u05d4\u05e9\u05ea\u05de\u05e9 \u05d1\u05db\u05e4\u05ea\u05d5\u05e8\u05d9 \u05d4\u05d0\u05d9\u05e9\u05d5\u05e8/\u05d3\u05d7\u05d9\u05d9\u05d4 \u05e9\u05d1\u05d4\u05d5\u05d3\u05e2\u05ea \u05d4\u05d1\u05e7\u05e9\u05d4 \u05d4\u05de\u05ea\u05d0\u05d9\u05de\u05d4.",
-            )
-            return
-        elif norm_text in exact_approval_words or norm_text in exact_rejection_words:
-            await deps.telegram_client.send_text(
-                chat_id,
-                "\u05d0\u05d9\u05df \u05db\u05e8\u05d2\u05e2 \u05e4\u05e2\u05d5\u05dc\u05d5\u05ea \u05d4\u05de\u05de\u05ea\u05d9\u05e0\u05d5\u05ea \u05dc\u05d0\u05d9\u05e9\u05d5\u05e8 \u05de\u05e4\u05e7\u05d3.",
-            )
-            return
     # Attendance buttons are handled before a pending free-form reply.  A user
     # can therefore correct/cancel an unfinished unavailability report simply
     # by pressing one of the buttons again.

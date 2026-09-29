@@ -160,70 +160,6 @@ KNOWN_BUTTON_PROTOCOLS: dict[str, str] = {
 
 SITUATIONAL_PICTURE_PROTOCOL = "overall_situational_picture"
 
-# Phrases that ask for the overall picture in so many words. Escaped \uXXXX
-# Hebrew literals keep tests/test_hebrew_leakage.py's scan clean, exactly as
-# `_is_team_roster_query` below does. Matching one of these routes the message
-# deterministically to the live multi-domain picture instead of leaving the
-# choice to general question routing.
-_SITUATIONAL_PICTURE_TERMS = (
-    "\u05ea\u05de\u05d5\u05e0\u05ea \u05de\u05e6\u05d1",  # (Hebrew) situational picture
-    "\u05ea\u05de\u05d5\u05e0\u05ea \u05d4\u05de\u05e6\u05d1",  # (Hebrew) the situational picture
-    "\u05ea\u05de\u05d5\u05e0\u05ea-\u05de\u05e6\u05d1",  # (Hebrew) situational-picture
-    "\u05de\u05e6\u05d1 \u05d4\u05d2\u05d6\u05e8\u05d4",  # (Hebrew) the sector's state
-    "\u05e1\u05d8\u05d8\u05d5\u05e1 \u05d2\u05d6\u05e8\u05d4",  # (Hebrew) sector status
-    "situational picture",
-    "situation picture",
-    "sector status",
-)
-
-
-def _is_situational_picture_query(text: str) -> bool:
-    normalized = " ".join(text.strip().casefold().split())
-    return any(term in normalized for term in _SITUATIONAL_PICTURE_TERMS)
-
-
-def _is_team_roster_query(text: str, prior_messages: tuple[dict, ...]) -> bool:
-    """Recognize roster questions that should not depend on general LLM routing."""
-    normalized = text.strip().casefold()
-    explicit_terms = (
-        "\u05db\u05d9\u05ea\u05ea \u05db\u05d5\u05e0\u05e0\u05d5\u05ea", "\u05db\u05d9\u05ea\u05ea \u05d4\u05db\u05d5\u05e0\u05e0\u05d5\u05ea", "\u05d7\u05d1\u05e8\u05d9 \u05db\u05d9\u05ea\u05d4", "\u05d7\u05d1\u05e8\u05d9 \u05d4\u05db\u05d9\u05ea\u05d4",
-        "\u05d4\u05d7\u05d1\u05e8\u05d9 \u05db\u05d9\u05ea\u05ea", "\u05de\u05e6\u05d1\u05ea \u05db\u05d9\u05ea\u05d4", "\u05de\u05e6\u05d1\u05ea \u05d4\u05db\u05d9\u05ea\u05d4",
-    )
-    if any(term in normalized for term in explicit_terms):
-        return True
-    if normalized.rstrip(" ?!") not in {"\u05de\u05d9 \u05d4\u05dd", "\u05de\u05d9 \u05d0\u05dc\u05d4", "\u05de\u05d4 \u05d4\u05e9\u05de\u05d5\u05ea", "\u05d0\u05e4\u05e9\u05e8 \u05d0\u05ea \u05d4\u05e9\u05de\u05d5\u05ea \u05e9\u05dc\u05d4\u05dd"}:
-        return False
-    recent_context = " ".join(str(item.get("content", "")) for item in prior_messages[-4:]).casefold()
-    return any(term in recent_context for term in explicit_terms)
-
-
-def _team_roster_view(text: str) -> str:
-    normalized = text.strip().casefold()
-    if any(term in normalized for term in ("\u05d8\u05e8\u05dd \u05d3\u05d9\u05d5\u05d5\u05d7", "\u05dc\u05d0 \u05d3\u05d9\u05d5\u05d5\u05d7", "\u05de\u05de\u05ea\u05d9\u05df", "\u05de\u05de\u05ea\u05d9\u05e0\u05d9\u05dd")):
-        return "awaiting"
-    if any(term in normalized for term in ("\u05de\u05d9 \u05dc\u05d0 \u05d6\u05de\u05d9\u05df", "\u05d0\u05d9\u05e0\u05dd \u05d6\u05de\u05d9\u05e0\u05d9\u05dd", "\u05dc\u05d0 \u05d6\u05de\u05d9\u05e0\u05d9\u05dd")):
-        return "unavailable"
-    if any(term in normalized for term in ("\u05de\u05d9 \u05d6\u05de\u05d9\u05df", "\u05d6\u05de\u05d9\u05e0\u05d9\u05dd \u05d1\u05dc\u05d1\u05d3")):
-        return "available"
-    if any(term in normalized for term in ("\u05de\u05d9 \u05d4\u05dd", "\u05de\u05d9 \u05d0\u05dc\u05d4", "\u05de\u05d9 \u05d7\u05d1\u05e8", "\u05d7\u05d1\u05e8\u05d9 \u05db\u05d9\u05ea\u05d4", "\u05d7\u05d1\u05e8\u05d9 \u05d4\u05db\u05d9\u05ea\u05d4", "\u05de\u05d4 \u05d4\u05e9\u05de\u05d5\u05ea", "\u05d4\u05e9\u05de\u05d5\u05ea \u05e9\u05dc\u05d4\u05dd")):
-        return "members"
-    return "summary"
-
-
-def _is_approval_policy_question(text: str) -> bool:
-    normalized = text.strip().casefold()
-    return any(word in normalized for word in ("\u05d0\u05d9\u05e9\u05d5\u05e8", "\u05dc\u05d0\u05e9\u05e8", "\u05de\u05d0\u05e9\u05e8")) and any(
-        term in normalized for term in ("\u05de\u05d9", "\u05d0\u05d9\u05e4\u05d4", "\u05d0\u05de\u05d5\u05e8", "\u05e6\u05e8\u05d9\u05da", "\u05de\u05d0\u05e9\u05e8")
-    )
-
-
-def _is_pending_report_cancellation(text: str) -> bool:
-    normalized = text.strip().casefold()
-    return any(
-        phrase in normalized
-        for phrase in ("\u05e2\u05d6\u05d5\u05d1", "\u05ea\u05d1\u05d8\u05dc", "\u05d1\u05d8\u05dc", "\u05d0\u05d9\u05df \u05d9\u05d5\u05ea\u05e8", "\u05d0\u05d9\u05df \u05db\u05dc\u05d5\u05dd", "\u05d1\u05d8\u05e2\u05d5\u05ea", "\u05dc\u05d0 \u05e9\u05de\u05e2\u05ea\u05d9 \u05d8\u05d5\u05d1")
-    )
-
 
 def _queued_answer_text(messages, kind: str, task_id: str) -> str:
     """The user-facing `answer` for a report/request that was just queued
@@ -350,42 +286,6 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             prior_messages = tuple(ctx.deps.persistence.fetch_conversation_messages(conversation_id, history_turns * 2))
 
         _remember("user", text)
-
-        # A correction/cancellation of an incomplete report is conversation
-        # control, not a fresh operational request (and especially not a drone
-        # recall merely because the text contains "\u05ea\u05d1\u05d8\u05dc"). Resolve only the
-        # newest unresolved hold owned by this sender in this conversation.
-        if _is_pending_report_cancellation(str(text)):
-            owned_pending: list[tuple[dict, dict]] = []
-            for hold in ctx.deps.persistence.list_held_events("event_data"):
-                held_event = ctx.deps.persistence.fetch_event(hold["event_id"])
-                if (
-                    held_event is not None
-                    and held_event.get("conversation_id") == conversation_id
-                    and held_event.get("sender_identity") == caller_identity
-                ):
-                    owned_pending.append((hold, held_event))
-            if owned_pending:
-                hold, held_event = owned_pending[-1]
-                ctx.deps.persistence.resolve_held_event(
-                    "event_data",
-                    hold["hold_id"],
-                    {"resolved_by": caller_identity, "decision": "cancelled_by_reporter"},
-                )
-                record_event_outcome(
-                    ctx.deps.persistence,
-                    held_event["event_id"],
-                    "declined",
-                    failure_reason="\u05d4\u05de\u05d3\u05d5\u05d5\u05d7 \u05d1\u05d9\u05d8\u05dc \u05d0\u05d5 \u05ea\u05d9\u05e7\u05df \u05d0\u05ea \u05d4\u05d3\u05d9\u05d5\u05d5\u05d7 \u05dc\u05e4\u05e0\u05d9 \u05d4\u05e9\u05dc\u05de\u05ea \u05d4\u05e4\u05e8\u05d8\u05d9\u05dd.",
-                )
-                answer = "\u05d4\u05d3\u05d9\u05d5\u05d5\u05d7 \u05d4\u05de\u05de\u05ea\u05d9\u05df \u05d1\u05d5\u05d8\u05dc. \u05dc\u05d0 \u05ea\u05d5\u05e4\u05e2\u05dc \u05e4\u05e2\u05d5\u05dc\u05d4 \u05d5\u05dc\u05d0 \u05e0\u05d3\u05e8\u05e9 \u05dc\u05de\u05e1\u05d5\u05e8 \u05de\u05d9\u05e7\u05d5\u05dd."
-                _remember("assistant", answer, held_event["event_id"])
-                return jsonify({
-                    "taken_as": "event_update",
-                    "event_id": held_event["event_id"],
-                    "answer": answer,
-                    "status": "declined",
-                })
 
         # Event-data replies are explicit. Sharing a sender/conversation with an
         # old hold is insufficient because a new button or request must remain
@@ -565,10 +465,6 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
         # selection only (orchestrator/group_routing.py::scope_deps), never a restriction on
         # an explicit, caller-asserted protocol name.
         matched_protocol_name = request_payload.get("protocol_hint") or KNOWN_BUTTON_PROTOCOLS.get(str(text).strip())
-        if matched_protocol_name is None and _is_situational_picture_query(str(text)):
-            matched_protocol_name = SITUATIONAL_PICTURE_PROTOCOL
-        if matched_protocol_name is None and _is_team_roster_query(str(text), prior_messages):
-            matched_protocol_name = "report_team_availability"
         matched_protocol = ctx.deps.protocol_set.get(matched_protocol_name) if matched_protocol_name else None
 
         if matched_protocol is not None:
@@ -663,15 +559,6 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 else RequestedOperation.ASK_QUESTION
             )
             require(level, require_op)
-            if matched_protocol.name == "report_team_availability" and hasattr(ag, "report_team_availability"):
-                with authenticated_request_identity(caller_identity):
-                    answer = ag.report_team_availability(view=_team_roster_view(str(text)))
-                _remember("assistant", answer)
-                return jsonify({
-                    "taken_as": "question",
-                    "answer": answer,
-                    "protocol": matched_protocol.name,
-                })
             with authenticated_request_identity(caller_identity):
                 res = ag.process(text, allowed_tools)
             answer = res.text if res.status == "success" else f"\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05d4\u05e4\u05e2\u05dc\u05ea \u05e1\u05d5\u05db\u05df: {res.text}"
@@ -681,16 +568,6 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 "answer": answer,
                 "protocol": matched_protocol.name,
             })
-
-        if _is_approval_policy_question(str(text)):
-            require(level, RequestedOperation.CONVERSE)
-            answer = (
-                "\u05d1\u05e7\u05e9\u05d4 \u05e9\u05de\u05d7\u05d9\u05d9\u05d1\u05ea \u05d0\u05d9\u05e9\u05d5\u05e8 \u05e0\u05e9\u05dc\u05d7\u05ea \u05dc\u05de\u05e4\u05e7\u05d3\u05d9\u05dd \u05d4\u05e8\u05e9\u05d5\u05de\u05d9\u05dd \u05d1\u05de\u05e2\u05e8\u05db\u05ea. "
-                "\u05e8\u05e7 \u05de\u05e9\u05ea\u05de\u05e9 \u05d1\u05e2\u05dc \u05d4\u05e8\u05e9\u05d0\u05ea \u05de\u05e4\u05e7\u05d3 \u05d9\u05db\u05d5\u05dc \u05dc\u05d0\u05e9\u05e8 \u05d0\u05d5 \u05dc\u05d3\u05d7\u05d5\u05ea \u05d0\u05d5\u05ea\u05d4 \u05d1\u05d0\u05de\u05e6\u05e2\u05d5\u05ea \u05db\u05e4\u05ea\u05d5\u05e8\u05d9 \u05d4\u05d0\u05d9\u05e9\u05d5\u05e8. "
-                "\u05d0\u05dd \u05d7\u05e1\u05e8\u05d9\u05dd \u05e4\u05e8\u05d8\u05d9\u05dd \u05de\u05d1\u05e6\u05e2\u05d9\u05d9\u05dd, \u05dc\u05de\u05e9\u05dc \u05de\u05d9\u05e7\u05d5\u05dd \u05d4\u05d0\u05d9\u05e8\u05d5\u05e2, \u05d4\u05de\u05e2\u05e8\u05db\u05ea \u05ea\u05e9\u05d0\u05dc \u05e2\u05dc\u05d9\u05d4\u05dd \u05dc\u05e4\u05e0\u05d9 \u05d9\u05e6\u05d9\u05e8\u05ea \u05d1\u05e7\u05e9\u05ea \u05d4\u05d0\u05d9\u05e9\u05d5\u05e8."
-            )
-            _remember("assistant", answer)
-            return jsonify({"taken_as": "conversational", "answer": answer})
 
         message_plan = None
         planner_mode = optimization_policy.planner_mode
@@ -1825,6 +1702,14 @@ def _uncertain_verdict_reporter_payload(ctx: "ApiContext", event_id: str) -> dic
     return {"event_id": event_id}
 
 
+def _resource_unavailable_alert_payload(ctx: "ApiContext", event_id: str) -> dict:
+    # Commander-only detail (fact + concrete alternatives), persisted on its own column by
+    # orchestrator/flows.py::_finish_with_resource_unavailable -- never insight_text or
+    # report_text, so it can never reach the reporter's own job_finished notification.
+    event = ctx.deps.persistence.fetch_event(event_id)
+    return {"event_id": event_id, "alert_text": event.get("commander_alert_text") or ""}
+
+
 def _precedent_closure_payload(ctx: "ApiContext", event_id: str) -> dict:
     event = ctx.deps.persistence.fetch_event(event_id)
     matched_id = event["precedent_closed_by_event_id"]
@@ -1880,6 +1765,7 @@ _PAYLOAD_BUILDERS = {
     "no_match_notice": _no_match_payload,
     "job_finished": _job_payload,
     "job_failed": _job_payload,
+    "resource_unavailable_alert": _resource_unavailable_alert_payload,
 }
 
 
@@ -1907,7 +1793,11 @@ def _target_chat_ids(ctx: "ApiContext", kind: str, event_id: str) -> list[str]:
         return []
     if kind in ("job_finished", "job_failed"):
         # Falls back to the sender's own identity for events that predate this column, or
-        # weren't submitted with a known chat (e.g. a non-Telegram "sensor" source).
+        # weren't submitted with a known chat (e.g. a non-Telegram "sensor" source). Never
+        # widened to include commanders — a `handled_resource_unavailable` outcome's commander
+        # alert is an entirely separate notification kind (`resource_unavailable_alert`,
+        # below), delivered only to each commander's own private chat, precisely so the
+        # reporter's own chat (this one, possibly a group) never receives it.
         return [event.get("telegram_chat_id") or sender]
     return [sender]
 

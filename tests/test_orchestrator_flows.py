@@ -398,6 +398,122 @@ def test_direct_tool_protocol_fails_deterministically_without_a_model_call(deps)
     assert result.outcome == "failed"
 
 
+# -- resource-unavailable mechanism: deterministic, never model-judged as failure ------------
+
+
+def _resource_unavailable_protocol(name="dispatch_something"):
+    def _try_dispatch(self, area=""):
+        self.signal_resource_unavailable("drone", area, "no ready drones available")
+        return f"Drone dispatch failed: no ready drones available for {area}."
+
+    def binder(event):
+        return (
+            Step(
+                agent_name="reference_agent", task_text="try dispatch", allowed_tools=(),
+                step_id="1", kind="direct_tool", direct_tool_name="try_dispatch",
+                direct_tool_kwargs={"area": "east_gate"},
+            ),
+        )
+
+    protocol = Protocol(
+        name=name,
+        description="applies when a resource dispatch is attempted",
+        participating_agents=("reference_agent",),
+        approved_tools=(),
+        expected_success_output="dispatch confirmation",
+        criticality=CriticalityLevel.HIGH,
+        approval_flag=False,
+        direct_tool_binder=binder,
+    )
+    return protocol, _try_dispatch
+
+
+def test_resource_unavailable_is_handled_not_failed_and_skips_judgment_entirely(deps):
+    protocol, try_dispatch = _resource_unavailable_protocol()
+    resource_deps = replace(deps, protocol_set=ProtocolSet(protocols=(*deps.protocol_set.all(), protocol)))
+    reference_agent = resource_deps.registry.get("reference_agent")
+    reference_agent.try_dispatch = types.MethodType(try_dispatch, reference_agent)
+
+    agent = _happy_path_agent(risk_score="0.9", selected="dispatch_something")
+    # needs_insight defaults to True on this protocol -- an empty dispatch here proves
+    # build_insight/judge_success were never reached (_ScriptedAgent.process raises on any
+    # unscripted prompt), i.e. the resource-unavailable short-circuit fires ahead of them.
+    insights_agent = _ScriptedAgent({})
+
+    result = process_report(resource_deps, agent, insights_agent, "suspicious activity", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    assert result.outcome == "handled_resource_unavailable"
+    event = resource_deps.persistence.fetch_event(result.event_id)
+    # No profile hook configured on this fixture -- core's own generic (English) fallback fact.
+    assert event["report_text"] is not None
+    assert "drone" in event["report_text"]
+    assert "east_gate" in event["report_text"]
+    # The commander alert (and any alternatives) must never appear in the reporter's own text.
+    assert "Commander alert" not in event["report_text"]
+    assert "Alternatives" not in event["report_text"]
+    assert event["commander_alert_text"] is not None
+    assert "Commander alert" in event["commander_alert_text"]
+    assert "no alternatives could be determined" in event["commander_alert_text"]  # no hook configured
+
+
+def test_resource_unavailable_uses_the_profiles_description_hook_when_supplied(deps):
+    protocol, try_dispatch = _resource_unavailable_protocol()
+    calls = []
+
+    def description_hook(resource_kind, area, reason, registry):
+        calls.append((resource_kind, area, reason))
+        return "no drone could be sent to the east sector", "CAM-01 covers the area; 1 ready drone remains"
+
+    resource_deps = replace(
+        deps,
+        protocol_set=ProtocolSet(protocols=(*deps.protocol_set.all(), protocol)),
+        resource_unavailable_description=description_hook,
+    )
+    reference_agent = resource_deps.registry.get("reference_agent")
+    reference_agent.try_dispatch = types.MethodType(try_dispatch, reference_agent)
+
+    agent = _happy_path_agent(risk_score="0.9", selected="dispatch_something")
+    insights_agent = _ScriptedAgent({})
+
+    result = process_report(resource_deps, agent, insights_agent, "suspicious activity", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    assert result.outcome == "handled_resource_unavailable"
+    event = resource_deps.persistence.fetch_event(result.event_id)
+    # The reporter sees the fact sentence, never the alternatives.
+    assert "no drone could be sent to the east sector" in event["report_text"]
+    assert "CAM-01" not in event["report_text"]
+    # The commander alert carries both, on its own separate column.
+    assert "no drone could be sent to the east sector" in event["commander_alert_text"]
+    assert "CAM-01 covers the area; 1 ready drone remains" in event["commander_alert_text"]
+    assert calls == [("drone", "east_gate", "no ready drones available")]
+
+
+def test_resource_unavailable_survives_the_description_hook_raising(deps):
+    protocol, try_dispatch = _resource_unavailable_protocol()
+
+    def broken_hook(resource_kind, area, reason, registry):
+        raise RuntimeError("boom")
+
+    resource_deps = replace(
+        deps,
+        protocol_set=ProtocolSet(protocols=(*deps.protocol_set.all(), protocol)),
+        resource_unavailable_description=broken_hook,
+    )
+    reference_agent = resource_deps.registry.get("reference_agent")
+    reference_agent.try_dispatch = types.MethodType(try_dispatch, reference_agent)
+
+    agent = _happy_path_agent(risk_score="0.9", selected="dispatch_something")
+    insights_agent = _ScriptedAgent({})
+
+    result = process_report(resource_deps, agent, insights_agent, "suspicious activity", "telegram", "2026-08-20T10:00:00", "viewer-1")
+
+    assert result.outcome == "handled_resource_unavailable"  # never surfaces as a hard failure
+    event = resource_deps.persistence.fetch_event(result.event_id)
+    # Falls all the way back to core's own generic fact and "no alternatives" text.
+    assert "drone" in event["report_text"]
+    assert "no alternatives could be determined" in event["commander_alert_text"]
+
+
 # -- Availability fields for absence reports (Stage 3, docs/bar_improves.md) -
 
 

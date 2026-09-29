@@ -149,6 +149,7 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
         message_catalog=loaded_profile.message_catalog,
         conversation_history_turns=loaded_profile.conversation_history_turns,
         conversation_history_ttl_hours=loaded_profile.conversation_history_ttl_hours,
+        resource_unavailable_description=loaded_profile.resource_unavailable_description,
     )
 
     queue_policy = loaded_profile.optimization_policy

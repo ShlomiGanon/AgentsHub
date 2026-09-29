@@ -32,6 +32,7 @@ from bot.contracts import (
     PrecedentClosureNotice,
     ProfileView,
     ProtocolView,
+    ResourceUnavailableAlertNotice,
     WriteResult,
     SettingsView,
     TracePollResult,
@@ -513,6 +514,8 @@ class HttpApiClient(BotApiClient):
             return UncertainVerdictNotice(event_id=payload["event_id"], insight_text=payload["insight_text"])
         if kind == "uncertain_verdict_reporter":
             return UncertainVerdictReporterNotice(event_id=payload["event_id"])
+        if kind == "resource_unavailable_alert":
+            return ResourceUnavailableAlertNotice(event_id=payload["event_id"], alert_text=payload["alert_text"])
         if kind == "precedent_closure":
             return PrecedentClosureNotice(
                 event_id=payload["event_id"],

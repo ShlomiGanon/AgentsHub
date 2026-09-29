@@ -122,6 +122,56 @@ def test_dispatch_drone_to_area_tool_and_active_missions(tmp_path):
     assert "north_gate" in active_output
 
 
+def test_dispatch_drone_to_area_signals_resource_unavailable_when_the_fleet_is_exhausted(tmp_path):
+    agent = _agent(tmp_path)
+    _call_tool(agent, "dispatch_drone_to_area", target_area="north_gate", incident_description="first")
+    _call_tool(agent, "dispatch_drone_to_area", target_area="north_gate", incident_description="second")
+
+    result = _call_tool(agent, "dispatch_drone_to_area", target_area="north_gate", incident_description="third")
+
+    assert "Drone dispatch failed" in result
+    signal = agent.take_resource_unavailable_signal()
+    assert signal is not None
+    resource_kind, area, _reason = signal
+    assert resource_kind == "drone"
+    assert area == "north_gate"
+
+
+def test_dispatch_drone_to_area_does_not_signal_on_a_successful_dispatch(tmp_path):
+    agent = _agent(tmp_path)
+
+    _call_tool(agent, "dispatch_drone_to_area", target_area="north_gate", incident_description="ok")
+
+    assert agent.take_resource_unavailable_signal() is None
+
+
+def test_get_camera_feeds_signals_resource_unavailable_when_an_area_has_no_cameras(tmp_path):
+    agent = _agent(tmp_path)
+
+    output = _call_tool(agent, "get_camera_feeds", area="nonexistent_area")
+
+    assert "No cameras found" in output
+    signal = agent.take_resource_unavailable_signal()
+    assert signal == ("camera", "nonexistent_area", "no active camera covering the area")
+
+
+def test_get_camera_feeds_does_not_signal_when_cameras_cover_the_area(tmp_path):
+    agent = _agent(tmp_path)
+
+    _call_tool(agent, "get_camera_feeds", area="north_gate")
+
+    assert agent.take_resource_unavailable_signal() is None
+
+
+def test_get_camera_feeds_does_not_signal_for_an_unscoped_general_query(tmp_path):
+    # No area given -- nothing to call "unavailable for", this is a general status query.
+    agent = _agent(tmp_path)
+
+    _call_tool(agent, "get_camera_feeds")
+
+    assert agent.take_resource_unavailable_signal() is None
+
+
 def test_update_camera_observation_and_overview(tmp_path):
     agent = _agent(tmp_path)
 

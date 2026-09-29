@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS events (
     outcome TEXT,
     outcome_failure_reason TEXT,
     report_text TEXT,
+    commander_alert_text TEXT,
 
     telegram_chat_id TEXT,
     telegram_chat_type TEXT,
@@ -290,6 +291,11 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "ALTER TABLE events ADD COLUMN telegram_chat_type TEXT;"
         "ALTER TABLE events ADD COLUMN ack_message_id TEXT;",
     ),
+    (
+        23,
+        "add commander_alert_text to events",
+        "ALTER TABLE events ADD COLUMN commander_alert_text TEXT;",
+    ),
 ]
 
 
@@ -357,6 +363,10 @@ def run_migrations(db_path: str) -> None:
                     for column_name in ("telegram_chat_id", "telegram_chat_type", "ack_message_id"):
                         if column_name not in columns:
                             connection.execute(f"ALTER TABLE events ADD COLUMN {column_name} TEXT")
+            elif version == 23:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(events)").fetchall()}
+                if columns and "commander_alert_text" not in columns:
+                    connection.execute("ALTER TABLE events ADD COLUMN commander_alert_text TEXT")
             else:
                 connection.executescript(sql)
 

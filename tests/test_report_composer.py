@@ -232,6 +232,21 @@ def test_commander_prompt_includes_protocol_agent_task_and_risk_fields():
     assert "active flame" in prompt
 
 
+def test_viewer_prompt_includes_the_resource_unavailable_fact_when_set():
+    # Unlike insight_text (commander-only), this fact must reach the model even for a viewer.
+    summary = _summary(resource_unavailable_fact="a drone could not be dispatched to the north gate")
+
+    prompt = build_prompt(summary, "viewer", "en")
+
+    assert "a drone could not be dispatched to the north gate" in prompt
+
+
+def test_viewer_prompt_omits_the_resource_unavailable_field_when_not_set():
+    prompt = build_prompt(_summary(), "viewer", "en")
+
+    assert "resource_unavailable_fact" not in prompt
+
+
 def test_original_message_is_framed_as_quoted_data_not_instructions():
     prompt = build_prompt(_summary(), "viewer", "en")
 

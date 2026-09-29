@@ -67,6 +67,10 @@ def _viewer_context(summary: RunSummary) -> dict:
         "outcome": summary.outcome,
         "outcome_failure_reason": summary.outcome_failure_reason,
     }
+    if summary.resource_unavailable_fact:
+        # Unlike insight_text (commander-only), this fact must reach every audience -- the
+        # reporter is told concretely what could not be dispatched, regardless of their level.
+        context["resource_unavailable_fact"] = summary.resource_unavailable_fact
     pending = _pending_context(summary, include_risk=False)
     if pending is not None:
         context["pending"] = pending

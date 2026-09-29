@@ -88,6 +88,18 @@ class ProtocolEditError(Exception):
 
 
 @dataclass(frozen=True)
+class ResourceUnavailable:
+    """A deterministic, DB-sourced signal that a tool needed one instance of some finite/
+    coverage-limited resource and found none -- set by the tool itself (from its own
+    persistence layer's status, e.g. a fleet count or a roster snapshot), never inferred from
+    a specialist agent's own wording (see `agents.runtime.signal_resource_unavailable`)."""
+
+    resource_kind: str
+    area: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class StepOutcome:
     step: Step
     result_text: str | None
@@ -96,6 +108,7 @@ class StepOutcome:
     failure_reason: str | None = None
     status: str = "succeeded"
     missing_event_fields: tuple[str, ...] = ()
+    resource_unavailable: "ResourceUnavailable | None" = None
 
 
 @dataclass(frozen=True)
