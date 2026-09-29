@@ -12,7 +12,7 @@ API_CONSOLE_STYLE = """
   .api-identity-bar { display:flex; gap:12px; align-items:end; flex-wrap:wrap; }
   .api-identity-bar .identity-field { min-width:280px; flex:1; }
   .api-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:18px; }
-  .api-card { border:1px solid var(--line); background:rgba(255,255,255,.16); padding:18px; }
+  .api-card { border:1px solid var(--line); background:#fff; padding:18px; border-radius:16px; box-shadow:0 8px 24px rgba(11,31,58,.05); }
   .api-output { direction:ltr; text-align:left; unicode-bidi:plaintext; white-space:pre-wrap; overflow-wrap:anywhere;
     min-height:80px; max-height:360px; overflow:auto; margin:12px 0 0; padding:12px;
     border:1px solid var(--line); background:rgba(255,255,255,.25); font-size:12px; }
@@ -24,7 +24,7 @@ API_CONSOLE_STYLE = """
   .api-form-grid .wide { grid-column:1/-1; }
   .api-form-grid label { display:block; font-size:12px; color:var(--text-dim); margin-bottom:5px; }
   .api-list { display:grid; gap:10px; margin-top:12px; }
-  .api-list-item { border:1px solid var(--line); padding:12px; }
+  .api-list-item { border:1px solid var(--line); padding:12px; border-radius:12px; background:#fff; }
   @media (max-width:640px) { .api-form-grid { grid-template-columns:1fr; } .api-form-grid .wide { grid-column:auto; } }
 </style>
 """
@@ -137,8 +137,8 @@ window.AdminApi = (() => {
 
 
 PROFILES_BODY = """
-<body data-api-identity="{{ api_identity }}"><div class="container container-narrow">
-  <div class="d-flex justify-content-between align-items-baseline"><h1>{{ t('admin.profiles.title') }}</h1><a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div>
+<div class="ls-page">
+  <h1>{{ t('admin.profiles.title') }}</h1>
   <p class="subtitle mb-4">{{ t('admin.profiles.subtitle') }}</p>
   """ + IDENTITY_BAR + FLASH_MESSAGES + """
   <div class="row g-3 mb-4">
@@ -178,13 +178,13 @@ document.getElementById('system-put-form').addEventListener('submit', event => {
   AdminApi.numberOptional(body, 'lookback_window_days', 'system-lookback', Number.parseInt);
   AdminApi.call('PUT', '/SYSTEM', body, 'system-put-output');
 });
-</script></body>
+</script>
 """
 
 
 PROTOCOLS_BODY = """
-<body data-api-identity="{{ api_identity }}"><div class="container container-narrow">
-  <div class="d-flex justify-content-between align-items-baseline"><h1>{{ t('admin.protocols.title') }}</h1><a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div>
+<div class="ls-page">
+  <h1>{{ t('admin.protocols.title') }}</h1>
   <p class="subtitle mb-4">{{ t('admin.protocols.subtitle') }}</p>
   """ + IDENTITY_BAR + FLASH_MESSAGES + """
   <datalist id="known-agents">{% for agent in agents %}<option value="{{ agent }}">{% endfor %}</datalist>
@@ -231,13 +231,13 @@ document.querySelectorAll('.protocol-edit-form').forEach(form => {
   form.addEventListener('submit', event => { event.preventDefault(); document.getElementById('protocol-status').hidden=false; AdminApi.call('PUT', `/Protocol/${encodeURIComponent(form.dataset.name)}`, editableProtocolBody(form), 'protocol-status'); });
   form.querySelector('.protocol-delete').addEventListener('click', () => { if(confirm({{ t('admin.protocols.delete_confirm')|tojson }})){ document.getElementById('protocol-status').hidden=false; AdminApi.call('DELETE', `/Protocol/${encodeURIComponent(form.dataset.name)}`, undefined, 'protocol-status'); } });
 });
-</script></body>
+</script>
 """
 
 
 EVENTS_BODY = """
-<body data-api-identity="{{ api_identity }}"><div class="container container-narrow">
-  <div class="d-flex justify-content-between align-items-baseline"><h1>{{ t('admin.events.title') }}</h1><a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div>
+<div class="ls-page">
+  <h1>{{ t('admin.events.title') }}</h1>
   <p class="subtitle mb-4">{{ t('admin.events.subtitle') }}</p>
   """ + IDENTITY_BAR + FLASH_MESSAGES + """
   <div class="block-console mb-4">
@@ -294,5 +294,5 @@ document.getElementById('notifications-refresh').addEventListener('click',loadNo
 document.getElementById('trace-form').addEventListener('submit', event => { event.preventDefault(); const trace=encodeURIComponent(AdminApi.value('trace-id')); const query=new URLSearchParams({since:AdminApi.value('trace-since'),wait_seconds:AdminApi.value('trace-wait')}); AdminApi.call('GET',`/Trace/${trace}?${query}`,undefined,'trace-output'); });
 document.getElementById('attendance-form').addEventListener('submit', event => { event.preventDefault(); const body={force:AdminApi.checked('attendance-force')}; AdminApi.optional(body,'now_iso','attendance-now'); AdminApi.call('POST','/TeamStatus/AttendanceCheck',body,'attendance-output'); });
 loadHolds(); loadNotifications();
-</script></body>
+</script>
 """

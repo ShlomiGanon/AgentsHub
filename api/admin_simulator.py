@@ -113,7 +113,7 @@ SIMULATOR_STYLE = """
   .sim-drop {
     flex: 1 1 320px;
     border: 2px dashed var(--line-strong);
-    border-radius: 6px;
+    border-radius: 16px;
     padding: 18px;
     text-align: center;
     cursor: pointer;
@@ -122,17 +122,18 @@ SIMULATOR_STYLE = """
     font-size: 14px;
     display: flex; align-items: center; justify-content: center;
   }
-  .sim-drop.dragover { border-color: var(--commander); background: var(--commander-dim); color: #075A47; }
+  .sim-drop.dragover { border-color: var(--lime); background: #F3FAE8; color: #3F6B12; }
   .sim-paste { flex: 1 1 320px; display: flex; flex-direction: column; gap: 6px; }
   .sim-paste textarea { min-height: 72px; resize: vertical; }
   .sim-actions { display: flex; flex-direction: column; gap: 6px; justify-content: center; }
   .sim-actions .btn { min-width: 170px; }
   .sim-header {
     background: var(--panel);
-    border: 1px solid var(--line-strong);
-    border-radius: 6px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
     padding: 18px 22px;
     margin-bottom: 20px;
+    box-shadow: 0 8px 24px rgba(11, 31, 58, .05);
   }
   .sim-header h2 { font-size: 20px; font-weight: 500; margin: 0 0 6px; }
   .sim-header .description { color: var(--text-dim); font-size: 15px; margin: 0; line-height: 1.5; }
@@ -148,13 +149,14 @@ SIMULATOR_STYLE = """
   .sim-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; }
   .chat-card {
     background: var(--panel);
-    border: 2px solid var(--line-strong);
-    border-radius: 6px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
     display: flex; flex-direction: column;
     height: 620px;
     transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    box-shadow: 0 8px 24px rgba(11, 31, 58, .05);
   }
-  .chat-card.active-next { border-color: var(--commander); box-shadow: 0 0 0 3px var(--commander-dim); }
+  .chat-card.active-next { border-color: var(--lime); box-shadow: 0 0 0 3px rgba(140,198,63,.28); }
   .chat-header { padding: 12px 16px; border-bottom: 1px solid var(--line); }
   .chat-title { font-weight: 600; font-size: 15px; }
   .chat-meta { font-family: var(--mono); font-size: 12px; color: var(--text-faint); margin-top: 2px; }
@@ -226,19 +228,9 @@ SIMULATOR_STYLE = """
 # embedded `sim-data` JSON (see simulator_page_context) and formats them with the same `{name}`
 # placeholder syntax the catalog uses.
 SIMULATOR_BODY = """
-<div class="container container-wide">
+<div class="ls-page-wide">
 
-  <div class="d-flex justify-content-between align-items-baseline mb-1">
-    <h1 class="mb-0">{{ t('admin.simulator.title') }}</h1>
-    <div class="d-flex align-items-center gap-3">
-      <a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_dashboard') }}</a>
-      <span class="status-pill"><span class="dot"></span>{{ t('admin.connected') }}</span>
-      <form method="post" action="{{ url_for('admin.logout') }}">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="btn btn-console-danger btn-sm">{{ t('admin.log_out') }}</button>
-      </form>
-    </div>
-  </div>
+  <h1 class="mb-1">{{ t('admin.simulator.title') }}</h1>
   <p class="subtitle mb-4">{{ t('admin.simulator.subtitle') }}</p>
 
   """ + IDENTITY_BAR + FLASH_MESSAGES + """

@@ -42,10 +42,43 @@ def control_dir() -> Path:
 
 
 def _atomic_json(path: Path, value: object) -> None:
+    """Write JSON by replacing the destination from a temp file.
+
+    On Windows, ``os.replace`` onto an existing file fails with Access Denied
+    (WinError 5) or a sharing violation (WinError 32) when another process has
+    the destination open — a reader in the API child, an indexer, or antivirus
+    scanning a file that was just replaced. The supervisor writes ``status.json``
+    every loop tick, so that collision is expected rather than exceptional.
+    Retry, then fall back to an in-place write; never leave the temp file behind.
+    """
+
     path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(value, ensure_ascii=False, indent=2)
     temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(path)
+    temporary.write_text(payload, encoding="utf-8")
+    last_error: OSError | None = None
+    try:
+        for attempt in range(8):
+            try:
+                os.replace(temporary, path)
+                return
+            except OSError as exc:
+                last_error = exc
+                winerror = getattr(exc, "winerror", None)
+                if winerror not in {5, 32} and not isinstance(exc, PermissionError):
+                    raise
+                time.sleep(0.05 * (2 ** attempt))
+        try:
+            path.write_text(payload, encoding="utf-8")
+        except OSError:
+            if last_error is not None:
+                raise last_error from None
+            raise
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def discover_profiles(directory: Path | None = None) -> tuple[ProfileInfo, ...]:
