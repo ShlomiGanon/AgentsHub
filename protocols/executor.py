@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from typing import TYPE_CHECKING, Callable
 
-from agents import AgentInvocationError
+from agents import AgentInvocationError, is_retryable_invocation_error
 from protocols.contracts import ProtocolRunResult, ResourceUnavailable, Step, StepOutcome
 from tools import get_trace_id, stage_context
 
@@ -150,7 +150,7 @@ def execute_step_with_retry(
                 extra={"event": "step_failed", "agent": step.agent_name, "attempt": attempts, "cause": last_failure_reason, "trace_id": get_trace_id()},
             )
 
-            if attempts >= attempt_limit or not _can_retry(step, agent):
+            if attempts >= attempt_limit or not _can_retry(step, agent) or not is_retryable_invocation_error(exc):
                 return StepOutcome(
                     step=step, result_text=None, attempt_count=attempts, succeeded=False,
                     failure_reason=last_failure_reason, status="failed",
@@ -349,9 +349,34 @@ def _execute_dependency_steps(
 
         def _run(step_id: str) -> tuple[str, StepOutcome]:
             step = steps[index_by_id[step_id]]
+            index = index_by_id[step_id]
+            logger.info(
+                "executing step",
+                extra={
+                    "event": "step_start",
+                    "agent": step.agent_name,
+                    "step_index": index,
+                    "step_id": step_id,
+                    "task_text": step.task_text,
+                    "trace_id": get_trace_id(),
+                },
+            )
             outcome = execute_step_with_retry(
                 agents_by_name[step.agent_name], step, settings_store,
                 task_rewriter=task_rewriter, sleep_fn=sleep_fn,
+            )
+            logger.info(
+                "step finished",
+                extra={
+                    "event": "step_result",
+                    "agent": step.agent_name,
+                    "step_index": index,
+                    "step_id": step_id,
+                    "succeeded": outcome.succeeded,
+                    "attempt_count": outcome.attempt_count,
+                    "result_text": outcome.result_text,
+                    "trace_id": get_trace_id(),
+                },
             )
             return step_id, outcome
 

@@ -32,6 +32,7 @@ from agents.contracts import (
     tool,
     tool_info_of,
 )
+from agents.provider_telemetry import track_provider_finish_reasons
 from tools import deep_debug_enabled, get_current_stage, get_trace_id, log_ai_interaction, stage_context, trace_context
 
 logger = logging.getLogger(__name__)
@@ -596,7 +597,8 @@ def invoke(
         if not acquired:
             raise TimeoutError("provider concurrency wait exceeded the invocation timeout")
         try:
-            crewai_output = crewai_agent.kickoff(text)
+            with track_provider_finish_reasons() as finish_reasons:
+                crewai_output = crewai_agent.kickoff(text)
         finally:
             _provider_semaphore.release()
     except TimeoutError as exc:
@@ -639,6 +641,32 @@ def invoke(
             },
         )
         raise AgentModelError(descriptor.name, "the model call failed", trace_id=get_trace_id(), cause=exc) from exc
+
+    # A write-capable specialist may already have committed its tool result.
+    # Do not turn that verified write into an apparent failed action merely
+    # because CrewAI's final prose was cut short.  The read-only answer paths
+    # can safely reject incomplete text and use their existing fallback.
+    has_write_tool = any(info.side_effecting for info in descriptor.tools if info.name in wrapped_tools)
+    if finish_reasons and finish_reasons[-1] == "length" and not has_write_tool:
+        logger.info(
+            "model invocation finished",
+            extra={
+                "event": "model_invocation_finished",
+                "agent": descriptor.name,
+                "model": descriptor.model,
+                "provider": descriptor.model.split("/", 1)[0],
+                "stage": get_current_stage(),
+                "attempt": 1,
+                "status": "error",
+                "termination_reason": "length",
+                "latency_ms": round((time.monotonic() - invocation_started_at) * 1000, 3),
+                "trace_id": get_trace_id(),
+                "telemetry_only": True,
+            },
+        )
+        raise AgentOutputParseError(
+            descriptor.name, "the model's final response was cut off at its output limit", trace_id=get_trace_id()
+        )
 
     raw_text = getattr(crewai_output, "raw", None)
     if raw_text is None:

@@ -136,5 +136,30 @@ class AgentFrameworkNotReadyError(AgentInvocationError):
     pass
 
 
+def is_retryable_invocation_error(error: AgentInvocationError) -> bool:
+    """Retry transport/timeouts, but never replay an unchanged permanent provider request."""
+
+    if isinstance(error, AgentTimeoutError):
+        return True
+    if isinstance(error, (AgentOutputParseError, AgentToolConstructionError, AgentFrameworkNotReadyError)):
+        return False
+    if not isinstance(error, AgentModelError):
+        return True
+
+    cause = error.cause or error.__cause__
+    seen: set[int] = set()
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        response = getattr(cause, "response", None)
+        status = getattr(cause, "status_code", None) or getattr(response, "status_code", None)
+        if isinstance(status, int) and 400 <= status < 500 and status not in {408, 409, 425, 429}:
+            return False
+        detail = str(cause).casefold()
+        if "assistant prefill" in detail or ("prefill" in detail and "not support" in detail):
+            return False
+        cause = getattr(cause, "__cause__", None) or getattr(cause, "__context__", None)
+    return True
+
+
 class AgentWarmupError(AgentInvocationError):
     """A configured provider/model failed its startup verification call."""

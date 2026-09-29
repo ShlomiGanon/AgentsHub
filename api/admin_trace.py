@@ -94,3 +94,15 @@ def register_trace_routes(
         active_count = sum(1 for r in recent if r["status"] not in terminal_set)
 
         return jsonify({"items": recent, "active_count": active_count})
+
+    @blueprint.route("/simulator/behind-the-scenes", methods=["GET"])
+    def simulator_behind_the_scenes():
+        redirect_response = require_session()
+        if redirect_response is not None:
+            return redirect_response
+        trace_id = request.args.get("trace_id", "")
+        from api.admin_bts_page import render_behind_the_scenes_html
+        return render_behind_the_scenes_html(
+            trace_id=trace_id,
+            profile_name=ctx.loaded_profile.module_path,
+        )

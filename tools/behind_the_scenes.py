@@ -198,6 +198,7 @@ def aggregate_trace_data(
     }
 
     tool_items: list[dict[str, Any]] = []
+    messages: list[dict[str, Any]] = []
     is_terminal = False
     terminal_outcome: str | None = None
     terminal_reason: str | None = None
@@ -221,6 +222,22 @@ def aggregate_trace_data(
             sender = entry.get("sender_identity") or ""
             txt = _safe_str(entry.get("raw_text") or entry.get("message") or "")
             stages["ingestion"]["details"] = f"מקור: {src} | שולח: {sender} | {txt}".strip(" | ")
+            messages.append({
+                "id": f"msg_{len(messages) + 1}",
+                "time": ts_raw,
+                "from_id": "user_client",
+                "from_label": f"משתמש ({sender})" if sender else "משתמש",
+                "from_icon": "👤",
+                "to_id": "main_agent",
+                "to_label": "סוכן ראשי",
+                "to_icon": "🤖",
+                "kind": "input",
+                "badge": "קליטת דיווח",
+                "title": "קליטת הודעת משתמש",
+                "summary": txt[:110] if txt else "הודעת פתיחה של סימולציה",
+                "body": txt,
+                "status": "success",
+            })
 
         # 2. Routing
         if event == "group_scope_applied":
@@ -239,6 +256,22 @@ def aggregate_trace_data(
             intent = entry.get("intent", "?")
             reason = _safe_str(entry.get("reason", ""))
             stages["intent_extraction"]["details"] = f"כוונה: {intent} ({reason})"
+            messages.append({
+                "id": f"msg_{len(messages) + 1}",
+                "time": ts_raw,
+                "from_id": "main_agent",
+                "from_label": "סוכן ראשי",
+                "from_icon": "🤖",
+                "to_id": "main_agent",
+                "to_label": "סוכן ראשי (הבנת כוונה)",
+                "to_icon": "🧠",
+                "kind": "intent",
+                "badge": "הבנת כוונה",
+                "title": f"סיווג כוונה: {intent}",
+                "summary": f"כוונה: {intent} — {reason[:90]}",
+                "body": f"כוונה: {intent}\nנימוק: {reason}",
+                "status": "success",
+            })
         elif event == "extraction_result":
             stages["intent_extraction"]["status"] = "success"
             cls_name = entry.get("classification") or "לא סווג"
@@ -263,34 +296,76 @@ def aggregate_trace_data(
             domains = entry.get("domains") or {}
             stages["agent_selection"]["details"] = f"תמונת מצב מתוכננת מול: {', '.join(domains.keys())}"
 
-        if event == "specialist_started":
+        if event in {"specialist_started", "step_start"}:
             ag = entry.get("agent", "")
-            if ag:
+            if ag and ag != "main_agent":
                 active_specialists.add(ag)
+                task_text = _safe_str(entry.get("task_text") or entry.get("task") or "")
+                step_idx = entry.get("step_index", len(agent_invocations.get(ag, [])) + 1)
                 agent_invocations.setdefault(ag, []).append({
                     "run_index": len(agent_invocations[ag]) + 1,
                     "parent": entry.get("parent_agent", "main_agent"),
                     "status": "running",
                     "started_at": ts_raw,
-                    "task": _safe_str(entry.get("task", "")),
+                    "task": task_text,
+                    "step_index": step_idx,
+                    "step_id": entry.get("step_id", str(step_idx)),
                 })
                 current_parallel_batch.append(ag)
-        elif event in {"specialist_finished", "specialist_failed", "specialist_timeout"}:
+                messages.append({
+                    "id": f"msg_{len(messages) + 1}",
+                    "time": ts_raw,
+                    "from_id": "main_agent",
+                    "from_label": "סוכן ראשי",
+                    "from_icon": "🤖",
+                    "to_id": f"specialist_{ag}",
+                    "to_label": _agent_display_name(ag),
+                    "to_icon": _agent_icon(ag),
+                    "kind": "delegation",
+                    "badge": "הוראת ביצוע",
+                    "title": f"הוראת ביצוע (צעד {step_idx}) אל {_agent_display_name(ag)}",
+                    "summary": f"משימה למומחה: {task_text[:110]}",
+                    "body": task_text,
+                    "status": "running",
+                })
+        elif event in {"specialist_finished", "specialist_failed", "specialist_timeout", "step_result", "step_failed"}:
             ag = entry.get("agent", "")
-            if ag:
+            if ag and ag != "main_agent":
                 active_specialists.discard(ag)
                 runs = agent_invocations.get(ag, [])
-                st = "failed" if "failed" in event or "timeout" in event else entry.get("status", "success")
+                is_err = "failed" in event or "timeout" in event or not entry.get("succeeded", True)
+                st = "failed" if is_err else "success"
+                res_text = _safe_str(entry.get("result_text") or entry.get("result") or "")
+                dur_ms = entry.get("duration_ms")
                 if runs:
                     runs[-1]["status"] = st
-                    runs[-1]["duration_ms"] = entry.get("duration_ms")
+                    runs[-1]["result"] = res_text
+                    if dur_ms is not None:
+                        runs[-1]["duration_ms"] = dur_ms
                 else:
                     agent_invocations[ag] = [{
                         "run_index": 1,
                         "parent": entry.get("parent_agent", "main_agent"),
                         "status": st,
                         "started_at": ts_raw,
+                        "result": res_text,
                     }]
+                messages.append({
+                    "id": f"msg_{len(messages) + 1}",
+                    "time": ts_raw,
+                    "from_id": f"specialist_{ag}",
+                    "from_label": _agent_display_name(ag),
+                    "from_icon": _agent_icon(ag),
+                    "to_id": "main_agent",
+                    "to_label": "סוכן ראשי",
+                    "to_icon": "🤖",
+                    "kind": "result",
+                    "badge": "תוצאת מומחה" if st == "success" else "שגיאת מומחה",
+                    "title": f"החזרת תוצאה מ-{_agent_display_name(ag)}",
+                    "summary": f"תוצאה: {res_text[:110]}" if res_text else ("הפעולה נכשלה" if st == "failed" else "הפעולה הושלמה"),
+                    "body": res_text or ("שגיאה בביצוע שלב המומחה" if st == "failed" else "הושלם ללא תוכן"),
+                    "status": st,
+                })
 
         # 5. Protocol Selection
         if event == "protocol_selection":
@@ -343,6 +418,23 @@ def aggregate_trace_data(
             }
             tool_items.append(item)
             stages["tool_execution"]["details"] = f"הופעלו {len(tool_items)} כלים"
+            messages.append({
+                "id": f"msg_{len(messages) + 1}",
+                "time": ts_raw,
+                "from_id": f"specialist_{ag}" if ag and ag != "main_agent" else "main_agent",
+                "from_label": _agent_display_name(ag) if ag else "סוכן ראשי",
+                "from_icon": _agent_icon(ag) if ag else "🤖",
+                "to_id": f"tool_{tool_name}",
+                "to_label": f"כלי: {tool_name}",
+                "to_icon": "🔧",
+                "kind": "tool",
+                "badge": "כלי (כתיבה)" if side_effecting else "כלי (קריאה)",
+                "title": f"הפעלת כלי {tool_name}",
+                "summary": f"קריאה לכלי {tool_name}: {res_summary[:90]}",
+                "body": res_summary,
+                "status": status,
+                "duration_ms": round(dur * 1000, 1),
+            })
         elif event == "tool_blocked":
             tool_name = entry.get("tool", "unknown")
             ag = entry.get("agent", "unknown")
@@ -357,6 +449,22 @@ def aggregate_trace_data(
                 "verification": "blocked",
                 "verification_note": "פעולה נחסמה",
             })
+            messages.append({
+                "id": f"msg_{len(messages) + 1}",
+                "time": ts_raw,
+                "from_id": f"specialist_{ag}" if ag and ag != "main_agent" else "main_agent",
+                "from_label": _agent_display_name(ag) if ag else "סוכן ראשי",
+                "from_icon": _agent_icon(ag) if ag else "🤖",
+                "to_id": f"tool_{tool_name}",
+                "to_label": f"כלי: {tool_name}",
+                "to_icon": "🔧",
+                "kind": "tool",
+                "badge": "כלי נחסם",
+                "title": f"חסימת כלי {tool_name}",
+                "summary": f"קריאה לכלי {tool_name} נחסמה עקב הרשאות",
+                "body": "הפעולה נחסמה",
+                "status": "failed",
+            })
 
         # 7. Persistence & Holds
         if event in {"hold_created", "hold_resolved"}:
@@ -365,12 +473,44 @@ def aggregate_trace_data(
             if event == "hold_created":
                 stages["persistence_verification"]["status"] = "waiting"
                 stages["persistence_verification"]["details"] = f"השהיה פעילה: {kind} ({_safe_str(entry.get('reason', ''))})"
+                messages.append({
+                    "id": f"msg_{len(messages) + 1}",
+                    "time": ts_raw,
+                    "from_id": "main_agent",
+                    "from_label": "סוכן ראשי",
+                    "from_icon": "🤖",
+                    "to_id": "commander_hold",
+                    "to_label": "אישור מפקד",
+                    "to_icon": "🛡️",
+                    "kind": "hold",
+                    "badge": "השהיה לאישור",
+                    "title": f"בקשת אישור ({kind})",
+                    "summary": f"השהיה פעילה: {_safe_str(entry.get('reason', ''))[:90]}",
+                    "body": _safe_str(entry.get('reason', '')),
+                    "status": "waiting",
+                })
             else:
                 stages["persistence_verification"]["status"] = "success"
                 stages["persistence_verification"]["details"] = f"השהיה אושרה ע\"י {entry.get('resolved_by', 'commander')}"
         elif event == "event_data_saved" or event == "attendance_cycle_opened":
             stages["persistence_verification"]["status"] = "success"
             stages["persistence_verification"]["details"] = "רשומת מצב נשמרה במסד"
+            messages.append({
+                "id": f"msg_{len(messages) + 1}",
+                "time": ts_raw,
+                "from_id": "main_agent",
+                "from_label": "סוכן ראשי",
+                "from_icon": "🤖",
+                "to_id": "persistence_store",
+                "to_label": "מסד נתונים (SQLite)",
+                "to_icon": "🗄️",
+                "kind": "persistence",
+                "badge": "שמירה במסד",
+                "title": "עדכון מצב תפעולי במסד",
+                "summary": "רשומת אירוע נשמרה במסד הנתונים ואומתה",
+                "body": "שמירת רשומת מצב במסד הנתונים ואימות",
+                "status": "success",
+            })
 
         # 8. Synthesis & Outcomes
         if event in {"step_start", "step_result", "step_retry", "step_failed"}:
@@ -396,6 +536,22 @@ def aggregate_trace_data(
             stages["synthesis"]["details"] = f"תוצאה סופית: {outcome}"
             if terminal_reason:
                 stages["synthesis"]["details"] += f" ({terminal_reason})"
+            messages.append({
+                "id": f"msg_{len(messages) + 1}",
+                "time": ts_raw,
+                "from_id": "main_agent",
+                "from_label": "סוכן ראשי",
+                "from_icon": "🤖",
+                "to_id": "user_client",
+                "to_label": "משתמש / ערוץ דיווח",
+                "to_icon": "👤",
+                "kind": "outcome",
+                "badge": "מענה סופי",
+                "title": f"מענה מסכם למשתמש ({outcome})",
+                "summary": f"תוצאה: {outcome} — {terminal_reason[:90] if terminal_reason else 'הבקשה טופלה במלואה'}",
+                "body": terminal_reason or f"סטטוס: {outcome}",
+                "status": "success" if outcome in {"succeeded", "closed_on_precedent"} else "failed",
+            })
 
             # If outcome is confirmed succeeded, verify side-effecting tools that completed
             if outcome == "succeeded":
@@ -496,17 +652,45 @@ def aggregate_trace_data(
     # -------------------------------------------------------------
     # Live Agent Execution Graph Construction
     # -------------------------------------------------------------
+    def _agent_icon(name: str) -> str:
+        icons = {
+            "main_agent": "🤖",
+            "team_status_agent": "📋",
+            "roster_agent": "📋",
+            "surveillance_agent": "👁️",
+            "neighboring_forces_agent": "🤝",
+            "security_agent": "🛡️",
+            "fire_agent": "🚒",
+            "firefighting_agent": "🚒",
+            "fire_station": "🚒",
+            "medical_agent": "🚑",
+            "engineering_agent": "⚙️",
+            "insights_agent": "💡",
+            "report_composer": "📊",
+            "persistence_store": "🗄️",
+            "user_client": "👤",
+            "final_outcome": "🎯",
+        }
+        return icons.get(name, "🤖")
+
     def _agent_display_name(name: str) -> str:
         hebrew_names = {
-            "main_agent": "סוכן ראשי",
-            "security_agent": "מומחה אבטחה",
-            "medical_agent": "מומחה רפואה",
-            "fire_agent": "מומחה כיבוי אש",
-            "engineering_agent": "מומחה הנדסה",
+            "main_agent": "סוכן ראשי (מתכלל)",
+            "team_status_agent": "מומחה נוכחות וכוח אדם",
+            "roster_agent": "מומחה נוכחות וכוח אדם",
             "surveillance_agent": "מומחה תצפית ורחפנים",
-            "insights_agent": "סוכן תובנות",
-            "report_composer": "מרכיב דוחות",
+            "neighboring_forces_agent": "מומחה כוחות שכנים וסיוע",
+            "security_agent": "מומחה אבטחה וכוננות",
+            "fire_agent": "מומחה כיבוי והצלה",
+            "firefighting_agent": "מומחה כיבוי והצלה",
+            "fire_station": "מומחה כיבוי והצלה",
+            "medical_agent": "מומחה רפואה ופינוי",
+            "engineering_agent": "מומחה הנדסה ותשתיות",
+            "insights_agent": "סוכן תובנות ומגמות",
+            "report_composer": "מרכיב דוחות תפעוליים",
             "persistence_store": "מסד נתונים ואימות",
+            "user_client": "משתמש / ערוץ דיווח",
+            "final_outcome": "מענה מסכם למשתמש",
         }
         return hebrew_names.get(name, name)
 
@@ -522,11 +706,35 @@ def aggregate_trace_data(
     graph_nodes: list[dict[str, Any]] = []
     graph_edges: list[dict[str, Any]] = []
 
+    # 0. User / Ingestion Node
+    has_user_input = bool(stages["ingestion"]["details"]) or any(m.get("from_id") == "user_client" for m in messages)
+    if has_user_input:
+        graph_nodes.append({
+            "id": "user_client",
+            "label": "משתמש / דיווח",
+            "sublabel": "Reporter / Telegram",
+            "icon": "👤",
+            "type": "user",
+            "status": "success",
+            "details": stages["ingestion"].get("details", ""),
+        })
+        graph_edges.append({
+            "id": "edge_user_main",
+            "source": "user_client",
+            "target": "main_agent",
+            "type": "input",
+            "status": "completed",
+            "label": "קליטת דיווח",
+            "message_count": 1,
+            "last_message": stages["ingestion"].get("details", "")[:80],
+        })
+
     # 1. Center: Main Agent
     graph_nodes.append({
         "id": "main_agent",
-        "label": "סוכן ראשי",
+        "label": "סוכן ראשי (מתכלל)",
         "sublabel": "Main Agent Orchestrator",
+        "icon": "🤖",
         "type": "main",
         "status": main_status,
         "intent": stages["intent_extraction"].get("details", ""),
@@ -546,6 +754,7 @@ def aggregate_trace_data(
         ag_status = runs[-1]["status"] if runs else "unknown"
         ag_dur = sum(float(r.get("duration_ms") or 0.0) for r in runs)
         ag_tasks = [r.get("task") for r in runs if r.get("task")]
+        ag_results = [r.get("result") for r in runs if r.get("result")]
         ag_tools = [t for t in tool_items if t["agent"] == ag_name]
         retries = sum(1 for r in runs if r.get("status") == "retry")
 
@@ -554,15 +763,21 @@ def aggregate_trace_data(
             "id": node_id,
             "label": _agent_display_name(ag_name),
             "sublabel": ag_name,
+            "icon": _agent_icon(ag_name),
             "type": "specialist",
             "status": ag_status,
             "is_parallel": is_parallel,
             "duration_ms": round(ag_dur, 1) if ag_dur > 0 else None,
             "call_count": len(runs),
             "tasks": ag_tasks,
+            "results": ag_results,
             "tools": ag_tools,
             "retries": retries,
         })
+
+        # Count messages between main_agent and this specialist
+        spec_msgs = [m for m in messages if m.get("to_id") == node_id or m.get("from_id") == node_id]
+        last_spec_msg = spec_msgs[-1]["summary"] if spec_msgs else ""
 
         # Connecting edge from Main Agent to Specialist
         edge_status = "active" if ag_status == "running" else ("completed" if ag_status == "success" else ("failed" if ag_status == "failed" else "pending"))
@@ -573,7 +788,9 @@ def aggregate_trace_data(
             "type": "delegation",
             "status": edge_status,
             "is_parallel": is_parallel,
-            "label": "במקביל (Parallel)" if is_parallel else "הפעלה",
+            "label": "במקביל (Parallel) ⚡" if is_parallel else "הוראת ביצוע",
+            "message_count": len(spec_msgs),
+            "last_message": last_spec_msg,
         })
 
         # 3. Sub-nodes for Tools executed by this specialist
@@ -583,6 +800,7 @@ def aggregate_trace_data(
                 "id": tool_node_id,
                 "label": t_info["tool"],
                 "sublabel": "פעולת כתיבה" if t_info["side_effecting"] else "פעולת קריאה",
+                "icon": "🔧",
                 "type": "tool",
                 "parent": node_id,
                 "status": t_info["status"],
@@ -599,6 +817,8 @@ def aggregate_trace_data(
                 "type": "tool_call",
                 "status": "completed" if t_info["status"] == "success" else ("failed" if t_info["status"] == "failed" else "active"),
                 "label": "כלי (כתיבה)" if t_info["side_effecting"] else "כלי (קריאה)",
+                "message_count": 1,
+                "last_message": t_info["summary"][:80],
             })
 
     # Tools called directly by Main Agent or unknown
@@ -609,6 +829,7 @@ def aggregate_trace_data(
             "id": tool_node_id,
             "label": t_info["tool"],
             "sublabel": "כלי ישיר",
+            "icon": "🔧",
             "type": "tool",
             "parent": "main_agent",
             "status": t_info["status"],
@@ -625,6 +846,8 @@ def aggregate_trace_data(
             "type": "tool_call",
             "status": "completed" if t_info["status"] == "success" else "failed",
             "label": "כלי ישיר",
+            "message_count": 1,
+            "last_message": t_info["summary"][:80],
         })
 
     # Persistence / Database Node (if write tools or persistence verification ran)
@@ -634,8 +857,9 @@ def aggregate_trace_data(
         store_node_id = "persistence_store"
         graph_nodes.append({
             "id": store_node_id,
-            "label": "שמירה ואימות נתונים",
+            "label": "מסד נתונים ואימות",
             "sublabel": "SQLite Store & Verification",
+            "icon": "🗄️",
             "type": "persistence",
             "status": persist_status if persist_status != "pending" else "running",
             "details": stages["persistence_verification"].get("details", ""),
@@ -648,6 +872,32 @@ def aggregate_trace_data(
             "type": "persistence",
             "status": "completed" if persist_status == "success" else ("active" if persist_status in {"running", "waiting"} else "pending"),
             "label": "שמירה / אימות",
+            "message_count": 1,
+            "last_message": stages["persistence_verification"].get("details", "")[:80],
+        })
+
+    # Final Outcome Delivery Node (if completed)
+    if is_terminal and terminal_outcome:
+        outcome_node_id = "final_outcome"
+        is_succ = terminal_outcome in {"succeeded", "completed", "closed_on_precedent"}
+        graph_nodes.append({
+            "id": outcome_node_id,
+            "label": f"מענה סופי: {terminal_outcome}",
+            "sublabel": "Final Outcome Delivery",
+            "icon": "✅" if is_succ else "❌",
+            "type": "outcome",
+            "status": "success" if is_succ else "failed",
+            "details": terminal_reason or f"סטטוס סופי: {terminal_outcome}",
+        })
+        graph_edges.append({
+            "id": "edge_main_outcome",
+            "source": "main_agent",
+            "target": outcome_node_id,
+            "type": "outcome",
+            "status": "completed" if is_succ else "failed",
+            "label": "מסירת מענה",
+            "message_count": 1,
+            "last_message": (terminal_reason or terminal_outcome)[:80],
         })
 
     graph_payload = {
@@ -666,6 +916,7 @@ def aggregate_trace_data(
         "stages": list(stages.values()),
         "collaboration": collaboration,
         "tool_items": tool_items,
+        "messages": messages,
         "event_count": len(entries),
         "graph": graph_payload,
     }

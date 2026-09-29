@@ -599,7 +599,7 @@ SIMULATOR_BODY = """
     <div class="sim-actions">
       <button type="button" class="btn btn-console-primary" id="send-next" disabled>{{ t('admin.simulator.send_next') }}</button>
       <button type="button" class="btn btn-console-danger" id="reset-view" disabled>{{ t('admin.simulator.reset_view') }}</button>
-      <button type="button" class="btn btn-console" id="toggle-bts">🔍 {{ t('admin.simulator.bts.toggle_btn') }}</button>
+      <button type="button" class="btn btn-console" id="toggle-bts" title="פתח גרף ביצוע ותקשורת סוכנים בזמן אמת בחלון נפרד">🔍 {{ t('admin.simulator.bts.toggle_btn') }} (חלון נפרד) ↗</button>
     </div>
     <div class="sim-actions">
       <label class="form-label-console" for="profile-simulation-select">{{ t('admin.simulator.profile_simulations') }}</label>
@@ -1717,15 +1717,35 @@ SIMULATOR_BODY = """
       hideNodeDetail();
     }
 
+    function openSeparateWindow() {
+      const trace = currentTraceId || '';
+      const url = '/admin/simulator/behind-the-scenes' + (trace ? '?trace_id=' + encodeURIComponent(trace) : '');
+      const win = window.open(url, 'AgentsHubBehindTheScenes', 'width=1520,height=940,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes');
+      if (win) {
+        win.focus();
+      }
+    }
+
     function toggle() {
-      if (isOpen) close();
-      else open(currentTraceId);
+      openSeparateWindow();
     }
 
     function track(traceId) {
       if (!traceId) return;
       currentTraceId = traceId;
       if (traceIdLabel) traceIdLabel.textContent = traceId;
+
+      // Broadcast to separate window in real-time
+      if (window.BroadcastChannel) {
+        try {
+          const ch = new BroadcastChannel('agentshub_trace_sync');
+          ch.postMessage({ traceId: traceId, timestamp: Date.now() });
+        } catch (e) {}
+      }
+      try {
+        localStorage.setItem('agentshub_active_trace', JSON.stringify({ traceId: traceId, timestamp: Date.now() }));
+      } catch (e) {}
+
       if (isOpen) {
         renderHeader(traceId, 'running');
         startPolling();

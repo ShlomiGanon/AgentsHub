@@ -77,7 +77,7 @@ from orchestrator.group_routing import (  # re-exported: api may only import orc
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
 from protocols import CriticalityLevel, EVENT_DATA_FIELDS, ResourceUnavailable, Step, StepOutcome
 from protocols.executor import execute_steps
-from agents import AgentModelError, AgentTimeoutError, authenticated_request_identity
+from agents import AgentModelError, AgentTimeoutError, authenticated_request_identity, is_retryable_invocation_error
 from messages import get_catalog
 from tools import get_trace_id
 
@@ -197,6 +197,8 @@ def _model_invoker_for(main_agent: "MainAgent"):
         try:
             agent_result = main_agent.process(prompt, [])
         except (AgentTimeoutError, AgentModelError) as exc:
+            if not is_retryable_invocation_error(exc):
+                raise
             # Stage 2 (docs/bar_improves.md): the raw report text is already
             # persisted before extraction ever runs (`begin_report`), so a
             # single transient provider timeout/error should not lose the
