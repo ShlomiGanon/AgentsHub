@@ -5,9 +5,10 @@ docs/Profile_Split_Plan.md)."""
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agents import FriendlyForcesAgent, SurveillanceAgent, TeamStatusAgent, get_authenticated_request_identity, tool
+from agents import Agent, NeighboringForcesAgent, SurveillanceAgent, TeamStatusAgent, get_authenticated_request_identity, tool
 from messages import get_catalog
-from persistence import open_team_status_persistence
+from persistence import open_response_team_surveillance_store, open_team_status_persistence
+from profiles.admin_tables import AdminColumn, AdminTable
 from profiles.contracts import AgentSpec, OptimizationPolicy
 from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
 from protocols import CriticalityLevel, Protocol
@@ -31,9 +32,27 @@ _PROFILE_DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "firefight
 _PROFILE_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_history.db")
+# The fire station itself -- the natural drone home base for this profile, mirroring
+# response_team.py's own DRONES_WAREHOUSE (docs/Admin_Tables_Plan.md section 1).
+FIREFIGHTING_DRONE_HOME = "fire_station"
 FIREFIGHTING_SURVEILLANCE_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_surveillance.db")
 FIREFIGHTING_CREW_STATUS_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_crew_status.db")
-RESETTABLE_DATABASES = (DB_PATH, FIREFIGHTING_SURVEILLANCE_DB_PATH, FIREFIGHTING_CREW_STATUS_DB_PATH)
+FIREFIGHTING_FORCES_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_forces.db")
+RESETTABLE_DATABASES = (
+    DB_PATH, FIREFIGHTING_SURVEILLANCE_DB_PATH, FIREFIGHTING_CREW_STATUS_DB_PATH, FIREFIGHTING_FORCES_DB_PATH,
+)
+
+# Mutual-aid force kinds and their home/staging area -- one of this profile's own 6 declared
+# AREAS each, chosen from where each kind is actually mentioned in the FIRE_002 simulation text
+# (docs/Admin_Tables_Plan.md section 3.1; see that doc for the exact quotes/citations and the
+# explicit caveat that `ambulance`'s value below has no supporting simulation text at all).
+FORCE_BASES = {
+    "police": "ornim_street",
+    "water_tankers": "chemical_plant",
+    "aircraft": "pine_ridge",
+    "ambulance": "ornim_street",
+}
+FORCE_POOL_SIZE = 2
 
 # The dashboard runs exactly one profile at a time.  Both selectable profiles
 # therefore use the deployment's single Telegram bot token; the supervisor
@@ -44,9 +63,23 @@ MODEL_CREDENTIAL_ENVS = []
 
 class FirefightingSurveillanceAgent(SurveillanceAgent):
     """Binds the reusable visual-surveillance specialist to this profile's own DB --
-    fire cameras and thermal sensors (docs/Profile_Split_Plan.md section 4.2)."""
+    fire cameras and thermal sensors (docs/Profile_Split_Plan.md section 4.2).
+
+    Opens the same already-generic `ResponseTeamSurveillanceStore`
+    (`open_response_team_surveillance_store`, despite the module name -- see
+    docs/Admin_Tables_Plan.md section 1) `profiles/response_team.py` uses, with this profile's
+    own DB path and home area, instead of the shared base's default hardcoded-`'central_hub'`
+    store -- so `return_drone_to_base` (recall, already declared on the shared
+    `SurveillanceAgent` base) works for this profile exactly like it does for response_team,
+    with no per-profile recall tool needed."""
 
     surveillance_db_path = FIREFIGHTING_SURVEILLANCE_DB_PATH
+
+    def __init__(self, model: str, api_key: str | None = None):
+        self.surveillance_store = open_response_team_surveillance_store(
+            self.surveillance_db_path, home_area=FIREFIGHTING_DRONE_HOME
+        )
+        Agent.__init__(self, model, api_key)
 
 
 class FirefightingCrewStatusAgent(TeamStatusAgent):
@@ -128,47 +161,23 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         return f"Crew shift availability recorded for {stored} approved member(s)."
 
 
-class FirefightingExternalForcesAgent(FriendlyForcesAgent):
-    """Extends the reusable friendly-forces dispatch specialist with two fire-service-specific
-    mutual-aid tools (docs/Profile_Split_Plan.md section 4.2) -- FIRE_002's phase 3 needs tanker-truck
-    and firefighting-aircraft dispatch, actions the base class's four tools (ambulance/police/
-    firefighters/military) do not cover. dispatch_police/dispatch_ambulance are inherited unchanged
-    for the police-cordon and casualty-adjacent needs elsewhere in the scenario."""
+class FirefightingExternalForcesAgent(NeighboringForcesAgent):
+    """Mutual-aid dispatch specialist -- a thin subclass of the shared
+    `agents.neighboring_forces_agent.NeighboringForcesAgent` (docs/Admin_Tables_Plan.md sections
+    3/3.2), giving this profile the exact same persisted dispatch-log + computed-remaining-
+    capacity mechanism `response_team.py` has, instead of the previous in-memory
+    `agents.friendly_forces_agent.FriendlyForcesAgent`-based stand-in. `dispatch_police`,
+    `dispatch_ambulance`, `dispatch_water_tankers`, and `dispatch_aircraft` no longer exist as
+    separate tools -- every kind now goes through the shared base's single
+    `dispatch_neighboring_force(kind, target_area, unit_count, note)` tool, with `kind` selecting
+    among `police|ambulance|water_tankers|aircraft`. No override of `_resolve_kind`/
+    `_check_capacity` is needed -- this profile has no non-force kind like response_team's own
+    "squad", so the shared base's defaults, driven by `FORCE_BASES`/`FORCE_POOL_SIZE` below, are
+    exactly right as-is."""
 
-    @tool(
-        "dispatch_water_tankers",
-        "Records a request to send water-tanker trucks (mutual aid from another station) to a "
-        "named location. Side-effecting and not idempotent -- running it twice records two "
-        "dispatch requests, not one.",
-        side_effecting=True,
-        idempotent=False,
-    )
-    def dispatch_water_tankers(
-        self, location: str, tanker_count: int = 1, source_station: str = "", note: str = ""
-    ) -> str:
-        record = (
-            f"water tanker dispatch requested for '{location}': tanker_count={tanker_count}"
-            f"{f', source_station={source_station}' if source_station else ''}{f', note={note}' if note else ''}"
-        )
-        self.dispatches_recorded.append(record)
-        return f"recorded water tanker dispatch request for '{location}'"
-
-    @tool(
-        "dispatch_aircraft",
-        "Records a request to send firefighting aircraft to a named location. Side-effecting and "
-        "not idempotent -- running it twice records two dispatch requests, not one.",
-        side_effecting=True,
-        idempotent=False,
-    )
-    def dispatch_aircraft(
-        self, location: str, aircraft_count: int = 1, aircraft_type: str = "firefighting", note: str = ""
-    ) -> str:
-        record = (
-            f"aircraft dispatch requested for '{location}': aircraft_count={aircraft_count}, "
-            f"aircraft_type={aircraft_type}{f', note={note}' if note else ''}"
-        )
-        self.dispatches_recorded.append(record)
-        return f"recorded aircraft dispatch request for '{location}'"
+    dispatch_db_path = FIREFIGHTING_FORCES_DB_PATH
+    force_bases = FORCE_BASES
+    force_pool_size = FORCE_POOL_SIZE
 
 
 AGENTS = [
@@ -293,8 +302,8 @@ PROTOCOLS = [
             "with no dispatch decision yet (use report_fire_incident or "
             "overall_situational_picture first for those)."
         ),
-        participating_agents=("friendly_forces_agent",),
-        approved_tools=("dispatch_water_tankers", "dispatch_aircraft", "dispatch_police"),
+        participating_agents=("neighboring_forces_agent",),
+        approved_tools=("dispatch_neighboring_force",),
         expected_success_output="Confirmation that the requested mutual-aid resource(s) were dispatched.",
         criticality=CriticalityLevel.HIGH,
         approval_flag=True,
@@ -401,7 +410,7 @@ SIMULATION_USERS = [
 SIMULATION_GROUPS = [
     SimulationGroup(key="fire_response_team", offset=0, agent_name="team_status_agent", label=_catalog_text("firefighting.simulation.fire002.group.fire_response_team.label")),
     SimulationGroup(key="fire_cameras", offset=1, agent_name="surveillance_agent", label=_catalog_text("firefighting.simulation.fire002.group.fire_cameras.label")),
-    SimulationGroup(key="fire_external_forces", offset=2, agent_name="friendly_forces_agent", label=_catalog_text("firefighting.simulation.fire002.group.fire_external_forces.label")),
+    SimulationGroup(key="fire_external_forces", offset=2, agent_name="neighboring_forces_agent", label=_catalog_text("firefighting.simulation.fire002.group.fire_external_forces.label")),
 ]
 
 SIMULATION_ROSTERS = [
@@ -585,4 +594,115 @@ SIMULATIONS = [
     },
     ),
 ]
+
+
+# == Admin-panel tables (docs/Admin_Tables_Plan.md) ==========================
+#
+# Every write_fn is a thin wrapper around a store method on the same already-shared store
+# classes response_team.py uses (persistence/response_team_store.py's
+# ResponseTeamSurveillanceStore/NeighboringForceStore, persistence/team_status_store.py's
+# SQLiteTeamStatusPersistence) -- proof this mechanism is genuinely shared, not just the same
+# shape reimplemented per profile.
+
+
+def _drones_list(deps) -> list:
+    return deps.registry.get("surveillance_agent").surveillance_store.list_drones()
+
+
+def _drones_get(deps, drone_id: str):
+    return deps.registry.get("surveillance_agent").surveillance_store.get_drone(drone_id)
+
+
+def _drones_write(deps, row: dict) -> None:
+    store = deps.registry.get("surveillance_agent").surveillance_store
+    store.admin_update_drone(row["drone_id"], **{k: v for k, v in row.items() if k != "drone_id"})
+
+
+def _attendance_list(deps) -> list:
+    return deps.registry.get("team_status_agent").status_store.list_responses()
+
+
+def _attendance_get(deps, response_id: str):
+    return deps.registry.get("team_status_agent").status_store.get_response(response_id)
+
+
+def _attendance_write(deps, row: dict) -> None:
+    store = deps.registry.get("team_status_agent").status_store
+    store.admin_update_attendance_fields(row["response_id"], **{k: v for k, v in row.items() if k != "response_id"})
+
+
+def _forces_list(deps) -> list:
+    return deps.registry.get("neighboring_forces_agent").dispatch_store.list_dispatches()
+
+
+def _forces_get(deps, request_id: str):
+    return deps.registry.get("neighboring_forces_agent").dispatch_store.get_dispatch(request_id)
+
+
+def _forces_write(deps, row: dict) -> None:
+    store = deps.registry.get("neighboring_forces_agent").dispatch_store
+    store.admin_update_dispatch(row["request_id"], **{k: v for k, v in row.items() if k != "request_id"})
+
+
+ADMIN_TABLES = (
+    AdminTable(
+        key="drones",
+        label="Drones",
+        primary_key="drone_id",
+        columns=(
+            AdminColumn("drone_id", "Drone ID", editable=False),
+            AdminColumn("callsign", "Callsign", required=True),
+            AdminColumn("model", "Model"),
+            AdminColumn(
+                "status", "Status", kind="select",
+                choices=("ready", "in_flight", "charging", "maintenance"), required=True,
+            ),
+            AdminColumn("battery_percent", "Battery %", kind="number"),
+            AdminColumn("current_area", "Current area"),
+            AdminColumn("assigned_mission_id", "Assigned mission ID"),
+            AdminColumn("last_updated", "Last updated", editable=False),
+        ),
+        list_fn=_drones_list, get_fn=_drones_get, write_fn=_drones_write,
+    ),
+    AdminTable(
+        key="attendance",
+        label="Crew Shift Attendance",
+        primary_key="response_id",
+        columns=(
+            AdminColumn("response_id", "Response ID", editable=False),
+            AdminColumn("telegram_identity", "Member", editable=False),
+            AdminColumn("availability", "Availability", kind="select", choices=("available", "unavailable")),
+            AdminColumn("reason", "Reason"),
+            AdminColumn("unavailable_until", "Unavailable until"),
+            AdminColumn(
+                "approval_status", "Approval status", kind="select",
+                choices=("accepted", "pending", "rejected"),
+            ),
+            AdminColumn("reviewed_by", "Reviewed by", editable=False),
+            AdminColumn("reviewed_at", "Reviewed at", editable=False),
+            AdminColumn("original_text", "Original text", editable=False),
+            AdminColumn("received_at", "Received at", editable=False),
+        ),
+        list_fn=_attendance_list, get_fn=_attendance_get, write_fn=_attendance_write,
+    ),
+    AdminTable(
+        key="forces",
+        label="Friendly Forces",
+        primary_key="request_id",
+        columns=(
+            AdminColumn("request_id", "Request ID", editable=False),
+            AdminColumn("force_kind", "Force kind", required=True),
+            AdminColumn("unit_count", "Unit count", kind="number", required=True),
+            AdminColumn("origin_area", "Origin area"),
+            AdminColumn("target_area", "Target area"),
+            AdminColumn("status", "Status", kind="select", choices=("en_route", "arrived")),
+            AdminColumn("dispatched_at", "Dispatched at", editable=False),
+            AdminColumn("eta_seconds", "ETA (seconds)", kind="number"),
+            AdminColumn("arrived_at", "Arrived at"),
+            AdminColumn("note", "Note"),
+            AdminColumn("event_id", "Event ID", editable=False),
+        ),
+        list_fn=_forces_list, get_fn=_forces_get, write_fn=_forces_write,
+    ),
+)
 

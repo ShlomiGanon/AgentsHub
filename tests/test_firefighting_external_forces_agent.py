@@ -1,114 +1,81 @@
-"""Covers FirefightingExternalForcesAgent's two new mutual-aid tools (Profile Split Plan
-section 4.2) -- dispatch_water_tankers and dispatch_aircraft -- mirroring
-tests/test_friendly_forces_agent.py's coverage style for the base class's own four tools."""
+"""profiles/firefighting.py's FirefightingExternalForcesAgent (docs/Admin_Tables_Plan.md
+sections 3/3.2/7.1) -- a thin subclass of the shared, persisted
+agents.neighboring_forces_agent.NeighboringForcesAgent, replacing the previous in-memory
+dispatch_police/dispatch_ambulance/dispatch_water_tankers/dispatch_aircraft tools with the one
+shared dispatch_neighboring_force(kind, target_area, unit_count, note) tool, backed by a real
+dispatch-log table and the same busy-window remaining-capacity mechanism response_team.py has."""
 
-from agents import base
-from profiles.firefighting import FirefightingExternalForcesAgent
-
-
-def test_constructed_with_a_model_like_any_other_agent():
-    agent = FirefightingExternalForcesAgent(model="some-model")
-
-    assert agent.model == "some-model"
-    assert agent.name == "friendly_forces_agent"  # inherited registry key, unchanged (decision 1)
+import profiles.firefighting as ff
 
 
-def test_exposes_the_four_inherited_tools_plus_the_two_new_ones():
-    agent = FirefightingExternalForcesAgent(model="m")
+def _agent(tmp_path, monkeypatch):
+    monkeypatch.setattr(ff.FirefightingExternalForcesAgent, "dispatch_db_path", str(tmp_path / "forces.db"))
+    return ff.FirefightingExternalForcesAgent(model="test-model")
+
+
+def test_constructed_with_a_model_like_any_other_agent(tmp_path, monkeypatch):
+    agent = _agent(tmp_path, monkeypatch)
+
+    assert agent.model == "test-model"
+    assert agent.name == "neighboring_forces_agent"
+
+
+def test_exposes_exactly_the_one_shared_dispatch_tool(tmp_path, monkeypatch):
+    agent = _agent(tmp_path, monkeypatch)
     tools = {t.name: t for t in agent.exposed_tools()}
 
-    assert set(tools) == {
-        "dispatch_ambulance", "dispatch_police", "dispatch_firefighters", "dispatch_military",
-        "dispatch_water_tankers", "dispatch_aircraft",
-    }
-    for tool_info in tools.values():
-        assert tool_info.side_effecting is True
-        assert tool_info.idempotent is False
+    assert set(tools) == {"dispatch_neighboring_force", "list_neighboring_force_dispatches"}
+    assert tools["dispatch_neighboring_force"].side_effecting is True
+    assert tools["dispatch_neighboring_force"].idempotent is False
 
 
-def test_dispatch_water_tankers_records_the_request_and_confirms():
-    agent = FirefightingExternalForcesAgent(model="m")
+def test_dispatch_water_tankers_records_a_real_row_and_confirms(tmp_path, monkeypatch):
+    agent = _agent(tmp_path, monkeypatch)
 
-    token = base._current_allowed_tools.set(frozenset({"dispatch_water_tankers"}))
-    try:
-        result = agent._wrapped_tools["dispatch_water_tankers"](
-            location="chemical_plant", tanker_count=4, source_station="neighboring station", note="water curtain"
-        )
-    finally:
-        base._current_allowed_tools.reset(token)
+    # unit_count=2, not more: FORCE_POOL_SIZE is 2 for every kind (profiles/firefighting.py
+    # section 3.1) -- requesting more than the pool holds is exactly what the resource-
+    # unavailable test below already covers.
+    result = agent.dispatch_neighboring_force(kind="water_tankers", target_area="chemical_plant", unit_count=2)
 
-    assert "chemical_plant" in result
-    assert len(agent.dispatches_recorded) == 1
-    assert "tanker_count=4" in agent.dispatches_recorded[0]
-    assert "source_station=neighboring station" in agent.dispatches_recorded[0]
-    assert "note=water curtain" in agent.dispatches_recorded[0]
+    assert "dispatch recorded, en route to chemical_plant" in result
+    rows = agent.dispatch_store.list_dispatches()
+    assert len(rows) == 1
+    assert rows[0]["force_kind"] == "water_tankers"
+    assert rows[0]["origin_area"] == "chemical_plant"  # profiles/firefighting.py's FORCE_BASES
+    assert rows[0]["unit_count"] == 2
 
 
-def test_dispatch_water_tankers_is_blocked_when_not_allowed():
-    agent = FirefightingExternalForcesAgent(model="m")
+def test_dispatch_aircraft_records_a_real_row_with_its_own_home_area(tmp_path, monkeypatch):
+    agent = _agent(tmp_path, monkeypatch)
 
-    token = base._current_allowed_tools.set(frozenset({"dispatch_aircraft"}))  # dispatch_water_tankers not allowed
-    try:
-        result = agent._wrapped_tools["dispatch_water_tankers"](location="chemical_plant")
-    finally:
-        base._current_allowed_tools.reset(token)
+    result = agent.dispatch_neighboring_force(kind="aircraft", target_area="chemical_plant", unit_count=2)
 
-    assert "not permitted" in result
-    assert agent.dispatches_recorded == []
+    assert "dispatch recorded" in result
+    rows = agent.dispatch_store.list_dispatches()
+    assert rows[0]["origin_area"] == "pine_ridge"  # profiles/firefighting.py's FORCE_BASES
 
 
-def test_dispatch_water_tankers_genuinely_records_each_call_it_receives():
-    agent = FirefightingExternalForcesAgent(model="m")
+def test_dispatch_neighboring_force_signals_resource_unavailable_once_the_pool_is_exhausted(tmp_path, monkeypatch):
+    agent = _agent(tmp_path, monkeypatch)
+    agent.dispatch_neighboring_force(kind="police", target_area="ornim_street", unit_count=2)
 
-    token = base._current_allowed_tools.set(frozenset({"dispatch_water_tankers"}))
-    try:
-        agent._wrapped_tools["dispatch_water_tankers"](location="chemical_plant")
-        agent._wrapped_tools["dispatch_water_tankers"](location="chemical_plant")
-    finally:
-        base._current_allowed_tools.reset(token)
+    result = agent.dispatch_neighboring_force(kind="police", target_area="ornim_street", unit_count=1)
 
-    assert len(agent.dispatches_recorded) == 2
+    assert "dispatch failed" in result
+    assert agent.take_resource_unavailable_signal() is not None
 
 
-def test_dispatch_aircraft_records_the_request_and_confirms():
-    agent = FirefightingExternalForcesAgent(model="m")
+def test_an_unknown_force_kind_asks_for_clarification_and_records_nothing(tmp_path, monkeypatch):
+    agent = _agent(tmp_path, monkeypatch)
 
-    token = base._current_allowed_tools.set(frozenset({"dispatch_aircraft"}))
-    try:
-        result = agent._wrapped_tools["dispatch_aircraft"](
-            location="pine_ridge", aircraft_count=2, note="firebreak support"
-        )
-    finally:
-        base._current_allowed_tools.reset(token)
+    result = agent.dispatch_neighboring_force(kind="bulldozer", target_area="chemical_plant")
 
-    assert "pine_ridge" in result
-    assert len(agent.dispatches_recorded) == 1
-    assert "aircraft_count=2" in agent.dispatches_recorded[0]
-    assert "aircraft_type=firefighting" in agent.dispatches_recorded[0]  # default value
-    assert "note=firebreak support" in agent.dispatches_recorded[0]
+    assert "Clarification required" in result
+    assert agent.dispatch_store.list_dispatches() == []
 
 
-def test_dispatch_aircraft_is_blocked_when_not_allowed():
-    agent = FirefightingExternalForcesAgent(model="m")
+def test_calling_a_removed_tool_name_directly_no_longer_exists(tmp_path, monkeypatch):
+    agent = _agent(tmp_path, monkeypatch)
 
-    token = base._current_allowed_tools.set(frozenset({"dispatch_water_tankers"}))  # dispatch_aircraft not allowed
-    try:
-        result = agent._wrapped_tools["dispatch_aircraft"](location="pine_ridge")
-    finally:
-        base._current_allowed_tools.reset(token)
-
-    assert "not permitted" in result
-    assert agent.dispatches_recorded == []
-
-
-def test_dispatch_aircraft_genuinely_records_each_call_it_receives():
-    agent = FirefightingExternalForcesAgent(model="m")
-
-    token = base._current_allowed_tools.set(frozenset({"dispatch_aircraft"}))
-    try:
-        agent._wrapped_tools["dispatch_aircraft"](location="pine_ridge")
-        agent._wrapped_tools["dispatch_aircraft"](location="pine_ridge")
-    finally:
-        base._current_allowed_tools.reset(token)
-
-    assert len(agent.dispatches_recorded) == 2
+    assert not hasattr(agent, "dispatch_water_tankers")
+    assert not hasattr(agent, "dispatch_police")

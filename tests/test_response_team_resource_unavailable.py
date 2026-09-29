@@ -13,7 +13,13 @@ import profiles.response_team as rt
 
 
 def _neighboring_forces_agent(tmp_path, monkeypatch):
-    monkeypatch.setattr(rt, "DB_PATH", str(tmp_path / "response_team.db"))
+    db_path = str(tmp_path / "response_team.db")
+    monkeypatch.setattr(rt, "DB_PATH", db_path)
+    # `dispatch_db_path` is a class attribute bound at class-definition time (the same pattern
+    # every other DB-backed agent in this codebase uses, e.g. FirefightingCrewStatusAgent's own
+    # `status_db_path`) -- monkeypatching the module-level DB_PATH alone doesn't reach it, so it
+    # needs its own override too, kept consistent with the same tmp_path.
+    monkeypatch.setattr(rt.NeighboringForcesAgent, "dispatch_db_path", db_path)
     return rt.NeighboringForcesAgent(model="test-model")
 
 
@@ -125,7 +131,9 @@ def test_dispatch_neighboring_force_squad_signals_resource_unavailable_when_too_
 
     result = agent.dispatch_neighboring_force(kind="squad", target_area="east_orchards", unit_count=2)
 
-    assert "Squad dispatch failed" in result
+    # agents/neighboring_forces_agent.py's shared dispatch_neighboring_force always lowercases
+    # kind_norm for this prefix (docs/Admin_Tables_Plan.md section 3.3's extracted base class).
+    assert "squad dispatch failed" in result
     signal = agent.take_resource_unavailable_signal()
     assert signal is not None
     resource_kind, area, reason = signal
@@ -139,7 +147,7 @@ def test_dispatch_neighboring_force_squad_signals_when_no_members_are_registered
 
     result = agent.dispatch_neighboring_force(kind="squad", target_area="east_orchards", unit_count=1)
 
-    assert "Squad dispatch failed" in result
+    assert "squad dispatch failed" in result
     resource_kind, _area, _reason = agent.take_resource_unavailable_signal()
     assert resource_kind == "squad_member"
 

@@ -170,6 +170,7 @@ def build_context(
     users=((VIEWER_IDENTITY, "viewer"), (COMMANDER_IDENTITY, "commander"), (SENSOR_IDENTITY, "viewer")),
     conversation_history_turns=0,
     simulation_users=(), simulation_groups=(), simulations=(), simulator_port=None,
+    admin_tables=(),
 ) -> ApiContext:
     persistence = SQLitePersistence(str(tmp_path / "api_test.db"))
     for identity, level in users:
@@ -214,7 +215,7 @@ def build_context(
         loaded_profile=_FakeLoadedProfile(
             module_path or "fixtures.profiles.minimal_profile", conversation_history_turns=conversation_history_turns,
             simulation_users=simulation_users, simulation_groups=simulation_groups, simulations=simulations,
-            simulator_port=simulator_port,
+            simulator_port=simulator_port, admin_tables=admin_tables,
         ),
         queue=queue,
         scheduler=scheduler,
@@ -237,7 +238,7 @@ class _FakeLoadedProfile:
     def __init__(
         self, module_path: str, conversation_history_turns: int = 0,
         simulation_users: tuple = (), simulation_groups: tuple = (), simulations: tuple = (),
-        simulator_port: int | None = None,
+        simulator_port: int | None = None, admin_tables: tuple = (),
     ):
         from profiles.loader import hash_profile_file
 
@@ -264,6 +265,10 @@ class _FakeLoadedProfile:
         # real LoadedProfile's default — a test exercising the /admin/simulator/bot-msg
         # proxy route passes a real port instead.
         self.simulator_port = simulator_port
+        # Optional (docs/Admin_Tables_Plan.md); empty by default, mirroring the real
+        # LoadedProfile's own default — a test exercising /admin/tables/... passes real
+        # AdminTable declarations instead.
+        self.admin_tables = admin_tables
         # Captured once, here, at "load" time — like the real LoadedProfile
         # does — not recomputed live. A property recomputing it on every
         # access would always equal api/management.py's own fresh recompute,

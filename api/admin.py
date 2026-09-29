@@ -61,12 +61,28 @@ from api.admin_api_pages import (
     PROFILES_BODY,
     PROTOCOLS_BODY,
 )
+from api.admin_tables import (
+    ADMIN_TABLES_EDIT_BODY,
+    ADMIN_TABLES_LIST_BODY,
+    AdminFormError,
+    find_admin_table,
+    parse_admin_table_form,
+)
 from api.request_boundary import BOT_SERVICE_KEY_ENV_VAR, SERVICE_KEY_HEADER
 from auth.permissions import InvalidFullNameError, PermissionLevel, normalize_full_name
 from config import discover_profiles, read_server_status, submit_server_command, supervisor_available
 from messages import get_current_catalog
 from orchestrator.flows import InvalidRoutingTargetError
-from persistence import EventSearchCriteria, NotFoundError, PersistenceError
+from persistence import (
+    EventSearchCriteria,
+    NeighboringForceStoreError,
+    NotFoundError,
+    PersistenceError,
+    SurveillancePersistenceError,
+    TeamStatusPersistenceError,
+)
+
+_ADMIN_TABLE_WRITE_ERRORS = (PersistenceError, SurveillancePersistenceError, TeamStatusPersistenceError, NeighboringForceStoreError)
 from tools import get_trace_id, record_telegram_security_metric
 
 if TYPE_CHECKING:
@@ -774,6 +790,9 @@ _MENU_TEMPLATE = """<!DOCTYPE html>
     <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.groups') }}"><h2 class="h5">{{ t('admin.menu_groups') }}</h2><span class="subtitle">{{ t('admin.groups_page_subtitle') }}</span></a></div>
     <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.simulator') }}"><h2 class="h5">{{ t('admin.menu_simulator') }}</h2><span class="subtitle">{{ t('admin.simulator.subtitle') }}</span></a></div>
     <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.server') }}"><h2 class="h5">{{ t('admin.menu_server') }}</h2><span class="subtitle">{{ t('admin.server_subtitle') }}</span></a></div>
+    {% for table in admin_tables %}
+    <div class="col-sm-6"><a class="block-console d-block text-decoration-none h-100" href="{{ url_for('admin.admin_table_list', table_key=table.key) }}"><h2 class="h5">{{ table.label }}</h2><span class="subtitle">{{ t('admin.tables.menu_subtitle') }}</span></a></div>
+    {% endfor %}
   </div>
 </div></body></html>"""
 
@@ -817,6 +836,12 @@ _PROFILES_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><
 
 
 _PROTOCOLS_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.protocols.title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + """</head>""" + PROTOCOLS_BODY + """</html>"""
+
+
+_ADMIN_TABLES_LIST_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ table.label }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """</head>""" + ADMIN_TABLES_LIST_BODY + """</html>"""
+
+
+_ADMIN_TABLES_EDIT_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ table.label }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """</head>""" + ADMIN_TABLES_EDIT_BODY + """</html>"""
 
 
 _EVENTS_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.events.title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + """</head>""" + EVENTS_BODY + """</html>"""
@@ -1266,7 +1291,101 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         if redirect_response is not None:
             return redirect_response
 
-        return _render(_MENU_TEMPLATE, csrf_token=session["csrf_token"])
+        return _render(
+            _MENU_TEMPLATE, csrf_token=session["csrf_token"], admin_tables=ctx.loaded_profile.admin_tables
+        )
+
+    @blueprint.route("/tables/<table_key>", methods=["GET"])
+    def admin_table_list(table_key):
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        table = find_admin_table(ctx.loaded_profile, table_key)
+        if table is None:
+            return redirect(url_for("admin.dashboard"))
+        rows = table.list_fn(ctx.deps)
+        return _render(_ADMIN_TABLES_LIST_TEMPLATE, table=table, rows=rows, csrf_token=session["csrf_token"])
+
+    @blueprint.route("/tables/<table_key>/edit/<row_id>", methods=["GET", "POST"])
+    def admin_table_edit(table_key, row_id):
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        table = find_admin_table(ctx.loaded_profile, table_key)
+        if table is None:
+            return redirect(url_for("admin.dashboard"))
+
+        if request.method == "GET":
+            row = table.get_fn(ctx.deps, row_id)
+            if row is None:
+                flash(_t("admin.tables.row_not_found"), "error")
+                return redirect(url_for("admin.admin_table_list", table_key=table_key))
+            return _render(
+                _ADMIN_TABLES_EDIT_TEMPLATE, table=table, row=row, row_id=row_id, csrf_token=session["csrf_token"]
+            )
+
+        csrf_response = _require_csrf()
+        if csrf_response is not None:
+            return csrf_response
+        try:
+            values = parse_admin_table_form(table, request.form)
+        except AdminFormError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin.admin_table_edit", table_key=table_key, row_id=row_id))
+        try:
+            table.write_fn(ctx.deps, {table.primary_key: row_id, **values})
+        except _ADMIN_TABLE_WRITE_ERRORS as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin.admin_table_edit", table_key=table_key, row_id=row_id))
+        logger.info(
+            "admin edited a table row",
+            extra={"event": "admin_table_row_edited", "table_key": table_key, "row_id": row_id, "trace_id": get_trace_id()},
+        )
+        flash(_t("admin.tables.saved"), "ok")
+        return redirect(url_for("admin.admin_table_list", table_key=table_key))
+
+    @blueprint.route("/tables/<table_key>/new", methods=["POST"])
+    def admin_table_new(table_key):
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        table = find_admin_table(ctx.loaded_profile, table_key)
+        if table is None or not table.allow_create:
+            return redirect(url_for("admin.dashboard"))
+        csrf_response = _require_csrf()
+        if csrf_response is not None:
+            return csrf_response
+        try:
+            values = parse_admin_table_form(table, request.form)
+        except AdminFormError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin.admin_table_list", table_key=table_key))
+        try:
+            table.write_fn(ctx.deps, values)
+        except _ADMIN_TABLE_WRITE_ERRORS as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin.admin_table_list", table_key=table_key))
+        flash(_t("admin.tables.saved"), "ok")
+        return redirect(url_for("admin.admin_table_list", table_key=table_key))
+
+    @blueprint.route("/tables/<table_key>/<row_id>/delete", methods=["POST"])
+    def admin_table_delete(table_key, row_id):
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        table = find_admin_table(ctx.loaded_profile, table_key)
+        if table is None or table.delete_fn is None:
+            return redirect(url_for("admin.dashboard"))
+        csrf_response = _require_csrf()
+        if csrf_response is not None:
+            return csrf_response
+        try:
+            table.delete_fn(ctx.deps, row_id)
+        except _ADMIN_TABLE_WRITE_ERRORS as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin.admin_table_list", table_key=table_key))
+        flash(_t("admin.tables.deleted"), "ok")
+        return redirect(url_for("admin.admin_table_list", table_key=table_key))
 
     @blueprint.route("/identity", methods=["POST"])
     def select_api_identity():

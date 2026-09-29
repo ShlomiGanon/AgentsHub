@@ -17,12 +17,13 @@ Architecture (docs/responce_improve.md's own rules, restated briefly):
     own `CREATE TABLE IF NOT EXISTS` DDL; none of this is added to the
     shared `persistence/schema.py` (every profile, including Fire and
     Rescue, would otherwise inherit it).
-  - The three agents below are profile-owned subclasses (two extend the
-    shared `TeamStatusAgent`/`SurveillanceAgent` with this profile's own
-    tools and store; the third, `NeighboringForcesAgent`, is wholly new).
-    None of their tools are added to the shared `agents/friendly_forces_
-    agent.py`, `agents/surveillance_agent.py`, `agents/team_status_agent.py`,
-    or `agents/roster_agent.py` modules, which stay untouched.
+  - The three agents below are profile-owned subclasses of shared bases --
+    `TeamStatusAgent`/`SurveillanceAgent`, and, since
+    docs/Admin_Tables_Plan.md's extraction, `agents.neighboring_forces_agent
+    .NeighboringForcesAgent` too (this profile's own subclass adds only its
+    "squad" special case on top). None of their tools are added to the
+    shared `agents/surveillance_agent.py`, `agents/team_status_agent.py`, or
+    `agents/roster_agent.py` modules, which stay untouched.
   - Profile module text stays English, per the same hard constraint as
     every other profile module in this repo -- Hebrew lives only in
     `messages/he.py`, read here (via `_catalog_text`) only for this
@@ -35,6 +36,7 @@ from pathlib import Path
 
 from agents import (
     Agent,
+    NeighboringForcesAgent as _NeighboringForcesAgentBase,
     SurveillanceAgent,
     TeamStatusAgent,
     get_authenticated_request_identity,
@@ -44,10 +46,10 @@ from messages import get_catalog
 from persistence import (
     SurveillancePersistenceError,
     TeamStatusPersistenceError,
-    open_neighboring_force_store,
     open_response_team_roster_store,
     open_response_team_surveillance_store,
 )
+from profiles.admin_tables import AdminColumn, AdminTable
 from profiles.contracts import AgentSpec, OptimizationPolicy
 from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
 from protocols import CriticalityLevel, Protocol, Step
@@ -166,9 +168,9 @@ DRONES = (
 # folds into 'yasam'.
 FORCE_BASES = {
     "ambulance": "expansion_neighborhood",
-    "police": "east_gate",
+    "police": "east_orchards",
     "k9": "east_orchards",
-    "yasam": "east_gate",
+    "yasam": "old_public_building",
 }
 
 # Fixed capacity per external force kind -- NeighboringForceStore itself has no standing-units
@@ -348,133 +350,53 @@ class ResponseTeamSurveillanceAgent(SurveillanceAgent):
         return self.return_drone_to_base(drone_or_mission_id)
 
 
-class NeighboringForcesAgent(Agent):
-    """Neighboring/external-force dispatch-log specialist -- wholly new,
-    profile-only (not the shared `agents/friendly_forces_agent.py`
-    `FriendlyForcesAgent`, which this profile no longer uses). Owns exactly
-    one table, `neighboring_force_dispatches`: force kinds and home bases
-    stay profile constants (`FORCE_BASES`, above), never a standing-units
-    table. Dispatch text always says "recorded, en route, ETA=..." -- the
-    later `en_route -> arrived` transition, once the ETA has elapsed, is
-    computed automatically (docs/responce_improve.md's one documented
-    exception to "a tool result proves only the tool's own effect"), never
-    reported by this agent."""
+class NeighboringForcesAgent(_NeighboringForcesAgentBase):
+    """Thin profile subclass of the shared `agents.neighboring_forces_agent.NeighboringForcesAgent`
+    (docs/Admin_Tables_Plan.md section 3.3) -- own DB, own force kinds/pool/busy-window, own ETA
+    matrix, plus one addition the shared base doesn't know about: `kind="squad"` dispatches the
+    response team's own roster (not a real external force) through the same tool, checked
+    against the roster's live availability instead of `FORCE_POOL_SIZE`. `_resolve_kind`/
+    `_check_capacity`/`_capacity_shortage_text` are overridden only for that one extra kind;
+    every other kind uses the shared base's own default behavior unchanged."""
 
-    name = "neighboring_forces_agent"
-    role = (
-        "Records requests to dispatch a neighboring/external force (ambulance, police, K9, or "
-        "YASAM) into one of this site's areas, and answers read-only questions about the current "
-        "dispatch log. A dispatch's status advances from en_route to arrived automatically once "
-        "its computed ETA has elapsed -- never from a human report."
-    )
-    system_prompt = (
-        "You are the neighboring-forces dispatch specialist. You have two tools: "
-        "dispatch_neighboring_force records a dispatch request for one force kind (ambulance, "
-        "police, k9, yasam, or squad -- the response team's own roster) to a named target area, "
-        "with the unit count and any note given; list_neighboring_force_dispatches returns the "
-        "current dispatch log, optionally filtered by status ('en_route' or 'arrived'). Neither "
-        "tool contacts a real ambulance, police unit, K9 team, or YASAM unit -- each only logs "
-        "the request and its computed ETA. Each force kind, including squad, has a limited "
-        "number of units currently available; if a dispatch fails for that reason, state that "
-        "plainly and do not retry. Report back plainly what was recorded; never claim a "
-        "dispatched force has arrived on scene yourself -- that transition is computed "
-        "automatically from elapsed time, not something you report."
-    )
+    dispatch_db_path = DB_PATH
+    force_bases = FORCE_BASES
+    force_pool_size = FORCE_POOL_SIZE
+    force_busy_seconds = FORCE_BUSY_SECONDS
+    eta_fn = staticmethod(eta_seconds)
 
     def __init__(self, model: str, api_key: str | None = None):
-        self.dispatch_store = open_neighboring_force_store(DB_PATH)
-        self.roster_store = open_response_team_roster_store(DB_PATH)
         super().__init__(model, api_key)
+        self.roster_store = open_response_team_roster_store(DB_PATH)
 
-    @tool(
-        "dispatch_neighboring_force",
-        "Records a request to dispatch a neighboring/external force (ambulance, police, k9, "
-        "yasam) or the response team's own roster (squad) to a named target area, with the unit "
-        "count and an optional note. Returns the recorded request, its en_route status, and "
-        "computed ETA -- or a clear statement that too few units/members are currently available. "
-        "Side-effecting and not idempotent -- running it twice records two dispatch requests, not one.",
-        side_effecting=True,
-        idempotent=False,
-    )
-    def dispatch_neighboring_force(self, kind: str, target_area: str, unit_count: int = 1, note: str = "") -> str:
-        kind_norm = kind.strip().lower()
-        if kind_norm != SQUAD_KIND and kind_norm not in FORCE_BASES:
-            return (
-                f"Clarification required: unknown force kind '{kind}'. "
-                f"Valid kinds: {', '.join(sorted((*FORCE_BASES, SQUAD_KIND)))}."
-            )
-        if not target_area.strip():
-            return "Clarification required: target_area is required."
-        if unit_count < 1:
-            return "Clarification required: unit_count must be at least 1."
+    def _valid_kinds(self) -> "tuple[str, ...]":
+        return tuple(sorted((*self.force_bases, SQUAD_KIND)))
 
-        cleaned_area = target_area.strip()
-
+    def _resolve_kind(self, kind_norm: str) -> "tuple[str, str] | None":
         if kind_norm == SQUAD_KIND:
-            origin_area = SQUAD_ORIGIN_AREA
+            return SQUAD_ORIGIN_AREA, "squad_member"
+        return super()._resolve_kind(kind_norm)
+
+    def _check_capacity(self, kind_norm: str, unit_count: int) -> "tuple[bool, int]":
+        if kind_norm == SQUAD_KIND:
             now_iso = datetime.now(timezone.utc).isoformat()
             available = sum(
                 1 for entry in self.roster_store.availability_snapshot(now_iso)
                 if entry["availability"] == "available"
             )
-            if available < unit_count:
-                reason = _catalog_text(
-                    "response_team.resource_unavailable.squad_reason", available=available, unit_count=unit_count,
-                )
-                self.signal_resource_unavailable("squad_member", cleaned_area, reason)
-                return f"Squad dispatch failed: {reason}"
-        else:
-            origin_area = FORCE_BASES[kind_norm]
-            busy_since = (datetime.now(timezone.utc) - timedelta(seconds=FORCE_BUSY_SECONDS)).isoformat()
-            busy_units = sum(
-                dispatch["unit_count"] for dispatch in self.dispatch_store.list_dispatches()
-                if dispatch["force_kind"] == kind_norm and dispatch["dispatched_at"] > busy_since
-            )
-            remaining = max(FORCE_POOL_SIZE - busy_units, 0)
-            if remaining < unit_count:
-                reason = _catalog_text(
-                    "response_team.resource_unavailable.force_reason",
-                    remaining=remaining, pool_size=FORCE_POOL_SIZE,
-                    resource=_RESOURCE_KIND_LABELS.get(kind_norm, kind_norm), unit_count=unit_count,
-                )
-                self.signal_resource_unavailable(kind_norm, cleaned_area, reason)
-                return f"{kind_norm} dispatch failed: {reason}"
+            return available >= unit_count, available
+        return super()._check_capacity(kind_norm, unit_count)
 
-        eta = eta_seconds(origin_area, cleaned_area)
-        record = self.dispatch_store.dispatch(
-            force_kind=kind_norm,
-            origin_area=origin_area,
-            target_area=cleaned_area,
-            unit_count=unit_count,
-            eta_seconds=eta,
-            note=note.strip(),
-        )
-        return (
-            f"{kind_norm} dispatch recorded, en route to {record['target_area']}, "
-            f"ETA={record['eta_seconds']}s (request {record['request_id']})."
-        )
-
-    @tool(
-        "list_neighboring_force_dispatches",
-        "Returns the current neighboring-force dispatch log (request id, kind, unit count, "
-        "origin/target area, status, ETA, dispatched-at), optionally filtered to one status "
-        "('en_route' or 'arrived'). A dispatch already shows 'arrived' once its ETA has elapsed, "
-        "with no separate report needed for that transition.",
-        side_effecting=False,
-    )
-    def list_neighboring_force_dispatches(self, status: str = "") -> str:
-        cleaned = status.strip().lower()
-        rows = self.dispatch_store.list_dispatches(status=cleaned or None)
-        if not rows:
-            return "No neighboring-force dispatches recorded."
-        lines = [f"Neighboring-force dispatches ({len(rows)}):"]
-        for row in rows:
-            lines.append(
-                f"- [{row['request_id']}] {row['force_kind']} x{row['unit_count']}: "
-                f"{row['origin_area']} -> {row['target_area']} ({row['status'].upper()}, "
-                f"ETA {row['eta_seconds']}s, dispatched {row['dispatched_at']})"
+    def _capacity_shortage_text(self, kind_norm: str, remaining: int, unit_count: int) -> str:
+        if kind_norm == SQUAD_KIND:
+            return _catalog_text(
+                "response_team.resource_unavailable.squad_reason", available=remaining, unit_count=unit_count,
             )
-        return "\n".join(lines)
+        return _catalog_text(
+            "response_team.resource_unavailable.force_reason",
+            remaining=remaining, pool_size=self.force_pool_size,
+            resource=_RESOURCE_KIND_LABELS.get(kind_norm, kind_norm), unit_count=unit_count,
+        )
 
 
 # == Resource-unavailable description (orchestrator/flows.py's shared mechanism) ============
@@ -1166,3 +1088,116 @@ SIMULATIONS = [
     },
     ),
 ]
+
+
+# == Admin-panel tables (docs/Admin_Tables_Plan.md) ==========================
+#
+# Every write_fn is a thin wrapper around a store method on this profile's own already-shared
+# store classes (persistence/response_team_store.py's ResponseTeamSurveillanceStore/
+# NeighboringForceStore, persistence/team_status_store.py's SQLiteTeamStatusPersistence) --
+# never a direct SQL statement in this module. Every cascade an edit implies (a drone leaving
+# an active mission, an attendance approval stamp) happens inside those store methods, so it's
+# identical whether the edit came from the admin panel or (where a live tool exists) a real
+# report.
+
+
+def _drones_list(deps) -> list:
+    return deps.registry.get("surveillance_agent").surveillance_store.list_drones()
+
+
+def _drones_get(deps, drone_id: str):
+    return deps.registry.get("surveillance_agent").surveillance_store.get_drone(drone_id)
+
+
+def _drones_write(deps, row: dict) -> None:
+    store = deps.registry.get("surveillance_agent").surveillance_store
+    store.admin_update_drone(row["drone_id"], **{k: v for k, v in row.items() if k != "drone_id"})
+
+
+def _attendance_list(deps) -> list:
+    return deps.registry.get("roster_agent").status_store.list_responses()
+
+
+def _attendance_get(deps, response_id: str):
+    return deps.registry.get("roster_agent").status_store.get_response(response_id)
+
+
+def _attendance_write(deps, row: dict) -> None:
+    store = deps.registry.get("roster_agent").status_store
+    store.admin_update_attendance_fields(row["response_id"], **{k: v for k, v in row.items() if k != "response_id"})
+
+
+def _forces_list(deps) -> list:
+    return deps.registry.get("neighboring_forces_agent").dispatch_store.list_dispatches()
+
+
+def _forces_get(deps, request_id: str):
+    return deps.registry.get("neighboring_forces_agent").dispatch_store.get_dispatch(request_id)
+
+
+def _forces_write(deps, row: dict) -> None:
+    store = deps.registry.get("neighboring_forces_agent").dispatch_store
+    store.admin_update_dispatch(row["request_id"], **{k: v for k, v in row.items() if k != "request_id"})
+
+
+ADMIN_TABLES = (
+    AdminTable(
+        key="drones",
+        label="Drones",
+        primary_key="drone_id",
+        columns=(
+            AdminColumn("drone_id", "Drone ID", editable=False),
+            AdminColumn("callsign", "Callsign", required=True),
+            AdminColumn("model", "Model"),
+            AdminColumn(
+                "status", "Status", kind="select",
+                choices=("ready", "in_flight", "charging", "maintenance"), required=True,
+            ),
+            AdminColumn("battery_percent", "Battery %", kind="number"),
+            AdminColumn("current_area", "Current area"),
+            AdminColumn("assigned_mission_id", "Assigned mission ID"),
+            AdminColumn("last_updated", "Last updated", editable=False),
+        ),
+        list_fn=_drones_list, get_fn=_drones_get, write_fn=_drones_write,
+    ),
+    AdminTable(
+        key="attendance",
+        label="Standby Squad Attendance",
+        primary_key="response_id",
+        columns=(
+            AdminColumn("response_id", "Response ID", editable=False),
+            AdminColumn("telegram_identity", "Member", editable=False),
+            AdminColumn("availability", "Availability", kind="select", choices=("available", "unavailable")),
+            AdminColumn("reason", "Reason"),
+            AdminColumn("unavailable_until", "Unavailable until"),
+            AdminColumn(
+                "approval_status", "Approval status", kind="select",
+                choices=("accepted", "pending", "rejected"),
+            ),
+            AdminColumn("reviewed_by", "Reviewed by", editable=False),
+            AdminColumn("reviewed_at", "Reviewed at", editable=False),
+            AdminColumn("original_text", "Original text", editable=False),
+            AdminColumn("received_at", "Received at", editable=False),
+        ),
+        list_fn=_attendance_list, get_fn=_attendance_get, write_fn=_attendance_write,
+    ),
+    AdminTable(
+        key="forces",
+        label="Friendly Forces",
+        primary_key="request_id",
+        columns=(
+            AdminColumn("request_id", "Request ID", editable=False),
+            AdminColumn("force_kind", "Force kind", required=True),
+            AdminColumn("unit_count", "Unit count", kind="number", required=True),
+            AdminColumn("origin_area", "Origin area"),
+            AdminColumn("target_area", "Target area"),
+            AdminColumn("status", "Status", kind="select", choices=("en_route", "arrived")),
+            AdminColumn("dispatched_at", "Dispatched at", editable=False),
+            AdminColumn("eta_seconds", "ETA (seconds)", kind="number"),
+            AdminColumn("arrived_at", "Arrived at"),
+            AdminColumn("note", "Note"),
+            AdminColumn("event_id", "Event ID", editable=False),
+        ),
+        list_fn=_forces_list, get_fn=_forces_get, write_fn=_forces_write,
+    ),
+)

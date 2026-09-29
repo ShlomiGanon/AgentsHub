@@ -114,6 +114,10 @@ class LoadedProfile:
     # hasn't supplied one -- core then falls back to its own generic (English) phrasing rather
     # than crashing.
     resource_unavailable_description: "Callable[[str, str, str, object], tuple[str, str]] | None" = None
+    # Optional admin-panel table declarations (docs/Admin_Tables_Plan.md) -- profiles.admin_tables
+    # .AdminTable entries. Defaults to empty so every existing profile is unaffected; a profile
+    # that declares none simply gets no /admin/tables/<key> pages at all.
+    admin_tables: tuple = ()
 
 REQUIRED_PROFILE_ATTRS = (
     "PROFILE_NAME",
