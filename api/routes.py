@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from flask import Blueprint, jsonify, request
 
 from api.request_boundary import BOT_SERVICE_IDENTITY, AuthorizationError, ConflictError, InvalidInputError, NotFoundError, RunFailureError, ServiceUnavailableError, authenticate, require
-from history import record_event_outcome, storage_timestamp
+from history import record_event_outcome, parse_timestamp, storage_timestamp
 
 from orchestrator.flows import begin_report, run_report_extraction
 
@@ -99,6 +99,20 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
         if reservation is None:
             raise ServiceUnavailableError(messages.text("api.queue_full"))
 
+        received_at = _now()
+        raw_timestamp = request_payload.get("timestamp")
+        if raw_timestamp is not None and raw_timestamp != "":
+            if not isinstance(raw_timestamp, str):
+                raise InvalidInputError(
+                    messages.text("api.invalid_timestamp", field="timestamp"), field="timestamp"
+                )
+            try:
+                received_at = storage_timestamp(parse_timestamp(raw_timestamp))
+            except (ValueError, TypeError):
+                raise InvalidInputError(
+                    messages.text("api.invalid_timestamp", field="timestamp"), field="timestamp"
+                )
+
         trace_id = get_trace_id() or new_trace_id()
         set_trace_id(trace_id)
         deadline_at = storage_timestamp(datetime.now(timezone.utc) + timedelta(seconds=optimization_policy.job_deadline_seconds))
@@ -107,7 +121,7 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
                 ctx.deps,
                 text,
                 "sensor",
-                _now(),
+                received_at,
                 sender_identity,
                 deadline_at=deadline_at,
                 sender_permission_level=level.name.lower(),

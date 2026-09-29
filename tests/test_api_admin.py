@@ -1286,6 +1286,8 @@ def test_simulator_embeds_live_groups_users_and_catalog_strings(tmp_path, teardo
     data = _embedded_simulator_data(page)
 
     assert data["groups"] == [{"chat_id": "-1001", "agent_name": "reference_agent", "label": "ops room"}]
+
+    assert data["groups"] == [{"chat_id": "-1001", "agent_name": "reference_agent", "label": "ops room"}]
     identities = {user["telegram_identity"] for user in data["users"]}
     assert {COMMANDER_IDENTITY, VIEWER_IDENTITY} <= identities
     assert "main_agent" in data["routable_agents"] and "reference_agent" in data["routable_agents"]
@@ -1313,6 +1315,7 @@ def test_simulator_page_talks_to_the_real_endpoints_only(tmp_path, teardown_ctx,
     assert "'/Job/'" in page
     assert "'X-Identity'" in page
     assert "/admin/simulator/bot-msg" in page
+    assert "edit-step-overlay" in page
     assert "'/Msg'" not in page
     assert "/admin/simulator/dispatch" not in page  # never a client-side dispatch shortcut
     assert "/admin/simulator/example" not in page  # the legacy bundled-fixture route is gone
@@ -1846,3 +1849,112 @@ function sleep(ms) {{ return new Promise(function (resolve) {{ setTimeout(resolv
     # The fix: with an early claim, generation 1 is already superseded before the round
     # trip even starts, so it contributes nothing during that same window.
     assert outcome["staleAppendsDuringEarlyWindow"] == 0
+
+
+def test_pending_step_edit_mutates_queue_and_build_request(tmp_path, teardown_ctx, _admin_env):
+    """Editing the pending queue[0] step is in-memory only: applyStepEdit() rewrites
+    text/sender/timestamp, sender_name comes from DATA.users, and buildRequest()
+    sends those values (including timestamp). A private chat_id follows the
+    current sender so simulator_app's chat_id == sender_identity rule still holds."""
+
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+    page = client.get("/admin/simulator").data.decode("utf-8")
+
+    apply_fn = _extract_between(page, "function applyStepEdit(step, fields, usersLookup) {", "  function isoToDatetimeLocal")
+    build_fn = _extract_between(page, "function buildRequest(chat, step) {", "  async function apiCall")
+    assert apply_fn.strip() and build_fn.strip(), "expected edit/build functions not found in the rendered page"
+
+    driver = f"""
+function t(key, values) {{
+  const templates = {{
+    err_step_text: 'Step {{step}} needs text',
+    err_step_sender: 'Step {{step}} needs sender',
+    err_edit_timestamp: 'bad timestamp',
+  }};
+  const template = Object.prototype.hasOwnProperty.call(templates, key) ? templates[key] : key;
+  return template.replace(/\\{{(\\w+)\\}}/g, function (match, name) {{
+    return values && Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : match;
+  }});
+}}
+const state = {{ runId: 'testrun' }};
+{apply_fn}
+{build_fn}
+
+const users = {{
+  '1002003': {{ telegram_identity: '1002003', full_name: 'Dana Cohen' }},
+  '5551': {{ telegram_identity: '5551', full_name: '' }},
+}};
+const step = {{
+  step: 1, chat: 'dm', sender_identity: '1002003', sender_name: 'Original Name',
+  text: 'old text', timestamp: '2026-01-01T00:00:00Z', source_message_id: null,
+}};
+applyStepEdit(step, {{
+  text: 'new text', sender_identity: '5551', timestamp: '2026-09-06T07:30:00Z',
+}}, users);
+
+const privateChat = {{ kind: 'message', telegram_chat_id: '1002003', telegram_chat_type: 'private' }};
+const groupChat = {{ kind: 'message', telegram_chat_id: '-1001', telegram_chat_type: 'supergroup' }};
+const eventChat = {{ kind: 'event' }};
+const privateReq = buildRequest(privateChat, step);
+const groupReq = buildRequest(groupChat, step);
+const eventReq = buildRequest(eventChat, step);
+
+const cleared = {{
+  step: 4, chat: 'sensor', sender_identity: '1002003', sender_name: 'x',
+  text: 'keep', timestamp: '2026-01-01T00:00:00Z', source_message_id: null,
+}};
+applyStepEdit(cleared, {{ text: 'keep', sender_identity: '1002003', timestamp: '' }}, users);
+const eventNoTs = buildRequest(eventChat, cleared);
+
+const named = {{ step: 3, text: 'a', sender_identity: '1', sender_name: 'old' }};
+applyStepEdit(named, {{ text: 'hello', sender_identity: '1002003', timestamp: null }}, users);
+
+let emptyTextError = null;
+try {{
+  applyStepEdit({{ step: 2, text: 'x' }}, {{ text: '  ', sender_identity: '1002003' }}, users);
+}} catch (error) {{ emptyTextError = error.message; }}
+
+console.log(JSON.stringify({{
+  step: step,
+  privateReq: privateReq,
+  groupReq: groupReq,
+  eventReq: eventReq,
+  eventNoTs: eventNoTs,
+  namedSender: named.sender_name,
+  emptyTextError: emptyTextError,
+}}));
+"""
+    driver_path = tmp_path / "edit_step_driver.js"
+    driver_path.write_text(driver, encoding="utf-8")
+    result = subprocess.run([node, str(driver_path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr + result.stdout
+    outcome = json.loads(result.stdout)
+
+    assert outcome["step"]["text"] == "new text"
+    assert outcome["step"]["sender_identity"] == "5551"
+    assert outcome["step"]["sender_name"] == "5551"
+    assert outcome["step"]["timestamp"] == "2026-09-06T07:30:00Z"
+    assert outcome["namedSender"] == "Dana Cohen"
+    assert outcome["emptyTextError"]
+
+    assert outcome["privateReq"]["url"] == "/admin/simulator/bot-msg"
+    assert outcome["privateReq"]["body"]["chat_id"] == "5551"
+    assert outcome["privateReq"]["body"]["sender_identity"] == "5551"
+    assert outcome["privateReq"]["body"]["text"] == "new text"
+    assert outcome["privateReq"]["body"]["timestamp"] == "2026-09-06T07:30:00Z"
+
+    assert outcome["groupReq"]["body"]["chat_id"] == "-1001"
+    assert outcome["groupReq"]["body"]["timestamp"] == "2026-09-06T07:30:00Z"
+
+    assert outcome["eventReq"]["url"] == "/Event"
+    assert outcome["eventReq"]["body"]["timestamp"] == "2026-09-06T07:30:00Z"
+    assert "timestamp" not in outcome["eventNoTs"]["body"]
+

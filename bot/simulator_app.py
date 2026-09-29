@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import logging
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -47,6 +48,18 @@ SERVICE_KEY_HEADER = "X-Service-Key"
 class SimulatorRequestRefused(Exception):
     """A `POST /Simulator-msg` request failed the identity-allowlist gate or basic
     shape validation — refused before any handler code ever runs (§4.3/§5)."""
+
+
+def _unix_from_iso_timestamp(value: str) -> float:
+    """ISO-8601 to Unix seconds for PTB's `message.date`. Naive values are UTC."""
+
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
 
 
 def _tier_model_from_environ(prefix: str) -> TierModel:
@@ -145,6 +158,16 @@ class SimulatorRuntime:
         if not source_message_id:
             raise SimulatorRequestRefused("source_message_id is required")
 
+        date = None
+        raw_timestamp = payload.get("timestamp")
+        if raw_timestamp is not None and raw_timestamp != "":
+            if not isinstance(raw_timestamp, str):
+                raise SimulatorRequestRefused("timestamp must be an ISO-8601 string")
+            try:
+                date = _unix_from_iso_timestamp(raw_timestamp)
+            except ValueError as exc:
+                raise SimulatorRequestRefused("timestamp is not a valid ISO-8601 datetime") from exc
+
         mark = self.telegram_client.mark()
         update = build_synthetic_text_update(
             update_id=self._next_id(),
@@ -154,6 +177,7 @@ class SimulatorRuntime:
             chat_type=chat_type,
             text=text,
             bot=self.bot,
+            date=date,
         )
         await self.application.process_update(update)
         reply_text = self.telegram_client.reply_since(mark, chat_id)
