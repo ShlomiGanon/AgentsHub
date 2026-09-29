@@ -129,7 +129,7 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
             reservation,
         )
 
-        return jsonify({"event_id": event_id, "status": "queued"}), 202
+        return jsonify({"event_id": event_id, "status": "queued", "trace_id": trace_id}), 202
 
     return blueprint
 
@@ -1400,8 +1400,10 @@ def job_status(ctx: "ApiContext", event_id: str) -> dict | None:
     if event is None:
         return None
 
+    event_trace_id = event.get("trace_id") if event is not None else None
+
     if event["outcome"] is not None:
-        response_payload = {"event_id": event_id, "status": event["outcome"]}
+        response_payload = {"event_id": event_id, "status": event["outcome"], "trace_id": event_trace_id}
         if event.get("insight_text") is not None:
             response_payload["insight_text"] = event["insight_text"]
         if event.get("report_text"):
@@ -1426,11 +1428,11 @@ def job_status(ctx: "ApiContext", event_id: str) -> dict | None:
 
     approval_hold = ctx.deps.persistence.fetch_held_event("approval", event_id)
     if approval_hold is not None and not approval_hold["resolved"]:
-        return {"event_id": event_id, "status": "held_for_approval", "reason": approval_hold["reason"]}
+        return {"event_id": event_id, "status": "held_for_approval", "reason": approval_hold["reason"], "trace_id": event_trace_id}
 
     clarification_hold = ctx.deps.persistence.fetch_held_event("clarification", event_id)
     if clarification_hold is not None and not clarification_hold["resolved"]:
-        return {"event_id": event_id, "status": "held_for_clarification", "unresolved_field": clarification_hold["unresolved_field"]}
+        return {"event_id": event_id, "status": "held_for_clarification", "unresolved_field": clarification_hold["unresolved_field"], "trace_id": event_trace_id}
 
     event_data_hold = ctx.deps.persistence.fetch_held_event("event_data", event_id)
     if event_data_hold is not None and not event_data_hold["resolved"]:
@@ -1440,13 +1442,14 @@ def job_status(ctx: "ApiContext", event_id: str) -> dict | None:
             "missing_fields": event_data_hold.get("missing_fields", []),
             "question": event_data_hold.get("question", ""),
             "steps_completed": _steps_completed(event),
+            "trace_id": event_trace_id,
         }
 
     processing = ctx.queue.currently_processing()
     if processing is not None and processing[0] == event_id:
-        return {"event_id": event_id, "status": "running"}
+        return {"event_id": event_id, "status": "running", "trace_id": event_trace_id}
 
-    return {"event_id": event_id, "status": "queued"}
+    return {"event_id": event_id, "status": "queued", "trace_id": event_trace_id}
 
 
 def build_jobs_blueprint(ctx: "ApiContext") -> Blueprint:

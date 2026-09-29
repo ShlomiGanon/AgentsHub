@@ -1528,11 +1528,15 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             return jsonify({"error": {"message": _t("admin.simulator.bot_mode_unconfigured")}}), 501
 
         service_key = os.environ.get(BOT_SERVICE_KEY_ENV_VAR) or ""
+        forward_headers = {SERVICE_KEY_HEADER: service_key}
+        fwd_trace = request.headers.get("X-Trace-ID") or (kwargs.get("json", {}).get("trace_id") if isinstance(kwargs.get("json"), dict) else None)
+        if fwd_trace:
+            forward_headers["X-Trace-ID"] = str(fwd_trace)
         try:
             response = httpx.request(
                 method,
                 f"http://localhost:{simulator_port}{path}",
-                headers={SERVICE_KEY_HEADER: service_key},
+                headers=forward_headers,
                 timeout=httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=75.0),
                 **kwargs,
             )
@@ -1595,6 +1599,9 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             "sent_len": request.args.get("sent_len", "0"),
         }
         return _forward_to_simulator("GET", "/Simulator-msg/poll", params=params)
+
+    from api.admin_trace import register_trace_routes
+    register_trace_routes(blueprint, ctx, _require_session)
 
     @blueprint.route("/groups", methods=["POST"])
     def write_group():

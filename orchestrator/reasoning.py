@@ -1618,8 +1618,25 @@ def run_parallel_specialists(
     if not task_runners:
         return results
 
-    if len(task_runners) == 1:
-        name, runner = task_runners[0]
+    def _logged_runner(agent_name: str, runner_fn: Callable[[], tuple[str, str]]) -> Callable[[], tuple[str, str]]:
+        def _wrapped() -> tuple[str, str]:
+            logger.info("specialist started", extra={"event": "specialist_started", "agent": agent_name, "parent_agent": "main_agent", "trace_id": get_trace_id()})
+            t0 = time.monotonic()
+            try:
+                res = runner_fn()
+                dur_ms = round((time.monotonic() - t0) * 1000, 1)
+                logger.info("specialist finished", extra={"event": "specialist_finished", "agent": agent_name, "parent_agent": "main_agent", "status": "success", "duration_ms": dur_ms, "trace_id": get_trace_id()})
+                return res
+            except Exception:
+                dur_ms = round((time.monotonic() - t0) * 1000, 1)
+                logger.info("specialist finished", extra={"event": "specialist_finished", "agent": agent_name, "parent_agent": "main_agent", "status": "failed", "duration_ms": dur_ms, "trace_id": get_trace_id()})
+                raise
+        return _wrapped
+
+    wrapped_runners = [(name, _logged_runner(name, runner)) for name, runner in task_runners]
+
+    if len(wrapped_runners) == 1:
+        name, runner = wrapped_runners[0]
         try:
             _, ans = runner()
             results[name] = ans
@@ -1628,10 +1645,10 @@ def run_parallel_specialists(
             results[name] = f"(\u05dc\u05d0 \u05d4\u05ea\u05e7\u05d1\u05dc \u05de\u05e2\u05e0\u05d4 \u05ea\u05e7\u05d9\u05df \u05de-{name})"
         return results
 
-    with ThreadPoolExecutor(max_workers=min(max_workers, len(task_runners))) as executor:
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(wrapped_runners))) as executor:
         future_to_name = {
             executor.submit(copy_context().run, runner): name
-            for name, runner in task_runners
+            for name, runner in wrapped_runners
         }
         for future, name in list(future_to_name.items()):
             try:
@@ -1671,6 +1688,16 @@ def answer_question_from_plan(
     (docs/Next_Plan.md §5 decision record). `None` (a commander) applies no restriction."""
 
     is_hebrew = any('\u0590' <= c <= '\u05ea' for c in question)
+    logger.info(
+        "agents selected for question",
+        extra={
+            "event": "agent_selection",
+            "status": selection.status,
+            "chosen_agents": list(selection.chosen_tasks.keys()),
+            "reason": selection.reason,
+            "trace_id": get_trace_id(),
+        },
+    )
     if selection.status == "none":
         return QuestionAnswer(_cant_answer_reply(selection.reason, is_hebrew=is_hebrew))
     if selection.status == "clarification":
@@ -1835,6 +1862,16 @@ def answer_question(
                 f"question routing repair did not produce a usable response: {selection_result.text}"
             )
         selection = _parse_agent_selection_response(selection_result.text)
+    logger.info(
+        "agents selected for question",
+        extra={
+            "event": "agent_selection",
+            "status": selection.status,
+            "chosen_agents": list(selection.chosen_tasks.keys()),
+            "reason": selection.reason,
+            "trace_id": get_trace_id(),
+        },
+    )
     if selection.status == "none":
         return _cant_answer_reply(selection.reason, is_hebrew=is_hebrew)
     if selection.status == "clarification":

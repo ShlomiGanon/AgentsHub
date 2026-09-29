@@ -190,20 +190,24 @@ def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> 
                     "event": "tool_call",
                     "agent": agent_name,
                     "tool": tool_info.name,
+                    "side_effecting": bool(tool_info.side_effecting),
                     "status": "error",
                     "duration_seconds": time.monotonic() - started,
                     "trace_id": get_trace_id(),
                 },
             )
             raise
+        summary = str(tool_result)[:140] if tool_result is not None else ""
         logger.info(
             "tool call",
             extra={
                 "event": "tool_call",
                 "agent": agent_name,
                 "tool": tool_info.name,
+                "side_effecting": bool(tool_info.side_effecting),
                 "status": "success",
                 "duration_seconds": time.monotonic() - started,
+                "result_summary": summary,
                 "trace_id": get_trace_id(),
             },
         )
