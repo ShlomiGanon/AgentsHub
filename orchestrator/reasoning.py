@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Callable, Literal
 logger = logging.getLogger(__name__)
 
 from agents import Agent, AgentOutputParseError, HistoryAgent, InvocationPolicy
+from agents.invocation_context import last_finished_invocation_id, record_finished_invocation_id
 from config import BaseConfig
 from history import EVENT_FIELD_CATALOG, HistoryQuerySpec, PrecedentMatch
 from history.query import HistoryQueryError
@@ -404,8 +405,14 @@ def _structured_call_with_one_repair(
                 f"\n\nYour previous response had this schema error: {last_error}. "
                 "Repair only the JSON shape and return one object."
             )
-        with stage_context(stage):
-            result = main_agent.process(attempt_prompt, [], invocation_policy=policy)
+        try:
+            with stage_context(stage):
+                result = main_agent.process(attempt_prompt, [], invocation_policy=policy)
+        except AgentOutputParseError as exc:
+            # A truncated structured decision cannot be repaired from partial JSON.
+            # Surface it through the flow's normal terminal-failure handling;
+            # letting it escape the queue leaves the persisted job pending forever.
+            raise OrchestrationParseError(f"{label} response was incomplete: {exc}") from exc
         if result.status != "success":
             raise OrchestrationParseError(f"{label} was refused or unusable: {result.text}")
         try:
@@ -693,7 +700,7 @@ def make_operational_decision(
         stage="operational_decision",
         label="operational decision",
         policy=InvocationPolicy(
-            max_output_tokens=300,
+            max_output_tokens=600,
             timeout_seconds=60.0,
             reasoning_effort="medium",
             response_schema={"name": "operational_decision", "schema": _OPERATIONAL_DECISION_SCHEMA},
@@ -1560,16 +1567,17 @@ def run_parallel_specialists(
 
     def _logged_runner(agent_name: str, runner_fn: Callable[[], tuple[str, str]]) -> Callable[[], tuple[str, str]]:
         def _wrapped() -> tuple[str, str]:
+            record_finished_invocation_id(None)
             logger.info("specialist started", extra={"event": "specialist_started", "agent": agent_name, "parent_agent": "main_agent", "trace_id": get_trace_id()})
             t0 = time.monotonic()
             try:
                 res = runner_fn()
                 dur_ms = round((time.monotonic() - t0) * 1000, 1)
-                logger.info("specialist finished", extra={"event": "specialist_finished", "agent": agent_name, "parent_agent": "main_agent", "status": "success", "duration_ms": dur_ms, "trace_id": get_trace_id()})
+                logger.info("specialist finished", extra={"event": "specialist_finished", "agent": agent_name, "parent_agent": "main_agent", "invocation_id": last_finished_invocation_id(), "status": "success", "duration_ms": dur_ms, "trace_id": get_trace_id()})
                 return res
             except Exception:
                 dur_ms = round((time.monotonic() - t0) * 1000, 1)
-                logger.info("specialist finished", extra={"event": "specialist_finished", "agent": agent_name, "parent_agent": "main_agent", "status": "failed", "duration_ms": dur_ms, "trace_id": get_trace_id()})
+                logger.info("specialist finished", extra={"event": "specialist_finished", "agent": agent_name, "parent_agent": "main_agent", "invocation_id": last_finished_invocation_id(), "status": "failed", "duration_ms": dur_ms, "trace_id": get_trace_id()})
                 raise
         return _wrapped
 

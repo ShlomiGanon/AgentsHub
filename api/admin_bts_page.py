@@ -957,6 +957,10 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
         }
       }
 
+      function esc(value) {
+        return String(value == null ? '' : value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+      }
+
       // Transform application
       function applyTransform() {
         if (sceneGroup) {
@@ -1042,54 +1046,25 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
         const positions = new Map();
         const userNode = nodes.find(n => n.type === 'user');
         const mainNode = nodes.find(n => n.type === 'main');
-        const specialists = nodes.filter(n => n.type === 'specialist');
+        const invocations = nodes.filter(n => n.type === 'invocation');
         const tools = nodes.filter(n => n.type === 'tool');
-        const persistNode = nodes.find(n => n.type === 'persistence');
-        const outcomeNode = nodes.find(n => n.type === 'outcome');
+        const otherNodes = nodes.filter(n => n.type === 'model' || n.type === 'outcome');
 
-        let currentY = 50;
-
-        // Level 0: User Input (if any)
-        if (userNode) {
-          positions.set(userNode.id, { x: 420, y: currentY });
-          currentY += 160;
+        if (userNode) positions.set(userNode.id, { x: 420, y: 40 });
+        if (mainNode) positions.set(mainNode.id, { x: 420, y: userNode ? 205 : 40 });
+        let nextY = userNode ? 390 : 225;
+        function placeRows(items) {
+          for (let start = 0; start < items.length; start += 4) {
+            const row = items.slice(start, start + 4);
+            const width = row.length * (NODE_WIDTH + 40);
+            const left = Math.max(40, 550 - width / 2);
+            row.forEach((item, index) => positions.set(item.id, { x: left + index * (NODE_WIDTH + 40), y: nextY }));
+            nextY += 185;
+          }
         }
-
-        // Level 1: Main Agent Orchestrator
-        if (mainNode) {
-          positions.set(mainNode.id, { x: 420, y: currentY });
-          currentY += 180;
-        }
-
-        // Level 2: Specialists (Sub-agents)
-        if (specialists.length > 0) {
-          const totalWidth = specialists.length * (NODE_WIDTH + 60);
-          let startX = Math.max(80, 550 - totalWidth / 2);
-          specialists.forEach((sp, i) => {
-            positions.set(sp.id, { x: startX + i * (NODE_WIDTH + 60), y: currentY });
-          });
-          currentY += 180;
-        }
-
-        // Level 3: Tools
-        if (tools.length > 0) {
-          const totalWidth = tools.length * (NODE_WIDTH + 40);
-          let startX = Math.max(80, 550 - totalWidth / 2);
-          tools.forEach((t, i) => {
-            positions.set(t.id, { x: startX + i * (NODE_WIDTH + 40), y: currentY });
-          });
-          currentY += 170;
-        }
-
-        // Level 4: Persistence & Outcome
-        const bottomNodes = [persistNode, outcomeNode].filter(Boolean);
-        if (bottomNodes.length > 0) {
-          const totalWidth = bottomNodes.length * (NODE_WIDTH + 60);
-          let startX = Math.max(80, 550 - totalWidth / 2);
-          bottomNodes.forEach((b, i) => {
-            positions.set(b.id, { x: startX + i * (NODE_WIDTH + 60), y: currentY });
-          });
-        }
+        placeRows(invocations);
+        placeRows(tools);
+        placeRows(otherNodes);
 
         return positions;
       }
@@ -1104,7 +1079,10 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
           currentData = data;
           render(data);
 
-          if (data.terminal) {
+          if (data.diagnostic_state === 'job_stopped_without_outcome') {
+            beacon.className = 'bts-live-beacon is-idle';
+            beaconText.textContent = 'ה־Job נעצר בלי תוצאה שמורה — נדרש בירור';
+          } else if (data.terminal) {
             beacon.className = 'bts-live-beacon is-idle';
             beaconText.textContent = data.outcome === 'succeeded' ? 'הושלם בהצלחה' : 'הסתיים (' + (data.outcome || 'סיום') + ')';
           } else {
@@ -1127,10 +1105,10 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
         mTokens.textContent = m.tokens ? m.tokens.total.toLocaleString() : '—';
         mTokensSub.textContent = m.tokens ? ('קלט: ' + m.tokens.input.toLocaleString() + ' | פלט: ' + m.tokens.output.toLocaleString()) : 'ללא נתוני טוקנים';
 
-        const agCount = (data.collaboration || []).length;
-        const toolCount = (data.tool_items || []).length;
+        const agCount = data.graph ? (data.graph.specialist_count || 0) : 0;
+        const toolCount = data.graph ? (data.graph.tool_count || 0) : 0;
         mAgents.textContent = agCount + ' מומחים | ' + toolCount + ' כלים';
-        mAgentsSub.textContent = data.graph && data.graph.has_parallel ? ('⚡ ריצה במקביל (' + (data.graph.parallel_batches_count || 1) + ' ענפים)') : 'ענפים במקביל: 0';
+        mAgentsSub.textContent = data.graph && data.graph.explanation ? data.graph.explanation : (data.graph && data.graph.has_parallel ? ('⚡ ריצה במקביל (' + data.graph.parallel_batches_count + ' ענפים חופפים)') : 'ענפים במקביל: 0');
 
         // 2. Render Graph
         renderGraph(data.graph);
@@ -1187,7 +1165,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
             const my = (y1 + y2) / 2;
             const labelWidth = Math.max(60, edge.label.length * 8 + 14);
             edgesHtml += '<rect x="' + (mx - labelWidth/2) + '" y="' + (my - 10) + '" width="' + labelWidth + '" height="20" class="bts-edge-label-bg"></rect>' +
-                         '<text x="' + mx + '" y="' + my + '" class="bts-edge-label-text">' + edge.label + '</text>';
+                         '<text x="' + mx + '" y="' + my + '" class="bts-edge-label-text">' + esc(edge.label) + '</text>';
           }
         });
         edgesLayer.innerHTML = edgesHtml;
@@ -1206,6 +1184,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
           else if (node.status === 'success') statusText = 'הושלם';
           else if (node.status === 'failed') statusText = 'נכשל';
           else if (node.status === 'waiting') statusText = 'ממתין לאישור';
+          else if (node.status === 'unknown') statusText = 'מצב לא ידוע';
 
           const timerText = node.duration_ms ? (node.duration_ms + ' מ"ש') : (node.status === 'running' ? '⏱️ פועל' : '');
           const previewText = node.protocol || node.intent || (node.tasks && node.tasks[0]) || node.summary || node.details || '';
@@ -1215,15 +1194,15 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
               '<div class="bts-node-top">' +
                 '<div class="bts-node-avatar">' + (node.icon || '🤖') + '</div>' +
                 '<div class="bts-node-titles">' +
-                  '<div class="bts-node-name">' + node.label + '</div>' +
-                  '<div class="bts-node-sub">' + (node.sublabel || '') + '</div>' +
+                '<div class="bts-node-name">' + esc(node.label) + '</div>' +
+                '<div class="bts-node-sub">' + esc(node.sublabel || '') + '</div>' +
                 '</div>' +
               '</div>' +
               '<div class="bts-node-badge-row">' +
                 '<span class="bts-node-status-pill ' + statusClass + '">' + statusText + '</span>' +
-                '<span class="bts-node-timer">' + timerText + '</span>' +
+                '<span class="bts-node-timer">' + esc(timerText) + '</span>' +
               '</div>' +
-              (previewText ? ('<div class="bts-node-preview" title="' + previewText.replace(/"/g, '&quot;') + '">' + previewText + '</div>') : '') +
+              (previewText ? ('<div class="bts-node-preview" title="' + esc(previewText) + '">' + esc(previewText) + '</div>') : '') +
             '</div>' +
           '</foreignObject>';
         });
@@ -1263,24 +1242,24 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
             '<div class="bts-inspect-title-row">' +
               '<div class="bts-inspect-icon">' + (node.icon || '🤖') + '</div>' +
               '<div>' +
-                '<div class="bts-inspect-title">' + node.label + '</div>' +
-                '<div class="bts-inspect-sub">' + (node.sublabel || node.id) + '</div>' +
+                '<div class="bts-inspect-title">' + esc(node.label) + '</div>' +
+                '<div class="bts-inspect-sub">' + esc(node.sublabel || node.id) + '</div>' +
               '</div>' +
             '</div>' +
             '<div class="bts-inspect-row">' +
               '<span class="bts-inspect-label">סטטוס תפעולי:</span>' +
-              '<span class="bts-inspect-val">' + statusBadge + '</span>' +
+              '<span class="bts-inspect-val">' + esc(statusBadge) + '</span>' +
             '</div>' +
             (node.duration_ms ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">זמן ביצוע:</span><span class="bts-inspect-val">' + node.duration_ms + ' מ"ש</span></div>') : '') +
             (node.call_count ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">מספר הפעלות / סבבים:</span><span class="bts-inspect-val">' + node.call_count + '</span></div>') : '') +
             (node.is_parallel ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">מצב הרצה:</span><span class="bts-inspect-val" style="color:var(--accent-cyan)">⚡ הרצה במקביל (Concurrent)</span></div>') : '') +
-            (node.verification ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">רמת אימות פעולה:</span><span class="bts-inspect-val" style="color:var(--accent-emerald)">' + (node.verification_note || node.verification) + '</span></div>') : '') +
-            (node.intent ? ('<div class="bts-inspect-section-title">כוונה שזוהתה</div><div class="bts-inspect-box">' + node.intent + '</div>') : '') +
-            (node.protocol ? ('<div class="bts-inspect-section-title">פרוטוקול שנבחר</div><div class="bts-inspect-box">' + node.protocol + '</div>') : '') +
-            (node.tasks && node.tasks.length ? ('<div class="bts-inspect-section-title">הוראות ומשימות שהועברו למומחה</div><div class="bts-inspect-box">' + node.tasks.join('\n\n') + '</div>') : '') +
-            (node.results && node.results.length ? ('<div class="bts-inspect-section-title">תוצאות שהוחזרו מהמומחה</div><div class="bts-inspect-box">' + node.results.join('\n\n') + '</div>') : '') +
-            (node.summary ? ('<div class="bts-inspect-section-title">סיכום ביצוע כלי</div><div class="bts-inspect-box">' + node.summary + '</div>') : '') +
-            (node.details ? ('<div class="bts-inspect-section-title">פרטים נוספים</div><div class="bts-inspect-box">' + node.details + '</div>') : '') +
+            (node.verification ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">רמת אימות פעולה:</span><span class="bts-inspect-val">' + esc(node.verification_note || node.verification) + '</span></div>') : '') +
+            (node.task ? ('<div class="bts-inspect-section-title">תקציר משימה</div><div class="bts-inspect-box">' + esc(node.task) + '</div>') : '') +
+            (node.result ? ('<div class="bts-inspect-section-title">תוצאה / שגיאה</div><div class="bts-inspect-box">' + esc(node.result) + '</div>') : '') +
+            (node.llm_calls && node.llm_calls.length ? ('<div class="bts-inspect-section-title">קריאות מודל (' + node.llm_calls.length + ')</div><div class="bts-inspect-box">' + node.llm_calls.map(c => esc(c.model + ' · ' + (c.latency_ms || 0) + ' מ״ש · ' + (c.finish_reason || c.status) + ' · ' + (c.input_tokens || 0) + '/' + (c.output_tokens || 0) + ' טוקנים')).join('<br>') + '</div>') : '') +
+            (node.tools && node.tools.length ? ('<div class="bts-inspect-section-title">כלים (' + node.tools.length + ')</div><div class="bts-inspect-box">' + esc(node.tools.join(', ')) + '</div>') : '') +
+            (node.summary ? ('<div class="bts-inspect-section-title">סיכום כלי</div><div class="bts-inspect-box">' + esc(node.summary) + '</div>') : '') +
+            (node.details ? ('<div class="bts-inspect-section-title">פרטים נוספים</div><div class="bts-inspect-box">' + esc(node.details) + '</div>') : '') +
           '</div>';
         inspectorContent.innerHTML = html;
       }
@@ -1298,7 +1277,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
           const isFailed = msg.status === 'failed' ? 'is-failed' : '';
           let badgeClass = 'bts-msg-badge';
           if (msg.kind === 'result') badgeClass += ' badge-result';
-          else if (msg.kind === 'tool') badgeClass += ' badge-tool';
+          else if (msg.kind === 'tool_call') badgeClass += ' badge-tool';
           else if (msg.status === 'failed') badgeClass += ' badge-failed';
 
           const timeStr = msg.time ? (msg.time.split('T')[1] || '').split('.')[0] : '';
@@ -1306,17 +1285,17 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
           html += '<div class="bts-msg-card ' + isRunning + ' ' + isFailed + '">' +
               '<div class="bts-msg-header">' +
                 '<div class="bts-msg-actors">' +
-                  '<span>' + (msg.from_icon || '🤖') + ' ' + msg.from_label + '</span>' +
+                  '<span>' + esc(msg.from_icon || '🤖') + ' ' + esc(msg.from_label) + '</span>' +
                   '<span class="bts-msg-arrow">➔</span>' +
-                  '<span>' + (msg.to_icon || '🤖') + ' ' + msg.to_label + '</span>' +
+                  '<span>' + esc(msg.to_icon || '🤖') + ' ' + esc(msg.to_label) + '</span>' +
                 '</div>' +
                 '<div class="bts-msg-time">' + timeStr + '</div>' +
               '</div>' +
               '<div style="display:flex; justify-content:space-between; align-items:center;">' +
-                '<div class="bts-msg-title">' + (msg.title || msg.summary) + '</div>' +
-                '<span class="' + badgeClass + '">' + (msg.badge || msg.kind) + '</span>' +
+                '<div class="bts-msg-title">' + esc(msg.title || msg.summary) + '</div>' +
+                '<span class="' + badgeClass + '">' + esc(msg.badge || msg.kind) + '</span>' +
               '</div>' +
-              (msg.body ? ('<div class="bts-msg-body">' + msg.body + '</div>') : '') +
+              (msg.body ? ('<div class="bts-msg-body">' + esc(msg.body) + '</div>') : '') +
             '</div>';
         });
         streamList.innerHTML = html;

@@ -10,6 +10,7 @@ from contextvars import copy_context
 from typing import TYPE_CHECKING, Callable
 
 from agents import AgentInvocationError, is_retryable_invocation_error
+from agents.invocation_context import last_finished_invocation_id, record_finished_invocation_id
 from protocols.contracts import ProtocolRunResult, ResourceUnavailable, Step, StepOutcome
 from tools import get_trace_id, stage_context
 
@@ -258,6 +259,7 @@ def execute_steps(
             extra={"event": "step_start", "agent": step.agent_name, "step_index": index, "task_text": step.task_text, "trace_id": get_trace_id()},
         )
 
+        record_finished_invocation_id(None)
         outcome = execute_step_with_retry(agent, step, settings_store, task_rewriter=task_rewriter, sleep_fn=sleep_fn)
         outcomes.append(outcome)
 
@@ -270,6 +272,7 @@ def execute_steps(
                 "succeeded": outcome.succeeded,
                 "attempt_count": outcome.attempt_count,
                 "result_text": outcome.result_text,
+                "invocation_id": last_finished_invocation_id(),
                 "trace_id": get_trace_id(),
             },
         )
@@ -361,6 +364,7 @@ def _execute_dependency_steps(
                     "trace_id": get_trace_id(),
                 },
             )
+            record_finished_invocation_id(None)
             outcome = execute_step_with_retry(
                 agents_by_name[step.agent_name], step, settings_store,
                 task_rewriter=task_rewriter, sleep_fn=sleep_fn,
@@ -375,6 +379,7 @@ def _execute_dependency_steps(
                     "succeeded": outcome.succeeded,
                     "attempt_count": outcome.attempt_count,
                     "result_text": outcome.result_text,
+                    "invocation_id": last_finished_invocation_id(),
                     "trace_id": get_trace_id(),
                 },
             )

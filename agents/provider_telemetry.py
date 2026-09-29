@@ -9,6 +9,7 @@ import threading
 from collections import OrderedDict
 from typing import Any
 
+from agents.invocation_context import current_invocation_id
 from tools import get_current_stage, get_trace_id
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ class _CallStart:
     agent: str | None
     started_at: datetime
     finish_reasons: list[str] | None
+    invocation_id: str | None
 
 
 _lock = threading.Lock()
@@ -94,6 +96,7 @@ def _write_finish(start: _CallStart, event: Any) -> None:
         extra={
             "event": "provider_request_failed" if failed else "provider_request_finished",
             "call_id": event.call_id,
+            "invocation_id": start.invocation_id,
             "agent": start.agent,
             "provider": _provider_name(start.model),
             "model": start.model,
@@ -139,6 +142,7 @@ def handle_provider_call_started(_source: Any, event: Any) -> None:
         agent=getattr(event, "agent_role", None),
         started_at=event.timestamp,
         finish_reasons=_active_finish_reasons.get(),
+        invocation_id=current_invocation_id(),
     )
     with _lock:
         if event.call_id in _terminal_call_ids:

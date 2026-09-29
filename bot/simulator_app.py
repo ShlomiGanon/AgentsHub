@@ -164,6 +164,7 @@ class SimulatorRuntime:
         current_trace = trace_id or get_trace_id()
         return {
             "reply_text": reply_text,
+            **self.telegram_client.changes_since(mark, chat_id),
             "watermark": _mark_to_dict(self.telegram_client.mark()),
             "trace_id": current_trace,
         }
@@ -182,7 +183,11 @@ class SimulatorRuntime:
             raise SimulatorRequestRefused(f"{chat_id!r} is not a currently-declared simulation chat_id for this profile")
 
         reply_text = self.telegram_client.reply_since(since, chat_id)
-        return {"reply_text": reply_text, "watermark": _mark_to_dict(self.telegram_client.mark())}
+        return {
+            "reply_text": reply_text,
+            **self.telegram_client.changes_since(since, chat_id),
+            "watermark": _mark_to_dict(self.telegram_client.mark()),
+        }
 
 
 def _mark_to_dict(mark: tuple[int, int]) -> dict:

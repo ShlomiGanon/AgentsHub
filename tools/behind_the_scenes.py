@@ -8,7 +8,7 @@ Strictly read-only and safe for operator diagnosis.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
@@ -72,6 +72,195 @@ def _profiles_match(expected: str | None, actual: str | None) -> bool:
     exp_stem = exp_norm.split(".")[-1]
     act_stem = act_norm.split(".")[-1]
     return exp_stem == act_stem or exp_stem in act_norm or act_stem in exp_norm
+
+
+def _agent_icon(name: str) -> str:
+    return {
+        "main_agent": "🤖", "roster_agent": "📋", "team_status_agent": "📋",
+        "surveillance_agent": "👁️", "neighboring_forces_agent": "🤝",
+        "security_agent": "🛡️", "fire_agent": "🚒", "firefighting_agent": "🚒",
+        "fire_station": "🚒", "medical_agent": "🚑", "engineering_agent": "⚙️",
+        "insights_agent": "💡", "report_composer": "📊", "persistence_store": "🗄️",
+        "user_client": "👤", "final_outcome": "🎯",
+    }.get(name, "🤖")
+
+
+def _agent_display_name(name: str) -> str:
+    return {
+        "main_agent": "סוכן ראשי (מתכלל)", "team_status_agent": "מומחה נוכחות וכוח אדם",
+        "roster_agent": "מומחה נוכחות וכוח אדם", "surveillance_agent": "מומחה תצפית ורחפנים",
+        "neighboring_forces_agent": "מומחה כוחות שכנים וסיוע", "security_agent": "מומחה אבטחה וכוננות",
+        "fire_agent": "מומחה כיבוי והצלה", "firefighting_agent": "מומחה כיבוי והצלה",
+        "fire_station": "מומחה כיבוי והצלה", "medical_agent": "מומחה רפואה ופינוי",
+        "engineering_agent": "מומחה הנדסה ותשתיות", "insights_agent": "סוכן תובנות ומגמות",
+        "report_composer": "מרכיב דוחות תפעוליים", "persistence_store": "מסד נתונים ואימות",
+        "user_client": "משתמש / ערוץ דיווח", "final_outcome": "מענה מסכם למשתמש",
+    }.get(name, name)
+
+
+def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Build only evidenced invocation, provider, tool, and persisted-outcome links."""
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    by_id: dict[str, dict[str, Any]] = {}
+    provider_events: list[dict[str, Any]] = []
+    tool_events: list[dict[str, Any]] = []
+    result_events: list[dict[str, Any]] = []
+    has_input = any(e.get("event") in {"report_received", "request_received"} for e in entries)
+    if has_input:
+        nodes.append({"id": "input", "type": "user", "label": "הודעה התקבלה", "status": "success", "icon": "👤"})
+    root = {"id": "orchestrator", "type": "main", "label": "Orchestrator", "status": "success" if outcome else "running", "icon": "🤖"}
+    nodes.append(root)
+    if has_input:
+        edges.append({"id": "input_orchestrator", "source": "input", "target": "orchestrator", "type": "input", "label": "קליטה", "status": "completed"})
+
+    for index, entry in enumerate(entries):
+        event = entry.get("event")
+        invocation_id = entry.get("invocation_id")
+        if event == "agent_invocation_started" and invocation_id:
+            node_id = f"invocation_{invocation_id}"
+            node = {
+                "id": node_id, "type": "invocation", "label": entry.get("agent") or "סוכן",
+                "sublabel": entry.get("stage") or "הפעלת סוכן", "icon": "🤖",
+                "status": "running", "started_at": entry.get("timestamp"),
+                "task": _safe_str(entry.get("task_summary"), 120),
+                "allowed_tools": entry.get("allowed_tools") or [], "llm_calls": [], "tools": [],
+                "parent_invocation_id": entry.get("parent_invocation_id"),
+            }
+            nodes.append(node)
+            by_id[invocation_id] = node
+        elif event == "agent_invocation_finished" and invocation_id in by_id:
+            node = by_id[invocation_id]
+            node["status"] = "success" if entry.get("status") == "success" else "failed"
+            node["finished_at"] = entry.get("timestamp")
+            node["duration_ms"] = entry.get("duration_ms")
+            node["result"] = f"{entry.get('result_chars', 0)} תווים" if entry.get("status") == "success" else _safe_str(entry.get("error_type"))
+        elif event == "model_invocation_finished" and not invocation_id:
+            # Old traces contain a real completion log but no source invocation ID.
+            # Keep each call separate; do not fabricate a specialist or tool.
+            node = {
+                "id": f"legacy_invocation_{index}", "type": "invocation",
+                "label": entry.get("agent") or "סוכן", "sublabel": entry.get("stage") or "מודל",
+                "icon": "🤖", "status": "success" if entry.get("status") == "success" else "failed",
+                "finished_at": entry.get("timestamp"), "duration_ms": entry.get("latency_ms"),
+                "llm_calls": [], "tools": [], "legacy": True,
+            }
+            finish_dt = _parse_timestamp(entry.get("timestamp"))
+            if finish_dt and isinstance(entry.get("latency_ms"), (int, float)):
+                node["started_at"] = (finish_dt - timedelta(milliseconds=entry["latency_ms"])).isoformat()
+            nodes.append(node)
+        elif event in {"provider_request_finished", "provider_request_failed"}:
+            provider_events.append(entry)
+        elif event in {"tool_call", "tool_blocked"}:
+            tool_events.append(entry)
+        elif event in {"step_result", "specialist_finished"}:
+            result_events.append(entry)
+
+    for node in [n for n in nodes if n["type"] == "invocation"]:
+        parent_id = node.get("parent_invocation_id")
+        parent = f"invocation_{parent_id}" if parent_id in by_id else "orchestrator"
+        edges.append({
+            "id": f"invoke_{node['id']}", "source": parent, "target": node["id"],
+            "type": "invocation", "label": _safe_str(node.get("sublabel"), 35),
+            "status": "active" if node["status"] == "running" else "completed",
+        })
+
+    for index, entry in enumerate(result_events):
+        node = by_id.get(entry.get("invocation_id"))
+        if node is None:
+            continue
+        received = entry.get("succeeded") if entry.get("event") == "step_result" else entry.get("status") == "success"
+        if not received and entry.get("event") != "step_result":
+            continue
+        parent_id = node.get("parent_invocation_id")
+        parent = f"invocation_{parent_id}" if parent_id in by_id else "orchestrator"
+        edges.append({
+            "id": f"result_{index}_{node['id']}", "source": node["id"], "target": parent,
+            "type": "result", "label": "תוצאת שלב חזרה" if received else "כשל שלב חזר",
+            "status": "completed" if received else "failed",
+        })
+
+    for entry in provider_events:
+        node = by_id.get(entry.get("invocation_id"))
+        if node is None and not entry.get("invocation_id"):
+            candidates = [n for n in nodes if n.get("legacy") and n.get("sublabel") == entry.get("stage")]
+            if len(candidates) == 1:
+                node = candidates[0]
+        call = {
+            "call_id": entry.get("call_id"), "model": _safe_str(entry.get("model"), 65),
+            "latency_ms": entry.get("latency_ms"), "status": entry.get("status"),
+            "finish_reason": entry.get("finish_reason"), "input_tokens": entry.get("input_tokens"),
+            "output_tokens": entry.get("output_tokens"),
+        }
+        if node is not None:
+            node["llm_calls"].append(call)
+        else:
+            nodes.append({
+                "id": f"unattributed_model_{len(nodes)}", "type": "model", "label": "קריאת מודל ללא שיוך ודאי",
+                "icon": "🧠", "status": "failed" if entry.get("status") == "error" else "success", "llm_calls": [call],
+            })
+
+    for index, entry in enumerate(tool_events):
+        invocation = by_id.get(entry.get("invocation_id"))
+        tool_node = {
+            "id": f"tool_call_{index}", "type": "tool", "label": entry.get("tool") or "כלי",
+            "icon": "🔧", "status": "failed" if entry.get("status") in {"error", "blocked"} else "success",
+            "duration_ms": round(float(entry.get("duration_seconds") or 0) * 1000, 1),
+            "summary": _safe_str(entry.get("result_summary"), 120),
+            "side_effecting": bool(entry.get("side_effecting")),
+            "verification": "unknown" if entry.get("side_effecting") else "read_only",
+        }
+        nodes.append(tool_node)
+        if invocation is not None:
+            invocation["tools"].append(tool_node["id"])
+            edges.append({
+                "id": f"tool_edge_{index}", "source": invocation["id"], "target": tool_node["id"],
+                "type": "tool_call", "label": "הפעלת כלי", "status": "completed",
+            })
+        else:
+            tool_node["details"] = "שיוך להפעלת סוכן לא נרשם; לא מוצג קשר משוער."
+
+    if outcome:
+        nodes.append({
+            "id": "persisted_outcome", "type": "outcome", "label": f"תוצאת Job: {outcome}",
+            "icon": "📌", "status": "success" if outcome in {"succeeded", "closed_on_precedent"} else "failed",
+            "details": "תוצאה נשמרה; אין בכך הוכחה למסירה בדפדפן.",
+        })
+        edges.append({"id": "outcome_edge", "source": "orchestrator", "target": "persisted_outcome", "type": "outcome", "label": "שמירת תוצאה", "status": "completed"})
+
+    specialist_nodes = [n for n in nodes if n["type"] == "invocation" and n.get("label") not in {"main_agent", "report_composer_agent", "insights_agent"}]
+    parallel_pairs = 0
+    for i, left in enumerate(specialist_nodes):
+        left_start = _parse_timestamp(left.get("started_at"))
+        left_end = _parse_timestamp(left.get("finished_at")) or datetime.now(timezone.utc)
+        if left_start is None:
+            continue
+        for right in specialist_nodes[i + 1:]:
+            right_start = _parse_timestamp(right.get("started_at"))
+            right_end = _parse_timestamp(right.get("finished_at")) or datetime.now(timezone.utc)
+            if right_start and left_start < right_end and right_start < left_end:
+                parallel_pairs += 1
+    explanation = ""
+    if not specialist_nodes:
+        explanation = (
+            "נסגר על בסיס תקדים לפני הפעלת מומחים וכלים."
+            if outcome == "closed_on_precedent" else
+            "לא נרשמה הפעלת מומחה ב־Trace הזה; אין להסיק שהתרחשה אחת."
+        )
+    graph_nodes_by_id = {node["id"]: node for node in nodes}
+    actual_messages = [
+        {"id": edge["id"], "kind": edge["type"], "from_id": edge["source"], "to_id": edge["target"],
+         "from_label": graph_nodes_by_id[edge["source"]]["label"],
+         "to_label": graph_nodes_by_id[edge["target"]]["label"],
+         "time": graph_nodes_by_id[edge["target"]].get("started_at") or graph_nodes_by_id[edge["source"]].get("finished_at"),
+         "title": edge.get("label", ""), "summary": edge.get("label", ""), "status": edge.get("status", "")}
+        for edge in edges if edge["type"] in {"invocation", "result", "tool_call"}
+    ]
+    return {
+        "nodes": nodes, "edges": edges, "specialist_count": len(specialist_nodes),
+        "tool_count": len(tool_events), "explanation": explanation,
+        "has_parallel": parallel_pairs > 0, "parallel_batches_count": parallel_pairs,
+    }, actual_messages
 
 
 def aggregate_trace_data(
@@ -652,48 +841,6 @@ def aggregate_trace_data(
     # -------------------------------------------------------------
     # Live Agent Execution Graph Construction
     # -------------------------------------------------------------
-    def _agent_icon(name: str) -> str:
-        icons = {
-            "main_agent": "🤖",
-            "team_status_agent": "📋",
-            "roster_agent": "📋",
-            "surveillance_agent": "👁️",
-            "neighboring_forces_agent": "🤝",
-            "security_agent": "🛡️",
-            "fire_agent": "🚒",
-            "firefighting_agent": "🚒",
-            "fire_station": "🚒",
-            "medical_agent": "🚑",
-            "engineering_agent": "⚙️",
-            "insights_agent": "💡",
-            "report_composer": "📊",
-            "persistence_store": "🗄️",
-            "user_client": "👤",
-            "final_outcome": "🎯",
-        }
-        return icons.get(name, "🤖")
-
-    def _agent_display_name(name: str) -> str:
-        hebrew_names = {
-            "main_agent": "סוכן ראשי (מתכלל)",
-            "team_status_agent": "מומחה נוכחות וכוח אדם",
-            "roster_agent": "מומחה נוכחות וכוח אדם",
-            "surveillance_agent": "מומחה תצפית ורחפנים",
-            "neighboring_forces_agent": "מומחה כוחות שכנים וסיוע",
-            "security_agent": "מומחה אבטחה וכוננות",
-            "fire_agent": "מומחה כיבוי והצלה",
-            "firefighting_agent": "מומחה כיבוי והצלה",
-            "fire_station": "מומחה כיבוי והצלה",
-            "medical_agent": "מומחה רפואה ופינוי",
-            "engineering_agent": "מומחה הנדסה ותשתיות",
-            "insights_agent": "סוכן תובנות ומגמות",
-            "report_composer": "מרכיב דוחות תפעוליים",
-            "persistence_store": "מסד נתונים ואימות",
-            "user_client": "משתמש / ערוץ דיווח",
-            "final_outcome": "מענה מסכם למשתמש",
-        }
-        return hebrew_names.get(name, name)
-
     # Main Agent status
     main_status = "pending"
     if stages["ingestion"]["status"] == "success":
@@ -907,16 +1054,27 @@ def aggregate_trace_data(
         "parallel_batches_count": len(parallel_batches),
     }
 
+    # The legacy stage summary above remains for timeline metrics, but its
+    # inferred graph/messages must not be presented as observed hand-offs.
+    graph_payload, causal_messages = _execution_graph(entries, terminal_outcome)
+    queue_stopped_on_error = not is_terminal and any(
+        entry.get("event") == "stage_finished" and entry.get("stage") == "queue_execution"
+        and entry.get("status") == "error" for entry in entries
+    )
+    if queue_stopped_on_error:
+        next(node for node in graph_payload["nodes"] if node["id"] == "orchestrator")["status"] = "unknown"
+
     return {
         "trace_id": trace_id,
         "terminal": is_terminal,
         "outcome": terminal_outcome,
         "outcome_reason": terminal_reason,
+        "diagnostic_state": "job_stopped_without_outcome" if queue_stopped_on_error else None,
         "metrics": metrics,
         "stages": list(stages.values()),
         "collaboration": collaboration,
         "tool_items": tool_items,
-        "messages": messages,
+        "messages": causal_messages,
         "event_count": len(entries),
         "graph": graph_payload,
     }

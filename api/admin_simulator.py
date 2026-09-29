@@ -103,6 +103,9 @@ def simulator_page_context(
         "bot_service_identity": bot_service_identity,
         "api_identity": api_identity,
         "strings": strings,
+        "queued_ack_prefixes": [
+            catalog.messages[key] for key in ("api.queued_report", "api.queued_request") if key in catalog.messages
+        ],
     }
 
 
@@ -804,6 +807,7 @@ SIMULATOR_BODY = """
 
   const DATA = JSON.parse(document.getElementById('sim-data').textContent);
   const STRINGS = DATA.strings || {};
+  const QUEUED_ACK_PREFIXES = DATA.queued_ack_prefixes || [];
   const POLL_INTERVAL_MS = 2000;
   const POLL_TIMEOUT_MS = 5 * 60 * 1000;
   const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'uncertain', 'closed_on_precedent', 'declined']);
@@ -831,6 +835,7 @@ SIMULATOR_BODY = """
   // generation is superseded (and stops itself, at its own next check) well before the new
   // step's own status message is even sent, let alone edited.
   const pollGenerationByChatId = {};
+  const statusBubblesByChatId = {};
 
   function claimPollGeneration(chatId) {
     const myGeneration = (pollGenerationByChatId[chatId] || 0) + 1;
@@ -1187,15 +1192,22 @@ SIMULATOR_BODY = """
     const headers = { 'Content-Type': 'application/json' };
     if (identity) headers['X-Identity'] = identity;
     if (traceId) headers['X-Trace-ID'] = traceId;
-    const response = await fetch(url, {
-      method: method,
-      headers: headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      credentials: 'same-origin',
-    });
-    let payload = null;
-    try { payload = await response.json(); } catch (error) { payload = null; }
-    return { status: response.status, payload: payload };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), method === 'POST' ? 85000 : 15000);
+    try {
+      const response = await fetch(url, {
+        method: method,
+        headers: headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+        credentials: 'same-origin',
+        signal: controller.signal,
+      });
+      let payload = null;
+      try { payload = await response.json(); } catch (error) { payload = null; }
+      return { status: response.status, payload: payload };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   function errorMessage(result) {
@@ -1240,11 +1252,11 @@ SIMULATOR_BODY = """
       try {
         result = await apiCall('GET', '/Job/' + encodeURIComponent(eventId), identity);
       } catch (error) {
-        setBubbleText(bubble, header, t('network_error', { message: error.message }), true);
-        return false;
+        setBubbleText(bubble, header, t('delivery_unknown'), true);
+        return true; // The event may have been persisted; do not offer an implicit replay.
       }
       if (result.status !== 200 || !result.payload) {
-        setBubbleText(bubble, header, errorMessage(result), true);
+        setBubbleText(bubble, header, result.status >= 500 ? t('delivery_unknown') : errorMessage(result), true);
         return true;
       }
       const job = result.payload;
@@ -1252,8 +1264,8 @@ SIMULATOR_BODY = """
       setBubbleText(bubble, body ? header + '\\n\\n' + body : header, jobStatusText(job), job.status === 'failed');
       if (TERMINAL_STATUSES.has(job.status) || job.status === 'held_for_clarification' || job.status === 'held_for_approval' || job.status === 'waiting_for_event_data') return true;
     }
-    setBubbleText(bubble, header, t('poll_timeout', { minutes: POLL_TIMEOUT_MS / 60000 }), true);
-    return false;
+    setBubbleText(bubble, header, t('delivery_unknown'), true);
+    return true;
   }
 
   // Priority 3 (docs/work_process.md §16): watches one chat, in the background, for
@@ -1271,12 +1283,18 @@ SIMULATOR_BODY = """
   // wait until here) — this loop just needs to know the generation it's watching for, not
   // claim its own. Checked both before each request (skip a poll entirely once superseded)
   // and after (discard a response that was already in flight when superseded).
-  async function pollSimulatorChat(chatKey, chatId, watermark, myGeneration) {
+  async function pollSimulatorChat(chatKey, chatId, watermark, myGeneration, reply, ackMessageId, traceId, waitingForJob) {
     const startedAt = Date.now();
     let mark = watermark || { status_len: 0, sent_len: 0 };
+    let pollFailures = 0;
+    let lastTraceCheck = 0;
+    let terminalSeenAt = null;
     while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
       await new Promise(function (resolve) { setTimeout(resolve, POLL_INTERVAL_MS); });
-      if (pollGenerationByChatId[chatId] !== myGeneration) return;
+      if (pollGenerationByChatId[chatId] !== myGeneration) {
+        if (waitingForJob) setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
+        return;
+      }
       let result;
       try {
         result = await apiCall(
@@ -1286,15 +1304,77 @@ SIMULATOR_BODY = """
           null
         );
       } catch (error) {
-        return; // a network hiccup while quietly watching for a follow-up isn't worth an error bubble
+        pollFailures += 1;
+        if (pollFailures >= 3 && waitingForJob) {
+          setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
+          return;
+        }
+        continue;
       }
-      if (pollGenerationByChatId[chatId] !== myGeneration) return;
-      if (result.status !== 200 || !result.payload) return;
+      if (pollGenerationByChatId[chatId] !== myGeneration) {
+        if (waitingForJob) setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
+        return;
+      }
+      if (result.status !== 200 || !result.payload) {
+        pollFailures += 1;
+        if (pollFailures >= 3 && waitingForJob) {
+          setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
+          return;
+        }
+        continue;
+      }
+      pollFailures = 0;
       if (result.payload.watermark) mark = result.payload.watermark;
-      if (result.payload.reply_text) {
-        appendBubble(chatKey, 'sys', t('system_label'), result.payload.reply_text, null);
+      const structured = Array.isArray(result.payload.status_updates) && Array.isArray(result.payload.sent_messages);
+      if (structured) {
+        for (const update of result.payload.status_updates) {
+          const knownBubble = statusBubblesByChatId[chatId] && statusBubblesByChatId[chatId].get(String(update.message_id));
+          if (update.kind === 'edit' && knownBubble) {
+            setBubbleText(knownBubble, update.text, null, false);
+            if (String(update.message_id) === String(ackMessageId)) waitingForJob = false;
+          } else if (update.kind === 'send' || update.kind === 'edit') {
+            appendBubble(chatKey, 'sys', t('system_label'), update.text, null);
+          }
+        }
+        for (const text of result.payload.sent_messages) appendBubble(chatKey, 'sys', t('system_label'), text, null);
+      } else if (result.payload.reply_text) {
+        if (waitingForJob) {
+          setBubbleText(reply, result.payload.reply_text, null, false);
+          waitingForJob = false;
+        } else {
+          appendBubble(chatKey, 'sys', t('system_label'), result.payload.reply_text, null);
+        }
+      }
+      if (waitingForJob && Date.now() - lastTraceCheck >= 8000) {
+        lastTraceCheck = Date.now();
+        try {
+          const traceResult = await apiCall('GET', '/admin/simulator/trace/' + encodeURIComponent(traceId), null);
+          if (traceResult.status === 200 && traceResult.payload) {
+            if (traceResult.payload.diagnostic_state === 'job_stopped_without_outcome') {
+              setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('job_stopped'), true);
+              return;
+            }
+            if (traceResult.payload.terminal) {
+              if (terminalSeenAt === null) terminalSeenAt = Date.now();
+              setBubbleText(reply, reply.querySelector('.bubble-text').textContent,
+                t('job_done_no_delivery', { outcome: traceResult.payload.outcome || 'unknown' }), false);
+              if (Date.now() - terminalSeenAt > 15000) {
+                setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
+                return;
+              }
+              continue;
+            }
+            const stages = traceResult.payload.stages || [];
+            const active = stages.filter(stage => stage.status === 'running').at(-1);
+            if (active) {
+              setBubbleText(reply, reply.querySelector('.bubble-text').textContent,
+                t('waiting_stage', { seconds: Math.floor((Date.now() - startedAt) / 1000), stage: active.name }), false);
+            }
+          }
+        } catch (error) { /* Trace display is diagnostic only. */ }
       }
     }
+    if (waitingForJob) setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
   }
 
   async function sendNext(chatKey) {
@@ -1327,13 +1407,14 @@ SIMULATOR_BODY = """
     try {
       result = await apiCall('POST', request.url, request.identity, request.body, traceId);
     } catch (error) {
-      setBubbleText(reply, t('network_error', { message: error.message }), null, true);
+      setBubbleText(reply, t('delivery_unknown'), t('network_error', { message: error.message }), true);
+      queue.shift(); // Outcome may already be persisted; never make an implicit replay the next step.
       state.busy = false;
       updateGlobalState();
       return;
     }
     if (result.status >= 400 || !result.payload) {
-      setBubbleText(reply, errorMessage(result), null, true);
+      setBubbleText(reply, result.status >= 500 ? t('delivery_unknown') : errorMessage(result), null, true);
       queue.shift();
       state.busy = false;
       updateGlobalState();
@@ -1366,7 +1447,14 @@ SIMULATOR_BODY = """
     queue.shift();
     state.busy = false;
     updateGlobalState();
-    pollSimulatorChat(chatKey, request.body.chat_id, payload.watermark, myGeneration);
+    const ackEvent = (payload.status_updates || []).find(event => event.kind === 'send');
+    if (ackEvent) {
+      if (!statusBubblesByChatId[request.body.chat_id]) statusBubblesByChatId[request.body.chat_id] = new Map();
+      statusBubblesByChatId[request.body.chat_id].set(String(ackEvent.message_id), reply);
+    }
+    const waitingForJob = QUEUED_ACK_PREFIXES.some(prefix => (payload.reply_text || '').startsWith(prefix));
+    pollSimulatorChat(chatKey, request.body.chat_id, payload.watermark, myGeneration,
+      reply, ackEvent && ackEvent.message_id, finalTraceId, waitingForJob);
   }
 
   // ---- mapping panel: prompts for any Telegram ID a manually-provided scenario is missing ----

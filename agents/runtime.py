@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from functools import lru_cache, wraps
 from typing import Callable
@@ -33,6 +33,7 @@ from agents.contracts import (
     tool_info_of,
 )
 from agents.provider_telemetry import track_provider_finish_reasons
+from agents.invocation_context import current_invocation_id, invocation_scope, record_finished_invocation_id
 from tools import deep_debug_enabled, get_current_stage, get_trace_id, log_ai_interaction, stage_context, trace_context
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,14 @@ _provider_semaphore = threading.BoundedSemaphore(8)
 _structured_output_mode = "off"
 _max_iter = 8
 _model_timeout_seconds = 30.0
+
+
+def _observe_invocation(event: str, **fields) -> None:
+    """Optional telemetry must never interrupt an agent or a committed tool call."""
+    try:
+        logger.info(event.replace("_", " "), extra={"event": event, "trace_id": get_trace_id(), "telemetry_only": True, **fields})
+    except Exception:
+        pass
 
 
 def get_authenticated_request_identity() -> str | None:
@@ -177,7 +186,7 @@ def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> 
         if allowed is None or tool_info.name not in allowed:
             logger.info(
                 "tool call blocked: not in this call's allowed_tools",
-                extra={"event": "tool_blocked", "agent": agent_name, "tool": tool_info.name, "trace_id": get_trace_id()},
+                extra={"event": "tool_blocked", "agent": agent_name, "tool": tool_info.name, "invocation_id": current_invocation_id(), "trace_id": get_trace_id()},
             )
             return f"Tool '{tool_info.name}' is not permitted for this task."
 
@@ -190,6 +199,7 @@ def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> 
                 extra={
                     "event": "tool_call",
                     "agent": agent_name,
+                    "invocation_id": current_invocation_id(),
                     "tool": tool_info.name,
                     "side_effecting": bool(tool_info.side_effecting),
                     "status": "error",
@@ -204,6 +214,7 @@ def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> 
             extra={
                 "event": "tool_call",
                 "agent": agent_name,
+                "invocation_id": current_invocation_id(),
                 "tool": tool_info.name,
                 "side_effecting": bool(tool_info.side_effecting),
                 "status": "success",
@@ -302,15 +313,56 @@ class Agent:
             model=self.descriptor.model,
             api_key=self.descriptor.api_key,
         )
-        invocation_tools = {name: wrapped for name, wrapped in self._wrapped_tools.items() if name in allowed}
+        invocation_id = uuid.uuid4().hex
+        invocation_trace_id = get_trace_id()
+        parent_invocation_id = current_invocation_id()
+        invocation_tools = {}
+        for name, wrapped in self._wrapped_tools.items():
+            if name not in allowed:
+                continue
+
+            @wraps(wrapped)
+            def _tracked_tool(*args, _wrapped=wrapped, _invocation_id=invocation_id, _trace_id=invocation_trace_id, **kwargs):
+                # CrewAI may run the tool in a different thread. Capture the ID in
+                # this wrapper instead of assuming ContextVar propagation.
+                with (trace_context(_trace_id) if _trace_id else nullcontext()), invocation_scope(_invocation_id):
+                    return _wrapped(*args, **kwargs)
+
+            invocation_tools[name] = _tracked_tool
 
         token = _current_allowed_tools.set(allowed)
+        record_finished_invocation_id(None)
+        started = time.monotonic()
+        _observe_invocation(
+            "agent_invocation_started", invocation_id=invocation_id,
+            parent_invocation_id=parent_invocation_id, agent=self.name,
+            stage=get_current_stage(), allowed_tools=sorted(allowed),
+            task_summary=text[:120],
+        )
         try:
-            if invocation_policy is None:
-                raw_text = invoke(invocation_descriptor, invocation_tools, text, self.timeout_seconds)
-            else:
-                raw_text = invoke(invocation_descriptor, invocation_tools, text, self.timeout_seconds, invocation_policy)
-            return parse_agent_output(raw_text)
+            with invocation_scope(invocation_id):
+                if invocation_policy is None:
+                    raw_text = invoke(invocation_descriptor, invocation_tools, text, self.timeout_seconds)
+                else:
+                    raw_text = invoke(invocation_descriptor, invocation_tools, text, self.timeout_seconds, invocation_policy)
+                result = parse_agent_output(raw_text)
+            _observe_invocation(
+                "agent_invocation_finished", invocation_id=invocation_id, agent=self.name,
+                stage=get_current_stage(), status=result.status,
+                duration_ms=round((time.monotonic() - started) * 1000, 3),
+                result_chars=len(result.text),
+            )
+            record_finished_invocation_id(invocation_id)
+            return result
+        except Exception as exc:
+            _observe_invocation(
+                "agent_invocation_finished", invocation_id=invocation_id, agent=self.name,
+                stage=get_current_stage(), status="error",
+                duration_ms=round((time.monotonic() - started) * 1000, 3),
+                error_type=type(exc).__name__,
+            )
+            record_finished_invocation_id(invocation_id)
+            raise
         finally:
             _current_allowed_tools.reset(token)
 
@@ -606,6 +658,7 @@ def invoke(
             "model invocation finished",
             extra={
                 "event": "model_invocation_finished",
+                "invocation_id": current_invocation_id(),
                 "agent": descriptor.name,
                 "model": descriptor.model,
                 "provider": descriptor.model.split("/", 1)[0],
@@ -627,6 +680,7 @@ def invoke(
             "model invocation finished",
             extra={
                 "event": "model_invocation_finished",
+                "invocation_id": current_invocation_id(),
                 "agent": descriptor.name,
                 "model": descriptor.model,
                 "provider": descriptor.model.split("/", 1)[0],
@@ -652,6 +706,7 @@ def invoke(
             "model invocation finished",
             extra={
                 "event": "model_invocation_finished",
+                "invocation_id": current_invocation_id(),
                 "agent": descriptor.name,
                 "model": descriptor.model,
                 "provider": descriptor.model.split("/", 1)[0],
@@ -703,6 +758,7 @@ def invoke(
         "model invocation finished",
         extra={
             "event": "model_invocation_finished",
+            "invocation_id": current_invocation_id(),
             "agent": descriptor.name,
             "model": descriptor.model,
             "provider": descriptor.model.split("/", 1)[0],
