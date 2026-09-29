@@ -889,12 +889,14 @@ MESSAGES = {
     "firefighting.simulation.fire002.persona.firefighter_team_a_6": "Team A Firefighter 6 - simulation data",
     "firefighting.simulation.fire002.persona.fire_police_patrol": "Police Patrol",
     "firefighting.simulation.fire002.persona.kkl_mountains_sector": "KKL Hub - Mountains Sector",
-    "firefighting.simulation.fire002.persona.lahav_avi_shift_commander": "Lahav Avi - Shift Commander",
-    "firefighting.simulation.fire002.persona.omri_firefighter": "Sergeant Omri - Firefighter",
+    # Simplified to match the roll-call text's own short first-name form (messages/he.py's
+    # matching comment has the full explanation).
+    "firefighting.simulation.fire002.persona.lahav_avi_shift_commander": "Avi",
+    "firefighting.simulation.fire002.persona.omri_firefighter": "Omri",
     "firefighting.simulation.fire002.persona.police_hub_agam": "Police Hub - Operations Division (Agam)",
     "firefighting.simulation.fire002.persona.roni_surveillance_operator": "Roni - Surveillance Operator",
     "firefighting.simulation.fire002.persona.station_commander": "Station Commander",
-    "firefighting.simulation.fire002.persona.yuval_ashed3_commander": "Sergeant Yuval - Ashed 3 Team Commander",
+    "firefighting.simulation.fire002.persona.yuval_ashed3_commander": "Yuval",
     "firefighting.simulation.fire002.phase1.description": "Preparing for a heatwave day: managing the shift roster, minor vehicle/equipment faults, and routine reports of small open-area fires.",
     "firefighting.simulation.fire002.phase1.step1.text": "Good morning. Verified opening roster: all 6 Team A firefighters are available for the shift — Avi, Omri, Yuval, and three simulation-labelled crew members. Engines Ashed 3 and Carmel 1 are fully operational and available at the station.",
     "firefighting.simulation.fire002.phase1.step2.text": "Just letting you know I need to leave at 12:00 for a routine medical checkup, back on shift at 15:00.",

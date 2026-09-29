@@ -7,7 +7,12 @@ from pathlib import Path
 
 from agents import Agent, NeighboringForcesAgent, SurveillanceAgent, TeamStatusAgent, get_authenticated_request_identity, tool
 from messages import get_catalog
-from persistence import open_response_team_surveillance_store, open_team_status_persistence
+from persistence import (
+    ApparatusStoreError,
+    open_apparatus_store,
+    open_response_team_surveillance_store,
+    open_team_status_persistence,
+)
 from profiles.admin_tables import AdminColumn, AdminTable
 from profiles.contracts import AgentSpec, OptimizationPolicy
 from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
@@ -38,8 +43,10 @@ FIREFIGHTING_DRONE_HOME = "fire_station"
 FIREFIGHTING_SURVEILLANCE_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_surveillance.db")
 FIREFIGHTING_CREW_STATUS_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_crew_status.db")
 FIREFIGHTING_FORCES_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_forces.db")
+FIREFIGHTING_APPARATUS_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_apparatus.db")
 RESETTABLE_DATABASES = (
     DB_PATH, FIREFIGHTING_SURVEILLANCE_DB_PATH, FIREFIGHTING_CREW_STATUS_DB_PATH, FIREFIGHTING_FORCES_DB_PATH,
+    FIREFIGHTING_APPARATUS_DB_PATH,
 )
 
 # Mutual-aid force kinds and their home/staging area -- one of this profile's own 6 declared
@@ -53,6 +60,61 @@ FORCE_BASES = {
     "ambulance": "ornim_street",
 }
 FORCE_POOL_SIZE = 2
+
+# Cameras: create-if-missing only (OPERATIONAL_SEED, below), mirroring
+# profiles/response_team.py's own CAMERAS/_ensure_operational_seed_data pattern exactly
+# (docs/Admin_Tables_Plan.md's own simulation-alignment audit). IDs/areas match exactly how
+# the FIRE_002 simulation text names them: "camera 02 (quarry junction)" (messages/he.py's
+# fire002.phase1.step5.text) and "camera 03 (pine ridge)" (fire002.phase2.step1/step4.text).
+CAMERAS = (
+    {
+        "camera_id": "CAM-02",
+        "name": "Quarry Junction Camera",
+        "area": "quarry_junction",
+        "status": "active",
+        "azimuth_degrees": 45,
+        "feed_summary": "Clear view of the quarry junction approach.",
+    },
+    {
+        "camera_id": "CAM-03",
+        "name": "Pine Ridge Camera",
+        "area": "pine_ridge",
+        "status": "active",
+        "azimuth_degrees": 0,
+        "feed_summary": "Wide-angle overlook of the pine ridge tree line.",
+    },
+)
+
+
+# Apparatus (engines/vehicles): create-if-missing only, same idiom as CAMERAS above. Named
+# exactly as FIRE_002's own text names them: "Ashed 3 and Carmel 1 are operational, functional,
+# and available at the station for assignment" (fire002.phase1.step1.text) -- both operational,
+# at fire_station. persistence/apparatus_store.py is deliberately minimal (registry + status/
+# area update only, no dispatch-log/capacity modeling like drones or neighboring forces).
+APPARATUS = (
+    {"apparatus_id": "APP-ASHED-3", "callsign": "Ashed 3", "status": "operational", "current_area": "fire_station"},
+    {"apparatus_id": "APP-CARMEL-1", "callsign": "Carmel 1", "status": "operational", "current_area": "fire_station"},
+)
+
+
+def _ensure_operational_seed_data() -> None:
+    """Create-if-missing cameras/apparatus -- never overwrites an existing row, the same
+    "create if missing, never touch if present" idiom response_team.py's own seed hook uses.
+    Called automatically, on every profile load (live or simulated), by
+    `ensure_simulation_entities` via this module's `OPERATIONAL_SEED` attribute."""
+
+    surveillance = open_response_team_surveillance_store(
+        FIREFIGHTING_SURVEILLANCE_DB_PATH, home_area=FIREFIGHTING_DRONE_HOME
+    )
+    for camera in CAMERAS:
+        surveillance.ensure_camera(**camera)
+
+    apparatus_store = open_apparatus_store(FIREFIGHTING_APPARATUS_DB_PATH)
+    for apparatus in APPARATUS:
+        apparatus_store.ensure_apparatus(**apparatus)
+
+
+OPERATIONAL_SEED = _ensure_operational_seed_data
 
 # The dashboard runs exactly one profile at a time.  Both selectable profiles
 # therefore use the deployment's single Telegram bot token; the supervisor
@@ -84,12 +146,54 @@ class FirefightingSurveillanceAgent(SurveillanceAgent):
 
 class FirefightingCrewStatusAgent(TeamStatusAgent):
     """Binds the reusable readiness-status specialist to this profile's own DB -- the
-    firefighting crew's shift roster and attendance (docs/Profile_Split_Plan.md section 4.2)."""
+    firefighting crew's shift roster and attendance (docs/Profile_Split_Plan.md section 4.2).
+
+    Also owns station apparatus (engine/vehicle) status -- FIRE_002's own simulation text
+    reports apparatus readiness in the exact same "station opening" messages as crew
+    availability (docs/Admin_Tables_Plan.md's simulation-data-alignment audit), so it belongs
+    on this same "station readiness" specialist rather than a new agent."""
 
     status_db_path = FIREFIGHTING_CREW_STATUS_DB_PATH
     timezone_name = "Asia/Jerusalem"
     attendance_check_hour = 8
     response_window_hours = 1
+
+    def __init__(self, model: str, api_key: str | None = None):
+        super().__init__(model, api_key)
+        self.apparatus_store = open_apparatus_store(FIREFIGHTING_APPARATUS_DB_PATH)
+
+    @tool(
+        "get_apparatus_status",
+        "Returns the station's own engine/vehicle apparatus roster with each one's current "
+        "status (operational, dispatched, unavailable, or maintenance) and area. Read-only.",
+        side_effecting=False,
+    )
+    def get_apparatus_status(self) -> str:
+        rows = self.apparatus_store.list_apparatus()
+        if not rows:
+            return "No apparatus is registered."
+        lines = ["Station apparatus:"]
+        for row in rows:
+            area = f", area: {row['current_area']}" if row["current_area"] else ""
+            lines.append(f"- {row['callsign']} ({row['apparatus_id']}): {row['status'].upper()}{area}")
+        return "\n".join(lines)
+
+    @tool(
+        "update_apparatus_status",
+        "Records one apparatus/engine's own operating status (operational, dispatched, "
+        "unavailable, or maintenance), and its area if the source states one. identifier is the "
+        "apparatus's callsign (e.g. 'Ashed 3') or apparatus_id. Side-effecting and idempotent -- "
+        "recording the identical status for the same apparatus twice leaves one record.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def update_apparatus_status(self, identifier: str, status: str, current_area: str = "") -> str:
+        try:
+            updated = self.apparatus_store.update_status(identifier, status.strip().lower(), current_area.strip() or None)
+        except ApparatusStoreError as exc:
+            return f"The apparatus status was not stored: {exc}"
+        area = f", area: {updated['current_area']}" if updated["current_area"] else ""
+        return f"{updated['callsign']} status recorded: {updated['status'].upper()}{area}."
 
     @tool(
         "record_crew_shift_status",
@@ -208,11 +312,13 @@ PROTOCOLS = [
         description=(
             "Applies when a commander explicitly declares the availability of multiple approved "
             "firefighting crew members for a shift -- for example, that the entire crew is available "
-            "at opening; use record_crew_shift_status to persist that declaration. It does not apply "
-            "to a request for a read-only roster picture (use report_crew_status for that)."
+            "at opening; use record_crew_shift_status to persist that declaration. The same report "
+            "commonly also states each engine/vehicle's own operating status (e.g. 'Ashed 3 and "
+            "Carmel 1 are operational') -- call update_apparatus_status for each one named. Does "
+            "not apply to a request for a read-only roster picture (use report_crew_status for that)."
         ),
         participating_agents=("team_status_agent",),
-        approved_tools=("record_crew_shift_status",),
+        approved_tools=("record_crew_shift_status", "update_apparatus_status"),
         expected_success_output="Confirmation that the declared crew shift availability was recorded.",
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
@@ -223,14 +329,15 @@ PROTOCOLS = [
         name="report_crew_status",
         description=(
             "Applies when someone asks for a read-only picture of the firefighting crew's shift "
-            "roster or engine/vehicle availability -- e.g. who is currently on duty; does not "
-            "apply to a commander declaring multiple members' availability (use "
+            "roster or engine/vehicle availability -- e.g. who is currently on duty, or whether "
+            "the station's apparatus is available; does not apply to a commander declaring "
+            "multiple members' availability (use "
             "record_crew_shift_status for that), and does not apply to a single member's own "
             "availability report (use "
             "record_crew_availability_response for that)."
         ),
         participating_agents=("team_status_agent",),
-        approved_tools=("report_team_availability",),
+        approved_tools=("report_team_availability", "get_apparatus_status"),
         expected_success_output="A read-only roster report covering crew headcount and availability.",
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
@@ -359,9 +466,14 @@ EVENT_TYPE_REQUIRED_FIELDS = {
     "mutual_aid_dispatch": ("area",),
 }
 
-# Approved (decision 1, Profile Split Plan implementation prompt): exactly these six, derived
-# only from the FIRE_002 simulation text -- see docs/Profile_Split_Plan.md section 5.2 for the
-# quoted justification per area. No other area may be added.
+# Originally approved (decision 1, Profile Split Plan implementation prompt) as exactly six,
+# derived only from the FIRE_002 simulation text -- see docs/Profile_Split_Plan.md section 5.2
+# for the quoted justification per area. Extended with a seventh, `route_444`, during this
+# session's own simulation-data-alignment audit (docs/Admin_Tables_Plan.md): FIRE_002's own
+# text names Route 444 twice as a real incident site (a small brush fire beside the highway,
+# phase1.step6; thick smoke visible from the highway, phase2.step2), not narrative color, so
+# the original "no other area may be added" constraint no longer matches what the profile's own
+# simulation content actually requires -- confirmed with the user before overriding it.
 AREAS = [
     "pine_ridge",
     "quarry_junction",
@@ -369,6 +481,7 @@ AREAS = [
     "ornim_street",
     "chemical_plant",
     "fire_station",
+    "route_444",
 ]
 
 API_PORT = 8906

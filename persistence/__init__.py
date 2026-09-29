@@ -34,6 +34,11 @@ from persistence.response_team_store import (
     open_response_team_roster_store,
     open_response_team_surveillance_store,
 )
+from persistence.apparatus_store import (
+    ApparatusStore,
+    ApparatusStoreError,
+    open_apparatus_store,
+)
 
 sqlite = sqlite_store
 sqlite_backend = sqlite_store
@@ -63,4 +68,7 @@ __all__ = [
     "open_neighboring_force_store",
     "open_response_team_roster_store",
     "open_response_team_surveillance_store",
+    "ApparatusStore",
+    "ApparatusStoreError",
+    "open_apparatus_store",
 ]

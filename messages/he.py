@@ -885,12 +885,17 @@ MESSAGES = {
     "firefighting.simulation.fire002.persona.firefighter_team_a_6": "כבאי צוות א׳ 6 - נתוני סימולציה",
     "firefighting.simulation.fire002.persona.fire_police_patrol": "סיור משטרתי",
     "firefighting.simulation.fire002.persona.kkl_mountains_sector": "מוקד קק\"ל - גזרת הרים",
-    "firefighting.simulation.fire002.persona.lahav_avi_shift_commander": "להב אבי - מפקד משמרת",
-    "firefighting.simulation.fire002.persona.omri_firefighter": "רס\"ל עמרי - כבאי",
+    # Simplified to the exact short first-name form the FIRE_002 roll-call text itself uses
+    # ("אבי, עמרי, יובל", phase1.step1.text) -- record_crew_shift_status matches member tokens
+    # against this full_name by exact casefold equality, and the roll call is spoken informally,
+    # not by rank/role (docs/Admin_Tables_Plan.md's simulation-data-alignment audit; this is the
+    # actual root cause of the "reason unknown" crew-status failure investigated this session).
+    "firefighting.simulation.fire002.persona.lahav_avi_shift_commander": "אבי",
+    "firefighting.simulation.fire002.persona.omri_firefighter": "עמרי",
     "firefighting.simulation.fire002.persona.police_hub_agam": "מוקד משטרה - אגמ",
     "firefighting.simulation.fire002.persona.roni_surveillance_operator": "רוני - מפעיל תצפיות",
     "firefighting.simulation.fire002.persona.station_commander": "מפקד התחנה",
-    "firefighting.simulation.fire002.persona.yuval_ashed3_commander": "רס\"ל יובל - מפקד צוות אשד 3",
+    "firefighting.simulation.fire002.persona.yuval_ashed3_commander": "יובל",
     "firefighting.simulation.fire002.phase1.description": "נתוני פתיחה ליום שרבי: שישה כבאים בצוות א׳, שני רכבי כיבוי זמינים בתחנה ושלושה נכסי תצפית במצב שגרה.",
     "firefighting.simulation.fire002.phase1.step1.text": "בוקר טוב. סד\"כ פתיחה מאומת: כל ששת הכבאים בצוות א׳ זמינים למשמרת — אבי, עמרי, יובל ושלושה אנשי צוות המסומנים כנתוני סימולציה. אשד 3 וכרמל 1 תקינים, מבצעיים וזמינים בתחנה להקצאה.",
     "firefighting.simulation.fire002.phase1.step2.text": "מעדכן שאני צריך לצאת ב-12:00 לבדיקה רפואית תקופתית, חוזר למשמרת ב-15:00.",
