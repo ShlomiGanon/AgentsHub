@@ -65,9 +65,9 @@ def parse_admin_table_form(table: "AdminTable", form) -> dict:
 # PROTOCOLS_BODY/EVENTS_BODY (api/admin_api_pages.py) already are -- one shared <head>/style,
 # many page bodies.
 
-ADMIN_TABLES_LIST_BODY = """<body><div class="container container-narrow">
-  <div class="d-flex justify-content-between align-items-baseline mb-1"><h1>{{ table.label }}</h1>
-    <a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a></div>
+ADMIN_TABLES_LIST_BODY = """
+<div class="ls-page">
+  <h1>{{ table.label }}</h1>
   <p class="subtitle mb-4">{{ t('admin.tables.list_subtitle') }}</p>
   {% for category, message in get_flashed_messages(with_categories=true) %}
     <div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>
@@ -97,10 +97,12 @@ ADMIN_TABLES_LIST_BODY = """<body><div class="container container-narrow">
       {% endfor %}
     </tbody>
   </table>
-</div></body>"""
+</div>
+"""
 
 
-ADMIN_TABLES_EDIT_BODY = """<body><div class="container container-narrow">
+ADMIN_TABLES_EDIT_BODY = """
+<div class="ls-page">
   <div class="d-flex justify-content-between align-items-baseline mb-1"><h1>{{ t('admin.tables.edit_title', label=table.label) }}</h1>
     <a class="nav-console" href="{{ url_for('admin.admin_table_list', table_key=table.key) }}">{{ t('admin.tables.back_to_list') }}</a></div>
   {% for category, message in get_flashed_messages(with_categories=true) %}
@@ -128,4 +130,5 @@ ADMIN_TABLES_EDIT_BODY = """<body><div class="container container-narrow">
     {% endfor %}
     <button type="submit" class="btn btn-console-primary">{{ t('admin.save') }}</button>
   </form>
-</div></body>"""
+</div>
+"""
