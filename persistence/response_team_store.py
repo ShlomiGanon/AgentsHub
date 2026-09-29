@@ -320,6 +320,11 @@ class ResponseTeamRosterStore(TeamStatusPersistenceInterface):
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_responses(self) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT * FROM attendance_responses ORDER BY received_at DESC").fetchall()
+        return [dict(row) for row in rows]
+
     def get_response(self, response_id: str) -> dict | None:
         with self._connect() as connection:
             row = connection.execute(

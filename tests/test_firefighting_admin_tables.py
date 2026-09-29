@@ -43,6 +43,7 @@ def _admin_env(monkeypatch):
     monkeypatch.setenv("ADMIN_USERNAME", ADMIN_USERNAME)
     monkeypatch.setenv("ADMIN_PASSWORD", ADMIN_PASSWORD)
     monkeypatch.setenv("ADMIN_SESSION_SECRET", "test-admin-session-secret")
+    monkeypatch.setenv("BOT_TOKEN", "test-admin-tables-token")
 
 
 def _fire_ctx(tmp_path, teardown_ctx):

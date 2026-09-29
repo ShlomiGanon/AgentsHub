@@ -39,6 +39,7 @@ def _admin_env(monkeypatch):
     monkeypatch.setenv("ADMIN_USERNAME", ADMIN_USERNAME)
     monkeypatch.setenv("ADMIN_PASSWORD", ADMIN_PASSWORD)
     monkeypatch.setenv("ADMIN_SESSION_SECRET", "test-admin-session-secret")
+    monkeypatch.setenv("BOT_TOKEN", "test-admin-tables-token")
 
 
 def _rt_ctx(tmp_path, teardown_ctx):
@@ -211,6 +212,9 @@ def test_attendance_reason_edit_writes_through(tmp_path, teardown_ctx, _admin_en
     )
     client = build_app(ctx).test_client()
     _login(client)
+    listed = client.get("/admin/tables/attendance")
+    assert listed.status_code == 200
+    assert response["response_id"] in listed.get_data(as_text=True)
     token = _csrf_token(client)
 
     client.post(
