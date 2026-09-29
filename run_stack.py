@@ -100,6 +100,14 @@ def _http_responds(url: str) -> bool:
         return False
 
 
+def _require_port_free(host: str, port: int, name: str) -> None:
+    if _port_is_open(host, port):
+        raise RuntimeError(
+            f"{name} port {host}:{port} is already in use. A previous stack likely survived "
+            "after run_stack exited without stop(); end that process, then start again."
+        )
+
+
 def _wait_until_port_open(proc: subprocess.Popen, host: str, port: int, name: str, timeout: float) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -226,6 +234,10 @@ class StackSupervisor:
         api_url = f"http://{_API_BIND_HOST}:{info.api_port}"
         admin_url = f"{api_url}/admin/login"
         self._status("starting")
+
+        _require_port_free(_API_BIND_HOST, info.api_port, "API")
+        if info.simulator_port:
+            _require_port_free(_API_BIND_HOST, info.simulator_port, "simulation-mode bot")
 
         _announce(
             f"Starting API for {info.profile_name} ({self.profile_module}); "
@@ -359,8 +371,8 @@ class StackSupervisor:
         self.start()
 
     def run(self) -> None:
-        self.start()
         try:
+            self.start()
             while True:
                 command = consume_command()
                 if command:
