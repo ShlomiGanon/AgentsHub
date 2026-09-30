@@ -331,6 +331,8 @@ STATE_UPDATE_FIELDS = frozenset(
         "approval_answered_at",
         "precedent_matched_event_ids",
         "precedent_closed_by_event_id",
+        "corrects_event_id",
+        "retracted",
     }
 )
 

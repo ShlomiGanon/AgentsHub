@@ -60,6 +60,38 @@ def test_partial_day_falls_back_to_raw_events(tmp_path):
     finally:
         store.close()
 
+
+def test_a_retracted_event_is_labeled_as_such_to_the_history_agent(tmp_path):
+    """Correction/retraction linkage (memory-audit follow-up): a retracted event must never
+    reach the history agent as unqualified current fact -- history/field_catalog.py's
+    "retracted"/"corrects_event_id" narrative fields carry this through _build_semantic_event_view
+    for every query shape, not just this one; this test proves it end to end for one of them."""
+    store = open_persistence(str(tmp_path / "query-retracted.db"))
+    try:
+        store.append_event({
+            "event_id": "e-original", "received_at": "2026-08-01T10:00:00", "source": "sensor",
+            "sender_identity": "s", "occurred_at": "2026-08-01T10:00:00", "raw_text": "gunfire at west_gate",
+            "classification": "security_incident", "area": "west_gate", "retracted": True,
+        })
+        store.append_event({
+            "event_id": "e-correction", "received_at": "2026-08-01T10:05:00", "source": "sensor",
+            "sender_identity": "s", "occurred_at": "2026-08-01T10:05:00", "raw_text": "it was our own warning shot",
+            "classification": "security_incident", "area": "east_orchards", "corrects_event_id": "e-original",
+        })
+        agent = FakeHistoryAgent()
+        service = HistoryQueryService(store, agent)
+
+        service.query("What happened at west_gate?", "2026-08-01T09:00:00", "2026-08-01T11:00:00")
+
+        assert "e-original" in agent.last_prompt
+        # The field catalog's own label/meaning text, not a hardcoded assertion on wording --
+        # confirms the retracted flag and the correction link both actually reached the prompt.
+        assert "Retracted" in agent.last_prompt
+        assert "true" in agent.last_prompt.lower()  # the boolean value itself, not just the label
+        assert "e-original" in agent.last_prompt and "Corrects event" in agent.last_prompt
+    finally:
+        store.close()
+
 # -- answer_most_recent_event (orchestrator.reasoning's direct-lookup
 # path, question-flow-repros follow-up) ------------------------------------
 

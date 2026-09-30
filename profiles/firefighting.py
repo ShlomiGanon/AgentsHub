@@ -5,9 +5,16 @@ docs/Profile_Split_Plan.md)."""
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agents import FriendlyForcesAgent, SurveillanceAgent, TeamStatusAgent, get_authenticated_request_identity, tool
+from agents import Agent, NeighboringForcesAgent, SurveillanceAgent, TeamStatusAgent, get_authenticated_request_identity, tool
 from messages import get_catalog
-from persistence import open_team_status_persistence
+from persistence import (
+    ApparatusStoreError,
+    open_apparatus_store,
+    open_incident_responder_store,
+    open_response_team_surveillance_store,
+    open_team_status_persistence,
+)
+from profiles.admin_tables import AdminColumn, AdminTable
 from profiles.contracts import AgentSpec, OptimizationPolicy
 from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
 from protocols import CriticalityLevel, Protocol
@@ -31,9 +38,84 @@ _PROFILE_DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "firefight
 _PROFILE_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_history.db")
+# The fire station itself -- the natural drone home base for this profile, mirroring
+# response_team.py's own DRONES_WAREHOUSE (docs/Admin_Tables_Plan.md section 1).
+FIREFIGHTING_DRONE_HOME = "fire_station"
 FIREFIGHTING_SURVEILLANCE_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_surveillance.db")
 FIREFIGHTING_CREW_STATUS_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_crew_status.db")
-RESETTABLE_DATABASES = (DB_PATH, FIREFIGHTING_SURVEILLANCE_DB_PATH, FIREFIGHTING_CREW_STATUS_DB_PATH)
+FIREFIGHTING_FORCES_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_forces.db")
+FIREFIGHTING_APPARATUS_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_apparatus.db")
+RESETTABLE_DATABASES = (
+    DB_PATH, FIREFIGHTING_SURVEILLANCE_DB_PATH, FIREFIGHTING_CREW_STATUS_DB_PATH, FIREFIGHTING_FORCES_DB_PATH,
+    FIREFIGHTING_APPARATUS_DB_PATH,
+)
+
+# Mutual-aid force kinds and their home/staging area -- one of this profile's own 6 declared
+# AREAS each, chosen from where each kind is actually mentioned in the FIRE_002 simulation text
+# (docs/Admin_Tables_Plan.md section 3.1; see that doc for the exact quotes/citations and the
+# explicit caveat that `ambulance`'s value below has no supporting simulation text at all).
+FORCE_BASES = {
+    "police": "ornim_street",
+    "water_tankers": "chemical_plant",
+    "aircraft": "pine_ridge",
+    "ambulance": "ornim_street",
+}
+FORCE_POOL_SIZE = 2
+
+# Cameras: create-if-missing only (OPERATIONAL_SEED, below), mirroring
+# profiles/response_team.py's own CAMERAS/_ensure_operational_seed_data pattern exactly
+# (docs/Admin_Tables_Plan.md's own simulation-alignment audit). IDs/areas match exactly how
+# the FIRE_002 simulation text names them: "camera 02 (quarry junction)" (messages/he.py's
+# fire002.phase1.step5.text) and "camera 03 (pine ridge)" (fire002.phase2.step1/step4.text).
+CAMERAS = (
+    {
+        "camera_id": "CAM-02",
+        "name": "Quarry Junction Camera",
+        "area": "quarry_junction",
+        "status": "active",
+        "azimuth_degrees": 45,
+        "feed_summary": "Clear view of the quarry junction approach.",
+    },
+    {
+        "camera_id": "CAM-03",
+        "name": "Pine Ridge Camera",
+        "area": "pine_ridge",
+        "status": "active",
+        "azimuth_degrees": 0,
+        "feed_summary": "Wide-angle overlook of the pine ridge tree line.",
+    },
+)
+
+
+# Apparatus (engines/vehicles): create-if-missing only, same idiom as CAMERAS above. Named
+# exactly as FIRE_002's own text names them: "Ashed 3 and Carmel 1 are operational, functional,
+# and available at the station for assignment" (fire002.phase1.step1.text) -- both operational,
+# at fire_station. persistence/apparatus_store.py is deliberately minimal (registry + status/
+# area update only, no dispatch-log/capacity modeling like drones or neighboring forces).
+APPARATUS = (
+    {"apparatus_id": "APP-ASHED-3", "callsign": "Ashed 3", "status": "operational", "current_area": "fire_station"},
+    {"apparatus_id": "APP-CARMEL-1", "callsign": "Carmel 1", "status": "operational", "current_area": "fire_station"},
+)
+
+
+def _ensure_operational_seed_data() -> None:
+    """Create-if-missing cameras/apparatus -- never overwrites an existing row, the same
+    "create if missing, never touch if present" idiom response_team.py's own seed hook uses.
+    Called automatically, on every profile load (live or simulated), by
+    `ensure_simulation_entities` via this module's `OPERATIONAL_SEED` attribute."""
+
+    surveillance = open_response_team_surveillance_store(
+        FIREFIGHTING_SURVEILLANCE_DB_PATH, home_area=FIREFIGHTING_DRONE_HOME
+    )
+    for camera in CAMERAS:
+        surveillance.ensure_camera(**camera)
+
+    apparatus_store = open_apparatus_store(FIREFIGHTING_APPARATUS_DB_PATH)
+    for apparatus in APPARATUS:
+        apparatus_store.ensure_apparatus(**apparatus)
+
+
+OPERATIONAL_SEED = _ensure_operational_seed_data
 
 # The dashboard runs exactly one profile at a time.  Both selectable profiles
 # therefore use the deployment's single Telegram bot token; the supervisor
@@ -44,19 +126,150 @@ MODEL_CREDENTIAL_ENVS = []
 
 class FirefightingSurveillanceAgent(SurveillanceAgent):
     """Binds the reusable visual-surveillance specialist to this profile's own DB --
-    fire cameras and thermal sensors (docs/Profile_Split_Plan.md section 4.2)."""
+    fire cameras and thermal sensors (docs/Profile_Split_Plan.md section 4.2).
+
+    Opens the same already-generic `ResponseTeamSurveillanceStore`
+    (`open_response_team_surveillance_store`, despite the module name -- see
+    docs/Admin_Tables_Plan.md section 1) `profiles/response_team.py` uses, with this profile's
+    own DB path and home area, instead of the shared base's default hardcoded-`'central_hub'`
+    store -- so `return_drone_to_base` (recall, already declared on the shared
+    `SurveillanceAgent` base) works for this profile exactly like it does for response_team,
+    with no per-profile recall tool needed."""
 
     surveillance_db_path = FIREFIGHTING_SURVEILLANCE_DB_PATH
+
+    def __init__(self, model: str, api_key: str | None = None):
+        self.surveillance_store = open_response_team_surveillance_store(
+            self.surveillance_db_path, home_area=FIREFIGHTING_DRONE_HOME
+        )
+        Agent.__init__(self, model, api_key)
 
 
 class FirefightingCrewStatusAgent(TeamStatusAgent):
     """Binds the reusable readiness-status specialist to this profile's own DB -- the
-    firefighting crew's shift roster and attendance (docs/Profile_Split_Plan.md section 4.2)."""
+    firefighting crew's shift roster and attendance (docs/Profile_Split_Plan.md section 4.2).
+
+    Also owns station apparatus (engine/vehicle) status -- FIRE_002's own simulation text
+    reports apparatus readiness in the exact same "station opening" messages as crew
+    availability (docs/Admin_Tables_Plan.md's simulation-data-alignment audit), so it belongs
+    on this same "station readiness" specialist rather than a new agent."""
 
     status_db_path = FIREFIGHTING_CREW_STATUS_DB_PATH
     timezone_name = "Asia/Jerusalem"
     attendance_check_hour = 8
     response_window_hours = 1
+
+    def __init__(self, model: str, api_key: str | None = None):
+        super().__init__(model, api_key)
+        self.apparatus_store = open_apparatus_store(FIREFIGHTING_APPARATUS_DB_PATH)
+        # Incident linkage is keyed against core `events`, which live in this profile's
+        # `DB_PATH` -- a different file from the apparatus/crew-status stores above.
+        self.incident_store = open_incident_responder_store(DB_PATH)
+
+    @tool(
+        "get_apparatus_status",
+        "Returns the station's own engine/vehicle apparatus roster with each one's current "
+        "status (operational, dispatched, unavailable, or maintenance) and area. Read-only.",
+        side_effecting=False,
+    )
+    def get_apparatus_status(self) -> str:
+        rows = self.apparatus_store.list_apparatus()
+        if not rows:
+            return "No apparatus is registered."
+        lines = ["Station apparatus:"]
+        for row in rows:
+            area = f", area: {row['current_area']}" if row["current_area"] else ""
+            lines.append(f"- {row['callsign']} ({row['apparatus_id']}): {row['status'].upper()}{area}")
+        return "\n".join(lines)
+
+    @tool(
+        "update_apparatus_status",
+        "Records one apparatus/engine's own operating status (operational, dispatched, "
+        "unavailable, or maintenance), and its area if the source states one. identifier is the "
+        "apparatus's callsign (e.g. 'Ashed 3') or apparatus_id. Side-effecting and idempotent -- "
+        "recording the identical status for the same apparatus twice leaves one record. This "
+        "alone does not link the apparatus to any incident -- call join_incident_response "
+        "separately when the report indicates it is dispatched to one.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def update_apparatus_status(self, identifier: str, status: str, current_area: str = "") -> str:
+        try:
+            updated = self.apparatus_store.update_status(identifier, status.strip().lower(), current_area.strip() or None)
+        except ApparatusStoreError as exc:
+            return f"The apparatus status was not stored: {exc}"
+        area = f", area: {updated['current_area']}" if updated["current_area"] else ""
+        return f"{updated['callsign']} status recorded: {updated['status'].upper()}{area}."
+
+    @tool(
+        "join_incident_response",
+        "Links one named apparatus to the one specific real incident currently on record for "
+        "`area`, when exactly one exists -- use when a report clearly indicates that apparatus is "
+        "dispatched to a specific incident there, not merely relocated or stationed. identifier is "
+        "the apparatus's callsign (e.g. 'Ashed 3') or apparatus_id. Never links on area alone: if "
+        "no recent incident is on record, or more than one is, nothing is linked and a plain "
+        "explanation is returned instead of a guess. Automatically closes any other incident that "
+        "apparatus was previously linked to (reassignment). Side-effecting and idempotent.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def join_incident_response(self, identifier: str = "", area: str = "") -> str:
+        apparatus = self.apparatus_store.get_apparatus(identifier)
+        if apparatus is None:
+            return f"Not linked: apparatus '{identifier}' not found."
+        if not area.strip():
+            return "Clarification required: area is required."
+
+        event, clarification = self.incident_store.resolve_single_candidate(area.strip())
+        if event is None:
+            return f"Not linked: {clarification}"
+        self.incident_store.join(event["event_id"], apparatus["apparatus_id"])
+        return f"{apparatus['callsign']} linked to the incident currently on record for '{area.strip()}'."
+
+    @tool(
+        "leave_incident_response",
+        "Closes one named apparatus's own current incident link, if any -- use when a report "
+        "states that apparatus is no longer responding to an incident, with no new one stated. "
+        "identifier is the apparatus's callsign or apparatus_id. Harmless (not an error) if it had "
+        "no open link. Side-effecting and idempotent.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def leave_incident_response(self, identifier: str = "") -> str:
+        apparatus = self.apparatus_store.get_apparatus(identifier)
+        if apparatus is None:
+            return f"Not updated: apparatus '{identifier}' not found."
+        closed = self.incident_store.leave(apparatus["apparatus_id"])
+        if closed is None:
+            return f"No open incident link was found to close for {apparatus['callsign']}."
+        return f"{apparatus['callsign']}'s incident link was closed."
+
+    @tool(
+        "list_incident_responders",
+        "Answers 'who/what else is responding' for the one specific real incident currently on "
+        "record for `area`, when exactly one exists -- lists only personnel and apparatus "
+        "actually linked to that incident (via join_incident_response), never anyone/anything "
+        "merely recorded in the same area. If no recent incident is on record, or more than one "
+        "is, says so plainly instead of guessing. Read-only.",
+        side_effecting=False,
+    )
+    def list_incident_responders(self, area: str = "") -> str:
+        if not area.strip():
+            return "Clarification required: area is required."
+
+        event, clarification = self.incident_store.resolve_single_candidate(area.strip())
+        if event is None:
+            return clarification
+
+        links = self.incident_store.list_open_responders(event["event_id"])
+        if not links:
+            return f"No one is currently linked to the incident on record for '{area.strip()}'."
+
+        names = []
+        for link in links:
+            apparatus = self.apparatus_store.get_apparatus(link["identity"])
+            names.append(apparatus["callsign"] if apparatus is not None else link["identity"])
+        return f"Currently linked to the incident on record for '{area.strip()}': {', '.join(names)}."
 
     @tool(
         "record_crew_shift_status",
@@ -128,47 +341,23 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         return f"Crew shift availability recorded for {stored} approved member(s)."
 
 
-class FirefightingExternalForcesAgent(FriendlyForcesAgent):
-    """Extends the reusable friendly-forces dispatch specialist with two fire-service-specific
-    mutual-aid tools (docs/Profile_Split_Plan.md section 4.2) -- FIRE_002's phase 3 needs tanker-truck
-    and firefighting-aircraft dispatch, actions the base class's four tools (ambulance/police/
-    firefighters/military) do not cover. dispatch_police/dispatch_ambulance are inherited unchanged
-    for the police-cordon and casualty-adjacent needs elsewhere in the scenario."""
+class FirefightingExternalForcesAgent(NeighboringForcesAgent):
+    """Mutual-aid dispatch specialist -- a thin subclass of the shared
+    `agents.neighboring_forces_agent.NeighboringForcesAgent` (docs/Admin_Tables_Plan.md sections
+    3/3.2), giving this profile the exact same persisted dispatch-log + computed-remaining-
+    capacity mechanism `response_team.py` has, instead of the previous in-memory
+    `agents.friendly_forces_agent.FriendlyForcesAgent`-based stand-in. `dispatch_police`,
+    `dispatch_ambulance`, `dispatch_water_tankers`, and `dispatch_aircraft` no longer exist as
+    separate tools -- every kind now goes through the shared base's single
+    `dispatch_neighboring_force(kind, target_area, unit_count, note)` tool, with `kind` selecting
+    among `police|ambulance|water_tankers|aircraft`. No override of `_resolve_kind`/
+    `_check_capacity` is needed -- this profile has no non-force kind like response_team's own
+    "squad", so the shared base's defaults, driven by `FORCE_BASES`/`FORCE_POOL_SIZE` below, are
+    exactly right as-is."""
 
-    @tool(
-        "dispatch_water_tankers",
-        "Records a request to send water-tanker trucks (mutual aid from another station) to a "
-        "named location. Side-effecting and not idempotent -- running it twice records two "
-        "dispatch requests, not one.",
-        side_effecting=True,
-        idempotent=False,
-    )
-    def dispatch_water_tankers(
-        self, location: str, tanker_count: int = 1, source_station: str = "", note: str = ""
-    ) -> str:
-        record = (
-            f"water tanker dispatch requested for '{location}': tanker_count={tanker_count}"
-            f"{f', source_station={source_station}' if source_station else ''}{f', note={note}' if note else ''}"
-        )
-        self.dispatches_recorded.append(record)
-        return f"recorded water tanker dispatch request for '{location}'"
-
-    @tool(
-        "dispatch_aircraft",
-        "Records a request to send firefighting aircraft to a named location. Side-effecting and "
-        "not idempotent -- running it twice records two dispatch requests, not one.",
-        side_effecting=True,
-        idempotent=False,
-    )
-    def dispatch_aircraft(
-        self, location: str, aircraft_count: int = 1, aircraft_type: str = "firefighting", note: str = ""
-    ) -> str:
-        record = (
-            f"aircraft dispatch requested for '{location}': aircraft_count={aircraft_count}, "
-            f"aircraft_type={aircraft_type}{f', note={note}' if note else ''}"
-        )
-        self.dispatches_recorded.append(record)
-        return f"recorded aircraft dispatch request for '{location}'"
+    dispatch_db_path = FIREFIGHTING_FORCES_DB_PATH
+    force_bases = FORCE_BASES
+    force_pool_size = FORCE_POOL_SIZE
 
 
 AGENTS = [
@@ -199,11 +388,13 @@ PROTOCOLS = [
         description=(
             "Applies when a commander explicitly declares the availability of multiple approved "
             "firefighting crew members for a shift -- for example, that the entire crew is available "
-            "at opening; use record_crew_shift_status to persist that declaration. It does not apply "
-            "to a request for a read-only roster picture (use report_crew_status for that)."
+            "at opening; use record_crew_shift_status to persist that declaration. The same report "
+            "commonly also states each engine/vehicle's own operating status (e.g. 'Ashed 3 and "
+            "Carmel 1 are operational') -- call update_apparatus_status for each one named. Does "
+            "not apply to a request for a read-only roster picture (use report_crew_status for that)."
         ),
         participating_agents=("team_status_agent",),
-        approved_tools=("record_crew_shift_status",),
+        approved_tools=("record_crew_shift_status", "update_apparatus_status"),
         expected_success_output="Confirmation that the declared crew shift availability was recorded.",
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
@@ -211,17 +402,43 @@ PROTOCOLS = [
         commander_only=True,
     ),
     Protocol(
+        name="report_apparatus_movement",
+        description=(
+            "Applies when any crew member (not only a commander) reports one named apparatus's "
+            "own dispatch or movement -- e.g. an engine left the station en route to a call and "
+            "is no longer available there -- use update_apparatus_status for that engine, and, "
+            "if the report clearly states it is dispatched to a specific incident there (not "
+            "merely relocated), also call join_incident_response for the same area. If the "
+            "report also asks who/what else is responding, also call list_incident_responders. "
+            "Does not apply to a commander's blanket declaration of multiple members' shift "
+            "availability (use record_crew_shift_status for that), and does not apply to a "
+            "read-only status question (use report_crew_status for that)."
+        ),
+        participating_agents=("team_status_agent",),
+        approved_tools=("update_apparatus_status", "join_incident_response", "list_incident_responders"),
+        expected_success_output=(
+            "Confirmation that the named apparatus's status/area was recorded; if it was "
+            "dispatched to a specific incident, confirmation it was linked to it and, if asked, "
+            "who/what else is currently linked to that same incident."
+        ),
+        criticality=CriticalityLevel.LOW,
+        approval_flag=False,
+        requires_confirmation=False,
+        commander_only=False,
+    ),
+    Protocol(
         name="report_crew_status",
         description=(
             "Applies when someone asks for a read-only picture of the firefighting crew's shift "
-            "roster or engine/vehicle availability -- e.g. who is currently on duty; does not "
-            "apply to a commander declaring multiple members' availability (use "
+            "roster or engine/vehicle availability -- e.g. who is currently on duty, or whether "
+            "the station's apparatus is available; does not apply to a commander declaring "
+            "multiple members' availability (use "
             "record_crew_shift_status for that), and does not apply to a single member's own "
             "availability report (use "
             "record_crew_availability_response for that)."
         ),
         participating_agents=("team_status_agent",),
-        approved_tools=("report_team_availability",),
+        approved_tools=("report_team_availability", "get_apparatus_status"),
         expected_success_output="A read-only roster report covering crew headcount and availability.",
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
@@ -293,8 +510,8 @@ PROTOCOLS = [
             "with no dispatch decision yet (use report_fire_incident or "
             "overall_situational_picture first for those)."
         ),
-        participating_agents=("friendly_forces_agent",),
-        approved_tools=("dispatch_water_tankers", "dispatch_aircraft", "dispatch_police"),
+        participating_agents=("neighboring_forces_agent",),
+        approved_tools=("dispatch_neighboring_force",),
         expected_success_output="Confirmation that the requested mutual-aid resource(s) were dispatched.",
         criticality=CriticalityLevel.HIGH,
         approval_flag=True,
@@ -307,8 +524,11 @@ PROTOCOLS = [
             "Applies when a commander asks for a combined snapshot spanning both the crew's "
             "roster/vehicle availability and the camera/surveillance picture in one request -- "
             "e.g. 'what's our force and vehicle availability' or 'urgent picture: exact fire "
-            "location and crew status'; does not apply when only one of the two domains is "
-            "asked about."
+            "location and crew status'. Also applies when a commander describes multiple "
+            "critical hot spots or reports at once and asks to prioritize response or allocate "
+            "crews/water -- pull the actual current records rather than trusting the "
+            "commander's own recap of what was reported earlier. Does not apply when only one "
+            "of the two domains is asked about."
         ),
         participating_agents=("surveillance_agent", "team_status_agent"),
         approved_tools=("get_surveillance_overview", "report_team_availability"),
@@ -343,6 +563,7 @@ EVENT_TYPES = [
     "mutual_aid_dispatch",
     "drone_dispatch",
     "historical_query",
+    "apparatus_movement",
 ]
 
 EVENT_TYPE_REQUIRED_FIELDS = {
@@ -350,9 +571,14 @@ EVENT_TYPE_REQUIRED_FIELDS = {
     "mutual_aid_dispatch": ("area",),
 }
 
-# Approved (decision 1, Profile Split Plan implementation prompt): exactly these six, derived
-# only from the FIRE_002 simulation text -- see docs/Profile_Split_Plan.md section 5.2 for the
-# quoted justification per area. No other area may be added.
+# Originally approved (decision 1, Profile Split Plan implementation prompt) as exactly six,
+# derived only from the FIRE_002 simulation text -- see docs/Profile_Split_Plan.md section 5.2
+# for the quoted justification per area. Extended with a seventh, `route_444`, during this
+# session's own simulation-data-alignment audit (docs/Admin_Tables_Plan.md): FIRE_002's own
+# text names Route 444 twice as a real incident site (a small brush fire beside the highway,
+# phase1.step6; thick smoke visible from the highway, phase2.step2), not narrative color, so
+# the original "no other area may be added" constraint no longer matches what the profile's own
+# simulation content actually requires -- confirmed with the user before overriding it.
 AREAS = [
     "pine_ridge",
     "quarry_junction",
@@ -360,6 +586,7 @@ AREAS = [
     "ornim_street",
     "chemical_plant",
     "fire_station",
+    "route_444",
 ]
 
 API_PORT = 8906
@@ -401,7 +628,7 @@ SIMULATION_USERS = [
 SIMULATION_GROUPS = [
     SimulationGroup(key="fire_response_team", offset=0, agent_name="team_status_agent", label=_catalog_text("firefighting.simulation.fire002.group.fire_response_team.label")),
     SimulationGroup(key="fire_cameras", offset=1, agent_name="surveillance_agent", label=_catalog_text("firefighting.simulation.fire002.group.fire_cameras.label")),
-    SimulationGroup(key="fire_external_forces", offset=2, agent_name="friendly_forces_agent", label=_catalog_text("firefighting.simulation.fire002.group.fire_external_forces.label")),
+    SimulationGroup(key="fire_external_forces", offset=2, agent_name="neighboring_forces_agent", label=_catalog_text("firefighting.simulation.fire002.group.fire_external_forces.label")),
 ]
 
 SIMULATION_ROSTERS = [
@@ -585,4 +812,115 @@ SIMULATIONS = [
     },
     ),
 ]
+
+
+# == Admin-panel tables (docs/Admin_Tables_Plan.md) ==========================
+#
+# Every write_fn is a thin wrapper around a store method on the same already-shared store
+# classes response_team.py uses (persistence/response_team_store.py's
+# ResponseTeamSurveillanceStore/NeighboringForceStore, persistence/team_status_store.py's
+# SQLiteTeamStatusPersistence) -- proof this mechanism is genuinely shared, not just the same
+# shape reimplemented per profile.
+
+
+def _drones_list(deps) -> list:
+    return deps.registry.get("surveillance_agent").surveillance_store.list_drones()
+
+
+def _drones_get(deps, drone_id: str):
+    return deps.registry.get("surveillance_agent").surveillance_store.get_drone(drone_id)
+
+
+def _drones_write(deps, row: dict) -> None:
+    store = deps.registry.get("surveillance_agent").surveillance_store
+    store.admin_update_drone(row["drone_id"], **{k: v for k, v in row.items() if k != "drone_id"})
+
+
+def _attendance_list(deps) -> list:
+    return deps.registry.get("team_status_agent").status_store.list_responses()
+
+
+def _attendance_get(deps, response_id: str):
+    return deps.registry.get("team_status_agent").status_store.get_response(response_id)
+
+
+def _attendance_write(deps, row: dict) -> None:
+    store = deps.registry.get("team_status_agent").status_store
+    store.admin_update_attendance_fields(row["response_id"], **{k: v for k, v in row.items() if k != "response_id"})
+
+
+def _forces_list(deps) -> list:
+    return deps.registry.get("neighboring_forces_agent").dispatch_store.list_dispatches()
+
+
+def _forces_get(deps, request_id: str):
+    return deps.registry.get("neighboring_forces_agent").dispatch_store.get_dispatch(request_id)
+
+
+def _forces_write(deps, row: dict) -> None:
+    store = deps.registry.get("neighboring_forces_agent").dispatch_store
+    store.admin_update_dispatch(row["request_id"], **{k: v for k, v in row.items() if k != "request_id"})
+
+
+ADMIN_TABLES = (
+    AdminTable(
+        key="drones",
+        label="Drones",
+        primary_key="drone_id",
+        columns=(
+            AdminColumn("drone_id", "Drone ID", editable=False),
+            AdminColumn("callsign", "Callsign", required=True),
+            AdminColumn("model", "Model"),
+            AdminColumn(
+                "status", "Status", kind="select",
+                choices=("ready", "in_flight", "charging", "maintenance"), required=True,
+            ),
+            AdminColumn("battery_percent", "Battery %", kind="number"),
+            AdminColumn("current_area", "Current area"),
+            AdminColumn("assigned_mission_id", "Assigned mission ID"),
+            AdminColumn("last_updated", "Last updated", editable=False),
+        ),
+        list_fn=_drones_list, get_fn=_drones_get, write_fn=_drones_write,
+    ),
+    AdminTable(
+        key="attendance",
+        label="Crew Shift Attendance",
+        primary_key="response_id",
+        columns=(
+            AdminColumn("response_id", "Response ID", editable=False),
+            AdminColumn("telegram_identity", "Member", editable=False),
+            AdminColumn("availability", "Availability", kind="select", choices=("available", "unavailable")),
+            AdminColumn("reason", "Reason"),
+            AdminColumn("unavailable_until", "Unavailable until"),
+            AdminColumn(
+                "approval_status", "Approval status", kind="select",
+                choices=("accepted", "pending", "rejected"),
+            ),
+            AdminColumn("reviewed_by", "Reviewed by", editable=False),
+            AdminColumn("reviewed_at", "Reviewed at", editable=False),
+            AdminColumn("original_text", "Original text", editable=False),
+            AdminColumn("received_at", "Received at", editable=False),
+        ),
+        list_fn=_attendance_list, get_fn=_attendance_get, write_fn=_attendance_write,
+    ),
+    AdminTable(
+        key="forces",
+        label="Friendly Forces",
+        primary_key="request_id",
+        columns=(
+            AdminColumn("request_id", "Request ID", editable=False),
+            AdminColumn("force_kind", "Force kind", required=True),
+            AdminColumn("unit_count", "Unit count", kind="number", required=True),
+            AdminColumn("origin_area", "Origin area"),
+            AdminColumn("target_area", "Target area"),
+            AdminColumn("status", "Status", kind="select", choices=("en_route", "arrived")),
+            AdminColumn("dispatched_at", "Dispatched at", editable=False),
+            AdminColumn("eta_seconds", "ETA (seconds)", kind="number"),
+            AdminColumn("arrived_at", "Arrived at"),
+            AdminColumn("note", "Note"),
+            AdminColumn("event_id", "Event ID", editable=False),
+        ),
+        list_fn=_forces_list, get_fn=_forces_get, write_fn=_forces_write,
+    ),
+)
 

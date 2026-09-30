@@ -56,6 +56,7 @@ from agents.standard_agents import HistoryAgent, ReferenceAgent
 from agents.team_status_agent import TeamStatusAgent
 from agents.surveillance_agent import SurveillanceAgent
 from agents.friendly_forces_agent import FriendlyForcesAgent
+from agents.neighboring_forces_agent import NeighboringForcesAgent
 from agents.roster_agent import RosterAgent
 from agents.fire_station_agents import DispatchAgent, HazmatAgent
 
@@ -96,6 +97,7 @@ __all__ = [
     "TeamStatusAgent",
     "SurveillanceAgent",
     "FriendlyForcesAgent",
+    "NeighboringForcesAgent",
     "RosterAgent",
     "DispatchAgent",
     "HazmatAgent",

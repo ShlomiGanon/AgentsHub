@@ -291,6 +291,51 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_responses(self) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT * FROM attendance_responses ORDER BY received_at DESC").fetchall()
+        return [dict(row) for row in rows]
+
+    def get_response(self, response_id: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM attendance_responses WHERE response_id = ?", (response_id,)
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def admin_update_attendance_fields(self, response_id: str, reviewed_by: str = "admin", **fields) -> dict:
+        """Admin-panel edit of one attendance response (docs/Admin_Tables_Plan.md section 2) --
+        every column is plain-editable. When `approval_status` is among the submitted fields,
+        this replicates `review_late_response`'s own effect (stamping `reviewed_by`/
+        `reviewed_at`) without that method's "must currently be pending" guard, since an admin
+        edit is an explicit override, not the normal single-review flow -- it can also correct
+        an already-reviewed response. `availability_snapshot` reads `approval_status` fresh on
+        every call, so the effect is immediate."""
+
+        now = _utc_now()
+        editable_columns = ("availability", "reason", "unavailable_until", "approval_status")
+        with self._connect() as connection:
+            current = connection.execute(
+                "SELECT 1 FROM attendance_responses WHERE response_id = ?", (response_id,)
+            ).fetchone()
+            if current is None:
+                raise TeamStatusPersistenceError(f"Attendance response '{response_id}' not found.")
+
+            updates = {column: fields[column] for column in editable_columns if column in fields}
+            if "approval_status" in updates:
+                updates["reviewed_by"] = reviewed_by
+                updates["reviewed_at"] = now
+            if updates:
+                assignments = ", ".join(f"{column} = ?" for column in updates)
+                connection.execute(
+                    f"UPDATE attendance_responses SET {assignments} WHERE response_id = ?",
+                    (*updates.values(), response_id),
+                )
+            updated = connection.execute(
+                "SELECT * FROM attendance_responses WHERE response_id = ?", (response_id,)
+            ).fetchone()
+        return dict(updated)
+
     def availability_snapshot(self, as_of: str) -> list[dict]:
         instant = _parse_timestamp(as_of)
         cycle = self.latest_cycle()

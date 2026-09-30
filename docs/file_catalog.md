@@ -23,6 +23,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `agents/contracts.py` | Production | Private implementation | Defines agent results, descriptors, tool metadata, parsing, and typed errors. |
 | `agents/fire_station_agents.py` | Production | Private implementation | Implements the Fire and Rescue dispatch and hazmat-assessment specialists (docs/bar_improves.md). |
 | `agents/friendly_forces_agent.py` | Production | Private implementation | Implements the tactical coordination and dispatch specialist for friendly forces. |
+| `agents/neighboring_forces_agent.py` | Production | Private implementation | Shared, parameterized neighboring/external-force dispatch-log specialist (docs/Admin_Tables_Plan.md) -- persisted dispatch log + computed remaining capacity, reused by `profiles/response_team.py` and `profiles/firefighting.py`. |
 | `agents/provider_telemetry.py` | Production | Private implementation | Correlates CrewAI provider-call events with AgentsHub traces, stages, latency, and usage. |
 | `agents/roster_agent.py` | Production | Private implementation | Implements the shared team/crew availability-reporting specialist (docs/bar_improves.md). |
 | `agents/runtime.py` | Production | Private implementation | Constructs and invokes agents, enforces tools, adapts CrewAI, and owns the runtime registry. |
@@ -33,6 +34,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `api/admin.py` | Production | Private implementation | Serves the login-gated, seven-page admin web panel under `/admin`, in the profile's catalog language. |
 | `api/admin_api_pages.py` | Production | Private implementation | Provides the tailored profiles, protocols, and events management UI; live endpoint actions use the selected `X-Identity` and retain normal API authorization. |
 | `api/admin_simulator.py` | Production | Private implementation | Style, body and script of the admin scenario simulator page, plus the helper that gathers its embedded data. |
+| `api/admin_tables.py` | Production | Private implementation | Generic admin-panel table rendering and form validation for whatever `AdminTable`s the active profile declares (docs/Admin_Tables_Plan.md); routes live in `api/admin.py`. |
 | `api/app.py` | Production | Public entry point | Builds API dependencies, owns ApiContext, and starts Flask. |
 | `api/request_boundary.py` | Production | Private implementation | Authenticates requests and translates API and HTTP failures into responses. |
 | `api/routes.py` | Production | Private implementation | Defines ingestion, management, hold, job, system, and notification routes. |
@@ -58,6 +60,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `config/server_control.py` | Production | Private implementation | Discovers safe profiles and exchanges restart, profile-switch, reset, and status messages with the stack supervisor. |
 | `conftest.py` | Project | Internal | Defines repository-wide pytest fixtures, model-tier configuration, and trace isolation. |
 | `docs/Admin_Profile_Switch_Investigation.md` | Documentation | Internal | Investigates why the admin panel doesn't come up after a profile switch, records the confirmed root cause, and the fix applied. |
+| `docs/Admin_Tables_Plan.md` | Documentation | Internal | Plans a generic, profile-declared admin-panel mechanism for editable Drones/Standby-squad-attendance/Friendly-forces tables, with per-file size estimates, phases, and risks. |
 | `docs/DEMO_READY.md` | Documentation | Internal | Documents DEMO READY. |
 | `docs/GT critial agents.pptx.pdf` | Documentation | Internal | Stores the GT critial agents.pptx reference artifact. |
 | `docs/IMPROVES/ADMIN_LOGIN_LOCKOUT_DIAGNOSIS.MD` | Documentation | Internal | Records the admin-login lockout diagnosis. |
@@ -141,7 +144,9 @@ This English catalog describes every tracked or pending first-party file in the 
 | `orchestrator/situational_picture.py` | Production | Private implementation | Builds the multi-domain situational picture at request time: the Main Agent plans one live question per specialist, gathers their answers and the recent event log concurrently, and composes the picture from those findings only. |
 | `orchestrator/tone.py` | Production | Private implementation | Shared, catalog-driven banned-opener check for every model-composed user-facing reply (report composition, event-data questions) -- deterministic post-check, no raw Hebrew/English literals outside the message catalog. |
 | `persistence/__init__.py` | Production | Public facade | Exposes persistence contracts, constructors, and compatibility aliases. |
+| `persistence/apparatus_store.py` | Production | Private implementation | Minimal SQLite registry for a fire station's own apparatus (engines/vehicles) -- create-if-missing seed plus a status/area update, no dispatch-log/capacity modeling (docs/Admin_Tables_Plan.md's simulation-data-alignment audit). |
 | `persistence/contracts.py` | Production | Private implementation | Defines persistence interfaces and domain errors. |
+| `persistence/incident_responder_store.py` | Production | Private implementation | Shared, cross-profile store linking an identity (person or apparatus) to the one specific real event it is responding to -- never area co-location; used by both profiles' roster/crew-status agents for join/list/leave incident-response tracking. |
 | `persistence/response_team_store.py` | Production | Private implementation | Implements the Response Team profile's own roster/attendance, surveillance, and neighboring-force-dispatch tables against the profile's shared DB_PATH (docs/responce_improve.md). |
 | `persistence/schema.py` | Production | Private implementation | Owns immutable migration DDL and the current SQLite schema. |
 | `persistence/sqlite_store.py` | Production | Private implementation | Implements serialized SQLite persistence, transactions, and row conversion. |
@@ -150,6 +155,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `persistence/team_status_contracts.py` | Production | Private implementation | Defines the database-agnostic readiness-team status persistence contract and constructor. |
 | `persistence/team_status_store.py` | Production | Private implementation | Implements the isolated SQLite store for readiness-team roster and attendance state. |
 | `profiles/__init__.py` | Production | Public facade | Exposes profile contracts, loading, registries, and compatibility aliases. |
+| `profiles/admin_tables.py` | Production | Private implementation | Defines `AdminColumn`/`AdminTable` -- a profile's own declared, editable admin-panel tables (docs/Admin_Tables_Plan.md). |
 | `profiles/contracts.py` | Production | Private implementation | Defines profile declarations, loaded-profile state, and area/event-type registries. |
 | `profiles/fire_station.py` | Production | Private implementation | Defines the Fire and Rescue Station profile (structure/hazmat fire, rescue, mutual-aid dispatch, attendance) (docs/bar_improves.md). |
 | `profiles/fire_station_sim.py` | Production | Private implementation | Defines the Fire and Rescue Station simulation deployment, reusing the live profile's declared content (docs/bar_improves.md). |
@@ -175,6 +181,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_agent_permission_enforcement.py` | Test | Internal | Verifies agent permission enforcement behavior and edge cases. |
 | `tests/test_agent_registry.py` | Test | Internal | Verifies agent registry behavior and edge cases. |
 | `tests/test_agent_runtime.py` | Test | Internal | Verifies agent construction, invocation, CrewAI adaptation, and output handling. |
+| `tests/test_admin_tables.py` | Test | Internal | Verifies the generic admin-table mechanism (list/edit/new/delete rendering and form validation) against a fake `AdminTable`, independent of any real profile store. |
 | `tests/test_api_admin.py` | Test | Internal | Verifies the admin web panel's login, session, CSRF, rate limiting, and user-management behavior. |
 | `tests/test_api_app.py` | Test | Internal | Verifies api app behavior and edge cases. |
 | `tests/test_api_groups.py` | Test | Internal | Verifies Telegram group binding routes, group-scoped message handling, and the attendance-check trigger. |
@@ -204,7 +211,10 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_environment_config.py` | Test | Internal | Verifies environment-backed model and runtime configuration. |
 | `tests/test_file_catalog.py` | Test | Internal | Ensures this catalog exactly matches the first-party repository tree. |
 | `tests/test_friendly_forces_agent.py` | Test | Internal | Verifies friendly forces agent dispatch tools and coordination records. |
-| `tests/test_firefighting_external_forces_agent.py` | Test | Internal | Verifies FirefightingExternalForcesAgent's two new mutual-aid tools (docs/Profile_Split_Plan.md). |
+| `tests/test_firefighting_admin_tables.py` | Test | Internal | Verifies the drones/attendance/forces admin-table wirings for `profiles/firefighting.py`, against its own DBs. |
+| `tests/test_neighboring_forces_agent.py` | Test | Internal | Verifies the shared, parameterized `agents/neighboring_forces_agent.py` base class directly, independent of either profile. |
+| `tests/test_firefighting_external_forces_agent.py` | Test | Internal | Verifies FirefightingExternalForcesAgent's shared, persisted `dispatch_neighboring_force` tool and per-kind capacity (docs/Admin_Tables_Plan.md). |
+| `tests/test_firefighting_apparatus_movement.py` | Test | Internal | Verifies FirefightingCrewStatusAgent's update_apparatus_status "who else is at this area" reporting and the report_apparatus_movement protocol (memory/continuity audit fix 4: incident-scoped responder tracking). |
 | `tests/test_group_routing.py` | Test | Internal | Verifies the group routing table, staleness refresh, scope resolution, and dependency scoping. |
 | `tests/test_group_scoping_safety_critical.py` | Test | Internal | Regression: a safety_critical protocol (e.g. report_security_incident, report_fire_incident) stays a selection candidate from every declared simulation group in a profile, regardless of which specialist that group is bound to. |
 | `tests/test_history_agent.py` | Test | Internal | Verifies history agent behavior and edge cases. |
@@ -253,7 +263,9 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_report_composer.py` | Test | Internal | Verifies model-composed run report text, its fallback to render_summary, and audience/language scoping of the prompt. |
 | `tests/test_response_improvements.py` | Test | Internal | Verifies conversation retention, long polling, trace propagation, queue ordering, idempotency, and removal of the obsolete stream route. |
 | `tests/test_response_team_direct_tool_binders.py` | Test | Internal | Verifies response_team's direct-tool step binders (Phase A) -- record_attendance/update_camera_status/report_team_movement parameter binding, missing-field detection, and camera-status inference. |
+| `tests/test_response_team_admin_tables.py` | Test | Internal | Verifies the drones/attendance/forces admin-table wirings for `profiles/response_team.py`, including the drone status/mission-cascade and the attendance approval-stamp behavior. |
 | `tests/test_response_team_resource_unavailable.py` | Test | Internal | Verifies response_team's resource-unavailable wiring -- dispatch_neighboring_force's per-force-kind capacity and its roster-backed "squad" kind, and the _find_resource_alternatives alternatives finder. |
+| `tests/test_response_team_roster_agent.py` | Test | Internal | Verifies ResponseTeamRosterAgent's report_team_movement "who else is with me" reporting, backed by list_members_by_area (memory/continuity audit fix 4: incident-scoped responder tracking). |
 | `tests/test_run_report.py` | Test | Internal | Verifies RunSummary construction from persisted event/step/hold data and audience-aware deterministic rendering. |
 | `tests/test_run_stack.py` | Test | Internal | Verifies profile-database reset removes only declared databases and known sidecars, and refuses a non-database path. |
 | `tests/test_server_control.py` | Test | Internal | Verifies safe profile discovery and supervisor command and selection persistence. |

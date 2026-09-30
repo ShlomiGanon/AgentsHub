@@ -377,20 +377,80 @@ class NotificationCursorStore:
 
 
 
+def _pid_is_running(pid: int) -> bool:
+    """True when `pid` still names a live process. Used to tell a crashed bot's leftover
+    lock file from a second live instance of the same deployment."""
+
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        process_query_limited_information = 0x1000
+        still_active = 259
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)) == 0:
+                return False
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _read_lock_pid(lock_path: Path) -> int | None:
+    try:
+        raw = lock_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not raw.isdigit():
+        return None
+    return int(raw)
+
+
 class SingleInstanceLock:
     def __init__(self, lock_path: Path):
         self._lock_path = lock_path
         self._fd: int | None = None
 
+    def _reclaim_stale(self) -> bool:
+        holder = _read_lock_pid(self._lock_path)
+        if holder is not None and _pid_is_running(holder):
+            return False
+        try:
+            self._lock_path.unlink()
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return True
+
     def acquire(self) -> None:
         try:
             self._fd = os.open(str(self._lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError as exc:
-            raise AlreadyRunningError(
-                f"a bot process for this deployment appears to already be running "
-                f"(lock file exists: {self._lock_path}); if the previous process crashed "
-                f"without cleaning up, remove that file manually before restarting"
-            ) from exc
+            if not self._reclaim_stale():
+                raise AlreadyRunningError(
+                    f"a bot process for this deployment appears to already be running "
+                    f"(lock file exists: {self._lock_path}); if the previous process crashed "
+                    f"without cleaning up, remove that file manually before restarting"
+                ) from exc
+            try:
+                self._fd = os.open(str(self._lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError as retry_exc:
+                raise AlreadyRunningError(
+                    f"a bot process for this deployment appears to already be running "
+                    f"(lock file exists: {self._lock_path}); if the previous process crashed "
+                    f"without cleaning up, remove that file manually before restarting"
+                ) from retry_exc
 
         os.write(self._fd, str(os.getpid()).encode("utf-8"))
 

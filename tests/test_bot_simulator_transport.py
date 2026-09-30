@@ -234,6 +234,16 @@ def test_synthetic_update_carries_the_right_identities_and_text():
     assert update.message.text == "hi team"
 
 
+def test_synthetic_update_uses_an_explicit_unix_date_when_provided():
+    bot = _fake_bot()
+    update = build_synthetic_text_update(
+        update_id=7, source_message_id="s1", sender_identity="9000000000000002",
+        chat_id="9000000000000002", chat_type="private", text="hi", bot=bot,
+        date=1694000000,
+    )
+    assert int(update.message.date.timestamp()) == 1694000000
+
+
 def test_stable_message_id_is_deterministic_and_positive():
     first = _stable_message_id("sim-step-3")
     second = _stable_message_id("sim-step-3")

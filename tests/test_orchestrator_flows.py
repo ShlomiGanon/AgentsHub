@@ -1707,6 +1707,7 @@ import pytest
 from agents import adapter
 from agents.reference import ReferenceAgent
 from agents.runtime import build_agent_registry
+from history.contracts import PrecedentMatch
 from orchestrator.main_agent import OrchestrationParseError, _parse_formulation_response, formulate_tasks, rewrite_task
 from protocols.model import CriticalityLevel, Protocol, ProtocolRunResult, Step, StepOutcome
 
@@ -2009,12 +2010,111 @@ def test_precedent_context_defaults_to_empty_and_is_optional(registry):
     assert result.success
 
 
+def _precedent(event_id="prior-1", *, resolved: bool, outcome="succeeded"):
+    return PrecedentMatch(
+        event_id=event_id, classification="fire", area="north", occurred_at="2026-01-01T00:00:00+00:00",
+        protocol_name="report_fire_incident", steps_summary=[{"agent_name": "x", "result_text": "prior incident X"}],
+        outcome=outcome, resolved=resolved,
+    )
+
+
 def test_precedent_context_appears_in_the_prompt_when_given(registry):
     agent = _ScriptedMainAgent("AGENT: reference_agent\nTASK: t")
 
-    formulate_tasks(agent, _protocol(), registry, "raw", "fire", "north", "d", precedent_context=("prior incident X",))
+    formulate_tasks(agent, _protocol(), registry, "raw", "fire", "north", "d", precedent_context=(_precedent(resolved=True),))
 
     assert "prior incident X" in agent.calls[0][0]
+
+
+def test_unresolved_precedent_is_excluded_from_the_prompt(registry):
+    # A failed/unresolved precedent carries no reliable procedure to repeat -- dumping its own
+    # failure reasoning into a new event's formulation prompt as unqualified "what was tried
+    # before" primes the model to preemptively refuse a fresh attempt (the firefighting
+    # crew-shift-status bug this fix addresses).
+    agent = _ScriptedMainAgent("AGENT: reference_agent\nTASK: t")
+
+    formulate_tasks(
+        agent, _protocol(), registry, "raw", "fire", "north", "d",
+        precedent_context=(_precedent(resolved=False, outcome="failed"),),
+    )
+
+    assert "prior incident X" not in agent.calls[0][0]
+    assert "Relevant precedent" not in agent.calls[0][0]
+
+
+def test_a_mix_of_resolved_and_unresolved_precedents_only_shows_the_resolved_one(registry):
+    agent = _ScriptedMainAgent("AGENT: reference_agent\nTASK: t")
+
+    formulate_tasks(
+        agent, _protocol(), registry, "raw", "fire", "north", "d",
+        precedent_context=(
+            _precedent("prior-failed", resolved=False, outcome="failed"),
+            _precedent("prior-ok", resolved=True, outcome="succeeded"),
+        ),
+    )
+
+    prompt = agent.calls[0][0]
+    assert "prior-ok" in prompt
+    assert "prior-failed" not in prompt
+
+
+def test_conversation_messages_appear_in_the_prompt_when_given(registry):
+    agent = _ScriptedMainAgent("AGENT: reference_agent\nTASK: t")
+
+    formulate_tasks(
+        agent, _protocol(), registry, "raw", "fire", "north", "d",
+        conversation_messages=({"role": "user", "content": "the drone from before"},),
+    )
+
+    assert "the drone from before" in agent.calls[0][0]
+    assert "Recent conversation in this thread" in agent.calls[0][0]
+
+
+def test_conversation_messages_absent_by_default(registry):
+    agent = _ScriptedMainAgent("AGENT: reference_agent\nTASK: t")
+
+    formulate_tasks(agent, _protocol(), registry, "raw", "fire", "north", "d")
+
+    assert "Recent conversation in this thread" not in agent.calls[0][0]
+
+
+def test_corrects_event_id_is_parsed_when_the_model_names_a_shown_precedent(registry):
+    agent = _ScriptedMainAgent(json.dumps({
+        "steps": [{"step_id": "s1", "agent_name": "reference_agent", "task": "t", "depends_on": [], "required_event_fields": []}],
+        "corrects_event_id": "prior-ok",
+    }))
+
+    result = formulate_tasks(
+        agent, _protocol(), registry, "raw", "fire", "north", "d",
+        precedent_context=(_precedent("prior-ok", resolved=True),),
+    )
+
+    assert result.success
+    assert result.corrects_event_id == "prior-ok"
+
+
+def test_corrects_event_id_is_rejected_when_not_one_of_the_shown_precedents(registry):
+    # Never trust an arbitrary model-supplied event_id -- only a candidate it was actually shown
+    # (a resolved precedent) counts as a valid correction/retraction link.
+    agent = _ScriptedMainAgent(json.dumps({
+        "steps": [{"step_id": "s1", "agent_name": "reference_agent", "task": "t", "depends_on": [], "required_event_fields": []}],
+        "corrects_event_id": "some-other-event-not-shown",
+    }))
+
+    result = formulate_tasks(agent, _protocol(), registry, "raw", "fire", "north", "d")
+
+    assert result.success
+    assert result.corrects_event_id is None
+
+
+def test_corrects_event_id_defaults_to_none(registry):
+    agent = _ScriptedMainAgent(json.dumps({
+        "steps": [{"step_id": "s1", "agent_name": "reference_agent", "task": "t", "depends_on": [], "required_event_fields": []}],
+    }))
+
+    result = formulate_tasks(agent, _protocol(), registry, "raw", "fire", "north", "d")
+
+    assert result.corrects_event_id is None
 
 
 def test_formulate_tasks_passes_no_tools_to_the_main_agent(registry):

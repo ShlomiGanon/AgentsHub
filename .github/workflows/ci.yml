@@ -110,6 +110,7 @@ jobs:
           tests/test_agent_runtime.py
           tests/test_friendly_forces_agent.py
           tests/test_firefighting_external_forces_agent.py
+          tests/test_neighboring_forces_agent.py
           tests/test_provider_telemetry.py
           tests/test_reference_agent.py
           tests/test_surveillance_agent.py
@@ -151,6 +152,7 @@ jobs:
       - name: Mission 7 - API Layer
         run: >
           python -m pytest -v --color=yes
+          tests/test_admin_tables.py
           tests/test_api_admin.py
           tests/test_api_app.py
           tests/test_api_groups.py
@@ -207,6 +209,8 @@ jobs:
           tests/test_operational_scenarios.py
           tests/test_response_team_direct_tool_binders.py
           tests/test_response_team_resource_unavailable.py
+          tests/test_response_team_admin_tables.py
+          tests/test_firefighting_admin_tables.py
 
       - name: Confirm tests did not modify tracked files
         run: git diff --exit-code

@@ -7,6 +7,7 @@ itself, including its thread/asyncio-loop bridge (docs/bot_simulation_mode_desig
 import asyncio
 import threading
 import types
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from profiles import SimulationGroup, SimulationPersona, simulation_group_chat_id, simulation_user_telegram_id
@@ -308,6 +309,36 @@ def test_simulator_msg_dispatches_and_returns_the_real_reply(tmp_path):
         body = response.get_json()
         assert body["reply_text"] == "42 events"
         assert set(body["watermark"]) == {"status_len", "sent_len"}
+
+
+def test_simulator_msg_applies_timestamp_to_the_synthetic_message_date(tmp_path, monkeypatch):
+    from bot import simulator_app
+
+    updates = []
+    real = simulator_app.build_synthetic_text_update
+
+    def capturing(**kwargs):
+        update = real(**kwargs)
+        updates.append(update)
+        return update
+
+    monkeypatch.setattr(simulator_app, "build_synthetic_text_update", capturing)
+
+    with _RunningSimulator(tmp_path) as sim:
+        response = sim.client.post(
+            "/Simulator-msg",
+            json={
+                "sender_identity": _PERSONA_ID, "chat_id": _PERSONA_ID, "chat_type": "private",
+                "text": "how many events?", "source_message_id": "sim-step-1",
+                "timestamp": "2026-09-06T07:30:00Z",
+            },
+            headers={"X-Service-Key": "test-key"},
+        )
+        assert response.status_code == 200
+
+    assert updates
+    expected = datetime(2026, 9, 6, 7, 30, tzinfo=timezone.utc)
+    assert int(updates[0].message.date.timestamp()) == int(expected.timestamp())
 
 
 def test_simulator_msg_returns_500_on_an_unexpected_handler_failure(tmp_path):

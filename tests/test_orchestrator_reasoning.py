@@ -468,3 +468,58 @@ def test_event_data_question_without_a_catalog_skips_the_tone_check():
 
     assert question == "Your report was received, please clarify the area."
     assert len(agent.calls) == 1
+
+
+def test_message_plan_prompt_instructs_wide_scope_narrative_routing_for_a_debrief_request():
+    """Memory/continuity audit fix 7 (debrief coherence): the plan prompt must steer a
+    debrief/timeline request to a wide, unfiltered history query -- covering every event type
+    across the whole incident -- rather than whatever narrow scope the model would otherwise
+    guess, so the debrief isn't accidentally limited to the single most recent event."""
+
+    import json as _json
+
+    from agents.contracts import AgentResult
+    from agents.runtime import AgentRegistry
+    from orchestrator.main_agent import plan_message
+
+    class _FakeMainAgent:
+        def __init__(self):
+            self.prompts: list[str] = []
+
+        def process(self, text, allowed_tools, *, invocation_policy=None):
+            self.prompts.append(text)
+            payload = {
+                "primary_intent": "question", "asks_for_information": True, "reports_occurrence": False,
+                "requests_action": False, "social_only": False, "is_quoted": False, "is_hypothetical": False,
+                "is_followup_without_context": False,
+                "evidence": {"question": "produce an initial debrief", "report": "", "request": ""},
+                "matched_protocol_names": [], "reason": "debrief request", "ambiguity_reason": None,
+                "clarification_question": None,
+                "question_plan": {
+                    "route": "history", "reason": "debrief",
+                    "history_query": {
+                        "operation": "narrative", "time_start": None, "time_end": None,
+                        "time_basis": "occurred_at", "classifications": [], "areas": [], "outcomes": [],
+                        "protocol_names": [], "event_ids": [], "risk_levels": [], "order": "oldest",
+                        "group_by": "none", "limit": 50,
+                    },
+                    "tasks": [],
+                },
+                "conversational_reply": None,
+            }
+            return AgentResult("success", _json.dumps(payload))
+
+    main_agent = _FakeMainAgent()
+    registry = AgentRegistry({})
+    protocol = Protocol(
+        name="query_historical_incidents", description="debrief",
+        participating_agents=("history_agent",), approved_tools=(), expected_success_output="x",
+        criticality=CriticalityLevel.LOW, approval_flag=False,
+    )
+
+    plan_message(main_agent, (protocol,), "produce an initial debrief", registry, history_query_service=None)
+
+    prompt = main_agent.prompts[0]
+    assert 'operation="narrative"' in prompt
+    assert "Leave classifications and areas empty" in prompt
+    assert "not just the most recent event" in prompt

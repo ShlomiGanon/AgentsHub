@@ -300,3 +300,33 @@ def test_nothing_collected_skips_the_model_and_reports_every_domain_unavailable(
     assert main_agent.prompts == []
     assert get_catalog("en").text("orchestrator.picture.domain_unavailable", domain="surveillance_agent") in text
     assert get_catalog("en").text("orchestrator.picture.domain_unavailable", domain=RECENT_EVENTS_DOMAIN) in text
+
+
+def test_compose_prompt_instructs_a_labeled_recommendation_only_when_explicitly_asked():
+    """Memory/continuity audit gap #3 (recommendation layer): the compose prompt must tell the
+    model to add a clearly-labeled recommendation only when the requester's own message asked
+    for one, grounded in the reports, never as a default addition to every picture."""
+
+    reports = (DomainReport("surveillance_agent", "q1", "Drones: 2 ready.", True),)
+    main_agent = FakeMainAgent()
+
+    compose_situational_picture(main_agent, reports, "recommend where to send the available force", current_time="T", recent_events_hours=6)
+
+    prompt = main_agent.prompts[0]
+    assert "explicitly asks for a recommendation" in prompt
+    assert "marks it as a recommendation rather than a fact" in prompt
+    assert "Never add this line unless a recommendation was explicitly asked for" in prompt
+
+
+def test_compose_prompt_instructs_correcting_a_confused_requester_instead_of_echoing_it():
+    """Memory/continuity audit gap: a commander recapping earlier reports incorrectly (gap
+    covered by fix 6) must be corrected against the actual reports/log, not repeated back."""
+
+    reports = (DomainReport("surveillance_agent", "q1", "Drones: 2 ready.", True),)
+    main_agent = FakeMainAgent()
+
+    compose_situational_picture(main_agent, reports, "confusing recap of earlier reports", current_time="T", recent_events_hours=6)
+
+    prompt = main_agent.prompts[0]
+    assert "check the requester's own message against the reports and recent-events log" in prompt
+    assert "do not repeat that framing" in prompt

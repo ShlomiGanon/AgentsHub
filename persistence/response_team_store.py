@@ -320,6 +320,52 @@ class ResponseTeamRosterStore(TeamStatusPersistenceInterface):
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_responses(self) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT * FROM attendance_responses ORDER BY received_at DESC").fetchall()
+        return [dict(row) for row in rows]
+
+    def get_response(self, response_id: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM attendance_responses WHERE response_id = ?", (response_id,)
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def admin_update_attendance_fields(self, response_id: str, reviewed_by: str = "admin", **fields) -> dict:
+        """Admin-panel edit of one attendance response (docs/Admin_Tables_Plan.md section 2) --
+        mirrors persistence/team_status_store.py's own `SQLiteTeamStatusPersistence.
+        admin_update_attendance_fields` exactly (this class implements the same
+        `TeamStatusPersistenceInterface` as a separate implementation, not a subclass, so the
+        method has to exist here too, not just there). When `approval_status` is among the
+        submitted fields, replicates `review_late_response`'s own effect (stamping
+        `reviewed_by`/`reviewed_at`) without that method's "must currently be pending" guard,
+        since an admin edit is an explicit override, not the normal single-review flow."""
+
+        now = _utc_now()
+        editable_columns = ("availability", "reason", "unavailable_until", "approval_status")
+        with self._connect() as connection:
+            current = connection.execute(
+                "SELECT 1 FROM attendance_responses WHERE response_id = ?", (response_id,)
+            ).fetchone()
+            if current is None:
+                raise TeamStatusPersistenceError(f"Attendance response '{response_id}' not found.")
+
+            updates = {column: fields[column] for column in editable_columns if column in fields}
+            if "approval_status" in updates:
+                updates["reviewed_by"] = reviewed_by
+                updates["reviewed_at"] = now
+            if updates:
+                assignments = ", ".join(f"{column} = ?" for column in updates)
+                connection.execute(
+                    f"UPDATE attendance_responses SET {assignments} WHERE response_id = ?",
+                    (*updates.values(), response_id),
+                )
+            updated = connection.execute(
+                "SELECT * FROM attendance_responses WHERE response_id = ?", (response_id,)
+            ).fetchone()
+        return dict(updated)
+
     def availability_snapshot(self, as_of: str) -> list[dict]:
         instant = _parse_timestamp(as_of)
         cycle = self.latest_cycle()
@@ -822,6 +868,58 @@ class ResponseTeamSurveillanceStore(SurveillancePersistenceInterface):
             updated = conn.execute("SELECT * FROM drone_missions WHERE mission_id = ?", (mission_id,)).fetchone()
             return dict(updated)
 
+    def admin_update_drone(self, drone_id: str, now_iso: str | None = None, **fields) -> dict:
+        """Admin-panel edit of one drone's own row (docs/Admin_Tables_Plan.md section 1) --
+        every submitted field is a plain-editable admin column, `status` included. Leaving an
+        active mission (via `status` changing away from `'in_flight'`, or `assigned_mission_id`
+        being cleared/changed) aborts that mission row the same way `recall_drone` does, so the
+        two never disagree about whether a mission is still active. Setting `status='in_flight'`
+        with an `assigned_mission_id` requires that mission to actually exist."""
+
+        now = now_iso or _utc_now()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute("SELECT * FROM drones WHERE drone_id = ?", (drone_id.strip(),)).fetchone()
+            if current is None:
+                raise SurveillancePersistenceError(f"Drone '{drone_id}' not found.")
+            current = dict(current)
+
+            new_status = fields.get("status", current["status"])
+            new_mission_id = fields.get("assigned_mission_id", current["assigned_mission_id"])
+            leaving_active_mission = (
+                current["assigned_mission_id"] is not None
+                and (new_status != "in_flight" or new_mission_id != current["assigned_mission_id"])
+            )
+            if leaving_active_mission:
+                conn.execute(
+                    "UPDATE drone_missions SET status = 'aborted', "
+                    "notes = 'Admin edit: status changed away from in_flight.', updated_at = ? "
+                    "WHERE mission_id = ? AND status IN ('dispatched', 'en_route', 'on_station')",
+                    (now, current["assigned_mission_id"]),
+                )
+                fields.setdefault("assigned_mission_id", None)
+                new_mission_id = fields["assigned_mission_id"]
+
+            if new_status == "in_flight" and new_mission_id:
+                mission = conn.execute(
+                    "SELECT 1 FROM drone_missions WHERE mission_id = ?", (new_mission_id,)
+                ).fetchone()
+                if mission is None:
+                    raise SurveillancePersistenceError(
+                        f"assigned_mission_id {new_mission_id!r} does not reference an existing mission."
+                    )
+
+            editable_columns = ("callsign", "model", "status", "battery_percent", "current_area", "assigned_mission_id")
+            updates = {column: fields[column] for column in editable_columns if column in fields}
+            if updates:
+                assignments = ", ".join(f"{column} = ?" for column in updates)
+                conn.execute(
+                    f"UPDATE drones SET {assignments}, last_updated = ? WHERE drone_id = ?",
+                    (*updates.values(), now, drone_id.strip()),
+                )
+            updated = conn.execute("SELECT * FROM drones WHERE drone_id = ?", (drone_id.strip(),)).fetchone()
+            return dict(updated)
+
     def surveillance_overview(self, area: str | None = None) -> dict:
         cameras = self.list_cameras(area=area)
         drones = self.list_drones()
@@ -954,6 +1052,38 @@ class NeighboringForceStore:
             query += " ORDER BY dispatched_at DESC"
             rows = conn.execute(query, params).fetchall()
             return [dict(row) for row in rows]
+
+    def get_dispatch(self, request_id: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM neighboring_force_dispatches WHERE request_id = ?", (request_id,)
+            ).fetchone()
+            return dict(row) if row is not None else None
+
+    def admin_update_dispatch(self, request_id: str, **fields) -> dict:
+        """Admin-panel edit of one dispatch row (docs/Admin_Tables_Plan.md section 3.3) --
+        every column is plain-editable; the busy-window capacity calculation
+        (`_force_remaining_capacity`) reads this same table fresh on every call, so an edit here
+        is reflected there immediately, with no separate recomputation step."""
+
+        editable_columns = ("force_kind", "unit_count", "origin_area", "target_area", "status", "eta_seconds", "arrived_at", "note")
+        with self._connect() as conn:
+            current = conn.execute(
+                "SELECT 1 FROM neighboring_force_dispatches WHERE request_id = ?", (request_id,)
+            ).fetchone()
+            if current is None:
+                raise NeighboringForceStoreError(f"Dispatch '{request_id}' not found.")
+            updates = {column: fields[column] for column in editable_columns if column in fields}
+            if updates:
+                assignments = ", ".join(f"{column} = ?" for column in updates)
+                conn.execute(
+                    f"UPDATE neighboring_force_dispatches SET {assignments} WHERE request_id = ?",
+                    (*updates.values(), request_id),
+                )
+            row = conn.execute(
+                "SELECT * FROM neighboring_force_dispatches WHERE request_id = ?", (request_id,)
+            ).fetchone()
+            return dict(row)
 
 
 def open_neighboring_force_store(db_path: str) -> NeighboringForceStore:

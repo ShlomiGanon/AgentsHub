@@ -908,15 +908,35 @@ def _run_protocol(
         return _execute_protocol_plan(
             deps, event_id, main_agent, insights_agent, protocol, direct_tool_steps, precedent_matches,
         )
+    event = deps.persistence.fetch_event(event_id)
+    conversation_messages: tuple = ()
+    conversation_id = (event or {}).get("conversation_id")
+    if conversation_id and deps.conversation_history_turns > 0:
+        conversation_messages = tuple(
+            deps.persistence.fetch_conversation_messages(conversation_id, deps.conversation_history_turns * 2)
+        )
     formulation = formulate_tasks(
         main_agent, protocol, deps.registry, raw_text, classification, area, description,
-        precedent_context=precedent_matches, event_data=deps.persistence.fetch_event(event_id),
+        precedent_context=precedent_matches, event_data=event,
         # The event type's statically-declared required fields (item #6's
         # EVENT_TYPE_REQUIRED_FIELDS), unioned into every formulated step's own
         # required_event_fields regardless of what the model declares — see
         # formulate_tasks' docstring.
         required_fields_floor=deps.event_type_registry.required_fields_for(classification),
+        conversation_messages=conversation_messages,
     )
+    if formulation.success and formulation.corrects_event_id:
+        # Correction/retraction linkage: the target event_id was already validated (formulate_tasks
+        # only ever accepts one of the RESOLVED precedents it was shown) before reaching here.
+        record_event_state(deps.persistence, event_id, {"corrects_event_id": formulation.corrects_event_id})
+        record_event_state(deps.persistence, formulation.corrects_event_id, {"retracted": True})
+        logger.info(
+            "event correction recorded",
+            extra={
+                "event": "event_correction_recorded", "event_id": event_id,
+                "corrects_event_id": formulation.corrects_event_id, "trace_id": get_trace_id(),
+            },
+        )
     if not formulation.success:
         _record_outcome_with_report(deps, event_id, "failed", failure_reason=formulation.failure_reason)
         _log_event_outcome(event_id, "failed", failure_reason=formulation.failure_reason, stage="formulation")

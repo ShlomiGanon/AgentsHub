@@ -46,9 +46,12 @@ Scenario JSON shape (documented in docs/unified_command_guide.md):
 declared on the chat — `conversation_id`/`protocol_hint` are no longer caller-supplied for this
 path, since the real bot handler now derives them itself, exactly as it would for a real Telegram
 message (docs/bot_simulation_mode_design.md §10); `kind: "event"` steps still go straight to
-`POST /Event`, unchanged. `timestamp`, `sender_name`, `label`, `title`, `description` and `tags`
-are display-only — `occurred_at` is always the server's receipt time, and the simulator never
-pretends otherwise.
+`POST /Event`. An edited pending step updates the in-memory queue and the
+payload that is actually sent: `text` and `sender_identity` always, and
+`timestamp` when set (message-kind steps carry it to the simulation-mode bot
+as Telegram `message.date`; event-kind steps send it to `POST /Event` as
+`received_at`). `sender_name`, `label`, `title`, `description` and `tags`
+remain display-only.
 """
 
 from __future__ import annotations
@@ -116,7 +119,7 @@ SIMULATOR_STYLE = """
   .sim-drop {
     flex: 1 1 320px;
     border: 2px dashed var(--line-strong);
-    border-radius: 6px;
+    border-radius: 16px;
     padding: 18px;
     text-align: center;
     cursor: pointer;
@@ -125,17 +128,18 @@ SIMULATOR_STYLE = """
     font-size: 14px;
     display: flex; align-items: center; justify-content: center;
   }
-  .sim-drop.dragover { border-color: var(--commander); background: var(--commander-dim); color: #075A47; }
+  .sim-drop.dragover { border-color: var(--lime); background: #F3FAE8; color: #3F6B12; }
   .sim-paste { flex: 1 1 320px; display: flex; flex-direction: column; gap: 6px; }
   .sim-paste textarea { min-height: 72px; resize: vertical; }
   .sim-actions { display: flex; flex-direction: column; gap: 6px; justify-content: center; }
   .sim-actions .btn { min-width: 170px; }
   .sim-header {
     background: var(--panel);
-    border: 1px solid var(--line-strong);
-    border-radius: 6px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
     padding: 18px 22px;
     margin-bottom: 20px;
+    box-shadow: 0 8px 24px rgba(11, 31, 58, .05);
   }
   .sim-header h2 { font-size: 20px; font-weight: 500; margin: 0 0 6px; }
   .sim-header .description { color: var(--text-dim); font-size: 15px; margin: 0; line-height: 1.5; }
@@ -151,13 +155,14 @@ SIMULATOR_STYLE = """
   .sim-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; }
   .chat-card {
     background: var(--panel);
-    border: 2px solid var(--line-strong);
-    border-radius: 6px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
     display: flex; flex-direction: column;
     height: 620px;
     transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    box-shadow: 0 8px 24px rgba(11, 31, 58, .05);
   }
-  .chat-card.active-next { border-color: var(--commander); box-shadow: 0 0 0 3px var(--commander-dim); }
+  .chat-card.active-next { border-color: var(--lime); box-shadow: 0 0 0 3px rgba(140,198,63,.28); }
   .chat-header { padding: 12px 16px; border-bottom: 1px solid var(--line); }
   .chat-title { font-weight: 600; font-size: 15px; }
   .chat-meta { font-family: var(--mono); font-size: 12px; color: var(--text-faint); margin-top: 2px; }
@@ -215,7 +220,19 @@ SIMULATOR_STYLE = """
   }
   .preview-content { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .preview-warn { color: var(--danger); font-size: 12px; margin-top: 4px; }
+  .preview-title-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
   .send-btn { width: 100%; }
+  .sim-edit-overlay {
+    position: fixed; inset: 0; z-index: 80;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(11, 31, 58, .45);
+    padding: 24px;
+  }
+  .sim-edit-overlay[hidden] { display: none !important; }
+  .sim-edit-dialog { width: min(560px, 100%); max-height: 90vh; overflow: auto; }
+  .sim-edit-dialog textarea { min-height: 120px; }
+  .sim-edit-dialog .form-label-console { margin-top: 12px; }
+  .sim-edit-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
   .sim-empty { color: var(--text-dim); font-size: 15px; padding: 24px 0; text-align: center; }
   .mapping-panel { display:none; margin-bottom:20px; }
   .mapping-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
@@ -572,19 +589,9 @@ SIMULATOR_STYLE = """
 # embedded `sim-data` JSON (see simulator_page_context) and formats them with the same `{name}`
 # placeholder syntax the catalog uses.
 SIMULATOR_BODY = """
-<div class="container container-wide">
+<div class="ls-page-wide">
 
-  <div class="d-flex justify-content-between align-items-baseline mb-1">
-    <h1 class="mb-0">{{ t('admin.simulator.title') }}</h1>
-    <div class="d-flex align-items-center gap-3">
-      <a class="nav-console" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_dashboard') }}</a>
-      <span class="status-pill"><span class="dot"></span>{{ t('admin.connected') }}</span>
-      <form method="post" action="{{ url_for('admin.logout') }}">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="btn btn-console-danger btn-sm">{{ t('admin.log_out') }}</button>
-      </form>
-    </div>
-  </div>
+  <h1 class="mb-1">{{ t('admin.simulator.title') }}</h1>
   <p class="subtitle mb-4">{{ t('admin.simulator.subtitle') }}</p>
 
   """ + IDENTITY_BAR + FLASH_MESSAGES + """
@@ -629,6 +636,22 @@ SIMULATOR_BODY = """
   </div>
 
   <div class="sim-grid" id="chats-container"></div>
+
+  <div id="edit-step-overlay" class="sim-edit-overlay" hidden>
+    <div class="block-console sim-edit-dialog" id="edit-step-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-step-title">
+      <span class="block-label" id="edit-step-title">{{ t('admin.simulator.edit') }}</span>
+      <div class="form-label-console">{{ t('admin.simulator.edit_text') }}</div>
+      <textarea id="edit-step-text" class="form-control form-control-console" dir="auto"></textarea>
+      <div class="form-label-console">{{ t('admin.simulator.edit_sender') }}</div>
+      <select id="edit-step-sender" class="form-select form-select-console"></select>
+      <div class="form-label-console">{{ t('admin.simulator.edit_timestamp') }}</div>
+      <input id="edit-step-timestamp" type="datetime-local" class="form-control form-control-console">
+      <div class="sim-edit-actions">
+        <button type="button" class="btn btn-console" id="edit-step-cancel">{{ t('admin.simulator.edit_cancel') }}</button>
+        <button type="button" class="btn btn-console-primary" id="edit-step-save">{{ t('admin.simulator.edit_save') }}</button>
+      </div>
+    </div>
+  </div>
 
 </div>
 
@@ -968,6 +991,7 @@ SIMULATOR_BODY = """
     // entry point got us here (paste, drop, or a profile-driven simulation), so no leftover
     // panel from a different path can stay on screen (docs/profile_simulations_design.md).
     closeMappingPanel();
+    closeEditDialog();
     const parsed = validateScenario(raw);
     state.scenario = parsed.scenario;
     state.chats = parsed.chats;
@@ -1099,7 +1123,18 @@ SIMULATOR_BODY = """
       const step = queue[0];
       const title = el('div', 'preview-title');
       title.appendChild(el('span', null, (isNext ? t('next_in_queue') : t('next_in_chat')) + ' - ' + t('step_label', { step: step.step })));
-      title.appendChild(el('span', null, formatTimestamp(step.timestamp)));
+      const actions = el('div', 'preview-title-actions');
+      actions.appendChild(el('span', null, formatTimestamp(step.timestamp)));
+      const editBtn = el('button', 'btn btn-console btn-sm');
+      editBtn.type = 'button';
+      editBtn.textContent = t('edit');
+      editBtn.disabled = state.busy;
+      editBtn.addEventListener('click', function (event) {
+        event.stopPropagation();
+        openEditDialog(chat.key);
+      });
+      actions.appendChild(editBtn);
+      title.appendChild(actions);
       preview.appendChild(title);
       const content = el('div', 'preview-content');
       content.dir = 'auto';
@@ -1161,19 +1196,119 @@ SIMULATOR_BODY = """
 
   // ---- dispatch (the bot's own requests, made from the browser) --------------------------
 
+  function applyStepEdit(step, fields, usersLookup) {
+    const text = typeof fields.text === 'string' ? fields.text : '';
+    if (!text.trim()) throw new Error(t('err_step_text', { step: step.step }));
+    const sender = fields.sender_identity === undefined || fields.sender_identity === null ? '' : String(fields.sender_identity).trim();
+    if (!/^\\d+$/.test(sender) || Number(sender) <= 0) throw new Error(t('err_step_sender', { step: step.step }));
+    let timestamp = null;
+    if (fields.timestamp) {
+      const parsed = new Date(fields.timestamp);
+      if (isNaN(parsed.getTime())) throw new Error(t('err_edit_timestamp'));
+      timestamp = parsed.toISOString().replace(/\\.\\d{3}Z$/, 'Z');
+    }
+    const lookup = usersLookup || {};
+    const user = lookup[sender];
+    const senderName = user && user.full_name ? String(user.full_name) : sender;
+    step.text = text;
+    step.sender_identity = sender;
+    step.sender_name = senderName;
+    step.timestamp = timestamp;
+    return step;
+  }
+
+  function isoToDatetimeLocal(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (isNaN(date.getTime())) return '';
+    const pad = function (n) { return String(n).padStart(2, '0'); };
+    return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate())
+      + 'T' + pad(date.getHours()) + ':' + pad(date.getMinutes());
+  }
+
+  function senderSelectOptions(currentIdentity) {
+    const seen = new Set();
+    const options = [];
+    (DATA.users || []).forEach(function (user) {
+      const identity = String(user.telegram_identity);
+      seen.add(identity);
+      const name = user.full_name ? String(user.full_name) : identity;
+      options.push({ identity: identity, label: identity + ' — ' + name });
+    });
+    if (currentIdentity && !seen.has(String(currentIdentity))) {
+      options.unshift({ identity: String(currentIdentity), label: String(currentIdentity) });
+    }
+    return options;
+  }
+
+  let editingChatKey = null;
+
+  function closeEditDialog() {
+    editingChatKey = null;
+    const overlay = document.getElementById('edit-step-overlay');
+    if (overlay) overlay.hidden = true;
+  }
+
+  function openEditDialog(chatKey) {
+    if (state.busy) return;
+    const queue = state.queues[chatKey];
+    if (!queue || queue.length === 0) return;
+    const step = queue[0];
+    editingChatKey = chatKey;
+    document.getElementById('edit-step-title').textContent = t('edit_title', { step: step.step });
+    document.getElementById('edit-step-text').value = step.text;
+    const select = document.getElementById('edit-step-sender');
+    select.innerHTML = '';
+    senderSelectOptions(step.sender_identity).forEach(function (option) {
+      const node = document.createElement('option');
+      node.value = option.identity;
+      node.textContent = option.label;
+      if (option.identity === step.sender_identity) node.selected = true;
+      select.appendChild(node);
+    });
+    document.getElementById('edit-step-timestamp').value = isoToDatetimeLocal(step.timestamp);
+    document.getElementById('edit-step-overlay').hidden = false;
+  }
+
+  function savePendingEdit() {
+    const chatKey = editingChatKey;
+    if (!chatKey || state.busy) return;
+    const queue = state.queues[chatKey];
+    if (!queue || queue.length === 0) { closeEditDialog(); return; }
+    try {
+      applyStepEdit(queue[0], {
+        text: document.getElementById('edit-step-text').value,
+        sender_identity: document.getElementById('edit-step-sender').value,
+        timestamp: document.getElementById('edit-step-timestamp').value,
+      }, usersByIdentity);
+    } catch (error) {
+      showAlert(error.message, true);
+      return;
+    }
+    closeEditDialog();
+    updateGlobalState();
+  }
+
   function buildRequest(chat, step) {
     const traceId = 'sim-' + state.runId + '-' + step.step + '-' + Date.now().toString(36);
     if (chat.kind === 'event') {
       // Sensors have no Telegram identity and were never bot traffic — unchanged
       // (docs/bot_simulation_mode_design.md §2 decision 3).
       return { url: '/Event', body: { text: step.text, sender_identity: step.sender_identity }, identity: step.sender_identity, traceId: traceId };
+      const body = { text: step.text, sender_identity: step.sender_identity };
+      if (step.timestamp) body.timestamp = step.timestamp;
+      return { url: '/Event', body: body, identity: step.sender_identity };
     }
     // Proxied to bot.simulator_app through api/admin.py (docs/bot_simulation_mode_design.md
     // §4.3/§4.4) so the step is fed through the real bot's own handler code, not /Msg
     // directly. `identity: null` — this call authenticates as the admin's own session
     // (cookies), not a per-persona X-Identity header; the persona identity travels inside
     // the body instead, the same way a real Telegram update carries it.
-    const chatId = chat.telegram_chat_id || step.sender_identity;
+    // Private chats always use the current sender: simulator_app requires
+    // chat_id == sender_identity, so an edited identity must not keep the old persona's id.
+    const chatId = chat.telegram_chat_type === 'private'
+      ? step.sender_identity
+      : (chat.telegram_chat_id || step.sender_identity);
     const body = {
       sender_identity: step.sender_identity,
       chat_id: chatId,
@@ -1186,6 +1321,8 @@ SIMULATOR_BODY = """
       trace_id: traceId,
     };
     return { url: '/admin/simulator/bot-msg', body: body, identity: null, traceId: traceId };
+    if (step.timestamp) body.timestamp = step.timestamp;
+    return { url: '/admin/simulator/bot-msg', body: body, identity: null };
   }
 
   async function apiCall(method, url, identity, body, traceId) {
@@ -1383,6 +1520,7 @@ SIMULATOR_BODY = """
     const chat = state.chatsByKey[chatKey];
     const step = queue[0];
     state.busy = true;
+    closeEditDialog();
     updateGlobalState();
 
     const request = buildRequest(chat, step);
@@ -2673,8 +2811,17 @@ SIMULATOR_BODY = """
     document.getElementById('send-next').disabled = true;
     document.getElementById('reset-view').disabled = true;
     closeMappingPanel();
+    closeEditDialog();
     showAlert('', false);
     BehindTheScenes.reset();
+  });
+  document.getElementById('edit-step-save').addEventListener('click', savePendingEdit);
+  document.getElementById('edit-step-cancel').addEventListener('click', closeEditDialog);
+  document.getElementById('edit-step-overlay').addEventListener('click', function (event) {
+    if (event.target === event.currentTarget) closeEditDialog();
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') closeEditDialog();
   });
 })();
 </script>

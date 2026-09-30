@@ -18,6 +18,8 @@ def test_history_agent_has_no_tools_and_uses_standard_process(monkeypatch):
     assert result.text == "faithful summary"
     assert "contradictory" in agent.system_prompt
     assert "outside knowledge" in agent.system_prompt
+    assert "corrects_event_id" in agent.system_prompt
+    assert "never summarize only the single most recent event" in agent.system_prompt
 
 from datetime import datetime, timezone
 
