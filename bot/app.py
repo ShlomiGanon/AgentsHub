@@ -14,7 +14,7 @@ from typing import Awaitable, Callable
 
 from config import ModelTierError, TierModel, resolve_tier_model_from_env
 from profiles.loader import LoadedProfile, ProfileLoadError, ProfileValidationError, load_profile
-from tools import configure_logging, deep_debug_enabled, new_trace_id
+from tools import configure_logging, deep_debug_enabled, get_trace_id, new_trace_id, set_trace_id
 
 from auth.permissions import PermissionLevel, RequestedOperation
 from auth.permissions import InvalidFullNameError, normalize_full_name
@@ -473,6 +473,7 @@ async def present_incoming_message(
     event_data_event_id: str | None = None,
     protocol_hint: str | None = None,
     telegram_chat_type: str | None = None,
+    trace_id: str | None = None,
 ) -> str | None:
     """Present one free-form message with the shared status/edit lifecycle.
 
@@ -486,7 +487,9 @@ async def present_incoming_message(
         messages.text("status.thinking"),
         reply_to_message_id=message_id,
     )
-    trace_id = new_trace_id()
+    resolved_trace_id = trace_id or get_trace_id() or new_trace_id()
+    set_trace_id(resolved_trace_id)
+    trace_id = resolved_trace_id
     trace_stop = asyncio.Event()
     trace_task: asyncio.Task | None = None
     submission: MessageSubmissionResult | None = None
@@ -734,6 +737,8 @@ async def _on_text_message(update, context) -> None:
             await deps.telegram_client.send_activity(chat_id, "typing")
             await asyncio.sleep(4.0)
 
+    trace_id = get_trace_id()
+
     activity_task = asyncio.create_task(_show_activity())
     try:
         await present_incoming_message(
@@ -746,6 +751,7 @@ async def _on_text_message(update, context) -> None:
             event_data_event_id,
             protocol_hint=protocol_hint,
             telegram_chat_type=chat_type,
+            trace_id=trace_id,
         )
     finally:
         activity_task.cancel()

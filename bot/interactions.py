@@ -41,6 +41,7 @@ MessageKind = Literal[
     "declined",
     "event_data_needed",
     "resource_unavailable_alert",
+    "hold_escalation",
 ]
 
 _HEADER_KEYS: dict[MessageKind, str] = {
@@ -55,6 +56,7 @@ _HEADER_KEYS: dict[MessageKind, str] = {
     "declined": "header.declined",
     "event_data_needed": "header.event_data_needed",
     "resource_unavailable_alert": "header.resource_unavailable_alert",
+    "hold_escalation": "header.hold_escalation",
 }
 
 
@@ -159,15 +161,12 @@ def _risk_level_word(risk_level: str, catalog: MessageCatalog) -> str:
 
 def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None) -> str:
     messages = _catalog(catalog)
-    selection_marker = "DRONE_SELECTION_REQUIRED:"
-    for completed_step in result.steps_completed:
-        marker_at = completed_step.find(selection_marker)
-        if marker_at >= 0:
-            selection_text = completed_step[marker_at + len(selection_marker):].strip()
-            return (
-                f"{format_header('event_data_needed', messages)}\n"
-                f"{messages.text('result.job_id', job_id=result.job_id)}\n\n{selection_text}"
-            )
+    if result.selection_required:
+        selection_text = "\n".join(result.steps_completed).strip()
+        return (
+            f"{format_header('event_data_needed', messages)}\n"
+            f"{messages.text('result.job_id', job_id=result.job_id)}\n\n{selection_text}"
+        )
 
     kind: MessageKind = "result" if result.outcome != "declined" else "declined"
     lines = [format_header(kind, messages), "", messages.text("result.verdict", outcome=_outcome_word(result.outcome, messages))]
@@ -462,7 +461,7 @@ async def change_setting(deps: "BotDeps", caller: CallerContext, field: str, raw
     return messages.text("settings.saved", message=setting_write_result.message)
 
 if TYPE_CHECKING:
-    from bot.contracts import BotDeps, HeldApprovalNotice, NoMatchNotice, ResourceUnavailableAlertNotice, UncertainVerdictNotice
+    from bot.contracts import BotDeps, HeldApprovalNotice, HoldEscalationNotice, NoMatchNotice, ResourceUnavailableAlertNotice, UncertainVerdictNotice
 
 CALLBACK_PREFIX = "approve"
 
@@ -604,6 +603,33 @@ async def notify_resource_unavailable_alert(deps: "BotDeps", notice: "ResourceUn
             await deps.telegram_client.send_text(chat_id, text)
         except Exception as exc:
             logger.warning("failed to send resource unavailable alert to %s: %s", chat_id, exc)
+
+
+def format_hold_escalation_notice(notice: "HoldEscalationNotice", catalog: MessageCatalog | None = None) -> str:
+    messages = _catalog(catalog)
+    return messages.text(
+        "notice.hold_escalation",
+        header=format_header("hold_escalation", messages),
+        event_id=notice.event_id,
+        alert=notice.alert_text,
+    )
+
+
+async def notify_hold_escalation(deps: "BotDeps", notice: "HoldEscalationNotice") -> None:
+    """Commander-only, private-chat delivery — mirrors `notify_resource_unavailable_alert`
+    exactly (item 8: an unresolved hold that went past the configured escalation window with no
+    answer). Never sent to the original sender's own chat, which keeps getting only its own
+    reminder of the same original prompt."""
+
+    text = format_hold_escalation_notice(notice, message_catalog_for(deps))
+
+    for chat_id in await deps.api_client.list_commander_chat_ids():
+        if not chat_id or chat_id == "bot-service":
+            continue
+        try:
+            await deps.telegram_client.send_text(chat_id, text)
+        except Exception as exc:
+            logger.warning("failed to send hold escalation alert to %s: %s", chat_id, exc)
 
 
 def format_uncertain_verdict_reporter_notice(catalog: MessageCatalog | None = None) -> str:

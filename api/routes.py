@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from flask import Blueprint, jsonify, request
 
 from api.request_boundary import BOT_SERVICE_IDENTITY, AuthorizationError, ConflictError, InvalidInputError, NotFoundError, RunFailureError, ServiceUnavailableError, authenticate, require
-from history import record_event_outcome, storage_timestamp
+from history import record_event_outcome, parse_timestamp, storage_timestamp
 
 from orchestrator.flows import begin_report, run_report_extraction
 
@@ -30,7 +30,7 @@ import logging
 
 from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
 from auth.permissions import InvalidFullNameError, normalize_full_name
-from agents import authenticated_request_identity, set_invocation_deadline
+from agents import AgentInvocationError, authenticated_request_identity, set_invocation_deadline
 
 from orchestrator.flows import (
     GroupNotRegisteredError,
@@ -43,6 +43,8 @@ from orchestrator.flows import (
     answer_question,
     answer_question_from_plan,
     apply_event_data_reply,
+    apply_drone_selection_reply,
+    attempt_direct_lane,
     build_role_aware_system_context,
     begin_report,
     begin_request,
@@ -99,6 +101,20 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
         if reservation is None:
             raise ServiceUnavailableError(messages.text("api.queue_full"))
 
+        received_at = _now()
+        raw_timestamp = request_payload.get("timestamp")
+        if raw_timestamp is not None and raw_timestamp != "":
+            if not isinstance(raw_timestamp, str):
+                raise InvalidInputError(
+                    messages.text("api.invalid_timestamp", field="timestamp"), field="timestamp"
+                )
+            try:
+                received_at = storage_timestamp(parse_timestamp(raw_timestamp))
+            except (ValueError, TypeError):
+                raise InvalidInputError(
+                    messages.text("api.invalid_timestamp", field="timestamp"), field="timestamp"
+                )
+
         trace_id = get_trace_id() or new_trace_id()
         set_trace_id(trace_id)
         deadline_at = storage_timestamp(datetime.now(timezone.utc) + timedelta(seconds=optimization_policy.job_deadline_seconds))
@@ -107,7 +123,7 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
                 ctx.deps,
                 text,
                 "sensor",
-                _now(),
+                received_at,
                 sender_identity,
                 deadline_at=deadline_at,
                 sender_permission_level=level.name.lower(),
@@ -129,7 +145,7 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
             reservation,
         )
 
-        return jsonify({"event_id": event_id, "status": "queued"}), 202
+        return jsonify({"event_id": event_id, "status": "queued", "trace_id": trace_id}), 202
 
     return blueprint
 
@@ -305,65 +321,26 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             pending_hold = candidate
 
         # A drone-choice reply is operational input, not free-form missing event
-        # data. Resolve it deterministically before any planner/model call.
+        # data. Forward it to the surveillance specialist so the model chooses
+        # a one-drone recall or a fleet recall; do not send it through the planner.
         drone_selection_hold = (
             pending_hold if pending_hold is not None and pending_hold.get("missing_fields") == ["drone_selection"] else None
         )
 
         if drone_selection_hold is not None:
             require(level, RequestedOperation.APPROVE_RUN)
-            surveillance_agent = ctx.deps.registry.get("surveillance_agent")
-            store = getattr(surveillance_agent, "surveillance_store", None)
-            if store is None:
-                raise RunFailureError("surveillance persistence is unavailable")
-
-            normalized = str(text).strip().casefold()
-            recall_all = (
-                normalized in {
-                    "all", "all drones", "\u05db\u05d5\u05dc\u05dd", "\u05db\u05d5\u05dc\u05df",
-                    "\u05d0\u05ea \u05db\u05d5\u05dc\u05dd", "\u05d0\u05ea \u05db\u05d5\u05dc\u05df",
-                    "\u05e2\u05dc \u05db\u05d5\u05dc\u05dd", "\u05e2\u05dc \u05db\u05d5\u05dc\u05df",
-                }
-                or "\u05db\u05dc \u05d4\u05e8\u05d7\u05e4" in normalized
-            )
-            result = store.recall_all_drones() if recall_all else store.recall_drone(str(text).strip())
-            if result["status"] in {"selection_required", "not_found"}:
-                choices = "\n".join(
-                    f"- {mission['callsign']} ({mission['drone_id']}) — {mission['mission_id']}, {mission['target_area']}"
-                    for mission in result["missions"]
+            try:
+                selection = apply_drone_selection_reply(
+                    ctx.deps, text, drone_selection_hold, resolved_by=caller_identity,
                 )
-                answer = messages.text("api.drone_selection_invalid", choices=choices)
-                _remember("assistant", answer, drone_selection_hold["event_id"])
-                return jsonify({
-                    "taken_as": "clarification",
-                    "event_id": drone_selection_hold["event_id"],
-                    "answer": answer,
-                    "status": "waiting_for_drone_selection",
-                })
-
-            ctx.deps.persistence.resolve_held_event(
-                "event_data",
-                drone_selection_hold["hold_id"],
-                {"resolved_by": caller_identity, "drone_selection": str(text).strip()},
-            )
-            record_event_outcome(ctx.deps.persistence, drone_selection_hold["event_id"], "succeeded")
-            if result["status"] == "no_active":
-                answer = messages.text("api.drone_recall_none")
-            elif result["status"] == "returned_all":
-                names = ", ".join(mission["callsign"] for mission in result["missions"])
-                answer = messages.text("api.drone_recall_all_done", names=names)
-            else:
-                drone = result["drone"]
-                mission = result["mission"]
-                answer = messages.text(
-                    "api.drone_recall_one_done", callsign=drone["callsign"], mission_id=mission["mission_id"]
-                )
-            _remember("assistant", answer, drone_selection_hold["event_id"])
+            except OrchestrationParseError as exc:
+                raise RunFailureError(str(exc)) from exc
+            _remember("assistant", selection.message, selection.event_id)
             return jsonify({
-                "taken_as": "event_update",
-                "event_id": drone_selection_hold["event_id"],
-                "answer": answer,
-                "status": "succeeded",
+                "taken_as": "clarification" if selection.status == "waiting_for_drone_selection" else "event_update",
+                "event_id": selection.event_id,
+                "answer": selection.message,
+                "status": selection.status,
             })
 
         matching_event_data_hold = pending_hold is not None
@@ -592,19 +569,41 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     _remember("assistant", answer)
                     return jsonify({"taken_as": "clarification", "answer": answer})
 
+        received_at = _now()
+
         try:
             intent = message_plan.intent if planner_mode == "merged" and message_plan is not None else classify_intent(
                 ctx.main_agent, ctx.deps.protocol_set.all(), text, prior_messages
             )
         except OrchestrationParseError as exc:
             raise RunFailureError(str(exc)) from exc
+        except AgentInvocationError as exc:
+            # A report must never vanish just because the model that classifies its intent is
+            # unavailable -- unlike a parse failure (the model answered, just unusably), this is
+            # a model-invocation failure with no event created yet. Persist the raw text now,
+            # with its outcome already recorded as failed, so it survives for later triage/retry.
+            # Scoped to AgentInvocationError specifically (timeout/model/output-parse/warmup/
+            # tool-construction -- every real "model unavailable" shape), not a bare Exception:
+            # an unexpected bug elsewhere must still fail loudly (a real 5xx), never be quietly
+            # reinterpreted as "the model was unavailable" and smoothed into a handled 422.
+            # instead of being lost with no trace (it would otherwise never reach begin_report,
+            # which every other path already calls before running any model on the report).
+            deadline_at = storage_timestamp(datetime.now(timezone.utc) + timedelta(seconds=optimization_policy.job_deadline_seconds))
+            lost_event_id = begin_report(
+                ctx.deps, text, "telegram", received_at, sender_identity, source_message_id,
+                conversation_id=conversation_id, deadline_at=deadline_at,
+                sender_permission_level=level.name.lower(),
+                telegram_chat_id=str(telegram_chat_id) if telegram_chat_id is not None else None,
+                telegram_chat_type=str(telegram_chat_type) if telegram_chat_type is not None else None,
+                ack_message_id=str(ack_message_id) if ack_message_id is not None else None,
+            )
+            record_event_outcome(ctx.deps.persistence, lost_event_id, "failed", failure_reason=f"intent classification failed: {exc}")
+            raise RunFailureError(f"intent classification failed: {exc}") from exc
 
         logger.info(
             "intent classified",
             extra={"event": "intent_classified", "intent": intent.intent, "reason": intent.reason, "trace_id": get_trace_id()},
         )
-
-        received_at = _now()
 
         if intent.intent == "needs_clarification":
             answer = intent.clarification_question or messages.text("api.clarify_action")
@@ -681,6 +680,23 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             except Exception:
                 ctx.queue.release_reservation(reservation)
                 raise
+
+            # Item 9: the direct lane runs synchronously, outside the serial queue, before this
+            # report would otherwise be queued for the full pipeline -- a cheap classification
+            # call handles it immediately when it's a simple, low-stakes, unambiguous action;
+            # anything else (a threat/risk indicator, ambiguity, a missing parameter, or simply
+            # not matching a direct-lane-eligible tool) returns None and falls through to the
+            # ordinary queued path below, completely unchanged.
+            direct_lane_result = attempt_direct_lane(ctx.deps, ctx.main_agent, event_id, sender_identity, text)
+            if direct_lane_result is not None:
+                ctx.queue.release_reservation(reservation)
+                finished_event = ctx.deps.persistence.fetch_event(event_id)
+                answer = (finished_event or {}).get("report_text") or _queued_answer_text(messages, "report", event_id)
+                _remember("assistant", answer, event_id)
+                return jsonify({
+                    "taken_as": "report", "event_id": event_id, "status": "completed",
+                    "outcome": direct_lane_result.outcome, "answer": answer,
+                })
 
             def _work() -> None:
                 with trace_context(trace_id):
@@ -843,7 +859,10 @@ def build_protocols_blueprint(ctx: "ApiContext") -> Blueprint:
 if TYPE_CHECKING:
     from api.app import ApiContext
 
-_SETTINGS_FIELDS = {"retry_count", "risk_threshold", "lookback_window_days", "safe_mode", "rich_reports_enabled"}
+_SETTINGS_FIELDS = {
+    "retry_count", "risk_threshold", "lookback_window_days", "safe_mode", "rich_reports_enabled",
+    "hold_reminder_minutes", "hold_escalation_minutes", "hold_expiry_hours",
+}
 
 
 def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
@@ -880,6 +899,8 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
                 "approval": len(ctx.deps.persistence.list_held_events("approval")),
             }
             response_payload["scheduler"] = ctx.scheduler.last_run_status()
+            if ctx.hold_sweep_scheduler is not None:
+                response_payload["hold_sweep_scheduler"] = ctx.hold_sweep_scheduler.last_run_status()
 
         if is_permitted(level, RequestedOperation.VIEW_SETTINGS):
             response_payload["settings"] = {
@@ -888,6 +909,9 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
                 "lookback_window_days": ctx.deps.settings_store.get_lookback_window_days(),
                 "safe_mode": ctx.deps.settings_store.get_safe_mode(),
                 "rich_reports_enabled": ctx.deps.settings_store.get_rich_reports_enabled(),
+                "hold_reminder_minutes": ctx.deps.settings_store.get_hold_reminder_minutes(),
+                "hold_escalation_minutes": ctx.deps.settings_store.get_hold_escalation_minutes(),
+                "hold_expiry_hours": ctx.deps.settings_store.get_hold_expiry_hours(),
             }
 
         return jsonify(response_payload)
@@ -939,6 +963,24 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
                 raise InvalidInputError(messages.text("api.rich_reports_enabled_boolean"), field="rich_reports_enabled")
             validated["rich_reports_enabled"] = setting_value
 
+        if "hold_reminder_minutes" in request_payload:
+            setting_value = request_payload["hold_reminder_minutes"]
+            if not isinstance(setting_value, (int, float)) or isinstance(setting_value, bool) or setting_value <= 0:
+                raise InvalidInputError(messages.text("api.hold_reminder_minutes_positive"), field="hold_reminder_minutes")
+            validated["hold_reminder_minutes"] = setting_value
+
+        if "hold_escalation_minutes" in request_payload:
+            setting_value = request_payload["hold_escalation_minutes"]
+            if not isinstance(setting_value, (int, float)) or isinstance(setting_value, bool) or setting_value <= 0:
+                raise InvalidInputError(messages.text("api.hold_escalation_minutes_positive"), field="hold_escalation_minutes")
+            validated["hold_escalation_minutes"] = setting_value
+
+        if "hold_expiry_hours" in request_payload:
+            setting_value = request_payload["hold_expiry_hours"]
+            if not isinstance(setting_value, (int, float)) or isinstance(setting_value, bool) or setting_value <= 0:
+                raise InvalidInputError(messages.text("api.hold_expiry_hours_positive"), field="hold_expiry_hours")
+            validated["hold_expiry_hours"] = setting_value
+
         previous_safe_mode = ctx.deps.settings_store.get_safe_mode()
         if "retry_count" in validated:
             ctx.deps.settings_store.set_retry_count(validated["retry_count"])
@@ -960,6 +1002,12 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
             )
         if "rich_reports_enabled" in validated:
             ctx.deps.settings_store.set_rich_reports_enabled(validated["rich_reports_enabled"])
+        if "hold_reminder_minutes" in validated:
+            ctx.deps.settings_store.set_hold_reminder_minutes(validated["hold_reminder_minutes"])
+        if "hold_escalation_minutes" in validated:
+            ctx.deps.settings_store.set_hold_escalation_minutes(validated["hold_escalation_minutes"])
+        if "hold_expiry_hours" in validated:
+            ctx.deps.settings_store.set_hold_expiry_hours(validated["hold_expiry_hours"])
 
         return jsonify({
             "retry_count": ctx.deps.settings_store.get_retry_count(),
@@ -1400,8 +1448,10 @@ def job_status(ctx: "ApiContext", event_id: str) -> dict | None:
     if event is None:
         return None
 
+    event_trace_id = event.get("trace_id") if event is not None else None
+
     if event["outcome"] is not None:
-        response_payload = {"event_id": event_id, "status": event["outcome"]}
+        response_payload = {"event_id": event_id, "status": event["outcome"], "trace_id": event_trace_id}
         if event.get("insight_text") is not None:
             response_payload["insight_text"] = event["insight_text"]
         if event.get("report_text"):
@@ -1426,11 +1476,11 @@ def job_status(ctx: "ApiContext", event_id: str) -> dict | None:
 
     approval_hold = ctx.deps.persistence.fetch_held_event("approval", event_id)
     if approval_hold is not None and not approval_hold["resolved"]:
-        return {"event_id": event_id, "status": "held_for_approval", "reason": approval_hold["reason"]}
+        return {"event_id": event_id, "status": "held_for_approval", "reason": approval_hold["reason"], "trace_id": event_trace_id}
 
     clarification_hold = ctx.deps.persistence.fetch_held_event("clarification", event_id)
     if clarification_hold is not None and not clarification_hold["resolved"]:
-        return {"event_id": event_id, "status": "held_for_clarification", "unresolved_field": clarification_hold["unresolved_field"]}
+        return {"event_id": event_id, "status": "held_for_clarification", "unresolved_field": clarification_hold["unresolved_field"], "trace_id": event_trace_id}
 
     event_data_hold = ctx.deps.persistence.fetch_held_event("event_data", event_id)
     if event_data_hold is not None and not event_data_hold["resolved"]:
@@ -1440,13 +1490,14 @@ def job_status(ctx: "ApiContext", event_id: str) -> dict | None:
             "missing_fields": event_data_hold.get("missing_fields", []),
             "question": event_data_hold.get("question", ""),
             "steps_completed": _steps_completed(event),
+            "trace_id": event_trace_id,
         }
 
     processing = ctx.queue.currently_processing()
     if processing is not None and processing[0] == event_id:
-        return {"event_id": event_id, "status": "running"}
+        return {"event_id": event_id, "status": "running", "trace_id": event_trace_id}
 
-    return {"event_id": event_id, "status": "queued"}
+    return {"event_id": event_id, "status": "queued", "trace_id": event_trace_id}
 
 
 def build_jobs_blueprint(ctx: "ApiContext") -> Blueprint:
@@ -1710,6 +1761,14 @@ def _resource_unavailable_alert_payload(ctx: "ApiContext", event_id: str) -> dic
     return {"event_id": event_id, "alert_text": event.get("commander_alert_text") or ""}
 
 
+def _hold_escalation_payload(ctx: "ApiContext", event_id: str) -> dict:
+    # Item 8: an unresolved hold escalated to commanders after get_hold_escalation_minutes with
+    # no answer -- the alert text is composed once, at escalation time (orchestrator.flows'
+    # _escalate_unresolved_hold), and persisted the same way commander_alert_text already is.
+    event = ctx.deps.persistence.fetch_event(event_id)
+    return {"event_id": event_id, "alert_text": event.get("hold_escalation_alert_text") or ""}
+
+
 def _precedent_closure_payload(ctx: "ApiContext", event_id: str) -> dict:
     event = ctx.deps.persistence.fetch_event(event_id)
     matched_id = event["precedent_closed_by_event_id"]
@@ -1766,6 +1825,7 @@ _PAYLOAD_BUILDERS = {
     "job_finished": _job_payload,
     "job_failed": _job_payload,
     "resource_unavailable_alert": _resource_unavailable_alert_payload,
+    "hold_escalation": _hold_escalation_payload,
 }
 
 

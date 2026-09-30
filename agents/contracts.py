@@ -1,6 +1,7 @@
 """Immutable agent descriptors and tool declaration primitives."""
 
 from dataclasses import dataclass
+import json
 from typing import Any, Callable, Literal
 
 
@@ -86,12 +87,12 @@ class AgentDescriptor:
     api_key: str | None = None
 
 
-UNCLEAR_TASK_PREFIX = "UNCLEAR_TASK:"
 UNCLEAR_TASK_PROMPT_INSTRUCTION = (
-    f'If the task you are given is unclear, ambiguous, or you lack what you need to act on it, '
-    f'respond with exactly one line starting with "{UNCLEAR_TASK_PREFIX}" followed by a specific '
-    f"statement of what is missing — which parameter, which context, which ambiguity. "
-    f"Do not attempt a partial or guessed answer in that case."
+    "If the task you are given is unclear, ambiguous, or you lack what you need to act on it, "
+    'respond with exactly one JSON object {"status": "unclear_task", "text": "<what is missing>"} '
+    "naming the specific parameter, context, or ambiguity. "
+    "Do not attempt a partial or guessed answer in that case. "
+    'Otherwise respond with the answer as plain text, or {"status": "success", "text": "<answer>"}.'
 )
 
 
@@ -99,12 +100,36 @@ UNCLEAR_TASK_PROMPT_INSTRUCTION = (
 class AgentResult:
     status: Literal["success", "unclear_task"]
     text: str
+    selection_required: bool = False
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    """Structured return from a Python tool method. Callers check `ok` / `selection_required`, never the text."""
+
+    text: str
+    ok: bool = True
+    selection_required: bool = False
+
+    def __str__(self) -> str:
+        return self.text
+
+
+def failed_tool_result(text: str) -> ToolResult:
+    return ToolResult(text=text, ok=False)
 
 
 def parse_agent_output(raw_text: str) -> AgentResult:
     stripped = raw_text.strip()
-    if stripped.startswith(UNCLEAR_TASK_PREFIX):
-        return AgentResult(status="unclear_task", text=stripped[len(UNCLEAR_TASK_PREFIX):].strip())
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        status = payload.get("status")
+        text = payload.get("text")
+        if status in {"success", "unclear_task"} and isinstance(text, str):
+            return AgentResult(status=status, text=text)
     return AgentResult(status="success", text=raw_text)
 
 
@@ -134,6 +159,31 @@ class AgentToolConstructionError(AgentInvocationError):
 
 class AgentFrameworkNotReadyError(AgentInvocationError):
     pass
+
+
+def is_retryable_invocation_error(error: AgentInvocationError) -> bool:
+    """Retry transport/timeouts, but never replay an unchanged permanent provider request."""
+
+    if isinstance(error, AgentTimeoutError):
+        return True
+    if isinstance(error, (AgentOutputParseError, AgentToolConstructionError, AgentFrameworkNotReadyError)):
+        return False
+    if not isinstance(error, AgentModelError):
+        return True
+
+    cause = error.cause or error.__cause__
+    seen: set[int] = set()
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        response = getattr(cause, "response", None)
+        status = getattr(cause, "status_code", None) or getattr(response, "status_code", None)
+        if isinstance(status, int) and 400 <= status < 500 and status not in {408, 409, 425, 429}:
+            return False
+        detail = str(cause).casefold()
+        if "assistant prefill" in detail or ("prefill" in detail and "not support" in detail):
+            return False
+        cause = getattr(cause, "__cause__", None) or getattr(cause, "__context__", None)
+    return True
 
 
 class AgentWarmupError(AgentInvocationError):

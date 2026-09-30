@@ -16,7 +16,10 @@ from agents.contracts import (
     AgentTimeoutError,
     AgentToolConstructionError,
     AgentWarmupError,
+    is_retryable_invocation_error,
     ToolInfo,
+    ToolResult,
+    failed_tool_result,
     parse_agent_output,
     tool,
 )
@@ -43,6 +46,7 @@ from agents.runtime import (
     set_invocation_deadline,
 )
 from agents.provider_telemetry import install_crewai_provider_telemetry
+from agents.invocation_context import last_finished_invocation_id, record_finished_invocation_id
 
 adapter = runtime
 base = runtime
@@ -55,6 +59,7 @@ from agents.standard_agents import HistoryAgent, ReferenceAgent
 from agents.team_status_agent import TeamStatusAgent
 from agents.surveillance_agent import SurveillanceAgent
 from agents.friendly_forces_agent import FriendlyForcesAgent
+from agents.neighboring_forces_agent import NeighboringForcesAgent
 from agents.roster_agent import RosterAgent
 from agents.fire_station_agents import DispatchAgent, HazmatAgent
 
@@ -77,6 +82,7 @@ __all__ = [
     "AgentTimeoutError",
     "AgentToolConstructionError",
     "AgentWarmupError",
+    "is_retryable_invocation_error",
     "configure_provider_concurrency",
     "configure_structured_output_mode",
     "configure_invocation_limits",
@@ -85,6 +91,8 @@ __all__ = [
     "install_crewai_provider_telemetry",
     "initialize_agent_runtime",
     "set_invocation_deadline",
+    "last_finished_invocation_id",
+    "record_finished_invocation_id",
     "DuplicateAgentNameError",
     "ExactResultCapture",
     "HistoryAgent",
@@ -94,11 +102,14 @@ __all__ = [
     "TeamStatusAgent",
     "SurveillanceAgent",
     "FriendlyForcesAgent",
+    "NeighboringForcesAgent",
     "RosterAgent",
     "DispatchAgent",
     "HazmatAgent",
     "ToolInfo",
+    "ToolResult",
     "build_agent_registry",
+    "failed_tool_result",
     "make_exact_result_capture",
     "parse_agent_output",
     "provider_capabilities",

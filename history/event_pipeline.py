@@ -311,6 +311,10 @@ VALID_OUTCOMES = frozenset(
         # commanders are alerted with concrete alternatives (orchestrator/flows.py's
         # `_finish_protocol_assessment`) and decide from there; nothing is auto-retried.
         "handled_resource_unavailable",
+        # An unresolved hold (clarification/approval/event_data) that nobody answered within the
+        # configured expiry window (SettingsStore.get_hold_expiry_hours) -- closed automatically,
+        # not by any human decision or model judgment (bot/background_services.py's hold sweep).
+        "expired",
     }
 )
 
@@ -331,6 +335,9 @@ STATE_UPDATE_FIELDS = frozenset(
         "approval_answered_at",
         "precedent_matched_event_ids",
         "precedent_closed_by_event_id",
+        "corrects_event_id",
+        "retracted",
+        "hold_escalation_alert_text",
     }
 )
 

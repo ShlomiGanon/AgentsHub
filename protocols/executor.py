@@ -9,7 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from typing import TYPE_CHECKING, Callable
 
-from agents import AgentInvocationError
+from agents import AgentInvocationError, ToolResult, is_retryable_invocation_error
+from agents import last_finished_invocation_id, record_finished_invocation_id
 from protocols.contracts import ProtocolRunResult, ResourceUnavailable, Step, StepOutcome
 from tools import get_trace_id, stage_context
 
@@ -42,18 +43,10 @@ def _can_retry(step: Step, agent: Agent) -> bool:
     return True
 
 
-# Known failure-reporting conventions shared across every direct-callable tool method today
-# (agents/team_status_agent.py, profiles/response_team.py's ResponseTeamRosterAgent/
-# ResponseTeamSurveillanceAgent) — a plain, human-readable string return, never a structured
-# status object. A direct_tool step has no specialist-agent LLM turn to judge its own result,
-# so this substring check is what stands in for that judgment (deliberately conservative:
-# false negatives here just fall through to a normal "succeeded" reading, which matches how a
-# specialist agent would read an ambiguous-but-not-explicitly-failed tool result today).
-_DIRECT_TOOL_FAILURE_MARKERS = ("Clarification required:", "was not stored:", "update failed:")
-
-
-def _direct_tool_call_failed(result_text: str) -> bool:
-    return any(marker in result_text for marker in _DIRECT_TOOL_FAILURE_MARKERS)
+def _as_tool_result(raw: object) -> ToolResult:
+    if isinstance(raw, ToolResult):
+        return raw
+    return ToolResult(text="" if raw is None else str(raw))
 
 
 def _take_resource_unavailable_signal(agent: Agent) -> "tuple[str, str, str] | None":
@@ -84,7 +77,7 @@ def _execute_direct_tool_step(agent: Agent, step: Step) -> StepOutcome:
     _take_resource_unavailable_signal(agent)
     try:
         tool_method = getattr(agent, step.direct_tool_name)
-        result_text = tool_method(**step.direct_tool_kwargs)
+        result = _as_tool_result(tool_method(**step.direct_tool_kwargs))
     except Exception as exc:
         logger.info(
             "direct tool step raised",
@@ -98,12 +91,15 @@ def _execute_direct_tool_step(agent: Agent, step: Step) -> StepOutcome:
 
     signal = _take_resource_unavailable_signal(agent)
     resource_unavailable = ResourceUnavailable(*signal) if signal is not None else None
-    if _direct_tool_call_failed(result_text):
+    if not result.ok:
         return StepOutcome(
-            step=step, result_text=result_text, attempt_count=1, succeeded=False, failure_reason=result_text,
+            step=step, result_text=result.text, attempt_count=1, succeeded=False, failure_reason=result.text,
             status="failed", resource_unavailable=resource_unavailable,
         )
-    return StepOutcome(step=step, result_text=result_text, attempt_count=1, succeeded=True, resource_unavailable=resource_unavailable)
+    return StepOutcome(
+        step=step, result_text=result.text, attempt_count=1, succeeded=True,
+        resource_unavailable=resource_unavailable, selection_required=result.selection_required,
+    )
 
 
 def execute_step_with_retry(
@@ -137,7 +133,12 @@ def execute_step_with_retry(
             _take_resource_unavailable_signal(agent)
             try:
                 with stage_context("step_execution"):
-                    agent_result = agent.process(current_task_text, list(step.allowed_tools))
+                    if step.invocation_policy is not None:
+                        agent_result = agent.process(
+                            current_task_text, list(step.allowed_tools), invocation_policy=step.invocation_policy
+                        )
+                    else:
+                        agent_result = agent.process(current_task_text, list(step.allowed_tools))
                 resource_signal = _take_resource_unavailable_signal(agent)
             finally:
                 for side_effect_lock in reversed(side_effect_locks):
@@ -150,7 +151,7 @@ def execute_step_with_retry(
                 extra={"event": "step_failed", "agent": step.agent_name, "attempt": attempts, "cause": last_failure_reason, "trace_id": get_trace_id()},
             )
 
-            if attempts >= attempt_limit or not _can_retry(step, agent):
+            if attempts >= attempt_limit or not _can_retry(step, agent) or not is_retryable_invocation_error(exc):
                 return StepOutcome(
                     step=step, result_text=None, attempt_count=attempts, succeeded=False,
                     failure_reason=last_failure_reason, status="failed",
@@ -188,6 +189,7 @@ def execute_step_with_retry(
         return StepOutcome(
             step=step, result_text=agent_result.text, attempt_count=attempts, succeeded=True,
             resource_unavailable=resource_unavailable,
+            selection_required=agent_result.selection_required,
         )
 
 
@@ -258,6 +260,7 @@ def execute_steps(
             extra={"event": "step_start", "agent": step.agent_name, "step_index": index, "task_text": step.task_text, "trace_id": get_trace_id()},
         )
 
+        record_finished_invocation_id(None)
         outcome = execute_step_with_retry(agent, step, settings_store, task_rewriter=task_rewriter, sleep_fn=sleep_fn)
         outcomes.append(outcome)
 
@@ -270,6 +273,7 @@ def execute_steps(
                 "succeeded": outcome.succeeded,
                 "attempt_count": outcome.attempt_count,
                 "result_text": outcome.result_text,
+                "invocation_id": last_finished_invocation_id(),
                 "trace_id": get_trace_id(),
             },
         )
@@ -349,9 +353,36 @@ def _execute_dependency_steps(
 
         def _run(step_id: str) -> tuple[str, StepOutcome]:
             step = steps[index_by_id[step_id]]
+            index = index_by_id[step_id]
+            logger.info(
+                "executing step",
+                extra={
+                    "event": "step_start",
+                    "agent": step.agent_name,
+                    "step_index": index,
+                    "step_id": step_id,
+                    "task_text": step.task_text,
+                    "trace_id": get_trace_id(),
+                },
+            )
+            record_finished_invocation_id(None)
             outcome = execute_step_with_retry(
                 agents_by_name[step.agent_name], step, settings_store,
                 task_rewriter=task_rewriter, sleep_fn=sleep_fn,
+            )
+            logger.info(
+                "step finished",
+                extra={
+                    "event": "step_result",
+                    "agent": step.agent_name,
+                    "step_index": index,
+                    "step_id": step_id,
+                    "succeeded": outcome.succeeded,
+                    "attempt_count": outcome.attempt_count,
+                    "result_text": outcome.result_text,
+                    "invocation_id": last_finished_invocation_id(),
+                    "trace_id": get_trace_id(),
+                },
             )
             return step_id, outcome
 

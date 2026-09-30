@@ -224,10 +224,11 @@ def test_drone_selection_is_rendered_as_required_input_not_completed_action():
         job_id="j1",
         outcome="succeeded",
         steps_completed=(
-            "surveillance_agent: DRONE_SELECTION_REQUIRED:\n"
+            "surveillance_agent:\n"
             "Multiple drones are active:\n- Eagle-1 (DRONE-01)\n- Falcon-2 (DRONE-02)\n"
             "No drone state was changed.",
         ),
+        selection_required=True,
     )
 
     text = format_job_result(result)

@@ -29,6 +29,7 @@ from bot.contracts import (
     JobResult,
     MessageSubmissionResult,
     NoMatchNotice,
+    HoldEscalationNotice,
     PrecedentClosureNotice,
     ProfileView,
     ProtocolView,
@@ -516,6 +517,8 @@ class HttpApiClient(BotApiClient):
             return UncertainVerdictReporterNotice(event_id=payload["event_id"])
         if kind == "resource_unavailable_alert":
             return ResourceUnavailableAlertNotice(event_id=payload["event_id"], alert_text=payload["alert_text"])
+        if kind == "hold_escalation":
+            return HoldEscalationNotice(event_id=payload["event_id"], alert_text=payload["alert_text"])
         if kind == "precedent_closure":
             return PrecedentClosureNotice(
                 event_id=payload["event_id"],

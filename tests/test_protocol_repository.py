@@ -382,6 +382,7 @@ def test_step_fields_include_dependencies_and_required_event_data():
         "kind",
         "direct_tool_name",
         "direct_tool_kwargs",
+        "invocation_policy",
     }
     assert step.step_id == ""
     assert step.depends_on == ()

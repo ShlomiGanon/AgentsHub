@@ -166,6 +166,19 @@ EVENT_FIELD_CATALOG: tuple[EventFieldDefinition, ...] = (
         "narrative",
     ),
     EventFieldDefinition(
+        "corrects_event_id", "Corrects event",
+        "This event's own report explicitly corrected or retracted a specific earlier event, which is this ID. "
+        "That earlier event is retracted -- treat its own claims as superseded by this one, not as still current.",
+        "narrative",
+    ),
+    EventFieldDefinition(
+        "retracted", "Retracted",
+        "True means a later event (see that later event's own corrects_event_id) explicitly corrected or "
+        "retracted this one. Never present a retracted event's own claims as current fact -- state plainly that "
+        "it was corrected, and prefer whatever the correcting event says instead.",
+        "narrative",
+    ),
+    EventFieldDefinition(
         "steps", "Executed steps",
         "The ordered specialist tasks that ran for this event, the tools each was allowed to use, and each step's "
         "result.",

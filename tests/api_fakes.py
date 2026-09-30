@@ -65,12 +65,18 @@ class ScriptedAgent:
 
 
 class FakeSettings:
-    def __init__(self, risk_threshold=0.5, retry_count=3, lookback_window_days=30, safe_mode=False, rich_reports_enabled=False):
+    def __init__(
+        self, risk_threshold=0.5, retry_count=3, lookback_window_days=30, safe_mode=False, rich_reports_enabled=False,
+        hold_reminder_minutes=10, hold_escalation_minutes=30, hold_expiry_hours=2,
+    ):
         self.risk_threshold = risk_threshold
         self.retry_count = retry_count
         self.lookback_window_days = lookback_window_days
         self.safe_mode = safe_mode
         self.rich_reports_enabled = rich_reports_enabled
+        self.hold_reminder_minutes = hold_reminder_minutes
+        self.hold_escalation_minutes = hold_escalation_minutes
+        self.hold_expiry_hours = hold_expiry_hours
 
     def get_retry_count(self):
         return self.retry_count
@@ -101,6 +107,24 @@ class FakeSettings:
 
     def set_rich_reports_enabled(self, value):
         self.rich_reports_enabled = value
+
+    def get_hold_reminder_minutes(self):
+        return self.hold_reminder_minutes
+
+    def get_hold_escalation_minutes(self):
+        return self.hold_escalation_minutes
+
+    def get_hold_expiry_hours(self):
+        return self.hold_expiry_hours
+
+    def set_hold_reminder_minutes(self, value):
+        self.hold_reminder_minutes = value
+
+    def set_hold_escalation_minutes(self, value):
+        self.hold_escalation_minutes = value
+
+    def set_hold_expiry_hours(self, value):
+        self.hold_expiry_hours = value
 
 
 def protocols() -> tuple[Protocol, ...]:
@@ -170,6 +194,7 @@ def build_context(
     users=((VIEWER_IDENTITY, "viewer"), (COMMANDER_IDENTITY, "commander"), (SENSOR_IDENTITY, "viewer")),
     conversation_history_turns=0,
     simulation_users=(), simulation_groups=(), simulations=(), simulator_port=None,
+    admin_tables=(),
 ) -> ApiContext:
     persistence = SQLitePersistence(str(tmp_path / "api_test.db"))
     for identity, level in users:
@@ -214,7 +239,7 @@ def build_context(
         loaded_profile=_FakeLoadedProfile(
             module_path or "fixtures.profiles.minimal_profile", conversation_history_turns=conversation_history_turns,
             simulation_users=simulation_users, simulation_groups=simulation_groups, simulations=simulations,
-            simulator_port=simulator_port,
+            simulator_port=simulator_port, admin_tables=admin_tables,
         ),
         queue=queue,
         scheduler=scheduler,
@@ -237,7 +262,7 @@ class _FakeLoadedProfile:
     def __init__(
         self, module_path: str, conversation_history_turns: int = 0,
         simulation_users: tuple = (), simulation_groups: tuple = (), simulations: tuple = (),
-        simulator_port: int | None = None,
+        simulator_port: int | None = None, admin_tables: tuple = (),
     ):
         from profiles.loader import hash_profile_file
 
@@ -264,6 +289,10 @@ class _FakeLoadedProfile:
         # real LoadedProfile's default — a test exercising the /admin/simulator/bot-msg
         # proxy route passes a real port instead.
         self.simulator_port = simulator_port
+        # Optional (docs/Admin_Tables_Plan.md); empty by default, mirroring the real
+        # LoadedProfile's own default — a test exercising /admin/tables/... passes real
+        # AdminTable declarations instead.
+        self.admin_tables = admin_tables
         # Captured once, here, at "load" time — like the real LoadedProfile
         # does — not recomputed live. A property recomputing it on every
         # access would always equal api/management.py's own fresh recompute,

@@ -200,6 +200,16 @@ def render_summary(summary: RunSummary, audience: Audience, catalog: MessageCata
             lines.append(
                 catalog.text("report.step_line", agent_name=step.agent_name, task_text=step.task_text, result=result)
             )
+    elif audience == "viewer":
+        # Same underlying facts a commander sees per step, but in the tool's own plain-language
+        # confirmation text only -- never the agent name or the task text it was given, which
+        # are internal routing details a viewer has no reason to see.
+        actions = [step.result_text for step in summary.steps if step.status == "succeeded" and step.result_text]
+        if actions:
+            lines.append("")
+            lines.append(catalog.text("result.what_was_done"))
+            for action in actions:
+                lines.append(catalog.text("report.action_line", action=action))
 
     if summary.pending is not None:
         lines.append("")

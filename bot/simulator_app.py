@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import logging
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -31,7 +32,7 @@ from bot.transports import HttpApiClient
 from config import ModelTierError, TierModel, resolve_tier_model_from_env
 from profiles import simulation_group_chat_id, simulation_user_telegram_id
 from profiles.loader import ProfileLoadError, ProfileValidationError, load_profile
-from tools import configure_logging
+from tools import configure_logging, get_trace_id, set_trace_id
 
 if TYPE_CHECKING:
     from profiles.contracts import LoadedProfile
@@ -47,6 +48,18 @@ SERVICE_KEY_HEADER = "X-Service-Key"
 class SimulatorRequestRefused(Exception):
     """A `POST /Simulator-msg` request failed the identity-allowlist gate or basic
     shape validation — refused before any handler code ever runs (§4.3/§5)."""
+
+
+def _unix_from_iso_timestamp(value: str) -> float:
+    """ISO-8601 to Unix seconds for PTB's `message.date`. Naive values are UTC."""
+
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
 
 
 def _tier_model_from_environ(prefix: str) -> TierModel:
@@ -145,6 +158,19 @@ class SimulatorRuntime:
         if not source_message_id:
             raise SimulatorRequestRefused("source_message_id is required")
 
+        trace_id = str(payload.get("trace_id") or "").strip()
+        if trace_id:
+            set_trace_id(trace_id)
+        date = None
+        raw_timestamp = payload.get("timestamp")
+        if raw_timestamp is not None and raw_timestamp != "":
+            if not isinstance(raw_timestamp, str):
+                raise SimulatorRequestRefused("timestamp must be an ISO-8601 string")
+            try:
+                date = _unix_from_iso_timestamp(raw_timestamp)
+            except ValueError as exc:
+                raise SimulatorRequestRefused("timestamp is not a valid ISO-8601 datetime") from exc
+
         mark = self.telegram_client.mark()
         update = build_synthetic_text_update(
             update_id=self._next_id(),
@@ -154,10 +180,17 @@ class SimulatorRuntime:
             chat_type=chat_type,
             text=text,
             bot=self.bot,
+            date=date,
         )
         await self.application.process_update(update)
         reply_text = self.telegram_client.reply_since(mark, chat_id)
-        return {"reply_text": reply_text, "watermark": _mark_to_dict(self.telegram_client.mark())}
+        current_trace = trace_id or get_trace_id()
+        return {
+            "reply_text": reply_text,
+            **self.telegram_client.changes_since(mark, chat_id),
+            "watermark": _mark_to_dict(self.telegram_client.mark()),
+            "trace_id": current_trace,
+        }
 
     def poll_chat(self, chat_id: str, since: tuple[int, int]) -> dict:
         """Anything sent to `chat_id` since `since` (a watermark from `handle_message`
@@ -173,7 +206,11 @@ class SimulatorRuntime:
             raise SimulatorRequestRefused(f"{chat_id!r} is not a currently-declared simulation chat_id for this profile")
 
         reply_text = self.telegram_client.reply_since(since, chat_id)
-        return {"reply_text": reply_text, "watermark": _mark_to_dict(self.telegram_client.mark())}
+        return {
+            "reply_text": reply_text,
+            **self.telegram_client.changes_since(since, chat_id),
+            "watermark": _mark_to_dict(self.telegram_client.mark()),
+        }
 
 
 def _mark_to_dict(mark: tuple[int, int]) -> dict:
@@ -213,6 +250,8 @@ def build_flask_app(runtime: SimulatorRuntime, bot_service_key: str) -> Flask:
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
             return jsonify({"error": {"message": "request body must be a JSON object"}}), 400
+        if "trace_id" not in payload and request.headers.get("X-Trace-ID"):
+            payload["trace_id"] = request.headers.get("X-Trace-ID")
 
         future = asyncio.run_coroutine_threadsafe(runtime.handle_message(payload), runtime.loop)
         try:

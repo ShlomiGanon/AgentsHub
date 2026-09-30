@@ -113,12 +113,18 @@ def test_update_camera_status_missing_fields_raises_no_camera_calls():
 
 
 def test_report_team_movement_with_area():
-    event = {"area": "east_fence"}
+    # Whether the report also indicates the member is responding to a specific incident (and so
+    # should be linked via join_incident_response) is a judgment call from the free-text report,
+    # not something a direct_tool binder can decide -- so this is an "agent" step, not
+    # direct_tool, once area is known (see profiles/response_team.py's own comment there).
+    event = {"area": "east_fence", "description": "heading to east fence"}
 
     (step,) = _bind_report_team_movement(event)
 
     assert step.required_event_fields == ()
-    assert step.direct_tool_kwargs == {"area": "east_fence"}
+    assert step.kind == "agent"
+    assert "east_fence" in step.task_text
+    assert step.allowed_tools == ("report_team_movement", "join_incident_response", "list_incident_responders")
 
 
 def test_report_team_movement_without_area_requires_it():

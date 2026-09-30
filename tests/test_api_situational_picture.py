@@ -110,7 +110,7 @@ class _RecordingHistory:
     def query_spec(self, question, spec, *, sender_identity_filter=None):
         self.calls.append((spec, sender_identity_filter))
         if sender_identity_filter is not None:
-            raise HistoryQueryError("no stored events match the requested history filters")
+            raise HistoryQueryError("no stored events match the requested history filters", empty=True)
         return HistoryAnswer("1. Event e1: smoke at gate 3, succeeded.", (), spec.time_start, spec.time_end, 1)
 
 

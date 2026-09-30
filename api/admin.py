@@ -61,12 +61,28 @@ from api.admin_api_pages import (
     PROFILES_BODY,
     PROTOCOLS_BODY,
 )
+from api.admin_tables import (
+    ADMIN_TABLES_EDIT_BODY,
+    ADMIN_TABLES_LIST_BODY,
+    AdminFormError,
+    find_admin_table,
+    parse_admin_table_form,
+)
 from api.request_boundary import BOT_SERVICE_KEY_ENV_VAR, SERVICE_KEY_HEADER
 from auth.permissions import InvalidFullNameError, PermissionLevel, normalize_full_name
 from config import discover_profiles, read_server_status, submit_server_command, supervisor_available
 from messages import get_current_catalog
 from orchestrator.flows import InvalidRoutingTargetError
-from persistence import EventSearchCriteria, NotFoundError, PersistenceError
+from persistence import (
+    EventSearchCriteria,
+    NeighboringForceStoreError,
+    NotFoundError,
+    PersistenceError,
+    SurveillancePersistenceError,
+    TeamStatusPersistenceError,
+)
+
+_ADMIN_TABLE_WRITE_ERRORS = (PersistenceError, SurveillancePersistenceError, TeamStatusPersistenceError, NeighboringForceStoreError)
 from tools import get_trace_id, record_telegram_security_metric
 
 if TYPE_CHECKING:
@@ -225,7 +241,12 @@ class LoginRateLimiter:
 # Bootstrap ships a mirrored build for right-to-left pages; the template picks one by the
 # catalog's language (`dir` below), so the Hebrew catalog gets a genuinely RTL layout rather
 # than an LTR grid with Hebrew text poured into it.
-_BOOTSTRAP_CSS_LINK = (
+_FONTS_LINK = (
+    '<link rel="preconnect" href="https://fonts.googleapis.com">'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    '<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">'
+)
+_BOOTSTRAP_CSS_LINK = _FONTS_LINK + (
     '{% if dir == "rtl" %}'
     '<link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/css/bootstrap.rtl.min.css" rel="stylesheet">'
     "{% else %}"
@@ -240,78 +261,105 @@ _BOOTSTRAP_CSS_LINK = (
 _DASHBOARD_STYLE = """
 <style>
   :root {
-    --bg: #F3F6FB;
-    --panel: #FFFFFF;
-    --line: #E2EAF3;
-    --line-strong: #C5D4E3;
-    --text: #0B1F3A;
-    --text-dim: #5A6B80;
-    --text-faint: #8A9BB0;
-    --sidebar: #0B1F3A;
-    --sidebar-text: #C5D4E8;
-    --teal: #1AB5C4;
-    --lime: #8CC63F;
-    --lime-hover: #7AB32E;
-    --blue: #1E5AA8;
-    --blue-hover: #174A8C;
-    --commander: #1AB5C4;
-    --commander-dim: #D4F3F6;
-    --viewer: #1E5AA8;
-    --viewer-dim: #D7E5F6;
-    --danger: #9A302B;
-    --danger-dim: #F3D6D4;
+    --bg: #f8fafc;
+    --panel: #ffffff;
+    --line: #e2e8f0;
+    --line-strong: #cbd5e1;
+    --text: #0B192C;
+    --text-dim: #475569;
+    --text-faint: #94a3b8;
+    --sidebar: #0B192C;
+    --sidebar-text: #cbd5e1;
+    --teal: #2563eb;
+    --lime: #84cc16;
+    --lime-hover: #65a30d;
+    --lime-dim: #ecfccb;
+    --blue: #2563eb;
+    --blue-hover: #1d4ed8;
+    --blue-dim: #dbeafe;
+    --commander: #84cc16;
+    --commander-dim: #ecfccb;
+    --viewer: #2563eb;
+    --viewer-dim: #dbeafe;
+    --danger: #b91c1c;
+    --danger-dim: #fee2e2;
+    --shadow: 0 4px 14px rgba(11, 25, 44, .06);
+    --shadow-lg: 0 18px 40px rgba(11, 25, 44, .12);
+    --radius: 16px;
+    --sans: Heebo, Inter, -apple-system, 'Segoe UI', sans-serif;
     --mono: 'SF Mono', 'JetBrains Mono', ui-monospace, Consolas, monospace;
   }
   * { box-sizing: border-box; }
   body {
     background: var(--bg);
     color: var(--text);
-    font-family: -apple-system, 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-family: var(--sans);
     font-size: 16px;
     margin: 0;
     min-height: 100vh;
   }
+  :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
   .ls-app { display: flex; min-height: 100vh; background: var(--bg); }
   .ls-sidebar {
     width: 248px;
     flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
     background: var(--sidebar);
     color: var(--sidebar-text);
     display: flex;
     flex-direction: column;
     padding: 20px 12px 12px;
     transition: width .2s ease;
+    border-inline-end: 1px solid rgba(255,255,255,.04);
   }
   .ls-app.ls-sidebar-collapsed .ls-sidebar { width: 76px; padding-inline: 10px; }
   .ls-brand {
     display: flex; align-items: center; justify-content: center;
     gap: 8px; text-decoration: none; color: inherit;
-    padding: 4px 8px 22px; min-height: 48px;
+    padding: 8px 4px 22px; min-height: 48px;
   }
-  .ls-wordmark { font-size: 18px; font-weight: 700; font-style: italic; letter-spacing: -.02em; white-space: nowrap; }
-  .ls-wordmark-lead { color: #fff; }
-  .ls-wordmark-spot { color: var(--teal); }
+  .ls-logo {
+    display: block; height: 32px; width: auto; max-width: 100%;
+  }
   .ls-mark {
-    display: none; width: 36px; height: 36px; border-radius: 50%;
-    background: radial-gradient(circle at 30% 30%, #5ED4E0, #1AB5C4 58%, #0E6F8A);
-    box-shadow: 0 0 0 3px rgba(26,181,196,.25);
+    display: none; width: 36px; height: 36px; object-fit: contain;
   }
-  .ls-app.ls-sidebar-collapsed .ls-wordmark { display: none; }
+  .ls-app.ls-sidebar-collapsed .ls-logo { display: none; }
   .ls-app.ls-sidebar-collapsed .ls-mark { display: block; }
   .ls-nav { display: flex; flex-direction: column; gap: 4px; flex: 1; overflow: auto; }
   .ls-nav-item {
+    position: relative;
     display: flex; align-items: center; gap: 12px;
     color: var(--sidebar-text); text-decoration: none;
     padding: 9px 12px; border-radius: 10px; font-size: 13.5px; font-weight: 500;
+    transition: background .2s ease, color .2s ease;
   }
-  .ls-nav-item:hover, .ls-nav-item.is-active { background: rgba(255,255,255,.08); color: #fff; }
+  .ls-nav-item:hover { background: rgba(255,255,255,.08); color: #fff; }
+  .ls-nav-item.is-active {
+    background: rgba(132, 204, 22, .16);
+    color: #fff;
+  }
+  .ls-nav-item.is-active::before {
+    content: "";
+    position: absolute;
+    inset-inline-start: 0;
+    top: 8px; bottom: 8px;
+    width: 3px;
+    border-radius: 999px;
+    background: var(--lime);
+  }
+  .ls-nav-item.is-active .ls-icon { color: var(--lime); }
   .ls-icon { width: 20px; height: 20px; flex-shrink: 0; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   .ls-app.ls-sidebar-collapsed .ls-nav-label { display: none; }
   .ls-app.ls-sidebar-collapsed .ls-nav-item { justify-content: center; padding: 10px; }
   .ls-sidebar-toggle {
     margin-top: 8px; border: 0; background: rgba(255,255,255,.06); color: var(--sidebar-text);
     border-radius: 10px; padding: 8px; cursor: pointer;
+    transition: background .2s ease;
   }
+  .ls-sidebar-toggle:hover { background: rgba(255,255,255,.12); color: #fff; }
   .ls-app.ls-sidebar-collapsed .ls-sidebar-toggle .ls-icon { transform: rotate(180deg); }
   [dir="rtl"] .ls-sidebar-toggle .ls-icon { transform: scaleX(-1); }
   [dir="rtl"] .ls-app.ls-sidebar-collapsed .ls-sidebar-toggle .ls-icon { transform: scaleX(-1) rotate(180deg); }
@@ -324,13 +372,18 @@ _DASHBOARD_STYLE = """
   .ls-btn-fill, .ls-btn-outline, .ls-user-btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 8px;
     border-radius: 999px; font-size: 13px; font-weight: 700; letter-spacing: .02em;
-    text-decoration: none; border: 1.5px solid transparent; padding: 8px 18px; cursor: default;
+    text-decoration: none; border: 1.5px solid transparent; padding: 8px 18px;
+    cursor: pointer; transition: background .2s ease, border-color .2s ease, color .2s ease, box-shadow .2s ease;
   }
   .ls-btn-fill { background: var(--blue); color: #fff; }
   .ls-btn-fill:hover { background: var(--blue-hover); color: #fff; }
   .ls-btn-outline { background: #fff; color: var(--blue); border-color: var(--blue); }
+  .ls-btn-outline .dot {
+    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--lime); box-shadow: 0 0 0 3px rgba(132,204,22,.28); margin-inline-end: 8px; vertical-align: middle;
+  }
   .ls-user-btn {
-    background: #fff; color: var(--text); border-color: var(--line-strong); cursor: pointer;
+    background: #fff; color: var(--text); border-color: var(--line-strong);
   }
   .ls-user-btn:hover { border-color: var(--blue); color: var(--blue); }
   .ls-content { flex: 1; padding: 12px 28px 48px; }
@@ -339,31 +392,50 @@ _DASHBOARD_STYLE = """
   .container-narrow, .container-wide { max-width: none; padding: 0; }
 
   h1 { font-size: 28px; font-weight: 700; letter-spacing: -.02em; color: var(--text); }
+  h2 { font-weight: 700; color: var(--text); }
   .ls-home-title { text-align: center; font-size: 32px; margin-bottom: 6px; }
   .ls-home-sub { text-align: center; max-width: 640px; margin: 0 auto 32px; }
   .ls-service-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
   .ls-service-card {
-    display: block; background: #fff; border-radius: 16px; padding: 26px 22px 22px;
+    display: block; background: var(--panel); border-radius: var(--radius); padding: 26px 22px 22px;
     text-decoration: none; color: inherit; height: 100%;
-    box-shadow: 0 8px 24px rgba(11, 31, 58, .06);
-    border: 1px solid rgba(255,255,255,.8);
+    box-shadow: var(--shadow);
+    border: 1px solid var(--line);
+    transition: transform .3s ease, box-shadow .3s ease, border-color .3s ease;
   }
-  .ls-service-card:hover { box-shadow: 0 12px 28px rgba(11, 31, 58, .10); color: inherit; }
+  .ls-service-card:hover, .ls-service-card:focus-visible {
+    transform: scale(1.02);
+    box-shadow: var(--shadow-lg);
+    border-color: rgba(132, 204, 22, .55);
+    color: inherit;
+  }
   .ls-service-icon {
     width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center;
-    background: #EEF6FF; color: var(--blue); margin-bottom: 14px;
+    background: var(--blue-dim); color: var(--blue); margin-bottom: 14px;
+    transition: background .3s ease, color .3s ease;
+  }
+  .ls-service-card:hover .ls-service-icon, .ls-service-card:focus-visible .ls-service-icon {
+    background: var(--lime-dim); color: #3f6212;
   }
   .ls-service-card h2 { font-size: 16px; font-weight: 700; margin: 0 0 6px; }
   @media (max-width: 980px) { .ls-service-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   @media (max-width: 640px) {
     .ls-service-grid { grid-template-columns: 1fr; }
     .ls-sidebar { position: sticky; top: 0; align-self: flex-start; max-height: 100vh; }
+    .ls-content { padding: 12px 16px 40px; }
+    .ls-topbar { padding-inline: 16px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ls-service-card, .ls-nav-item, .ls-btn-fill, .ls-btn-outline, .ls-user-btn, .btn-console, .btn-console-primary, .btn-console-danger {
+      transition: none;
+    }
+    .ls-service-card:hover, .ls-service-card:focus-visible { transform: none; }
   }
 
   .status-pill { font-size: 13px; color: var(--text-faint); }
   .status-pill .dot {
     display: inline-block; width: 6px; height: 6px; border-radius: 50%;
-    background: var(--lime); box-shadow: 0 0 0 3px rgba(140,198,63,.28); margin-inline-end: 6px;
+    background: var(--lime); box-shadow: 0 0 0 3px rgba(132,204,22,.28); margin-inline-end: 6px;
   }
   .subtitle { color: var(--text-dim); font-size: 15px; }
   .nav-console { font-size: 14px; color: var(--text-dim); text-decoration: none; }
@@ -371,23 +443,31 @@ _DASHBOARD_STYLE = """
 
   .alert-console {
     background: var(--commander-dim);
-    border: 1px solid #9AD7DF;
-    border-inline-start: 3px solid var(--teal);
-    border-radius: 10px;
-    color: #0B5C66;
+    border: 1px solid #bef264;
+    border-inline-start: 3px solid var(--lime);
+    border-radius: 12px;
+    color: #3f6212;
     font-size: 14px;
   }
   .alert-console b { font-weight: 600; }
   .alert-console-error {
     background: var(--danger-dim);
-    border: 1px solid #C98782;
+    border: 1px solid #fca5a5;
     border-inline-start: 3px solid var(--danger);
-    border-radius: 10px;
-    color: #6B1F1B;
+    border-radius: 12px;
+    color: #7f1d1d;
     font-size: 14px;
   }
   .alert-console-error b { font-weight: 600; }
 
+  .ls-page > table.table-console,
+  .table-responsive {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 8px 20px 4px;
+  }
   table.table-console {
     --bs-table-bg: transparent;
     border-collapse: collapse;
@@ -415,7 +495,7 @@ _DASHBOARD_STYLE = """
   .identity .tag { font-family: inherit; font-size: 13px; color: var(--text-faint); margin-inline-start: 8px; }
   .tag {
     display: inline-block; font-size: 12px; color: var(--text-dim);
-    background: #EEF3F9; border-radius: 999px; padding: 2px 10px;
+    background: #f1f5f9; border-radius: 999px; padding: 2px 10px;
   }
 
   .level-dot {
@@ -440,7 +520,7 @@ _DASHBOARD_STYLE = """
   }
   .form-select-console:focus, .form-control-console:focus {
     border-color: var(--blue);
-    box-shadow: 0 0 0 0.2rem rgba(30, 90, 168, 0.15);
+    box-shadow: 0 0 0 0.2rem rgba(37, 99, 235, 0.18);
   }
 
   .btn-console {
@@ -450,25 +530,27 @@ _DASHBOARD_STYLE = """
     border-radius: 999px;
     font-size: 14px;
     font-weight: 600;
+    transition: background .2s ease, border-color .2s ease, color .2s ease;
   }
-  .btn-console:hover { border-color: var(--blue-hover); color: var(--blue-hover); background: #fff; }
+  .btn-console:hover { border-color: var(--blue-hover); color: var(--blue-hover); background: var(--blue-dim); }
 
-  .btn-console-danger { color: var(--danger); border-color: #C98782; background: #fff; border-radius: 999px; }
+  .btn-console-danger { color: var(--danger); border-color: #fca5a5; background: #fff; border-radius: 999px; transition: background .2s ease, border-color .2s ease; }
   .btn-console-danger:hover { border-color: var(--danger); color: var(--danger); background: var(--danger-dim); }
 
   .btn-console-primary {
     background: var(--lime); border-color: var(--lime); color: #fff;
     border-radius: 999px; font-weight: 700;
+    transition: background .2s ease, border-color .2s ease, box-shadow .2s ease;
   }
-  .btn-console-primary:hover { background: var(--lime-hover); border-color: var(--lime-hover); color: #fff; }
+  .btn-console-primary:hover { background: var(--lime-hover); border-color: var(--lime-hover); color: #fff; box-shadow: 0 8px 18px rgba(132, 204, 22, .28); }
 
   .block-console {
     border: 1px solid var(--line);
-    border-radius: 16px;
+    border-radius: var(--radius);
     padding: 22px 24px 24px;
     position: relative;
     background: var(--panel);
-    box-shadow: 0 8px 24px rgba(11, 31, 58, .05);
+    box-shadow: var(--shadow);
   }
   .block-label {
     position: absolute;
@@ -500,20 +582,21 @@ _DASHBOARD_STYLE = """
 _LOGIN_STYLE = """
 <style>
   :root {
-    --bg: #F7FAFD;
-    --text: #0B1F3A;
-    --text-dim: #5A6B80;
-    --text-faint: #8A9BB0;
-    --teal: #1AB5C4;
-    --lime: #8CC63F;
-    --lime-hover: #7AB32E;
-    --danger: #9A302B;
-    --danger-dim: #F3D6D4;
+    --bg: #f8fafc;
+    --text: #0B192C;
+    --text-dim: #475569;
+    --text-faint: #94a3b8;
+    --lime: #84cc16;
+    --lime-hover: #65a30d;
+    --blue: #2563eb;
+    --danger: #b91c1c;
+    --danger-dim: #fee2e2;
+    --sans: Heebo, Inter, -apple-system, 'Segoe UI', sans-serif;
   }
   body.ls-login {
     background: var(--bg);
     color: var(--text);
-    font-family: -apple-system, 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-family: var(--sans);
     font-size: 16px;
     min-height: 100vh;
     display: flex;
@@ -523,18 +606,23 @@ _LOGIN_STYLE = """
     padding: 24px;
     margin: 0;
   }
-  .login-brand { margin-bottom: 28px; text-align: center; }
-  .ls-wordmark { font-size: 28px; font-weight: 700; font-style: italic; letter-spacing: -.02em; }
-  .ls-wordmark-lead { color: var(--text); }
-  .ls-wordmark-spot { color: var(--teal); }
+  .login-brand {
+    margin-bottom: 28px;
+    text-align: center;
+    background: #0B192C;
+    border-radius: 16px;
+    padding: 18px 28px;
+    box-shadow: 0 12px 32px rgba(11, 25, 44, .18);
+  }
+  .login-brand .ls-logo { display: block; height: 44px; width: auto; max-width: 280px; margin: 0 auto; }
   .login-card {
     width: 100%;
     max-width: 440px;
-    background: #E4F0FB;
-    border: 1.5px solid #B7D4EE;
-    border-radius: 24px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
     padding: 40px 36px 32px;
-    box-shadow: 0 12px 40px rgba(30, 90, 168, 0.08);
+    box-shadow: 0 4px 14px rgba(11, 25, 44, .06);
   }
   .login-card h1 {
     font-size: 22px;
@@ -557,28 +645,29 @@ _LOGIN_STYLE = """
     display: block;
   }
   .form-control-console {
-    background: #fff;
-    border: 0;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
     border-radius: 12px;
     color: var(--text);
     font-size: 15px;
     width: 100%;
     padding: 14px 16px;
-    box-shadow: 0 1px 2px rgba(11, 31, 58, 0.04);
   }
-  .form-control-console::placeholder { color: #4AA0D5; }
+  .form-control-console::placeholder { color: #94a3b8; }
   .form-control-console:focus {
     outline: none;
-    box-shadow: 0 0 0 0.2rem rgba(30, 90, 168, 0.18);
+    border-color: var(--blue);
+    box-shadow: 0 0 0 0.2rem rgba(37, 99, 235, 0.18);
+    background: #fff;
   }
   .field-group { margin-bottom: 14px; }
 
   .alert-console-error {
     background: var(--danger-dim);
-    border: 1px solid #C98782;
+    border: 1px solid #fca5a5;
     border-inline-start: 3px solid var(--danger);
-    border-radius: 10px;
-    color: #6B1F1B;
+    border-radius: 12px;
+    color: #7f1d1d;
     font-size: 13px;
     padding: 10px 14px;
     margin-bottom: 20px;
@@ -587,7 +676,7 @@ _LOGIN_STYLE = """
     margin-top: 10px;
     height: 6px;
     border-radius: 3px;
-    background: rgba(154, 48, 43, 0.18);
+    background: rgba(185, 28, 28, 0.18);
     overflow: hidden;
   }
   .lockout-progress-fill {
@@ -607,8 +696,9 @@ _LOGIN_STYLE = """
     border-radius: 999px;
     padding: 12px 48px;
     min-width: 180px;
+    transition: background .2s ease, box-shadow .2s ease;
   }
-  .btn-console-primary:hover { background: var(--lime-hover); color: #fff; }
+  .btn-console-primary:hover { background: var(--lime-hover); color: #fff; box-shadow: 0 8px 18px rgba(132, 204, 22, .28); }
 
   .status-pill {
     font-size: 12px;
@@ -623,7 +713,7 @@ _LOGIN_STYLE = """
     width: 6px; height: 6px;
     border-radius: 50%;
     background: var(--lime);
-    box-shadow: 0 0 0 3px rgba(140,198,63,.28);
+    box-shadow: 0 0 0 3px rgba(132,204,22,.28);
     margin-inline-end: 6px;
   }
 </style>
@@ -640,7 +730,7 @@ _LOGIN_TEMPLATE = """<!DOCTYPE html>
 <body class="ls-login">
 
   <div class="login-brand">
-    <span class="ls-wordmark" aria-label="LeadSpotting"><span class="ls-wordmark-lead">Lead</span><span class="ls-wordmark-spot">Spotting</span></span>
+    <img class="ls-logo" src="{{ url_for('static', filename='leadspotting-logo.gif') }}" alt="LeadSpotting">
   </div>
   <div class="login-card">
     <h1>{{ t('admin.login_title') }}</h1>
@@ -690,6 +780,7 @@ _ICON_USERS = '<svg class="ls-icon" viewBox="0 0 24 24" aria-hidden="true"><circ
 _ICON_GROUPS = '<svg class="ls-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="9" r="2.5"/><circle cx="16" cy="9" r="2.5"/><circle cx="12" cy="8" r="2.7"/><path d="M4 19c.7-2.6 2.4-4 5-4"/><path d="M20 19c-.7-2.6-2.4-4-5-4"/><path d="M8.5 19c.7-2.4 2-3.6 3.5-3.6s2.8 1.2 3.5 3.6"/></svg>'
 _ICON_SIMULATOR = '<svg class="ls-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M10 8.5v7l6-3.5z" fill="currentColor" stroke="none"/></svg>'
 _ICON_SERVER = '<svg class="ls-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c3 3.2 4.5 6.2 4.5 9S15 17.8 12 21"/><path d="M12 3c-3 3.2-4.5 6.2-4.5 9S9 17.8 12 21"/></svg>'
+_ICON_TABLE = '<svg class="ls-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M3 14h18"/><path d="M9 9v11"/><path d="M15 9v11"/></svg>'
 _ICON_TOGGLE = '<svg class="ls-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>'
 _ICON_PERSON = '<svg class="ls-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.2"/><path d="M5 19c1-3.4 3.4-5 7-5s6 1.6 7 5"/></svg>'
 
@@ -712,9 +803,9 @@ _SHELL_SCRIPT = """
 _SHELL_OPEN = """
 <body class="ls-app"{% if api_identity is defined %} data-api-identity="{{ api_identity }}"{% endif %}>
 <aside class="ls-sidebar">
-  <a class="ls-brand" href="{{ url_for('admin.dashboard') }}">
-    <span class="ls-mark"></span>
-    <span class="ls-wordmark" aria-label="LeadSpotting"><span class="ls-wordmark-lead">Lead</span><span class="ls-wordmark-spot">Spotting</span></span>
+  <a class="ls-brand" href="{{ url_for('admin.dashboard') }}" aria-label="LeadSpotting">
+    <img class="ls-mark" src="{{ url_for('static', filename='leadspotting-mark.gif') }}" alt="">
+    <img class="ls-logo" src="{{ url_for('static', filename='leadspotting-logo.gif') }}" alt="">
   </a>
   <nav class="ls-nav" aria-label="{{ t('admin.menu_title') }}">
     <a class="ls-nav-item{% if request.endpoint == 'admin.dashboard' %} is-active{% endif %}" href="{{ url_for('admin.dashboard') }}">""" + _ICON_HOME + """<span class="ls-nav-label">{{ t('admin.menu_title') }}</span></a>
@@ -725,13 +816,16 @@ _SHELL_OPEN = """
     <a class="ls-nav-item{% if request.endpoint == 'admin.groups' %} is-active{% endif %}" href="{{ url_for('admin.groups') }}">""" + _ICON_GROUPS + """<span class="ls-nav-label">{{ t('admin.menu_groups') }}</span></a>
     <a class="ls-nav-item{% if request.endpoint == 'admin.simulator' %} is-active{% endif %}" href="{{ url_for('admin.simulator') }}">""" + _ICON_SIMULATOR + """<span class="ls-nav-label">{{ t('admin.menu_simulator') }}</span></a>
     <a class="ls-nav-item{% if request.endpoint == 'admin.server' %} is-active{% endif %}" href="{{ url_for('admin.server') }}">""" + _ICON_SERVER + """<span class="ls-nav-label">{{ t('admin.menu_server') }}</span></a>
+    {% for table in admin_tables|default([]) %}
+    <a class="ls-nav-item{% if request.view_args and request.view_args.get('table_key') == table.key %} is-active{% endif %}" href="{{ url_for('admin.admin_table_list', table_key=table.key) }}">""" + _ICON_TABLE + """<span class="ls-nav-label">{{ table.label }}</span></a>
+    {% endfor %}
   </nav>
   <button type="button" class="ls-sidebar-toggle" id="ls-sidebar-toggle" aria-label="{{ t('admin.menu_title') }}">""" + _ICON_TOGGLE + """</button>
 </aside>
 <div class="ls-main">
   <header class="ls-topbar">
     <a class="ls-btn-fill" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a>
-    <span class="ls-btn-outline"><span class="dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#8CC63F;margin-inline-end:8px;vertical-align:middle;"></span>{{ t('admin.connected') }}</span>
+    <span class="ls-btn-outline"><span class="dot"></span>{{ t('admin.connected') }}</span>
     <div class="ls-topbar-end">
       {% if csrf_token %}
       <form method="post" action="{{ url_for('admin.logout') }}">
@@ -942,6 +1036,9 @@ _MENU_TEMPLATE = """<!DOCTYPE html>
     <a class="ls-service-card" href="{{ url_for('admin.groups') }}"><span class="ls-service-icon">""" + _ICON_GROUPS + """</span><h2>{{ t('admin.menu_groups') }}</h2><span class="subtitle">{{ t('admin.groups_page_subtitle') }}</span></a>
     <a class="ls-service-card" href="{{ url_for('admin.simulator') }}"><span class="ls-service-icon">""" + _ICON_SIMULATOR + """</span><h2>{{ t('admin.menu_simulator') }}</h2><span class="subtitle">{{ t('admin.simulator.subtitle') }}</span></a>
     <a class="ls-service-card" href="{{ url_for('admin.server') }}"><span class="ls-service-icon">""" + _ICON_SERVER + """</span><h2>{{ t('admin.menu_server') }}</h2><span class="subtitle">{{ t('admin.server_subtitle') }}</span></a>
+    {% for table in admin_tables %}
+    <a class="ls-service-card" href="{{ url_for('admin.admin_table_list', table_key=table.key) }}"><span class="ls-service-icon">""" + _ICON_TABLE + """</span><h2>{{ table.label }}</h2><span class="subtitle">{{ t('admin.tables.menu_subtitle') }}</span></a>
+    {% endfor %}
   </div>
 </div>
 """ + _SHELL_CLOSE
@@ -991,6 +1088,12 @@ _PROFILES_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><
 _PROTOCOLS_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.protocols.title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + """</head>""" + _SHELL_OPEN + PROTOCOLS_BODY + _SHELL_CLOSE
 
 
+_ADMIN_TABLES_LIST_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ table.label }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """</head>""" + _SHELL_OPEN + ADMIN_TABLES_LIST_BODY + _SHELL_CLOSE
+
+
+_ADMIN_TABLES_EDIT_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ table.label }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """</head>""" + _SHELL_OPEN + ADMIN_TABLES_EDIT_BODY + _SHELL_CLOSE
+
+
 _EVENTS_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.events.title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + """</head>""" + _SHELL_OPEN + EVENTS_BODY + _SHELL_CLOSE
 
 
@@ -999,12 +1102,12 @@ _SERVER_STYLE = """
   .mode-panel {
     position: relative;
     overflow: hidden;
-    border: 1px solid rgba(14, 116, 95, .22);
-    background: linear-gradient(135deg, rgba(14, 116, 95, .08), rgba(255, 255, 255, .96) 48%, rgba(31, 78, 121, .07));
+    border: 1px solid rgba(132, 204, 22, .28);
+    background: linear-gradient(135deg, rgba(132, 204, 22, .10), rgba(255, 255, 255, .96) 48%, rgba(37, 99, 235, .07));
   }
   .mode-panel.safe-active {
-    border-color: rgba(31, 78, 121, .30);
-    background: linear-gradient(135deg, rgba(31, 78, 121, .10), rgba(255, 255, 255, .97) 48%, rgba(14, 116, 95, .06));
+    border-color: rgba(37, 99, 235, .32);
+    background: linear-gradient(135deg, rgba(37, 99, 235, .10), rgba(255, 255, 255, .97) 48%, rgba(132, 204, 22, .06));
   }
   .mode-panel::after {
     content: "";
@@ -1014,11 +1117,11 @@ _SERVER_STYLE = """
     inset-inline-end: -95px;
     top: -120px;
     border-radius: 50%;
-    background: radial-gradient(circle, rgba(14, 116, 95, .16), transparent 68%);
+    background: radial-gradient(circle, rgba(132, 204, 22, .20), transparent 68%);
     animation: modeGlow 4.8s ease-in-out infinite;
     pointer-events: none;
   }
-  .safe-active::after { background: radial-gradient(circle, rgba(31, 78, 121, .18), transparent 68%); }
+  .safe-active::after { background: radial-gradient(circle, rgba(37, 99, 235, .20), transparent 68%); }
   .mode-layout { display: grid; grid-template-columns: minmax(150px, .62fr) minmax(280px, 1.38fr); gap: 28px; align-items: center; }
   .mode-visual { display: flex; align-items: center; justify-content: center; min-height: 150px; }
   .mode-orbit {
@@ -1028,10 +1131,10 @@ _SERVER_STYLE = """
     display: grid;
     place-items: center;
     border-radius: 50%;
-    border: 1px solid rgba(14, 116, 95, .28);
+    border: 1px solid rgba(132, 204, 22, .32);
     animation: modePulse 2.8s ease-in-out infinite;
   }
-  .safe-active .mode-orbit { border-color: rgba(31, 78, 121, .35); }
+  .safe-active .mode-orbit { border-color: rgba(37, 99, 235, .38); }
   .mode-orbit::before, .mode-orbit::after {
     content: "";
     position: absolute;
@@ -1052,14 +1155,14 @@ _SERVER_STYLE = """
     font-size: 12px;
     background: var(--commander);
     clip-path: polygon(50% 0, 92% 17%, 84% 70%, 50% 100%, 16% 70%, 8% 17%);
-    filter: drop-shadow(0 8px 12px rgba(14, 116, 95, .22));
+    filter: drop-shadow(0 8px 12px rgba(132, 204, 22, .28));
     animation: shieldFloat 3.2s ease-in-out infinite;
   }
-  .safe-active .mode-shield { background: #1f4e79; filter: drop-shadow(0 8px 12px rgba(31, 78, 121, .25)); }
+  .safe-active .mode-shield { background: var(--blue); filter: drop-shadow(0 8px 12px rgba(37, 99, 235, .28)); }
   .mode-value { font-family: var(--mono); font-size: 12px; color: var(--text-faint); letter-spacing: .02em; }
   .mode-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .mode-state-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--commander); box-shadow: 0 0 0 5px rgba(14, 116, 95, .12); animation: statusBlink 2s ease-in-out infinite; }
-  .safe-active .mode-state-dot { background: #1f4e79; box-shadow: 0 0 0 5px rgba(31, 78, 121, .12); }
+  .mode-state-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--commander); box-shadow: 0 0 0 5px rgba(132, 204, 22, .16); animation: statusBlink 2s ease-in-out infinite; }
+  .safe-active .mode-state-dot { background: var(--blue); box-shadow: 0 0 0 5px rgba(37, 99, 235, .16); }
   .mode-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
   .mode-choice {
     border: 1px solid var(--line);
@@ -1072,12 +1175,12 @@ _SERVER_STYLE = """
   }
   .mode-choice:hover { transform: translateY(-2px); border-color: var(--commander); box-shadow: 0 8px 18px rgba(16, 35, 58, .09); }
   .mode-choice.active { border-color: var(--commander); background: var(--commander-dim); box-shadow: inset 0 0 0 1px rgba(14, 116, 95, .12); }
-  .safe-active .mode-choice.active { border-color: #1f4e79; background: rgba(31, 78, 121, .09); }
+  .safe-active .mode-choice.active { border-color: var(--blue); background: var(--blue-dim); }
   .mode-choice strong { display: block; margin-bottom: 3px; }
   .mode-choice small { display: block; color: var(--text-dim); line-height: 1.35; }
   .mode-counts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 15px; }
   @keyframes modeGlow { 0%,100% { transform: scale(.92); opacity: .65; } 50% { transform: scale(1.08); opacity: 1; } }
-  @keyframes modePulse { 0%,100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(14,116,95,.08); } 50% { transform: scale(1.035); box-shadow: 0 0 0 13px rgba(14,116,95,0); } }
+  @keyframes modePulse { 0%,100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(132,204,22,.10); } 50% { transform: scale(1.035); box-shadow: 0 0 0 13px rgba(132,204,22,0); } }
   @keyframes shieldFloat { 0%,100% { transform: translateY(2px); } 50% { transform: translateY(-4px); } }
   @keyframes statusBlink { 0%,100% { opacity: .62; } 50% { opacity: 1; } }
   @media (max-width: 700px) { .mode-layout { grid-template-columns: 1fr; gap: 8px; } .mode-visual { min-height: 118px; } .mode-actions { grid-template-columns: 1fr; } }
@@ -1269,6 +1372,11 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
     blueprint = Blueprint("admin", __name__, url_prefix="/admin")
     rate_limiter = LoginRateLimiter(config.login_max_attempts, config.login_lockout_minutes)
     levels = [level.name.lower() for level in PermissionLevel]
+    _page_render = globals()["_render"]
+
+    def _render(template: str, **context) -> str:
+        context.setdefault("admin_tables", ctx.loaded_profile.admin_tables)
+        return _page_render(template, **context)
 
     def _api_users() -> list[dict]:
         """Human identities available to the browser API console.
@@ -1436,7 +1544,101 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         if redirect_response is not None:
             return redirect_response
 
-        return _render(_MENU_TEMPLATE, csrf_token=session["csrf_token"])
+        return _render(
+            _MENU_TEMPLATE, csrf_token=session["csrf_token"], admin_tables=ctx.loaded_profile.admin_tables
+        )
+
+    @blueprint.route("/tables/<table_key>", methods=["GET"])
+    def admin_table_list(table_key):
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        table = find_admin_table(ctx.loaded_profile, table_key)
+        if table is None:
+            return redirect(url_for("admin.dashboard"))
+        rows = table.list_fn(ctx.deps)
+        return _render(_ADMIN_TABLES_LIST_TEMPLATE, table=table, rows=rows, csrf_token=session["csrf_token"])
+
+    @blueprint.route("/tables/<table_key>/edit/<row_id>", methods=["GET", "POST"])
+    def admin_table_edit(table_key, row_id):
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        table = find_admin_table(ctx.loaded_profile, table_key)
+        if table is None:
+            return redirect(url_for("admin.dashboard"))
+
+        if request.method == "GET":
+            row = table.get_fn(ctx.deps, row_id)
+            if row is None:
+                flash(_t("admin.tables.row_not_found"), "error")
+                return redirect(url_for("admin.admin_table_list", table_key=table_key))
+            return _render(
+                _ADMIN_TABLES_EDIT_TEMPLATE, table=table, row=row, row_id=row_id, csrf_token=session["csrf_token"]
+            )
+
+        csrf_response = _require_csrf()
+        if csrf_response is not None:
+            return csrf_response
+        try:
+            values = parse_admin_table_form(table, request.form)
+        except AdminFormError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin.admin_table_edit", table_key=table_key, row_id=row_id))
+        try:
+            table.write_fn(ctx.deps, {table.primary_key: row_id, **values})
+        except _ADMIN_TABLE_WRITE_ERRORS as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin.admin_table_edit", table_key=table_key, row_id=row_id))
+        logger.info(
+            "admin edited a table row",
+            extra={"event": "admin_table_row_edited", "table_key": table_key, "row_id": row_id, "trace_id": get_trace_id()},
+        )
+        flash(_t("admin.tables.saved"), "ok")
+        return redirect(url_for("admin.admin_table_list", table_key=table_key))
+
+    @blueprint.route("/tables/<table_key>/new", methods=["POST"])
+    def admin_table_new(table_key):
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        table = find_admin_table(ctx.loaded_profile, table_key)
+        if table is None or not table.allow_create:
+            return redirect(url_for("admin.dashboard"))
+        csrf_response = _require_csrf()
+        if csrf_response is not None:
+            return csrf_response
+        try:
+            values = parse_admin_table_form(table, request.form)
+        except AdminFormError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin.admin_table_list", table_key=table_key))
+        try:
+            table.write_fn(ctx.deps, values)
+        except _ADMIN_TABLE_WRITE_ERRORS as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin.admin_table_list", table_key=table_key))
+        flash(_t("admin.tables.saved"), "ok")
+        return redirect(url_for("admin.admin_table_list", table_key=table_key))
+
+    @blueprint.route("/tables/<table_key>/<row_id>/delete", methods=["POST"])
+    def admin_table_delete(table_key, row_id):
+        redirect_response = _require_session()
+        if redirect_response is not None:
+            return redirect_response
+        table = find_admin_table(ctx.loaded_profile, table_key)
+        if table is None or table.delete_fn is None:
+            return redirect(url_for("admin.dashboard"))
+        csrf_response = _require_csrf()
+        if csrf_response is not None:
+            return csrf_response
+        try:
+            table.delete_fn(ctx.deps, row_id)
+        except _ADMIN_TABLE_WRITE_ERRORS as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin.admin_table_list", table_key=table_key))
+        flash(_t("admin.tables.deleted"), "ok")
+        return redirect(url_for("admin.admin_table_list", table_key=table_key))
 
     @blueprint.route("/identity", methods=["POST"])
     def select_api_identity():
@@ -1699,11 +1901,15 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             return jsonify({"error": {"message": _t("admin.simulator.bot_mode_unconfigured")}}), 501
 
         service_key = os.environ.get(BOT_SERVICE_KEY_ENV_VAR) or ""
+        forward_headers = {SERVICE_KEY_HEADER: service_key}
+        fwd_trace = request.headers.get("X-Trace-ID") or (kwargs.get("json", {}).get("trace_id") if isinstance(kwargs.get("json"), dict) else None)
+        if fwd_trace:
+            forward_headers["X-Trace-ID"] = str(fwd_trace)
         try:
             response = httpx.request(
                 method,
                 f"http://localhost:{simulator_port}{path}",
-                headers={SERVICE_KEY_HEADER: service_key},
+                headers=forward_headers,
                 timeout=httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=75.0),
                 **kwargs,
             )
@@ -1766,6 +1972,9 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             "sent_len": request.args.get("sent_len", "0"),
         }
         return _forward_to_simulator("GET", "/Simulator-msg/poll", params=params)
+
+    from api.admin_trace import register_trace_routes
+    register_trace_routes(blueprint, ctx, _require_session)
 
     @blueprint.route("/groups", methods=["POST"])
     def write_group():

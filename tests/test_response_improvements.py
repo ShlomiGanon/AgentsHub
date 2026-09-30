@@ -95,6 +95,29 @@ def test_policy_queue_reserves_capacity_for_continuations():
         event_queue.release_reservation(reservation)
 
 
+def test_policy_queue_stop_returns_within_timeout_when_a_worker_is_blocked(monkeypatch):
+    from orchestrator import event_queue as event_queue_module
+
+    monkeypatch.setattr(event_queue_module, "STOP_JOIN_TIMEOUT_SECONDS", 0.2)
+    release = threading.Event()
+    event_queue = PolicyAwareEventQueue(lambda _item: release.wait(), workers=1, max_size=5)
+    event_queue.start()
+    event_queue.submit(WorkItem("blocked"))
+    try:
+        for _ in range(200):
+            if event_queue.currently_processing() is not None:
+                break
+            time.sleep(0.01)
+        started = time.monotonic()
+        event_queue.stop()
+        assert time.monotonic() - started < 1.0
+        assert any(worker.is_alive() for worker in event_queue._workers)
+    finally:
+        release.set()
+        for worker in event_queue._workers:
+            worker.join(timeout=1.0)
+
+
 def test_repeating_an_outcome_does_not_duplicate_the_notification(tmp_path):
     store = open_persistence(str(tmp_path / "outcome-idempotency.db"))
     try:

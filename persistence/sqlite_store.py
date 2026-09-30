@@ -70,10 +70,13 @@ _EVENT_COLUMNS = (
     "telegram_chat_id",
     "telegram_chat_type",
     "ack_message_id",
+    "corrects_event_id",
+    "retracted",
+    "hold_escalation_alert_text",
 )
 
 _EVENT_JSON_COLUMNS = {"entities", "precedent_matched_event_ids"}
-_EVENT_BOOL_COLUMNS = {"occurred_at_is_fallback", "clarification_held", "approval_held"}
+_EVENT_BOOL_COLUMNS = {"occurred_at_is_fallback", "clarification_held", "approval_held", "retracted"}
 
 _EVENT_IMMUTABLE_COLUMNS = {
     "event_id", "received_at", "source", "sender_identity", "sender_permission_level",
@@ -90,6 +93,9 @@ _OUTCOME_TO_NOTIFICATION_KINDS: dict[str, tuple[str, ...]] = {
     "succeeded": ("job_finished",),
     "declined": ("job_finished",),
     "failed": ("job_failed",),
+    # An unresolved hold that nobody answered within the configured expiry window (item 8) --
+    # same reporter-facing delivery as any other failure, via the existing job_failed path.
+    "expired": ("job_failed",),
     "uncertain": ("job_finished", "uncertain_verdict", "uncertain_verdict_reporter"),
     "closed_on_precedent": ("job_finished", "precedent_closure"),
     "no_match_protocol": ("job_finished", "no_match_notice"),
@@ -1054,6 +1060,37 @@ class SQLitePersistence(PersistenceInterface):
 
         self._submit_write(_do)
 
+    def mark_held_event_reminded(self, kind: str, hold_id: str, reminded_at: str) -> None:
+        def _do(connection: sqlite3.Connection) -> None:
+            connection.execute(
+                "UPDATE held_events SET reminded_at = ? WHERE hold_id = ? AND kind = ? AND resolved = 0",
+                (reminded_at, hold_id, kind),
+            )
+            connection.commit()
+
+        self._submit_write(_do)
+
+    def mark_held_event_escalated(self, kind: str, hold_id: str, escalated_at: str) -> None:
+        def _do(connection: sqlite3.Connection) -> None:
+            connection.execute(
+                "UPDATE held_events SET escalated_at = ? WHERE hold_id = ? AND kind = ? AND resolved = 0",
+                (escalated_at, hold_id, kind),
+            )
+            connection.commit()
+
+        self._submit_write(_do)
+
+    def insert_notification(self, kind: str, event_id: str) -> None:
+        """Public wrapper for re-triggering an existing notification kind on demand -- item 8's
+        hold reminder re-sends the same `{kind}_hold` prompt this way, reusing the existing
+        payload builder/renderer entirely (it re-reads the still-unresolved hold fresh)."""
+
+        def _do(connection: sqlite3.Connection) -> None:
+            _insert_notification(connection, kind, event_id)
+            connection.commit()
+            self._wake_notification_waiters()
+
+        self._submit_write(_do)
 
     def fetch_notifications_since(self, since: int) -> list[dict]:
         connection = self._read_connection()

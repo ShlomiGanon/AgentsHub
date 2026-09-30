@@ -17,12 +17,13 @@ Architecture (docs/responce_improve.md's own rules, restated briefly):
     own `CREATE TABLE IF NOT EXISTS` DDL; none of this is added to the
     shared `persistence/schema.py` (every profile, including Fire and
     Rescue, would otherwise inherit it).
-  - The three agents below are profile-owned subclasses (two extend the
-    shared `TeamStatusAgent`/`SurveillanceAgent` with this profile's own
-    tools and store; the third, `NeighboringForcesAgent`, is wholly new).
-    None of their tools are added to the shared `agents/friendly_forces_
-    agent.py`, `agents/surveillance_agent.py`, `agents/team_status_agent.py`,
-    or `agents/roster_agent.py` modules, which stay untouched.
+  - The three agents below are profile-owned subclasses of shared bases --
+    `TeamStatusAgent`/`SurveillanceAgent`, and, since
+    docs/Admin_Tables_Plan.md's extraction, `agents.neighboring_forces_agent
+    .NeighboringForcesAgent` too (this profile's own subclass adds only its
+    "squad" special case on top). None of their tools are added to the
+    shared `agents/surveillance_agent.py`, `agents/team_status_agent.py`, or
+    `agents/roster_agent.py` modules, which stay untouched.
   - Profile module text stays English, per the same hard constraint as
     every other profile module in this repo -- Hebrew lives only in
     `messages/he.py`, read here (via `_catalog_text`) only for this
@@ -35,8 +36,11 @@ from pathlib import Path
 
 from agents import (
     Agent,
+    InvocationPolicy,
+    NeighboringForcesAgent as _NeighboringForcesAgentBase,
     SurveillanceAgent,
     TeamStatusAgent,
+    failed_tool_result,
     get_authenticated_request_identity,
     tool,
 )
@@ -44,10 +48,11 @@ from messages import get_catalog
 from persistence import (
     SurveillancePersistenceError,
     TeamStatusPersistenceError,
-    open_neighboring_force_store,
+    open_incident_responder_store,
     open_response_team_roster_store,
     open_response_team_surveillance_store,
 )
+from profiles.admin_tables import AdminColumn, AdminTable
 from profiles.contracts import AgentSpec, OptimizationPolicy
 from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
 from protocols import CriticalityLevel, Protocol, Step
@@ -166,9 +171,9 @@ DRONES = (
 # folds into 'yasam'.
 FORCE_BASES = {
     "ambulance": "expansion_neighborhood",
-    "police": "east_gate",
+    "police": "east_orchards",
     "k9": "east_orchards",
-    "yasam": "east_gate",
+    "yasam": "old_public_building",
 }
 
 # Fixed capacity per external force kind -- NeighboringForceStore itself has no standing-units
@@ -258,32 +263,110 @@ class ResponseTeamRosterAgent(TeamStatusAgent):
         if not self.status_db_path:
             raise TypeError("ResponseTeamRosterAgent requires a class-level status_db_path")
         self.status_store = open_response_team_roster_store(self.status_db_path)
+        self.incident_store = open_incident_responder_store(self.status_db_path)
         Agent.__init__(self, model, api_key)
 
     @tool(
         "report_team_movement",
         "Records a team member's own current area -- e.g. travelling to or arriving at an area "
         "while still on duty. Side-effecting and idempotent -- recording the same area twice for "
-        "the same member leaves one current value.",
+        "the same member leaves one current value. This alone does not link the member to any "
+        "incident -- call join_incident_response separately when the report also indicates they "
+        "are responding to one.",
         side_effecting=True,
         idempotent=True,
     )
     def report_team_movement(self, area: str = "", member_identity: str = "") -> str:
         identity = (member_identity or get_authenticated_request_identity() or "").strip()
         if not identity:
-            return "The movement report was not stored: authenticated requester identity is unavailable."
+            return failed_tool_result("The movement report was not stored: authenticated requester identity is unavailable.")
         if not area.strip():
-            return "Clarification required: area is required."
+            return failed_tool_result("Clarification required: area is required.")
 
         approved_members = self.status_store.list_members(approved_only=True)
         if not any(member["telegram_identity"] == identity for member in approved_members):
-            return "The movement report was not stored: requester is not an approved roster member."
+            return failed_tool_result("The movement report was not stored: requester is not an approved roster member.")
 
         try:
             updated = self.status_store.set_current_area(identity, area.strip())
         except TeamStatusPersistenceError as exc:
-            return f"The movement report was not stored: {exc}"
+            return failed_tool_result(f"The movement report was not stored: {exc}")
+
         return f"{updated['full_name']}'s current area was recorded as '{updated['current_area']}'."
+
+    @tool(
+        "join_incident_response",
+        "Links the caller to the one specific real incident currently on record for `area`, when "
+        "exactly one exists -- use when a member's report clearly indicates they are responding "
+        "to, heading to, or dispatched to an incident there, not merely stationed or passing "
+        "through the area. Never links on area alone: if no recent incident is on record, or more "
+        "than one is, nothing is linked and a plain explanation is returned instead of a guess. "
+        "Automatically closes any other incident the caller was previously linked to "
+        "(reassignment). Side-effecting and idempotent.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def join_incident_response(self, area: str = "", member_identity: str = "") -> str:
+        identity = (member_identity or get_authenticated_request_identity() or "").strip()
+        if not identity:
+            return "Not linked: authenticated requester identity is unavailable."
+        if not area.strip():
+            return failed_tool_result("Clarification required: area is required.")
+
+        approved_members = self.status_store.list_members(approved_only=True)
+        if not any(member["telegram_identity"] == identity for member in approved_members):
+            return "Not linked: requester is not an approved roster member."
+
+        event, clarification = self.incident_store.resolve_single_candidate(area.strip())
+        if event is None:
+            return f"Not linked: {clarification}"
+        self.incident_store.join(event["event_id"], identity)
+        return f"Linked to the incident currently on record for '{area.strip()}'."
+
+    @tool(
+        "leave_incident_response",
+        "Closes the caller's own current incident link, if any -- use when a member reports "
+        "leaving an incident or being reassigned away with no new incident stated. Harmless (not "
+        "an error) if the caller had no open link. Side-effecting and idempotent.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def leave_incident_response(self, member_identity: str = "") -> str:
+        identity = (member_identity or get_authenticated_request_identity() or "").strip()
+        if not identity:
+            return "Not updated: authenticated requester identity is unavailable."
+        closed = self.incident_store.leave(identity)
+        if closed is None:
+            return "No open incident link was found to close."
+        return "The caller's incident link was closed."
+
+    @tool(
+        "list_incident_responders",
+        "Answers 'who else is with me' / 'who is responding' for the one specific real incident "
+        "currently on record for `area`, when exactly one exists -- lists only members actually "
+        "linked to that incident (via join_incident_response), never members merely recorded in "
+        "the same area. If no recent incident is on record, or more than one is, says so plainly "
+        "instead of guessing. Read-only.",
+        side_effecting=False,
+    )
+    def list_incident_responders(self, area: str = "") -> str:
+        if not area.strip():
+            return failed_tool_result("Clarification required: area is required.")
+
+        event, clarification = self.incident_store.resolve_single_candidate(area.strip())
+        if event is None:
+            return clarification
+
+        links = self.incident_store.list_open_responders(event["event_id"])
+        if not links:
+            return f"No one is currently linked to the incident on record for '{area.strip()}'."
+
+        members_by_identity = {
+            member["telegram_identity"]: member["full_name"]
+            for member in self.status_store.list_members(approved_only=False)
+        }
+        names = [members_by_identity.get(link["identity"], link["identity"]) for link in links]
+        return f"Currently linked to the incident on record for '{area.strip()}': {', '.join(names)}."
 
 
 class ResponseTeamSurveillanceAgent(SurveillanceAgent):
@@ -319,9 +402,9 @@ class ResponseTeamSurveillanceAgent(SurveillanceAgent):
     )
     def update_camera_status(self, camera_id: str, observation: str, status: str = "") -> str:
         if not camera_id.strip():
-            return "Clarification required: camera_id is required."
+            return failed_tool_result("Clarification required: camera_id is required.")
         if not observation.strip():
-            return "Clarification required: observation is required."
+            return failed_tool_result("Clarification required: observation is required.")
         try:
             updated = self.surveillance_store.update_camera_feed(
                 camera_id=camera_id.strip(),
@@ -329,7 +412,7 @@ class ResponseTeamSurveillanceAgent(SurveillanceAgent):
                 status=status.strip().lower() or None,
             )
         except SurveillancePersistenceError as exc:
-            return f"Camera status update failed: {exc}"
+            return failed_tool_result(f"Camera status update failed: {exc}")
         return (
             f"Camera '{updated['camera_id']}' status recorded.\n"
             f"- Status: {updated['status'].upper()}\n"
@@ -339,8 +422,9 @@ class ResponseTeamSurveillanceAgent(SurveillanceAgent):
 
     @tool(
         "recall_drone",
-        f"Recalls one active drone (or, given 'all', every active drone) to {DRONES_WAREHOUSE}. "
-        "drone_or_mission_id is optional only when exactly one mission is active.",
+        f"Recalls one active drone to {DRONES_WAREHOUSE}. "
+        "drone_or_mission_id is optional only when exactly one mission is active. "
+        "To recall every active drone, call return_all_drones_to_base.",
         side_effecting=True,
         idempotent=True,
     )
@@ -348,133 +432,53 @@ class ResponseTeamSurveillanceAgent(SurveillanceAgent):
         return self.return_drone_to_base(drone_or_mission_id)
 
 
-class NeighboringForcesAgent(Agent):
-    """Neighboring/external-force dispatch-log specialist -- wholly new,
-    profile-only (not the shared `agents/friendly_forces_agent.py`
-    `FriendlyForcesAgent`, which this profile no longer uses). Owns exactly
-    one table, `neighboring_force_dispatches`: force kinds and home bases
-    stay profile constants (`FORCE_BASES`, above), never a standing-units
-    table. Dispatch text always says "recorded, en route, ETA=..." -- the
-    later `en_route -> arrived` transition, once the ETA has elapsed, is
-    computed automatically (docs/responce_improve.md's one documented
-    exception to "a tool result proves only the tool's own effect"), never
-    reported by this agent."""
+class NeighboringForcesAgent(_NeighboringForcesAgentBase):
+    """Thin profile subclass of the shared `agents.neighboring_forces_agent.NeighboringForcesAgent`
+    (docs/Admin_Tables_Plan.md section 3.3) -- own DB, own force kinds/pool/busy-window, own ETA
+    matrix, plus one addition the shared base doesn't know about: `kind="squad"` dispatches the
+    response team's own roster (not a real external force) through the same tool, checked
+    against the roster's live availability instead of `FORCE_POOL_SIZE`. `_resolve_kind`/
+    `_check_capacity`/`_capacity_shortage_text` are overridden only for that one extra kind;
+    every other kind uses the shared base's own default behavior unchanged."""
 
-    name = "neighboring_forces_agent"
-    role = (
-        "Records requests to dispatch a neighboring/external force (ambulance, police, K9, or "
-        "YASAM) into one of this site's areas, and answers read-only questions about the current "
-        "dispatch log. A dispatch's status advances from en_route to arrived automatically once "
-        "its computed ETA has elapsed -- never from a human report."
-    )
-    system_prompt = (
-        "You are the neighboring-forces dispatch specialist. You have two tools: "
-        "dispatch_neighboring_force records a dispatch request for one force kind (ambulance, "
-        "police, k9, yasam, or squad -- the response team's own roster) to a named target area, "
-        "with the unit count and any note given; list_neighboring_force_dispatches returns the "
-        "current dispatch log, optionally filtered by status ('en_route' or 'arrived'). Neither "
-        "tool contacts a real ambulance, police unit, K9 team, or YASAM unit -- each only logs "
-        "the request and its computed ETA. Each force kind, including squad, has a limited "
-        "number of units currently available; if a dispatch fails for that reason, state that "
-        "plainly and do not retry. Report back plainly what was recorded; never claim a "
-        "dispatched force has arrived on scene yourself -- that transition is computed "
-        "automatically from elapsed time, not something you report."
-    )
+    dispatch_db_path = DB_PATH
+    force_bases = FORCE_BASES
+    force_pool_size = FORCE_POOL_SIZE
+    force_busy_seconds = FORCE_BUSY_SECONDS
+    eta_fn = staticmethod(eta_seconds)
 
     def __init__(self, model: str, api_key: str | None = None):
-        self.dispatch_store = open_neighboring_force_store(DB_PATH)
-        self.roster_store = open_response_team_roster_store(DB_PATH)
         super().__init__(model, api_key)
+        self.roster_store = open_response_team_roster_store(DB_PATH)
 
-    @tool(
-        "dispatch_neighboring_force",
-        "Records a request to dispatch a neighboring/external force (ambulance, police, k9, "
-        "yasam) or the response team's own roster (squad) to a named target area, with the unit "
-        "count and an optional note. Returns the recorded request, its en_route status, and "
-        "computed ETA -- or a clear statement that too few units/members are currently available. "
-        "Side-effecting and not idempotent -- running it twice records two dispatch requests, not one.",
-        side_effecting=True,
-        idempotent=False,
-    )
-    def dispatch_neighboring_force(self, kind: str, target_area: str, unit_count: int = 1, note: str = "") -> str:
-        kind_norm = kind.strip().lower()
-        if kind_norm != SQUAD_KIND and kind_norm not in FORCE_BASES:
-            return (
-                f"Clarification required: unknown force kind '{kind}'. "
-                f"Valid kinds: {', '.join(sorted((*FORCE_BASES, SQUAD_KIND)))}."
-            )
-        if not target_area.strip():
-            return "Clarification required: target_area is required."
-        if unit_count < 1:
-            return "Clarification required: unit_count must be at least 1."
+    def _valid_kinds(self) -> "tuple[str, ...]":
+        return tuple(sorted((*self.force_bases, SQUAD_KIND)))
 
-        cleaned_area = target_area.strip()
-
+    def _resolve_kind(self, kind_norm: str) -> "tuple[str, str] | None":
         if kind_norm == SQUAD_KIND:
-            origin_area = SQUAD_ORIGIN_AREA
+            return SQUAD_ORIGIN_AREA, "squad_member"
+        return super()._resolve_kind(kind_norm)
+
+    def _check_capacity(self, kind_norm: str, unit_count: int) -> "tuple[bool, int]":
+        if kind_norm == SQUAD_KIND:
             now_iso = datetime.now(timezone.utc).isoformat()
             available = sum(
                 1 for entry in self.roster_store.availability_snapshot(now_iso)
                 if entry["availability"] == "available"
             )
-            if available < unit_count:
-                reason = _catalog_text(
-                    "response_team.resource_unavailable.squad_reason", available=available, unit_count=unit_count,
-                )
-                self.signal_resource_unavailable("squad_member", cleaned_area, reason)
-                return f"Squad dispatch failed: {reason}"
-        else:
-            origin_area = FORCE_BASES[kind_norm]
-            busy_since = (datetime.now(timezone.utc) - timedelta(seconds=FORCE_BUSY_SECONDS)).isoformat()
-            busy_units = sum(
-                dispatch["unit_count"] for dispatch in self.dispatch_store.list_dispatches()
-                if dispatch["force_kind"] == kind_norm and dispatch["dispatched_at"] > busy_since
-            )
-            remaining = max(FORCE_POOL_SIZE - busy_units, 0)
-            if remaining < unit_count:
-                reason = _catalog_text(
-                    "response_team.resource_unavailable.force_reason",
-                    remaining=remaining, pool_size=FORCE_POOL_SIZE,
-                    resource=_RESOURCE_KIND_LABELS.get(kind_norm, kind_norm), unit_count=unit_count,
-                )
-                self.signal_resource_unavailable(kind_norm, cleaned_area, reason)
-                return f"{kind_norm} dispatch failed: {reason}"
+            return available >= unit_count, available
+        return super()._check_capacity(kind_norm, unit_count)
 
-        eta = eta_seconds(origin_area, cleaned_area)
-        record = self.dispatch_store.dispatch(
-            force_kind=kind_norm,
-            origin_area=origin_area,
-            target_area=cleaned_area,
-            unit_count=unit_count,
-            eta_seconds=eta,
-            note=note.strip(),
-        )
-        return (
-            f"{kind_norm} dispatch recorded, en route to {record['target_area']}, "
-            f"ETA={record['eta_seconds']}s (request {record['request_id']})."
-        )
-
-    @tool(
-        "list_neighboring_force_dispatches",
-        "Returns the current neighboring-force dispatch log (request id, kind, unit count, "
-        "origin/target area, status, ETA, dispatched-at), optionally filtered to one status "
-        "('en_route' or 'arrived'). A dispatch already shows 'arrived' once its ETA has elapsed, "
-        "with no separate report needed for that transition.",
-        side_effecting=False,
-    )
-    def list_neighboring_force_dispatches(self, status: str = "") -> str:
-        cleaned = status.strip().lower()
-        rows = self.dispatch_store.list_dispatches(status=cleaned or None)
-        if not rows:
-            return "No neighboring-force dispatches recorded."
-        lines = [f"Neighboring-force dispatches ({len(rows)}):"]
-        for row in rows:
-            lines.append(
-                f"- [{row['request_id']}] {row['force_kind']} x{row['unit_count']}: "
-                f"{row['origin_area']} -> {row['target_area']} ({row['status'].upper()}, "
-                f"ETA {row['eta_seconds']}s, dispatched {row['dispatched_at']})"
+    def _capacity_shortage_text(self, kind_norm: str, remaining: int, unit_count: int) -> str:
+        if kind_norm == SQUAD_KIND:
+            return _catalog_text(
+                "response_team.resource_unavailable.squad_reason", available=remaining, unit_count=unit_count,
             )
-        return "\n".join(lines)
+        return _catalog_text(
+            "response_team.resource_unavailable.force_reason",
+            remaining=remaining, pool_size=self.force_pool_size,
+            resource=_RESOURCE_KIND_LABELS.get(kind_norm, kind_norm), unit_count=unit_count,
+        )
 
 
 # == Resource-unavailable description (orchestrator/flows.py's shared mechanism) ============
@@ -675,20 +679,48 @@ def _bind_update_camera_status(event: dict) -> tuple[Step, ...]:
     )
 
 
+# A narrow, low-stakes judgment call (decide whether a movement report also indicates incident
+# response, then call up to three known tools) never needs the agent's default reasoning budget --
+# same mechanism SurveillanceAgent.process already uses for its own tool-turn-plus-summary calls.
+_FAST_JUDGMENT_POLICY = InvocationPolicy(max_output_tokens=400, reasoning_effort="none")
+
+
 def _bind_report_team_movement(event: dict) -> tuple[Step, ...]:
     area = (event.get("area") or "").strip()
-    required = () if area else ("area",)
-    kwargs = {"area": area} if area else {}
+    description = (event.get("description") or "").strip()
+    missing = tuple(name for name in ("area",) if not event.get(name))
+    if missing:
+        return (
+            Step(
+                agent_name="roster_agent",
+                task_text="Record the reporter's own current area, bound directly from the event's extracted fields.",
+                allowed_tools=("report_team_movement",),
+                step_id="1",
+                required_event_fields=missing,
+                kind="direct_tool",
+                direct_tool_name="report_team_movement",
+                direct_tool_kwargs={},
+            ),
+        )
+    # Whether this movement is a response to a specific incident is a genuine judgment call
+    # from the free-text report, the same class of decision `_bind_update_camera_status` makes
+    # for a camera's resulting status -- so the specialist agent decides and calls the relevant
+    # tool(s) itself rather than a keyword heuristic pre-deciding it.
     return (
         Step(
             agent_name="roster_agent",
-            task_text="Record the reporter's own current area, bound directly from the event's extracted fields.",
-            allowed_tools=("report_team_movement",),
+            task_text=(
+                f"The reporter's own current area was reported as '{area}'. Call report_team_movement "
+                f"with that area. Then, from the report below, decide: does it clearly say the reporter "
+                f"is responding to, heading to, or dispatched to a specific incident at that area (not "
+                f"merely stationed or passing through)? If so, also call join_incident_response for the "
+                f"same area. If the report also asks who else is with/responding, also call "
+                f"list_incident_responders for the same area and include its answer in your reply.\n\n"
+                f"Report: {description}"
+            ),
+            allowed_tools=("report_team_movement", "join_incident_response", "list_incident_responders"),
             step_id="1",
-            required_event_fields=required,
-            kind="direct_tool",
-            direct_tool_name="report_team_movement",
-            direct_tool_kwargs=kwargs,
+            invocation_policy=_FAST_JUDGMENT_POLICY,
         ),
     )
 
@@ -720,6 +752,7 @@ PROTOCOLS = [
         # that needs a model's insight/judgment.
         needs_insight=False,
         direct_tool_binder=_bind_record_attendance,
+        direct_lane_eligible=True,
     ),
     Protocol(
         name="update_camera_status",
@@ -740,28 +773,25 @@ PROTOCOLS = [
         commander_only=False,
         needs_insight=False,
         direct_tool_binder=_bind_update_camera_status,
+        direct_lane_eligible=True,
     ),
     Protocol(
         name="report_security_incident",
         description=(
-            "Applies to a report of an unconfirmed hostile, suspicious, or security-relevant "
-            "event -- a suspicious vehicle or person, gunfire, a sighted armed suspect, an "
-            "intrusion, or a breach in the perimeter fence -- confirmed or monitored, when "
-            "useful, by tasking a drone to the reported area for recon. A drone dispatch is not "
-            "always required: an already-handled, no-further-risk report (e.g. a small fire "
-            "that is already out, with no firefighter kind involved) is an information event "
-            "only, with no dispatch. Does not apply to a plain camera/sensor equipment-status "
+            "Applies to a report of an unconfirmed hostile, suspicious, or still-relevant "
+            "security event -- a suspicious vehicle or person, gunfire, a sighted armed suspect, "
+            "an intrusion, or a breach in the perimeter fence -- confirmed or monitored by "
+            "tasking a drone to the reported area for recon. Does not apply when the report "
+            "itself says the situation is already handled, resolved, or presents no further risk "
+            "(use log_security_observation for that -- never dispatch a drone for an "
+            "already-handled report). Does not apply to a plain camera/sensor equipment-status "
             "observation with no security implication (use update_camera_status for that), and "
             "does not apply to a request to actually send an external force (use "
             "dispatch_neighboring_force for that)."
         ),
         participating_agents=("surveillance_agent",),
         approved_tools=("dispatch_drone_to_area",),
-        expected_success_output=(
-            "Confirmation of drone dispatch to the reported area (callsign, ETA, mission ID) "
-            "when a dispatch was needed, or a plain acknowledgement that the report was logged "
-            "when it was not."
-        ),
+        expected_success_output="Confirmation of drone dispatch to the reported area (callsign, ETA, mission ID).",
         criticality=CriticalityLevel.HIGH,
         approval_flag=False,
         requires_confirmation=False,
@@ -769,6 +799,30 @@ PROTOCOLS = [
         # A field/civilian security report can arrive in any group, not only the
         # camera-ops channel this protocol's own agent (surveillance_agent) is bound
         # to -- keep it selectable everywhere (orchestrator/group_routing.py).
+        safety_critical=True,
+    ),
+    Protocol(
+        # Split from report_security_incident (over-dispatch fix): an already-handled report has
+        # no dispatch tool available at all here, structurally, not merely a prompt instruction
+        # the agent could still disregard -- e.g. a small fire that is already out, with no
+        # firefighter kind involved, or a suspicious situation already resolved/cleared.
+        name="log_security_observation",
+        description=(
+            "Applies when a report describes a security-relevant observation that is explicitly "
+            "already handled, resolved, or presents no further risk -- e.g. a small fire that is "
+            "already out, with no firefighter kind involved, or a suspicious situation that has "
+            "already been resolved or cleared. Purely informational: logs the observation: never "
+            "dispatches a drone or any other resource. Does not apply to anything still active, "
+            "ongoing, or unconfirmed (use report_security_incident for that)."
+        ),
+        participating_agents=("surveillance_agent",),
+        approved_tools=(),
+        expected_success_output="A plain acknowledgement that the observation was logged.",
+        criticality=CriticalityLevel.LOW,
+        approval_flag=False,
+        requires_confirmation=False,
+        commander_only=False,
+        needs_insight=False,
         safety_critical=True,
     ),
     Protocol(
@@ -797,14 +851,19 @@ PROTOCOLS = [
             "member reporting they will be unavailable (use record_attendance for that)."
         ),
         participating_agents=("roster_agent",),
-        approved_tools=("report_team_movement",),
-        expected_success_output="Confirmation that the team member's current area was recorded.",
+        approved_tools=("report_team_movement", "join_incident_response", "list_incident_responders"),
+        expected_success_output=(
+            "Confirmation that the team member's current area was recorded; if the report also "
+            "indicated they are responding to a specific incident, confirmation they were linked "
+            "to it and, if asked, who else is currently linked to that same incident."
+        ),
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
         needs_insight=False,
         direct_tool_binder=_bind_report_team_movement,
+        direct_lane_eligible=True,
     ),
     Protocol(
         name="query_situational_picture",
@@ -812,9 +871,12 @@ PROTOCOLS = [
             "Applies when someone asks for a combined, current snapshot spanning any of the "
             "team's roster/attendance, the camera picture, or neighboring-force dispatch status "
             "-- e.g. 'who's missing tonight and what's the camera status', or 'anything moving, "
-            "and where are the responding forces'. Does not apply to a retrospective, "
-            "end-to-end summary of a closed or ongoing incident (use query_incident_summary for "
-            "that)."
+            "and where are the responding forces'. Also applies when a confused or urgent "
+            "message recaps several recent reports (possibly from different chats) and asks to "
+            "make sense of them and/or decide where to send the available force -- pull the "
+            "actual records rather than trusting the requester's own recap. Does not apply to a "
+            "retrospective, end-to-end summary of a closed or ongoing incident (use "
+            "query_incident_summary for that)."
         ),
         participating_agents=("roster_agent", "surveillance_agent", "neighboring_forces_agent"),
         approved_tools=("report_team_availability", "get_surveillance_overview", "list_neighboring_force_dispatches"),
@@ -1166,3 +1228,116 @@ SIMULATIONS = [
     },
     ),
 ]
+
+
+# == Admin-panel tables (docs/Admin_Tables_Plan.md) ==========================
+#
+# Every write_fn is a thin wrapper around a store method on this profile's own already-shared
+# store classes (persistence/response_team_store.py's ResponseTeamSurveillanceStore/
+# NeighboringForceStore, persistence/team_status_store.py's SQLiteTeamStatusPersistence) --
+# never a direct SQL statement in this module. Every cascade an edit implies (a drone leaving
+# an active mission, an attendance approval stamp) happens inside those store methods, so it's
+# identical whether the edit came from the admin panel or (where a live tool exists) a real
+# report.
+
+
+def _drones_list(deps) -> list:
+    return deps.registry.get("surveillance_agent").surveillance_store.list_drones()
+
+
+def _drones_get(deps, drone_id: str):
+    return deps.registry.get("surveillance_agent").surveillance_store.get_drone(drone_id)
+
+
+def _drones_write(deps, row: dict) -> None:
+    store = deps.registry.get("surveillance_agent").surveillance_store
+    store.admin_update_drone(row["drone_id"], **{k: v for k, v in row.items() if k != "drone_id"})
+
+
+def _attendance_list(deps) -> list:
+    return deps.registry.get("roster_agent").status_store.list_responses()
+
+
+def _attendance_get(deps, response_id: str):
+    return deps.registry.get("roster_agent").status_store.get_response(response_id)
+
+
+def _attendance_write(deps, row: dict) -> None:
+    store = deps.registry.get("roster_agent").status_store
+    store.admin_update_attendance_fields(row["response_id"], **{k: v for k, v in row.items() if k != "response_id"})
+
+
+def _forces_list(deps) -> list:
+    return deps.registry.get("neighboring_forces_agent").dispatch_store.list_dispatches()
+
+
+def _forces_get(deps, request_id: str):
+    return deps.registry.get("neighboring_forces_agent").dispatch_store.get_dispatch(request_id)
+
+
+def _forces_write(deps, row: dict) -> None:
+    store = deps.registry.get("neighboring_forces_agent").dispatch_store
+    store.admin_update_dispatch(row["request_id"], **{k: v for k, v in row.items() if k != "request_id"})
+
+
+ADMIN_TABLES = (
+    AdminTable(
+        key="drones",
+        label="Drones",
+        primary_key="drone_id",
+        columns=(
+            AdminColumn("drone_id", "Drone ID", editable=False),
+            AdminColumn("callsign", "Callsign", required=True),
+            AdminColumn("model", "Model"),
+            AdminColumn(
+                "status", "Status", kind="select",
+                choices=("ready", "in_flight", "charging", "maintenance"), required=True,
+            ),
+            AdminColumn("battery_percent", "Battery %", kind="number"),
+            AdminColumn("current_area", "Current area"),
+            AdminColumn("assigned_mission_id", "Assigned mission ID"),
+            AdminColumn("last_updated", "Last updated", editable=False),
+        ),
+        list_fn=_drones_list, get_fn=_drones_get, write_fn=_drones_write,
+    ),
+    AdminTable(
+        key="attendance",
+        label="Standby Squad Attendance",
+        primary_key="response_id",
+        columns=(
+            AdminColumn("response_id", "Response ID", editable=False),
+            AdminColumn("telegram_identity", "Member", editable=False),
+            AdminColumn("availability", "Availability", kind="select", choices=("available", "unavailable")),
+            AdminColumn("reason", "Reason"),
+            AdminColumn("unavailable_until", "Unavailable until"),
+            AdminColumn(
+                "approval_status", "Approval status", kind="select",
+                choices=("accepted", "pending", "rejected"),
+            ),
+            AdminColumn("reviewed_by", "Reviewed by", editable=False),
+            AdminColumn("reviewed_at", "Reviewed at", editable=False),
+            AdminColumn("original_text", "Original text", editable=False),
+            AdminColumn("received_at", "Received at", editable=False),
+        ),
+        list_fn=_attendance_list, get_fn=_attendance_get, write_fn=_attendance_write,
+    ),
+    AdminTable(
+        key="forces",
+        label="Friendly Forces",
+        primary_key="request_id",
+        columns=(
+            AdminColumn("request_id", "Request ID", editable=False),
+            AdminColumn("force_kind", "Force kind", required=True),
+            AdminColumn("unit_count", "Unit count", kind="number", required=True),
+            AdminColumn("origin_area", "Origin area"),
+            AdminColumn("target_area", "Target area"),
+            AdminColumn("status", "Status", kind="select", choices=("en_route", "arrived")),
+            AdminColumn("dispatched_at", "Dispatched at", editable=False),
+            AdminColumn("eta_seconds", "ETA (seconds)", kind="number"),
+            AdminColumn("arrived_at", "Arrived at"),
+            AdminColumn("note", "Note"),
+            AdminColumn("event_id", "Event ID", editable=False),
+        ),
+        list_fn=_forces_list, get_fn=_forces_get, write_fn=_forces_write,
+    ),
+)

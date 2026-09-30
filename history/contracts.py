@@ -92,7 +92,11 @@ class PrecedentMatch:
 
 
 class HistoryQueryError(Exception):
-    pass
+    """A history lookup could not be completed. Callers check `empty`, not the message text."""
+
+    def __init__(self, message: str = "", *, empty: bool = False):
+        super().__init__(message)
+        self.empty = empty
 
 
 HistoryOperation = Literal[

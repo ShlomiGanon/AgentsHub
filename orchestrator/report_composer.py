@@ -57,6 +57,16 @@ def _pending_context(summary: RunSummary, *, include_risk: bool) -> dict | None:
     return context
 
 
+def _actions_taken(summary: RunSummary) -> list[str]:
+    """What was actually done, in the tool's own plain-language confirmation text -- never the
+    agent name or the task text it was given, which are internal routing details, not facts
+    about the world. A succeeded step with no result_text (nothing meaningful to report, e.g. a
+    read-only lookup) contributes nothing; a failed step is not an action taken and is already
+    covered by outcome_failure_reason instead."""
+
+    return [step.result_text for step in summary.steps if step.status == "succeeded" and step.result_text]
+
+
 def _viewer_context(summary: RunSummary) -> dict:
     context: dict = {
         "raw_text": summary.raw_text,
@@ -66,6 +76,7 @@ def _viewer_context(summary: RunSummary) -> dict:
         "description": summary.description,
         "outcome": summary.outcome,
         "outcome_failure_reason": summary.outcome_failure_reason,
+        "actions_taken": _actions_taken(summary),
     }
     if summary.resource_unavailable_fact:
         # Unlike insight_text (commander-only), this fact must reach every audience -- the

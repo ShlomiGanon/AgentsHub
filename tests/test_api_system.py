@@ -143,6 +143,7 @@ def test_get_system_reports_current_settings(tmp_path, teardown_ctx):
     assert resp.get_json()["settings"] == {
         "retry_count": 3, "risk_threshold": 0.5, "lookback_window_days": 30, "safe_mode": False,
         "rich_reports_enabled": False,
+        "hold_reminder_minutes": 10, "hold_escalation_minutes": 30, "hold_expiry_hours": 2,
     }
 
 

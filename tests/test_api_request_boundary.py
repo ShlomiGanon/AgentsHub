@@ -167,6 +167,42 @@ def test_post_event_records_source_as_sensor_with_occurred_at_equal_to_received_
     assert event["occurred_at"] == event["received_at"]
 
 
+def test_post_event_uses_an_optional_timestamp_as_received_at(ctx):
+    client = build_app(ctx).test_client()
+
+    resp = client.post(
+        "/Event",
+        headers=auth_headers(SENSOR_IDENTITY),
+        json={
+            "text": "smoke at gate 3",
+            "sender_identity": SENSOR_IDENTITY,
+            "timestamp": "2026-09-06T07:30:00Z",
+        },
+    )
+
+    assert resp.status_code == 202
+    event = ctx.deps.persistence.fetch_event(resp.get_json()["event_id"])
+    assert event["received_at"] == "2026-09-06T07:30:00"
+
+
+def test_post_event_rejects_an_invalid_timestamp(ctx):
+    client = build_app(ctx).test_client()
+
+    resp = client.post(
+        "/Event",
+        headers=auth_headers(SENSOR_IDENTITY),
+        json={
+            "text": "smoke at gate 3",
+            "sender_identity": SENSOR_IDENTITY,
+            "timestamp": "not-a-timestamp",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert resp.get_json()["field"] == "timestamp"
+    assert ctx.deps.persistence.fetch_events_range("2000-01-01", "2100-01-01") == []
+
+
 def test_post_event_runs_to_completion_through_the_queue(ctx):
     client = build_app(ctx).test_client()
 

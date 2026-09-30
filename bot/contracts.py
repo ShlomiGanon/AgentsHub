@@ -154,6 +154,7 @@ class JobResult:
     # orchestrator.report_composer) — None when rich reporting is disabled, in which case the
     # bot falls back to format_job_result's fixed-template rendering.
     report_text: str | None = None
+    selection_required: bool = False
 
 
 @dataclass(frozen=True)
@@ -206,6 +207,18 @@ class ResourceUnavailableAlertNotice:
     Delivered to every commander's own private chat (bot/interactions.py's
     `notify_resource_unavailable_alert`, mirroring `notify_uncertain_verdict`) — never to the
     reporter's own chat, which gets only its own plain job_finished reply."""
+
+    event_id: str
+    alert_text: str
+
+
+@dataclass(frozen=True)
+class HoldEscalationNotice:
+    """Commander-only: an unresolved hold (clarification/approval/event_data) has gone past the
+    configured escalation window with no answer. Delivered to every commander's own private chat
+    (bot/interactions.py's `notify_hold_escalation`, mirroring `notify_resource_unavailable_alert`
+    exactly) -- never to the original sender's own chat, which keeps getting only its own
+    reminder of the same original prompt."""
 
     event_id: str
     alert_text: str
@@ -281,6 +294,7 @@ BotNotificationKind = Literal[
     "job_failed",
     "event_data_hold",
     "resource_unavailable_alert",
+    "hold_escalation",
 ]
 
 
@@ -307,6 +321,7 @@ class BotNotification:
         | JobResult
         | FailureNotice
         | EventDataNeededNotice
+        | HoldEscalationNotice
     )
     reply_to_message_id: str | None = None
     # job_finished/job_failed only: the status/ack message to edit in place with the final

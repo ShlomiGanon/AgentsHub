@@ -565,7 +565,13 @@ class _HumanReadableFormatter(logging.Formatter):
         message = renderer(fields, record)
 
         time_str = self.formatTime(record, "%H:%M:%S")
-        return f"[{time_str}] {record.levelname:<5} {trace_display}  {message}"
+        s = f"[{time_str}] {record.levelname:<5} {trace_display}  {message}"
+        if record.exc_info:
+            if not record.exc_text:
+                record.exc_text = self.formatException(record.exc_info)
+            if record.exc_text:
+                s = s + "\n" + record.exc_text
+        return s
 
 
 class _PersistenceLogHandler(logging.Handler):

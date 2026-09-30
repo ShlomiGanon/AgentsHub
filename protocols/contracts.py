@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Callable, Literal
 
+from agents import InvocationPolicy
+
 
 EVENT_DATA_FIELDS = (
     "classification",
@@ -54,6 +56,16 @@ class Protocol:
     # judgment call, and there is no specialist-agent reasoning left to synthesize an insight
     # about.
     needs_insight: bool = True
+    # Item 9: eligible for the direct lane (orchestrator/direct_lane.py) -- a simple,
+    # low-stakes, single-agent action (attendance/absence, movement, camera/equipment status,
+    # shift status, a read-only lookup) whose tool(s) may be called directly from one cheap
+    # classification call, skipping this protocol's own normal formulate_tasks/agent-step/
+    # insight pipeline entirely when the message turns out to actually be that simple. Never
+    # widens what a protocol allows -- the direct lane still only ever calls tools already in
+    # this protocol's own approved_tools, and still falls back to the full pipeline (this same
+    # protocol, run normally) whenever the message carries a threat, a risk indicator, or is
+    # missing a required parameter.
+    direct_lane_eligible: bool = False
     # A profile-supplied callable: event dict -> tuple[Step, ...], each already fully bound
     # (concrete direct_tool_kwargs resolved from the event's own extracted fields) or carrying
     # required_event_fields naming what's still missing. When set, orchestrator/flows.py's
@@ -81,6 +93,12 @@ class Step:
     kind: Literal["agent", "direct_tool"] = "agent"
     direct_tool_name: str = ""
     direct_tool_kwargs: dict = field(default_factory=dict)
+    # Set by a direct_tool_binder for an "agent"-kind step whose task is a narrow, low-stakes
+    # judgment call (e.g. report_team_movement's incident-linking decision) where the model's
+    # own default invocation cost is unnecessary -- executed exactly like any other agent step,
+    # just with a cheaper/faster invocation (see protocols/executor.py's own call site). None
+    # (the default) keeps the agent's own default invocation policy, unchanged.
+    invocation_policy: "InvocationPolicy | None" = None
 
 
 class ProtocolEditError(Exception):
@@ -109,6 +127,7 @@ class StepOutcome:
     status: str = "succeeded"
     missing_event_fields: tuple[str, ...] = ()
     resource_unavailable: "ResourceUnavailable | None" = None
+    selection_required: bool = False
 
 
 @dataclass(frozen=True)

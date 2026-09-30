@@ -44,6 +44,43 @@ def test_reset_removes_only_declared_databases_and_known_sidecars(tmp_path):
     assert unrelated.exists()
 
 
+def test_run_stops_children_when_start_fails(monkeypatch):
+    calls = []
+    monkeypatch.setattr(run_stack, "write_status", lambda **kwargs: None)
+
+    class Boom(run_stack.StackSupervisor):
+        def start(self):
+            calls.append("start")
+            raise RuntimeError("simulation-mode bot exited during startup")
+
+        def stop(self):
+            calls.append("stop")
+
+        def _status(self, state):
+            pass
+
+    supervisor = Boom("profiles.response_team")
+    with pytest.raises(RuntimeError, match="simulation-mode bot"):
+        supervisor.run()
+
+    assert calls == ["start", "stop"]
+
+
+def test_start_refuses_an_already_occupied_api_port(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        run_stack,
+        "available_profile",
+        lambda module: SimpleNamespace(profile_name="Demo", api_port=8907, simulator_port=None),
+    )
+    monkeypatch.setattr(run_stack, "_port_is_open", lambda host, port: True)
+
+    supervisor = run_stack.StackSupervisor("profiles.response_team")
+    with pytest.raises(RuntimeError, match="already in use"):
+        supervisor.start()
+
+
 def test_reset_refuses_a_declared_non_database_path(tmp_path):
     module = ModuleType("profiles.test_unsafe_reset_profile")
     module.DB_PATH = str(tmp_path)

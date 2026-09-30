@@ -254,6 +254,33 @@ def test_context_manager_releases_on_exit(tmp_path):
     assert not lock_path.exists()
 
 
+def test_stale_lock_from_a_dead_pid_is_reclaimed(tmp_path, monkeypatch):
+    import os
+
+    from bot import background_services
+
+    lock_path = tmp_path / "deployment.db.bot.lock"
+    lock_path.write_text("999999", encoding="utf-8")
+    monkeypatch.setattr(background_services, "_pid_is_running", lambda pid: False)
+
+    lock = SingleInstanceLock(lock_path)
+    lock.acquire()
+
+    assert lock_path.read_text(encoding="utf-8") == str(os.getpid())
+    lock.release()
+
+
+def test_lock_held_by_a_live_pid_is_still_refused(tmp_path, monkeypatch):
+    from bot import background_services
+
+    lock_path = tmp_path / "deployment.db.bot.lock"
+    lock_path.write_text("1", encoding="utf-8")
+    monkeypatch.setattr(background_services, "_pid_is_running", lambda pid: True)
+
+    with pytest.raises(AlreadyRunningError):
+        SingleInstanceLock(lock_path).acquire()
+
+
 import asyncio
 
 from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
