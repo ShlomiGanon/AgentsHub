@@ -1,6 +1,7 @@
 """Immutable agent descriptors and tool declaration primitives."""
 
 from dataclasses import dataclass
+import json
 from typing import Any, Callable, Literal
 
 
@@ -86,12 +87,12 @@ class AgentDescriptor:
     api_key: str | None = None
 
 
-UNCLEAR_TASK_PREFIX = "UNCLEAR_TASK:"
 UNCLEAR_TASK_PROMPT_INSTRUCTION = (
-    f'If the task you are given is unclear, ambiguous, or you lack what you need to act on it, '
-    f'respond with exactly one line starting with "{UNCLEAR_TASK_PREFIX}" followed by a specific '
-    f"statement of what is missing — which parameter, which context, which ambiguity. "
-    f"Do not attempt a partial or guessed answer in that case."
+    "If the task you are given is unclear, ambiguous, or you lack what you need to act on it, "
+    'respond with exactly one JSON object {"status": "unclear_task", "text": "<what is missing>"} '
+    "naming the specific parameter, context, or ambiguity. "
+    "Do not attempt a partial or guessed answer in that case. "
+    'Otherwise respond with the answer as plain text, or {"status": "success", "text": "<answer>"}.'
 )
 
 
@@ -99,17 +100,36 @@ UNCLEAR_TASK_PROMPT_INSTRUCTION = (
 class AgentResult:
     status: Literal["success", "unclear_task"]
     text: str
+    selection_required: bool = False
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    """Structured return from a Python tool method. Callers check `ok` / `selection_required`, never the text."""
+
+    text: str
+    ok: bool = True
+    selection_required: bool = False
+
+    def __str__(self) -> str:
+        return self.text
+
+
+def failed_tool_result(text: str) -> ToolResult:
+    return ToolResult(text=text, ok=False)
 
 
 def parse_agent_output(raw_text: str) -> AgentResult:
-    # The prompt instruction asks for the sentinel on its own line, but a model does not always
-    # put it first -- e.g. after preamble reasoning, or on the last line. Scan every line rather
-    # than only the start of the whole text, so the real reason still reaches the reply instead
-    # of being silently missed and reported as "reason unknown".
-    for line in raw_text.splitlines():
-        candidate = line.strip()
-        if candidate.startswith(UNCLEAR_TASK_PREFIX):
-            return AgentResult(status="unclear_task", text=candidate[len(UNCLEAR_TASK_PREFIX):].strip())
+    stripped = raw_text.strip()
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        status = payload.get("status")
+        text = payload.get("text")
+        if status in {"success", "unclear_task"} and isinstance(text, str):
+            return AgentResult(status=status, text=text)
     return AgentResult(status="success", text=raw_text)
 
 

@@ -30,7 +30,7 @@ import logging
 
 from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
 from auth.permissions import InvalidFullNameError, normalize_full_name
-from agents import authenticated_request_identity, set_invocation_deadline
+from agents import AgentInvocationError, authenticated_request_identity, set_invocation_deadline
 
 from orchestrator.flows import (
     GroupNotRegisteredError,
@@ -615,11 +615,15 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             )
         except OrchestrationParseError as exc:
             raise RunFailureError(str(exc)) from exc
-        except Exception as exc:
+        except AgentInvocationError as exc:
             # A report must never vanish just because the model that classifies its intent is
             # unavailable -- unlike a parse failure (the model answered, just unusably), this is
             # a model-invocation failure with no event created yet. Persist the raw text now,
-            # with its outcome already recorded as failed, so it survives for later triage/retry
+            # with its outcome already recorded as failed, so it survives for later triage/retry.
+            # Scoped to AgentInvocationError specifically (timeout/model/output-parse/warmup/
+            # tool-construction -- every real "model unavailable" shape), not a bare Exception:
+            # an unexpected bug elsewhere must still fail loudly (a real 5xx), never be quietly
+            # reinterpreted as "the model was unavailable" and smoothed into a handled 422.
             # instead of being lost with no trace (it would otherwise never reach begin_report,
             # which every other path already calls before running any model on the report).
             deadline_at = storage_timestamp(datetime.now(timezone.utc) + timedelta(seconds=optimization_policy.job_deadline_seconds))

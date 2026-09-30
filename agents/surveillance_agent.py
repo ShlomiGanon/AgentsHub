@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from agents.contracts import AgentResult, InvocationPolicy
+from agents.contracts import AgentResult, InvocationPolicy, ToolResult, failed_tool_result
 from agents.runtime import Agent, make_exact_result_capture, tool
 from persistence import (
     SurveillancePersistenceError,
@@ -71,6 +71,12 @@ _RECALL_TARGET_SENTINELS = frozenset(
 )
 
 
+# A read-only status turn needs room for the tool result and a short operational
+# summary. 220 tokens truncated live answers; keep this budget in one place so
+# tests assert the current value instead of a stale literal.
+READ_ONLY_DEFAULT_MAX_OUTPUT_TOKENS = 600
+
+
 class SurveillanceAgent(Agent):
     """Specialist agent responsible for cameras, drone fleet operations, and tactical aerial dispatch."""
 
@@ -120,7 +126,9 @@ class SurveillanceAgent(Agent):
         if invocation_policy is None:
             # A tool turn and its final operational summary must both fit; 220 tokens
             # truncated a live read-only answer before the Main Agent composed it.
-            invocation_policy = InvocationPolicy(max_output_tokens=600, reasoning_effort="none")
+            invocation_policy = InvocationPolicy(
+                max_output_tokens=READ_ONLY_DEFAULT_MAX_OUTPUT_TOKENS, reasoning_effort="none"
+            )
         return _recall_capture.run(super().process, text, allowed_tools, invocation_policy=invocation_policy)
 
     def _recall(self, drone_or_mission_id: str) -> dict:
@@ -231,9 +239,9 @@ class SurveillanceAgent(Agent):
         dispatched_by: str = "commander",
     ) -> str:
         if not target_area.strip():
-            return "Clarification required: target_area must be specified to dispatch a drone."
+            return failed_tool_result("Clarification required: target_area must be specified to dispatch a drone.")
         if not incident_description.strip():
-            return "Clarification required: incident_description is required for drone mission dispatch."
+            return failed_tool_result("Clarification required: incident_description is required for drone mission dispatch.")
 
         _SENTINEL_IDS = {"auto", "none", "null", "n/a", "-", "automatic", "any", "best", "default"}
         cleaned_drone_id = specific_drone_id.strip()
@@ -310,11 +318,13 @@ class SurveillanceAgent(Agent):
             return output
         if status in {"selection_required", "not_found"}:
             heading = (
-                "DRONE_SELECTION_REQUIRED:\nMultiple drones are currently on active missions. "
+                "Multiple drones are currently on active missions. "
                 "Specify one Drone ID, callsign, or Mission ID:"
                 if status == "selection_required"
-                else f"DRONE_SELECTION_REQUIRED:\nNo active drone matched '{result.get('requested', '')}'. "
-                "Choose one of these active drones:"
+                else (
+                    f"No active drone matched '{result.get('requested', '')}'. "
+                    "Choose one of these active drones:"
+                )
             )
             lines = [heading]
             for mission in result["missions"]:
@@ -324,8 +334,8 @@ class SurveillanceAgent(Agent):
                 )
             lines.append("No drone state was changed.")
             output = "\n".join(lines)
-            _capture_recall_result(output)
-            return output
+            _recall_capture.capture(output, selection_required=True)
+            return ToolResult(text=output, selection_required=True)
 
         mission = result["mission"]
         drone = result["drone"]
@@ -391,9 +401,9 @@ class SurveillanceAgent(Agent):
     )
     def update_camera_observation(self, camera_id: str, new_observation: str, status: str = "") -> str:
         if not camera_id.strip():
-            return "Clarification required: camera_id is required."
+            return failed_tool_result("Clarification required: camera_id is required.")
         if not new_observation.strip():
-            return "Clarification required: new_observation must not be empty."
+            return failed_tool_result("Clarification required: new_observation must not be empty.")
 
         try:
             updated = self.surveillance_store.update_camera_feed(

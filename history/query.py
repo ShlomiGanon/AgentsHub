@@ -435,7 +435,7 @@ class HistoryQueryService:
         sources = self._sources_for_events(events)
 
         if not events:
-            raise HistoryQueryError("no stored events match the requested history filters")
+            raise HistoryQueryError("no stored events match the requested history filters", empty=True)
 
         views = [_build_semantic_event_view(event) for event in events]
 
@@ -581,7 +581,7 @@ class HistoryQueryService:
         )
         events = self._persistence.search_events(criteria)
         if not events:
-            raise HistoryQueryError("no events have been recorded yet")
+            raise HistoryQueryError("no events have been recorded yet", empty=True)
 
         most_recent = events[0]
         view = _build_semantic_event_view(most_recent)

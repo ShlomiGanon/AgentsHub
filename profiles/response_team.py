@@ -40,6 +40,7 @@ from agents import (
     NeighboringForcesAgent as _NeighboringForcesAgentBase,
     SurveillanceAgent,
     TeamStatusAgent,
+    failed_tool_result,
     get_authenticated_request_identity,
     tool,
 )
@@ -278,18 +279,18 @@ class ResponseTeamRosterAgent(TeamStatusAgent):
     def report_team_movement(self, area: str = "", member_identity: str = "") -> str:
         identity = (member_identity or get_authenticated_request_identity() or "").strip()
         if not identity:
-            return "The movement report was not stored: authenticated requester identity is unavailable."
+            return failed_tool_result("The movement report was not stored: authenticated requester identity is unavailable.")
         if not area.strip():
-            return "Clarification required: area is required."
+            return failed_tool_result("Clarification required: area is required.")
 
         approved_members = self.status_store.list_members(approved_only=True)
         if not any(member["telegram_identity"] == identity for member in approved_members):
-            return "The movement report was not stored: requester is not an approved roster member."
+            return failed_tool_result("The movement report was not stored: requester is not an approved roster member.")
 
         try:
             updated = self.status_store.set_current_area(identity, area.strip())
         except TeamStatusPersistenceError as exc:
-            return f"The movement report was not stored: {exc}"
+            return failed_tool_result(f"The movement report was not stored: {exc}")
 
         return f"{updated['full_name']}'s current area was recorded as '{updated['current_area']}'."
 
@@ -310,7 +311,7 @@ class ResponseTeamRosterAgent(TeamStatusAgent):
         if not identity:
             return "Not linked: authenticated requester identity is unavailable."
         if not area.strip():
-            return "Clarification required: area is required."
+            return failed_tool_result("Clarification required: area is required.")
 
         approved_members = self.status_store.list_members(approved_only=True)
         if not any(member["telegram_identity"] == identity for member in approved_members):
@@ -350,7 +351,7 @@ class ResponseTeamRosterAgent(TeamStatusAgent):
     )
     def list_incident_responders(self, area: str = "") -> str:
         if not area.strip():
-            return "Clarification required: area is required."
+            return failed_tool_result("Clarification required: area is required.")
 
         event, clarification = self.incident_store.resolve_single_candidate(area.strip())
         if event is None:
@@ -401,9 +402,9 @@ class ResponseTeamSurveillanceAgent(SurveillanceAgent):
     )
     def update_camera_status(self, camera_id: str, observation: str, status: str = "") -> str:
         if not camera_id.strip():
-            return "Clarification required: camera_id is required."
+            return failed_tool_result("Clarification required: camera_id is required.")
         if not observation.strip():
-            return "Clarification required: observation is required."
+            return failed_tool_result("Clarification required: observation is required.")
         try:
             updated = self.surveillance_store.update_camera_feed(
                 camera_id=camera_id.strip(),
@@ -411,7 +412,7 @@ class ResponseTeamSurveillanceAgent(SurveillanceAgent):
                 status=status.strip().lower() or None,
             )
         except SurveillancePersistenceError as exc:
-            return f"Camera status update failed: {exc}"
+            return failed_tool_result(f"Camera status update failed: {exc}")
         return (
             f"Camera '{updated['camera_id']}' status recorded.\n"
             f"- Status: {updated['status'].upper()}\n"

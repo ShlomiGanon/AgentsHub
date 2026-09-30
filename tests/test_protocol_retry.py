@@ -1,7 +1,7 @@
 import pytest
 
 from agents.errors import AgentModelError
-from agents.results import AgentResult
+from agents.results import AgentResult, ToolResult
 from agents.runtime import ToolInfo
 from protocols.model import Step
 from protocols.executor import execute_step_with_retry
@@ -323,14 +323,23 @@ def test_direct_tool_step_never_calls_process_even_when_it_would_raise():
     assert outcome.succeeded  # would have raised AssertionError above if .process() were ever called
 
 
-def test_direct_tool_step_fails_on_a_known_failure_marker_in_the_tool_result():
-    agent = _DirectToolAgent(tool_result="Clarification required: specify whether available or unavailable.")
+def test_direct_tool_step_fails_when_the_tool_returns_a_failed_result():
+    agent = _DirectToolAgent(tool_result=ToolResult(text="specify whether available or unavailable.", ok=False))
 
     outcome = execute_step_with_retry(agent, _direct_tool_step({}), _FakeSettings(2))
 
     assert not outcome.succeeded
     assert outcome.status == "failed"
-    assert "Clarification required" in outcome.failure_reason
+    assert "specify whether available or unavailable" in outcome.failure_reason
+
+
+def test_direct_tool_step_does_not_fail_by_inspecting_successful_tool_wording():
+    agent = _DirectToolAgent(tool_result="Clarification required: this is just the recorded message.")
+
+    outcome = execute_step_with_retry(agent, _direct_tool_step({}), _FakeSettings(2))
+
+    assert outcome.succeeded
+    assert outcome.result_text == "Clarification required: this is just the recorded message."
 
 
 def test_direct_tool_step_fails_when_the_tool_method_raises():
@@ -345,7 +354,7 @@ def test_direct_tool_step_fails_when_the_tool_method_raises():
 def test_direct_tool_step_has_no_retry_loop():
     # A single call, attempt_count=1, regardless of the configured retry limit -- there is no
     # crewai loop here to retry within.
-    agent = _DirectToolAgent(tool_result="Clarification required: area is required.")
+    agent = _DirectToolAgent(tool_result=ToolResult(text="area is required.", ok=False))
 
     outcome = execute_step_with_retry(agent, _direct_tool_step({}), _FakeSettings(5))
 

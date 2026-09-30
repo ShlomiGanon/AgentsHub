@@ -12,6 +12,7 @@ from tools import get_trace_id, stage_context, trace_context
 
 logger = logging.getLogger(__name__)
 _STOP = object()
+STOP_JOIN_TIMEOUT_SECONDS = 2.0
 
 
 class EventQueueFullError(Exception):
@@ -67,7 +68,16 @@ class SerialEventQueue:
 
     def stop(self) -> None:
         self._queue.put(_STOP)
-        self._worker.join()
+        self._worker.join(timeout=STOP_JOIN_TIMEOUT_SECONDS)
+        if self._worker.is_alive():
+            logger.warning(
+                "event queue worker still running after stop timeout",
+                extra={
+                    "event": "queue_stop_timeout",
+                    "queue_name": type(self).__name__,
+                    "timeout_seconds": STOP_JOIN_TIMEOUT_SECONDS,
+                },
+            )
 
     def _run(self) -> None:
         while True:
@@ -176,8 +186,19 @@ class PolicyAwareEventQueue:
     def stop(self) -> None:
         for _worker in self._workers:
             self._queue.put((10**9, next(self._sequence), QueueReservation(0, True), _STOP))
+        deadline = time.monotonic() + STOP_JOIN_TIMEOUT_SECONDS
         for worker in self._workers:
-            worker.join()
+            remaining = deadline - time.monotonic()
+            worker.join(timeout=max(0.0, remaining))
+        if any(worker.is_alive() for worker in self._workers):
+            logger.warning(
+                "event queue worker still running after stop timeout",
+                extra={
+                    "event": "queue_stop_timeout",
+                    "queue_name": type(self).__name__,
+                    "timeout_seconds": STOP_JOIN_TIMEOUT_SECONDS,
+                },
+            )
 
     def _locks_for(self, keys: tuple[str, ...]) -> list[threading.Lock]:
         with self._resource_lock_guard:

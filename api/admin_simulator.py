@@ -609,7 +609,7 @@ SIMULATOR_BODY = """
     <div class="sim-actions">
       <button type="button" class="btn btn-console-primary" id="send-next" disabled>{{ t('admin.simulator.send_next') }}</button>
       <button type="button" class="btn btn-console-danger" id="reset-view" disabled>{{ t('admin.simulator.reset_view') }}</button>
-      <button type="button" class="btn btn-console" id="toggle-bts" title="פתח גרף ביצוע ותקשורת סוכנים בזמן אמת בחלון נפרד">🔍 {{ t('admin.simulator.bts.toggle_btn') }} (חלון נפרד) ↗</button>
+      <button type="button" class="btn btn-console" id="toggle-bts" title="{{ t('admin.simulator.bts.toggle_title') }}">{{ t('admin.simulator.bts.toggle_btn') }} ({{ t('admin.simulator.bts.separate_window') }})</button>
     </div>
     <div class="sim-actions">
       <label class="form-label-console" for="profile-simulation-select">{{ t('admin.simulator.profile_simulations') }}</label>
@@ -662,8 +662,8 @@ SIMULATOR_BODY = """
     <div class="d-flex justify-content-between align-items-center">
       <div class="d-flex align-items-center gap-2">
         <span class="bts-header-title">🌐 Live Agent Execution Graph</span>
-        <span id="bts-status-badge" class="bts-badge bts-badge-pending">○ ממתין</span>
-        <span id="bts-active-badge" class="bts-badge-active-count">⚡ 0 בקשות פעילות</span>
+        <span id="bts-status-badge" class="bts-badge bts-badge-pending">{{ t('admin.simulator.bts.waiting_badge') }}</span>
+        <span id="bts-active-badge" class="bts-badge-active-count">{{ t('admin.simulator.bts.active_requests', count=0) }}</span>
       </div>
       <button type="button" id="bts-close-btn" class="btn-console-close" title="{{ t('admin.simulator.bts.close') }}">✕</button>
     </div>
@@ -686,22 +686,22 @@ SIMULATOR_BODY = """
     <div class="bts-kpi-card">
       <div class="bts-kpi-label">⏱ {{ t('admin.simulator.bts.metric_wall_clock') }}</div>
       <div id="bts-metric-wall" class="bts-kpi-val">—</div>
-      <div id="bts-metric-breakdown" class="bts-kpi-sub">מודל: — | כלים: —</div>
+      <div id="bts-metric-breakdown" class="bts-kpi-sub">{{ t('admin.simulator.bts.model_tools_breakdown', model='—', tools='—') }}</div>
     </div>
     <div class="bts-kpi-card">
       <div class="bts-kpi-label">🧠 {{ t('admin.simulator.bts.metric_llm_calls') }}</div>
       <div id="bts-metric-llm" class="bts-kpi-val">—</div>
-      <div id="bts-metric-retries" class="bts-kpi-sub">ניסיונות חוזרים: 0</div>
+      <div id="bts-metric-retries" class="bts-kpi-sub">{{ t('admin.simulator.bts.retries_count', count=0) }}</div>
     </div>
     <div class="bts-kpi-card">
       <div class="bts-kpi-label">📊 {{ t('admin.simulator.bts.metric_tokens') }}</div>
       <div id="bts-metric-tokens" class="bts-kpi-val">—</div>
-      <div id="bts-metric-tokens-sub" class="bts-kpi-sub">קלט/פלט/מטמון</div>
+      <div id="bts-metric-tokens-sub" class="bts-kpi-sub">{{ t('admin.simulator.bts.tokens_io_cache_label') }}</div>
     </div>
     <div class="bts-kpi-card">
-      <div class="bts-kpi-label">👥 סוכנים וכלים שהופעלו</div>
+      <div class="bts-kpi-label">{{ t('admin.simulator.bts.agents_tools_metric') }}</div>
       <div id="bts-metric-agents" class="bts-kpi-val">—</div>
-      <div id="bts-metric-agents-sub" class="bts-kpi-sub">ענפים במקביל: 0</div>
+      <div id="bts-metric-agents-sub" class="bts-kpi-sub">{{ t('admin.simulator.bts.parallel_branches', count=0) }}</div>
     </div>
   </div>
 
@@ -709,18 +709,18 @@ SIMULATOR_BODY = """
   <div class="bts-viewport-container" id="bts-viewport">
     <!-- Graph Legend -->
     <div class="bts-legend-bar">
-      <div class="bts-legend-item"><span class="bts-legend-dot" style="background:#38bdf8;"></span> סוכן ראשי</div>
-      <div class="bts-legend-item"><span class="bts-legend-dot" style="background:#a855f7;"></span> מומחה</div>
-      <div class="bts-legend-item"><span class="bts-legend-dot" style="background:#c084fc; box-shadow:0 0 6px #c084fc;"></span> ⚡ ריצה במקביל</div>
-      <div class="bts-legend-item"><span class="bts-legend-dot" style="background:#10b981;"></span> כלי תפעולי</div>
-      <div class="bts-legend-item"><span class="bts-legend-dot" style="background:#f59e0b;"></span> מסד נתונים</div>
+      <div class="bts-legend-item"><span class="bts-legend-dot" style="background:#38bdf8;"></span> {{ t('admin.simulator.bts.legend_main') }}</div>
+      <div class="bts-legend-item"><span class="bts-legend-dot" style="background:#a855f7;"></span> {{ t('admin.simulator.bts.legend_specialist') }}</div>
+      <div class="bts-legend-item"><span class="bts-legend-dot" style="background:#c084fc; box-shadow:0 0 6px #c084fc;"></span> {{ t('admin.simulator.bts.legend_parallel') }}</div>
+      <div class="bts-legend-item"><span class="bts-legend-dot" style="background:#10b981;"></span> {{ t('admin.simulator.bts.legend_tool') }}</div>
+      <div class="bts-legend-item"><span class="bts-legend-dot" style="background:#f59e0b;"></span> {{ t('admin.simulator.bts.legend_db') }}</div>
     </div>
 
     <!-- Floating Zoom/Pan Controls -->
     <div class="bts-graph-controls">
-      <button type="button" class="bts-ctrl-btn" id="bts-zoom-in" title="התקרב (+)">+</button>
-      <button type="button" class="bts-ctrl-btn" id="bts-zoom-out" title="התרחק (-)">−</button>
-      <button type="button" class="bts-ctrl-btn" id="bts-zoom-fit" title="איפוס מבט ומרכוז">⌖</button>
+      <button type="button" class="bts-ctrl-btn" id="bts-zoom-in" title="{{ t('admin.simulator.bts.zoom_in') }}">+</button>
+      <button type="button" class="bts-ctrl-btn" id="bts-zoom-out" title="{{ t('admin.simulator.bts.zoom_out') }}">−</button>
+      <button type="button" class="bts-ctrl-btn" id="bts-zoom-fit" title="{{ t('admin.simulator.bts.zoom_fit') }}">⌖</button>
     </div>
 
     <!-- SVG Graph -->
@@ -773,49 +773,49 @@ SIMULATOR_BODY = """
             <div id="bts-det-sub" style="font-size:10px; color:#94a3b8;">—</div>
           </div>
         </div>
-        <button type="button" id="bts-det-close" class="btn-console-close" title="סגור פרטים">✕</button>
+        <button type="button" id="bts-det-close" class="btn-console-close" title="{{ t('admin.simulator.bts.close_details') }}">✕</button>
       </div>
       <div class="bts-detail-body">
         <!-- Status & Metrics Section -->
         <div class="bts-detail-section">
-          <div class="bts-detail-sec-title">סטטוס ומדדים</div>
+          <div class="bts-detail-sec-title">{{ t('admin.simulator.bts.detail_status_metrics') }}</div>
           <div class="bts-detail-prop-row">
-            <span class="bts-detail-prop-label">סטטוס:</span>
+            <span class="bts-detail-prop-label">{{ t('admin.simulator.bts.detail_status') }}</span>
             <span id="bts-det-status" class="bts-badge bts-badge-pending">—</span>
           </div>
           <div class="bts-detail-prop-row">
-            <span class="bts-detail-prop-label">זמן ריצה:</span>
+            <span class="bts-detail-prop-label">{{ t('admin.simulator.bts.detail_runtime') }}</span>
             <span id="bts-det-dur" class="bts-detail-prop-val">—</span>
           </div>
           <div class="bts-detail-prop-row">
-            <span class="bts-detail-prop-label">הפעלות / קריאות:</span>
+            <span class="bts-detail-prop-label">{{ t('admin.simulator.bts.detail_calls') }}</span>
             <span id="bts-det-calls" class="bts-detail-prop-val">—</span>
           </div>
           <div class="bts-detail-prop-row">
-            <span class="bts-detail-prop-label">ביצוע במקביל:</span>
+            <span class="bts-detail-prop-label">{{ t('admin.simulator.bts.detail_parallel') }}</span>
             <span id="bts-det-parallel" class="bts-detail-prop-val">—</span>
           </div>
           <div id="bts-det-retries-row" class="bts-detail-prop-row" style="display:none;">
-            <span class="bts-detail-prop-label">ניסיונות חוזרים:</span>
+            <span class="bts-detail-prop-label">{{ t('admin.simulator.bts.detail_retries') }}</span>
             <span id="bts-det-retries" class="bts-detail-prop-val" style="color:#f87171;">0</span>
           </div>
         </div>
 
         <!-- Task / Directives Section -->
         <div class="bts-detail-section">
-          <div id="bts-det-task-title" class="bts-detail-sec-title">מה התבקש ממנו</div>
+          <div id="bts-det-task-title" class="bts-detail-sec-title">{{ t('admin.simulator.bts.detail_task_asked') }}</div>
           <div id="bts-det-task-content" style="color:#cbd5e1; white-space:pre-wrap; line-height:1.5;">—</div>
         </div>
 
         <!-- Tools / Side-Effects Section -->
         <div id="bts-det-tools-section" class="bts-detail-section">
-          <div class="bts-detail-sec-title">כלים ואימות תפעולי</div>
+          <div class="bts-detail-sec-title">{{ t('admin.simulator.bts.detail_tools_verify') }}</div>
           <div id="bts-det-tools-list" class="d-flex flex-column gap-2 mt-1"></div>
         </div>
 
         <!-- Error / Note Section (if present) -->
         <div id="bts-det-error-section" class="bts-detail-section" style="display:none; border-color:#ef4444; background:rgba(239,68,68,0.08);">
-          <div class="bts-detail-sec-title" style="color:#f87171;">פירוט שגיאה או עיכוב</div>
+          <div class="bts-detail-sec-title" style="color:#f87171;">{{ t('admin.simulator.bts.detail_error') }}</div>
           <div id="bts-det-error-content" style="color:#fca5a5;"></div>
         </div>
       </div>
@@ -1994,16 +1994,16 @@ SIMULATOR_BODY = """
     function renderEmpty() {
       renderHeader(null, 'pending');
       if (metricWall) metricWall.textContent = '—';
-      if (metricBreakdown) metricBreakdown.textContent = 'מודל: — | כלים: —';
+      if (metricBreakdown) metricBreakdown.textContent = t('bts.model_tools_breakdown', { model: '—', tools: '—' });
       if (metricLlm) metricLlm.textContent = '—';
-      if (metricRetries) metricRetries.textContent = 'ניסיונות חוזרים: 0';
+      if (metricRetries) metricRetries.textContent = t('bts.retries_count', { count: 0 });
       if (metricTokens) metricTokens.textContent = '—';
       if (metricTokensSub) metricTokensSub.textContent = t('bts.na');
       if (metricAgents) metricAgents.textContent = '—';
-      if (metricAgentsSub) metricAgentsSub.textContent = 'ענפים במקביל: 0';
+      if (metricAgentsSub) metricAgentsSub.textContent = t('bts.parallel_branches', { count: 0 });
       if (edgesLayer) edgesLayer.innerHTML = '';
       if (nodesLayer) {
-        nodesLayer.innerHTML = '<text x="500" y="240" fill="#64748b" font-size="14" text-anchor="middle" font-family="sans-serif">ממתין לבקשת סימולציה... שלח הודעה או בחר בקשה מרשימת ה-Traces</text>';
+        nodesLayer.innerHTML = '<text x="500" y="240" fill="#64748b" font-size="14" text-anchor="middle" font-family="sans-serif">' + t('bts.waiting_simulation') + '</text>';
       }
       hideNodeDetail();
     }
@@ -2079,7 +2079,7 @@ SIMULATOR_BODY = """
           return it.status === 'running' || it.status === 'processing';
         }).length;
         if (activeBadge) {
-          activeBadge.textContent = '⚡ ' + activeCount + ' ' + (activeCount === 1 ? 'בקשה פעילה' : 'בקשות פעילות');
+          activeBadge.textContent = t('bts.active_requests', { count: activeCount });
           activeBadge.style.display = activeCount > 0 ? 'inline-flex' : 'none';
         }
 
@@ -2117,22 +2117,22 @@ SIMULATOR_BODY = """
       }
       if (metricBreakdown) {
         if (!hasEvents) {
-          metricBreakdown.textContent = t('bts.no_trace_events') || 'אין נתוני מעקב עדיין';
+          metricBreakdown.textContent = t('bts.no_trace_events');
         } else {
           const mod = m.model_latency_ms ? (m.model_latency_ms.toLocaleString() + ' ' + t('bts.ms')) : '0';
           const tool = m.tools_duration_ms ? (m.tools_duration_ms.toLocaleString() + ' ' + t('bts.ms')) : '0';
-          metricBreakdown.textContent = 'מודל: ' + mod + ' | כלים: ' + tool;
+          metricBreakdown.textContent = t('bts.model_tools_breakdown', { model: mod, tools: tool });
         }
       }
       if (metricLlm) {
         if (!hasEvents) {
-          metricLlm.textContent = t('bts.no_trace_events') || 'אין נתוני מעקב עדיין';
+          metricLlm.textContent = t('bts.no_trace_events');
         } else {
-          metricLlm.textContent = (m.llm_call_count || 0) + ' קריאות ספק';
+          metricLlm.textContent = t('bts.llm_calls_count', { count: (m.llm_call_count || 0) });
         }
       }
       if (metricRetries) {
-        metricRetries.textContent = 'ניסיונות חוזרים: ' + (m.retries_count || 0);
+        metricRetries.textContent = t('bts.retries_count', { count: (m.retries_count || 0) });
       }
       if (metricTokens) {
         if (m.tokens && m.tokens.total) {
@@ -2143,7 +2143,11 @@ SIMULATOR_BODY = """
       }
       if (metricTokensSub) {
         if (m.tokens && m.tokens.total) {
-          metricTokensSub.textContent = 'קלט: ' + m.tokens.input.toLocaleString() + ' | פלט: ' + m.tokens.output.toLocaleString() + ' | מטמון: ' + m.tokens.cache.toLocaleString();
+          metricTokensSub.textContent = t('bts.tokens_io_cache', {
+            input: m.tokens.input.toLocaleString(),
+            output: m.tokens.output.toLocaleString(),
+            cache: m.tokens.cache.toLocaleString()
+          });
         } else {
           metricTokensSub.textContent = t('bts.na');
         }
@@ -2156,10 +2160,12 @@ SIMULATOR_BODY = """
       const parallelCount = (graphData.nodes || []).filter(function (n) { return n.type === 'specialist' && n.is_parallel; }).length;
 
       if (metricAgents) {
-        metricAgents.textContent = specialists.length + ' מומחים | ' + toolsCount + ' כלים';
+        metricAgents.textContent = t('bts.agents_tools_count', { specialists: specialists.length, tools: toolsCount });
       }
       if (metricAgentsSub) {
-        metricAgentsSub.textContent = 'ענפים במקביל: ' + parallelCount + (graphData.parallel_batches_count ? ' (' + graphData.parallel_batches_count + ' מחזורים)' : '');
+        metricAgentsSub.textContent = graphData.parallel_batches_count
+          ? t('bts.parallel_cycles', { count: parallelCount, cycles: graphData.parallel_batches_count })
+          : t('bts.parallel_branches', { count: parallelCount });
       }
 
       currentGraphData = graphData;
@@ -2185,7 +2191,7 @@ SIMULATOR_BODY = """
       const edges = graphData.edges || [];
 
       if (nodes.length === 0) {
-        nodesLayer.innerHTML = '<text x="500" y="240" fill="#64748b" font-size="14" text-anchor="middle" font-family="sans-serif">ממתין לבקשת סימולציה... שלח הודעה או בחר בקשה מרשימת ה-Traces</text>';
+        nodesLayer.innerHTML = '<text x="500" y="240" fill="#64748b" font-size="14" text-anchor="middle" font-family="sans-serif">' + t('bts.waiting_simulation') + '</text>';
         return;
       }
 
@@ -2320,7 +2326,7 @@ SIMULATOR_BODY = """
           txt.setAttribute('font-size', '10');
           txt.setAttribute('font-weight', '700');
           txt.setAttribute('font-family', 'sans-serif');
-          txt.textContent = '⚡ במקביל';
+          txt.textContent = t('bts.parallel_badge');
           badgeG.appendChild(txt);
 
           edgesLayer.appendChild(badgeG);
@@ -2435,7 +2441,7 @@ SIMULATOR_BODY = """
           pTxt.setAttribute('font-size', '9');
           pTxt.setAttribute('font-weight', '700');
           pTxt.setAttribute('font-family', 'sans-serif');
-          pTxt.textContent = '⚡ במקביל';
+          pTxt.textContent = t('bts.parallel_badge');
           parG.appendChild(pTxt);
           g.appendChild(parG);
         }
@@ -2452,13 +2458,13 @@ SIMULATOR_BODY = """
 
           let vColor = '#10b981';
           let vBg = 'rgba(16, 185, 129, 0.25)';
-          let vLabel = '✔ מאומת';
+          let vLabel = t('bts.verify_verified_short');
           if (node.verification === 'read_only') {
-            vColor = '#38bdf8'; vBg = 'rgba(56, 189, 248, 0.25)'; vLabel = 'ℹ קריאה';
+            vColor = '#38bdf8'; vBg = 'rgba(56, 189, 248, 0.25)'; vLabel = t('bts.verify_call');
           } else if (node.verification === 'unverified') {
-            vColor = '#f59e0b'; vBg = 'rgba(245, 158, 11, 0.25)'; vLabel = '⚠ ללא אימות';
+            vColor = '#f59e0b'; vBg = 'rgba(245, 158, 11, 0.25)'; vLabel = t('bts.verify_unverified_short');
           } else if (node.verification === 'failed') {
-            vColor = '#ef4444'; vBg = 'rgba(239, 68, 68, 0.25)'; vLabel = '✖ נכשל';
+            vColor = '#ef4444'; vBg = 'rgba(239, 68, 68, 0.25)'; vLabel = t('bts.node_failed');
           }
 
           vRect.setAttribute('fill', vBg);
@@ -2486,23 +2492,23 @@ SIMULATOR_BODY = """
         statText.setAttribute('font-size', '10');
         statText.setAttribute('font-family', 'sans-serif');
 
-        let statStr = '○ ממתין';
+        let statStr = t('bts.node_pending');
         let statFill = '#94a3b8';
 
         if (node.status === 'running') {
-          statStr = '⏳ פעיל...';
+          statStr = t('bts.node_running');
           statFill = '#38bdf8';
         } else if (node.status === 'success' || node.status === 'completed') {
-          statStr = '✔ הושלם' + (node.duration_ms ? ' (' + node.duration_ms + ' ms)' : '');
+          statStr = node.duration_ms ? t('bts.node_completed_ms', { ms: node.duration_ms }) : t('bts.node_completed');
           statFill = '#34d399';
         } else if (node.status === 'failed') {
-          statStr = '✖ נכשל';
+          statStr = t('bts.node_failed');
           statFill = '#f87171';
         } else if (node.status === 'retry') {
-          statStr = '🔄 ניסיון חוזר (' + (node.retries || 1) + ')';
+          statStr = t('bts.node_retry', { count: (node.retries || 1) });
           statFill = '#fbbf24';
         } else if (node.status === 'waiting') {
-          statStr = '⏸ ממתין להשהיה';
+          statStr = t('bts.node_waiting_hold');
           statFill = '#fbbf24';
         }
 
@@ -2541,29 +2547,29 @@ SIMULATOR_BODY = """
       if (detStatus) {
         if (node.status === 'running') {
           detStatus.className = 'bts-badge bts-badge-live';
-          detStatus.textContent = '⏳ פעיל כעת';
+          detStatus.textContent = t('bts.status_running_now');
         } else if (node.status === 'success' || node.status === 'completed') {
           detStatus.className = 'bts-badge bts-badge-completed';
-          detStatus.textContent = '✔ הושלם בהצלחה';
+          detStatus.textContent = t('bts.status_completed_ok');
         } else if (node.status === 'failed') {
           detStatus.className = 'bts-badge bts-badge-failed';
-          detStatus.textContent = '✖ נכשל';
+          detStatus.textContent = t('bts.node_failed');
         } else if (node.status === 'retry') {
           detStatus.className = 'bts-badge bts-badge-pending';
-          detStatus.textContent = '🔄 ניסיון חוזר (' + (node.retries || 1) + ')';
+          detStatus.textContent = t('bts.node_retry', { count: (node.retries || 1) });
         } else {
           detStatus.className = 'bts-badge bts-badge-pending';
-          detStatus.textContent = '○ ממתין';
+          detStatus.textContent = t('bts.node_pending');
         }
       }
 
       // Duration & Calls
       if (detDur) detDur.textContent = node.duration_ms ? (node.duration_ms + ' ' + t('bts.ms')) : t('bts.na');
-      if (detCalls) detCalls.textContent = (node.call_count || node.llm_calls || 1) + ' הפעלות';
+      if (detCalls) detCalls.textContent = t('bts.calls_count', { count: (node.call_count || node.llm_calls || 1) });
 
       // Parallel Status
       if (detParallel) {
-        detParallel.textContent = node.is_parallel ? '⚡ כן (בו-זמנית עם מומחים נוספים)' : 'לא (סדרתי)';
+        detParallel.textContent = node.is_parallel ? t('bts.parallel_yes') : t('bts.parallel_no');
         detParallel.style.color = node.is_parallel ? '#c084fc' : '#cbd5e1';
       }
 
@@ -2580,21 +2586,21 @@ SIMULATOR_BODY = """
       // Task / Directives
       if (detTaskTitle && detTaskContent) {
         if (node.type === 'main') {
-          detTaskTitle.textContent = 'כוונה ופרוטוקול שנבחרו';
-          detTaskContent.textContent = (node.intent || 'מעבד בקשה') + (node.protocol ? '\\nפרוטוקול: ' + node.protocol : '');
+          detTaskTitle.textContent = t('bts.task_intent_protocol');
+          detTaskContent.textContent = (node.intent || t('bts.processing_request')) + (node.protocol ? '\\n' + t('bts.protocol_line', { protocol: node.protocol }) : '');
         } else if (node.type === 'specialist') {
-          detTaskTitle.textContent = 'מה התבקש מהמומחה';
+          detTaskTitle.textContent = t('bts.task_specialist');
           if (Array.isArray(node.tasks) && node.tasks.length > 0) {
             detTaskContent.textContent = node.tasks.join('\\n\\n');
           } else {
-            detTaskContent.textContent = 'ביצוע משימת מומחה במסגרת הפרוטוקול.';
+            detTaskContent.textContent = t('bts.task_specialist_default');
           }
         } else if (node.type === 'tool') {
-          detTaskTitle.textContent = 'מטרת הפעלת הכלי';
-          detTaskContent.textContent = node.summary || ('הפעלת ' + (node.label || 'כלי'));
+          detTaskTitle.textContent = t('bts.task_tool');
+          detTaskContent.textContent = node.summary || t('bts.invoking_label', { label: (node.label || t('bts.legend_tool')) });
         } else if (node.type === 'persistence') {
-          detTaskTitle.textContent = 'פעולת שמירה ואימות';
-          detTaskContent.textContent = node.details || 'שמירה ב-SQLite ואימות מצב תפעולי.';
+          detTaskTitle.textContent = t('bts.task_persist');
+          detTaskContent.textContent = node.details || t('bts.persist_default');
         }
       }
 
@@ -2633,13 +2639,13 @@ SIMULATOR_BODY = """
             vTag.className = 'bts-vtag bts-vtag-' + vKind;
 
             if (vKind === 'verified') {
-              vTag.textContent = '✔ מאומת (ראיה מפורשת)';
+              vTag.textContent = t('bts.verify_verified_evidence');
             } else if (vKind === 'read_only') {
-              vTag.textContent = 'ℹ קריאה בלבד (ללא שינוי מצב)';
+              vTag.textContent = t('bts.verify_read_only_state');
             } else if (vKind === 'unverified') {
-              vTag.textContent = '⚠ ללא אימות (בוצע ללא בדיקה)';
+              vTag.textContent = t('bts.verify_unverified');
             } else if (vKind === 'failed') {
-              vTag.textContent = '✖ נכשל';
+              vTag.textContent = t('bts.node_failed');
             } else {
               vTag.textContent = vKind;
             }
@@ -2665,7 +2671,7 @@ SIMULATOR_BODY = """
       if (detErrorSection && detErrorContent) {
         if (node.status === 'failed' || (node.outcome_reason && node.is_terminal)) {
           detErrorSection.style.display = 'block';
-          detErrorContent.textContent = node.outcome_reason || 'הפעולה נכשלה או נתקלה בחריגה במהלך העיבוד.';
+          detErrorContent.textContent = node.outcome_reason || t('bts.error_default');
         } else {
           detErrorSection.style.display = 'none';
         }

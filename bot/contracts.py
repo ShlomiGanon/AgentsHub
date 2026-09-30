@@ -154,6 +154,7 @@ class JobResult:
     # orchestrator.report_composer) — None when rich reporting is disabled, in which case the
     # bot falls back to format_job_result's fixed-template rendering.
     report_text: str | None = None
+    selection_required: bool = False
 
 
 @dataclass(frozen=True)

@@ -70,7 +70,8 @@ def test_an_unknown_force_kind_asks_for_clarification_and_records_nothing(tmp_pa
 
     result = agent.dispatch_neighboring_force(kind="bulldozer", target_area="chemical_plant")
 
-    assert "Clarification required" in result
+    assert result.ok is False
+    assert "Clarification required" in result.text
     assert agent.dispatch_store.list_dispatches() == []
 
 

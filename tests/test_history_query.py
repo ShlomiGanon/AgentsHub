@@ -215,6 +215,23 @@ def test_answer_most_recent_event_raises_a_clean_error_when_nothing_has_been_rec
             assert False, "expected HistoryQueryError"
         except HistoryQueryError as exc:
             assert "no events" in str(exc)
+            assert exc.empty is True
+    finally:
+        store.close()
+
+
+def test_query_spec_marks_empty_when_nothing_matches(tmp_path):
+    from history.contracts import HistoryQueryError, HistoryQuerySpec
+
+    store = open_persistence(str(tmp_path / "query-spec-empty.db"))
+    try:
+        service = HistoryQueryService(store, FakeHistoryAgent())
+
+        try:
+            service.query_spec("any fires?", HistoryQuerySpec(operation="list"))
+            assert False, "expected HistoryQueryError"
+        except HistoryQueryError as exc:
+            assert exc.empty is True
     finally:
         store.close()
 

@@ -7,8 +7,7 @@ from typing import TYPE_CHECKING, Callable
 
 from flask import Blueprint, jsonify, request
 
-from tools import is_valid_trace_id
-from tools.behind_the_scenes import aggregate_trace_data
+from tools import aggregate_trace_data, is_valid_trace_id
 
 if TYPE_CHECKING:
     from api.app import ApiContext

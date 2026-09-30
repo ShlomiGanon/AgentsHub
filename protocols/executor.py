@@ -9,8 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from typing import TYPE_CHECKING, Callable
 
-from agents import AgentInvocationError, is_retryable_invocation_error
-from agents.invocation_context import last_finished_invocation_id, record_finished_invocation_id
+from agents import AgentInvocationError, ToolResult, is_retryable_invocation_error
+from agents import last_finished_invocation_id, record_finished_invocation_id
 from protocols.contracts import ProtocolRunResult, ResourceUnavailable, Step, StepOutcome
 from tools import get_trace_id, stage_context
 
@@ -43,18 +43,10 @@ def _can_retry(step: Step, agent: Agent) -> bool:
     return True
 
 
-# Known failure-reporting conventions shared across every direct-callable tool method today
-# (agents/team_status_agent.py, profiles/response_team.py's ResponseTeamRosterAgent/
-# ResponseTeamSurveillanceAgent) — a plain, human-readable string return, never a structured
-# status object. A direct_tool step has no specialist-agent LLM turn to judge its own result,
-# so this substring check is what stands in for that judgment (deliberately conservative:
-# false negatives here just fall through to a normal "succeeded" reading, which matches how a
-# specialist agent would read an ambiguous-but-not-explicitly-failed tool result today).
-_DIRECT_TOOL_FAILURE_MARKERS = ("Clarification required:", "was not stored:", "update failed:")
-
-
-def _direct_tool_call_failed(result_text: str) -> bool:
-    return any(marker in result_text for marker in _DIRECT_TOOL_FAILURE_MARKERS)
+def _as_tool_result(raw: object) -> ToolResult:
+    if isinstance(raw, ToolResult):
+        return raw
+    return ToolResult(text="" if raw is None else str(raw))
 
 
 def _take_resource_unavailable_signal(agent: Agent) -> "tuple[str, str, str] | None":
@@ -85,7 +77,7 @@ def _execute_direct_tool_step(agent: Agent, step: Step) -> StepOutcome:
     _take_resource_unavailable_signal(agent)
     try:
         tool_method = getattr(agent, step.direct_tool_name)
-        result_text = tool_method(**step.direct_tool_kwargs)
+        result = _as_tool_result(tool_method(**step.direct_tool_kwargs))
     except Exception as exc:
         logger.info(
             "direct tool step raised",
@@ -99,12 +91,15 @@ def _execute_direct_tool_step(agent: Agent, step: Step) -> StepOutcome:
 
     signal = _take_resource_unavailable_signal(agent)
     resource_unavailable = ResourceUnavailable(*signal) if signal is not None else None
-    if _direct_tool_call_failed(result_text):
+    if not result.ok:
         return StepOutcome(
-            step=step, result_text=result_text, attempt_count=1, succeeded=False, failure_reason=result_text,
+            step=step, result_text=result.text, attempt_count=1, succeeded=False, failure_reason=result.text,
             status="failed", resource_unavailable=resource_unavailable,
         )
-    return StepOutcome(step=step, result_text=result_text, attempt_count=1, succeeded=True, resource_unavailable=resource_unavailable)
+    return StepOutcome(
+        step=step, result_text=result.text, attempt_count=1, succeeded=True,
+        resource_unavailable=resource_unavailable, selection_required=result.selection_required,
+    )
 
 
 def execute_step_with_retry(
@@ -194,6 +189,7 @@ def execute_step_with_retry(
         return StepOutcome(
             step=step, result_text=agent_result.text, attempt_count=attempts, succeeded=True,
             resource_unavailable=resource_unavailable,
+            selection_required=agent_result.selection_required,
         )
 
 

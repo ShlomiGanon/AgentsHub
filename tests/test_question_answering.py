@@ -1,20 +1,26 @@
 """Question routing and answer composition behavior."""
 
+import threading
+import time
+
 import pytest
 
 from agents.history import HistoryAgent
 from agents.runtime import build_agent_registry
 from agents.runtime import ToolInfo
+from messages import get_catalog
 from orchestrator.main_agent import OrchestrationParseError
-from orchestrator.reasoning import answer_question
+from orchestrator.queue import SerialEventQueue
+from orchestrator.reasoning import SpecialistFailure, SpecialistResult, answer_question, run_parallel_specialists
 
 
 class _ScriptedAgent:
-    def __init__(self, name, tool_infos=(), response_text="an answer", status="success"):
+    def __init__(self, name, tool_infos=(), response_text="an answer", status="success", raises=None):
         self.name = name
         self._tool_infos = tool_infos
         self._response_text = response_text
         self._status = status
+        self._raises = raises
         self.calls = []
 
     def exposed_tools(self):
@@ -28,6 +34,8 @@ class _ScriptedAgent:
 
     def process(self, text, allowed_tools):
         self.calls.append((text, tuple(allowed_tools)))
+        if self._raises is not None:
+            raise self._raises
 
         class _Result:
             status = self._status
@@ -195,9 +203,9 @@ def test_unclear_routing_status_raises():
 
 def test_a_sub_agent_that_fails_does_not_crash_the_whole_answer():
     # Two chosen agents, only one reporting unclear_task — the single-
-    # agent clean-reply path below must not apply here; the raw
-    # "(no usable answer: ...)" wrapping is still correct when it's one
-    # voice among several feeding composition, not the whole answer.
+    # agent clean-reply path below must not apply here; an unusable
+    # specialist result still feeds composition rather than becoming the
+    # whole answer.
     failing_agent = _ScriptedAgent("reference_agent", READ_ONLY_TOOL, response_text="broken", status="unclear_task")
     other_agent = _ScriptedAgent("status_agent", (), response_text="all clear")
     registry = build_agent_registry({}, [failing_agent, other_agent])
@@ -216,10 +224,9 @@ def test_a_sub_agent_that_fails_does_not_crash_the_whole_answer():
 
 def test_a_single_chosen_agents_unclear_task_gets_the_clean_cant_answer_reply():
     # The direct symptom found in repro 1: previously this returned the
-    # agent's raw internal text verbatim ("(no usable answer: please
-    # specify a location)") as the final answer. Now routed through the
-    # same clean presentation a true NONE selection gets, and the agent's
-    # own wording is never quoted back to the asker.
+    # agent's raw internal text verbatim as the final answer. Now routed
+    # through the same clean presentation a true NONE selection gets, and
+    # the agent's own wording is never quoted back to the asker.
     failing_agent = _ScriptedAgent("reference_agent", READ_ONLY_TOOL, response_text="please specify a location", status="unclear_task")
     registry = build_agent_registry({}, [failing_agent])
     main_agent = _ScriptedMainAgent([_ROUTE_NORMAL, ("AGENT: reference_agent\nTASK: check on my tasks", "success")])
@@ -273,7 +280,99 @@ def test_history_query_error_does_not_crash_the_whole_answer():
 
     answer = answer_question(main_agent, "any prior incidents?", registry, history_service)
 
-    assert "no usable answer" in answer
+    assert answer == "I don't have a way to answer that. no material available"
+
+
+def test_empty_history_reply_uses_the_error_flag_not_the_exception_wording():
+    from history.query import HistoryQueryError
+
+    history_agent = HistoryAgent(model="m")
+    registry = build_agent_registry({}, [history_agent])
+    hebrew_question = "האם היו אירועים?"
+
+    wording_only = _ScriptedMainAgent([_ROUTE_NORMAL, ("AGENT: history_agent\nTASK: any prior incidents?", "success")])
+    wording_service = _ScriptedHistoryQueryService(
+        raises=HistoryQueryError("no stored events match the requested history filters")
+    )
+    wording_answer = answer_question(wording_only, hebrew_question, registry, wording_service)
+    assert wording_answer.startswith("לא ניתן להשיב על כך כרגע.")
+    assert "no stored events" in wording_answer
+
+    flagged = _ScriptedMainAgent([_ROUTE_NORMAL, ("AGENT: history_agent\nTASK: any prior incidents?", "success")])
+    flagged_service = _ScriptedHistoryQueryService(raises=HistoryQueryError("nothing here", empty=True))
+    flagged_answer = answer_question(flagged, hebrew_question, registry, flagged_service)
+    assert flagged_answer == "לא נמצאו אירועים מתאימים בהיסטוריה או ביומן המבצעי."
+
+
+def test_a_successful_answer_that_looks_like_a_timeout_marker_is_still_the_answer():
+    reference_agent = _ScriptedAgent(
+        "reference_agent", MIXED_TOOLS, response_text="(timeout: this is the real finding)"
+    )
+    registry = build_agent_registry({}, [reference_agent])
+    main_agent = _ScriptedMainAgent([_ROUTE_NORMAL, ("AGENT: reference_agent\nTASK: check gate 3", "success")])
+
+    answer = answer_question(main_agent, "is gate 3 ok?", registry, NO_HISTORY_SERVICE)
+
+    assert answer == "(timeout: this is the real finding)"
+
+
+def test_a_specialist_exception_appends_the_partial_failure_note():
+    failing_agent = _ScriptedAgent("reference_agent", READ_ONLY_TOOL, raises=RuntimeError("boom"))
+    other_agent = _ScriptedAgent("status_agent", (), response_text="all clear")
+    registry = build_agent_registry({}, [failing_agent, other_agent])
+    main_agent = _ScriptedMainAgent(
+        [
+            _ROUTE_NORMAL,
+            ("AGENT: reference_agent\nTASK: check status\nAGENT: status_agent\nTASK: any incidents?", "success"),
+            ("composed answer", "success"),
+        ]
+    )
+
+    answer = answer_question(main_agent, "what's the status?", registry, NO_HISTORY_SERVICE)
+
+    note = get_catalog("en").text("orchestrator.specialist.partial_failure", agents="reference_agent")
+    assert answer == f"composed answer\n{note}"
+
+
+def test_run_parallel_specialists_records_an_exception_on_the_result_not_in_the_answer():
+    def _boom():
+        raise RuntimeError("provider failed")
+
+    results = run_parallel_specialists([("failing_agent", _boom)])
+
+    result = results["failing_agent"]
+    assert result.failed is True
+    assert result.failure is SpecialistFailure.ERROR
+    assert result.answer == ""
+
+
+def test_run_parallel_specialists_records_a_timeout_on_the_result_not_in_the_answer():
+    def _slow():
+        time.sleep(0.4)
+        return SpecialistResult(answer="late")
+
+    def _ok():
+        return SpecialistResult(answer="done")
+
+    results = run_parallel_specialists(
+        [("slow_agent", _slow), ("ok_agent", _ok)],
+        max_workers=2,
+        timeout_per_specialist=0.05,
+    )
+
+    slow = results["slow_agent"]
+    assert slow.failed is True
+    assert slow.failure is SpecialistFailure.TIMEOUT
+    assert slow.answer == ""
+    assert results["ok_agent"] == SpecialistResult(answer="done")
+
+
+def test_run_parallel_specialists_does_not_treat_answer_text_as_a_failure_signal():
+    results = run_parallel_specialists(
+        [("agent", lambda: SpecialistResult(answer="(timeout: real finding)"))]
+    )
+
+    assert results["agent"] == SpecialistResult(answer="(timeout: real finding)")
 
 
 # -- Direct-lookup classification (bypasses agent-selection entirely) ------
@@ -483,11 +582,6 @@ def test_direct_lookup_marker_requires_the_exact_supported_value():
 
     assert answer == "gate 3 is nominal"
 
-import threading
-import time
-
-from orchestrator.queue import SerialEventQueue
-
 
 def test_items_are_processed_in_strict_arrival_order():
     processed = []
@@ -633,3 +727,26 @@ def test_currently_processing_clears_even_when_the_item_raises():
 
     assert q.currently_processing() is None
     q.stop()
+
+
+def test_stop_returns_within_timeout_when_the_worker_is_blocked(monkeypatch):
+    from orchestrator import event_queue as event_queue_module
+    from orchestrator.event_queue import SerialEventQueue
+
+    monkeypatch.setattr(event_queue_module, "STOP_JOIN_TIMEOUT_SECONDS", 0.2)
+    release = threading.Event()
+    q = SerialEventQueue(lambda _item: release.wait())
+    q.start()
+    q.submit("blocked")
+    try:
+        for _ in range(200):
+            if q.currently_processing() is not None:
+                break
+            time.sleep(0.01)
+        started = time.monotonic()
+        q.stop()
+        assert time.monotonic() - started < 1.0
+        assert q._worker.is_alive()
+    finally:
+        release.set()
+        q._worker.join(timeout=1.0)

@@ -157,8 +157,9 @@ def test_dispatch_neighboring_force_still_rejects_an_unrecognized_kind(tmp_path,
 
     result = agent.dispatch_neighboring_force(kind="helicopter", target_area="east_gate", unit_count=1)
 
-    assert "Clarification required" in result
-    assert "squad" in result  # now listed among the valid kinds
+    assert result.ok is False
+    assert "Clarification required" in result.text
+    assert "squad" in result.text  # now listed among the valid kinds
     assert agent.take_resource_unavailable_signal() is None
 
 

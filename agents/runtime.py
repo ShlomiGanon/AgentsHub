@@ -26,6 +26,7 @@ from agents.contracts import (
     AgentToolConstructionError,
     AgentWarmupError,
     ToolInfo,
+    ToolResult,
     UNCLEAR_TASK_PROMPT_INSTRUCTION,
     exposed_tools_for,
     parse_agent_output,
@@ -101,16 +102,16 @@ class ExactResultCapture:
 
     def __init__(self, namespace: str):
         self._context_var: ContextVar[str | None] = ContextVar(f"exact_result_capture[{namespace}]", default=None)
-        self._results: dict[str, str] = {}
+        self._results: dict[str, tuple[str, bool]] = {}
         self._lock = threading.Lock()
 
-    def capture(self, output: str) -> None:
+    def capture(self, output: str, *, selection_required: bool = False) -> None:
         """Call from inside a tool method, with the exact text that method is about to return."""
 
         key = self._context_var.get() or get_trace_id()
         if key:
             with self._lock:
-                self._results[key] = output
+                self._results[key] = (output, selection_required)
 
     def run(
         self,
@@ -133,7 +134,8 @@ class ExactResultCapture:
             with self._lock:
                 exact = self._results.pop(key, None)
             if exact is not None:
-                return AgentResult(status="success", text=exact)
+                text, selection_required = exact
+                return AgentResult(status="success", text=text, selection_required=selection_required)
             return model_result
         finally:
             with self._lock:
@@ -217,13 +219,13 @@ def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> 
                 "invocation_id": current_invocation_id(),
                 "tool": tool_info.name,
                 "side_effecting": bool(tool_info.side_effecting),
-                "status": "success",
+                "status": "success" if not isinstance(tool_result, ToolResult) or tool_result.ok else "error",
                 "duration_seconds": time.monotonic() - started,
                 "result_summary": summary,
                 "trace_id": get_trace_id(),
             },
         )
-        return tool_result
+        return tool_result.text if isinstance(tool_result, ToolResult) else tool_result
 
     return _wrapped
 

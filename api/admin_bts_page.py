@@ -9,9 +9,13 @@ and database verifications in real-time.
 from __future__ import annotations
 
 import html
+import json
+import re
+
+from messages import get_current_catalog
 
 HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
-<html lang="he" dir="rtl">
+<html lang="__BTS_LANG__" dir="__BTS_DIR__">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -56,7 +60,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       display: flex;
       flex-direction: column;
       user-select: none;
-      direction: rtl;
+      direction: __BTS_DIR__;
     }
 
     /* Header Bar */
@@ -772,23 +776,23 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       </div>
       <div id="beacon" class="bts-live-beacon">
         <span class="bts-pulse-dot"></span>
-        <span id="beacon-text">שידור חי פעיל</span>
+        <span id="beacon-text">{{ t('admin.simulator.bts.live_broadcast') }}</span>
       </div>
     </div>
 
     <div class="bts-header-center">
       <select id="trace-select" class="bts-trace-select">
-        <option value="">טוען רשימת בקשות (Traces)...</option>
+        <option value="">{{ t('admin.simulator.bts.loading_traces') }}</option>
       </select>
       <label class="bts-autofollow">
         <input type="checkbox" id="auto-follow-check" checked>
-        עקוב אוטומטית אחר בקשות חדשות
+        {{ t('admin.simulator.bts.auto_follow') }}
       </label>
     </div>
 
     <div class="bts-header-right">
-      <div id="trace-id-pill" class="bts-pill" title="לחץ להעתקת Trace ID">—</div>
-      <button id="refresh-btn" class="bts-btn" title="רענן נתונים">🔄 רענן</button>
+      <div id="trace-id-pill" class="bts-pill" title="{{ t('admin.simulator.bts.copy_trace') }}">—</div>
+      <button id="refresh-btn" class="bts-btn" title="{{ t('admin.simulator.bts.refresh_data') }}">{{ t('admin.simulator.bts.refresh') }}</button>
     </div>
   </header>
 
@@ -796,38 +800,38 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
   <section class="bts-metrics-bar">
     <div class="bts-metric-card">
       <div class="bts-metric-title">
-        <span>זמן ביצוע כולל (Wall-clock)</span>
+        <span>{{ t('admin.simulator.bts.metric_wall_clock') }}</span>
         <span>⏱️</span>
       </div>
       <div id="m-wall" class="bts-metric-val">—</div>
-      <div id="m-wall-breakdown" class="bts-metric-sub">מודל: — | כלים: —</div>
+      <div id="m-wall-breakdown" class="bts-metric-sub">{{ t('admin.simulator.bts.model_tools_breakdown', model='—', tools='—') }}</div>
     </div>
 
     <div class="bts-metric-card">
       <div class="bts-metric-title">
-        <span>קריאות ספק LLM</span>
+        <span>{{ t('admin.simulator.bts.metric_llm_calls') }}</span>
         <span>🧠</span>
       </div>
       <div id="m-llm" class="bts-metric-val">—</div>
-      <div id="m-retries" class="bts-metric-sub">ניסיונות חוזרים: 0</div>
+      <div id="m-retries" class="bts-metric-sub">{{ t('admin.simulator.bts.retries_count', count=0) }}</div>
     </div>
 
     <div class="bts-metric-card">
       <div class="bts-metric-title">
-        <span>טוקנים ועלות</span>
+        <span>{{ t('admin.simulator.bts.metric_tokens_cost') }}</span>
         <span>📊</span>
       </div>
       <div id="m-tokens" class="bts-metric-val">—</div>
-      <div id="m-tokens-sub" class="bts-metric-sub">קלט: — | פלט: —</div>
+      <div id="m-tokens-sub" class="bts-metric-sub">{{ t('admin.simulator.bts.tokens_io', input='—', output='—') }}</div>
     </div>
 
     <div class="bts-metric-card">
       <div class="bts-metric-title">
-        <span>סוכנים וכלים שהופעלו</span>
+        <span>{{ t('admin.simulator.bts.agents_tools_metric') }}</span>
         <span>👥</span>
       </div>
       <div id="m-agents" class="bts-metric-val">—</div>
-      <div id="m-agents-sub" class="bts-metric-sub">ענפים במקביל: 0</div>
+      <div id="m-agents-sub" class="bts-metric-sub">{{ t('admin.simulator.bts.parallel_branches', count=0) }}</div>
     </div>
   </section>
 
@@ -859,9 +863,9 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
 
       <!-- Zoom Floating Controls -->
       <div class="bts-zoom-controls">
-        <button id="zoom-in" class="bts-zoom-btn" title="התקרב">+</button>
-        <button id="zoom-out" class="bts-zoom-btn" title="התרחק">−</button>
-        <button id="zoom-fit" class="bts-zoom-btn" title="התאם לתצוגה">⛶</button>
+        <button id="zoom-in" class="bts-zoom-btn" title="{{ t('admin.simulator.bts.zoom_in') }}">+</button>
+        <button id="zoom-out" class="bts-zoom-btn" title="{{ t('admin.simulator.bts.zoom_out') }}">−</button>
+        <button id="zoom-fit" class="bts-zoom-btn" title="{{ t('admin.simulator.bts.zoom_fit') }}">⛶</button>
       </div>
     </div>
 
@@ -869,24 +873,24 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
     <aside class="bts-right-panel">
       <div class="bts-panel-tabs">
         <button id="tab-stream-btn" class="bts-tab-btn is-active">
-          <span>💬</span> זרם תקשורת סוכנים
+          <span>💬</span> {{ t('admin.simulator.bts.stream_tab') }}
         </button>
         <button id="tab-inspect-btn" class="bts-tab-btn">
-          <span>🔍</span> פרטי צומת שנבחר
+          <span>🔍</span> {{ t('admin.simulator.bts.inspect_tab') }}
         </button>
       </div>
 
       <!-- Tab 1: Live Message Stream -->
       <div id="tab-stream" class="bts-tab-content is-active">
         <div id="stream-list">
-          <div class="bts-inspect-empty">ממתין להעברת הודעות בין הסוכנים...</div>
+          <div class="bts-inspect-empty">{{ t('admin.simulator.bts.stream_empty') }}</div>
         </div>
       </div>
 
       <!-- Tab 2: Node Inspector -->
       <div id="tab-inspect" class="bts-tab-content">
         <div id="inspector-content">
-          <div class="bts-inspect-empty">בחר צומת כלשהו בגרף להצגת פרטי משימה ואימותים מעמיקים.</div>
+          <div class="bts-inspect-empty">{{ t('admin.simulator.bts.inspect_empty') }}</div>
         </div>
       </div>
     </aside>
@@ -894,6 +898,13 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
 
   <script>
     (function () {
+      const STRINGS = __BTS_STRINGS__;
+      function t(key, values) {
+        const template = Object.prototype.hasOwnProperty.call(STRINGS, key) ? STRINGS[key] : key;
+        return template.replace(/\{(\w+)\}/g, function (match, name) {
+          return values && Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : match;
+        });
+      }
       let currentTraceId = "__SAFE_TRACE_ID__";
       let pollTimer = null;
       let recentTimer = null;
@@ -1081,13 +1092,13 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
 
           if (data.diagnostic_state === 'job_stopped_without_outcome') {
             beacon.className = 'bts-live-beacon is-idle';
-            beaconText.textContent = 'ה־Job נעצר בלי תוצאה שמורה — נדרש בירור';
+            beaconText.textContent = t('job_stopped');
           } else if (data.terminal) {
             beacon.className = 'bts-live-beacon is-idle';
-            beaconText.textContent = data.outcome === 'succeeded' ? 'הושלם בהצלחה' : 'הסתיים (' + (data.outcome || 'סיום') + ')';
+            beaconText.textContent = data.outcome === 'succeeded' ? t('bts.status_completed_ok') : t('bts.job_ended', { outcome: (data.outcome || t('bts.outcome_fallback')) });
           } else {
             beacon.className = 'bts-live-beacon';
-            beaconText.textContent = 'שידור חי פעיל';
+            beaconText.textContent = t('bts.live_broadcast');
           }
         } catch (err) {
           console.warn('Trace fetch error:', err);
@@ -1098,17 +1109,20 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       function render(data) {
         // 1. Update Metrics
         const m = data.metrics || {};
-        mWall.textContent = m.total_wall_clock_ms ? (m.total_wall_clock_ms.toLocaleString() + ' מ"ש') : '—';
-        mWallBreakdown.textContent = 'מודל: ' + (m.model_latency_ms || 0) + ' מ"ש | כלים: ' + (m.tools_duration_ms || 0) + ' מ"ש';
-        mLlm.textContent = m.llm_call_count ? (m.llm_call_count + ' קריאות') : '0';
-        mRetries.textContent = 'ניסיונות חוזרים: ' + (m.retries_count || 0);
+        mWall.textContent = m.total_wall_clock_ms ? (m.total_wall_clock_ms.toLocaleString() + ' ' + t('bts.ms')) : '—';
+        mWallBreakdown.textContent = t('bts.model_tools_breakdown', {
+          model: (m.model_latency_ms || 0) + ' ' + t('bts.ms'),
+          tools: (m.tools_duration_ms || 0) + ' ' + t('bts.ms')
+        });
+        mLlm.textContent = m.llm_call_count ? t('bts.calls_short', { count: m.llm_call_count }) : '0';
+        mRetries.textContent = t('bts.retries_count', { count: (m.retries_count || 0) });
         mTokens.textContent = m.tokens ? m.tokens.total.toLocaleString() : '—';
-        mTokensSub.textContent = m.tokens ? ('קלט: ' + m.tokens.input.toLocaleString() + ' | פלט: ' + m.tokens.output.toLocaleString()) : 'ללא נתוני טוקנים';
+        mTokensSub.textContent = m.tokens ? t('bts.tokens_io', { input: m.tokens.input.toLocaleString(), output: m.tokens.output.toLocaleString() }) : t('bts.no_token_data');
 
         const agCount = data.graph ? (data.graph.specialist_count || 0) : 0;
         const toolCount = data.graph ? (data.graph.tool_count || 0) : 0;
-        mAgents.textContent = agCount + ' מומחים | ' + toolCount + ' כלים';
-        mAgentsSub.textContent = data.graph && data.graph.explanation ? data.graph.explanation : (data.graph && data.graph.has_parallel ? ('⚡ ריצה במקביל (' + data.graph.parallel_batches_count + ' ענפים חופפים)') : 'ענפים במקביל: 0');
+        mAgents.textContent = t('bts.agents_tools_count', { specialists: agCount, tools: toolCount });
+        mAgentsSub.textContent = data.graph && data.graph.explanation ? data.graph.explanation : (data.graph && data.graph.has_parallel ? t('bts.parallel_run_branches', { count: data.graph.parallel_batches_count }) : t('bts.parallel_branches', { count: 0 }));
 
         // 2. Render Graph
         renderGraph(data.graph);
@@ -1126,7 +1140,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       // Render Graph Nodes and Edges
       function renderGraph(graph) {
         if (!graph || !graph.nodes || graph.nodes.length === 0) {
-          nodesLayer.innerHTML = '<text x="450" y="250" fill="#64748b" font-size="14" text-anchor="middle">ממתין להפעלת בקשה בסימולציה...</text>';
+          nodesLayer.innerHTML = '<text x="450" y="250" fill="#64748b" font-size="14" text-anchor="middle">' + t('bts.waiting_sim_request') + '</text>';
           edgesLayer.innerHTML = '';
           return;
         }
@@ -1179,14 +1193,14 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
           const isSelected = node.id === selectedNodeId ? 'is-selected' : '';
           const statusClass = 'status-' + (node.status || 'pending');
 
-          let statusText = 'ממתין';
-          if (node.status === 'running') statusText = 'פעיל כעת';
-          else if (node.status === 'success') statusText = 'הושלם';
-          else if (node.status === 'failed') statusText = 'נכשל';
-          else if (node.status === 'waiting') statusText = 'ממתין לאישור';
-          else if (node.status === 'unknown') statusText = 'מצב לא ידוע';
+          let statusText = t('bts.node_pending');
+          if (node.status === 'running') statusText = t('bts.status_running_now');
+          else if (node.status === 'success') statusText = t('bts.node_completed');
+          else if (node.status === 'failed') statusText = t('bts.node_failed');
+          else if (node.status === 'waiting') statusText = t('bts.node_waiting_approval');
+          else if (node.status === 'unknown') statusText = t('bts.node_unknown');
 
-          const timerText = node.duration_ms ? (node.duration_ms + ' מ"ש') : (node.status === 'running' ? '⏱️ פועל' : '');
+          const timerText = node.duration_ms ? (node.duration_ms + ' ' + t('bts.ms')) : (node.status === 'running' ? t('bts.running_timer') : '');
           const previewText = node.protocol || node.intent || (node.tasks && node.tasks[0]) || node.summary || node.details || '';
 
           nodesHtml += '<foreignObject x="' + pos.x + '" y="' + pos.y + '" width="' + NODE_WIDTH + '" height="' + NODE_HEIGHT + '">' +
@@ -1233,10 +1247,10 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       // Render Node Inspector
       function renderInspector(node) {
         let statusBadge = node.status;
-        if (node.status === 'running') statusBadge = '🟢 פעיל כעת';
-        else if (node.status === 'success') statusBadge = '✔ הושלם בהצלחה';
-        else if (node.status === 'failed') statusBadge = '✖ שגיאה';
-        else if (node.status === 'waiting') statusBadge = '⏳ ממתין לאישור';
+        if (node.status === 'running') statusBadge = t('bts.status_running_now');
+        else if (node.status === 'success') statusBadge = t('bts.status_completed_ok');
+        else if (node.status === 'failed') statusBadge = t('bts.node_failed');
+        else if (node.status === 'waiting') statusBadge = t('bts.node_waiting_approval');
 
         let html = '<div class="bts-inspect-card">' +
             '<div class="bts-inspect-title-row">' +
@@ -1247,19 +1261,19 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
               '</div>' +
             '</div>' +
             '<div class="bts-inspect-row">' +
-              '<span class="bts-inspect-label">סטטוס תפעולי:</span>' +
+              '<span class="bts-inspect-label">' + t('bts.inspect_status') + '</span>' +
               '<span class="bts-inspect-val">' + esc(statusBadge) + '</span>' +
             '</div>' +
-            (node.duration_ms ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">זמן ביצוע:</span><span class="bts-inspect-val">' + node.duration_ms + ' מ"ש</span></div>') : '') +
-            (node.call_count ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">מספר הפעלות / סבבים:</span><span class="bts-inspect-val">' + node.call_count + '</span></div>') : '') +
-            (node.is_parallel ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">מצב הרצה:</span><span class="bts-inspect-val" style="color:var(--accent-cyan)">⚡ הרצה במקביל (Concurrent)</span></div>') : '') +
-            (node.verification ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">רמת אימות פעולה:</span><span class="bts-inspect-val">' + esc(node.verification_note || node.verification) + '</span></div>') : '') +
-            (node.task ? ('<div class="bts-inspect-section-title">תקציר משימה</div><div class="bts-inspect-box">' + esc(node.task) + '</div>') : '') +
-            (node.result ? ('<div class="bts-inspect-section-title">תוצאה / שגיאה</div><div class="bts-inspect-box">' + esc(node.result) + '</div>') : '') +
-            (node.llm_calls && node.llm_calls.length ? ('<div class="bts-inspect-section-title">קריאות מודל (' + node.llm_calls.length + ')</div><div class="bts-inspect-box">' + node.llm_calls.map(c => esc(c.model + ' · ' + (c.latency_ms || 0) + ' מ״ש · ' + (c.finish_reason || c.status) + ' · ' + (c.input_tokens || 0) + '/' + (c.output_tokens || 0) + ' טוקנים')).join('<br>') + '</div>') : '') +
-            (node.tools && node.tools.length ? ('<div class="bts-inspect-section-title">כלים (' + node.tools.length + ')</div><div class="bts-inspect-box">' + esc(node.tools.join(', ')) + '</div>') : '') +
-            (node.summary ? ('<div class="bts-inspect-section-title">סיכום כלי</div><div class="bts-inspect-box">' + esc(node.summary) + '</div>') : '') +
-            (node.details ? ('<div class="bts-inspect-section-title">פרטים נוספים</div><div class="bts-inspect-box">' + esc(node.details) + '</div>') : '') +
+            (node.duration_ms ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">' + t('bts.inspect_duration') + '</span><span class="bts-inspect-val">' + node.duration_ms + ' ' + t('bts.ms') + '</span></div>') : '') +
+            (node.call_count ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">' + t('bts.inspect_calls') + '</span><span class="bts-inspect-val">' + node.call_count + '</span></div>') : '') +
+            (node.is_parallel ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">' + t('bts.inspect_run_mode') + '</span><span class="bts-inspect-val" style="color:var(--accent-cyan)">' + t('bts.inspect_parallel') + '</span></div>') : '') +
+            (node.verification ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">' + t('bts.inspect_verification') + '</span><span class="bts-inspect-val">' + esc(node.verification_note || node.verification) + '</span></div>') : '') +
+            (node.task ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_task') + '</div><div class="bts-inspect-box">' + esc(node.task) + '</div>') : '') +
+            (node.result ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_result') + '</div><div class="bts-inspect-box">' + esc(node.result) + '</div>') : '') +
+            (node.llm_calls && node.llm_calls.length ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_llm_calls', { count: node.llm_calls.length }) + '</div><div class="bts-inspect-box">' + node.llm_calls.map(c => esc(t('bts.llm_call_line', { model: c.model, ms: (c.latency_ms || 0), reason: (c.finish_reason || c.status), input: (c.input_tokens || 0), output: (c.output_tokens || 0) }))).join('<br>') + '</div>') : '') +
+            (node.tools && node.tools.length ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_tools', { count: node.tools.length }) + '</div><div class="bts-inspect-box">' + esc(node.tools.join(', ')) + '</div>') : '') +
+            (node.summary ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_tool_summary') + '</div><div class="bts-inspect-box">' + esc(node.summary) + '</div>') : '') +
+            (node.details ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_details') + '</div><div class="bts-inspect-box">' + esc(node.details) + '</div>') : '') +
           '</div>';
         inspectorContent.innerHTML = html;
       }
@@ -1267,7 +1281,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       // Render Message Stream (How agents talk to each other)
       function renderMessageStream(messages) {
         if (!messages || messages.length === 0) {
-          streamList.innerHTML = '<div class="bts-inspect-empty">ממתין להעברת הודעות ובקשות בין הסוכנים...</div>';
+          streamList.innerHTML = '<div class="bts-inspect-empty">' + t('bts.stream_empty') + '</div>';
           return;
         }
 
@@ -1354,7 +1368,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
         if (currentTraceId) {
           navigator.clipboard.writeText(currentTraceId);
           const old = traceIdPill.textContent;
-          traceIdPill.textContent = 'הועתק!';
+          traceIdPill.textContent = t('bts.copied');
           setTimeout(() => traceIdPill.textContent = old, 1200);
         }
       });
@@ -1400,5 +1414,30 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
 
 def render_behind_the_scenes_html(*, trace_id: str = "", profile_name: str = "") -> str:
     """Return the complete standalone HTML page for Behind the Scenes."""
-    safe_trace = html.escape(trace_id or "")
-    return HTML_PAGE_TEMPLATE.replace("__SAFE_TRACE_ID__", safe_trace)
+    catalog = get_current_catalog()
+    strings = {
+        key[len("admin.simulator."):]: template
+        for key, template in catalog.messages.items()
+        if key.startswith("admin.simulator.bts.")
+    }
+    # Also expose job_stopped from the simulator catalog (used by the live beacon).
+    if "admin.simulator.job_stopped" in catalog.messages:
+        strings["job_stopped"] = catalog.messages["admin.simulator.job_stopped"]
+
+    def _kwargs(raw: str | None) -> dict[str, object]:
+        if not raw:
+            return {}
+        values: dict[str, object] = {}
+        for name, quoted, number in re.findall(r"(\w+)=(?:'([^']*)'|(\d+))", raw):
+            values[name] = int(number) if number else quoted
+        return values
+
+    def _replace_t(match: re.Match[str]) -> str:
+        return html.escape(catalog.text(match.group(1), **_kwargs(match.group(2))))
+
+    page = re.sub(r"\{\{\s*t\('([^']+)'(?:,\s*(.*?))?\s*\)\s*\}\}", _replace_t, HTML_PAGE_TEMPLATE)
+    page = page.replace("__SAFE_TRACE_ID__", html.escape(trace_id or ""))
+    page = page.replace("__BTS_LANG__", html.escape(catalog.language))
+    page = page.replace("__BTS_DIR__", "rtl" if catalog.language == "he" else "ltr")
+    page = page.replace("__BTS_STRINGS__", json.dumps(strings, ensure_ascii=False))
+    return page

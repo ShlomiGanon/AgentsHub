@@ -98,7 +98,7 @@ class FakeHistoryService:
     def query_spec(self, question, spec, *, sender_identity_filter=None):
         self.calls.append((question, spec, sender_identity_filter))
         if self.answer is None:
-            raise HistoryQueryError("no stored events match the requested history filters")
+            raise HistoryQueryError("no stored events match the requested history filters", empty=True)
         return HistoryAnswer(self.answer, (), spec.time_start, spec.time_end, 1)
 
 
@@ -269,6 +269,17 @@ def test_no_recent_events_is_a_fact_not_a_failure():
     assert report.domain == RECENT_EVENTS_DOMAIN
     assert report.succeeded is True
     assert report.text == get_catalog("en").text("orchestrator.picture.no_recent_events", hours=6)
+
+
+def test_recent_events_failure_is_not_inferred_from_exception_wording():
+    class _WordingOnlyEmpty:
+        def query_spec(self, question, spec, *, sender_identity_filter=None):
+            raise HistoryQueryError("no stored events match the requested history filters")
+
+    report = collect_recent_events(_WordingOnlyEmpty(), hours=6, now=NOW, sender_identity_filter=None)
+
+    assert report.succeeded is False
+    assert report.text == "no stored events match the requested history filters"
 
 
 def test_composition_falls_back_to_the_collected_findings_when_the_model_cannot_write():

@@ -1614,7 +1614,7 @@ def _extract_claim_and_poll_fns(page: str) -> tuple[str, str]:
     claim_fn = _extract_between(page, "function claimPollGeneration(chatId) {", "const registeredIdentities")
     poll_fn = _extract_between(
         page,
-        "async function pollSimulatorChat(chatKey, chatId, watermark, myGeneration) {",
+        "async function pollSimulatorChat(",
         "  async function sendNext",
     )
     assert claim_fn.strip() and poll_fn.strip(), "expected functions not found in the rendered page"

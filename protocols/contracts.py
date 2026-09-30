@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Callable, Literal
 
-from agents.contracts import InvocationPolicy
+from agents import InvocationPolicy
 
 
 EVENT_DATA_FIELDS = (
@@ -127,6 +127,7 @@ class StepOutcome:
     status: str = "succeeded"
     missing_event_fields: tuple[str, ...] = ()
     resource_unavailable: "ResourceUnavailable | None" = None
+    selection_required: bool = False
 
 
 @dataclass(frozen=True)

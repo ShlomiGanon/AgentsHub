@@ -53,7 +53,7 @@ def test_job_status_is_queued_for_an_event_not_yet_picked_up(ctx):
     event_id = _new_event(ctx)
     ctx.queue.submit((event_id, lambda: None))
 
-    assert job_status(ctx, event_id) == {"event_id": event_id, "status": "queued"}
+    assert job_status(ctx, event_id) == {"event_id": event_id, "status": "queued", "trace_id": None}
 
 
 def test_job_status_is_running_while_the_worker_is_on_it(ctx):
@@ -61,13 +61,20 @@ def test_job_status_is_running_while_the_worker_is_on_it(ctx):
     release = threading.Event()
 
     ctx.queue.submit((event_id, release.wait))
-    for _ in range(200):
-        if ctx.queue.currently_processing() is not None:
-            break
-        time.sleep(0.01)
+    try:
+        for _ in range(200):
+            if ctx.queue.currently_processing() is not None:
+                break
+            time.sleep(0.01)
 
-    assert job_status(ctx, event_id) == {"event_id": event_id, "status": "running"}
-    release.set()
+        # job_status always includes trace_id (139de27) -- None here since _new_event's
+        # InitialEventEnvelope never sets one. A pre-existing mismatch: this assertion never
+        # accounted for that field, which made it fail unconditionally and then deadlock the
+        # ctx fixture's teardown (queue.stop()'s un-timed-out thread.join()) forever, since
+        # release.set() below was never reached to unblock the worker.
+        assert job_status(ctx, event_id) == {"event_id": event_id, "status": "running", "trace_id": None}
+    finally:
+        release.set()
 
 
 def test_job_status_reports_held_for_clarification(ctx):

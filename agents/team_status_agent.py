@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from agents.runtime import Agent, get_authenticated_request_identity, tool
+from agents.contracts import failed_tool_result
 from persistence import AttendanceCycle, TeamStatusPersistenceError, open_team_status_persistence
 
 
@@ -168,7 +169,7 @@ class TeamStatusAgent(Agent):
     ) -> str:
         telegram_identity = get_authenticated_request_identity()
         if not telegram_identity:
-            return "The attendance response was not stored: authenticated requester identity is unavailable."
+            return failed_tool_result("The attendance response was not stored: authenticated requester identity is unavailable.")
         now = _aware_datetime(received_at or None)
         if not source_message_id:
             source_message_id = f"msg-{int(now.timestamp())}"
@@ -177,15 +178,15 @@ class TeamStatusAgent(Agent):
 
         approved_members = self.status_store.list_members(approved_only=True)
         if not any(m["telegram_identity"] == telegram_identity for m in approved_members):
-            return "The attendance response was not stored: requester is not an approved roster member."
+            return failed_tool_result("The attendance response was not stored: requester is not an approved roster member.")
 
         normalized = availability.strip().lower()
         if normalized not in {"available", "unavailable"}:
-            return "Clarification required: specify whether the member is available or unavailable."
+            return failed_tool_result("Clarification required: specify whether the member is available or unavailable.")
         if normalized == "unavailable" and not reason.strip():
-            return "Clarification required: an unavailable member must provide a reason."
+            return failed_tool_result("Clarification required: an unavailable member must provide a reason.")
         if normalized == "unavailable" and unavailable_days < 1:
-            return "Clarification required: specify how many days the member will be unavailable."
+            return failed_tool_result("Clarification required: specify how many days the member will be unavailable.")
 
         unavailable_until = None
         if normalized == "unavailable":
@@ -202,7 +203,7 @@ class TeamStatusAgent(Agent):
                 unavailable_until=unavailable_until,
             )
         except TeamStatusPersistenceError as exc:
-            return f"The attendance response was not stored: {exc}"
+            return failed_tool_result(f"The attendance response was not stored: {exc}")
 
         if response["approval_status"] == "pending":
             return f"The late response is pending commander approval. Response ID: {response['response_id']}"

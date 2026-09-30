@@ -55,6 +55,8 @@ from orchestrator.reasoning import (
     select_protocol,
     ProtocolSelectionResult,
     RiskAssessment,
+    SpecialistFailure,
+    SpecialistResult,
     run_parallel_specialists,
 )
 from orchestrator.reasoning import answer_question, determine_closure, look_up_precedent
@@ -1558,7 +1560,7 @@ def _execute_protocol_plan(
         (
             outcome.result_text
             for outcome in run_result.step_outcomes
-            if outcome.result_text and outcome.result_text.startswith("DRONE_SELECTION_REQUIRED:")
+            if outcome.selection_required and outcome.result_text
         ),
         None,
     )

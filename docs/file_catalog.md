@@ -23,6 +23,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `agents/contracts.py` | Production | Private implementation | Defines agent results, descriptors, tool metadata, parsing, and typed errors. |
 | `agents/fire_station_agents.py` | Production | Private implementation | Implements the Fire and Rescue dispatch and hazmat-assessment specialists (docs/bar_improves.md). |
 | `agents/friendly_forces_agent.py` | Production | Private implementation | Implements the tactical coordination and dispatch specialist for friendly forces. |
+| `agents/invocation_context.py` | Production | Private implementation | Correlation IDs for execution telemetry (last-finished invocation id), never used for decisions. |
 | `agents/neighboring_forces_agent.py` | Production | Private implementation | Shared, parameterized neighboring/external-force dispatch-log specialist (docs/Admin_Tables_Plan.md) -- persisted dispatch log + computed remaining capacity, reused by `profiles/response_team.py` and `profiles/firefighting.py`. |
 | `agents/provider_telemetry.py` | Production | Private implementation | Correlates CrewAI provider-call events with AgentsHub traces, stages, latency, and usage. |
 | `agents/roster_agent.py` | Production | Private implementation | Implements the shared team/crew availability-reporting specialist (docs/bar_improves.md). |
@@ -33,8 +34,10 @@ This English catalog describes every tracked or pending first-party file in the 
 | `api/__init__.py` | Production | Public facade | Exposes the API facade and compatibility module aliases. |
 | `api/admin.py` | Production | Private implementation | Serves the login-gated, seven-page admin web panel under `/admin`, in the profile's catalog language. |
 | `api/admin_api_pages.py` | Production | Private implementation | Provides the tailored profiles, protocols, and events management UI; live endpoint actions use the selected `X-Identity` and retain normal API authorization. |
+| `api/admin_bts_page.py` | Production | Private implementation | Renders the standalone Behind-the-Scenes live agent execution/communication dashboard. |
 | `api/admin_simulator.py` | Production | Private implementation | Style, body and script of the admin scenario simulator page, plus the helper that gathers its embedded data. |
 | `api/admin_tables.py` | Production | Private implementation | Generic admin-panel table rendering and form validation for whatever `AdminTable`s the active profile declares (docs/Admin_Tables_Plan.md); routes live in `api/admin.py`. |
+| `api/admin_trace.py` | Production | Private implementation | Admin routes for the Behind-the-Scenes simulator trace panel. |
 | `api/app.py` | Production | Public entry point | Builds API dependencies, owns ApiContext, and starts Flask. |
 | `api/request_boundary.py` | Production | Private implementation | Authenticates requests and translates API and HTTP failures into responses. |
 | `api/routes.py` | Production | Private implementation | Defines ingestion, management, hold, job, system, and notification routes. |
@@ -279,6 +282,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_unsafe_system.py` | Test | Internal | Verifies safe/open Telegram admission, automatic registration, approval, and API isolation. |
 | `tests/test_user_admin.py` | Test | Internal | Verifies user admin behavior and edge cases. |
 | `tools/__init__.py` | Production | Public facade | Exposes shared observability helpers and lazy terminal compatibility aliases. |
+| `tools/behind_the_scenes.py` | Production | Private implementation | Read-only trace aggregation and diagnostics engine extracting execution stages, agent collaboration graphs, tool side-effects, and performance metrics from raw log_entries. |
 | `tools/observability.py` | Production | Private implementation | Provides trace contexts, structured logging, and human/JSON output. |
 | `tools/evaluate_response_pipeline.py` | Production | Public entry point | Runs versioned offline response evals and opt-in billed live evaluation. |
 | `tools/simulator.py` | Production | Public entry point | Provides the event-simulator executable entry point. |

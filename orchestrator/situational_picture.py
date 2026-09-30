@@ -28,7 +28,7 @@ from messages.model_messages import (
     SITUATIONAL_PICTURE_COMPOSE_INSTRUCTION,
     SITUATIONAL_PICTURE_PLAN_INSTRUCTION,
 )
-from orchestrator.reasoning import run_parallel_specialists
+from orchestrator.reasoning import SpecialistResult, run_parallel_specialists
 from tools import get_trace_id, stage_context
 
 if TYPE_CHECKING:
@@ -259,7 +259,7 @@ def collect_recent_events(
         with stage_context("picture_recent_events"):
             answer = history_query_service.query_spec(question, spec, sender_identity_filter=sender_identity_filter)
     except HistoryQueryError as exc:
-        if "no stored events" in str(exc).lower():
+        if exc.empty:
             return DomainReport(
                 RECENT_EVENTS_DOMAIN, question, catalog.text("orchestrator.picture.no_recent_events", hours=hours), True
             )
@@ -292,8 +292,8 @@ def collect_domain_reports(
 
     outcomes: dict[str, tuple[str, bool]] = {}
 
-    def _specialist_runner(briefing: DomainBriefing) -> Callable[[], tuple[str, str]]:
-        def _run() -> tuple[str, str]:
+    def _specialist_runner(briefing: DomainBriefing) -> Callable[[], SpecialistResult]:
+        def _run() -> SpecialistResult:
             agent = registry.get(briefing.agent_name)
             tools = _readable_tools(agent, protocol)
             try:
@@ -301,21 +301,21 @@ def collect_domain_reports(
                     result = agent.process(briefing.query, tools)
             except Exception as exc:
                 outcomes[briefing.agent_name] = (str(exc), False)
-                return briefing.agent_name, str(exc)
+                return SpecialistResult(answer=str(exc))
             succeeded = result.status == "success" and bool(result.text.strip())
             outcomes[briefing.agent_name] = (result.text, succeeded)
-            return briefing.agent_name, result.text
+            return SpecialistResult(answer=result.text)
 
         return _run
 
-    def _history_runner() -> tuple[str, str]:
+    def _history_runner() -> SpecialistResult:
         report = collect_recent_events(
             history_query_service, hours=plan.recent_events_hours, now=now, sender_identity_filter=sender_identity_filter
         )
         outcomes[RECENT_EVENTS_DOMAIN] = (report.text, report.succeeded)
-        return RECENT_EVENTS_DOMAIN, report.text
+        return SpecialistResult(answer=report.text)
 
-    runners: list[tuple[str, Callable[[], tuple[str, str]]]] = [
+    runners: list[tuple[str, Callable[[], SpecialistResult]]] = [
         (briefing.agent_name, _specialist_runner(briefing)) for briefing in plan.briefings
     ]
     runners.append((RECENT_EVENTS_DOMAIN, _history_runner))
@@ -331,8 +331,8 @@ def collect_domain_reports(
         if domain in outcomes:
             text, succeeded = outcomes[domain]
         else:
-            # The runner never finished (timeout) - run_parallel_specialists left its own marker.
-            text, succeeded = raw_answers.get(domain, ""), False
+            result = raw_answers.get(domain)
+            text, succeeded = (result.answer if result else ""), False
         reports.append(DomainReport(domain, queries[domain], text, succeeded))
     return tuple(reports)
 

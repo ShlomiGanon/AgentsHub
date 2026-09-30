@@ -412,6 +412,16 @@ def run_migrations(db_path: str) -> None:
                             "ALTER TABLE events ADD COLUMN retracted INTEGER NOT NULL DEFAULT 0 "
                             "CHECK (retracted IN (0, 1))"
                         )
+            elif version == 26:
+                held_columns = {row[1] for row in connection.execute("PRAGMA table_info(held_events)").fetchall()}
+                if held_columns:  # held_events may not exist yet in a partial/synthetic fixture database
+                    if "reminded_at" not in held_columns:
+                        connection.execute("ALTER TABLE held_events ADD COLUMN reminded_at TEXT")
+                    if "escalated_at" not in held_columns:
+                        connection.execute("ALTER TABLE held_events ADD COLUMN escalated_at TEXT")
+                event_columns = {row[1] for row in connection.execute("PRAGMA table_info(events)").fetchall()}
+                if event_columns and "hold_escalation_alert_text" not in event_columns:
+                    connection.execute("ALTER TABLE events ADD COLUMN hold_escalation_alert_text TEXT")
             else:
                 connection.executescript(sql)
 

@@ -969,9 +969,10 @@ def test_drone_selection_result_creates_a_resumable_hold(deps, monkeypatch):
     )
     outcome = StepOutcome(
         step=step,
-        result_text="DRONE_SELECTION_REQUIRED:\n- Eagle-1\n- Falcon-2",
+        result_text="- Eagle-1\n- Falcon-2",
         attempt_count=1,
         succeeded=True,
+        selection_required=True,
     )
     monkeypatch.setattr(
         flows_module,

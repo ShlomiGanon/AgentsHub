@@ -161,15 +161,12 @@ def _risk_level_word(risk_level: str, catalog: MessageCatalog) -> str:
 
 def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None) -> str:
     messages = _catalog(catalog)
-    selection_marker = "DRONE_SELECTION_REQUIRED:"
-    for completed_step in result.steps_completed:
-        marker_at = completed_step.find(selection_marker)
-        if marker_at >= 0:
-            selection_text = completed_step[marker_at + len(selection_marker):].strip()
-            return (
-                f"{format_header('event_data_needed', messages)}\n"
-                f"{messages.text('result.job_id', job_id=result.job_id)}\n\n{selection_text}"
-            )
+    if result.selection_required:
+        selection_text = "\n".join(result.steps_completed).strip()
+        return (
+            f"{format_header('event_data_needed', messages)}\n"
+            f"{messages.text('result.job_id', job_id=result.job_id)}\n\n{selection_text}"
+        )
 
     kind: MessageKind = "result" if result.outcome != "declined" else "declined"
     lines = [format_header(kind, messages), "", messages.text("result.verdict", outcome=_outcome_word(result.outcome, messages))]

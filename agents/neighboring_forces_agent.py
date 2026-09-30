@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from agents.runtime import Agent, tool
+from agents.contracts import failed_tool_result
 from persistence import open_neighboring_force_store
 
 
@@ -121,14 +122,14 @@ class NeighboringForcesAgent(Agent):
         kind_norm = kind.strip().lower()
         resolved = self._resolve_kind(kind_norm)
         if resolved is None:
-            return (
+            return failed_tool_result(
                 f"Clarification required: unknown force kind '{kind}'. "
                 f"Valid kinds: {', '.join(self._valid_kinds())}."
             )
         if not target_area.strip():
-            return "Clarification required: target_area is required."
+            return failed_tool_result("Clarification required: target_area is required.")
         if unit_count < 1:
-            return "Clarification required: unit_count must be at least 1."
+            return failed_tool_result("Clarification required: unit_count must be at least 1.")
 
         origin_area, signal_kind = resolved
         cleaned_area = target_area.strip()

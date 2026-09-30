@@ -1,5 +1,6 @@
 from agents import SurveillanceAgent
 from agents import runtime as agent_runtime
+from agents.surveillance_agent import READ_ONLY_DEFAULT_MAX_OUTPUT_TOKENS
 from contextvars import copy_context
 from concurrent.futures import ThreadPoolExecutor
 
@@ -224,8 +225,8 @@ def test_return_requires_selection_when_multiple_drones_are_active(tmp_path):
     assert "Drone dispatched successfully" in second
 
     choices = _call_tool(agent, "return_drone_to_base")
-    assert choices.startswith("DRONE_SELECTION_REQUIRED:")
     assert "Multiple drones" in choices
+    assert "Eagle-1" in choices
     assert "Eagle-1" in choices
     assert "Falcon-2" in choices
     assert "No drone state was changed" in choices
@@ -264,19 +265,19 @@ def test_process_preserves_exact_recall_selection_across_tool_thread(tmp_path, m
     def fake_invoke(descriptor, wrapped_tools, text, timeout_seconds, invocation_policy=None):
         with ThreadPoolExecutor(max_workers=1) as executor:
             tool_output = executor.submit(copy_context().run, wrapped_tools["return_drone_to_base"]).result()
-        assert tool_output.startswith("DRONE_SELECTION_REQUIRED:")
-        return "model rewrote and hid the selection marker"
+        assert "Multiple drones" in tool_output
+        return "model rewrote and hid the selection list"
 
     monkeypatch.setattr(agent_runtime, "invoke", fake_invoke)
     result = agent.process("return the drone", ["return_drone_to_base"])
 
-    assert result.text.startswith("DRONE_SELECTION_REQUIRED:")
+    assert result.selection_required is True
     assert "Eagle-1" in result.text
     assert "Falcon-2" in result.text
     assert len(agent.surveillance_store.get_active_missions()) == 2
 
 
-def test_surveillance_process_applies_a_small_default_output_budget(tmp_path, monkeypatch):
+def test_process_applies_the_default_read_only_output_budget(tmp_path, monkeypatch):
     agent = _agent(tmp_path)
     captured = {}
 
@@ -288,5 +289,5 @@ def test_surveillance_process_applies_a_small_default_output_budget(tmp_path, mo
     result = agent.process("מה מצב הרחפנים?", ["get_drone_fleet_status"])
 
     assert result.text == "concise"
-    assert captured["policy"].max_output_tokens == 220
+    assert captured["policy"].max_output_tokens == READ_ONLY_DEFAULT_MAX_OUTPUT_TOKENS
     assert captured["policy"].reasoning_effort == "none"

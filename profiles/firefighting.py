@@ -5,7 +5,7 @@ docs/Profile_Split_Plan.md)."""
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agents import Agent, InvocationPolicy, NeighboringForcesAgent, SurveillanceAgent, TeamStatusAgent, get_authenticated_request_identity, tool
+from agents import Agent, InvocationPolicy, NeighboringForcesAgent, SurveillanceAgent, TeamStatusAgent, failed_tool_result, get_authenticated_request_identity, tool
 from messages import get_catalog
 from persistence import (
     ApparatusStoreError,
@@ -197,7 +197,7 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         try:
             updated = self.apparatus_store.update_status(identifier, status.strip().lower(), current_area.strip() or None)
         except ApparatusStoreError as exc:
-            return f"The apparatus status was not stored: {exc}"
+            return failed_tool_result(f"The apparatus status was not stored: {exc}")
         area = f", area: {updated['current_area']}" if updated["current_area"] else ""
         return f"{updated['callsign']} status recorded: {updated['status'].upper()}{area}."
 
@@ -218,7 +218,7 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         if apparatus is None:
             return f"Not linked: apparatus '{identifier}' not found."
         if not area.strip():
-            return "Clarification required: area is required."
+            return failed_tool_result("Clarification required: area is required.")
 
         event, clarification = self.incident_store.resolve_single_candidate(area.strip())
         if event is None:
@@ -255,7 +255,7 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
     )
     def list_incident_responders(self, area: str = "") -> str:
         if not area.strip():
-            return "Clarification required: area is required."
+            return failed_tool_result("Clarification required: area is required.")
 
         event, clarification = self.incident_store.resolve_single_candidate(area.strip())
         if event is None:
@@ -289,17 +289,17 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         received_at: str = "",
     ) -> str:
         if not get_authenticated_request_identity():
-            return "The crew shift status was not stored: authenticated requester identity is unavailable."
+            return failed_tool_result("The crew shift status was not stored: authenticated requester identity is unavailable.")
 
         normalized = availability.strip().lower()
         if normalized not in {"available", "unavailable"}:
-            return "Clarification required: specify whether the crew is available or unavailable."
+            return failed_tool_result("Clarification required: specify whether the crew is available or unavailable.")
         if normalized != "available":
-            return "Clarification required: bulk shift recording currently supports an explicit available declaration only."
+            return failed_tool_result("Clarification required: bulk shift recording currently supports an explicit available declaration only.")
 
         approved_members = self.status_store.list_members(approved_only=True)
         if not approved_members:
-            return "The crew shift status was not stored: the approved roster is empty."
+            return failed_tool_result("The crew shift status was not stored: the approved roster is empty.")
 
         requested = member_identities.strip()
         all_tokens = {"all", "everyone", "entire crew", "all crew"}
@@ -318,9 +318,9 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
                 elif member not in selected_members:
                     selected_members.append(member)
             if unknown:
-                return f"The crew shift status was not stored: unknown approved member(s): {', '.join(unknown)}."
+                return failed_tool_result(f"The crew shift status was not stored: unknown approved member(s): {', '.join(unknown)}.")
             if not selected_members:
-                return "Clarification required: specify which approved crew members are included."
+                return failed_tool_result("Clarification required: specify which approved crew members are included.")
 
         now_iso = received_at.strip() or datetime.now(timezone.utc).isoformat()
         source_base = source_message_id.strip() or f"crew-shift-{int(datetime.now(timezone.utc).timestamp())}"
@@ -337,7 +337,7 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
                 )
                 stored += 1
         except Exception as exc:
-            return f"The crew shift status was not stored: {exc}"
+            return failed_tool_result(f"The crew shift status was not stored: {exc}")
         return f"Crew shift availability recorded for {stored} approved member(s)."
 
 
