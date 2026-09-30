@@ -59,6 +59,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from api.admin_api_pages import FLASH_MESSAGES, IDENTITY_BAR
+from api.simulations import simulation_catalog_payload
 from messages import MessageCatalog
 
 if TYPE_CHECKING:
@@ -77,10 +78,10 @@ def simulator_page_context(
 
     `api_identity` is the admin's currently-selected registered identity (the same
     `IDENTITY_BAR`/`api_identity` mechanism the Profiles/Protocols/Events pages already
-    use, `api/admin_api_pages.py`) — the script's only use for it is authenticating its
-    own `GET /Simulations`/`GET /Simulations/<key>` calls to discover and load this
-    profile's declared simulations; it is unrelated to any scenario step's own
-    `sender_identity`, which is always used for that step's own request."""
+    use, `api/admin_api_pages.py`) — it gates the server-rendered simulation catalog and
+    authenticates the selected scenario's `GET /Simulations/<key>` materialization request;
+    it is unrelated to any scenario step's own `sender_identity`, which is always used for
+    that step's own request."""
 
     groups = [
         {"chat_id": binding.chat_id, "agent_name": binding.agent_name, "label": binding.label}
@@ -94,6 +95,17 @@ def simulator_page_context(
         }
         for user in sorted(ctx.deps.persistence.list_users(), key=lambda user: user["telegram_identity"])
     ]
+    selected_user = next((user for user in users if user["telegram_identity"] == api_identity), None)
+    can_view_simulations = bool(selected_user and selected_user["permission_level"] == "commander")
+    profile_simulations = simulation_catalog_payload(ctx.loaded_profile) if can_view_simulations else []
+    if not api_identity:
+        profile_simulations_hint_key = "admin.simulator.select_identity_first"
+    elif not can_view_simulations:
+        profile_simulations_hint_key = "admin.simulator.profile_simulations_commander_required"
+    elif not profile_simulations:
+        profile_simulations_hint_key = "admin.simulator.no_profile_simulations"
+    else:
+        profile_simulations_hint_key = ""
     strings = {
         key[len(SIMULATOR_STRING_PREFIX):]: template
         for key, template in catalog.messages.items()
@@ -105,6 +117,8 @@ def simulator_page_context(
         "routable_agents": list(ctx.group_routing.routable_targets),
         "bot_service_identity": bot_service_identity,
         "api_identity": api_identity,
+        "profile_simulations": profile_simulations,
+        "profile_simulations_hint_key": profile_simulations_hint_key,
         "strings": strings,
         "queued_ack_prefixes": [
             catalog.messages[key] for key in ("api.queued_report", "api.queued_request") if key in catalog.messages
@@ -613,9 +627,14 @@ SIMULATOR_BODY = """
     </div>
     <div class="sim-actions">
       <label class="form-label-console" for="profile-simulation-select">{{ t('admin.simulator.profile_simulations') }}</label>
-      <select id="profile-simulation-select" class="form-select form-select-console" disabled><option value="">{{ t('admin.simulator.choose_profile_simulation') }}</option></select>
-      <button type="button" class="btn btn-console-primary" id="load-profile-simulation" disabled>{{ t('admin.simulator.load_profile_simulation') }}</button>
-      <div class="subtitle" id="profile-sim-hint" style="font-size:12px; margin:0;"></div>
+      <select id="profile-simulation-select" class="form-select form-select-console" {% if not page_data.profile_simulations %}disabled{% endif %}>
+        <option value="">{{ t('admin.simulator.choose_profile_simulation') }}</option>
+        {% for simulation in page_data.profile_simulations %}
+        <option value="{{ simulation.key }}">{{ simulation.title or simulation.key }}</option>
+        {% endfor %}
+      </select>
+      <button type="button" class="btn btn-console-primary" id="load-profile-simulation" {% if not page_data.profile_simulations %}disabled{% endif %}>{{ t('admin.simulator.load_profile_simulation') }}</button>
+      <div class="subtitle" id="profile-sim-hint" style="font-size:12px; margin:0;">{% if page_data.profile_simulations_hint_key %}{{ t(page_data.profile_simulations_hint_key) }}{% endif %}</div>
     </div>
   </div>
 
@@ -1837,54 +1856,13 @@ SIMULATOR_BODY = """
     }
   }
 
-  // ---- profile-declared simulations: server-queried, no manual ID entry ------------------
-  // The admin page discovers and loads these purely by querying the server (GET /Simulations,
-  // GET /Simulations/<key>) — it holds no knowledge of any simulation user/group ID itself.
-  // The response is already the exact canonical scenario shape, so it feeds straight into the
-  // same loadScenario() the manual paste/drop path already uses.
+  // ---- profile-declared simulations: server-rendered catalog, no manual ID entry ----------
+  // The catalog is rendered from the already-loaded profile and is exposed only for an acting
+  // commander. Selecting an entry still fetches its canonical materialized scenario from
+  // GET /Simulations/<key>; the browser never constructs simulation Telegram IDs.
 
   const profileSimSelect = document.getElementById('profile-simulation-select');
   const profileSimLoadButton = document.getElementById('load-profile-simulation');
-  const profileSimHint = document.getElementById('profile-sim-hint');
-
-  // Single place that sets the disabled/enabled state AND makes the reason visible —
-  // a short inline hint (matches this page's existing .subtitle idiom, no new UI pattern)
-  // plus a native title tooltip on both controls, so "why is this greyed out" is never
-  // left to guessing at a disabled <select>'s own option text alone.
-  function setProfileSimAvailability(enabled, hint) {
-    profileSimSelect.disabled = !enabled;
-    profileSimLoadButton.disabled = !enabled;
-    profileSimHint.textContent = hint || '';
-    profileSimSelect.title = hint || '';
-    profileSimLoadButton.title = hint || '';
-  }
-
-  async function loadProfileSimulationCatalog() {
-    profileSimSelect.innerHTML = '';
-    profileSimSelect.appendChild(el('option', null, t('choose_profile_simulation')));
-    if (!DATA.api_identity) {
-      setProfileSimAvailability(false, t('select_identity_first'));
-      return;
-    }
-    let result;
-    try {
-      result = await apiCall('GET', '/Simulations', DATA.api_identity);
-    } catch (error) {
-      setProfileSimAvailability(false, t('profile_simulation_load_failed', { message: error.message }));
-      return;
-    }
-    const simulations = (result.payload && result.payload.simulations) || [];
-    if (result.status >= 400 || !simulations.length) {
-      setProfileSimAvailability(false, t('no_profile_simulations'));
-      return;
-    }
-    simulations.forEach(function (simulation) {
-      const option = el('option', null, simulation.title || simulation.key);
-      option.value = simulation.key;
-      profileSimSelect.appendChild(option);
-    });
-    setProfileSimAvailability(true, '');
-  }
 
   profileSimLoadButton.addEventListener('click', async function () {
     const key = profileSimSelect.value;
@@ -1906,8 +1884,6 @@ SIMULATOR_BODY = """
       profileSimLoadButton.disabled = false;
     }
   });
-
-  loadProfileSimulationCatalog();
 
   // ---- wiring --------------------------------------------------------------------------------
 
@@ -2846,8 +2822,8 @@ SIMULATOR_BODY = """
         } else if (node.type === 'tool') {
           detTaskTitle.textContent = 'מטרת הפעלת הכלי';
           detTaskContent.textContent = (node.summary || ('הפעלת ' + (node.label || 'כלי'))) +
-            '\nCaller: ' + (node.caller_agent_name || 'לא נשמר') +
-            '\nInvocation ID: ' + (node.agent_invocation_id || 'לא נשמר');
+            '\\nCaller: ' + (node.caller_agent_name || 'לא נשמר') +
+            '\\nInvocation ID: ' + (node.agent_invocation_id || 'לא נשמר');
         } else if (node.type === 'persistence') {
           detTaskTitle.textContent = 'פעולת שמירה ואימות';
           detTaskContent.textContent = node.details || 'שמירה ב-SQLite ואימות מצב תפעולי.';

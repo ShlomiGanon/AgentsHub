@@ -602,6 +602,7 @@ MESSAGES = {
     "admin.simulator.choose_profile_simulation": "Choose a declared simulation",
     "admin.simulator.load_profile_simulation": "Load",
     "admin.simulator.no_profile_simulations": "This profile declares no simulations.",
+    "admin.simulator.profile_simulations_commander_required": "Select a commander identity to load simulations.",
     "admin.simulator.profile_simulation_load_failed": "Could not load this simulation: {message}",
     "admin.simulator.select_identity_first": "Select an acting identity above to list this profile's simulations.",
     "admin.simulator.bot_mode_unconfigured": "This profile has not declared SIMULATOR_PORT, so message steps cannot be routed through the simulation-mode bot process (docs/bot_simulation_mode_design.md).",

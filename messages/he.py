@@ -599,6 +599,7 @@ MESSAGES = {
     "admin.simulator.choose_profile_simulation": "בחר סימולציה מוצהרת",
     "admin.simulator.load_profile_simulation": "טען",
     "admin.simulator.no_profile_simulations": "הפרופיל הזה לא מצהיר על אף סימולציה.",
+    "admin.simulator.profile_simulations_commander_required": "יש לבחור זהות מפקד כדי לטעון סימולציות.",
     "admin.simulator.profile_simulation_load_failed": "לא ניתן לטעון סימולציה זו: {message}",
     "admin.simulator.select_identity_first": "בחר זהות פעילה למעלה כדי להציג את סימולציות הפרופיל.",
     "admin.simulator.bot_mode_unconfigured": "פרופיל זה לא הגדיר SIMULATOR_PORT, ולכן לא ניתן לנתב שלבי הודעה דרך תהליך הבוט במצב סימולציה (docs/bot_simulation_mode_design.md).",
