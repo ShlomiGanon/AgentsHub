@@ -1356,6 +1356,10 @@ def test_simulator_page_talks_to_the_real_endpoints_only(tmp_path, teardown_ctx,
     assert "'/Msg'" not in page
     assert "/admin/simulator/dispatch" not in page  # never a client-side dispatch shortcut
     assert "/admin/simulator/example" not in page  # the legacy bundled-fixture route is gone
+    # Rebuilding the <select> must keep an empty-value placeholder. Without it the
+    # option text ("בחר סימולציה מוצהרת") becomes GET /Simulations/<label> → 404.
+    assert "placeholder.value = ''" in page
+    assert "profileSimLoadButton.disabled = !enabled || !profileSimSelect.value" in page
 
 
 def test_simulator_script_is_syntactically_valid_javascript(tmp_path, teardown_ctx, _admin_env):

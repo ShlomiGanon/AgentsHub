@@ -17,7 +17,7 @@ API_CONSOLE_STYLE = """
     box-shadow:var(--shadow);
   }
   .api-card h3 { margin-bottom: 2px; font-size: 15px; }
-  .api-card.is-primary { border-inline-start: 3px solid var(--lime); }
+  .api-card.is-primary { border-inline-start: 3px solid var(--blue); }
   .api-card.is-muted { box-shadow: none; background: var(--panel-muted); }
   .api-output { direction:ltr; text-align:left; unicode-bidi:plaintext; white-space:pre-wrap; overflow-wrap:anywhere;
     min-height:72px; max-height:280px; overflow:auto; margin:12px 0 0; padding:10px 12px;
@@ -38,6 +38,81 @@ API_CONSOLE_STYLE = """
   .protocol-edit-form { row-gap: 10px; }
   .api-list-item.ls-empty { text-align:center; color:var(--text-dim); padding:28px 16px; }
   @media (max-width:640px) { .api-form-grid { grid-template-columns:1fr; } .api-form-grid .wide { grid-column:auto; } }
+
+  .ls-content:has(.ls-events) { padding: 20px 28px 40px; }
+  .ls-events { max-width: 1080px; }
+  .ls-events .ls-page-header { margin-bottom: 16px; }
+  .ls-events .ls-identity-block { margin-bottom: 14px; padding: 12px 16px; }
+  .ls-events .ls-identity-block .api-hint { margin-top: 8px !important; }
+  .ls-events .ls-tabs { margin: 0 0 16px; gap: 2px; }
+  .ls-events .ls-tab { padding: 8px 12px; font-size: 13px; font-weight: 600; }
+
+  .ls-events-stage {
+    min-height: 360px;
+    display: flex;
+    flex-direction: column;
+    border: 1px dashed var(--line-strong);
+    border-radius: var(--radius);
+    background: var(--panel);
+    padding: 16px 20px 20px;
+  }
+  .ls-events-stage.has-events {
+    border-style: solid;
+    border-color: var(--line);
+    box-shadow: var(--shadow);
+  }
+  .ls-events-stage .ls-table-toolbar { margin-bottom: 12px; }
+  .ls-events-stage .table-responsive { flex: 1; }
+  .ls-events-stage .ls-empty-state {
+    flex: 1;
+    min-height: 280px;
+    margin: 0;
+    padding: 56px 32px;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+  .ls-events-stage .ls-empty-icon { width: 40px; height: 40px; margin: 0 auto 14px; color: var(--blue); }
+  .ls-events-stage .ls-empty-state strong { font-size: 16px; margin-bottom: 8px; }
+  .ls-events-stage .ls-empty-state p { max-width: 440px; }
+
+  .ls-events-tools {
+    margin-top: 28px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    align-items: stretch;
+  }
+  .ls-events-tools .api-card {
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    box-shadow: var(--shadow);
+  }
+  .ls-events-tools .api-card h3 { margin-bottom: 4px; font-size: 14px; font-weight: 600; }
+  .ls-events-tools .api-hint { font-size: 12px; line-height: 1.4; margin-bottom: 0; }
+  .ls-events-tools .api-form-grid { gap: 8px; margin-top: 10px; }
+  .ls-events-tools .api-form-grid label { margin-bottom: 4px; }
+  .ls-events-tools form { display: flex; flex-direction: column; flex: 1; }
+  .ls-events-tools form .wide:last-child { margin-top: auto; padding-top: 10px; }
+  .ls-events-tools form .btn { width: 100%; }
+  .ls-events-tools .api-list { margin-top: 10px; gap: 8px; flex: 1; }
+  .ls-events-tools .api-list-item {
+    padding: 14px 12px;
+    text-align: center;
+    box-shadow: none;
+    background: var(--panel-muted);
+  }
+  .ls-events [data-panel="new"] .ls-section-title { margin: 0 0 16px; }
+  .ls-events [data-panel="new"] .api-grid { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .ls-events [data-panel="new"] .api-card { padding: 16px; }
+  @media (max-width: 800px) { .ls-events-tools { grid-template-columns: 1fr; } }
 </style>
 """
 
@@ -335,7 +410,7 @@ document.querySelectorAll('.protocol-edit-form').forEach(form => {
 
 
 EVENTS_BODY = """
-<div class="ls-page">
+<div class="ls-page ls-events">
   <div class="ls-page-header">
     <div>
       <h1>{{ t('admin.events.title') }}</h1>
@@ -348,13 +423,13 @@ EVENTS_BODY = """
     <button type="button" class="ls-tab" data-tab="new">{{ t('admin.events.tab_new') }}</button>
   </div>
   <div data-panel="recent">
-    <section class="ls-section">
+    <div class="ls-events-stage{% if recent_events %} has-events{% endif %}">
       <div class="ls-table-toolbar">
         <span class="block-label mb-0">{{ t('admin.events.recent', count=recent_events|length) }}</span>
         <span class="api-hint">{{ t('admin.events.recent_help') }}</span>
       </div>
       {% if recent_events %}
-      <div class="table-responsive ls-table-card"><table class="table table-console ls-compact-table mb-0"><thead><tr><th>{{ t('admin.events.received') }}</th><th>{{ t('admin.events.description') }}</th><th>{{ t('admin.events.sender') }}</th><th>{{ t('admin.events.classification') }}</th><th>{{ t('admin.events.status') }}</th><th>{{ t('admin.col_actions') }}</th></tr></thead><tbody>
+      <div class="table-responsive"><table class="table table-console mb-0"><thead><tr><th>{{ t('admin.events.received') }}</th><th>{{ t('admin.events.description') }}</th><th>{{ t('admin.events.sender') }}</th><th>{{ t('admin.events.classification') }}</th><th>{{ t('admin.events.status') }}</th><th>{{ t('admin.col_actions') }}</th></tr></thead><tbody>
         {% for item in recent_events %}<tr><td class="identity" title="{{ item.received_at }}"><span class="identity-id">{{ item.received_at }}</span></td><td><div>{{ item.text }}</div><small class="identity" title="{{ item.event_id }}">{{ item.event_id }}</small></td><td>{{ item.sender_name or item.sender_identity }}</td><td>{{ item.classification or '—' }}{% if item.area %} · {{ item.area }}{% endif %}</td><td><span class="tag">{{ item.status }}</span></td><td><button type="button" class="btn btn-console btn-sm recent-job" data-event-id="{{ item.event_id }}">{{ t('admin.events.check_status') }}</button></td></tr>{% endfor %}
       </tbody></table></div>
       {% else %}
@@ -367,21 +442,21 @@ EVENTS_BODY = """
       </div>
       {% endif %}
       <pre id="recent-job-output" class="api-output" hidden></pre>
-    </section>
-    <div class="api-grid">
-      <section class="api-card is-muted"><h3 class="h6">{{ t('admin.events.find_job') }}</h3><p class="api-hint">{{ t('admin.events.find_job_help') }}</p>
+    </div>
+    <div class="ls-events-tools">
+      <section class="api-card"><h3 class="h6">{{ t('admin.events.find_job') }}</h3><p class="api-hint">{{ t('admin.events.find_job_help') }}</p>
         <form id="job-form" class="api-form-grid mt-3"><div class="wide"><label>{{ t('admin.events.event_id') }}</label><input id="job-id" required class="form-control form-control-console tech"></div><div class="wide"><button class="btn btn-console">{{ t('admin.events.check_status') }}</button></div></form><pre id="job-output" class="api-output" hidden></pre></section>
-      <section class="api-card is-primary"><div class="d-flex justify-content-between align-items-center gap-2"><h3 class="h6 mb-0">{{ t('admin.events.pending_holds') }}</h3><button id="holds-get" class="btn btn-console btn-sm">{{ t('admin.api.refresh') }}</button></div><p class="api-hint mt-3">{{ t('admin.events.holds_help') }}</p><div id="holds-list" class="api-list"><div class="api-list-item">{{ t('admin.api.loading') }}</div></div><pre id="holds-output" class="api-output" hidden></pre><pre id="hold-action-output" class="api-output" hidden></pre></section>
-      <section class="api-card is-muted"><div class="d-flex justify-content-between align-items-center gap-2"><h3 class="h6 mb-0">{{ t('admin.events.notifications') }}</h3><button id="notifications-refresh" class="btn btn-console btn-sm">{{ t('admin.api.refresh') }}</button></div>
+      <section class="api-card"><div class="d-flex justify-content-between align-items-center gap-2"><h3 class="h6 mb-0">{{ t('admin.events.pending_holds') }}</h3><button id="holds-get" class="btn btn-console btn-sm">{{ t('admin.api.refresh') }}</button></div><p class="api-hint mt-3">{{ t('admin.events.holds_help') }}</p><div id="holds-list" class="api-list"><div class="api-list-item">{{ t('admin.api.loading') }}</div></div><pre id="holds-output" class="api-output" hidden></pre><pre id="hold-action-output" class="api-output" hidden></pre></section>
+      <section class="api-card"><div class="d-flex justify-content-between align-items-center gap-2"><h3 class="h6 mb-0">{{ t('admin.events.notifications') }}</h3><button id="notifications-refresh" class="btn btn-console btn-sm">{{ t('admin.api.refresh') }}</button></div>
         <div class="api-form-grid mt-3"><div><label>since</label><input id="notifications-since" type="number" min="0" value="0" class="form-control form-control-console"></div><div><label>wait_seconds</label><input id="notifications-wait" type="number" min="0" max="30" value="0" class="form-control form-control-console"></div></div><div id="notifications-list" class="api-list"><div class="api-list-item">{{ t('admin.api.loading') }}</div></div><pre id="notifications-output" class="api-output" hidden></pre></section>
     </div>
   </div>
   <div data-panel="new" hidden>
     <h2 class="h6 ls-section-title">{{ t('admin.events.new_activity') }}</h2>
     <div class="api-grid">
-      <section class="api-card is-primary"><h3 class="h6">{{ t('admin.events.sensor_report') }}</h3><p class="api-hint">{{ t('admin.events.sensor_report_help') }}</p>
+      <section class="api-card"><h3 class="h6">{{ t('admin.events.sensor_report') }}</h3><p class="api-hint">{{ t('admin.events.sensor_report_help') }}</p>
         <form id="event-form" class="api-form-grid mt-3"><div class="wide"><label>{{ t('admin.events.text') }}</label><textarea id="event-text" required class="form-control form-control-console"></textarea></div><div class="wide"><button class="btn btn-console-primary">{{ t('admin.events.send_report') }}</button></div></form><pre id="event-output" class="api-output" hidden></pre></section>
-      <section class="api-card is-primary"><h3 class="h6">{{ t('admin.events.user_message') }}</h3><p class="api-hint">{{ t('admin.events.user_message_help') }}</p>
+      <section class="api-card"><h3 class="h6">{{ t('admin.events.user_message') }}</h3><p class="api-hint">{{ t('admin.events.user_message_help') }}</p>
         <form id="message-form" class="api-form-grid mt-3">
           <div class="wide"><label>{{ t('admin.events.text') }}</label><textarea id="message-text" required class="form-control form-control-console"></textarea></div>
           <div><label>{{ t('admin.events.conversation') }}</label><input id="message-conversation" class="form-control form-control-console"></div><div><label>{{ t('admin.events.source_message') }}</label><input id="message-source" class="form-control form-control-console"></div>
@@ -389,9 +464,9 @@ EVENTS_BODY = """
           <div><label>{{ t('admin.events.preferred_protocol') }}</label><input id="message-protocol" class="form-control form-control-console"></div><div><label>{{ t('admin.events.related_event') }}</label><input id="message-event-data" class="form-control form-control-console"></div>
           <div class="wide"><button class="btn btn-console-primary">{{ t('admin.events.send_message') }}</button></div>
         </form><pre id="message-output" class="api-output" hidden></pre></section>
-      <section class="api-card is-muted"><h3 class="h6">{{ t('admin.events.live_trace') }}</h3><p class="api-hint">{{ t('admin.events.live_trace_help') }}</p>
+      <section class="api-card"><h3 class="h6">{{ t('admin.events.live_trace') }}</h3><p class="api-hint">{{ t('admin.events.live_trace_help') }}</p>
         <form id="trace-form" class="api-form-grid mt-3"><div class="wide"><label>{{ t('admin.events.trace_id') }}</label><input id="trace-id" required class="form-control form-control-console tech"></div><div><label>{{ t('admin.events.from_cursor') }}</label><input id="trace-since" type="number" min="0" value="0" class="form-control form-control-console"></div><div><label>{{ t('admin.events.wait_seconds') }}</label><input id="trace-wait" type="number" min="0" max="30" value="0" class="form-control form-control-console"></div><div class="wide"><button class="btn btn-console">{{ t('admin.events.show_log') }}</button></div></form><pre id="trace-output" class="api-output" hidden></pre></section>
-      <section class="api-card is-muted"><h3 class="h6">{{ t('admin.events.attendance') }}</h3><p class="api-hint">{{ t('admin.events.attendance_help') }}</p>
+      <section class="api-card"><h3 class="h6">{{ t('admin.events.attendance') }}</h3><p class="api-hint">{{ t('admin.events.attendance_help') }}</p>
         <form id="attendance-form" class="api-form-grid mt-3"><div><label>{{ t('admin.events.check_time') }}</label><input id="attendance-now" type="datetime-local" class="form-control form-control-console"></div><div class="form-check align-self-end"><input id="attendance-force" type="checkbox" class="form-check-input"><label for="attendance-force" class="form-check-label">{{ t('admin.events.force_check') }}</label></div><div class="wide"><button class="btn btn-console">{{ t('admin.events.start_check') }}</button></div></form><pre id="attendance-output" class="api-output" hidden></pre></section>
     </div>
   </div>

@@ -265,14 +265,14 @@ _DASHBOARD_STYLE = """
     --navy-soft: #15263d;
     --bg: #f5f7fb;
     --panel: #ffffff;
-    --panel-muted: #f8fafc;
+    --panel-muted: #f4f7fb;
     --line: #e2e8f0;
     --line-strong: #cbd5e1;
     --text: #0B192C;
     --text-dim: #5b6b80;
     --text-faint: #8b9bb0;
-    --sidebar: #0B192C;
-    --sidebar-text: #c5d0de;
+    --sidebar: #ffffff;
+    --sidebar-text: #0B192C;
     --teal: #0f766e;
     --lime: #84cc16;
     --lime-hover: #65a30d;
@@ -328,14 +328,14 @@ _DASHBOARD_STYLE = """
     flex-direction: column;
     padding: 14px 8px 10px;
     transition: width .2s ease;
-    border-inline-end: 1px solid rgba(255,255,255,.05);
+    border-inline-end: 1px solid var(--line);
   }
   .ls-app.ls-sidebar-collapsed .ls-sidebar { width: 72px; padding-inline: 10px; }
   .ls-brand {
     display: flex; align-items: center; justify-content: center;
     gap: 8px; text-decoration: none; color: inherit;
     padding: 4px 8px 12px; min-height: 40px;
-    border-bottom: 1px solid rgba(255,255,255,.06);
+    border-bottom: 1px solid var(--line);
     margin-bottom: 8px;
   }
   .ls-logo {
@@ -356,24 +356,25 @@ _DASHBOARD_STYLE = """
     font-weight: 700;
     letter-spacing: .08em;
     text-transform: uppercase;
-    color: rgba(197, 208, 222, .5);
+    color: var(--text-faint);
     padding: 4px 10px 3px;
   }
   .ls-app.ls-sidebar-collapsed .ls-nav-group-label {
     height: 1px; padding: 0; margin: 8px 10px 6px; color: transparent;
-    background: rgba(255,255,255,.1); overflow: hidden;
+    background: var(--line); overflow: hidden;
   }
   .ls-nav-item {
     position: relative;
     display: flex; align-items: center; gap: 10px;
-    color: var(--sidebar-text); text-decoration: none;
+    color: var(--navy); text-decoration: none;
     padding: 7px 10px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500;
     transition: background .15s ease, color .15s ease;
   }
-  .ls-nav-item:hover { background: rgba(255,255,255,.07); color: #fff; }
+  .ls-nav-item .ls-icon { color: var(--blue); }
+  .ls-nav-item:hover { background: var(--blue-dim); color: var(--blue); }
   .ls-nav-item.is-active {
-    background: rgba(132, 204, 22, .14);
-    color: #fff;
+    background: var(--blue-dim);
+    color: var(--blue);
   }
   .ls-nav-item.is-active::before {
     content: "";
@@ -384,16 +385,16 @@ _DASHBOARD_STYLE = """
     border-radius: 999px;
     background: var(--lime);
   }
-  .ls-nav-item.is-active .ls-icon { color: var(--lime); }
+  .ls-nav-item.is-active .ls-icon { color: var(--blue); }
   .ls-icon { width: 18px; height: 18px; flex-shrink: 0; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   .ls-app.ls-sidebar-collapsed .ls-nav-label { display: none; }
   .ls-app.ls-sidebar-collapsed .ls-nav-item { justify-content: center; padding: 10px; }
   .ls-sidebar-toggle {
-    margin-top: 8px; border: 0; background: rgba(255,255,255,.06); color: var(--sidebar-text);
+    margin-top: 8px; border: 0; background: var(--panel-muted); color: var(--navy);
     border-radius: var(--radius-sm); padding: 8px; cursor: pointer;
-    transition: background .15s ease;
+    transition: background .15s ease, color .15s ease;
   }
-  .ls-sidebar-toggle:hover { background: rgba(255,255,255,.12); color: #fff; }
+  .ls-sidebar-toggle:hover { background: var(--blue-dim); color: var(--blue); }
   .ls-app.ls-sidebar-collapsed .ls-sidebar-toggle .ls-icon { transform: rotate(180deg); }
   [dir="rtl"] .ls-sidebar-toggle .ls-icon { transform: scaleX(-1); }
   [dir="rtl"] .ls-app.ls-sidebar-collapsed .ls-sidebar-toggle .ls-icon { transform: scaleX(-1) rotate(180deg); }
@@ -410,16 +411,23 @@ _DASHBOARD_STYLE = """
   .btn-console, .btn-console-primary, .btn-console-danger {
     display: inline-flex; align-items: center; justify-content: center; gap: 8px;
     min-height: var(--btn-h); border-radius: var(--radius-sm);
-    font-size: 13px; font-weight: 700; letter-spacing: .01em; line-height: 1;
+    font-size: 13px; font-weight: 600; letter-spacing: .01em; line-height: 1;
     text-decoration: none; border: 1.5px solid transparent; padding: 7px 14px;
     cursor: pointer; transition: background .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease, filter .15s ease;
   }
   .ls-btn-fill { background: var(--navy); color: #fff; border-color: var(--navy); }
   .ls-btn-fill:hover { background: var(--navy-soft); color: #fff; box-shadow: 0 6px 14px rgba(11, 25, 44, .18); }
   .ls-btn-outline { background: #fff; color: var(--blue); border-color: var(--blue); font-weight: 600; }
-  .ls-btn-outline .dot {
+  .ls-status-live {
+    display: inline-flex; align-items: center; gap: 6px;
+    min-height: 28px; padding: 4px 10px;
+    border: 1px solid var(--line); border-radius: 999px;
+    background: var(--panel-muted); color: var(--text-dim);
+    font-size: 12px; font-weight: 600;
+  }
+  .ls-status-live .dot {
     display: inline-block; width: 6px; height: 6px; border-radius: 50%;
-    background: var(--lime); box-shadow: 0 0 0 3px rgba(132,204,22,.28); margin-inline-end: 8px; vertical-align: middle;
+    background: var(--lime); box-shadow: 0 0 0 3px rgba(132,204,22,.22);
   }
   .ls-user-btn {
     background: #fff; color: var(--text); border-color: var(--line-strong); font-weight: 600;
@@ -453,7 +461,7 @@ _DASHBOARD_STYLE = """
   }
   .ls-home-group-title {
     font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
-    color: var(--text-faint); margin: 0 0 10px;
+    color: var(--blue); margin: 0 0 10px;
   }
   .ls-service-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
   .ls-tabs { display: flex; gap: 2px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin: 0 0 14px; }
@@ -463,7 +471,7 @@ _DASHBOARD_STYLE = """
     transition: color .15s ease, border-color .15s ease, background .15s ease;
   }
   .ls-tab:hover { color: var(--navy); background: var(--panel-muted); }
-  .ls-tab.is-active { color: var(--navy); border-bottom-color: var(--lime); }
+  .ls-tab.is-active { color: var(--blue); border-bottom-color: var(--blue); }
   .protocol-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; align-items: start; }
   .ls-content:has(.ls-protocols) { padding: 20px 28px 40px; }
   .ls-protocols { max-width: 1400px; }
@@ -480,10 +488,10 @@ _DASHBOARD_STYLE = """
   .protocol-nav { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px; box-shadow: var(--shadow); position: sticky; top: 72px; }
   .protocol-nav-item {
     display: block; width: 100%; text-align: start; border: 0; background: transparent;
-    padding: 8px 10px; border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--text); cursor: pointer;
+    padding: 8px 10px; border-radius: 8px; font-size: 13px; font-weight: 400; color: var(--text); cursor: pointer;
   }
   .protocol-nav-item:hover { background: var(--panel-muted); }
-  .protocol-nav-item.is-active { background: var(--lime-dim); color: var(--navy); }
+  .protocol-nav-item.is-active { background: var(--blue-dim); color: var(--blue); }
   .protocol-editor-block[hidden], [data-panel][hidden] { display: none !important; }
   .ls-status-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-bottom: 12px; }
   .ls-status-chip {
@@ -492,7 +500,8 @@ _DASHBOARD_STYLE = """
     display: flex; flex-direction: column; justify-content: center; gap: 2px;
   }
   .ls-status-chip .ls-status-kicker { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-faint); }
-  .ls-status-chip strong { color: var(--text); font-weight: 700; }
+  .ls-status-chip strong { color: var(--text); font-weight: 600; }
+  .ls-status-chip:first-child { border-inline-start: 3px solid var(--blue); }
   .ls-danger-zone { border-color: #fecaca; }
   .ls-compact-table td .form-control-console, .ls-compact-table td .form-select-console { min-height: 30px; padding: 3px 8px; font-size: 13px; }
   .ls-compact-table tbody td { padding: 5px 8px; }
@@ -512,7 +521,7 @@ _DASHBOARD_STYLE = """
   .protocol-section { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
   .protocol-section:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 0; }
   .protocol-nav-create { color: var(--blue); }
-  .sim-step.is-primary { border-color: var(--lime); box-shadow: 0 0 0 3px rgba(132,204,22,.16); }
+  .sim-step.is-primary { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(37, 99, 235, .12); }
   @media (max-width: 900px) { .protocol-layout { grid-template-columns: 1fr; } .protocol-nav { position: static; } }
   .ls-service-card {
     display: block; background: var(--panel); border-radius: var(--radius); padding: 18px 18px 16px;
@@ -524,7 +533,7 @@ _DASHBOARD_STYLE = """
   .ls-service-card:hover, .ls-service-card:focus-visible {
     transform: scale(1.02);
     box-shadow: var(--shadow-lg);
-    border-color: rgba(132, 204, 22, .45);
+    border-color: rgba(37, 99, 235, .35);
     color: inherit;
   }
   .ls-service-icon {
@@ -533,10 +542,26 @@ _DASHBOARD_STYLE = """
     transition: background .25s ease, color .25s ease;
   }
   .ls-service-card:hover .ls-service-icon, .ls-service-card:focus-visible .ls-service-icon {
-    background: var(--lime-dim); color: #3f6212;
+    background: var(--blue); color: #fff;
   }
-  .ls-service-card h2 { font-size: 15px; font-weight: 700; margin: 0 0 4px; }
-  .ls-service-card .subtitle { font-size: 13px; display: block; }
+  .ls-service-card h2 { font-size: 15px; font-weight: 600; margin: 0 0 4px; color: var(--navy); }
+  .ls-service-card .subtitle { font-size: 13px; display: block; color: var(--text-dim); }
+  .ls-service-card.is-featured {
+    background: var(--blue); border-color: var(--blue); color: #fff;
+  }
+  .ls-service-card.is-featured h2, .ls-service-card.is-featured .subtitle { color: #fff; }
+  .ls-service-card.is-featured .subtitle { color: rgba(255,255,255,.82); }
+  .ls-service-card.is-featured .ls-service-icon { background: rgba(255,255,255,.16); color: #fff; }
+  .ls-service-card.is-featured:hover, .ls-service-card.is-featured:focus-visible {
+    background: var(--blue-hover); border-color: var(--blue-hover); color: #fff;
+  }
+  .ls-service-card.is-featured:hover .ls-service-icon, .ls-service-card.is-featured:focus-visible .ls-service-icon {
+    background: rgba(255,255,255,.22); color: #fff;
+  }
+  .ls-service-card.is-featured-navy { background: var(--navy); border-color: var(--navy); }
+  .ls-service-card.is-featured-navy:hover, .ls-service-card.is-featured-navy:focus-visible {
+    background: var(--navy-soft); border-color: var(--navy-soft);
+  }
   @media (max-width: 980px) { .ls-service-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   @media (max-width: 640px) {
     .ls-service-grid { grid-template-columns: 1fr; }
@@ -686,7 +711,7 @@ _DASHBOARD_STYLE = """
   .btn-console-danger { color: var(--danger); border-color: #fca5a5; background: #fff; }
   .btn-console-danger:hover { border-color: var(--danger); color: var(--danger); background: var(--danger-dim); }
   .btn-console-primary {
-    background: var(--lime); border-color: var(--lime); color: var(--lime-text);
+    background: var(--lime); border-color: var(--lime); color: var(--lime-text); font-weight: 700;
   }
   .btn-console-primary:hover { background: var(--lime-hover); border-color: var(--lime-hover); color: var(--lime-text); filter: brightness(1.02); box-shadow: 0 6px 14px rgba(132, 204, 22, .28); }
   .btn-console:disabled, .btn-console-primary:disabled, .btn-console-danger:disabled,
@@ -1020,7 +1045,7 @@ _SHELL_OPEN = """
 <div class="ls-main">
   <header class="ls-topbar">
     <a class="ls-btn-fill" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a>
-    <span class="ls-btn-outline"><span class="dot"></span>{{ t('admin.connected') }}</span>
+    <span class="ls-status-live"><span class="dot"></span>{{ t('admin.connected') }}</span>
     <div class="ls-topbar-end">
       {% if csrf_token %}
       <form method="post" action="{{ url_for('admin.logout') }}">
@@ -1239,14 +1264,14 @@ _MENU_TEMPLATE = """<!DOCTYPE html>
   <section class="ls-home-group">
     <h2 class="ls-home-group-title">{{ t('admin.home_group_operations') }}</h2>
     <div class="ls-service-grid">
-      <a class="ls-service-card" href="{{ url_for('admin.events') }}"><span class="ls-service-icon">""" + _ICON_EVENTS + """</span><h2>{{ t('admin.menu_events') }}</h2><span class="subtitle">{{ t('admin.events.subtitle') }}</span></a>
-      <a class="ls-service-card" href="{{ url_for('admin.simulator') }}"><span class="ls-service-icon">""" + _ICON_SIMULATOR + """</span><h2>{{ t('admin.menu_simulator') }}</h2><span class="subtitle">{{ t('admin.simulator.subtitle') }}</span></a>
+      <a class="ls-service-card is-featured" href="{{ url_for('admin.events') }}"><span class="ls-service-icon">""" + _ICON_EVENTS + """</span><h2>{{ t('admin.menu_events') }}</h2><span class="subtitle">{{ t('admin.events.subtitle') }}</span></a>
+      <a class="ls-service-card is-featured" href="{{ url_for('admin.simulator') }}"><span class="ls-service-icon">""" + _ICON_SIMULATOR + """</span><h2>{{ t('admin.menu_simulator') }}</h2><span class="subtitle">{{ t('admin.simulator.subtitle') }}</span></a>
     </div>
   </section>
   <section class="ls-home-group">
     <h2 class="ls-home-group-title">{{ t('admin.home_group_system') }}</h2>
     <div class="ls-service-grid">
-      <a class="ls-service-card" href="{{ url_for('admin.server') }}"><span class="ls-service-icon">""" + _ICON_SERVER + """</span><h2>{{ t('admin.menu_server') }}</h2><span class="subtitle">{{ t('admin.server_subtitle') }}</span></a>
+      <a class="ls-service-card is-featured is-featured-navy" href="{{ url_for('admin.server') }}"><span class="ls-service-icon">""" + _ICON_SERVER + """</span><h2>{{ t('admin.menu_server') }}</h2><span class="subtitle">{{ t('admin.server_subtitle') }}</span></a>
     </div>
   </section>
   {% if admin_tables %}
@@ -1345,61 +1370,90 @@ _EVENTS_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><he
 
 _SERVER_STYLE = """
 <style>
+  .ls-content:has(.ls-server) { padding: 20px 28px 40px; }
+  .ls-server { max-width: 1080px; }
+  .ls-server .ls-page-header { margin-bottom: 20px; }
+  .ls-server .ls-section { margin-bottom: 28px; }
+  .ls-server .block-console { padding: 22px 24px; }
+  .ls-server .ls-identity-block { padding: 16px 18px; margin-bottom: 20px; }
   .mode-panel {
+    position: relative;
+    overflow: hidden;
     border: 1px solid var(--line);
+    border-inline-start: 3px solid var(--blue);
     background: var(--panel);
+    padding: 28px 28px 24px;
   }
-  .mode-panel.open-active { border-inline-start: 3px solid var(--lime); }
-  .mode-panel.safe-active { border-inline-start: 3px solid var(--blue); }
-  .mode-layout { display: grid; grid-template-columns: minmax(120px, .4fr) minmax(280px, 1.6fr); gap: 20px; align-items: center; }
-  .mode-visual { display: flex; align-items: center; justify-content: center; min-height: 64px; }
+  .mode-panel.open-active { background: var(--panel); }
+  .mode-panel.safe-active { background: var(--panel); border-inline-start-color: var(--blue); }
+  .mode-layout { display: grid; grid-template-columns: minmax(150px, .62fr) minmax(280px, 1.38fr); gap: 28px; align-items: center; }
+  .mode-visual { display: flex; align-items: center; justify-content: center; min-height: 150px; }
   .mode-orbit {
     position: relative;
-    width: 56px;
-    height: 56px;
+    width: 116px;
+    height: 116px;
     display: grid;
     place-items: center;
     border-radius: 50%;
-    border: 1px solid var(--line-strong);
+    border: 1px solid rgba(37, 99, 235, .28);
     background: var(--panel-muted);
   }
-  .safe-active .mode-orbit { border-color: rgba(37, 99, 235, .35); }
-  .open-active .mode-orbit { border-color: rgba(132, 204, 22, .4); }
+  .open-active .mode-orbit { border-color: rgba(132, 204, 22, .45); }
+  .safe-active .mode-orbit { border-color: rgba(37, 99, 235, .38); background: #eff6ff; }
+  .mode-orbit::before, .mode-orbit::after {
+    content: "";
+    position: absolute;
+    border-radius: 50%;
+    border: 1px solid currentColor;
+    opacity: .14;
+  }
+  .mode-orbit::before { inset: 12px; }
+  .mode-orbit::after { inset: 27px; }
   .mode-shield {
-    width: 30px;
-    height: 34px;
+    width: 48px;
+    height: 56px;
     display: grid;
     place-items: center;
-    color: var(--navy);
+    color: var(--lime-text);
     font-family: var(--mono);
     font-weight: 700;
-    font-size: 11px;
+    font-size: 12px;
     background: var(--lime);
     clip-path: polygon(50% 0, 92% 17%, 84% 70%, 50% 100%, 16% 70%, 8% 17%);
   }
   .safe-active .mode-shield { background: var(--blue); color: #fff; }
   .mode-value { font-family: var(--mono); font-size: 12px; color: var(--text-faint); letter-spacing: .02em; direction: ltr; unicode-bidi: isolate; }
-  .mode-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .mode-state-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 4px rgba(132, 204, 22, .16); }
-  .safe-active .mode-state-dot { background: var(--blue); box-shadow: 0 0 0 4px rgba(37, 99, 235, .16); }
-  .mode-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 0; }
+  .mode-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+  .mode-title h2 { font-size: 22px; font-weight: 600; color: var(--navy); }
+  .mode-state-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 5px rgba(132, 204, 22, .16); }
+  .safe-active .mode-state-dot { background: var(--blue); box-shadow: 0 0 0 5px rgba(37, 99, 235, .16); }
+  .mode-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 20px; }
   .mode-choice {
     border: 1px solid var(--line);
-    border-radius: var(--radius-sm);
-    padding: 12px 14px;
+    border-radius: var(--radius);
+    padding: 16px 18px;
     background: #fff;
-    color: var(--text);
+    color: var(--navy);
     text-align: start;
-    min-height: 72px;
-    transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+    min-height: 88px;
+    transition: border-color .15s ease, box-shadow .15s ease, background .15s ease, transform .2s ease;
   }
-  .mode-choice:hover { border-color: var(--blue); box-shadow: var(--shadow); }
-  .mode-choice.active { border-color: var(--lime); background: var(--lime-dim); }
-  .safe-active .mode-choice.active { border-color: var(--blue); background: var(--blue-dim); }
-  .mode-choice strong { display: block; margin-bottom: 3px; }
-  .mode-choice small { display: block; color: var(--text-dim); line-height: 1.35; }
-  .mode-counts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
-  @media (max-width: 700px) { .mode-layout { grid-template-columns: 1fr; gap: 8px; } .mode-visual { min-height: 72px; } .mode-actions { grid-template-columns: 1fr; } }
+  .mode-choice:hover { transform: translateY(-2px); border-color: var(--blue); box-shadow: var(--shadow); }
+  .mode-choice[data-safe-mode="false"].active {
+    border-color: var(--blue);
+    background: var(--blue-dim);
+  }
+  .mode-choice[data-safe-mode="true"].active {
+    border-color: var(--line-strong);
+    background: var(--panel);
+  }
+  .mode-choice strong { display: block; margin-bottom: 4px; font-weight: 600; color: var(--navy); }
+  .mode-choice small { display: block; color: var(--text-dim); line-height: 1.4; }
+  .mode-counts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+  .ls-server .ls-action-card { margin-bottom: 16px; }
+  .ls-server .ls-action-card:last-child { margin-bottom: 0; }
+  @media (max-width: 700px) { .mode-layout { grid-template-columns: 1fr; gap: 12px; } .mode-visual { min-height: 118px; } .mode-actions { grid-template-columns: 1fr; } }
+  @media (prefers-reduced-motion: reduce) { .mode-choice { transition: border-color .15s ease, box-shadow .15s ease, background .15s ease; transform: none; } }
 </style>
 """
 
@@ -1407,7 +1461,7 @@ _SERVER_STYLE = """
 _SERVER_TEMPLATE = """<!DOCTYPE html>
 <html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.server_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + _SERVER_STYLE + """</head>
 """ + _SHELL_OPEN + """
-<div class="ls-page"><div class="ls-page-header"><div><h1>{{ t('admin.server_title') }}</h1>
+<div class="ls-page ls-server"><div class="ls-page-header"><div><h1>{{ t('admin.server_title') }}</h1>
 <p class="subtitle">{{ t('admin.server_subtitle') }}</p></div></div>
 {% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>{% endfor %}
 """ + IDENTITY_BAR + """
@@ -1415,27 +1469,34 @@ _SERVER_TEMPLATE = """<!DOCTYPE html>
 {% if not supervisor %}<div class="alert-console-error px-3 py-2 mb-4">{{ t('admin.server_unavailable') }}</div>{% endif %}
 <section class="ls-section">
   <h2 class="ls-section-title">{{ t('admin.server_status_heading') }}</h2>
-  <div class="ls-status-strip">
-    <div class="ls-status-chip"><span class="ls-status-kicker">{{ t('admin.connected') }}</span><strong>{% if supervisor %}{{ t('admin.server.connection_ok') }}{% else %}{{ t('admin.server.connection_limited') }}{% endif %}</strong></div>
-    <div class="ls-status-chip"><span class="ls-status-kicker">{{ t('admin.server_profile') }}</span><strong>{{ t('admin.server_active_profile', profile=active_profile) }}</strong></div>
-    <div class="ls-status-chip"><span class="ls-status-kicker">SAFE_MODE</span><strong>{% if safe_mode %}{{ t('admin.server_safe_on') }}{% else %}{{ t('admin.server_safe_off') }}{% endif %}</strong><span class="mode-value">SAFE_MODE = {{ safe_mode|string|lower }}</span></div>
-    <div class="ls-status-chip"><span class="ls-status-kicker">{{ t('admin.col_status') }}</span><span class="tag">{{ t('admin.server_pending_users', count=automatic_users) }}</span> <span class="tag">{{ t('admin.server_pending_groups', count=automatic_groups) }}</span></div>
-  </div>
   <div class="block-console mode-panel {% if safe_mode %}safe-active{% else %}open-active{% endif %}">
-    <p class="subtitle mb-2">{% if safe_mode %}{{ t('admin.server_safe_on_help') }}{% else %}{{ t('admin.server_safe_off_help') }}{% endif %}</p>
-    <div class="mode-actions" data-confirm="{{ t('admin.server_safe_confirm', users=automatic_users, groups=automatic_groups) }}">
-      <button type="button" data-safe-mode="false" class="mode-choice {% if not safe_mode %}active{% endif %}"><strong>{{ t('admin.server_choose_open') }}</strong><small>{{ t('admin.server_choose_open_help') }}</small></button>
-      <button type="button" data-safe-mode="true" class="mode-choice {% if safe_mode %}active{% endif %}"><strong>{{ t('admin.server_choose_safe') }}</strong><small>{{ t('admin.server_choose_safe_help') }}</small></button>
+    <div class="mode-layout">
+      <div class="mode-visual"><div class="mode-orbit" aria-hidden="true"><div class="mode-shield">{% if safe_mode %}SAFE{% else %}OPEN{% endif %}</div></div></div>
+      <div>
+        <span class="block-label">SAFE_MODE</span>
+        <div class="mode-title"><span class="mode-state-dot"></span><h2 class="mb-0">{% if safe_mode %}{{ t('admin.server_safe_on') }}{% else %}{{ t('admin.server_safe_off') }}{% endif %}</h2><span class="mode-value">SAFE_MODE = {{ safe_mode|string|lower }}</span></div>
+        <p class="subtitle mt-2 mb-0">{% if safe_mode %}{{ t('admin.server_safe_on_help') }}{% else %}{{ t('admin.server_safe_off_help') }}{% endif %}</p>
+        <div class="mode-counts">
+          <span class="tag">{% if supervisor %}{{ t('admin.server.connection_ok') }}{% else %}{{ t('admin.server.connection_limited') }}{% endif %}</span>
+          <span class="tag">{{ t('admin.server_pending_users', count=automatic_users) }}</span>
+          <span class="tag">{{ t('admin.server_pending_groups', count=automatic_groups) }}</span>
+        </div>
+        <div class="mode-actions" data-confirm="{{ t('admin.server_safe_confirm', users=automatic_users, groups=automatic_groups) }}">
+          <button type="button" data-safe-mode="false" class="mode-choice {% if not safe_mode %}active{% endif %}"><strong>{{ t('admin.server_choose_open') }}</strong><small>{{ t('admin.server_choose_open_help') }}</small></button>
+          <button type="button" data-safe-mode="true" class="mode-choice {% if safe_mode %}active{% endif %}"><strong>{{ t('admin.server_choose_safe') }}</strong><small>{{ t('admin.server_choose_safe_help') }}</small></button>
+        </div>
+        <div id="safe-mode-feedback" class="api-hint mt-3" role="status" aria-live="polite"></div>
+      </div>
     </div>
-    <div id="safe-mode-feedback" class="api-hint mt-3" role="status" aria-live="polite"></div>
   </div>
 </section>
 <section class="ls-section">
   <h2 class="ls-section-title">{{ t('admin.server_actions_heading') }}</h2>
-  <div class="block-console mb-3"><span class="block-label">{{ t('admin.server_profile') }}</span>
+  <div class="block-console ls-action-card"><span class="block-label">{{ t('admin.server_profile') }}</span>
+  <p class="subtitle">{{ t('admin.server_active_profile', profile=active_profile) }}</p>
   <form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.switch_profile') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="col"><select class="form-select form-select-console" name="profile_module" {% if not supervisor %}disabled{% endif %}>{% for profile in profiles %}<option value="{{ profile.module_path }}" {% if profile.module_path == active_module %}selected{% endif %}>{{ profile.profile_name }} — {{ profile.module_path }} ({{ profile.api_port }})</option>{% endfor %}</select></div><div class="col-auto"><button class="btn btn-console-primary" {% if not supervisor %}disabled{% endif %}>{{ t('admin.server_load_profile') }}</button></div></form>
   <p class="subtitle mt-3 mb-0">{{ t('admin.server_restart_required') }}</p></div>
-  <div class="block-console ls-danger-zone"><span class="block-label">{{ t('admin.server_reset') }}</span><p class="subtitle">{{ t('admin.server_reset_help') }}</p><form method="post" action="{{ url_for('admin.reset_server') }}" onsubmit="return confirm({{ t('admin.server_reset_confirm')|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="confirm" value="yes"><button class="btn btn-console-danger" {% if not supervisor %}disabled{% endif %}>{{ t('admin.server_reset_button') }}</button></form></div>
+  <div class="block-console ls-action-card ls-danger-zone"><span class="block-label">{{ t('admin.server_reset') }}</span><p class="subtitle">{{ t('admin.server_reset_help') }}</p><form method="post" action="{{ url_for('admin.reset_server') }}" onsubmit="return confirm({{ t('admin.server_reset_confirm')|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="confirm" value="yes"><button class="btn btn-console-danger" {% if not supervisor %}disabled{% endif %}>{{ t('admin.server_reset_button') }}</button></form></div>
 </section>
 </div>""" + API_CLIENT_SCRIPT + """
 <script>

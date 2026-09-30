@@ -1772,7 +1772,7 @@ SIMULATOR_BODY = """
   // left to guessing at a disabled <select>'s own option text alone.
   function setProfileSimAvailability(enabled, hint) {
     profileSimSelect.disabled = !enabled;
-    profileSimLoadButton.disabled = !enabled;
+    profileSimLoadButton.disabled = !enabled || !profileSimSelect.value;
     profileSimHint.textContent = hint || '';
     profileSimSelect.title = hint || '';
     profileSimLoadButton.title = hint || '';
@@ -1780,7 +1780,9 @@ SIMULATOR_BODY = """
 
   async function loadProfileSimulationCatalog() {
     profileSimSelect.innerHTML = '';
-    profileSimSelect.appendChild(el('option', null, t('choose_profile_simulation')));
+    const placeholder = el('option', null, t('choose_profile_simulation'));
+    placeholder.value = '';
+    profileSimSelect.appendChild(placeholder);
     if (!DATA.api_identity) {
       setProfileSimAvailability(false, t('select_identity_first'));
       return;
@@ -1805,6 +1807,12 @@ SIMULATOR_BODY = """
     setProfileSimAvailability(true, '');
   }
 
+  profileSimSelect.addEventListener('change', function () {
+    if (!profileSimSelect.disabled) {
+      profileSimLoadButton.disabled = !profileSimSelect.value;
+    }
+  });
+
   profileSimLoadButton.addEventListener('click', async function () {
     const key = profileSimSelect.value;
     if (!key) return;
@@ -1822,7 +1830,7 @@ SIMULATOR_BODY = """
     } catch (error) {
       showAlert(t('profile_simulation_load_failed', { message: error.message }), true);
     } finally {
-      profileSimLoadButton.disabled = false;
+      profileSimLoadButton.disabled = !profileSimSelect.value;
     }
   });
 
