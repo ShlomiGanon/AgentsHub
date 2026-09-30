@@ -106,6 +106,36 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
     provider_events: list[dict[str, Any]] = []
     tool_events: list[dict[str, Any]] = []
     result_events: list[dict[str, Any]] = []
+    step_events: list[dict[str, Any]] = []
+    invocation_completions: dict[str, dict[str, Any]] = {}
+
+    def ensure_invocation(invocation_id: Any, agent_name: Any, entry: dict[str, Any], *, legacy: bool = False):
+        if not isinstance(invocation_id, str) or not invocation_id.strip():
+            return None
+        if not isinstance(agent_name, str) or not agent_name.strip() or agent_name == "unattributed" or len(agent_name) > 100:
+            return None
+        node = by_id.get(invocation_id)
+        if node is None:
+            node = {
+                "id": f"invocation_{invocation_id}", "type": "invocation", "label": agent_name,
+                "sublabel": entry.get("stage") or "Agent Invocation", "icon": "🤖",
+                "status": "unknown", "started_at": entry.get("started_at") or entry.get("timestamp"),
+                "task": _safe_str(entry.get("task_summary"), 120),
+                "allowed_tools": entry.get("allowed_tools") or [], "llm_calls": [], "tools": [],
+                "invocation_id": invocation_id, "legacy": legacy,
+            }
+            nodes.append(node)
+            by_id[invocation_id] = node
+        elif node.get("legacy") and not legacy:
+            node["legacy"] = False
+        node["agent_name"] = agent_name
+        node["label"] = agent_name
+        node["parent_invocation_id"] = entry.get("parent_invocation_id") or node.get("parent_invocation_id")
+        node["parent_agent"] = entry.get("parent_agent") or node.get("parent_agent")
+        node["protocol_name"] = entry.get("protocol_name") or node.get("protocol_name")
+        node["stage"] = entry.get("stage") or node.get("stage")
+        node["started_at"] = entry.get("started_at") or node.get("started_at") or entry.get("timestamp")
+        return node
     has_input = any(e.get("event") in {"report_received", "request_received"} for e in entries)
     if has_input:
         nodes.append({"id": "input", "type": "user", "label": "הודעה התקבלה", "status": "success", "icon": "👤"})
@@ -118,23 +148,32 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
         event = entry.get("event")
         invocation_id = entry.get("invocation_id")
         if event == "agent_invocation_started" and invocation_id:
-            node_id = f"invocation_{invocation_id}"
-            node = {
-                "id": node_id, "type": "invocation", "label": entry.get("agent") or "סוכן",
-                "sublabel": entry.get("stage") or "הפעלת סוכן", "icon": "🤖",
-                "status": "running", "started_at": entry.get("timestamp"),
-                "task": _safe_str(entry.get("task_summary"), 120),
-                "allowed_tools": entry.get("allowed_tools") or [], "llm_calls": [], "tools": [],
-                "parent_invocation_id": entry.get("parent_invocation_id"),
-            }
-            nodes.append(node)
-            by_id[invocation_id] = node
-        elif event == "agent_invocation_finished" and invocation_id in by_id:
-            node = by_id[invocation_id]
+            node = ensure_invocation(invocation_id, entry.get("agent_name") or entry.get("agent"), entry)
+            if node is not None:
+                node["status"] = "running"
+        elif event == "agent_invocation_finished" and invocation_id:
+            node = ensure_invocation(invocation_id, entry.get("agent_name") or entry.get("agent"), entry)
+            if node is None:
+                continue
             node["status"] = "success" if entry.get("status") == "success" else "failed"
             node["finished_at"] = entry.get("timestamp")
             node["duration_ms"] = entry.get("duration_ms")
             node["result"] = f"{entry.get('result_chars', 0)} תווים" if entry.get("status") == "success" else _safe_str(entry.get("error_type"))
+            invocation_completions[invocation_id] = entry
+        elif event == "model_invocation_finished" and invocation_id:
+            node = ensure_invocation(invocation_id, entry.get("agent_name") or entry.get("agent"), entry)
+            if node is not None:
+                node["status"] = "success" if entry.get("status") == "success" else "failed"
+                node["finished_at"] = entry.get("timestamp")
+                node["duration_ms"] = entry.get("duration_ms") or entry.get("latency_ms")
+                node["result"] = "הפעלת הסוכן הסתיימה; פלט גולמי אינו מוצג"
+                node["input_tokens"] = entry.get("input_tokens")
+                node["output_tokens"] = entry.get("output_tokens")
+                finished_at = _parse_timestamp(entry.get("timestamp"))
+                latency_ms = entry.get("latency_ms")
+                if finished_at and isinstance(latency_ms, (int, float)):
+                    node["started_at"] = (finished_at - timedelta(milliseconds=latency_ms)).isoformat()
+                invocation_completions[invocation_id] = entry
         elif event == "model_invocation_finished" and not invocation_id:
             # Old traces contain a real completion log but no source invocation ID.
             # Keep each call separate; do not fabricate a specialist or tool.
@@ -150,11 +189,37 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
                 node["started_at"] = (finish_dt - timedelta(milliseconds=entry["latency_ms"])).isoformat()
             nodes.append(node)
         elif event in {"provider_request_finished", "provider_request_failed"}:
+            provider_invocation_id = entry.get("agent_invocation_id") or invocation_id
+            provider_agent_name = entry.get("agent_name")
+            ensure_invocation(provider_invocation_id, provider_agent_name, entry)
             provider_events.append(entry)
         elif event in {"tool_call", "tool_blocked"}:
+            ensure_invocation(invocation_id, entry.get("agent_name") or entry.get("agent"), entry)
             tool_events.append(entry)
         elif event in {"step_result", "specialist_finished"}:
+            if invocation_id:
+                result_agent = entry.get("agent_name") or entry.get("agent")
+                completed_node = ensure_invocation(invocation_id, result_agent, entry)
+                if completed_node is not None:
+                    completed_node["status"] = "success" if entry.get("succeeded", entry.get("status") == "success") else "failed"
+                    completed_node["finished_at"] = entry.get("timestamp")
+                    completed_node["duration_ms"] = entry.get("duration_ms") or completed_node.get("duration_ms")
+                invocation_completions.setdefault(invocation_id, entry)
             result_events.append(entry)
+        elif event == "step_start":
+            step_events.append({"start": entry, "finish": None})
+
+    for entry in entries:
+        if entry.get("event") not in {"step_result", "step_failed"}:
+            continue
+        agent_name = entry.get("agent")
+        step_id = entry.get("step_index", entry.get("step_id"))
+        for step in reversed(step_events):
+            start = step["start"]
+            start_step_id = start.get("step_index", start.get("step_id"))
+            if start.get("agent") == agent_name and start_step_id == step_id and step["finish"] is None:
+                step["finish"] = entry
+                break
 
     for node in [n for n in nodes if n["type"] == "invocation"]:
         parent_id = node.get("parent_invocation_id")
@@ -166,6 +231,8 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
         })
 
     for index, entry in enumerate(result_events):
+        if entry.get("invocation_id") in invocation_completions:
+            continue
         node = by_id.get(entry.get("invocation_id"))
         if node is None:
             continue
@@ -181,44 +248,179 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
         })
 
     for entry in provider_events:
-        node = by_id.get(entry.get("invocation_id"))
-        if node is None and not entry.get("invocation_id"):
+        invocation_id = entry.get("agent_invocation_id") or entry.get("invocation_id")
+        node = by_id.get(invocation_id)
+        if node is None and not invocation_id:
             candidates = [n for n in nodes if n.get("legacy") and n.get("sublabel") == entry.get("stage")]
             if len(candidates) == 1:
                 node = candidates[0]
         call = {
-            "call_id": entry.get("call_id"), "model": _safe_str(entry.get("model"), 65),
+            "call_id": entry.get("provider_request_id") or entry.get("call_id"), "provider_request_id": entry.get("provider_request_id") or entry.get("call_id"),
+            "trace_id": entry.get("trace_id"),
+            "agent_name": entry.get("agent_name") or entry.get("agent"),
+            "agent_invocation_id": invocation_id,
+            "parent_agent": entry.get("parent_agent"), "parent_invocation_id": entry.get("parent_invocation_id"),
+            "stage": entry.get("stage"), "purpose": (
+                entry.get("purpose") if entry.get("purpose") not in {None, "", "unattributed"}
+                else {"extraction": "event_extraction"}.get(entry.get("stage"), "unattributed")
+            ),
+            "protocol_name": entry.get("protocol_name"), "tool_name": entry.get("tool_name"),
+            "sequence_number": entry.get("sequence_number"),
+            "started_at": entry.get("started_at"), "finished_at": entry.get("finished_at"),
+            "model": _safe_str(entry.get("model"), 65),
             "latency_ms": entry.get("latency_ms"), "status": entry.get("status"),
             "finish_reason": entry.get("finish_reason"), "input_tokens": entry.get("input_tokens"),
-            "output_tokens": entry.get("output_tokens"),
+            "output_tokens": entry.get("output_tokens"), "cache_tokens": entry.get("cache_tokens"),
+            "call_type": entry.get("call_type"),
+            "result_summary": ("בקשת הספק נכשלה" if entry.get("status") == "error" else
+                ("הספק החזיר בקשת כלי" if "tool_call" in str(entry.get("call_type") or "").lower() else "הספק החזיר תשובה")),
         }
+        model_id = f"provider_request_{_safe_str(entry.get('provider_request_id') or entry.get('call_id') or index, 64)}"
+        purpose_label = call["purpose"] if call["purpose"] != "unattributed" else (call["stage"] or "unattributed")
+        model_node = {
+            "id": model_id, "type": "model",
+            "label": ("LLM: " + purpose_label) if node is not None else "LLM: unattributed",
+            "sublabel": call["stage"] or "שלב לא ידוע", "icon": "🧠",
+            "status": "failed" if entry.get("status") == "error" else "success",
+            "duration_ms": call["latency_ms"], "llm_calls": [call], "call_count": 1,
+            "task": ("מטרה: " + purpose_label) if node is not None else "לא נשמר קישור ודאי להפעלת הסוכן",
+            "result": call["result_summary"], "agent_invocation_id": call["agent_invocation_id"],
+            "agent_name": call["agent_name"], "protocol_name": call["protocol_name"],
+        }
+        nodes.append(model_node)
         if node is not None:
             node["llm_calls"].append(call)
-        else:
-            nodes.append({
-                "id": f"unattributed_model_{len(nodes)}", "type": "model", "label": "קריאת מודל ללא שיוך ודאי",
-                "icon": "🧠", "status": "failed" if entry.get("status") == "error" else "success", "llm_calls": [call],
+            node["protocol_name"] = call["protocol_name"] or node.get("protocol_name")
+            node.setdefault("provider_node_ids", []).append(model_id)
+            edges.append({
+                "id": f"provider_{index}_{model_id}", "source": node["id"], "target": model_id,
+                "type": "llm", "label": "LLM: " + purpose_label,
+                "status": "failed" if entry.get("status") == "error" else "completed",
             })
 
+    tool_nodes_by_invocation: dict[str, list[dict[str, Any]]] = {}
     for index, entry in enumerate(tool_events):
-        invocation = by_id.get(entry.get("invocation_id"))
+        invocation_id = entry.get("invocation_id")
+        invocation = by_id.get(invocation_id)
         tool_node = {
             "id": f"tool_call_{index}", "type": "tool", "label": entry.get("tool") or "כלי",
             "icon": "🔧", "status": "failed" if entry.get("status") in {"error", "blocked"} else "success",
             "duration_ms": round(float(entry.get("duration_seconds") or 0) * 1000, 1),
             "summary": _safe_str(entry.get("result_summary"), 120),
+            "timestamp": entry.get("timestamp"), "agent_invocation_id": invocation_id,
             "side_effecting": bool(entry.get("side_effecting")),
             "verification": "unknown" if entry.get("side_effecting") else "read_only",
         }
         nodes.append(tool_node)
+        if invocation_id:
+            tool_nodes_by_invocation.setdefault(invocation_id, []).append(tool_node)
         if invocation is not None:
             invocation["tools"].append(tool_node["id"])
+            invocation["tool_node_ids"] = invocation.get("tool_node_ids", []) + [tool_node["id"]]
+            prior_decisions = [
+                model for model in nodes
+                if model.get("type") == "model"
+                and model.get("agent_invocation_id") == invocation_id
+                and "tool_call" in str((model.get("llm_calls") or [{}])[0].get("call_type") or "").lower()
+                and (_parse_timestamp((model.get("llm_calls") or [{}])[0].get("finished_at")) or datetime.min.replace(tzinfo=timezone.utc)) <= (_parse_timestamp(entry.get("timestamp")) or datetime.max.replace(tzinfo=timezone.utc))
+            ]
+            source_id = prior_decisions[-1]["id"] if prior_decisions else invocation["id"]
             edges.append({
-                "id": f"tool_edge_{index}", "source": invocation["id"], "target": tool_node["id"],
+                "id": f"tool_edge_{index}", "source": source_id, "target": tool_node["id"],
                 "type": "tool_call", "label": "הפעלת כלי", "status": "completed",
             })
         else:
             tool_node["details"] = "שיוך להפעלת סוכן לא נרשם; לא מוצג קשר משוער."
+
+    for index, entry in enumerate(provider_events):
+        invocation_id = entry.get("agent_invocation_id") or entry.get("invocation_id")
+        tool_name = entry.get("tool_name")
+        if not invocation_id or not tool_name:
+            continue
+        provider_node_id = f"provider_request_{_safe_str(entry.get('provider_request_id') or entry.get('call_id') or index, 64)}"
+        started_at = _parse_timestamp(entry.get("started_at"))
+        candidates = [
+            tool for tool in tool_nodes_by_invocation.get(invocation_id, [])
+            if tool.get("label") == tool_name
+            and (_parse_timestamp(tool.get("timestamp")) is not None)
+            and started_at is not None
+            and _parse_timestamp(tool.get("timestamp")) <= started_at
+        ]
+        if candidates:
+            tool = candidates[-1]
+            edges.append({
+                "id": f"tool_result_{index}_{provider_node_id}", "source": tool["id"], "target": provider_node_id,
+                "type": "tool_result", "label": "תוצאת כלי למודל", "status": "completed",
+            })
+
+    for invocation_id, completion in invocation_completions.items():
+        invocation = by_id.get(invocation_id)
+        if invocation is None:
+            continue
+        result_id = f"agent_result_{invocation_id}"
+        completion_succeeded = completion.get("succeeded")
+        if completion_succeeded is None:
+            completion_succeeded = completion.get("status") == "success"
+        result_node = {
+            "id": result_id, "type": "result", "label": f"תוצאת {invocation.get('label', 'Agent')}",
+            "sublabel": "Agent invocation result", "icon": "📥",
+            "status": "success" if completion_succeeded else "failed",
+            "details": "הפעלת הסוכן הסתיימה; תוכן פלט גולמי אינו מוצג.",
+        }
+        nodes.append(result_node)
+        children = []
+        for model in nodes:
+            if model.get("type") == "model" and model.get("agent_invocation_id") == invocation_id:
+                when = _parse_timestamp((model.get("llm_calls") or [{}])[0].get("finished_at"))
+                children.append((when or datetime.min.replace(tzinfo=timezone.utc), model["id"]))
+        for tool in tool_nodes_by_invocation.get(invocation_id, []):
+            when = _parse_timestamp(tool.get("timestamp"))
+            children.append((when or datetime.min.replace(tzinfo=timezone.utc), tool["id"]))
+        source_id = max(children)[1] if children else invocation["id"]
+        edges.append({
+            "id": f"result_edge_{invocation_id}", "source": source_id, "target": result_id,
+            "type": "agent_result", "label": "תוצאת הפעלה", "status": result_node["status"],
+        })
+        parent_id = invocation.get("parent_invocation_id")
+        parent_target = f"invocation_{parent_id}" if parent_id in by_id else "orchestrator"
+        edges.append({
+            "id": f"result_return_{invocation_id}", "source": result_id, "target": parent_target,
+            "type": "result", "label": "תוצאה הוחזרה", "status": result_node["status"],
+        })
+
+    for step_index, step in enumerate(step_events):
+        start, finish = step["start"], step["finish"]
+        agent_name = start.get("agent") or "סוכן לא ידוע"
+        step_id = start.get("step_index", start.get("step_id", step_index))
+        start_at = _parse_timestamp(start.get("timestamp"))
+        finish_at = _parse_timestamp((finish or {}).get("timestamp"))
+        matching_invocations = [
+            inv for inv in nodes if inv.get("type") == "invocation" and inv.get("label") == agent_name
+            and start_at is not None
+            and (inv_start := _parse_timestamp(inv.get("started_at"))) is not None and inv_start >= start_at
+            and (finish_at is None or inv_start <= finish_at)
+        ]
+        step_node_id = f"protocol_step_{step_index}_{_safe_str(step_id, 40)}"
+        observed = bool(matching_invocations)
+        result_status = (finish or {}).get("succeeded")
+        step_node = {
+            "id": step_node_id, "type": "routing", "label": f"צעד פרוטוקול: {agent_name}",
+            "sublabel": f"צעד {step_id}", "icon": "🧭",
+            "status": "success" if result_status is True else ("failed" if result_status is False else "unknown"),
+            "task": ("נמצאה הפעלת Agent תואמת" if observed else "הצעד נבחר, אך לא נצפתה הפעלת Agent עם מזהה invocation."),
+            "details": ("צעד תהליך בפרוטוקול; אינו צומת Agent Invocation." + (" קיימת הפעלה מתאימה ב־Trace." if observed else " לא נוצרה הפעלת Agent מדווחת.")),
+            "started_at": start.get("timestamp"), "finished_at": (finish or {}).get("timestamp"),
+        }
+        nodes.append(step_node)
+        edges.append({
+            "id": f"route_step_{step_index}", "source": "orchestrator", "target": step_node_id,
+            "type": "routing", "label": "בחירת צעד פרוטוקול", "status": "completed",
+        })
+        for invocation in matching_invocations:
+            edges.append({
+                "id": f"step_invocation_{step_index}_{invocation['id']}", "source": step_node_id, "target": invocation["id"],
+                "type": "delegation", "label": "הפעלת Agent שנצפתה", "status": "completed",
+            })
 
     if outcome:
         nodes.append({
@@ -254,7 +456,7 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
          "to_label": graph_nodes_by_id[edge["target"]]["label"],
          "time": graph_nodes_by_id[edge["target"]].get("started_at") or graph_nodes_by_id[edge["source"]].get("finished_at"),
          "title": edge.get("label", ""), "summary": edge.get("label", ""), "status": edge.get("status", "")}
-        for edge in edges if edge["type"] in {"invocation", "result", "tool_call"}
+        for edge in edges if edge["type"] in {"invocation", "result", "tool_call", "llm", "tool_result", "routing", "delegation", "agent_result"}
     ]
     return {
         "nodes": nodes, "edges": edges, "specialist_count": len(specialist_nodes),
@@ -306,6 +508,7 @@ def aggregate_trace_data(
     active_specialists: set[str] = set()
     parallel_batches: list[list[str]] = []
     current_parallel_batch: list[str] = []
+    protocol_steps: list[dict[str, Any]] = []
 
     # Stages tracking (the 8 mandatory phases)
     # 1. Ingestion, 2. Routing, 3. Intent & Extraction, 4. Agent Selection,
@@ -485,7 +688,7 @@ def aggregate_trace_data(
             domains = entry.get("domains") or {}
             stages["agent_selection"]["details"] = f"תמונת מצב מתוכננת מול: {', '.join(domains.keys())}"
 
-        if event in {"specialist_started", "step_start"}:
+        if event == "specialist_started":
             ag = entry.get("agent", "")
             if ag and ag != "main_agent":
                 active_specialists.add(ag)
@@ -517,7 +720,23 @@ def aggregate_trace_data(
                     "body": task_text,
                     "status": "running",
                 })
-        elif event in {"specialist_finished", "specialist_failed", "specialist_timeout", "step_result", "step_failed"}:
+        elif event == "step_start":
+            protocol_steps.append({
+                "agent": entry.get("agent"), "step_index": entry.get("step_index"),
+                "step_id": entry.get("step_id"), "started_at": ts_raw,
+                "status": "running", "invocation_id": None,
+            })
+            ag = entry.get("agent") or "סוכן לא ידוע"
+            messages.append({
+                "id": f"msg_{len(messages) + 1}", "time": ts_raw,
+                "from_id": "main_agent", "from_label": "מנוע הפרוטוקול", "from_icon": "🧭",
+                "to_id": "protocol_flow", "to_label": f"צעד פרוטוקול עבור {ag}", "to_icon": _agent_icon(ag),
+                "kind": "protocol_step", "badge": "בחירת צעד",
+                "title": f"הפרוטוקול בחר צעד עבור {ag}",
+                "summary": "בחירת צעד אינה הוכחה להפעלת Agent.",
+                "body": "צומת Agent יופיע רק אם Trace מכיל invocation מזוהה.", "status": "running",
+            })
+        elif event in {"specialist_finished", "specialist_failed", "specialist_timeout"}:
             ag = entry.get("agent", "")
             if ag and ag != "main_agent":
                 active_specialists.discard(ag)
@@ -555,6 +774,25 @@ def aggregate_trace_data(
                     "body": res_text or ("שגיאה בביצוע שלב המומחה" if st == "failed" else "הושלם ללא תוכן"),
                     "status": st,
                 })
+        elif event in {"step_result", "step_failed"}:
+            ag = entry.get("agent") or "סוכן לא ידוע"
+            step_idx = entry.get("step_index")
+            for step in reversed(protocol_steps):
+                if step.get("agent") == entry.get("agent") and step.get("step_index") == step_idx and step.get("status") == "running":
+                    step["status"] = "success" if entry.get("succeeded", event == "step_result") else "failed"
+                    step["finished_at"] = ts_raw
+                    step["invocation_id"] = entry.get("invocation_id")
+                    break
+            messages.append({
+                "id": f"msg_{len(messages) + 1}", "time": ts_raw,
+                "from_id": "protocol_flow", "from_label": "מנוע הפרוטוקול", "from_icon": "🧭",
+                "to_id": "main_agent", "to_label": "סוכן ראשי", "to_icon": "🤖",
+                "kind": "protocol_step_result", "badge": "תוצאת צעד פרוטוקול",
+                "title": f"צעד הפרוטוקול עבור {ag} הסתיים",
+                "summary": ("קיים מזהה invocation" if entry.get("invocation_id") else "לא נצפתה הפעלת Agent מזוהה"),
+                "body": "תוצאת השלב נשמרה ברמת הפרוטוקול; אין להסיק ממנה שהסוכן עצמו הופעל.",
+                "status": "success" if entry.get("succeeded", event == "step_result") else "failed",
+            })
 
         # 5. Protocol Selection
         if event == "protocol_selection":
@@ -822,7 +1060,7 @@ def aggregate_trace_data(
         "queue_wait_ms": round(queue_wait_seconds * 1000, 1) if queue_wait_seconds is not None else None,
         "retries_count": retries_count,
         "tokens": tokens_payload,
-        "agent_invocations_count": sum(len(runs) for runs in agent_invocations.values()),
+        "agent_invocations_count": 0,
     }
 
     # Format collaboration tree
@@ -1057,6 +1295,34 @@ def aggregate_trace_data(
     # The legacy stage summary above remains for timeline metrics, but its
     # inferred graph/messages must not be presented as observed hand-offs.
     graph_payload, causal_messages = _execution_graph(entries, terminal_outcome)
+    observed_invocations = [
+        node for node in graph_payload["nodes"]
+        if node.get("type") == "invocation" and node.get("invocation_id")
+    ]
+    metrics["agent_invocations_count"] = len(observed_invocations)
+    collaboration_by_agent: dict[str, list[dict[str, Any]]] = {}
+    for node in observed_invocations:
+        collaboration_by_agent.setdefault(node["label"], []).append({
+            "invocation_id": node["invocation_id"],
+            "parent": node.get("parent_agent") or "Orchestrator",
+            "status": node.get("status", "unknown"),
+            "started_at": node.get("started_at"),
+            "finished_at": node.get("finished_at"),
+            "duration_ms": node.get("duration_ms"),
+            "task": node.get("task", ""),
+            "tools": node.get("tools", []),
+        })
+    collaboration = [
+        {
+            "agent": agent_name,
+            "parent": runs[0].get("parent", "Orchestrator"),
+            "call_count": len(runs),
+            "is_parallel": False,
+            "runs": runs,
+            "final_status": runs[-1].get("status", "unknown"),
+        }
+        for agent_name, runs in collaboration_by_agent.items()
+    ]
     queue_stopped_on_error = not is_terminal and any(
         entry.get("event") == "stage_finished" and entry.get("stage") == "queue_execution"
         and entry.get("status") == "error" for entry in entries

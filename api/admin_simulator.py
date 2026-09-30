@@ -859,6 +859,27 @@ SIMULATOR_BODY = """
   // step's own status message is even sent, let alone edited.
   const pollGenerationByChatId = {};
   const statusBubblesByChatId = {};
+  // The simulator's notification stream is global, while follow-up messages can be sent to a
+  // reporter's private chat even when the triggering step came from a group. Keep a per-DM
+  // watermark so a newer watcher for that same persona can resume without replaying messages.
+  const privatePollWatermarksByIdentity = {};
+
+  function copyPollWatermark(mark) {
+    return {
+      status_len: Number(mark && mark.status_len) || 0,
+      sent_len: Number(mark && mark.sent_len) || 0,
+    };
+  }
+
+  function privatePollWatermark(identity, fallback) {
+    const baseline = copyPollWatermark(fallback);
+    const previous = privatePollWatermarksByIdentity[identity];
+    if (!previous) return baseline;
+    return {
+      status_len: Math.max(previous.status_len, baseline.status_len),
+      sent_len: Math.max(previous.sent_len, baseline.sent_len),
+    };
+  }
 
   function claimPollGeneration(chatId) {
     const myGeneration = (pollGenerationByChatId[chatId] || 0) + 1;
@@ -903,7 +924,7 @@ SIMULATOR_BODY = """
 
   // ---- scenario model -------------------------------------------------------------------
 
-  const state = { scenario: null, chats: [], chatsByKey: {}, queues: {}, runId: null, busy: false };
+  const state = { scenario: null, scenarioSteps: [], chats: [], chatsByKey: {}, queues: {}, runId: null, busy: false };
   // Non-null while #mapping-panel is open for a manually-pasted/uploaded scenario missing IDs
   // (docs/profile_simulations_design.md) — {groupsNeedingId, personaValues}; null when closed.
   let mappingMode = null;
@@ -994,6 +1015,7 @@ SIMULATOR_BODY = """
     closeEditDialog();
     const parsed = validateScenario(raw);
     state.scenario = parsed.scenario;
+    state.scenarioSteps = parsed.steps;
     state.chats = parsed.chats;
     state.chatsByKey = parsed.chatsByKey;
     state.queues = {};
@@ -1418,7 +1440,20 @@ SIMULATOR_BODY = """
   // wait until here) — this loop just needs to know the generation it's watching for, not
   // claim its own. Checked both before each request (skip a poll entirely once superseded)
   // and after (discard a response that was already in flight when superseded).
-  async function pollSimulatorChat(chatKey, chatId, watermark, myGeneration, reply, ackMessageId, traceId, waitingForJob) {
+  function privateChatKeyForIdentity(identity) {
+    const matches = state.chats.filter(function (chat) {
+      if (chat.kind !== 'message' || chat.telegram_chat_type !== 'private') return false;
+      return state.scenarioSteps.some(function (step) {
+        return step.chat === chat.key && step.sender_identity === identity;
+      });
+    });
+    return matches.length === 1 ? matches[0].key : null;
+  }
+
+  async function pollSimulatorChat(
+    chatKey, chatId, watermark, myGeneration, reply, ackMessageId, traceId,
+    deliveryState, privateTargetIdentity, privateFollowupWatcher, privateMessageChatKey
+  ) {
     const startedAt = Date.now();
     let mark = watermark || { status_len: 0, sent_len: 0 };
     let pollFailures = 0;
@@ -1427,7 +1462,7 @@ SIMULATOR_BODY = """
     while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
       await new Promise(function (resolve) { setTimeout(resolve, POLL_INTERVAL_MS); });
       if (pollGenerationByChatId[chatId] !== myGeneration) {
-        if (waitingForJob) setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
+        if (deliveryState.waitingForJob && !privateFollowupWatcher) setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
         return;
       }
       let result;
@@ -1440,19 +1475,19 @@ SIMULATOR_BODY = """
         );
       } catch (error) {
         pollFailures += 1;
-        if (pollFailures >= 3 && waitingForJob) {
+        if (pollFailures >= 3 && deliveryState.waitingForJob && !privateFollowupWatcher) {
           setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
           return;
         }
         continue;
       }
       if (pollGenerationByChatId[chatId] !== myGeneration) {
-        if (waitingForJob) setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
+        if (deliveryState.waitingForJob && !privateFollowupWatcher) setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
         return;
       }
       if (result.status !== 200 || !result.payload) {
         pollFailures += 1;
-        if (pollFailures >= 3 && waitingForJob) {
+        if (pollFailures >= 3 && deliveryState.waitingForJob && !privateFollowupWatcher) {
           setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
           return;
         }
@@ -1460,27 +1495,81 @@ SIMULATOR_BODY = """
       }
       pollFailures = 0;
       if (result.payload.watermark) mark = result.payload.watermark;
+      if (privateTargetIdentity && result.payload.watermark) {
+        privatePollWatermarksByIdentity[privateTargetIdentity] = copyPollWatermark(result.payload.watermark);
+      }
       const structured = Array.isArray(result.payload.status_updates) && Array.isArray(result.payload.sent_messages);
+      let receivedPrivateMessage = false;
       if (structured) {
         for (const update of result.payload.status_updates) {
+          if (privateFollowupWatcher && (update.kind === 'send' || update.kind === 'edit')) {
+            if (!statusBubblesByChatId[chatId]) statusBubblesByChatId[chatId] = new Map();
+            const privateStatusBubbles = statusBubblesByChatId[chatId];
+            const knownPrivateBubble = privateStatusBubbles.get(String(update.message_id));
+            if (update.kind === 'edit' && knownPrivateBubble) {
+              setBubbleText(knownPrivateBubble, update.text, null, false);
+            } else {
+              const bubble = appendBubble(
+                privateMessageChatKey || chatKey,
+                'sys',
+                t('private_followup_label', { identity: privateTargetIdentity }),
+                update.text,
+                null,
+                null,
+                traceId
+              );
+              privateStatusBubbles.set(String(update.message_id), bubble);
+            }
+            receivedPrivateMessage = true;
+            continue;
+          }
           const knownBubble = statusBubblesByChatId[chatId] && statusBubblesByChatId[chatId].get(String(update.message_id));
           if (update.kind === 'edit' && knownBubble) {
             setBubbleText(knownBubble, update.text, null, false);
-            if (String(update.message_id) === String(ackMessageId)) waitingForJob = false;
+            if (String(update.message_id) === String(ackMessageId)) deliveryState.waitingForJob = false;
           } else if (update.kind === 'send' || update.kind === 'edit') {
             appendBubble(chatKey, 'sys', t('system_label'), update.text, null);
+            if (privateTargetIdentity) receivedPrivateMessage = true;
           }
         }
-        for (const text of result.payload.sent_messages) appendBubble(chatKey, 'sys', t('system_label'), text, null);
+        for (const text of result.payload.sent_messages) {
+          appendBubble(
+            privateFollowupWatcher ? (privateMessageChatKey || chatKey) : chatKey,
+            'sys',
+            privateFollowupWatcher ? t('private_followup_label', { identity: privateTargetIdentity }) : t('system_label'),
+            text,
+            null,
+            null,
+            privateFollowupWatcher ? traceId : null
+          );
+          if (privateTargetIdentity) receivedPrivateMessage = true;
+        }
       } else if (result.payload.reply_text) {
-        if (waitingForJob) {
+        if (deliveryState.waitingForJob && !privateFollowupWatcher) {
           setBubbleText(reply, result.payload.reply_text, null, false);
-          waitingForJob = false;
         } else {
-          appendBubble(chatKey, 'sys', t('system_label'), result.payload.reply_text, null);
+          appendBubble(
+            privateFollowupWatcher ? (privateMessageChatKey || chatKey) : chatKey,
+            'sys',
+            privateFollowupWatcher ? t('private_followup_label', { identity: privateTargetIdentity }) : t('system_label'),
+            result.payload.reply_text,
+            null,
+            null,
+            privateFollowupWatcher ? traceId : null
+          );
+          if (privateFollowupWatcher) receivedPrivateMessage = true;
         }
       }
-      if (waitingForJob && Date.now() - lastTraceCheck >= 8000) {
+      if (receivedPrivateMessage && deliveryState.waitingForJob) {
+        setBubbleText(
+          reply,
+          t('private_followup_waiting', { identity: privateTargetIdentity }),
+          t('private_followup_status'),
+          false
+        );
+        deliveryState.waitingForJob = false;
+      }
+      if (deliveryState.waitingForJob && Date.now() - lastTraceCheck >= 8000) {
         lastTraceCheck = Date.now();
         try {
           const traceResult = await apiCall('GET', '/admin/simulator/trace/' + encodeURIComponent(traceId), null);
@@ -1509,7 +1598,7 @@ SIMULATOR_BODY = """
         } catch (error) { /* Trace display is diagnostic only. */ }
       }
     }
-    if (waitingForJob) setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
+    if (deliveryState.waitingForJob && !privateFollowupWatcher) setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
   }
 
   async function sendNext(chatKey) {
@@ -1589,8 +1678,39 @@ SIMULATOR_BODY = """
       statusBubblesByChatId[request.body.chat_id].set(String(ackEvent.message_id), reply);
     }
     const waitingForJob = QUEUED_ACK_PREFIXES.some(prefix => (payload.reply_text || '').startsWith(prefix));
-    pollSimulatorChat(chatKey, request.body.chat_id, payload.watermark, myGeneration,
-      reply, ackEvent && ackEvent.message_id, finalTraceId, waitingForJob);
+    const deliveryState = { waitingForJob: waitingForJob };
+    const senderIdentity = String(request.body.sender_identity || '');
+    const isPrivateOrigin = request.body.chat_type === 'private';
+    const originWatermark = payload.watermark;
+    pollSimulatorChat(
+      chatKey,
+      request.body.chat_id,
+      originWatermark,
+      myGeneration,
+      reply,
+      ackEvent && ackEvent.message_id,
+      finalTraceId,
+      deliveryState,
+      null,
+      false,
+      chatKey
+    );
+    if (waitingForJob && !isPrivateOrigin && senderIdentity && senderIdentity !== String(request.body.chat_id || '')) {
+      const privateGeneration = claimPollGeneration(senderIdentity);
+      pollSimulatorChat(
+        chatKey,
+        senderIdentity,
+        privatePollWatermark(senderIdentity, payload.request_watermark || payload.watermark),
+        privateGeneration,
+        reply,
+        null,
+        finalTraceId,
+        deliveryState,
+        senderIdentity,
+        true,
+        privateChatKeyForIdentity(senderIdentity)
+      );
+    }
   }
 
   // ---- mapping panel: prompts for any Telegram ID a manually-provided scenario is missing ----
@@ -2191,67 +2311,86 @@ SIMULATOR_BODY = """
 
       const cx = 500;
       const posMap = {};
-
-      const mainNode = nodes.find(function (n) { return n.type === 'main'; });
-      const specialists = nodes.filter(function (n) { return n.type === 'specialist'; });
-      const directTools = nodes.filter(function (n) { return n.type === 'tool' && (!n.parent || n.parent === 'main_agent'); });
-      const persistence = nodes.find(function (n) { return n.type === 'persistence'; });
-
-      // Layout Main Orchestrator
-      if (mainNode) {
-        mainNode.w = 260;
-        mainNode.h = 92;
-        mainNode.x = cx;
-        mainNode.y = 80;
-        posMap[mainNode.id] = mainNode;
-      }
-
-      // Layout Specialists
-      const numSpec = specialists.length;
-      let maxBottomY = 280;
-
-      if (numSpec > 0) {
-        const spacing = Math.max(250, Math.min(320, 840 / Math.max(1, numSpec)));
-        const startX = cx - ((numSpec - 1) * spacing) / 2;
-
-        specialists.forEach(function (spec, idx) {
-          spec.w = 230;
-          spec.h = 88;
-          spec.x = startX + idx * spacing;
-          spec.y = 260;
-          posMap[spec.id] = spec;
-
-          // Tools executed by this specialist
-          const specTools = nodes.filter(function (n) { return n.type === 'tool' && n.parent === spec.id; });
-          specTools.forEach(function (tool, tIdx) {
-            tool.w = 190;
-            tool.h = 64;
-            const offsetX = specTools.length > 1 ? (tIdx % 2 === 0 ? -60 : 60) : 0;
-            tool.x = spec.x + offsetX;
-            tool.y = 410 + Math.floor(tIdx / 2) * 76;
-            posMap[tool.id] = tool;
-            if (tool.y + 40 > maxBottomY) maxBottomY = tool.y + 40;
-          });
-        });
-      }
-
-      // Layout Direct Tools
-      directTools.forEach(function (tool, idx) {
-        tool.w = 180;
-        tool.h = 60;
-        tool.x = cx - 340;
-        tool.y = 90 + idx * 72;
-        posMap[tool.id] = tool;
-        if (tool.y + 40 > maxBottomY) maxBottomY = tool.y + 40;
+      const hasInvocationGraph = nodes.some(function (n) {
+        return ['invocation', 'model', 'routing', 'result'].includes(n.type);
       });
 
-      // Layout Persistence Store
-      if (persistence) {
-        persistence.w = 240;
-        persistence.h = 76;
-        persistence.x = numSpec > 0 ? cx : cx + 320;
-        persistence.y = numSpec > 0 ? Math.max(480, maxBottomY + 70) : 80;
-        posMap[persistence.id] = persistence;
+      if (hasInvocationGraph) {
+        const rows = [
+          nodes.filter(function (n) { return n.type === 'user'; }),
+          nodes.filter(function (n) { return n.type === 'main'; }),
+          nodes.filter(function (n) { return n.type === 'routing'; }),
+          nodes.filter(function (n) { return n.type === 'invocation'; }),
+          nodes.filter(function (n) { return n.type === 'model'; }),
+          nodes.filter(function (n) { return n.type === 'tool'; }),
+          nodes.filter(function (n) { return n.type === 'result' || n.type === 'outcome'; }),
+        ];
+        rows.forEach(function (row, rowIndex) {
+          if (!row.length) return;
+          const width = 210;
+          const gap = 34;
+          const rowWidth = row.length * width + (row.length - 1) * gap;
+          const left = Math.max(115, cx - rowWidth / 2 + width / 2);
+          row.forEach(function (node, index) {
+            node.w = width;
+            node.h = node.type === 'main' ? 84 : 72;
+            node.x = left + index * (width + gap);
+            node.y = 55 + rowIndex * 112;
+            posMap[node.id] = node;
+          });
+        });
+      } else {
+        const mainNode = nodes.find(function (n) { return n.type === 'main'; });
+        const specialists = nodes.filter(function (n) { return n.type === 'specialist'; });
+        const directTools = nodes.filter(function (n) { return n.type === 'tool' && (!n.parent || n.parent === 'main_agent'); });
+        const persistence = nodes.find(function (n) { return n.type === 'persistence'; });
+
+        if (mainNode) {
+          mainNode.w = 260;
+          mainNode.h = 92;
+          mainNode.x = cx;
+          mainNode.y = 80;
+          posMap[mainNode.id] = mainNode;
+        }
+
+        const numSpec = specialists.length;
+        let maxBottomY = 280;
+        if (numSpec > 0) {
+          const spacing = Math.max(250, Math.min(320, 840 / Math.max(1, numSpec)));
+          const startX = cx - ((numSpec - 1) * spacing) / 2;
+          specialists.forEach(function (spec, idx) {
+            spec.w = 230;
+            spec.h = 88;
+            spec.x = startX + idx * spacing;
+            spec.y = 260;
+            posMap[spec.id] = spec;
+            const specTools = nodes.filter(function (n) { return n.type === 'tool' && n.parent === spec.id; });
+            specTools.forEach(function (tool, tIdx) {
+              tool.w = 190;
+              tool.h = 64;
+              const offsetX = specTools.length > 1 ? (tIdx % 2 === 0 ? -60 : 60) : 0;
+              tool.x = spec.x + offsetX;
+              tool.y = 410 + Math.floor(tIdx / 2) * 76;
+              posMap[tool.id] = tool;
+              if (tool.y + 40 > maxBottomY) maxBottomY = tool.y + 40;
+            });
+          });
+        }
+        directTools.forEach(function (tool, idx) {
+          tool.w = 180;
+          tool.h = 60;
+          tool.x = cx - 340;
+          tool.y = 90 + idx * 72;
+          posMap[tool.id] = tool;
+          if (tool.y + 40 > maxBottomY) maxBottomY = tool.y + 40;
+        });
+        if (persistence) {
+          persistence.w = 240;
+          persistence.h = 76;
+          persistence.x = numSpec > 0 ? cx : cx + 320;
+          persistence.y = numSpec > 0 ? Math.max(480, maxBottomY + 70) : 80;
+          posMap[persistence.id] = persistence;
+        }
       }
 
       // 1. Draw Edges
@@ -2360,6 +2499,18 @@ SIMULATOR_BODY = """
           bgFill = '#061a1a';
           strokeColor = node.status === 'failed' ? '#ef4444' : '#0d9488';
           if (node.status === 'success') strokeColor = '#059669';
+        } else if (node.type === 'invocation') {
+          bgFill = '#160d2b';
+          strokeColor = node.status === 'failed' ? '#ef4444' : '#7c3aed';
+        } else if (node.type === 'model') {
+          bgFill = '#0c1d30';
+          strokeColor = node.status === 'failed' ? '#ef4444' : '#0284c7';
+        } else if (node.type === 'routing') {
+          bgFill = '#172033';
+          strokeColor = '#64748b';
+        } else if (node.type === 'result') {
+          bgFill = '#10251c';
+          strokeColor = node.status === 'failed' ? '#ef4444' : '#059669';
         } else if (node.type === 'persistence') {
           bgFill = '#1a1306';
           strokeColor = node.status === 'failed' ? '#ef4444' : '#d97706';
@@ -2381,6 +2532,10 @@ SIMULATOR_BODY = """
         let stripFill = 'rgba(56, 189, 248, 0.12)';
         if (node.type === 'specialist') stripFill = node.is_parallel ? 'rgba(192, 132, 252, 0.22)' : 'rgba(168, 85, 247, 0.15)';
         if (node.type === 'tool') stripFill = 'rgba(16, 185, 129, 0.15)';
+        if (node.type === 'invocation') stripFill = 'rgba(168, 85, 247, 0.15)';
+        if (node.type === 'model') stripFill = 'rgba(56, 189, 248, 0.15)';
+        if (node.type === 'routing') stripFill = 'rgba(100, 116, 139, 0.15)';
+        if (node.type === 'result') stripFill = 'rgba(16, 185, 129, 0.15)';
         if (node.type === 'persistence') stripFill = 'rgba(245, 158, 11, 0.18)';
         strip.setAttribute('fill', stripFill);
         g.appendChild(strip);
@@ -2389,6 +2544,10 @@ SIMULATOR_BODY = """
         let icon = '🤖';
         if (node.type === 'specialist') icon = '🔬';
         if (node.type === 'tool') icon = node.side_effecting ? '🛠️' : '🔍';
+        if (node.type === 'invocation') icon = '🤖';
+        if (node.type === 'model') icon = '🧠';
+        if (node.type === 'routing') icon = '🧭';
+        if (node.type === 'result') icon = '📥';
         if (node.type === 'persistence') icon = '💾';
 
         const titleText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -2532,6 +2691,9 @@ SIMULATOR_BODY = """
       if (node.type === 'specialist') icon = '🔬';
       if (node.type === 'tool') icon = node.side_effecting ? '🛠️' : '🔍';
       if (node.type === 'persistence') icon = '💾';
+      if (node.type === 'model') icon = '🧠';
+      if (node.type === 'routing') icon = '🧭';
+      if (node.type === 'result') icon = '📥';
 
       if (detIcon) detIcon.textContent = icon;
       if (detTitle) detTitle.textContent = node.label || node.id;
@@ -2551,6 +2713,9 @@ SIMULATOR_BODY = """
         } else if (node.status === 'retry') {
           detStatus.className = 'bts-badge bts-badge-pending';
           detStatus.textContent = '🔄 ניסיון חוזר (' + (node.retries || 1) + ')';
+        } else if (node.status === 'unknown') {
+          detStatus.className = 'bts-badge bts-badge-pending';
+          detStatus.textContent = '○ מצב לא ידוע — חסר אירוע סיום';
         } else {
           detStatus.className = 'bts-badge bts-badge-pending';
           detStatus.textContent = '○ ממתין';
@@ -2579,7 +2744,34 @@ SIMULATOR_BODY = """
 
       // Task / Directives
       if (detTaskTitle && detTaskContent) {
-        if (node.type === 'main') {
+        if (node.type === 'model' && Array.isArray(node.llm_calls)) {
+          detTaskTitle.textContent = 'Provider request — metadata בטוח';
+          detTaskContent.textContent = node.llm_calls.map(function (c) {
+            return [
+              'Agent: ' + (c.agent_name || 'unattributed'),
+              'יוזם: ' + (c.parent_agent || 'unattributed'),
+              'Invocation: ' + (c.agent_invocation_id || 'unattributed'),
+              'Purpose / stage: ' + (c.purpose || 'unattributed') + ' / ' + (c.stage || 'unattributed'),
+              'Protocol / tool: ' + (c.protocol_name || 'לא זמין') + ' / ' + (c.tool_name || 'לא זמין'),
+              'Provider request: ' + (c.provider_request_id || 'לא זמין') + ' · sequence ' + (c.sequence_number ?? 'לא זמין'),
+              'התחלה/סיום: ' + (c.started_at || 'לא זמין') + ' / ' + (c.finished_at || 'לא זמין'),
+              'זמן: ' + (c.latency_ms ?? 'לא זמין') + ' מ״ש · finish: ' + (c.finish_reason || c.status || 'לא ידוע'),
+              'טוקנים קלט/פלט/מטמון: ' + (c.input_tokens ?? '?') + '/' + (c.output_tokens ?? '?') + '/' + (c.cache_tokens ?? '?'),
+              'סיכום בטוח: ' + (c.result_summary || 'לא זמין'),
+            ].join('\\n');
+          }).join('\\n\\n');
+        } else if (node.type === 'routing' || node.type === 'result') {
+          detTaskTitle.textContent = node.type === 'routing' ? 'בחירת צעד — ללא הנחת invocation' : 'תוצאת invocation';
+          detTaskContent.textContent = node.details || node.task || 'לא נשמרו פרטים נוספים.';
+        } else if (node.type === 'invocation') {
+          detTaskTitle.textContent = 'Agent invocation';
+          const calls = Array.isArray(node.llm_calls) ? node.llm_calls : [];
+          detTaskContent.textContent = (node.task || 'תקציר משימה לא נשמר.') +
+            '\\nInvocation ID: ' + (node.invocation_id || 'לא זמין') +
+            '\\nParent: ' + (node.parent_agent || 'Orchestrator') +
+            '\\nProtocol: ' + (node.protocol_name || 'לא זמין') +
+            '\\nProvider calls: ' + calls.length;
+        } else if (node.type === 'main') {
           detTaskTitle.textContent = 'כוונה ופרוטוקול שנבחרו';
           detTaskContent.textContent = (node.intent || 'מעבד בקשה') + (node.protocol ? '\\nפרוטוקול: ' + node.protocol : '');
         } else if (node.type === 'specialist') {
@@ -2800,7 +2992,7 @@ SIMULATOR_BODY = """
   });
   document.getElementById('reset-view').addEventListener('click', function () {
     // View only: clears the cards and the queues. Nothing already sent is undone on the server.
-    state.scenario = null; state.chats = []; state.chatsByKey = {}; state.queues = {}; state.runId = null; state.busy = false;
+    state.scenario = null; state.scenarioSteps = []; state.chats = []; state.chatsByKey = {}; state.queues = {}; state.runId = null; state.busy = false;
     document.getElementById('chats-container').innerHTML = '';
     document.getElementById('scenario-title').textContent = t('no_scenario');
     document.getElementById('scenario-desc').textContent = '';

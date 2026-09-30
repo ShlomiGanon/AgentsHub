@@ -9,8 +9,9 @@ import threading
 from collections import OrderedDict
 from typing import Any
 
-from agents.invocation_context import current_invocation_id
-from tools import get_current_stage, get_trace_id
+from agents.invocation_context import (current_invocation_agent, current_invocation_id,
+    current_parent_agent, current_parent_invocation_id, last_invocation_tool)
+from tools import get_current_protocol, get_current_stage, get_trace_id
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,42 @@ class _CallStart:
     started_at: datetime
     finish_reasons: list[str] | None
     invocation_id: str | None
+    parent_agent: str | None
+    parent_invocation_id: str | None
+    purpose: str
+    sequence_number: int | None
+    tool_name: str | None
+    protocol_name: str | None
+
+
+_STAGE_PURPOSES = {
+    "intent_classification": "intent_classification",
+    "extraction": "event_extraction",
+    "question_direct_lookup_classification": "agent_selection",
+    "question_routing": "agent_selection",
+    "question_routing_repair": "retry",
+    "question_subagent": "specialist_reasoning",
+    "question_composition": "response_composition",
+    "question_history_query": "planning",
+    "question_direct_lookup": "specialist_reasoning",
+    "risk_assessment": "risk_assessment",
+    "protocol_selection": "protocol_selection",
+    "task_formulation": "planning",
+    "task_formulation_repair": "retry",
+    "task_rewrite": "planning",
+    "success_judgment": "outcome_evaluation",
+    "insight_generation": "outcome_evaluation",
+    "event_data_question": "planning",
+    "event_data_update": "tool_result_interpretation",
+    "picture_planning": "planning",
+    "picture_recent_events": "planning",
+    "picture_specialist": "specialist_reasoning",
+    "picture_composition": "synthesis",
+    "report_composition": "response_composition",
+    "operational_decision": "operational_decision",
+    "step_execution": "tool_decision",
+    "task_execution": "tool_decision",
+}
 
 
 _lock = threading.Lock()
@@ -33,6 +70,29 @@ _terminal_call_ids: "OrderedDict[str, None]" = OrderedDict()
 _TERMINAL_CALL_ID_LIMIT = 4096
 _installed = False
 _active_finish_reasons: ContextVar[list[str] | None] = ContextVar("provider_finish_reasons", default=None)
+_trace_sequences: dict[str, int] = {}
+
+
+def _purpose_for_event(stage: str, call_type: Any) -> str:
+    """Resolve purpose from explicit stage context and provider event type, never prompt text."""
+    kind = str(call_type or "").lower()
+    if "tool_call" in kind:
+        return "tool_decision"
+    if "llm_call" in kind and stage in {"question_subagent", "picture_specialist", "step_execution", "task_execution"}:
+        if last_invocation_tool(current_invocation_id()):
+            return "tool_result_interpretation"
+    return _STAGE_PURPOSES.get(stage, "unattributed")
+
+
+def _next_sequence(trace_id: str) -> int | None:
+    if not trace_id:
+        return None
+    with _lock:
+        value = _trace_sequences.get(trace_id, 0) + 1
+        _trace_sequences[trace_id] = value
+        if len(_trace_sequences) > 2048:
+            _trace_sequences.pop(next(iter(_trace_sequences)))
+        return value
 
 
 @contextmanager
@@ -91,16 +151,29 @@ def _write_finish(start: _CallStart, event: Any) -> None:
     finish_reason = getattr(event, "finish_reason", None)
     if start.finish_reasons is not None and finish_reason is not None:
         start.finish_reasons.append(str(finish_reason))
+    finished_at = event.timestamp
     logger.info(
         "provider request failed" if failed else "provider request finished",
         extra={
             "event": "provider_request_failed" if failed else "provider_request_finished",
             "call_id": event.call_id,
+            "provider_request_id": getattr(event, "response_id", None) or event.call_id,
+            "telemetry_call_id": event.call_id,
             "invocation_id": start.invocation_id,
             "agent": start.agent,
+            "agent_name": start.agent,
+            "agent_invocation_id": start.invocation_id,
+            "parent_agent": start.parent_agent,
+            "parent_invocation_id": start.parent_invocation_id,
             "provider": _provider_name(start.model),
             "model": start.model,
             "stage": start.stage,
+            "purpose": start.purpose,
+            "protocol_name": start.protocol_name,
+            "tool_name": start.tool_name,
+            "sequence_number": start.sequence_number,
+            "started_at": start.started_at.isoformat(),
+            "finished_at": finished_at.isoformat(),
             "attempt": 1,
             "status": "error" if failed else "success",
             "error_detail": _provider_error_detail(event) if failed else None,
@@ -139,10 +212,16 @@ def handle_provider_call_started(_source: Any, event: Any) -> None:
         trace_id=get_trace_id(),
         stage=get_current_stage(),
         model=event.model or "unknown",
-        agent=getattr(event, "agent_role", None),
+        agent=current_invocation_agent() or "unattributed",
         started_at=event.timestamp,
         finish_reasons=_active_finish_reasons.get(),
         invocation_id=current_invocation_id(),
+        parent_agent=current_parent_agent() or ("Orchestrator" if current_invocation_id() else None),
+        parent_invocation_id=current_parent_invocation_id(),
+        purpose=_purpose_for_event(get_current_stage(), getattr(event, "call_type", None)),
+        sequence_number=_next_sequence(get_trace_id()),
+        tool_name=last_invocation_tool(current_invocation_id()),
+        protocol_name=get_current_protocol(),
     )
     with _lock:
         if event.call_id in _terminal_call_ids:

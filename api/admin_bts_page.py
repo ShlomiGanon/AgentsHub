@@ -1046,9 +1046,11 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
         const positions = new Map();
         const userNode = nodes.find(n => n.type === 'user');
         const mainNode = nodes.find(n => n.type === 'main');
+        const routing = nodes.filter(n => n.type === 'routing');
         const invocations = nodes.filter(n => n.type === 'invocation');
+        const models = nodes.filter(n => n.type === 'model');
         const tools = nodes.filter(n => n.type === 'tool');
-        const otherNodes = nodes.filter(n => n.type === 'model' || n.type === 'outcome');
+        const otherNodes = nodes.filter(n => n.type === 'result' || n.type === 'outcome');
 
         if (userNode) positions.set(userNode.id, { x: 420, y: 40 });
         if (mainNode) positions.set(mainNode.id, { x: 420, y: userNode ? 205 : 40 });
@@ -1062,7 +1064,9 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
             nextY += 185;
           }
         }
+        placeRows(routing);
         placeRows(invocations);
+        placeRows(models);
         placeRows(tools);
         placeRows(otherNodes);
 
@@ -1256,7 +1260,17 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
             (node.verification ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">רמת אימות פעולה:</span><span class="bts-inspect-val">' + esc(node.verification_note || node.verification) + '</span></div>') : '') +
             (node.task ? ('<div class="bts-inspect-section-title">תקציר משימה</div><div class="bts-inspect-box">' + esc(node.task) + '</div>') : '') +
             (node.result ? ('<div class="bts-inspect-section-title">תוצאה / שגיאה</div><div class="bts-inspect-box">' + esc(node.result) + '</div>') : '') +
-            (node.llm_calls && node.llm_calls.length ? ('<div class="bts-inspect-section-title">קריאות מודל (' + node.llm_calls.length + ')</div><div class="bts-inspect-box">' + node.llm_calls.map(c => esc(c.model + ' · ' + (c.latency_ms || 0) + ' מ״ש · ' + (c.finish_reason || c.status) + ' · ' + (c.input_tokens || 0) + '/' + (c.output_tokens || 0) + ' טוקנים')).join('<br>') + '</div>') : '') +
+            (node.llm_calls && node.llm_calls.length ? ('<div class="bts-inspect-section-title">קריאות מודל (' + node.llm_calls.length + ')</div><div class="bts-inspect-box">' + node.llm_calls.map(c => esc(
+              '#' + (c.sequence_number || '?') + ' · ' + (c.purpose || 'unattributed') + ' · ' + (c.agent_name || node.label || 'unattributed') +
+              ' · ' + (c.latency_ms ?? '?') + ' מ״ש · ' + (c.finish_reason || c.status || 'unknown') +
+              ' · טוקנים קלט/פלט/מטמון: ' + (c.input_tokens ?? '?') + '/' + (c.output_tokens ?? '?') + '/' + (c.cache_tokens ?? '?') +
+              '\nיוזם: ' + (c.parent_agent || 'unattributed') + ' · שלב: ' + (c.stage || 'unattributed') +
+              ' · פרוטוקול: ' + (c.protocol_name || 'לא רלוונטי/לא זמין') +
+              ' · ' + (c.tool_name ? ('אחרי כלי ' + c.tool_name) : (c.call_type && String(c.call_type).toLowerCase().includes('tool_call') ? 'החלטת כלי' : 'לפני כלי / סינתזה לא ידוע')) +
+              '\nמזהה בקשת ספק: ' + (c.provider_request_id || 'unavailable') + ' · הפעלה: ' + (c.agent_invocation_id || 'unattributed') +
+              '\nהתחלה: ' + (c.started_at || 'unavailable') + ' · סיום: ' + (c.finished_at || 'unavailable') +
+              ' · סיכום בטוח: ' + (c.result_summary || 'אין תקציר בטוח זמין')
+            )).join('<br><br>') + '</div>') : '') +
             (node.tools && node.tools.length ? ('<div class="bts-inspect-section-title">כלים (' + node.tools.length + ')</div><div class="bts-inspect-box">' + esc(node.tools.join(', ')) + '</div>') : '') +
             (node.summary ? ('<div class="bts-inspect-section-title">סיכום כלי</div><div class="bts-inspect-box">' + esc(node.summary) + '</div>') : '') +
             (node.details ? ('<div class="bts-inspect-section-title">פרטים נוספים</div><div class="bts-inspect-box">' + esc(node.details) + '</div>') : '') +
