@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass, field
@@ -23,7 +24,7 @@ from messages.model_messages import (
 )
 from orchestrator.tone import banned_opener
 from protocols import EVENT_DATA_FIELDS, Protocol, Step
-from tools import stage_context
+from tools import get_trace_id, stage_context
 
 _EVENT_DATA_FIELD_MEANINGS = {
     definition.key: definition.meaning
@@ -1433,6 +1434,7 @@ def _history_query_spec_from_payload(payload: object) -> HistoryQuerySpec:
 
 
 def _parse_agent_selection_response(raw_text: str) -> AgentSelectionResult:
+    raw_text = _unwrap_json_code_fence(raw_text)
     if raw_text.lstrip().startswith("{"):
         payload = _load_unique_json_object(raw_text, "question routing")
         route = payload.get("route")

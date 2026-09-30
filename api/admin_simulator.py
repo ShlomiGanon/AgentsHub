@@ -905,6 +905,15 @@ SIMULATOR_BODY = """
     pollGenerationByChatId[chatId] = myGeneration;
     return myGeneration;
   }
+
+  function invalidatePollWatchers() {
+    Object.keys(pollGenerationByChatId).forEach(function (chatId) {
+      pollGenerationByChatId[chatId] += 1;
+    });
+    Object.keys(privatePollWatermarksByIdentity).forEach(function (identity) {
+      delete privatePollWatermarksByIdentity[identity];
+    });
+  }
   const registeredIdentities = new Set((DATA.users || []).map(function (user) { return String(user.telegram_identity); }));
   const usersByIdentity = {};
   (DATA.users || []).forEach(function (user) { usersByIdentity[String(user.telegram_identity)] = user; });
@@ -1032,6 +1041,7 @@ SIMULATOR_BODY = """
     // panel from a different path can stay on screen (docs/profile_simulations_design.md).
     closeMappingPanel();
     closeEditDialog();
+    invalidatePollWatchers();
     const parsed = validateScenario(raw);
     state.scenario = parsed.scenario;
     state.scenarioSteps = parsed.steps;
@@ -3039,6 +3049,7 @@ SIMULATOR_BODY = """
   });
   document.getElementById('reset-view').addEventListener('click', function () {
     // View only: clears the cards and the queues. Nothing already sent is undone on the server.
+    invalidatePollWatchers();
     state.scenario = null; state.scenarioSteps = []; state.chats = []; state.chatsByKey = {}; state.queues = {}; state.runId = null; state.busy = false;
     document.getElementById('chats-container').innerHTML = '';
     document.getElementById('scenario-title').textContent = t('no_scenario');

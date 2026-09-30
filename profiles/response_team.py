@@ -399,7 +399,17 @@ class ResponseTeamSurveillanceAgent(SurveillanceAgent):
         side_effecting=True,
         idempotent=True,
     )
-    def update_camera_status(self, camera_id: str, observation: str, status: str = "") -> str:
+    def update_camera_status(
+        self,
+        camera_id: str = "",
+        observation: str = "",
+        status: str = "",
+        camera_identifier: str = "",
+    ) -> str:
+        # Some model/tool adapters use the prose-level name `camera_identifier`
+        # even though the public protocol field is `camera_id`. Accept both so
+        # that a harmless naming variation cannot fail the operational step.
+        camera_id = camera_id.strip() or camera_identifier.strip()
         if not camera_id.strip():
             return "Clarification required: camera_id is required."
         if not observation.strip():
