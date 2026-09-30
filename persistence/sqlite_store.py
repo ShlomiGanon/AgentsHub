@@ -70,10 +70,12 @@ _EVENT_COLUMNS = (
     "telegram_chat_id",
     "telegram_chat_type",
     "ack_message_id",
+    "corrects_event_id",
+    "retracted",
 )
 
 _EVENT_JSON_COLUMNS = {"entities", "precedent_matched_event_ids"}
-_EVENT_BOOL_COLUMNS = {"occurred_at_is_fallback", "clarification_held", "approval_held"}
+_EVENT_BOOL_COLUMNS = {"occurred_at_is_fallback", "clarification_held", "approval_held", "retracted"}
 
 _EVENT_IMMUTABLE_COLUMNS = {
     "event_id", "received_at", "source", "sender_identity", "sender_permission_level",

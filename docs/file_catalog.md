@@ -146,6 +146,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `persistence/__init__.py` | Production | Public facade | Exposes persistence contracts, constructors, and compatibility aliases. |
 | `persistence/apparatus_store.py` | Production | Private implementation | Minimal SQLite registry for a fire station's own apparatus (engines/vehicles) -- create-if-missing seed plus a status/area update, no dispatch-log/capacity modeling (docs/Admin_Tables_Plan.md's simulation-data-alignment audit). |
 | `persistence/contracts.py` | Production | Private implementation | Defines persistence interfaces and domain errors. |
+| `persistence/incident_responder_store.py` | Production | Private implementation | Shared, cross-profile store linking an identity (person or apparatus) to the one specific real event it is responding to -- never area co-location; used by both profiles' roster/crew-status agents for join/list/leave incident-response tracking. |
 | `persistence/response_team_store.py` | Production | Private implementation | Implements the Response Team profile's own roster/attendance, surveillance, and neighboring-force-dispatch tables against the profile's shared DB_PATH (docs/responce_improve.md). |
 | `persistence/schema.py` | Production | Private implementation | Owns immutable migration DDL and the current SQLite schema. |
 | `persistence/sqlite_store.py` | Production | Private implementation | Implements serialized SQLite persistence, transactions, and row conversion. |
@@ -213,6 +214,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_firefighting_admin_tables.py` | Test | Internal | Verifies the drones/attendance/forces admin-table wirings for `profiles/firefighting.py`, against its own DBs. |
 | `tests/test_neighboring_forces_agent.py` | Test | Internal | Verifies the shared, parameterized `agents/neighboring_forces_agent.py` base class directly, independent of either profile. |
 | `tests/test_firefighting_external_forces_agent.py` | Test | Internal | Verifies FirefightingExternalForcesAgent's shared, persisted `dispatch_neighboring_force` tool and per-kind capacity (docs/Admin_Tables_Plan.md). |
+| `tests/test_firefighting_apparatus_movement.py` | Test | Internal | Verifies FirefightingCrewStatusAgent's update_apparatus_status "who else is at this area" reporting and the report_apparatus_movement protocol (memory/continuity audit fix 4: incident-scoped responder tracking). |
 | `tests/test_group_routing.py` | Test | Internal | Verifies the group routing table, staleness refresh, scope resolution, and dependency scoping. |
 | `tests/test_group_scoping_safety_critical.py` | Test | Internal | Regression: a safety_critical protocol (e.g. report_security_incident, report_fire_incident) stays a selection candidate from every declared simulation group in a profile, regardless of which specialist that group is bound to. |
 | `tests/test_history_agent.py` | Test | Internal | Verifies history agent behavior and edge cases. |
@@ -263,6 +265,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_response_team_direct_tool_binders.py` | Test | Internal | Verifies response_team's direct-tool step binders (Phase A) -- record_attendance/update_camera_status/report_team_movement parameter binding, missing-field detection, and camera-status inference. |
 | `tests/test_response_team_admin_tables.py` | Test | Internal | Verifies the drones/attendance/forces admin-table wirings for `profiles/response_team.py`, including the drone status/mission-cascade and the attendance approval-stamp behavior. |
 | `tests/test_response_team_resource_unavailable.py` | Test | Internal | Verifies response_team's resource-unavailable wiring -- dispatch_neighboring_force's per-force-kind capacity and its roster-backed "squad" kind, and the _find_resource_alternatives alternatives finder. |
+| `tests/test_response_team_roster_agent.py` | Test | Internal | Verifies ResponseTeamRosterAgent's report_team_movement "who else is with me" reporting, backed by list_members_by_area (memory/continuity audit fix 4: incident-scoped responder tracking). |
 | `tests/test_run_report.py` | Test | Internal | Verifies RunSummary construction from persisted event/step/hold data and audience-aware deterministic rendering. |
 | `tests/test_run_stack.py` | Test | Internal | Verifies profile-database reset removes only declared databases and known sidecars, and refuses a non-database path. |
 | `tests/test_server_control.py` | Test | Internal | Verifies safe profile discovery and supervisor command and selection persistence. |

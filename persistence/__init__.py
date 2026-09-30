@@ -39,6 +39,10 @@ from persistence.apparatus_store import (
     ApparatusStoreError,
     open_apparatus_store,
 )
+from persistence.incident_responder_store import (
+    IncidentResponderStore,
+    open_incident_responder_store,
+)
 
 sqlite = sqlite_store
 sqlite_backend = sqlite_store
@@ -71,4 +75,6 @@ __all__ = [
     "ApparatusStore",
     "ApparatusStoreError",
     "open_apparatus_store",
+    "IncidentResponderStore",
+    "open_incident_responder_store",
 ]

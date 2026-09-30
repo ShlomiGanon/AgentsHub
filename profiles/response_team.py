@@ -46,6 +46,7 @@ from messages import get_catalog
 from persistence import (
     SurveillancePersistenceError,
     TeamStatusPersistenceError,
+    open_incident_responder_store,
     open_response_team_roster_store,
     open_response_team_surveillance_store,
 )
@@ -260,13 +261,16 @@ class ResponseTeamRosterAgent(TeamStatusAgent):
         if not self.status_db_path:
             raise TypeError("ResponseTeamRosterAgent requires a class-level status_db_path")
         self.status_store = open_response_team_roster_store(self.status_db_path)
+        self.incident_store = open_incident_responder_store(self.status_db_path)
         Agent.__init__(self, model, api_key)
 
     @tool(
         "report_team_movement",
         "Records a team member's own current area -- e.g. travelling to or arriving at an area "
         "while still on duty. Side-effecting and idempotent -- recording the same area twice for "
-        "the same member leaves one current value.",
+        "the same member leaves one current value. This alone does not link the member to any "
+        "incident -- call join_incident_response separately when the report also indicates they "
+        "are responding to one.",
         side_effecting=True,
         idempotent=True,
     )
@@ -285,7 +289,82 @@ class ResponseTeamRosterAgent(TeamStatusAgent):
             updated = self.status_store.set_current_area(identity, area.strip())
         except TeamStatusPersistenceError as exc:
             return f"The movement report was not stored: {exc}"
+
         return f"{updated['full_name']}'s current area was recorded as '{updated['current_area']}'."
+
+    @tool(
+        "join_incident_response",
+        "Links the caller to the one specific real incident currently on record for `area`, when "
+        "exactly one exists -- use when a member's report clearly indicates they are responding "
+        "to, heading to, or dispatched to an incident there, not merely stationed or passing "
+        "through the area. Never links on area alone: if no recent incident is on record, or more "
+        "than one is, nothing is linked and a plain explanation is returned instead of a guess. "
+        "Automatically closes any other incident the caller was previously linked to "
+        "(reassignment). Side-effecting and idempotent.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def join_incident_response(self, area: str = "", member_identity: str = "") -> str:
+        identity = (member_identity or get_authenticated_request_identity() or "").strip()
+        if not identity:
+            return "Not linked: authenticated requester identity is unavailable."
+        if not area.strip():
+            return "Clarification required: area is required."
+
+        approved_members = self.status_store.list_members(approved_only=True)
+        if not any(member["telegram_identity"] == identity for member in approved_members):
+            return "Not linked: requester is not an approved roster member."
+
+        event, clarification = self.incident_store.resolve_single_candidate(area.strip())
+        if event is None:
+            return f"Not linked: {clarification}"
+        self.incident_store.join(event["event_id"], identity)
+        return f"Linked to the incident currently on record for '{area.strip()}'."
+
+    @tool(
+        "leave_incident_response",
+        "Closes the caller's own current incident link, if any -- use when a member reports "
+        "leaving an incident or being reassigned away with no new incident stated. Harmless (not "
+        "an error) if the caller had no open link. Side-effecting and idempotent.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def leave_incident_response(self, member_identity: str = "") -> str:
+        identity = (member_identity or get_authenticated_request_identity() or "").strip()
+        if not identity:
+            return "Not updated: authenticated requester identity is unavailable."
+        closed = self.incident_store.leave(identity)
+        if closed is None:
+            return "No open incident link was found to close."
+        return "The caller's incident link was closed."
+
+    @tool(
+        "list_incident_responders",
+        "Answers 'who else is with me' / 'who is responding' for the one specific real incident "
+        "currently on record for `area`, when exactly one exists -- lists only members actually "
+        "linked to that incident (via join_incident_response), never members merely recorded in "
+        "the same area. If no recent incident is on record, or more than one is, says so plainly "
+        "instead of guessing. Read-only.",
+        side_effecting=False,
+    )
+    def list_incident_responders(self, area: str = "") -> str:
+        if not area.strip():
+            return "Clarification required: area is required."
+
+        event, clarification = self.incident_store.resolve_single_candidate(area.strip())
+        if event is None:
+            return clarification
+
+        links = self.incident_store.list_open_responders(event["event_id"])
+        if not links:
+            return f"No one is currently linked to the incident on record for '{area.strip()}'."
+
+        members_by_identity = {
+            member["telegram_identity"]: member["full_name"]
+            for member in self.status_store.list_members(approved_only=False)
+        }
+        names = [members_by_identity.get(link["identity"], link["identity"]) for link in links]
+        return f"Currently linked to the incident on record for '{area.strip()}': {', '.join(names)}."
 
 
 class ResponseTeamSurveillanceAgent(SurveillanceAgent):
@@ -599,18 +678,39 @@ def _bind_update_camera_status(event: dict) -> tuple[Step, ...]:
 
 def _bind_report_team_movement(event: dict) -> tuple[Step, ...]:
     area = (event.get("area") or "").strip()
-    required = () if area else ("area",)
-    kwargs = {"area": area} if area else {}
+    description = (event.get("description") or "").strip()
+    missing = tuple(name for name in ("area",) if not event.get(name))
+    if missing:
+        return (
+            Step(
+                agent_name="roster_agent",
+                task_text="Record the reporter's own current area, bound directly from the event's extracted fields.",
+                allowed_tools=("report_team_movement",),
+                step_id="1",
+                required_event_fields=missing,
+                kind="direct_tool",
+                direct_tool_name="report_team_movement",
+                direct_tool_kwargs={},
+            ),
+        )
+    # Whether this movement is a response to a specific incident is a genuine judgment call
+    # from the free-text report, the same class of decision `_bind_update_camera_status` makes
+    # for a camera's resulting status -- so the specialist agent decides and calls the relevant
+    # tool(s) itself rather than a keyword heuristic pre-deciding it.
     return (
         Step(
             agent_name="roster_agent",
-            task_text="Record the reporter's own current area, bound directly from the event's extracted fields.",
-            allowed_tools=("report_team_movement",),
+            task_text=(
+                f"The reporter's own current area was reported as '{area}'. Call report_team_movement "
+                f"with that area. Then, from the report below, decide: does it clearly say the reporter "
+                f"is responding to, heading to, or dispatched to a specific incident at that area (not "
+                f"merely stationed or passing through)? If so, also call join_incident_response for the "
+                f"same area. If the report also asks who else is with/responding, also call "
+                f"list_incident_responders for the same area and include its answer in your reply.\n\n"
+                f"Report: {description}"
+            ),
+            allowed_tools=("report_team_movement", "join_incident_response", "list_incident_responders"),
             step_id="1",
-            required_event_fields=required,
-            kind="direct_tool",
-            direct_tool_name="report_team_movement",
-            direct_tool_kwargs=kwargs,
         ),
     )
 
@@ -719,8 +819,12 @@ PROTOCOLS = [
             "member reporting they will be unavailable (use record_attendance for that)."
         ),
         participating_agents=("roster_agent",),
-        approved_tools=("report_team_movement",),
-        expected_success_output="Confirmation that the team member's current area was recorded.",
+        approved_tools=("report_team_movement", "join_incident_response", "list_incident_responders"),
+        expected_success_output=(
+            "Confirmation that the team member's current area was recorded; if the report also "
+            "indicated they are responding to a specific incident, confirmation they were linked "
+            "to it and, if asked, who else is currently linked to that same incident."
+        ),
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
         requires_confirmation=False,
@@ -734,9 +838,12 @@ PROTOCOLS = [
             "Applies when someone asks for a combined, current snapshot spanning any of the "
             "team's roster/attendance, the camera picture, or neighboring-force dispatch status "
             "-- e.g. 'who's missing tonight and what's the camera status', or 'anything moving, "
-            "and where are the responding forces'. Does not apply to a retrospective, "
-            "end-to-end summary of a closed or ongoing incident (use query_incident_summary for "
-            "that)."
+            "and where are the responding forces'. Also applies when a confused or urgent "
+            "message recaps several recent reports (possibly from different chats) and asks to "
+            "make sense of them and/or decide where to send the available force -- pull the "
+            "actual records rather than trusting the requester's own recap. Does not apply to a "
+            "retrospective, end-to-end summary of a closed or ongoing incident (use "
+            "query_incident_summary for that)."
         ),
         participating_agents=("roster_agent", "surveillance_agent", "neighboring_forces_agent"),
         approved_tools=("report_team_availability", "get_surveillance_overview", "list_neighboring_force_dispatches"),

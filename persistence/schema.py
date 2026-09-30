@@ -71,6 +71,9 @@ CREATE TABLE IF NOT EXISTS events (
     report_text TEXT,
     commander_alert_text TEXT,
 
+    corrects_event_id TEXT,
+    retracted INTEGER NOT NULL DEFAULT 0 CHECK (retracted IN (0, 1)),
+
     telegram_chat_id TEXT,
     telegram_chat_type TEXT,
     ack_message_id TEXT,
@@ -171,6 +174,24 @@ CREATE TABLE IF NOT EXISTS notification_log (
     event_id TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+"""
+
+# Links an identity (a person's telegram_identity, or an apparatus_id) to the one specific
+# event it is actually responding to -- never an area alone. Shared across every profile
+# (personnel and apparatus both use it) because "who/what is currently responding to THIS
+# incident" is the same question everywhere, unlike the profile-owned roster/apparatus tables
+# that this coexists with. An identity has at most one open link (left_at IS NULL) at a time;
+# joining a new event closes any other open link for that same identity first (reassignment).
+INCIDENT_RESPONDERS_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS incident_responders (
+    link_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL,
+    identity TEXT NOT NULL,
+    joined_at TEXT NOT NULL,
+    left_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_incident_responders_event ON incident_responders(event_id, left_at);
+CREATE INDEX IF NOT EXISTS idx_incident_responders_identity ON incident_responders(identity, left_at);
 """
 
 # Open-ended structured log details are serialized as JSON.
@@ -296,6 +317,13 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "add commander_alert_text to events",
         "ALTER TABLE events ADD COLUMN commander_alert_text TEXT;",
     ),
+    (
+        24,
+        "add correction/retraction linkage to events",
+        "ALTER TABLE events ADD COLUMN corrects_event_id TEXT;"
+        "ALTER TABLE events ADD COLUMN retracted INTEGER NOT NULL DEFAULT 0 CHECK (retracted IN (0, 1));",
+    ),
+    (25, "create incident_responders table", INCIDENT_RESPONDERS_TABLE_DDL),
 ]
 
 
@@ -367,6 +395,16 @@ def run_migrations(db_path: str) -> None:
                 columns = {row[1] for row in connection.execute("PRAGMA table_info(events)").fetchall()}
                 if columns and "commander_alert_text" not in columns:
                     connection.execute("ALTER TABLE events ADD COLUMN commander_alert_text TEXT")
+            elif version == 24:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(events)").fetchall()}
+                if columns:
+                    if "corrects_event_id" not in columns:
+                        connection.execute("ALTER TABLE events ADD COLUMN corrects_event_id TEXT")
+                    if "retracted" not in columns:
+                        connection.execute(
+                            "ALTER TABLE events ADD COLUMN retracted INTEGER NOT NULL DEFAULT 0 "
+                            "CHECK (retracted IN (0, 1))"
+                        )
             else:
                 connection.executescript(sql)
 

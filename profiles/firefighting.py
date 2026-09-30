@@ -10,6 +10,7 @@ from messages import get_catalog
 from persistence import (
     ApparatusStoreError,
     open_apparatus_store,
+    open_incident_responder_store,
     open_response_team_surveillance_store,
     open_team_status_persistence,
 )
@@ -161,6 +162,9 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
     def __init__(self, model: str, api_key: str | None = None):
         super().__init__(model, api_key)
         self.apparatus_store = open_apparatus_store(FIREFIGHTING_APPARATUS_DB_PATH)
+        # Incident linkage is keyed against core `events`, which live in this profile's
+        # `DB_PATH` -- a different file from the apparatus/crew-status stores above.
+        self.incident_store = open_incident_responder_store(DB_PATH)
 
     @tool(
         "get_apparatus_status",
@@ -183,7 +187,9 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         "Records one apparatus/engine's own operating status (operational, dispatched, "
         "unavailable, or maintenance), and its area if the source states one. identifier is the "
         "apparatus's callsign (e.g. 'Ashed 3') or apparatus_id. Side-effecting and idempotent -- "
-        "recording the identical status for the same apparatus twice leaves one record.",
+        "recording the identical status for the same apparatus twice leaves one record. This "
+        "alone does not link the apparatus to any incident -- call join_incident_response "
+        "separately when the report indicates it is dispatched to one.",
         side_effecting=True,
         idempotent=True,
     )
@@ -194,6 +200,76 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
             return f"The apparatus status was not stored: {exc}"
         area = f", area: {updated['current_area']}" if updated["current_area"] else ""
         return f"{updated['callsign']} status recorded: {updated['status'].upper()}{area}."
+
+    @tool(
+        "join_incident_response",
+        "Links one named apparatus to the one specific real incident currently on record for "
+        "`area`, when exactly one exists -- use when a report clearly indicates that apparatus is "
+        "dispatched to a specific incident there, not merely relocated or stationed. identifier is "
+        "the apparatus's callsign (e.g. 'Ashed 3') or apparatus_id. Never links on area alone: if "
+        "no recent incident is on record, or more than one is, nothing is linked and a plain "
+        "explanation is returned instead of a guess. Automatically closes any other incident that "
+        "apparatus was previously linked to (reassignment). Side-effecting and idempotent.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def join_incident_response(self, identifier: str = "", area: str = "") -> str:
+        apparatus = self.apparatus_store.get_apparatus(identifier)
+        if apparatus is None:
+            return f"Not linked: apparatus '{identifier}' not found."
+        if not area.strip():
+            return "Clarification required: area is required."
+
+        event, clarification = self.incident_store.resolve_single_candidate(area.strip())
+        if event is None:
+            return f"Not linked: {clarification}"
+        self.incident_store.join(event["event_id"], apparatus["apparatus_id"])
+        return f"{apparatus['callsign']} linked to the incident currently on record for '{area.strip()}'."
+
+    @tool(
+        "leave_incident_response",
+        "Closes one named apparatus's own current incident link, if any -- use when a report "
+        "states that apparatus is no longer responding to an incident, with no new one stated. "
+        "identifier is the apparatus's callsign or apparatus_id. Harmless (not an error) if it had "
+        "no open link. Side-effecting and idempotent.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def leave_incident_response(self, identifier: str = "") -> str:
+        apparatus = self.apparatus_store.get_apparatus(identifier)
+        if apparatus is None:
+            return f"Not updated: apparatus '{identifier}' not found."
+        closed = self.incident_store.leave(apparatus["apparatus_id"])
+        if closed is None:
+            return f"No open incident link was found to close for {apparatus['callsign']}."
+        return f"{apparatus['callsign']}'s incident link was closed."
+
+    @tool(
+        "list_incident_responders",
+        "Answers 'who/what else is responding' for the one specific real incident currently on "
+        "record for `area`, when exactly one exists -- lists only personnel and apparatus "
+        "actually linked to that incident (via join_incident_response), never anyone/anything "
+        "merely recorded in the same area. If no recent incident is on record, or more than one "
+        "is, says so plainly instead of guessing. Read-only.",
+        side_effecting=False,
+    )
+    def list_incident_responders(self, area: str = "") -> str:
+        if not area.strip():
+            return "Clarification required: area is required."
+
+        event, clarification = self.incident_store.resolve_single_candidate(area.strip())
+        if event is None:
+            return clarification
+
+        links = self.incident_store.list_open_responders(event["event_id"])
+        if not links:
+            return f"No one is currently linked to the incident on record for '{area.strip()}'."
+
+        names = []
+        for link in links:
+            apparatus = self.apparatus_store.get_apparatus(link["identity"])
+            names.append(apparatus["callsign"] if apparatus is not None else link["identity"])
+        return f"Currently linked to the incident on record for '{area.strip()}': {', '.join(names)}."
 
     @tool(
         "record_crew_shift_status",
@@ -326,6 +402,31 @@ PROTOCOLS = [
         commander_only=True,
     ),
     Protocol(
+        name="report_apparatus_movement",
+        description=(
+            "Applies when any crew member (not only a commander) reports one named apparatus's "
+            "own dispatch or movement -- e.g. an engine left the station en route to a call and "
+            "is no longer available there -- use update_apparatus_status for that engine, and, "
+            "if the report clearly states it is dispatched to a specific incident there (not "
+            "merely relocated), also call join_incident_response for the same area. If the "
+            "report also asks who/what else is responding, also call list_incident_responders. "
+            "Does not apply to a commander's blanket declaration of multiple members' shift "
+            "availability (use record_crew_shift_status for that), and does not apply to a "
+            "read-only status question (use report_crew_status for that)."
+        ),
+        participating_agents=("team_status_agent",),
+        approved_tools=("update_apparatus_status", "join_incident_response", "list_incident_responders"),
+        expected_success_output=(
+            "Confirmation that the named apparatus's status/area was recorded; if it was "
+            "dispatched to a specific incident, confirmation it was linked to it and, if asked, "
+            "who/what else is currently linked to that same incident."
+        ),
+        criticality=CriticalityLevel.LOW,
+        approval_flag=False,
+        requires_confirmation=False,
+        commander_only=False,
+    ),
+    Protocol(
         name="report_crew_status",
         description=(
             "Applies when someone asks for a read-only picture of the firefighting crew's shift "
@@ -423,8 +524,11 @@ PROTOCOLS = [
             "Applies when a commander asks for a combined snapshot spanning both the crew's "
             "roster/vehicle availability and the camera/surveillance picture in one request -- "
             "e.g. 'what's our force and vehicle availability' or 'urgent picture: exact fire "
-            "location and crew status'; does not apply when only one of the two domains is "
-            "asked about."
+            "location and crew status'. Also applies when a commander describes multiple "
+            "critical hot spots or reports at once and asks to prioritize response or allocate "
+            "crews/water -- pull the actual current records rather than trusting the "
+            "commander's own recap of what was reported earlier. Does not apply when only one "
+            "of the two domains is asked about."
         ),
         participating_agents=("surveillance_agent", "team_status_agent"),
         approved_tools=("get_surveillance_overview", "report_team_availability"),
@@ -459,6 +563,7 @@ EVENT_TYPES = [
     "mutual_aid_dispatch",
     "drone_dispatch",
     "historical_query",
+    "apparatus_movement",
 ]
 
 EVENT_TYPE_REQUIRED_FIELDS = {
