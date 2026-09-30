@@ -2,11 +2,14 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from contextlib import contextmanager
+from contextvars import ContextVar
 import logging
 import threading
 from collections import OrderedDict
 from typing import Any
 
+from agents.invocation_context import current_invocation_id
 from tools import get_current_stage, get_trace_id
 
 logger = logging.getLogger(__name__)
@@ -19,6 +22,8 @@ class _CallStart:
     model: str
     agent: str | None
     started_at: datetime
+    finish_reasons: list[str] | None
+    invocation_id: str | None
 
 
 _lock = threading.Lock()
@@ -27,6 +32,19 @@ _pending_finishes: dict[str, tuple[Any, str, str]] = {}
 _terminal_call_ids: "OrderedDict[str, None]" = OrderedDict()
 _TERMINAL_CALL_ID_LIMIT = 4096
 _installed = False
+_active_finish_reasons: ContextVar[list[str] | None] = ContextVar("provider_finish_reasons", default=None)
+
+
+@contextmanager
+def track_provider_finish_reasons():
+    """Keep final provider termination local to one agent invocation, including parallel agents."""
+
+    reasons: list[str] = []
+    token = _active_finish_reasons.set(reasons)
+    try:
+        yield reasons
+    finally:
+        _active_finish_reasons.reset(token)
 
 
 def _provider_name(model: str) -> str:
@@ -71,11 +89,14 @@ def _write_finish(start: _CallStart, event: Any) -> None:
     failed = getattr(event, "type", "") == "llm_call_failed"
     elapsed_ms = max(0.0, (event.timestamp - start.started_at).total_seconds() * 1000)
     finish_reason = getattr(event, "finish_reason", None)
+    if start.finish_reasons is not None and finish_reason is not None:
+        start.finish_reasons.append(str(finish_reason))
     logger.info(
         "provider request failed" if failed else "provider request finished",
         extra={
             "event": "provider_request_failed" if failed else "provider_request_finished",
             "call_id": event.call_id,
+            "invocation_id": start.invocation_id,
             "agent": start.agent,
             "provider": _provider_name(start.model),
             "model": start.model,
@@ -120,6 +141,8 @@ def handle_provider_call_started(_source: Any, event: Any) -> None:
         model=event.model or "unknown",
         agent=getattr(event, "agent_role", None),
         started_at=event.timestamp,
+        finish_reasons=_active_finish_reasons.get(),
+        invocation_id=current_invocation_id(),
     )
     with _lock:
         if event.call_id in _terminal_call_ids:

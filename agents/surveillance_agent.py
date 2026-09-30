@@ -118,7 +118,9 @@ class SurveillanceAgent(Agent):
         self, text: str, allowed_tools: list[str], *, invocation_policy: InvocationPolicy | None = None
     ) -> AgentResult:
         if invocation_policy is None:
-            invocation_policy = InvocationPolicy(max_output_tokens=220, reasoning_effort="none")
+            # A tool turn and its final operational summary must both fit; 220 tokens
+            # truncated a live read-only answer before the Main Agent composed it.
+            invocation_policy = InvocationPolicy(max_output_tokens=600, reasoning_effort="none")
         return _recall_capture.run(super().process, text, allowed_tools, invocation_policy=invocation_policy)
 
     def _recall(self, drone_or_mission_id: str) -> dict:

@@ -145,6 +145,18 @@ class SimulatorTelegramClient(TelegramClient):
 
         return len(self.status_events), len(self.sent)
 
+    def changes_since(self, mark: tuple[int, int], chat_id: str) -> dict:
+        """Expose real send/edit events so the simulator can replace an ack in place."""
+        status_mark, sent_mark = mark
+        return {
+            "status_updates": [
+                {"kind": event[0], "message_id": event[2], "text": event[3] if len(event) > 3 else ""}
+                for event in self.status_events[status_mark:]
+                if event[1] == chat_id
+            ],
+            "sent_messages": [message.text for message in self.sent[sent_mark:] if message.chat_id == chat_id],
+        }
+
     def reply_since(self, mark: tuple[int, int], chat_id: str) -> str | None:
         """The text a real Telegram user in `chat_id` would end up seeing
         for everything sent since `mark`. A status message that gets sent

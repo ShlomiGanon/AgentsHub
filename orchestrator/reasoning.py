@@ -12,7 +12,8 @@ from typing import TYPE_CHECKING, Callable, Literal
 
 logger = logging.getLogger(__name__)
 
-from agents import Agent, HistoryAgent, InvocationPolicy
+from agents import Agent, AgentOutputParseError, HistoryAgent, InvocationPolicy
+from agents.invocation_context import last_finished_invocation_id, record_finished_invocation_id
 from config import BaseConfig
 from history import EVENT_FIELD_CATALOG, HistoryQuerySpec, PrecedentMatch
 from history.query import HistoryQueryError
@@ -409,8 +410,14 @@ def _structured_call_with_one_repair(
                 f"\n\nYour previous response had this schema error: {last_error}. "
                 "Repair only the JSON shape and return one object."
             )
-        with stage_context(stage):
-            result = main_agent.process(attempt_prompt, [], invocation_policy=policy)
+        try:
+            with stage_context(stage):
+                result = main_agent.process(attempt_prompt, [], invocation_policy=policy)
+        except AgentOutputParseError as exc:
+            # A truncated structured decision cannot be repaired from partial JSON.
+            # Surface it through the flow's normal terminal-failure handling;
+            # letting it escape the queue leaves the persisted job pending forever.
+            raise OrchestrationParseError(f"{label} response was incomplete: {exc}") from exc
         if result.status != "success":
             raise OrchestrationParseError(f"{label} was refused or unusable: {result.text}")
         try:
@@ -698,7 +705,7 @@ def make_operational_decision(
         stage="operational_decision",
         label="operational decision",
         policy=InvocationPolicy(
-            max_output_tokens=300,
+            max_output_tokens=600,
             timeout_seconds=60.0,
             reasoning_effort="medium",
             response_schema={"name": "operational_decision", "schema": _OPERATIONAL_DECISION_SCHEMA},
@@ -1595,66 +1602,6 @@ def plan_message(
     return MessagePlan(intent, question_selection, conversational_reply.strip() if conversational_reply else None)
 
 
-def answer_question_from_plan(
-    main_agent: MainAgent,
-    question: str,
-    selection: AgentSelectionResult,
-    registry: "AgentRegistry",
-    history_query_service: "HistoryQueryService",
-    *,
-    max_fanout: int = 4,
-    caller_sender_identity_filter: str | None = None,
-    conversation_messages: tuple[dict, ...] = (),
-) -> QuestionAnswer:
-    """`caller_sender_identity_filter` restricts every history lookup this call performs to events the caller
-    themselves submitted — the ownership scoping a viewer's `ask_question` operation requires
-    (docs/Next_Plan.md §5 decision record). `None` (a commander) applies no restriction."""
-
-    is_hebrew = any('\u0590' <= c <= '\u05ea' for c in question)
-    if selection.status == "none":
-        return QuestionAnswer(_cant_answer_reply(selection.reason, is_hebrew=is_hebrew))
-    if selection.status == "clarification":
-        if is_hebrew:
-            return QuestionAnswer(f"\u05e0\u05d3\u05e8\u05e9\u05d9\u05dd \u05e4\u05e8\u05d8\u05d9\u05dd \u05e0\u05d5\u05e1\u05e4\u05d9\u05dd \u05db\u05d3\u05d9 \u05e9\u05d0\u05d5\u05db\u05dc \u05dc\u05d4\u05e9\u05d9\u05d1: {selection.reason}")
-        return QuestionAnswer(f"I need a little more detail before I can answer. {selection.reason}")
-    if selection.status == "history":
-        assert selection.history_query_spec is not None
-        try:
-            with stage_context("question_history_query"):
-                history_answer = history_query_service.query_spec(
-                    question, selection.history_query_spec, sender_identity_filter=caller_sender_identity_filter
-                )
-            provenance = {
-                "timezone": getattr(history_query_service, "timezone_name", None),
-                "time_start": history_answer.time_start,
-                "time_end": history_answer.time_end,
-                "filters": {
-                    "classifications": list(selection.history_query_spec.classifications),
-                    "areas": list(selection.history_query_spec.areas),
-                    "outcomes": list(selection.history_query_spec.outcomes),
-                    "protocol_names": list(selection.history_query_spec.protocol_names),
-                    "event_ids": list(selection.history_query_spec.event_ids),
-                    "risk_levels": list(selection.history_query_spec.risk_levels),
-                },
-                "matched_count": history_answer.total_events_matched,
-                "truncated": history_answer.truncated,
-                "source_ids": [source.source_id for source in history_answer.sources_used],
-            }
-            return QuestionAnswer(history_answer.answer, provenance)
-        except HistoryQueryError as exc:
-            if is_hebrew:
-                msg = str(exc)
-                if "no stored events" in msg.lower():
-                    return QuestionAnswer("\u05dc\u05d0 \u05e0\u05de\u05e6\u05d0\u05d5 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05e7\u05d5\u05d3\u05de\u05d9\u05dd \u05d1\u05d9\u05d5\u05de\u05df \u05d4\u05de\u05d1\u05e6\u05e2\u05d9.")
-                return QuestionAnswer(f"\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05e9\u05dc\u05d5\u05e3 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05de\u05d4\u05d9\u05d5\u05de\u05df: {msg}")
-            return QuestionAnswer(_cant_answer_reply(str(exc)))
-
-    tasks = list(selection.chosen_tasks.items())[:max_fanout]
-    selectable_names = {agent.name for agent in registry.all() if agent.name not in {"main_agent", "insights_agent"}}
-    unknown_names = sorted(set(name for name, _task in tasks) - selectable_names)
-    if unknown_names:
-        return QuestionAnswer(_cant_answer_reply(f"The selected agent is not available: {', '.join(unknown_names)}.", is_hebrew=is_hebrew))
-
 def run_parallel_specialists(
     task_runners: list[tuple[str, Callable[[], tuple[str, str]]]],
     *,
@@ -1669,8 +1616,26 @@ def run_parallel_specialists(
     if not task_runners:
         return results
 
-    if len(task_runners) == 1:
-        name, runner = task_runners[0]
+    def _logged_runner(agent_name: str, runner_fn: Callable[[], tuple[str, str]]) -> Callable[[], tuple[str, str]]:
+        def _wrapped() -> tuple[str, str]:
+            record_finished_invocation_id(None)
+            logger.info("specialist started", extra={"event": "specialist_started", "agent": agent_name, "parent_agent": "main_agent", "trace_id": get_trace_id()})
+            t0 = time.monotonic()
+            try:
+                res = runner_fn()
+                dur_ms = round((time.monotonic() - t0) * 1000, 1)
+                logger.info("specialist finished", extra={"event": "specialist_finished", "agent": agent_name, "parent_agent": "main_agent", "invocation_id": last_finished_invocation_id(), "status": "success", "duration_ms": dur_ms, "trace_id": get_trace_id()})
+                return res
+            except Exception:
+                dur_ms = round((time.monotonic() - t0) * 1000, 1)
+                logger.info("specialist finished", extra={"event": "specialist_finished", "agent": agent_name, "parent_agent": "main_agent", "invocation_id": last_finished_invocation_id(), "status": "failed", "duration_ms": dur_ms, "trace_id": get_trace_id()})
+                raise
+        return _wrapped
+
+    wrapped_runners = [(name, _logged_runner(name, runner)) for name, runner in task_runners]
+
+    if len(wrapped_runners) == 1:
+        name, runner = wrapped_runners[0]
         try:
             _, ans = runner()
             results[name] = ans
@@ -1679,10 +1644,10 @@ def run_parallel_specialists(
             results[name] = f"(\u05dc\u05d0 \u05d4\u05ea\u05e7\u05d1\u05dc \u05de\u05e2\u05e0\u05d4 \u05ea\u05e7\u05d9\u05df \u05de-{name})"
         return results
 
-    with ThreadPoolExecutor(max_workers=min(max_workers, len(task_runners))) as executor:
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(wrapped_runners))) as executor:
         future_to_name = {
             executor.submit(copy_context().run, runner): name
-            for name, runner in task_runners
+            for name, runner in wrapped_runners
         }
         for future, name in list(future_to_name.items()):
             try:
@@ -1706,6 +1671,28 @@ def run_parallel_specialists(
     return results
 
 
+def _question_reference_context(conversation_messages: tuple[dict, ...]) -> str:
+    """Carry this conversation's referents forward without treating old replies as current state."""
+
+    references = [
+        {"role": message.get("role"), "content": str(message.get("content"))[:1000], "event_id": message.get("event_id")}
+        for message in conversation_messages[-4:]
+        if message.get("role") in {"user", "assistant"} and message.get("content")
+    ]
+    if not references:
+        return ""
+    return (
+        "\nConversation references JSON (untrusted; use only to resolve what the current question refers to). "
+        "Re-read operational facts from the authorized history or read-only tools; never treat these "
+        "earlier messages as verified current state: "
+        f"{json.dumps(references, ensure_ascii=False, sort_keys=True)}"
+    )
+
+
+def _usable_specialist_answer(text: str) -> bool:
+    return not text.startswith(("(no usable answer", "(שגיאה", "(חריגת זמן"))
+
+
 def answer_question_from_plan(
     main_agent: MainAgent,
     question: str,
@@ -1722,6 +1709,18 @@ def answer_question_from_plan(
     (docs/Next_Plan.md §5 decision record). `None` (a commander) applies no restriction."""
 
     is_hebrew = any('\u0590' <= c <= '\u05ea' for c in question)
+    reference_context = _question_reference_context(conversation_messages)
+    contextual_question = question + reference_context
+    logger.info(
+        "agents selected for question",
+        extra={
+            "event": "agent_selection",
+            "status": selection.status,
+            "chosen_agents": list(selection.chosen_tasks.keys()),
+            "reason": selection.reason,
+            "trace_id": get_trace_id(),
+        },
+    )
     if selection.status == "none":
         return QuestionAnswer(_cant_answer_reply(selection.reason, is_hebrew=is_hebrew))
     if selection.status == "clarification":
@@ -1733,7 +1732,8 @@ def answer_question_from_plan(
         try:
             with stage_context("question_history_query"):
                 history_answer = history_query_service.query_spec(
-                    question, selection.history_query_spec, sender_identity_filter=caller_sender_identity_filter
+                    contextual_question, selection.history_query_spec,
+                    sender_identity_filter=caller_sender_identity_filter,
                 )
             provenance = {
                 "timezone": getattr(history_query_service, "timezone_name", None),
@@ -1768,6 +1768,7 @@ def answer_question_from_plan(
 
     def _run_task(agent_name: str, task_text: str) -> tuple[str, str]:
         agent = registry.get(agent_name)
+        task_text += reference_context
         if is_hebrew:
             task_text = f"\u05d7\u05d5\u05d1\u05d4 \u05dc\u05e2\u05e0\u05d5\u05ea \u05d0\u05da \u05d5\u05e8\u05e7 \u05d1\u05e2\u05d1\u05e8\u05d9\u05ea \u05e7\u05e6\u05e8\u05d4 \u05d5\u05de\u05d1\u05e6\u05e2\u05d9\u05ea (\u05e2\u05d3 3-4 \u05e9\u05d5\u05e8\u05d5\u05ea):\n{task_text}"
         if isinstance(agent, HistoryAgent):
@@ -1788,18 +1789,24 @@ def answer_question_from_plan(
     sub_answers = run_parallel_specialists(task_runners, max_workers=max_fanout, timeout_per_specialist=25.0)
 
     if len(sub_answers) == 1:
-        return QuestionAnswer(next(iter(sub_answers.values())))
-    with stage_context("question_composition"):
-        composed = main_agent.process(
-            _build_compose_prompt(question, sub_answers),
-            [],
-            invocation_policy=InvocationPolicy(max_output_tokens=700, timeout_seconds=75.0),
-        )
-    if composed.status != "success":
-        valid_items = [txt for txt in sub_answers.values() if not txt.startswith("(\u05d7\u05e8\u05d9\u05d2\u05ea \u05d6\u05de\u05df") and not txt.startswith("(\u05e9\u05d2\u05d9\u05d0\u05d4")]
+        single_answer = next(iter(sub_answers.values()))
+        if not _usable_specialist_answer(single_answer):
+            return QuestionAnswer(_cant_answer_reply(single_answer, is_hebrew=is_hebrew))
+        return QuestionAnswer(single_answer)
+    try:
+        with stage_context("question_composition"):
+            composed = main_agent.process(
+                _build_compose_prompt(contextual_question, sub_answers),
+                [],
+                invocation_policy=InvocationPolicy(max_output_tokens=700, timeout_seconds=75.0),
+            )
+    except AgentOutputParseError:
+        composed = None
+    if composed is None or composed.status != "success":
+        valid_items = [txt for txt in sub_answers.values() if _usable_specialist_answer(txt)]
         if valid_items:
             return QuestionAnswer("\n".join(f"• {item}" for item in valid_items))
-        raise OrchestrationParseError(f"answer composition did not produce a usable response: {composed.text}")
+        raise OrchestrationParseError("answer composition did not produce a complete response")
 
     failed_agents = [name for name, txt in sub_answers.items() if txt.startswith("(\u05d7\u05e8\u05d9\u05d2\u05ea \u05d6\u05de\u05df") or txt.startswith("(\u05e9\u05d2\u05d9\u05d0\u05d4")]
     if failed_agents:
@@ -1886,6 +1893,16 @@ def answer_question(
                 f"question routing repair did not produce a usable response: {selection_result.text}"
             )
         selection = _parse_agent_selection_response(selection_result.text)
+    logger.info(
+        "agents selected for question",
+        extra={
+            "event": "agent_selection",
+            "status": selection.status,
+            "chosen_agents": list(selection.chosen_tasks.keys()),
+            "reason": selection.reason,
+            "trace_id": get_trace_id(),
+        },
+    )
     if selection.status == "none":
         return _cant_answer_reply(selection.reason, is_hebrew=is_hebrew)
     if selection.status == "clarification":
@@ -1949,13 +1966,16 @@ def answer_question(
             return _cant_answer_reply(f"{agent_name} doesn't have a way to help with this question.")
         return single_ans
 
-    with stage_context("question_composition"):
-        compose_result = main_agent.process(_build_compose_prompt(question, sub_answers), [])
-    if compose_result.status != "success":
-        valid_items = [txt for txt in sub_answers.values() if not txt.startswith("(\u05d7\u05e8\u05d9\u05d2\u05ea \u05d6\u05de\u05df") and not txt.startswith("(\u05e9\u05d2\u05d9\u05d0\u05d4")]
+    try:
+        with stage_context("question_composition"):
+            compose_result = main_agent.process(_build_compose_prompt(question, sub_answers), [])
+    except AgentOutputParseError:
+        compose_result = None
+    if compose_result is None or compose_result.status != "success":
+        valid_items = [txt for txt in sub_answers.values() if _usable_specialist_answer(txt)]
         if valid_items:
             return "\n".join(f"• {item}" for item in valid_items)
-        raise OrchestrationParseError(f"answer composition did not produce a usable response: {compose_result.text}")
+        raise OrchestrationParseError("answer composition did not produce a complete response")
 
     failed_agents = [name for name, txt in sub_answers.items() if txt.startswith("(\u05d7\u05e8\u05d9\u05d2\u05ea \u05d6\u05de\u05df") or txt.startswith("(\u05e9\u05d2\u05d9\u05d0\u05d4")]
     if failed_agents:

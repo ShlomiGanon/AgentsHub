@@ -70,4 +70,7 @@ __all__ = [
     "trace_context",
     "verbose_logging_enabled",
     "deep_debug_enabled",
+    "aggregate_trace_data",
 ]
+
+from tools.behind_the_scenes import aggregate_trace_data

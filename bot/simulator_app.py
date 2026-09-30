@@ -32,7 +32,7 @@ from bot.transports import HttpApiClient
 from config import ModelTierError, TierModel, resolve_tier_model_from_env
 from profiles import simulation_group_chat_id, simulation_user_telegram_id
 from profiles.loader import ProfileLoadError, ProfileValidationError, load_profile
-from tools import configure_logging
+from tools import configure_logging, get_trace_id, set_trace_id
 
 if TYPE_CHECKING:
     from profiles.contracts import LoadedProfile
@@ -158,6 +158,9 @@ class SimulatorRuntime:
         if not source_message_id:
             raise SimulatorRequestRefused("source_message_id is required")
 
+        trace_id = str(payload.get("trace_id") or "").strip()
+        if trace_id:
+            set_trace_id(trace_id)
         date = None
         raw_timestamp = payload.get("timestamp")
         if raw_timestamp is not None and raw_timestamp != "":
@@ -181,7 +184,13 @@ class SimulatorRuntime:
         )
         await self.application.process_update(update)
         reply_text = self.telegram_client.reply_since(mark, chat_id)
-        return {"reply_text": reply_text, "watermark": _mark_to_dict(self.telegram_client.mark())}
+        current_trace = trace_id or get_trace_id()
+        return {
+            "reply_text": reply_text,
+            **self.telegram_client.changes_since(mark, chat_id),
+            "watermark": _mark_to_dict(self.telegram_client.mark()),
+            "trace_id": current_trace,
+        }
 
     def poll_chat(self, chat_id: str, since: tuple[int, int]) -> dict:
         """Anything sent to `chat_id` since `since` (a watermark from `handle_message`
@@ -197,7 +206,11 @@ class SimulatorRuntime:
             raise SimulatorRequestRefused(f"{chat_id!r} is not a currently-declared simulation chat_id for this profile")
 
         reply_text = self.telegram_client.reply_since(since, chat_id)
-        return {"reply_text": reply_text, "watermark": _mark_to_dict(self.telegram_client.mark())}
+        return {
+            "reply_text": reply_text,
+            **self.telegram_client.changes_since(since, chat_id),
+            "watermark": _mark_to_dict(self.telegram_client.mark()),
+        }
 
 
 def _mark_to_dict(mark: tuple[int, int]) -> dict:
@@ -237,6 +250,8 @@ def build_flask_app(runtime: SimulatorRuntime, bot_service_key: str) -> Flask:
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
             return jsonify({"error": {"message": "request body must be a JSON object"}}), 400
+        if "trace_id" not in payload and request.headers.get("X-Trace-ID"):
+            payload["trace_id"] = request.headers.get("X-Trace-ID")
 
         future = asyncio.run_coroutine_threadsafe(runtime.handle_message(payload), runtime.loop)
         try:
