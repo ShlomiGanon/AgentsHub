@@ -999,6 +999,17 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
         return String(value == null ? '' : value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
       }
 
+      function formatDurationMs(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return 'לא זמין';
+        const seconds = number / 1000;
+        const precision = seconds < 1 ? 2 : (seconds < 10 ? 2 : 1);
+        let text = seconds.toFixed(precision);
+        while (text.includes('.') && text.endsWith('0')) text = text.slice(0, -1);
+        if (text.endsWith('.')) text = text.slice(0, -1);
+        return text + ' שניות';
+      }
+
       // Transform application
       function applyTransform() {
         if (sceneGroup) {
@@ -1170,9 +1181,9 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       function render(data) {
         // 1. Update Metrics
         const m = data.metrics || {};
-        mWall.textContent = m.total_wall_clock_ms ? (m.total_wall_clock_ms.toLocaleString() + ' מ"ש') : '—';
+        mWall.textContent = m.total_wall_clock_ms != null ? formatDurationMs(m.total_wall_clock_ms) : '—';
         const queueTime = m.queue_wait_ms == null ? 'לא זמין' : m.queue_wait_ms;
-        mWallBreakdown.textContent = 'ספק מצטבר: ' + (m.model_latency_ms || 0) + ' מ"ש | כלים: ' + (m.tools_duration_ms || 0) + ' מ"ש | תור: ' + queueTime + ' מ"ש';
+        mWallBreakdown.textContent = 'ספק מצטבר: ' + formatDurationMs(m.model_latency_ms || 0) + ' | כלים: ' + formatDurationMs(m.tools_duration_ms || 0) + ' | תור: ' + (m.queue_wait_ms == null ? queueTime : formatDurationMs(m.queue_wait_ms));
         mLlm.textContent = m.llm_call_count ? (m.llm_call_count + ' קריאות') : '0';
         mRetries.textContent = 'ניסיונות חוזרים: ' + (m.retries_count || 0);
         mTokens.textContent = m.tokens ? m.tokens.total.toLocaleString() : '—';
@@ -1259,7 +1270,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
           else if (node.status === 'waiting') statusText = 'ממתין לאישור';
           else if (node.status === 'unknown') statusText = 'מצב לא ידוע';
 
-          const timerText = node.duration_ms ? (node.duration_ms + ' מ"ש') : (node.status === 'running' ? '⏱️ פועל' : '');
+          const timerText = node.duration_ms != null ? formatDurationMs(node.duration_ms) : (node.status === 'running' ? '⏱️ פועל' : '');
           const previewText = node.selected_agents && node.selected_agents.length
             ? node.selected_agents.join(', ')
             : (node.sublabel || node.protocol || node.intent || (node.tasks && node.tasks[0]) || node.summary || node.details || '');
@@ -1326,7 +1337,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
               '<span class="bts-inspect-label">סטטוס תפעולי:</span>' +
               '<span class="bts-inspect-val">' + esc(statusBadge) + '</span>' +
             '</div>' +
-            (node.duration_ms ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">זמן ביצוע:</span><span class="bts-inspect-val">' + node.duration_ms + ' מ"ש</span></div>') : '') +
+            (node.duration_ms != null ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">זמן ביצוע:</span><span class="bts-inspect-val">' + formatDurationMs(node.duration_ms) + '</span></div>') : '') +
             (node.call_count ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">מספר הפעלות / סבבים:</span><span class="bts-inspect-val">' + node.call_count + '</span></div>') : '') +
             (node.is_parallel ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">מצב הרצה:</span><span class="bts-inspect-val" style="color:var(--accent-cyan)">⚡ הרצה במקביל (Concurrent)</span></div>') : '') +
             (node.verification ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">רמת אימות פעולה:</span><span class="bts-inspect-val">' + esc(node.verification_note || node.verification) + '</span></div>') : '') +
@@ -1334,7 +1345,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
             (node.result ? ('<div class="bts-inspect-section-title">תוצאה / שגיאה</div><div class="bts-inspect-box">' + esc(node.result) + '</div>') : '') +
             (node.llm_calls && node.llm_calls.length ? ('<div class="bts-inspect-section-title">קריאות מודל (' + node.llm_calls.length + ')</div><div class="bts-inspect-box">' + node.llm_calls.map(c => esc(
               '#' + (c.sequence_number || '?') + ' · ' + (c.purpose || 'unattributed') + ' · ' + (c.agent_name || node.label || 'unattributed') +
-              ' · ' + (c.latency_ms ?? '?') + ' מ״ש · ' + (c.finish_reason || c.status || 'unknown') +
+              ' · ' + (c.latency_ms == null ? 'לא זמין' : formatDurationMs(c.latency_ms)) + ' · ' + (c.finish_reason || c.status || 'unknown') +
               ' · טוקנים קלט/פלט/מטמון: ' + (c.input_tokens ?? '?') + '/' + (c.output_tokens ?? '?') + '/' + (c.cache_tokens ?? '?') +
               '\nיוזם: ' + (c.parent_agent || 'unattributed') + ' · שלב: ' + (c.stage || 'unattributed') +
               ' · parent invocation: ' + (c.parent_invocation_id || 'לא נשמר') +
@@ -1353,7 +1364,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
               '</div>') : '') +
             (node.type === 'invocation' && node.model_status ? ('<div class="bts-inspect-section-title">ריצת מודל (נפרדת מתוצאת Agent)</div><div class="bts-inspect-box">' +
               'סטטוס מודל: ' + esc(node.model_status) + '<br>' +
-              'זמן מודל: ' + esc(node.model_duration_ms ?? 'לא זמין') + ' מ״ש<br>' +
+              'זמן מודל: ' + esc(node.model_duration_ms == null ? 'לא זמין' : formatDurationMs(node.model_duration_ms)) + '<br>' +
               'טוקנים קלט/פלט: ' + esc(node.model_input_tokens ?? '?') + '/' + esc(node.model_output_tokens ?? '?') +
               '</div>') : '') +
             (node.summary ? ('<div class="bts-inspect-section-title">סיכום כלי</div><div class="bts-inspect-box">' + esc(node.summary) + '</div>') : '') +

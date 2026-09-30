@@ -210,7 +210,7 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
             routing_events.append(entry)
         if event in {"event_data_saved", "attendance_cycle_opened", "persistence_verified", "verification_succeeded", "verification_failed"}:
             persistence_events.append(entry)
-        if event in {"report_composed", "picture_composed", "response_composed", "question_composition"}:
+        if event in {"picture_planned", "report_composed", "picture_composed", "response_composed", "question_composition"}:
             composition_events.append(entry)
         if event == "agent_invocation_started" and invocation_id:
             node = ensure_invocation(invocation_id, entry.get("agent_name") or entry.get("agent"), entry)

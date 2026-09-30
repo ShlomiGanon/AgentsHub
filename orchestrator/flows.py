@@ -303,7 +303,13 @@ def _record_outcome_with_report(
             insight_text=insight_text if insight_text is not None else summary.insight_text,
             resource_unavailable_fact=resource_unavailable_fact,
         )
-        report_text = compose_report(deps.report_composer_agent, summary, resolve_audience(summary), deps.message_catalog)
+        if summary.selected_protocol in {"query_situational_picture", "overall_situational_picture"} and summary.insight_text:
+            # The picture composer already produced the user-facing snapshot. Do not send it
+            # through the generic commander report composer, which exposes internal step tasks
+            # and can reintroduce Markdown/tables into the operational picture.
+            report_text = summary.insight_text.strip()
+        else:
+            report_text = compose_report(deps.report_composer_agent, summary, resolve_audience(summary), deps.message_catalog)
 
     record_event_outcome(
         deps.persistence, event_id, outcome,

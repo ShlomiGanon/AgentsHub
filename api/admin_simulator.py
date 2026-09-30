@@ -934,7 +934,7 @@ SIMULATOR_BODY = """
     let text = seconds.toFixed(precision);
     while (text.includes('.') && text.endsWith('0')) text = text.slice(0, -1);
     if (text.endsWith('.')) text = text.slice(0, -1);
-    return text + 's';
+    return text + ' שניות';
   }
 
   function el(tag, className, text) {
@@ -2186,7 +2186,10 @@ SIMULATOR_BODY = """
         pollFailures = 0;
         render(data);
 
-        if (data.terminal || data.execution_status === 'unknown' || data.diagnostic_state === 'job_stopped_without_outcome') {
+        // `unknown` can be a transient aggregate state while the queue is still writing
+        // the next synthesis/picture events. Only stop on a real terminal outcome or a
+        // confirmed queue stop; otherwise the graph must keep following the trace.
+        if (data.terminal || data.diagnostic_state === 'job_stopped_without_outcome') {
           stopPolling();
         }
       } catch (err) {

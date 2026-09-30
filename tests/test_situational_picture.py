@@ -288,6 +288,17 @@ def test_composition_falls_back_to_the_collected_findings_when_the_model_cannot_
     assert catalog.text("orchestrator.picture.recent_events_label", hours=6) + ": 1. Event abc." in text
 
 
+def test_composition_removes_model_markup_from_operator_facing_picture():
+    reports = (DomainReport("surveillance_agent", "q1", "Cameras nominal.", True),)
+    main_agent = FakeMainAgent(
+        compose_text="**מצלמות:** תקינות\n- **כוחות:** אין חריגה\n[התראה למפקד — ממתין ללא מענה]"
+    )
+
+    text = compose_situational_picture(main_agent, reports, "picture", current_time="T", recent_events_hours=6)
+
+    assert text == "מצלמות: תקינות\nכוחות: אין חריגה\nהתראה למפקד — ממתין ללא מענה"
+
+
 def test_nothing_collected_skips_the_model_and_reports_every_domain_unavailable():
     reports = (
         DomainReport("surveillance_agent", "q1", "boom", False),
