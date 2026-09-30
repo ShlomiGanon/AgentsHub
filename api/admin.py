@@ -261,19 +261,23 @@ _BOOTSTRAP_CSS_LINK = _FONTS_LINK + (
 _DASHBOARD_STYLE = """
 <style>
   :root {
-    --bg: #f8fafc;
+    --navy: #0B192C;
+    --navy-soft: #15263d;
+    --bg: #f5f7fb;
     --panel: #ffffff;
+    --panel-muted: #f8fafc;
     --line: #e2e8f0;
     --line-strong: #cbd5e1;
     --text: #0B192C;
-    --text-dim: #475569;
-    --text-faint: #94a3b8;
+    --text-dim: #5b6b80;
+    --text-faint: #8b9bb0;
     --sidebar: #0B192C;
-    --sidebar-text: #cbd5e1;
-    --teal: #2563eb;
+    --sidebar-text: #c5d0de;
+    --teal: #0f766e;
     --lime: #84cc16;
     --lime-hover: #65a30d;
     --lime-dim: #ecfccb;
+    --lime-text: #0B192C;
     --blue: #2563eb;
     --blue-hover: #1d4ed8;
     --blue-dim: #dbeafe;
@@ -283,9 +287,19 @@ _DASHBOARD_STYLE = """
     --viewer-dim: #dbeafe;
     --danger: #b91c1c;
     --danger-dim: #fee2e2;
-    --shadow: 0 4px 14px rgba(11, 25, 44, .06);
-    --shadow-lg: 0 18px 40px rgba(11, 25, 44, .12);
-    --radius: 16px;
+    --warning: #b45309;
+    --warning-dim: #fef3c7;
+    --shadow: 0 1px 2px rgba(11, 25, 44, .04), 0 6px 18px rgba(11, 25, 44, .05);
+    --shadow-lg: 0 8px 22px rgba(11, 25, 44, .09);
+    --radius: 10px;
+    --radius-sm: 6px;
+    --control-h: 36px;
+    --btn-h: 36px;
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
     --sans: Heebo, Inter, -apple-system, 'Segoe UI', sans-serif;
     --mono: 'SF Mono', 'JetBrains Mono', ui-monospace, Consolas, monospace;
   }
@@ -294,14 +308,16 @@ _DASHBOARD_STYLE = """
     background: var(--bg);
     color: var(--text);
     font-family: var(--sans);
-    font-size: 16px;
+    font-size: 14.5px;
+    line-height: 1.45;
+    font-weight: 400;
     margin: 0;
     min-height: 100vh;
   }
   :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
   .ls-app { display: flex; min-height: 100vh; background: var(--bg); }
   .ls-sidebar {
-    width: 248px;
+    width: 236px;
     flex-shrink: 0;
     position: sticky;
     top: 0;
@@ -310,54 +326,72 @@ _DASHBOARD_STYLE = """
     color: var(--sidebar-text);
     display: flex;
     flex-direction: column;
-    padding: 20px 12px 12px;
+    padding: 14px 8px 10px;
     transition: width .2s ease;
-    border-inline-end: 1px solid rgba(255,255,255,.04);
+    border-inline-end: 1px solid rgba(255,255,255,.05);
   }
-  .ls-app.ls-sidebar-collapsed .ls-sidebar { width: 76px; padding-inline: 10px; }
+  .ls-app.ls-sidebar-collapsed .ls-sidebar { width: 72px; padding-inline: 10px; }
   .ls-brand {
     display: flex; align-items: center; justify-content: center;
     gap: 8px; text-decoration: none; color: inherit;
-    padding: 8px 4px 22px; min-height: 48px;
+    padding: 4px 8px 12px; min-height: 40px;
+    border-bottom: 1px solid rgba(255,255,255,.06);
+    margin-bottom: 8px;
   }
   .ls-logo {
-    display: block; height: 32px; width: auto; max-width: 100%;
+    display: block; height: 28px; width: auto; max-width: 100%;
   }
   .ls-mark {
-    display: none; width: 36px; height: 36px; object-fit: contain;
+    display: none; width: 32px; height: 32px; object-fit: contain;
   }
   .ls-app.ls-sidebar-collapsed .ls-logo { display: none; }
   .ls-app.ls-sidebar-collapsed .ls-mark { display: block; }
-  .ls-nav { display: flex; flex-direction: column; gap: 4px; flex: 1; overflow: auto; }
+  .ls-app.ls-sidebar-collapsed .ls-brand { border-bottom: 0; margin-bottom: 8px; padding-bottom: 8px; }
+  .ls-nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow: auto; padding-inline: 2px; }
+  .ls-nav-group { margin-top: 8px; padding-top: 2px; }
+  .ls-nav-group:first-child { margin-top: 0; }
+  .ls-nav-group-label {
+    display: block;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: rgba(197, 208, 222, .5);
+    padding: 4px 10px 3px;
+  }
+  .ls-app.ls-sidebar-collapsed .ls-nav-group-label {
+    height: 1px; padding: 0; margin: 8px 10px 6px; color: transparent;
+    background: rgba(255,255,255,.1); overflow: hidden;
+  }
   .ls-nav-item {
     position: relative;
-    display: flex; align-items: center; gap: 12px;
+    display: flex; align-items: center; gap: 10px;
     color: var(--sidebar-text); text-decoration: none;
-    padding: 9px 12px; border-radius: 10px; font-size: 13.5px; font-weight: 500;
-    transition: background .2s ease, color .2s ease;
+    padding: 7px 10px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500;
+    transition: background .15s ease, color .15s ease;
   }
-  .ls-nav-item:hover { background: rgba(255,255,255,.08); color: #fff; }
+  .ls-nav-item:hover { background: rgba(255,255,255,.07); color: #fff; }
   .ls-nav-item.is-active {
-    background: rgba(132, 204, 22, .16);
+    background: rgba(132, 204, 22, .14);
     color: #fff;
   }
   .ls-nav-item.is-active::before {
     content: "";
     position: absolute;
     inset-inline-start: 0;
-    top: 8px; bottom: 8px;
+    top: 7px; bottom: 7px;
     width: 3px;
     border-radius: 999px;
     background: var(--lime);
   }
   .ls-nav-item.is-active .ls-icon { color: var(--lime); }
-  .ls-icon { width: 20px; height: 20px; flex-shrink: 0; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .ls-icon { width: 18px; height: 18px; flex-shrink: 0; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   .ls-app.ls-sidebar-collapsed .ls-nav-label { display: none; }
   .ls-app.ls-sidebar-collapsed .ls-nav-item { justify-content: center; padding: 10px; }
   .ls-sidebar-toggle {
     margin-top: 8px; border: 0; background: rgba(255,255,255,.06); color: var(--sidebar-text);
-    border-radius: 10px; padding: 8px; cursor: pointer;
-    transition: background .2s ease;
+    border-radius: var(--radius-sm); padding: 8px; cursor: pointer;
+    transition: background .15s ease;
   }
   .ls-sidebar-toggle:hover { background: rgba(255,255,255,.12); color: #fff; }
   .ls-app.ls-sidebar-collapsed .ls-sidebar-toggle .ls-icon { transform: rotate(180deg); }
@@ -365,64 +399,149 @@ _DASHBOARD_STYLE = """
   [dir="rtl"] .ls-app.ls-sidebar-collapsed .ls-sidebar-toggle .ls-icon { transform: scaleX(-1) rotate(180deg); }
   .ls-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
   .ls-topbar {
-    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-    padding: 16px 28px 8px; background: transparent;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 8px 24px; min-height: 56px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 20;
   }
   .ls-topbar-end { margin-inline-start: auto; display: flex; align-items: center; gap: 10px; }
-  .ls-btn-fill, .ls-btn-outline, .ls-user-btn {
+  .ls-btn-fill, .ls-btn-outline, .ls-user-btn,
+  .btn-console, .btn-console-primary, .btn-console-danger {
     display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-    border-radius: 999px; font-size: 13px; font-weight: 700; letter-spacing: .02em;
-    text-decoration: none; border: 1.5px solid transparent; padding: 8px 18px;
-    cursor: pointer; transition: background .2s ease, border-color .2s ease, color .2s ease, box-shadow .2s ease;
+    min-height: var(--btn-h); border-radius: var(--radius-sm);
+    font-size: 13px; font-weight: 700; letter-spacing: .01em; line-height: 1;
+    text-decoration: none; border: 1.5px solid transparent; padding: 7px 14px;
+    cursor: pointer; transition: background .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease, filter .15s ease;
   }
-  .ls-btn-fill { background: var(--blue); color: #fff; }
-  .ls-btn-fill:hover { background: var(--blue-hover); color: #fff; }
-  .ls-btn-outline { background: #fff; color: var(--blue); border-color: var(--blue); }
+  .ls-btn-fill { background: var(--navy); color: #fff; border-color: var(--navy); }
+  .ls-btn-fill:hover { background: var(--navy-soft); color: #fff; box-shadow: 0 6px 14px rgba(11, 25, 44, .18); }
+  .ls-btn-outline { background: #fff; color: var(--blue); border-color: var(--blue); font-weight: 600; }
   .ls-btn-outline .dot {
     display: inline-block; width: 6px; height: 6px; border-radius: 50%;
     background: var(--lime); box-shadow: 0 0 0 3px rgba(132,204,22,.28); margin-inline-end: 8px; vertical-align: middle;
   }
   .ls-user-btn {
-    background: #fff; color: var(--text); border-color: var(--line-strong);
+    background: #fff; color: var(--text); border-color: var(--line-strong); font-weight: 600;
   }
   .ls-user-btn:hover { border-color: var(--blue); color: var(--blue); }
-  .ls-content { flex: 1; padding: 12px 28px 48px; }
+  .ls-content { flex: 1; padding: 16px 24px 32px; }
   .ls-page { max-width: 1080px; }
-  .ls-page-wide { max-width: 1400px; }
+  .ls-page-wide { max-width: 1360px; }
   .container-narrow, .container-wide { max-width: none; padding: 0; }
+  .ls-page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .ls-page-header h1, .ls-page > h1:first-child { font-size: 22px; font-weight: 600; letter-spacing: -.02em; color: var(--navy); margin: 0 0 4px; }
+  .ls-page-header .subtitle, .ls-page > h1 + .subtitle { margin: 0; max-width: 680px; }
+  .ls-section { margin-bottom: 16px; }
+  .ls-section-title, .ls-home-group-title, .block-label {
+    display: block;
+    font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--text-faint); margin: 0 0 8px;
+  }
 
-  h1 { font-size: 28px; font-weight: 700; letter-spacing: -.02em; color: var(--text); }
-  h2 { font-weight: 700; color: var(--text); }
-  .ls-home-title { text-align: center; font-size: 32px; margin-bottom: 6px; }
-  .ls-home-sub { text-align: center; max-width: 640px; margin: 0 auto 32px; }
-  .ls-service-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+  h1 { font-size: 22px; font-weight: 600; letter-spacing: -.02em; color: var(--navy); }
+  h2 { font-weight: 600; color: var(--navy); font-size: 17px; }
+  h3 { font-weight: 600; color: var(--navy); }
+  .ls-content:has(.ls-home) { padding: 20px 28px 40px; }
+  .ls-home { max-width: 1120px; }
+  .ls-home .ls-page-header { margin-bottom: 20px; gap: 16px; }
+  .ls-home-title { text-align: start; font-size: 22px; font-weight: 600; margin-bottom: 4px; }
+  .ls-home-sub { text-align: start; max-width: 680px; margin: 0; }
+  .ls-home-group {
+    margin-bottom: 26px; padding: 0;
+    background: transparent; border: 0; border-radius: 0; box-shadow: none;
+  }
+  .ls-home-group-title {
+    font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--text-faint); margin: 0 0 10px;
+  }
+  .ls-service-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .ls-tabs { display: flex; gap: 2px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin: 0 0 14px; }
+  .ls-tab {
+    background: transparent; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
+    padding: 8px 12px; font-size: 13px; font-weight: 600; color: var(--text-dim); cursor: pointer;
+    transition: color .15s ease, border-color .15s ease, background .15s ease;
+  }
+  .ls-tab:hover { color: var(--navy); background: var(--panel-muted); }
+  .ls-tab.is-active { color: var(--navy); border-bottom-color: var(--lime); }
+  .protocol-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; align-items: start; }
+  .ls-content:has(.ls-protocols) { padding: 20px 28px 40px; }
+  .ls-protocols { max-width: 1400px; }
+  .ls-protocols .ls-page-header { margin-bottom: 20px; gap: 16px; }
+  .ls-protocols .ls-table-toolbar { margin-bottom: 16px; }
+  .ls-protocols .ls-identity-block { margin-bottom: 16px; padding: 16px 18px; }
+  .ls-protocols .protocol-layout { grid-template-columns: 240px minmax(0, 1fr); gap: 20px; }
+  .ls-protocols .protocol-nav { padding: 12px; }
+  .ls-protocols .protocol-nav-item { padding: 10px 12px; }
+  .ls-protocols .protocol-section { margin-bottom: 16px; padding-bottom: 16px; }
+  .ls-protocols .block-console { padding: 18px 18px 16px; }
+  .ls-protocols .api-form-grid { gap: 12px; }
+  .ls-protocols textarea.form-control-console { min-height: 88px; }
+  .protocol-nav { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px; box-shadow: var(--shadow); position: sticky; top: 72px; }
+  .protocol-nav-item {
+    display: block; width: 100%; text-align: start; border: 0; background: transparent;
+    padding: 8px 10px; border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--text); cursor: pointer;
+  }
+  .protocol-nav-item:hover { background: var(--panel-muted); }
+  .protocol-nav-item.is-active { background: var(--lime-dim); color: var(--navy); }
+  .protocol-editor-block[hidden], [data-panel][hidden] { display: none !important; }
+  .ls-status-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-bottom: 12px; }
+  .ls-status-chip {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: 8px 10px; font-size: 12px; color: var(--text-dim); min-height: 56px;
+    display: flex; flex-direction: column; justify-content: center; gap: 2px;
+  }
+  .ls-status-chip .ls-status-kicker { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-faint); }
+  .ls-status-chip strong { color: var(--text); font-weight: 700; }
+  .ls-danger-zone { border-color: #fecaca; }
+  .ls-compact-table td .form-control-console, .ls-compact-table td .form-select-console { min-height: 30px; padding: 3px 8px; font-size: 13px; }
+  .ls-compact-table tbody td { padding: 5px 8px; }
+  .ls-table-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+  .ls-count { font-size: 12px; font-weight: 600; color: var(--text-dim); }
+  .ls-actions { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+  .ls-actions .btn { min-height: 28px; padding: 2px 8px; font-size: 12px; font-weight: 600; }
+  .ls-empty-state { text-align: center; padding: 28px 18px; color: var(--text-dim); background: var(--panel); border: 1px dashed var(--line-strong); border-radius: var(--radius); }
+  .ls-empty-icon { width: 32px; height: 32px; margin: 0 auto 8px; color: var(--blue); }
+  .ls-empty-state strong { display: block; color: var(--navy); font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .ls-empty-state p { margin: 0 auto; max-width: 400px; font-size: 13px; }
+  .ls-empty-state .btn { margin-top: 12px; }
+  .ls-chip-list { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tech, .tag.tech, .form-control-console.tech, .form-select-console.tech {
+    direction: ltr; unicode-bidi: isolate; text-align: start; font-family: var(--mono);
+  }
+  .protocol-section { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+  .protocol-section:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 0; }
+  .protocol-nav-create { color: var(--blue); }
+  .sim-step.is-primary { border-color: var(--lime); box-shadow: 0 0 0 3px rgba(132,204,22,.16); }
+  @media (max-width: 900px) { .protocol-layout { grid-template-columns: 1fr; } .protocol-nav { position: static; } }
   .ls-service-card {
-    display: block; background: var(--panel); border-radius: var(--radius); padding: 26px 22px 22px;
+    display: block; background: var(--panel); border-radius: var(--radius); padding: 18px 18px 16px;
     text-decoration: none; color: inherit; height: 100%;
     box-shadow: var(--shadow);
     border: 1px solid var(--line);
-    transition: transform .3s ease, box-shadow .3s ease, border-color .3s ease;
+    transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease;
   }
   .ls-service-card:hover, .ls-service-card:focus-visible {
     transform: scale(1.02);
     box-shadow: var(--shadow-lg);
-    border-color: rgba(132, 204, 22, .55);
+    border-color: rgba(132, 204, 22, .45);
     color: inherit;
   }
   .ls-service-icon {
-    width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center;
-    background: var(--blue-dim); color: var(--blue); margin-bottom: 14px;
-    transition: background .3s ease, color .3s ease;
+    width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center;
+    background: var(--blue-dim); color: var(--blue); margin-bottom: 12px;
+    transition: background .25s ease, color .25s ease;
   }
   .ls-service-card:hover .ls-service-icon, .ls-service-card:focus-visible .ls-service-icon {
     background: var(--lime-dim); color: #3f6212;
   }
-  .ls-service-card h2 { font-size: 16px; font-weight: 700; margin: 0 0 6px; }
+  .ls-service-card h2 { font-size: 15px; font-weight: 700; margin: 0 0 4px; }
+  .ls-service-card .subtitle { font-size: 13px; display: block; }
   @media (max-width: 980px) { .ls-service-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   @media (max-width: 640px) {
     .ls-service-grid { grid-template-columns: 1fr; }
     .ls-sidebar { position: sticky; top: 0; align-self: flex-start; max-height: 100vh; }
-    .ls-content { padding: 12px 16px 40px; }
+    .ls-content { padding: 12px 14px 28px; }
     .ls-topbar { padding-inline: 16px; }
   }
   @media (prefers-reduced-motion: reduce) {
@@ -437,15 +556,15 @@ _DASHBOARD_STYLE = """
     display: inline-block; width: 6px; height: 6px; border-radius: 50%;
     background: var(--lime); box-shadow: 0 0 0 3px rgba(132,204,22,.28); margin-inline-end: 6px;
   }
-  .subtitle { color: var(--text-dim); font-size: 15px; }
-  .nav-console { font-size: 14px; color: var(--text-dim); text-decoration: none; }
-  .nav-console:hover { color: var(--text); text-decoration: underline; }
+  .subtitle { color: var(--text-dim); font-size: 13.5px; line-height: 1.45; }
+  .nav-console { font-size: 13px; color: var(--blue); text-decoration: none; font-weight: 600; }
+  .nav-console:hover { color: var(--blue-hover); text-decoration: underline; }
 
   .alert-console {
     background: var(--commander-dim);
     border: 1px solid #bef264;
     border-inline-start: 3px solid var(--lime);
-    border-radius: 12px;
+    border-radius: var(--radius-sm);
     color: #3f6212;
     font-size: 14px;
   }
@@ -454,48 +573,76 @@ _DASHBOARD_STYLE = """
     background: var(--danger-dim);
     border: 1px solid #fca5a5;
     border-inline-start: 3px solid var(--danger);
-    border-radius: 12px;
+    border-radius: var(--radius-sm);
     color: #7f1d1d;
     font-size: 14px;
   }
   .alert-console-error b { font-weight: 600; }
 
   .ls-page > table.table-console,
-  .table-responsive {
+  .ls-table-card {
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: var(--radius);
     box-shadow: var(--shadow);
-    padding: 8px 20px 4px;
+    padding: 0;
+    overflow: auto;
   }
+  .table-responsive { overflow: auto; }
   table.table-console {
     --bs-table-bg: transparent;
     border-collapse: collapse;
-    font-size: 15px;
+    font-size: 14px;
+    margin-bottom: 0;
   }
   table.table-console thead th {
-    font-size: 12px;
-    font-weight: 600;
+    font-size: 11px;
+    font-weight: 700;
     color: var(--text-faint);
-    letter-spacing: 0.04em;
-    border-bottom: 1px solid var(--line-strong) !important;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    background: var(--panel-muted);
+    border-bottom: 1px solid var(--line) !important;
     border-top: none;
-    padding-inline-start: 0;
+    padding: 8px 12px;
+    white-space: nowrap;
   }
   table.table-console tbody td {
     border-color: var(--line);
     vertical-align: middle;
-    padding-block: 14px;
-    padding-inline: 0 0.5rem;
-    font-size: 15px;
+    padding: 8px 12px;
+    font-size: 13px;
   }
-  table.table-console tbody td:first-child { padding-inline-start: 0; }
+  table.table-console tbody tr:nth-child(even) { background: #f7f9fc; }
+  table.table-console tbody tr:hover { background: #eef4ff; }
+  table.table-console tbody td:first-child,
+  table.table-console thead th:first-child { padding-inline-start: 16px; }
+  table.table-console .ls-empty,
+  table.table-console td[colspan] {
+    color: var(--text-dim);
+    text-align: center;
+    padding: 28px 16px;
+    background: var(--panel-muted);
+  }
 
-  .identity { font-family: var(--mono); font-size: 15px; }
-  .identity .tag { font-family: inherit; font-size: 13px; color: var(--text-faint); margin-inline-start: 8px; }
+  .identity {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    direction: ltr;
+    unicode-bidi: isolate;
+  }
+  .identity-id {
+    display: inline-block;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+  }
+  .identity .tag { font-family: var(--sans); font-size: 11px; color: var(--text-faint); margin-inline-start: 8px; }
   .tag {
-    display: inline-block; font-size: 12px; color: var(--text-dim);
-    background: #f1f5f9; border-radius: 999px; padding: 2px 10px;
+    display: inline-block; font-size: 11px; font-weight: 600; color: var(--text-dim);
+    background: #f1f5f9; border-radius: 999px; padding: 2px 8px; line-height: 1.4;
   }
 
   .level-dot {
@@ -513,68 +660,70 @@ _DASHBOARD_STYLE = """
   .form-select-console, .form-control-console {
     background: #fff;
     border: 1px solid var(--line);
-    border-radius: 12px;
+    border-radius: var(--radius-sm);
     color: var(--text);
-    font-size: 14px;
-    padding: 10px 14px;
+    font-size: 13.5px;
+    min-height: var(--control-h);
+    padding: 6px 10px;
   }
+  textarea.form-control-console { min-height: 76px; padding: 8px 10px; }
   .form-select-console:focus, .form-control-console:focus {
     border-color: var(--blue);
-    box-shadow: 0 0 0 0.2rem rgba(37, 99, 235, 0.18);
+    box-shadow: 0 0 0 0.2rem rgba(37, 99, 235, 0.16);
+  }
+  .form-select-console:disabled, .form-control-console:disabled,
+  .form-control-console[readonly] {
+    background: var(--panel-muted);
+    color: var(--text-dim);
   }
 
   .btn-console {
     background: #fff;
     color: var(--blue);
-    border: 1.5px solid var(--blue);
-    border-radius: 999px;
-    font-size: 14px;
-    font-weight: 600;
-    transition: background .2s ease, border-color .2s ease, color .2s ease;
+    border-color: var(--blue);
   }
   .btn-console:hover { border-color: var(--blue-hover); color: var(--blue-hover); background: var(--blue-dim); }
-
-  .btn-console-danger { color: var(--danger); border-color: #fca5a5; background: #fff; border-radius: 999px; transition: background .2s ease, border-color .2s ease; }
+  .btn-console-danger { color: var(--danger); border-color: #fca5a5; background: #fff; }
   .btn-console-danger:hover { border-color: var(--danger); color: var(--danger); background: var(--danger-dim); }
-
   .btn-console-primary {
-    background: var(--lime); border-color: var(--lime); color: #fff;
-    border-radius: 999px; font-weight: 700;
-    transition: background .2s ease, border-color .2s ease, box-shadow .2s ease;
+    background: var(--lime); border-color: var(--lime); color: var(--lime-text);
   }
-  .btn-console-primary:hover { background: var(--lime-hover); border-color: var(--lime-hover); color: #fff; box-shadow: 0 8px 18px rgba(132, 204, 22, .28); }
+  .btn-console-primary:hover { background: var(--lime-hover); border-color: var(--lime-hover); color: var(--lime-text); filter: brightness(1.02); box-shadow: 0 6px 14px rgba(132, 204, 22, .28); }
+  .btn-console:disabled, .btn-console-primary:disabled, .btn-console-danger:disabled,
+  .ls-btn-fill:disabled, .ls-user-btn:disabled {
+    opacity: .55; cursor: not-allowed; box-shadow: none; filter: none;
+  }
+  .btn-sm.btn-console, .btn-sm.btn-console-primary, .btn-sm.btn-console-danger {
+    min-height: 28px; padding: 3px 9px; font-size: 12px; font-weight: 600;
+  }
 
   .block-console {
     border: 1px solid var(--line);
     border-radius: var(--radius);
-    padding: 22px 24px 24px;
+    padding: 14px 16px 14px;
     position: relative;
     background: var(--panel);
     box-shadow: var(--shadow);
   }
-  .block-label {
-    position: absolute;
-    top: -11px;
-    inset-inline-start: 18px;
-    background: var(--panel);
-    padding: 0 8px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-dim);
-  }
+  .ls-section > .ls-section-title + .block-console > .block-label:first-child { display: none; }
+  .ls-identity-block { margin-bottom: 12px; }
+  .ls-create-panel { background: var(--panel-muted); box-shadow: none; }
   .form-label-console {
     font-size: 12px;
-    color: var(--text-faint);
-    letter-spacing: 0.02em;
+    font-weight: 600;
+    color: var(--text-dim);
+    letter-spacing: 0.01em;
     margin-bottom: 4px;
   }
   code.console-code {
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: 12px;
     color: var(--viewer);
     background: var(--viewer-dim);
     padding: 1px 5px;
     border-radius: 3px;
+    direction: ltr;
+    unicode-bidi: isolate;
   }
 </style>
 """
@@ -617,12 +766,12 @@ _LOGIN_STYLE = """
   .login-brand .ls-logo { display: block; height: 44px; width: auto; max-width: 280px; margin: 0 auto; }
   .login-card {
     width: 100%;
-    max-width: 440px;
+    max-width: 420px;
     background: #ffffff;
     border: 1px solid #e2e8f0;
-    border-radius: 16px;
-    padding: 40px 36px 32px;
-    box-shadow: 0 4px 14px rgba(11, 25, 44, .06);
+    border-radius: 12px;
+    padding: 32px 28px 28px;
+    box-shadow: 0 1px 2px rgba(11, 25, 44, .04), 0 8px 24px rgba(11, 25, 44, .06);
   }
   .login-card h1 {
     font-size: 22px;
@@ -644,14 +793,15 @@ _LOGIN_STYLE = """
     margin-bottom: 4px;
     display: block;
   }
-  .form-control-console {
-    background: #f8fafc;
+  .form-control-console, .form-select-console {
+    background: #fff;
     border: 1px solid #e2e8f0;
-    border-radius: 12px;
+    border-radius: 8px;
     color: var(--text);
     font-size: 15px;
     width: 100%;
-    padding: 14px 16px;
+    min-height: 44px;
+    padding: 12px 14px;
   }
   .form-control-console::placeholder { color: #94a3b8; }
   .form-control-console:focus {
@@ -689,16 +839,17 @@ _LOGIN_STYLE = """
   .btn-console-primary {
     background: var(--lime);
     border: 0;
-    color: #fff;
+    color: #0B192C;
     font-size: 15px;
     font-weight: 700;
-    letter-spacing: .04em;
-    border-radius: 999px;
-    padding: 12px 48px;
+    letter-spacing: .02em;
+    border-radius: 8px;
+    padding: 12px 32px;
     min-width: 180px;
+    min-height: 44px;
     transition: background .2s ease, box-shadow .2s ease;
   }
-  .btn-console-primary:hover { background: var(--lime-hover); color: #fff; box-shadow: 0 8px 18px rgba(132, 204, 22, .28); }
+  .btn-console-primary:hover { background: var(--lime-hover); color: #0B192C; box-shadow: 0 8px 18px rgba(132, 204, 22, .28); }
 
   .status-pill {
     font-size: 12px;
@@ -796,6 +947,38 @@ _SHELL_SCRIPT = """
     root.classList.toggle('ls-sidebar-collapsed');
     window.localStorage.setItem(key, root.classList.contains('ls-sidebar-collapsed') ? '1' : '0');
   });
+  document.querySelectorAll('[data-ls-tabs]').forEach(function (group) {
+    const buttons = Array.from(group.querySelectorAll('[data-tab]'));
+    const scope = group.closest('.ls-page, .ls-page-wide') || document;
+    function show(name) {
+      buttons.forEach(function (button) { button.classList.toggle('is-active', button.dataset.tab === name); });
+      scope.querySelectorAll('[data-panel]').forEach(function (panel) {
+        if (panel.closest('[data-ls-tabs]') && panel.closest('[data-ls-tabs]') !== group) return;
+        panel.hidden = panel.dataset.panel !== name;
+      });
+    }
+    buttons.forEach(function (button) { button.addEventListener('click', function () { show(button.dataset.tab); }); });
+    const initial = group.getAttribute('data-initial') || (buttons[0] && buttons[0].dataset.tab);
+    if (initial) show(initial);
+  });
+  const protocolNav = document.querySelector('[data-protocol-nav]');
+  if (protocolNav) {
+    const items = Array.from(protocolNav.querySelectorAll('[data-protocol-target]'));
+    function showProtocol(id) {
+      items.forEach(function (item) { item.classList.toggle('is-active', item.getAttribute('data-protocol-target') === id); });
+      document.querySelectorAll('.protocol-editor-block').forEach(function (block) { block.hidden = block.id !== id; });
+    }
+    items.forEach(function (item) {
+      item.addEventListener('click', function () { showProtocol(item.getAttribute('data-protocol-target')); });
+    });
+    if (items[0]) showProtocol(items[0].getAttribute('data-protocol-target'));
+  }
+  document.querySelectorAll('[data-tab-goto]').forEach(function (button) {
+    button.addEventListener('click', function () {
+      const target = document.querySelector('[data-tab="' + button.getAttribute('data-tab-goto') + '"]');
+      if (target) target.click();
+    });
+  });
 })();
 </script>
 """
@@ -808,17 +991,29 @@ _SHELL_OPEN = """
     <img class="ls-logo" src="{{ url_for('static', filename='leadspotting-logo.gif') }}" alt="">
   </a>
   <nav class="ls-nav" aria-label="{{ t('admin.menu_title') }}">
-    <a class="ls-nav-item{% if request.endpoint == 'admin.dashboard' %} is-active{% endif %}" href="{{ url_for('admin.dashboard') }}">""" + _ICON_HOME + """<span class="ls-nav-label">{{ t('admin.menu_title') }}</span></a>
-    <a class="ls-nav-item{% if request.endpoint == 'admin.profiles' %} is-active{% endif %}" href="{{ url_for('admin.profiles') }}">""" + _ICON_PROFILES + """<span class="ls-nav-label">{{ t('admin.menu_profiles') }}</span></a>
-    <a class="ls-nav-item{% if request.endpoint == 'admin.protocols' %} is-active{% endif %}" href="{{ url_for('admin.protocols') }}">""" + _ICON_PROTOCOLS + """<span class="ls-nav-label">{{ t('admin.menu_protocols') }}</span></a>
-    <a class="ls-nav-item{% if request.endpoint == 'admin.events' %} is-active{% endif %}" href="{{ url_for('admin.events') }}">""" + _ICON_EVENTS + """<span class="ls-nav-label">{{ t('admin.menu_events') }}</span></a>
-    <a class="ls-nav-item{% if request.endpoint == 'admin.users' %} is-active{% endif %}" href="{{ url_for('admin.users') }}">""" + _ICON_USERS + """<span class="ls-nav-label">{{ t('admin.menu_users') }}</span></a>
-    <a class="ls-nav-item{% if request.endpoint == 'admin.groups' %} is-active{% endif %}" href="{{ url_for('admin.groups') }}">""" + _ICON_GROUPS + """<span class="ls-nav-label">{{ t('admin.menu_groups') }}</span></a>
-    <a class="ls-nav-item{% if request.endpoint == 'admin.simulator' %} is-active{% endif %}" href="{{ url_for('admin.simulator') }}">""" + _ICON_SIMULATOR + """<span class="ls-nav-label">{{ t('admin.menu_simulator') }}</span></a>
-    <a class="ls-nav-item{% if request.endpoint == 'admin.server' %} is-active{% endif %}" href="{{ url_for('admin.server') }}">""" + _ICON_SERVER + """<span class="ls-nav-label">{{ t('admin.menu_server') }}</span></a>
-    {% for table in admin_tables|default([]) %}
-    <a class="ls-nav-item{% if request.view_args and request.view_args.get('table_key') == table.key %} is-active{% endif %}" href="{{ url_for('admin.admin_table_list', table_key=table.key) }}">""" + _ICON_TABLE + """<span class="ls-nav-label">{{ table.label }}</span></a>
-    {% endfor %}
+    <div class="ls-nav-group">
+      <span class="ls-nav-group-label">{{ t('admin.nav_group_management') }}</span>
+      <a class="ls-nav-item{% if request.endpoint == 'admin.dashboard' %} is-active{% endif %}" href="{{ url_for('admin.dashboard') }}">""" + _ICON_HOME + """<span class="ls-nav-label">{{ t('admin.menu_title') }}</span></a>
+      <a class="ls-nav-item{% if request.endpoint == 'admin.profiles' %} is-active{% endif %}" href="{{ url_for('admin.profiles') }}">""" + _ICON_PROFILES + """<span class="ls-nav-label">{{ t('admin.menu_profiles') }}</span></a>
+      <a class="ls-nav-item{% if request.endpoint == 'admin.protocols' %} is-active{% endif %}" href="{{ url_for('admin.protocols') }}">""" + _ICON_PROTOCOLS + """<span class="ls-nav-label">{{ t('admin.menu_protocols') }}</span></a>
+      <a class="ls-nav-item{% if request.endpoint == 'admin.users' %} is-active{% endif %}" href="{{ url_for('admin.users') }}">""" + _ICON_USERS + """<span class="ls-nav-label">{{ t('admin.menu_users') }}</span></a>
+      <a class="ls-nav-item{% if request.endpoint == 'admin.groups' %} is-active{% endif %}" href="{{ url_for('admin.groups') }}">""" + _ICON_GROUPS + """<span class="ls-nav-label">{{ t('admin.menu_groups') }}</span></a>
+    </div>
+    <div class="ls-nav-group">
+      <span class="ls-nav-group-label">{{ t('admin.nav_group_operations') }}</span>
+      <a class="ls-nav-item{% if request.endpoint == 'admin.events' %} is-active{% endif %}" href="{{ url_for('admin.events') }}">""" + _ICON_EVENTS + """<span class="ls-nav-label">{{ t('admin.menu_events') }}</span></a>
+      <a class="ls-nav-item{% if request.endpoint == 'admin.simulator' %} is-active{% endif %}" href="{{ url_for('admin.simulator') }}">""" + _ICON_SIMULATOR + """<span class="ls-nav-label">{{ t('admin.menu_simulator') }}</span></a>
+    </div>
+    <div class="ls-nav-group">
+      <span class="ls-nav-group-label">{{ t('admin.nav_group_system') }}</span>
+      <a class="ls-nav-item{% if request.endpoint == 'admin.server' %} is-active{% endif %}" href="{{ url_for('admin.server') }}">""" + _ICON_SERVER + """<span class="ls-nav-label">{{ t('admin.menu_server') }}</span></a>
+    </div>
+    <div class="ls-nav-group">
+      <span class="ls-nav-group-label">{{ t('admin.nav_group_data') }}</span>
+      {% for table in admin_tables|default([]) %}
+      <a class="ls-nav-item{% if request.view_args and request.view_args.get('table_key') == table.key %} is-active{% endif %}" href="{{ url_for('admin.admin_table_list', table_key=table.key) }}">""" + _ICON_TABLE + """<span class="ls-nav-label">{{ table.label }}</span></a>
+      {% endfor %}
+    </div>
   </nav>
   <button type="button" class="ls-sidebar-toggle" id="ls-sidebar-toggle" aria-label="{{ t('admin.menu_title') }}">""" + _ICON_TOGGLE + """</button>
 </aside>
@@ -1022,24 +1217,48 @@ _MENU_TEMPLATE = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{ t('admin.menu_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """
 </head>""" + _SHELL_OPEN + """
-<div class="ls-page">
-  <h1 class="ls-home-title">{{ t('admin.menu_title') }}</h1>
-  <p class="subtitle ls-home-sub">{{ t('admin.menu_subtitle') }}</p>
+<div class="ls-page ls-home">
+  <div class="ls-page-header">
+    <div>
+      <h1 class="ls-home-title">{{ t('admin.menu_title') }}</h1>
+      <p class="subtitle ls-home-sub">{{ t('admin.menu_subtitle') }}</p>
+    </div>
+  </div>
   {% for category, message in get_flashed_messages(with_categories=true) %}
     <div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>
   {% endfor %}
-  <div class="ls-service-grid">
-    <a class="ls-service-card" href="{{ url_for('admin.profiles') }}"><span class="ls-service-icon">""" + _ICON_PROFILES + """</span><h2>{{ t('admin.menu_profiles') }}</h2><span class="subtitle">{{ t('admin.profiles.subtitle') }}</span></a>
-    <a class="ls-service-card" href="{{ url_for('admin.protocols') }}"><span class="ls-service-icon">""" + _ICON_PROTOCOLS + """</span><h2>{{ t('admin.menu_protocols') }}</h2><span class="subtitle">{{ t('admin.protocols.subtitle') }}</span></a>
-    <a class="ls-service-card" href="{{ url_for('admin.events') }}"><span class="ls-service-icon">""" + _ICON_EVENTS + """</span><h2>{{ t('admin.menu_events') }}</h2><span class="subtitle">{{ t('admin.events.subtitle') }}</span></a>
-    <a class="ls-service-card" href="{{ url_for('admin.users') }}"><span class="ls-service-icon">""" + _ICON_USERS + """</span><h2>{{ t('admin.menu_users') }}</h2><span class="subtitle">{{ t('admin.users_subtitle') }}</span></a>
-    <a class="ls-service-card" href="{{ url_for('admin.groups') }}"><span class="ls-service-icon">""" + _ICON_GROUPS + """</span><h2>{{ t('admin.menu_groups') }}</h2><span class="subtitle">{{ t('admin.groups_page_subtitle') }}</span></a>
-    <a class="ls-service-card" href="{{ url_for('admin.simulator') }}"><span class="ls-service-icon">""" + _ICON_SIMULATOR + """</span><h2>{{ t('admin.menu_simulator') }}</h2><span class="subtitle">{{ t('admin.simulator.subtitle') }}</span></a>
-    <a class="ls-service-card" href="{{ url_for('admin.server') }}"><span class="ls-service-icon">""" + _ICON_SERVER + """</span><h2>{{ t('admin.menu_server') }}</h2><span class="subtitle">{{ t('admin.server_subtitle') }}</span></a>
-    {% for table in admin_tables %}
-    <a class="ls-service-card" href="{{ url_for('admin.admin_table_list', table_key=table.key) }}"><span class="ls-service-icon">""" + _ICON_TABLE + """</span><h2>{{ table.label }}</h2><span class="subtitle">{{ t('admin.tables.menu_subtitle') }}</span></a>
-    {% endfor %}
-  </div>
+  <section class="ls-home-group">
+    <h2 class="ls-home-group-title">{{ t('admin.home_group_configuration') }}</h2>
+    <div class="ls-service-grid">
+      <a class="ls-service-card" href="{{ url_for('admin.profiles') }}"><span class="ls-service-icon">""" + _ICON_PROFILES + """</span><h2>{{ t('admin.menu_profiles') }}</h2><span class="subtitle">{{ t('admin.profiles.subtitle') }}</span></a>
+      <a class="ls-service-card" href="{{ url_for('admin.protocols') }}"><span class="ls-service-icon">""" + _ICON_PROTOCOLS + """</span><h2>{{ t('admin.menu_protocols') }}</h2><span class="subtitle">{{ t('admin.protocols.subtitle') }}</span></a>
+      <a class="ls-service-card" href="{{ url_for('admin.users') }}"><span class="ls-service-icon">""" + _ICON_USERS + """</span><h2>{{ t('admin.menu_users') }}</h2><span class="subtitle">{{ t('admin.users_subtitle') }}</span></a>
+      <a class="ls-service-card" href="{{ url_for('admin.groups') }}"><span class="ls-service-icon">""" + _ICON_GROUPS + """</span><h2>{{ t('admin.menu_groups') }}</h2><span class="subtitle">{{ t('admin.groups_page_subtitle') }}</span></a>
+    </div>
+  </section>
+  <section class="ls-home-group">
+    <h2 class="ls-home-group-title">{{ t('admin.home_group_operations') }}</h2>
+    <div class="ls-service-grid">
+      <a class="ls-service-card" href="{{ url_for('admin.events') }}"><span class="ls-service-icon">""" + _ICON_EVENTS + """</span><h2>{{ t('admin.menu_events') }}</h2><span class="subtitle">{{ t('admin.events.subtitle') }}</span></a>
+      <a class="ls-service-card" href="{{ url_for('admin.simulator') }}"><span class="ls-service-icon">""" + _ICON_SIMULATOR + """</span><h2>{{ t('admin.menu_simulator') }}</h2><span class="subtitle">{{ t('admin.simulator.subtitle') }}</span></a>
+    </div>
+  </section>
+  <section class="ls-home-group">
+    <h2 class="ls-home-group-title">{{ t('admin.home_group_system') }}</h2>
+    <div class="ls-service-grid">
+      <a class="ls-service-card" href="{{ url_for('admin.server') }}"><span class="ls-service-icon">""" + _ICON_SERVER + """</span><h2>{{ t('admin.menu_server') }}</h2><span class="subtitle">{{ t('admin.server_subtitle') }}</span></a>
+    </div>
+  </section>
+  {% if admin_tables %}
+  <section class="ls-home-group">
+    <h2 class="ls-home-group-title">{{ t('admin.home_group_data') }}</h2>
+    <div class="ls-service-grid">
+      {% for table in admin_tables %}
+      <a class="ls-service-card" href="{{ url_for('admin.admin_table_list', table_key=table.key) }}"><span class="ls-service-icon">""" + _ICON_TABLE + """</span><h2>{{ table.label }}</h2><span class="subtitle">{{ t('admin.tables.menu_subtitle') }}</span></a>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
 </div>
 """ + _SHELL_CLOSE
 
@@ -1048,24 +1267,32 @@ _USERS_TEMPLATE = """<!DOCTYPE html>
 <html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{ t('admin.users_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """
 </head>""" + _SHELL_OPEN + """
-<div class="ls-page">
+<div class="ls-page-wide">
+  <div class="ls-page-header"><div>
   <h1>{{ t('admin.users_title') }}</h1>
-  <p class="subtitle mb-4">{{ t('admin.users_subtitle') }}</p>
+  <p class="subtitle">{{ t('admin.users_subtitle') }}</p>
+  </div></div>
   {% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>{% endfor %}
-  <table class="table table-console mb-5"><thead><tr><th>{{ t('admin.col_identity') }}</th><th>{{ t('admin.col_full_name') }}</th><th>{{ t('admin.col_level') }}</th><th></th></tr></thead><tbody>
-  {% for user in users %}<tr><td class="identity">{{ user.telegram_identity }}{% if user.telegram_identity == bot_service_identity %} <span class="tag">{{ t('admin.tag_bot_service') }}</span>{% endif %}<div class="mt-2"><span class="tag">{% if user.auto_register %}{{ t('admin.registration_automatic') }}{% else %}{{ t('admin.registration_approved') }}{% endif %}</span> <span class="tag">{% if safe_mode and user.auto_register %}{{ t('admin.registration_blocked') }}{% else %}{{ t('admin.registration_active') }}{% endif %}</span></div></td>
-    <td colspan="2"><form class="d-flex gap-2" method="post" action="{{ url_for('admin.write_user') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="telegram_identity" value="{{ user.telegram_identity }}">
-      <input type="text" name="full_name" value="{{ user.full_name }}" class="form-control form-control-console" maxlength="120" placeholder="{{ t('admin.col_full_name') }}">
-      <select name="permission_level" class="form-select form-select-console form-select-sm w-auto">{% for level in levels %}<option value="{{ level }}" {% if level == user.permission_level %}selected{% endif %}>{{ level }}</option>{% endfor %}</select>
-      <button class="btn btn-console btn-sm">{{ t('admin.save') }}</button></form></td>
-    <td><div class="d-flex gap-2">{% if user.auto_register %}<form method="post" action="{{ url_for('admin.approve_user', identity=user.telegram_identity) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-primary btn-sm">{{ t('admin.approve_registration') }}</button></form>{% endif %}<form method="post" action="{{ url_for('admin.remove_user', identity=user.telegram_identity) }}" onsubmit="return confirm({{ t('admin.confirm_remove_user', identity=user.telegram_identity)|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-danger btn-sm">{{ t('admin.remove') }}</button></form></div></td></tr>{% endfor %}
-  </tbody></table>
-  <div class="block-console mb-4"><span class="block-label">{{ t('admin.add_user') }}</span><form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.write_user') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <section class="ls-section">
+    <div class="ls-table-toolbar"><h2 class="ls-section-title mb-0">{{ t('admin.users.list_heading') }}</h2><span class="ls-count">{{ t('admin.tables.record_count', count=users|length) }}</span></div>
+    <div class="table-responsive ls-table-card"><table class="table table-console ls-compact-table mb-0"><thead><tr><th>{{ t('admin.col_identity') }}</th><th>{{ t('admin.col_full_name') }}</th><th>{{ t('admin.col_level') }}</th><th>{{ t('admin.col_status') }}</th><th>{{ t('admin.col_actions') }}</th></tr></thead><tbody>
+    {% for user in users %}
+    <tr>
+      <td class="identity" title="{{ user.telegram_identity }}"><span class="identity-id">{{ user.telegram_identity }}</span>{% if user.telegram_identity == bot_service_identity %} <span class="tag">{{ t('admin.tag_bot_service') }}</span>{% endif %}</td>
+      <td><form id="user-save-{{ loop.index }}" method="post" action="{{ url_for('admin.write_user') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="telegram_identity" value="{{ user.telegram_identity }}"><input type="text" name="full_name" value="{{ user.full_name }}" class="form-control form-control-console" maxlength="120" placeholder="{{ t('admin.col_full_name') }}"></form></td>
+      <td><select name="permission_level" form="user-save-{{ loop.index }}" class="form-select form-select-console">{% for level in levels %}<option value="{{ level }}" {% if level == user.permission_level %}selected{% endif %}>{{ level }}</option>{% endfor %}</select></td>
+      <td><span class="tag">{% if user.auto_register %}{{ t('admin.registration_automatic') }}{% else %}{{ t('admin.registration_approved') }}{% endif %}</span> <span class="tag">{% if safe_mode and user.auto_register %}{{ t('admin.registration_blocked') }}{% else %}{{ t('admin.registration_active') }}{% endif %}</span></td>
+      <td><div class="ls-actions"><button class="btn btn-console btn-sm" form="user-save-{{ loop.index }}">{{ t('admin.save') }}</button>{% if user.auto_register %}<form method="post" action="{{ url_for('admin.approve_user', identity=user.telegram_identity) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-primary btn-sm">{{ t('admin.approve_registration') }}</button></form>{% endif %}<form method="post" action="{{ url_for('admin.remove_user', identity=user.telegram_identity) }}" onsubmit="return confirm({{ t('admin.confirm_remove_user', identity=user.telegram_identity)|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-danger btn-sm">{{ t('admin.remove') }}</button></form></div></td>
+    </tr>
+    {% endfor %}
+    </tbody></table></div>
+  </section>
+  <section class="ls-section"><div class="block-console ls-create-panel"><span class="block-label">{{ t('admin.add_user') }}</span><form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.write_user') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="col"><div class="form-label-console">{{ t('admin.col_identity') }}</div><input name="telegram_identity" class="form-control form-control-console" required></div>
     <div class="col"><div class="form-label-console">{{ t('admin.col_full_name') }}</div><input name="full_name" class="form-control form-control-console" maxlength="120"></div>
     <div class="col-auto"><div class="form-label-console">{{ t('admin.col_level') }}</div><select name="permission_level" class="form-select form-select-console">{% for level in levels %}<option value="{{ level }}">{{ level }}</option>{% endfor %}</select></div>
-    <div class="col-auto"><button class="btn btn-console-primary">{{ t('admin.add') }}</button></div></form></div>
-  <div class="block-console"><span class="block-label">{{ t('admin.bot_service_title') }}</span><p class="subtitle">{{ t('admin.bot_service_help', identity=bot_service_identity) }}</p><form method="post" action="{{ url_for('admin.provision_bot_service') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console">{{ t('admin.bot_service_button') }}</button></form></div>
+    <div class="col-auto"><button class="btn btn-console-primary">{{ t('admin.add') }}</button></div></form></div></section>
+  <section class="ls-section"><div class="block-console"><span class="block-label">{{ t('admin.bot_service_title') }}</span><p class="subtitle">{{ t('admin.bot_service_help', identity=bot_service_identity) }}</p><form method="post" action="{{ url_for('admin.provision_bot_service') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console">{{ t('admin.bot_service_button') }}</button></form></div></section>
 </div>
 """ + _SHELL_CLOSE
 
@@ -1073,11 +1300,30 @@ _USERS_TEMPLATE = """<!DOCTYPE html>
 _GROUPS_TEMPLATE = """<!DOCTYPE html>
 <html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.groups_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + """</head>
 """ + _SHELL_OPEN + """
-<div class="ls-page"><h1>{{ t('admin.groups_title') }}</h1><p class="subtitle mb-4">{{ t('admin.groups_page_subtitle') }}</p>
+<div class="ls-page-wide"><div class="ls-page-header"><div><h1>{{ t('admin.groups_title') }}</h1><p class="subtitle">{{ t('admin.groups_page_subtitle') }}</p></div></div>
 {% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>{% endfor %}
-<table class="table table-console mb-4"><thead><tr><th>{{ t('admin.col_chat_id') }}</th><th>{{ t('admin.col_label') }}</th><th>{{ t('admin.col_routed_to') }}</th><th></th></tr></thead><tbody>
-{% for group in groups %}<tr><td class="identity">{{ group.chat_id }}<div class="mt-2"><span class="tag">{% if group.auto_register %}{{ t('admin.registration_automatic') }}{% else %}{{ t('admin.registration_approved') }}{% endif %}</span> <span class="tag">{% if safe_mode and group.auto_register %}{{ t('admin.registration_blocked') }}{% else %}{{ t('admin.registration_active') }}{% endif %}</span></div><form class="d-flex gap-2 mt-2" method="post" action="{{ url_for('admin.rename_group', chat_id=group.chat_id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input name="new_chat_id" class="form-control form-control-console form-control-sm" placeholder="{{ t('admin.new_chat_id_placeholder') }}" title="{{ t('admin.group_rename_help') }}"><button class="btn btn-console btn-sm" title="{{ t('admin.group_rename_help') }}">{{ t('admin.rename_group') }}</button></form></td><td colspan="2"><form class="d-flex gap-2" method="post" action="{{ url_for('admin.write_group') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="chat_id" value="{{ group.chat_id }}"><input name="label" value="{{ group.label }}" maxlength="200" class="form-control form-control-console" placeholder="{{ t('admin.col_label') }}"><select name="agent_name" class="form-select form-select-console">{% for agent_name in routable_agents %}<option value="{{ agent_name }}" {% if agent_name == group.agent_name %}selected{% endif %}>{{ agent_name }}</option>{% endfor %}</select><button class="btn btn-console">{{ t('admin.save') }}</button></form></td><td><div class="d-flex gap-2">{% if group.auto_register %}<form method="post" action="{{ url_for('admin.approve_group', chat_id=group.chat_id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-primary">{{ t('admin.approve_registration') }}</button></form>{% endif %}<form method="post" action="{{ url_for('admin.remove_group', chat_id=group.chat_id) }}" onsubmit="return confirm({{ t('admin.confirm_remove_group', chat_id=group.chat_id)|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-danger">{{ t('admin.remove') }}</button></form></div></td></tr>{% else %}<tr><td colspan="4">{{ t('admin.no_groups') }}</td></tr>{% endfor %}</tbody></table>
-<div class="block-console"><span class="block-label">{{ t('admin.add_group') }}</span><p class="subtitle">{{ t('admin.add_group_help', main_agent='main_agent') }}</p><form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.write_group') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="col"><div class="form-label-console">{{ t('admin.col_chat_id') }}</div><input name="chat_id" class="form-control form-control-console" placeholder="-1001234567890" required></div><div class="col"><div class="form-label-console">{{ t('admin.col_label') }}</div><input name="label" class="form-control form-control-console" maxlength="200"></div><div class="col-auto"><select name="agent_name" class="form-select form-select-console">{% for agent_name in routable_agents %}<option value="{{ agent_name }}">{{ agent_name }}</option>{% endfor %}</select></div><div class="col-auto"><button class="btn btn-console-primary">{{ t('admin.add') }}</button></div></form></div>
+<section class="ls-section">
+  <div class="ls-table-toolbar"><h2 class="ls-section-title mb-0">{{ t('admin.groups.list_heading') }}</h2><span class="ls-count">{{ t('admin.tables.record_count', count=groups|length) }}</span></div>
+  <div class="table-responsive ls-table-card"><table class="table table-console ls-compact-table mb-0"><thead><tr><th>{{ t('admin.col_chat_id') }}</th><th>{{ t('admin.col_label') }}</th><th>{{ t('admin.col_routed_to') }}</th><th>{{ t('admin.col_status') }}</th><th>{{ t('admin.col_actions') }}</th></tr></thead><tbody>
+  {% for group in groups %}
+  <tr>
+    <td class="identity" title="{{ group.chat_id }}"><span class="identity-id">{{ group.chat_id }}</span></td>
+    <td><form id="group-save-{{ loop.index }}" method="post" action="{{ url_for('admin.write_group') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="chat_id" value="{{ group.chat_id }}"><input name="label" value="{{ group.label }}" maxlength="200" class="form-control form-control-console" placeholder="{{ t('admin.col_label') }}"></form></td>
+    <td><select name="agent_name" form="group-save-{{ loop.index }}" class="form-select form-select-console">{% for agent_name in routable_agents %}<option value="{{ agent_name }}" {% if agent_name == group.agent_name %}selected{% endif %}>{{ agent_name }}</option>{% endfor %}</select></td>
+    <td><span class="tag">{% if group.auto_register %}{{ t('admin.registration_automatic') }}{% else %}{{ t('admin.registration_approved') }}{% endif %}</span> <span class="tag">{% if safe_mode and group.auto_register %}{{ t('admin.registration_blocked') }}{% else %}{{ t('admin.registration_active') }}{% endif %}</span></td>
+    <td>
+      <div class="ls-actions">
+        <button class="btn btn-console btn-sm" form="group-save-{{ loop.index }}">{{ t('admin.save') }}</button>
+        {% if group.auto_register %}<form method="post" action="{{ url_for('admin.approve_group', chat_id=group.chat_id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-primary btn-sm">{{ t('admin.approve_registration') }}</button></form>{% endif %}
+        <form method="post" action="{{ url_for('admin.remove_group', chat_id=group.chat_id) }}" onsubmit="return confirm({{ t('admin.confirm_remove_group', chat_id=group.chat_id)|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-console-danger btn-sm">{{ t('admin.remove') }}</button></form>
+      </div>
+      <form class="d-flex gap-2 mt-2" method="post" action="{{ url_for('admin.rename_group', chat_id=group.chat_id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input name="new_chat_id" class="form-control form-control-console form-control-sm" placeholder="{{ t('admin.new_chat_id_placeholder') }}" title="{{ t('admin.group_rename_help') }}"><button class="btn btn-console btn-sm" title="{{ t('admin.group_rename_help') }}">{{ t('admin.rename_group') }}</button></form>
+    </td>
+  </tr>
+  {% else %}<tr><td class="ls-empty" colspan="5">{{ t('admin.no_groups') }}</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+<section class="ls-section"><div class="block-console ls-create-panel"><span class="block-label">{{ t('admin.add_group') }}</span><p class="subtitle">{{ t('admin.add_group_help', main_agent='main_agent') }}</p><form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.write_group') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="col"><div class="form-label-console">{{ t('admin.col_chat_id') }}</div><input name="chat_id" class="form-control form-control-console" placeholder="-1001234567890" required></div><div class="col"><div class="form-label-console">{{ t('admin.col_label') }}</div><input name="label" class="form-control form-control-console" maxlength="200"></div><div class="col-auto"><select name="agent_name" class="form-select form-select-console">{% for agent_name in routable_agents %}<option value="{{ agent_name }}">{{ agent_name }}</option>{% endfor %}</select></div><div class="col-auto"><button class="btn btn-console-primary">{{ t('admin.add') }}</button></div></form></div></section>
 </div>
 """ + _SHELL_CLOSE
 
@@ -1100,91 +1346,60 @@ _EVENTS_TEMPLATE = """<!DOCTYPE html><html lang="{{ lang }}" dir="{{ dir }}"><he
 _SERVER_STYLE = """
 <style>
   .mode-panel {
-    position: relative;
-    overflow: hidden;
-    border: 1px solid rgba(132, 204, 22, .28);
-    background: linear-gradient(135deg, rgba(132, 204, 22, .10), rgba(255, 255, 255, .96) 48%, rgba(37, 99, 235, .07));
+    border: 1px solid var(--line);
+    background: var(--panel);
   }
-  .mode-panel.safe-active {
-    border-color: rgba(37, 99, 235, .32);
-    background: linear-gradient(135deg, rgba(37, 99, 235, .10), rgba(255, 255, 255, .97) 48%, rgba(132, 204, 22, .06));
-  }
-  .mode-panel::after {
-    content: "";
-    position: absolute;
-    width: 220px;
-    height: 220px;
-    inset-inline-end: -95px;
-    top: -120px;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(132, 204, 22, .20), transparent 68%);
-    animation: modeGlow 4.8s ease-in-out infinite;
-    pointer-events: none;
-  }
-  .safe-active::after { background: radial-gradient(circle, rgba(37, 99, 235, .20), transparent 68%); }
-  .mode-layout { display: grid; grid-template-columns: minmax(150px, .62fr) minmax(280px, 1.38fr); gap: 28px; align-items: center; }
-  .mode-visual { display: flex; align-items: center; justify-content: center; min-height: 150px; }
+  .mode-panel.open-active { border-inline-start: 3px solid var(--lime); }
+  .mode-panel.safe-active { border-inline-start: 3px solid var(--blue); }
+  .mode-layout { display: grid; grid-template-columns: minmax(120px, .4fr) minmax(280px, 1.6fr); gap: 20px; align-items: center; }
+  .mode-visual { display: flex; align-items: center; justify-content: center; min-height: 64px; }
   .mode-orbit {
     position: relative;
-    width: 116px;
-    height: 116px;
-    display: grid;
-    place-items: center;
-    border-radius: 50%;
-    border: 1px solid rgba(132, 204, 22, .32);
-    animation: modePulse 2.8s ease-in-out infinite;
-  }
-  .safe-active .mode-orbit { border-color: rgba(37, 99, 235, .38); }
-  .mode-orbit::before, .mode-orbit::after {
-    content: "";
-    position: absolute;
-    border-radius: 50%;
-    border: 1px solid currentColor;
-    opacity: .16;
-  }
-  .mode-orbit::before { inset: 12px; }
-  .mode-orbit::after { inset: 27px; }
-  .mode-shield {
-    width: 48px;
+    width: 56px;
     height: 56px;
     display: grid;
     place-items: center;
-    color: #fff;
+    border-radius: 50%;
+    border: 1px solid var(--line-strong);
+    background: var(--panel-muted);
+  }
+  .safe-active .mode-orbit { border-color: rgba(37, 99, 235, .35); }
+  .open-active .mode-orbit { border-color: rgba(132, 204, 22, .4); }
+  .mode-shield {
+    width: 30px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    color: var(--navy);
     font-family: var(--mono);
     font-weight: 700;
-    font-size: 12px;
-    background: var(--commander);
+    font-size: 11px;
+    background: var(--lime);
     clip-path: polygon(50% 0, 92% 17%, 84% 70%, 50% 100%, 16% 70%, 8% 17%);
-    filter: drop-shadow(0 8px 12px rgba(132, 204, 22, .28));
-    animation: shieldFloat 3.2s ease-in-out infinite;
   }
-  .safe-active .mode-shield { background: var(--blue); filter: drop-shadow(0 8px 12px rgba(37, 99, 235, .28)); }
-  .mode-value { font-family: var(--mono); font-size: 12px; color: var(--text-faint); letter-spacing: .02em; }
+  .safe-active .mode-shield { background: var(--blue); color: #fff; }
+  .mode-value { font-family: var(--mono); font-size: 12px; color: var(--text-faint); letter-spacing: .02em; direction: ltr; unicode-bidi: isolate; }
   .mode-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .mode-state-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--commander); box-shadow: 0 0 0 5px rgba(132, 204, 22, .16); animation: statusBlink 2s ease-in-out infinite; }
-  .safe-active .mode-state-dot { background: var(--blue); box-shadow: 0 0 0 5px rgba(37, 99, 235, .16); }
-  .mode-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
+  .mode-state-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 4px rgba(132, 204, 22, .16); }
+  .safe-active .mode-state-dot { background: var(--blue); box-shadow: 0 0 0 4px rgba(37, 99, 235, .16); }
+  .mode-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 0; }
   .mode-choice {
     border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: 13px 15px;
-    background: rgba(255,255,255,.78);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    background: #fff;
     color: var(--text);
     text-align: start;
-    transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease, background .2s ease;
+    min-height: 72px;
+    transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
   }
-  .mode-choice:hover { transform: translateY(-2px); border-color: var(--commander); box-shadow: 0 8px 18px rgba(16, 35, 58, .09); }
-  .mode-choice.active { border-color: var(--commander); background: var(--commander-dim); box-shadow: inset 0 0 0 1px rgba(14, 116, 95, .12); }
+  .mode-choice:hover { border-color: var(--blue); box-shadow: var(--shadow); }
+  .mode-choice.active { border-color: var(--lime); background: var(--lime-dim); }
   .safe-active .mode-choice.active { border-color: var(--blue); background: var(--blue-dim); }
   .mode-choice strong { display: block; margin-bottom: 3px; }
   .mode-choice small { display: block; color: var(--text-dim); line-height: 1.35; }
-  .mode-counts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 15px; }
-  @keyframes modeGlow { 0%,100% { transform: scale(.92); opacity: .65; } 50% { transform: scale(1.08); opacity: 1; } }
-  @keyframes modePulse { 0%,100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(132,204,22,.10); } 50% { transform: scale(1.035); box-shadow: 0 0 0 13px rgba(132,204,22,0); } }
-  @keyframes shieldFloat { 0%,100% { transform: translateY(2px); } 50% { transform: translateY(-4px); } }
-  @keyframes statusBlink { 0%,100% { opacity: .62; } 50% { opacity: 1; } }
-  @media (max-width: 700px) { .mode-layout { grid-template-columns: 1fr; gap: 8px; } .mode-visual { min-height: 118px; } .mode-actions { grid-template-columns: 1fr; } }
-  @media (prefers-reduced-motion: reduce) { .mode-panel::after, .mode-orbit, .mode-shield, .mode-state-dot { animation: none; } .mode-choice { transition: none; } }
+  .mode-counts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  @media (max-width: 700px) { .mode-layout { grid-template-columns: 1fr; gap: 8px; } .mode-visual { min-height: 72px; } .mode-actions { grid-template-columns: 1fr; } }
 </style>
 """
 
@@ -1192,32 +1407,36 @@ _SERVER_STYLE = """
 _SERVER_TEMPLATE = """<!DOCTYPE html>
 <html lang="{{ lang }}" dir="{{ dir }}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{ t('admin.server_title') }}</title>""" + _BOOTSTRAP_CSS_LINK + _DASHBOARD_STYLE + API_CONSOLE_STYLE + _SERVER_STYLE + """</head>
 """ + _SHELL_OPEN + """
-<div class="ls-page"><h1>{{ t('admin.server_title') }}</h1>
-<p class="subtitle mb-4">{{ t('admin.server_subtitle') }}</p>
+<div class="ls-page"><div class="ls-page-header"><div><h1>{{ t('admin.server_title') }}</h1>
+<p class="subtitle">{{ t('admin.server_subtitle') }}</p></div></div>
 {% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>{% endfor %}
 """ + IDENTITY_BAR + """
 {% if status.get('last_error') %}<div class="alert-console-error px-3 py-2 mb-4">{{ status.get('last_error') }}</div>{% endif %}
 {% if not supervisor %}<div class="alert-console-error px-3 py-2 mb-4">{{ t('admin.server_unavailable') }}</div>{% endif %}
-<div class="block-console mode-panel {% if safe_mode %}safe-active{% else %}open-active{% endif %} mb-4">
-  <div class="mode-layout">
-    <div class="mode-visual"><div class="mode-orbit" aria-hidden="true"><div class="mode-shield">{% if safe_mode %}SAFE{% else %}OPEN{% endif %}</div></div></div>
-    <div>
-      <span class="block-label">SAFE_MODE</span>
-      <div class="mode-title"><span class="mode-state-dot"></span><h2 class="h4 mb-0">{% if safe_mode %}{{ t('admin.server_safe_on') }}{% else %}{{ t('admin.server_safe_off') }}{% endif %}</h2><span class="mode-value">SAFE_MODE = {{ safe_mode|string|lower }}</span></div>
-      <p class="subtitle mt-2 mb-0">{% if safe_mode %}{{ t('admin.server_safe_on_help') }}{% else %}{{ t('admin.server_safe_off_help') }}{% endif %}</p>
-      <div class="mode-counts"><span class="tag">{{ t('admin.server_pending_users', count=automatic_users) }}</span><span class="tag">{{ t('admin.server_pending_groups', count=automatic_groups) }}</span></div>
-      <div class="mode-actions" data-confirm="{{ t('admin.server_safe_confirm', users=automatic_users, groups=automatic_groups) }}">
-        <button type="button" data-safe-mode="false" class="mode-choice {% if not safe_mode %}active{% endif %}"><strong>{{ t('admin.server_choose_open') }}</strong><small>{{ t('admin.server_choose_open_help') }}</small></button>
-        <button type="button" data-safe-mode="true" class="mode-choice {% if safe_mode %}active{% endif %}"><strong>{{ t('admin.server_choose_safe') }}</strong><small>{{ t('admin.server_choose_safe_help') }}</small></button>
-      </div>
-      <div id="safe-mode-feedback" class="api-hint mt-3" role="status" aria-live="polite"></div>
-    </div>
+<section class="ls-section">
+  <h2 class="ls-section-title">{{ t('admin.server_status_heading') }}</h2>
+  <div class="ls-status-strip">
+    <div class="ls-status-chip"><span class="ls-status-kicker">{{ t('admin.connected') }}</span><strong>{% if supervisor %}{{ t('admin.server.connection_ok') }}{% else %}{{ t('admin.server.connection_limited') }}{% endif %}</strong></div>
+    <div class="ls-status-chip"><span class="ls-status-kicker">{{ t('admin.server_profile') }}</span><strong>{{ t('admin.server_active_profile', profile=active_profile) }}</strong></div>
+    <div class="ls-status-chip"><span class="ls-status-kicker">SAFE_MODE</span><strong>{% if safe_mode %}{{ t('admin.server_safe_on') }}{% else %}{{ t('admin.server_safe_off') }}{% endif %}</strong><span class="mode-value">SAFE_MODE = {{ safe_mode|string|lower }}</span></div>
+    <div class="ls-status-chip"><span class="ls-status-kicker">{{ t('admin.col_status') }}</span><span class="tag">{{ t('admin.server_pending_users', count=automatic_users) }}</span> <span class="tag">{{ t('admin.server_pending_groups', count=automatic_groups) }}</span></div>
   </div>
-</div>
-<div class="block-console mb-4"><span class="block-label">{{ t('admin.server_profile') }}</span><p class="subtitle">{{ t('admin.server_active_profile', profile=active_profile) }}</p>
-<form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.switch_profile') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="col"><select class="form-select form-select-console" name="profile_module" {% if not supervisor %}disabled{% endif %}>{% for profile in profiles %}<option value="{{ profile.module_path }}" {% if profile.module_path == active_module %}selected{% endif %}>{{ profile.profile_name }} — {{ profile.module_path }} ({{ profile.api_port }})</option>{% endfor %}</select></div><div class="col-auto"><button class="btn btn-console-primary" {% if not supervisor %}disabled{% endif %}>{{ t('admin.server_load_profile') }}</button></div></form>
-<p class="subtitle mt-3 mb-0">{{ t('admin.server_restart_required') }}</p></div>
-<div class="block-console"><span class="block-label">{{ t('admin.server_reset') }}</span><p class="subtitle">{{ t('admin.server_reset_help') }}</p><form method="post" action="{{ url_for('admin.reset_server') }}" onsubmit="return confirm({{ t('admin.server_reset_confirm')|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="confirm" value="yes"><button class="btn btn-console-danger" {% if not supervisor %}disabled{% endif %}>{{ t('admin.server_reset_button') }}</button></form></div>
+  <div class="block-console mode-panel {% if safe_mode %}safe-active{% else %}open-active{% endif %}">
+    <p class="subtitle mb-2">{% if safe_mode %}{{ t('admin.server_safe_on_help') }}{% else %}{{ t('admin.server_safe_off_help') }}{% endif %}</p>
+    <div class="mode-actions" data-confirm="{{ t('admin.server_safe_confirm', users=automatic_users, groups=automatic_groups) }}">
+      <button type="button" data-safe-mode="false" class="mode-choice {% if not safe_mode %}active{% endif %}"><strong>{{ t('admin.server_choose_open') }}</strong><small>{{ t('admin.server_choose_open_help') }}</small></button>
+      <button type="button" data-safe-mode="true" class="mode-choice {% if safe_mode %}active{% endif %}"><strong>{{ t('admin.server_choose_safe') }}</strong><small>{{ t('admin.server_choose_safe_help') }}</small></button>
+    </div>
+    <div id="safe-mode-feedback" class="api-hint mt-3" role="status" aria-live="polite"></div>
+  </div>
+</section>
+<section class="ls-section">
+  <h2 class="ls-section-title">{{ t('admin.server_actions_heading') }}</h2>
+  <div class="block-console mb-3"><span class="block-label">{{ t('admin.server_profile') }}</span>
+  <form class="row g-3 align-items-end" method="post" action="{{ url_for('admin.switch_profile') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="col"><select class="form-select form-select-console" name="profile_module" {% if not supervisor %}disabled{% endif %}>{% for profile in profiles %}<option value="{{ profile.module_path }}" {% if profile.module_path == active_module %}selected{% endif %}>{{ profile.profile_name }} — {{ profile.module_path }} ({{ profile.api_port }})</option>{% endfor %}</select></div><div class="col-auto"><button class="btn btn-console-primary" {% if not supervisor %}disabled{% endif %}>{{ t('admin.server_load_profile') }}</button></div></form>
+  <p class="subtitle mt-3 mb-0">{{ t('admin.server_restart_required') }}</p></div>
+  <div class="block-console ls-danger-zone"><span class="block-label">{{ t('admin.server_reset') }}</span><p class="subtitle">{{ t('admin.server_reset_help') }}</p><form method="post" action="{{ url_for('admin.reset_server') }}" onsubmit="return confirm({{ t('admin.server_reset_confirm')|tojson|forceescape }});"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="confirm" value="yes"><button class="btn btn-console-danger" {% if not supervisor %}disabled{% endif %}>{{ t('admin.server_reset_button') }}</button></form></div>
+</section>
 </div>""" + API_CLIENT_SCRIPT + """
 <script>
 (() => {

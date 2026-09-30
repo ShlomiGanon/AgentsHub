@@ -115,18 +115,39 @@ def simulator_page_context(
 SIMULATOR_STYLE = """
 <style>
   .container-wide { max-width: 1400px; }
-  .sim-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: stretch; margin-bottom: 20px; }
-  .sim-drop {
-    flex: 1 1 320px;
-    border: 2px dashed var(--line-strong);
+  .sim-toolbar { display: grid; grid-template-columns: minmax(220px, .9fr) 16px minmax(280px, 1.2fr) 16px minmax(220px, .8fr); gap: 0; align-items: stretch; margin-bottom: 16px; }
+  .sim-flow-join { align-self: center; height: 2px; background: var(--line-strong); }
+  @media (max-width: 980px) { .sim-toolbar { grid-template-columns: 1fr; } .sim-flow-join { height: 16px; width: 2px; justify-self: center; } }
+  .sim-step {
+    background: var(--panel);
+    border: 1px solid var(--line);
     border-radius: var(--radius);
-    padding: 18px;
+    padding: 12px;
+    box-shadow: var(--shadow);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .sim-step-head { display: flex; align-items: center; gap: 8px; }
+  .sim-step-num {
+    width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+    display: grid; place-items: center; background: var(--navy); color: #fff;
+    font-size: 11px; font-weight: 700;
+  }
+  .sim-step.is-primary .sim-step-num { background: var(--lime); color: var(--lime-text); }
+  .sim-step-label {
+    font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-faint);
+  }
+  .sim-drop {
+    flex: 1 1 auto;
+    border: 1.5px dashed var(--line-strong);
+    border-radius: var(--radius-sm);
+    padding: 14px;
     text-align: center;
     cursor: pointer;
-    background: var(--panel);
+    background: var(--panel-muted);
     color: var(--text-dim);
-    font-size: 14px;
+    font-size: 13px;
     display: flex; align-items: center; justify-content: center;
+    min-height: 72px;
   }
   .sim-drop.dragover { border-color: var(--lime); background: var(--lime-dim); color: #3f6212; }
   .sim-paste { flex: 1 1 320px; display: flex; flex-direction: column; gap: 6px; }
@@ -137,8 +158,8 @@ SIMULATOR_STYLE = """
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: var(--radius);
-    padding: 18px 22px;
-    margin-bottom: 20px;
+    padding: 16px 18px;
+    margin-bottom: 16px;
     box-shadow: var(--shadow);
   }
   .sim-header h2 { font-size: 20px; font-weight: 500; margin: 0 0 6px; }
@@ -595,31 +616,44 @@ SIMULATOR_STYLE = """
 SIMULATOR_BODY = """
 <div class="ls-page-wide">
 
-  <h1 class="mb-1">{{ t('admin.simulator.title') }}</h1>
-  <p class="subtitle mb-4">{{ t('admin.simulator.subtitle') }}</p>
+  <div class="ls-page-header">
+    <div>
+      <h1 class="mb-1">{{ t('admin.simulator.title') }}</h1>
+      <p class="subtitle mb-0">{{ t('admin.simulator.subtitle') }}</p>
+    </div>
+  </div>
 
   """ + IDENTITY_BAR + FLASH_MESSAGES + """
 
   <div class="sim-toolbar">
-    <div class="sim-drop" id="drop-zone">
-      <span>{{ t('admin.simulator.drop_zone') }}</span>
-      <input type="file" id="file-input" accept=".json,application/json" style="display:none">
-    </div>
-    <div class="sim-paste">
-      <div class="form-label-console">{{ t('admin.simulator.paste_label') }}</div>
-      <textarea id="paste-input" class="form-control form-control-console" spellcheck="false" dir="ltr"></textarea>
-      <button type="button" class="btn btn-console btn-sm" id="load-pasted">{{ t('admin.simulator.load_pasted') }}</button>
-    </div>
-    <div class="sim-actions">
-      <button type="button" class="btn btn-console-primary" id="send-next" disabled>{{ t('admin.simulator.send_next') }}</button>
-      <button type="button" class="btn btn-console-danger" id="reset-view" disabled>{{ t('admin.simulator.reset_view') }}</button>
-      <button type="button" class="btn btn-console" id="toggle-bts" title="{{ t('admin.simulator.bts.toggle_title') }}">{{ t('admin.simulator.bts.toggle_btn') }} ({{ t('admin.simulator.bts.separate_window') }})</button>
-    </div>
-    <div class="sim-actions">
+    <div class="sim-step">
+      <div class="sim-step-head"><span class="sim-step-num">1</span><div class="sim-step-label">{{ t('admin.simulator.step_choose') }}</div></div>
       <label class="form-label-console" for="profile-simulation-select">{{ t('admin.simulator.profile_simulations') }}</label>
       <select id="profile-simulation-select" class="form-select form-select-console" disabled><option value="">{{ t('admin.simulator.choose_profile_simulation') }}</option></select>
-      <button type="button" class="btn btn-console-primary" id="load-profile-simulation" disabled>{{ t('admin.simulator.load_profile_simulation') }}</button>
+      <button type="button" class="btn btn-console" id="load-profile-simulation" disabled>{{ t('admin.simulator.load_profile_simulation') }}</button>
       <div class="subtitle" id="profile-sim-hint" style="font-size:12px; margin:0;"></div>
+    </div>
+    <div class="sim-flow-join" aria-hidden="true"></div>
+    <div class="sim-step">
+      <div class="sim-step-head"><span class="sim-step-num">2</span><div class="sim-step-label">{{ t('admin.simulator.step_load') }}</div></div>
+      <div class="sim-drop" id="drop-zone">
+        <span>{{ t('admin.simulator.drop_zone') }}</span>
+        <input type="file" id="file-input" accept=".json,application/json" style="display:none">
+      </div>
+      <div class="sim-paste">
+        <div class="form-label-console">{{ t('admin.simulator.paste_label') }}</div>
+        <textarea id="paste-input" class="form-control form-control-console" spellcheck="false" dir="ltr"></textarea>
+        <button type="button" class="btn btn-console btn-sm" id="load-pasted">{{ t('admin.simulator.load_pasted') }}</button>
+      </div>
+    </div>
+    <div class="sim-flow-join" aria-hidden="true"></div>
+    <div class="sim-step is-primary">
+      <div class="sim-step-head"><span class="sim-step-num">3</span><div class="sim-step-label">{{ t('admin.simulator.step_run') }}</div></div>
+      <div class="sim-actions">
+        <button type="button" class="btn btn-console-primary send-btn" id="send-next" disabled>{{ t('admin.simulator.send_next') }}</button>
+        <button type="button" class="btn btn-console-danger" id="reset-view" disabled>{{ t('admin.simulator.reset_view') }}</button>
+        <button type="button" class="btn btn-console" id="toggle-bts" title="{{ t('admin.simulator.bts.toggle_title') }}">{{ t('admin.simulator.bts.toggle_btn') }} ({{ t('admin.simulator.bts.separate_window') }})</button>
+      </div>
     </div>
   </div>
 
@@ -633,6 +667,7 @@ SIMULATOR_BODY = """
   <div id="sim-alert"></div>
 
   <div class="sim-header" id="scenario-info">
+    <div class="sim-step-head"><span class="sim-step-num">4</span><div class="sim-step-label">{{ t('admin.simulator.step_review') }}</div></div>
     <h2 id="scenario-title">{{ t('admin.simulator.no_scenario') }}</h2>
     <p id="scenario-desc" class="description"></p>
     <div class="sim-badges" id="scenario-badges"></div>
