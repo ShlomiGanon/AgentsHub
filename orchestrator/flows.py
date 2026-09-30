@@ -195,6 +195,16 @@ class EventDataReplyResult:
     ambiguous_event_ids: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class DroneSelectionReplyResult:
+    event_id: str
+    message: str
+    status: Literal["waiting_for_drone_selection", "succeeded"]
+
+
+_DRONE_RECALL_TOOLS = ("return_drone_to_base", "return_all_drones_to_base")
+
+
 def _model_invoker_for(main_agent: "MainAgent"):
     def _invoke(prompt: str) -> str:
         try:
@@ -1844,6 +1854,50 @@ def apply_event_data_reply(
         event["event_id"], updates,
         parsed.reply_text,
     )
+
+
+def apply_drone_selection_reply(
+    deps: FlowDeps,
+    reply_text: str,
+    hold: dict,
+    *,
+    resolved_by: str,
+) -> DroneSelectionReplyResult:
+    """Forward a drone-choice hold reply to the surveillance specialist.
+
+    The specialist decides whether the reply names one drone or asks to return
+    every active drone, and calls `return_drone_to_base` or
+    `return_all_drones_to_base`. Core does not inspect the reply wording.
+    """
+
+    event_id = hold["event_id"]
+    try:
+        agent = deps.registry.get("surveillance_agent")
+    except KeyError as exc:
+        raise OrchestrationParseError("surveillance_agent is not available") from exc
+
+    exposed = {tool.name for tool in agent.exposed_tools()}
+    allowed = [name for name in _DRONE_RECALL_TOOLS if name in exposed]
+    if not allowed:
+        raise OrchestrationParseError("surveillance_agent has no recall tools")
+
+    task = deps.message_catalog.text(
+        "orchestrator.drone_selection.task",
+        choices=hold.get("question") or "",
+        reply=reply_text,
+    )
+    with stage_context("drone_selection_reply"):
+        result = agent.process(task, allowed)
+    if result.status != "success" or getattr(result, "selection_required", False):
+        return DroneSelectionReplyResult(event_id, result.text, "waiting_for_drone_selection")
+
+    deps.persistence.resolve_held_event(
+        "event_data",
+        hold["hold_id"],
+        {"resolved_by": resolved_by},
+    )
+    record_event_outcome(deps.persistence, event_id, "succeeded")
+    return DroneSelectionReplyResult(event_id, result.text, "succeeded")
 
 
 def resume_after_event_data(

@@ -422,8 +422,9 @@ class ResponseTeamSurveillanceAgent(SurveillanceAgent):
 
     @tool(
         "recall_drone",
-        f"Recalls one active drone (or, given 'all', every active drone) to {DRONES_WAREHOUSE}. "
-        "drone_or_mission_id is optional only when exactly one mission is active.",
+        f"Recalls one active drone to {DRONES_WAREHOUSE}. "
+        "drone_or_mission_id is optional only when exactly one mission is active. "
+        "To recall every active drone, call return_all_drones_to_base.",
         side_effecting=True,
         idempotent=True,
     )

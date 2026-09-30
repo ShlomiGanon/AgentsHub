@@ -168,7 +168,7 @@ MESSAGES = {
         "ולאחר מכן ניתן להשיב שוב.",
     "api.clarify_check_record_do": "נא להבהיר מה ברצונך שאבדוק, אתעד או אבצע.",
     "api.clarify_action": "נא להבהיר מה ברצונך שאבצע.",
-    "api.drone_selection_invalid": "לא זיהיתי רחפן מתאים. בחר שם או מזהה מהרשימה:\n{choices}\nאפשר גם לכתוב: כולם",
+    "api.drone_selection_invalid": "לא זיהיתי רחפן מתאים. בחר שם או מזהה מהרשימה:\n{choices}",
     "api.drone_recall_none": "אין כרגע רחפנים במשימה; לא בוצע שינוי.",
     "api.drone_recall_all_done": "הוחזרו לבסיס: {names}. המשימות נסגרו.",
     "api.drone_recall_one_done": "{callsign} הוחזר לבסיס. המשימה {mission_id} נסגרה.",
@@ -767,6 +767,15 @@ MESSAGES = {
     "orchestrator.picture.fallback_header": "תמונת מצב נכון ל-{time}:",
     "orchestrator.picture.missing_note": "(הערה מבצעית: לא התקבל דיווח מ-{domains})",
     "orchestrator.specialist.partial_failure": "(הערה: לא התקבל דיווח מ-{agents})",
+    "orchestrator.drone_selection.task": (
+        "המפעיל משיב איזה רחפן להחזיר לבסיס.\n"
+        "האפשרויות הפתוחות:\n{choices}\n\n"
+        "תשובת המפעיל:\n{reply}\n\n"
+        "אם התשובה נוקבת ברחפן אחד, קרא ל-return_drone_to_base עם מזהה הרחפן, אות הקריאה או מזהה המשימה. "
+        "אם התשובה מבקשת להחזיר כל רחפן שעדיין במשימה, קרא ל-return_all_drones_to_base. "
+        "אם התשובה אינה מיישבת את הבחירה, קרא ל-return_drone_to_base עם מזהה ריק. "
+        "קרא בדיוק לאחד משני הכלים האלה. אל תמציא מזהה."
+    ),
     # A composed reply must never open with an acknowledgement-only phrase (nothing
     # said about what actually happened) and must never surface internal labels
     # (classification, severity, protocol name). Pipe-delimited; split in code
@@ -943,7 +952,7 @@ MESSAGES = {
     "response_team.surveillance.recall_no_match_multi": "לא נמצא רחפן פעיל תואם ל-'{requested}' מתוך {count} רחפנים באוויר.",
     "response_team.surveillance.recall_no_match_single": "לא נמצא רחפן פעיל תואם להחזרה.",
     "response_team.surveillance.recall_none_active": "אין כרגע רחפנים פעילים באוויר להחזרה.",
-    "response_team.surveillance.recall_selection_required": "קיימים {count} רחפנים פעילים באוויר. אנא ציין איזה רחפן להחזיר או ציין 'החזר את כולם'.",
+    "response_team.surveillance.recall_selection_required": "קיימים {count} רחפנים פעילים באוויר. ציין איזה רחפן להחזיר לפי מזהה, אות קריאה או מזהה משימה.",
     "response_team.surveillance.role": "אחראי על תצפית חזותית, מערך מצלמות אבטחה, וצי רחפנים טקטיים. "
         "מספק סטטוס רחפנים וסוללות, תמונת מצב מצלמות, ושיגור או החזרת רחפנים.",
     "response_team.surveillance.status.charging": "בטעינה {icon}",
@@ -953,9 +962,9 @@ MESSAGES = {
     "response_team.surveillance.system_prompt": "אתה סוכן מומחה לתצפית חזותית ורחפנים. "
         "חובה לענות אך ורק בעברית קצרה, מדויקת ומבצעית (עד 4-5 שורות לכל היותר). "
         "אל תשתמש באנגלית כלל, למעט מזהים מדויקים (כגון CAM-01, DRONE-01). "
-        "להחזרת רחפן קרא תמיד מיד ל-return_drone_to_base(drone_or_mission_id=''). "
-        "כאשר לא צוין רחפן ספציפי העבר מחרוזת ריקה והכלי יבחר אוטומטית את הרחפן הפעיל לפי מצב הצי. "
-        "אל תנסה לבצע סריקות מקדימות, אל תמציא מזהים, ואסור לדווח שאין רחפנים או שהכלי אינו זמין מבלי שהפעלת את return_drone_to_base — הפעל תמיד את הכלי מיד! "
+        "להחזרת רחפן אחד קרא תמיד מיד ל-return_drone_to_base. העבר מזהה רחפן, אות קריאה או מזהה משימה רק כאשר המשימה נוקבת באחד מהם; אחרת העבר מזהה ריק. "
+        "להחזרת כל הרחפנים הפעילים קרא מיד ל-return_all_drones_to_base. "
+        "אל תנסה לבצע סריקות מקדימות, אל תמציא מזהים, ואסור לדווח שאין רחפנים או שהכלי אינו זמין מבלי שהפעלת את כלי ההחזרה המתאים — הפעל תמיד את הכלי מיד! "
         "לשיגור רחפן קרא מיד ל-dispatch_drone_to_area עם גזרת היעד (target_area) בלבד. "
         "שדות specific_drone_id ו-dispatched_by הם אופציונליים לחלוטין ואסור בתכלית האיסור לבקש אותם - המערכת בוחרת אוטומטית רחפן מוכן מהצי. "
         "לעולם אל תדווח שמשימה אינה ברורה או שחסרים פרטים כאשר גזרת היעד ידועה, אלא שגר את הרחפן מיד. "

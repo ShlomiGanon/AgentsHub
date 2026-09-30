@@ -6,15 +6,19 @@ from types import SimpleNamespace
 import pytest
 
 from agents import adapter
+from agents import AgentRegistry, AgentResult
 from agents.history import HistoryAgent
 from agents.reference import ReferenceAgent
 from agents.runtime import build_agent_registry
+from agents.surveillance_agent import SurveillanceAgent
 from auth.permissions import PermissionLevel
 from config.base import BaseConfig, TierModel
 from history.query import HistoryQueryService
+from messages import get_catalog
 import orchestrator.flows as flows_module
 from orchestrator.flows import (
     FlowDeps,
+    apply_drone_selection_reply,
     apply_event_data_reply,
     assemble_core_agents,
     begin_report,
@@ -996,6 +1000,142 @@ def test_drone_selection_result_creates_a_resumable_hold(deps, monkeypatch):
     assert hold["missing_fields"] == ["drone_selection"]
     assert hold["waiting_step_ids"] == ["recall-1"]
     assert deps.persistence.fetch_event(event_id)["outcome"] is None
+
+
+class _TestSurveillanceAgent(SurveillanceAgent):
+    surveillance_db_path = ""
+
+
+class _DecidingSurveillance:
+    name = "surveillance_agent"
+
+    def __init__(self, inner, decide):
+        self._inner = inner
+        self._decide = decide
+        self.calls = []
+        self.surveillance_store = inner.surveillance_store
+
+    def exposed_tools(self):
+        return self._inner.exposed_tools()
+
+    def process(self, text, allowed_tools, invocation_policy=None):
+        self.calls.append((text, tuple(allowed_tools)))
+        return self._decide(self._inner, text, allowed_tools)
+
+
+def _live_surveillance(tmp_path):
+    _TestSurveillanceAgent.surveillance_db_path = str(tmp_path / "drone-selection.db")
+    agent = _TestSurveillanceAgent(model="m")
+    agent.dispatch_drone_to_area("north_gate", "first")
+    agent.dispatch_drone_to_area("south_sector", "second")
+    return agent
+
+
+def _drone_selection_hold(deps, question):
+    event_id = begin_report(deps, "return the drone", "telegram", "2026-08-20T10:00:00", "commander-1")
+    create_event_data_hold(deps.persistence, event_id, ("drone_selection",), question, ("recall-1",))
+    [hold] = deps.persistence.list_held_events("event_data")
+    return hold
+
+
+def _deps_with_surveillance(deps, agent):
+    existing = {item.name: item for item in deps.registry.all()}
+    existing[agent.name] = agent
+    return replace(deps, registry=AgentRegistry(existing))
+
+
+def _result_from_tool(raw):
+    return AgentResult(
+        status="success",
+        text=str(raw),
+        selection_required=getattr(raw, "selection_required", False),
+    )
+
+
+def test_drone_selection_reply_is_forwarded_to_the_surveillance_agent(deps, tmp_path):
+    inner = _live_surveillance(tmp_path)
+    deciding = _DecidingSurveillance(inner, lambda real, text, allowed: _result_from_tool(real.return_all_drones_to_base()))
+    scoped = _deps_with_surveillance(deps, deciding)
+    hold = _drone_selection_hold(scoped, "- Eagle-1\n- Falcon-2")
+
+    apply_drone_selection_reply(scoped, "operator reply", hold, resolved_by="commander-1")
+
+    prompt, allowed = deciding.calls[0]
+    assert prompt == scoped.message_catalog.text(
+        "orchestrator.drone_selection.task",
+        choices="- Eagle-1\n- Falcon-2",
+        reply="operator reply",
+    )
+    assert allowed == ("return_drone_to_base", "return_all_drones_to_base")
+
+
+def test_drone_selection_reply_task_uses_the_active_message_catalog(deps, tmp_path):
+    inner = _live_surveillance(tmp_path)
+    deciding = _DecidingSurveillance(inner, lambda real, text, allowed: _result_from_tool(real.return_all_drones_to_base()))
+    hebrew = get_catalog("he")
+    scoped = replace(_deps_with_surveillance(deps, deciding), message_catalog=hebrew)
+    hold = _drone_selection_hold(scoped, "- Eagle-1\n- Falcon-2")
+
+    apply_drone_selection_reply(scoped, "operator reply", hold, resolved_by="commander-1")
+
+    prompt, _allowed = deciding.calls[0]
+    assert prompt == hebrew.text(
+        "orchestrator.drone_selection.task",
+        choices="- Eagle-1\n- Falcon-2",
+        reply="operator reply",
+    )
+    assert prompt != get_catalog("en").text(
+        "orchestrator.drone_selection.task",
+        choices="- Eagle-1\n- Falcon-2",
+        reply="operator reply",
+    )
+
+
+def test_drone_selection_reply_recalls_every_drone_when_the_agent_calls_return_all(deps, tmp_path):
+    inner = _live_surveillance(tmp_path)
+    deciding = _DecidingSurveillance(inner, lambda real, text, allowed: _result_from_tool(real.return_all_drones_to_base()))
+    scoped = _deps_with_surveillance(deps, deciding)
+    hold = _drone_selection_hold(scoped, "- Eagle-1\n- Falcon-2")
+
+    result = apply_drone_selection_reply(scoped, "operator reply", hold, resolved_by="commander-1")
+
+    assert result.status == "succeeded"
+    assert inner.surveillance_store.get_active_missions() == []
+    assert scoped.persistence.list_held_events("event_data") == []
+    assert scoped.persistence.fetch_event(result.event_id)["outcome"] == "succeeded"
+
+
+def test_drone_selection_reply_recalls_one_drone_when_the_agent_passes_an_identifier(deps, tmp_path):
+    inner = _live_surveillance(tmp_path)
+    selected = inner.surveillance_store.get_active_missions()[0]["callsign"]
+
+    def _one(real, text, allowed):
+        return _result_from_tool(real.return_drone_to_base(selected))
+
+    deciding = _DecidingSurveillance(inner, _one)
+    scoped = _deps_with_surveillance(deps, deciding)
+    hold = _drone_selection_hold(scoped, "- Eagle-1\n- Falcon-2")
+
+    result = apply_drone_selection_reply(scoped, "operator reply", hold, resolved_by="commander-1")
+
+    assert result.status == "succeeded"
+    remaining = inner.surveillance_store.get_active_missions()
+    assert len(remaining) == 1
+    assert remaining[0]["callsign"] != selected
+
+
+def test_drone_selection_reply_keeps_the_hold_when_selection_is_still_required(deps, tmp_path):
+    inner = _live_surveillance(tmp_path)
+    deciding = _DecidingSurveillance(inner, lambda real, text, allowed: _result_from_tool(real.return_drone_to_base("")))
+    scoped = _deps_with_surveillance(deps, deciding)
+    hold = _drone_selection_hold(scoped, "- Eagle-1\n- Falcon-2")
+
+    result = apply_drone_selection_reply(scoped, "operator reply", hold, resolved_by="commander-1")
+
+    assert result.status == "waiting_for_drone_selection"
+    assert len(inner.surveillance_store.get_active_missions()) == 2
+    assert scoped.persistence.list_held_events("event_data")[0]["hold_id"] == hold["hold_id"]
+    assert scoped.persistence.fetch_event(result.event_id)["outcome"] is None
 
 
 def test_precedent_lookup_still_runs_when_the_target_events_occurred_at_is_unresolved(deps):

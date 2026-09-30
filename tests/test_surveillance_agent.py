@@ -34,6 +34,7 @@ def test_surveillance_agent_descriptor_and_tools_exposed(tmp_path):
         "dispatch_drone_to_area",
         "get_active_missions",
         "return_drone_to_base",
+        "return_all_drones_to_base",
         "get_surveillance_overview",
         "update_camera_observation",
     }
@@ -246,7 +247,7 @@ def test_return_all_recalls_every_active_drone_atomically(tmp_path):
     _call_tool(agent, "dispatch_drone_to_area", target_area="north_gate", incident_description="First mission")
     _call_tool(agent, "dispatch_drone_to_area", target_area="south_sector", incident_description="Second mission")
 
-    result = _call_tool(agent, "return_drone_to_base", drone_or_mission_id="כולם")
+    result = _call_tool(agent, "return_all_drones_to_base")
 
     assert "All active drones returned to base" in result
     assert "Eagle-1" in result
@@ -255,6 +256,29 @@ def test_return_all_recalls_every_active_drone_atomically(tmp_path):
     drones = {drone["callsign"]: drone for drone in agent.surveillance_store.list_drones()}
     assert drones["Eagle-1"]["status"] == "ready"
     assert drones["Falcon-2"]["status"] == "ready"
+
+
+def test_return_drone_to_base_does_not_treat_wording_as_recall_all(tmp_path):
+    agent = _agent(tmp_path)
+    _call_tool(agent, "dispatch_drone_to_area", target_area="north_gate", incident_description="First mission")
+    _call_tool(agent, "dispatch_drone_to_area", target_area="south_sector", incident_description="Second mission")
+
+    result = _call_tool(agent, "return_drone_to_base", drone_or_mission_id="fleet")
+
+    assert "All active drones returned to base" not in result
+    assert "No drone state was changed" in result
+    assert len(agent.surveillance_store.get_active_missions()) == 2
+
+
+def test_return_drone_to_base_does_not_treat_filler_words_as_an_empty_identifier(tmp_path):
+    agent = _agent(tmp_path)
+    _call_tool(agent, "dispatch_drone_to_area", target_area="north_gate", incident_description="Only mission")
+
+    result = _call_tool(agent, "return_drone_to_base", drone_or_mission_id="auto")
+
+    assert "Drone returned to base successfully" not in result
+    assert "No drone state was changed" in result
+    assert len(agent.surveillance_store.get_active_missions()) == 1
 
 
 def test_process_preserves_exact_recall_selection_across_tool_thread(tmp_path, monkeypatch):

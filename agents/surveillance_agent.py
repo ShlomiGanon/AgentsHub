@@ -25,51 +25,6 @@ def _utc_now() -> str:
 _recall_capture = make_exact_result_capture("surveillance_recall")
 _capture_recall_result = _recall_capture.capture
 
-# Phrases meaning "recall every active drone," not one specific drone —
-# checked before treating the argument as an identifier. Written as
-# escaped \uXXXX Hebrew literals rather than the characters themselves so
-# this file keeps passing tests/test_hebrew_leakage.py's scan for stray
-# Hebrew outside the message catalog.
-_RECALL_ALL_SENTINELS = frozenset(
-    {
-        "all",
-        "all drones",
-        "\u05db\u05d5\u05dc\u05dd",  # (Hebrew) all (plural, masculine)
-        "\u05db\u05d5\u05dc\u05df",  # (Hebrew) all (plural, feminine)
-        "\u05db\u05dc \u05d4\u05e8\u05d7\u05e4\u05e0\u05d9\u05dd",  # (Hebrew) all the drones
-    }
-)
-_RECALL_ALL_SUBSTRINGS = (
-    "\u05db\u05d5\u05dc\u05dd",  # (Hebrew) all
-    "\u05db\u05dc \u05d4\u05e8\u05d7\u05e4",  # (Hebrew) all the drone(s) [prefix]
-)
-
-
-def _wants_all_drones(normalized: str) -> bool:
-    return normalized in _RECALL_ALL_SENTINELS or any(term in normalized for term in _RECALL_ALL_SUBSTRINGS)
-
-
-# Generic non-identifier filler words a caller — or an LLM acting on a
-# caller's behalf — sometimes passes instead of leaving the parameter
-# empty for auto-selection ("AUTO", "auto", "none", "-", ...). None of
-# these ever collides with a real drone ID, callsign, or mission ID, so
-# treating them as "no identifier given" is safe for every caller of
-# `return_drone_to_base`, in any language, not only a profile that
-# normalizes them itself.
-_RECALL_TARGET_SENTINELS = frozenset(
-    {
-        "auto",
-        "none",
-        "null",
-        "n/a",
-        "-",
-        "drone",
-        "\u05e8\u05d7\u05e4\u05df",  # (Hebrew) drone
-        "\u05d4\u05d7\u05d6\u05e8",  # (Hebrew) return
-        "\u05d1\u05e1\u05d9\u05e1",  # (Hebrew) base
-    }
-)
-
 
 # A read-only status turn needs room for the tool result and a short operational
 # summary. 220 tokens truncated live answers; keep this budget in one place so
@@ -103,8 +58,9 @@ class SurveillanceAgent(Agent):
         "When asked about drones or dispatch: give only essential tactical facts (Callsign, Status, Battery, Location/Target, ETA). "
         "A specific drone ID or callsign is OPTIONAL for dispatch. If none was explicitly requested, leave specific_drone_id empty; "
         "dispatch_drone_to_area will deterministically select the best ready drone. Never ask for a drone ID merely because it was omitted. "
-        "For a recall, call return_drone_to_base exactly once. If it reports multiple active drones, reproduce its list and ask the user "
-        "to choose one; never choose a drone yourself. If exactly one drone is active, the tool returns it automatically. "
+        "If the task is to return one drone, call return_drone_to_base exactly once. Pass a Drone ID, callsign, or Mission ID only when the task names one; otherwise pass an empty identifier. "
+        "If it reports multiple active drones, reproduce its list and ask the user to choose one; never choose a drone yourself. "
+        "If the task is to return every active drone, call return_all_drones_to_base exactly once. Never put that choice into drone_or_mission_id. "
         "Call exactly one tool unless the task explicitly requests multiple distinct data sets. "
         "Never broaden an area, camera, drone, or mission filter beyond the scope explicitly requested. "
         "Never dispatch a drone or update an observation unless the task explicitly requests that exact state change. "
@@ -132,18 +88,58 @@ class SurveillanceAgent(Agent):
         return _recall_capture.run(super().process, text, allowed_tools, invocation_policy=invocation_policy)
 
     def _recall(self, drone_or_mission_id: str) -> dict:
-        """Resolve one recall request against the store — the state-machine step behind
+        """Resolve one named-or-empty recall against the store — the state-machine step behind
         `return_drone_to_base`. A subclass that needs to localize the returned text (see
         `profiles.standby_squad.StandbySquadSurveillanceAgent`) calls this instead of
-        duplicating the branching against `self.surveillance_store`."""
+        duplicating the branching against `self.surveillance_store`. An empty identifier
+        means no drone was named; recalling every active drone is a different tool."""
 
         requested = drone_or_mission_id.strip()
-        normalized = requested.casefold()
-        if _wants_all_drones(normalized):
-            return self.surveillance_store.recall_all_drones()
-        if normalized in _RECALL_TARGET_SENTINELS:
-            requested = ""
         return self.surveillance_store.recall_drone(requested or None)
+
+    def _render_recall(self, result: dict) -> str | ToolResult:
+        status = result["status"]
+        if status == "no_active":
+            output = "No active drone missions; no drone was returned."
+            _capture_recall_result(output)
+            return output
+        if status == "returned_all":
+            names = ", ".join(mission["callsign"] for mission in result["missions"])
+            output = f"All active drones returned to base: {names}. Missions closed as operator recall."
+            _capture_recall_result(output)
+            return output
+        if status in {"selection_required", "not_found"}:
+            heading = (
+                "Multiple drones are currently on active missions. "
+                "Specify one Drone ID, callsign, or Mission ID:"
+                if status == "selection_required"
+                else (
+                    f"No active drone matched '{result.get('requested', '')}'. "
+                    "Choose one of these active drones:"
+                )
+            )
+            lines = [heading]
+            for mission in result["missions"]:
+                lines.append(
+                    f"- {mission['callsign']} ({mission['drone_id']}) | Mission {mission['mission_id']} | "
+                    f"Target {mission['target_area']} | Status {mission['status'].upper()}"
+                )
+            lines.append("No drone state was changed.")
+            output = "\n".join(lines)
+            _recall_capture.capture(output, selection_required=True)
+            return ToolResult(text=output, selection_required=True)
+
+        mission = result["mission"]
+        drone = result["drone"]
+        output = (
+            "Drone returned to base successfully:\n"
+            f"- Drone: {drone['callsign']} ({drone['drone_id']})\n"
+            f"- Mission: {mission['mission_id']} closed as operator recall\n"
+            f"- Current Area: {drone['current_area']}\n"
+            f"- Fleet Status: {drone['status'].upper()}"
+        )
+        _capture_recall_result(output)
+        return output
 
     @tool(
         "get_camera_feeds",
@@ -298,56 +294,24 @@ class SurveillanceAgent(Agent):
 
     @tool(
         "return_drone_to_base",
-        "Safely recalls a drone from an active mission. drone_or_mission_id is optional only when exactly one mission is active. "
+        "Safely recalls one drone from an active mission. drone_or_mission_id is optional only when exactly one mission is active. "
         "If multiple drones are active and no identifier is supplied, no state changes and the tool returns the exact choices. "
-        "Accepts a Drone ID, callsign, or Mission ID.",
+        "Accepts a Drone ID, callsign, or Mission ID. To recall every active drone, call return_all_drones_to_base instead.",
         side_effecting=True,
         idempotent=True,
     )
     def return_drone_to_base(self, drone_or_mission_id: str = "") -> str:
-        result = self._recall(drone_or_mission_id)
-        status = result["status"]
-        if status == "no_active":
-            output = "No active drone missions; no drone was returned."
-            _capture_recall_result(output)
-            return output
-        if status == "returned_all":
-            names = ", ".join(mission["callsign"] for mission in result["missions"])
-            output = f"All active drones returned to base: {names}. Missions closed as operator recall."
-            _capture_recall_result(output)
-            return output
-        if status in {"selection_required", "not_found"}:
-            heading = (
-                "Multiple drones are currently on active missions. "
-                "Specify one Drone ID, callsign, or Mission ID:"
-                if status == "selection_required"
-                else (
-                    f"No active drone matched '{result.get('requested', '')}'. "
-                    "Choose one of these active drones:"
-                )
-            )
-            lines = [heading]
-            for mission in result["missions"]:
-                lines.append(
-                    f"- {mission['callsign']} ({mission['drone_id']}) | Mission {mission['mission_id']} | "
-                    f"Target {mission['target_area']} | Status {mission['status'].upper()}"
-                )
-            lines.append("No drone state was changed.")
-            output = "\n".join(lines)
-            _recall_capture.capture(output, selection_required=True)
-            return ToolResult(text=output, selection_required=True)
+        return self._render_recall(self._recall(drone_or_mission_id))
 
-        mission = result["mission"]
-        drone = result["drone"]
-        output = (
-            "Drone returned to base successfully:\n"
-            f"- Drone: {drone['callsign']} ({drone['drone_id']})\n"
-            f"- Mission: {mission['mission_id']} closed as operator recall\n"
-            f"- Current Area: {drone['current_area']}\n"
-            f"- Fleet Status: {drone['status'].upper()}"
-        )
-        _capture_recall_result(output)
-        return output
+    @tool(
+        "return_all_drones_to_base",
+        "Safely recalls every drone that is currently on an active mission. No identifier is required. "
+        "To recall one named drone, call return_drone_to_base instead.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def return_all_drones_to_base(self) -> str:
+        return self._render_recall(self.surveillance_store.recall_all_drones())
 
     @tool(
         "get_surveillance_overview",

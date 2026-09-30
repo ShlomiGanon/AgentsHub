@@ -43,6 +43,7 @@ from orchestrator.flows import (
     answer_question,
     answer_question_from_plan,
     apply_event_data_reply,
+    apply_drone_selection_reply,
     attempt_direct_lane,
     build_role_aware_system_context,
     begin_report,
@@ -320,65 +321,26 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             pending_hold = candidate
 
         # A drone-choice reply is operational input, not free-form missing event
-        # data. Resolve it deterministically before any planner/model call.
+        # data. Forward it to the surveillance specialist so the model chooses
+        # a one-drone recall or a fleet recall; do not send it through the planner.
         drone_selection_hold = (
             pending_hold if pending_hold is not None and pending_hold.get("missing_fields") == ["drone_selection"] else None
         )
 
         if drone_selection_hold is not None:
             require(level, RequestedOperation.APPROVE_RUN)
-            surveillance_agent = ctx.deps.registry.get("surveillance_agent")
-            store = getattr(surveillance_agent, "surveillance_store", None)
-            if store is None:
-                raise RunFailureError("surveillance persistence is unavailable")
-
-            normalized = str(text).strip().casefold()
-            recall_all = (
-                normalized in {
-                    "all", "all drones", "\u05db\u05d5\u05dc\u05dd", "\u05db\u05d5\u05dc\u05df",
-                    "\u05d0\u05ea \u05db\u05d5\u05dc\u05dd", "\u05d0\u05ea \u05db\u05d5\u05dc\u05df",
-                    "\u05e2\u05dc \u05db\u05d5\u05dc\u05dd", "\u05e2\u05dc \u05db\u05d5\u05dc\u05df",
-                }
-                or "\u05db\u05dc \u05d4\u05e8\u05d7\u05e4" in normalized
-            )
-            result = store.recall_all_drones() if recall_all else store.recall_drone(str(text).strip())
-            if result["status"] in {"selection_required", "not_found"}:
-                choices = "\n".join(
-                    f"- {mission['callsign']} ({mission['drone_id']}) — {mission['mission_id']}, {mission['target_area']}"
-                    for mission in result["missions"]
+            try:
+                selection = apply_drone_selection_reply(
+                    ctx.deps, text, drone_selection_hold, resolved_by=caller_identity,
                 )
-                answer = messages.text("api.drone_selection_invalid", choices=choices)
-                _remember("assistant", answer, drone_selection_hold["event_id"])
-                return jsonify({
-                    "taken_as": "clarification",
-                    "event_id": drone_selection_hold["event_id"],
-                    "answer": answer,
-                    "status": "waiting_for_drone_selection",
-                })
-
-            ctx.deps.persistence.resolve_held_event(
-                "event_data",
-                drone_selection_hold["hold_id"],
-                {"resolved_by": caller_identity, "drone_selection": str(text).strip()},
-            )
-            record_event_outcome(ctx.deps.persistence, drone_selection_hold["event_id"], "succeeded")
-            if result["status"] == "no_active":
-                answer = messages.text("api.drone_recall_none")
-            elif result["status"] == "returned_all":
-                names = ", ".join(mission["callsign"] for mission in result["missions"])
-                answer = messages.text("api.drone_recall_all_done", names=names)
-            else:
-                drone = result["drone"]
-                mission = result["mission"]
-                answer = messages.text(
-                    "api.drone_recall_one_done", callsign=drone["callsign"], mission_id=mission["mission_id"]
-                )
-            _remember("assistant", answer, drone_selection_hold["event_id"])
+            except OrchestrationParseError as exc:
+                raise RunFailureError(str(exc)) from exc
+            _remember("assistant", selection.message, selection.event_id)
             return jsonify({
-                "taken_as": "event_update",
-                "event_id": drone_selection_hold["event_id"],
-                "answer": answer,
-                "status": "succeeded",
+                "taken_as": "clarification" if selection.status == "waiting_for_drone_selection" else "event_update",
+                "event_id": selection.event_id,
+                "answer": selection.message,
+                "status": selection.status,
             })
 
         matching_event_data_hold = pending_hold is not None

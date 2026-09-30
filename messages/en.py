@@ -169,7 +169,7 @@ MESSAGES = {
         "the older one first, then reply again.",
     "api.clarify_check_record_do": "Could you clarify what you want me to check, record, or do?",
     "api.clarify_action": "Could you clarify what you want me to do?",
-    "api.drone_selection_invalid": "No matching drone was identified. Choose a name or ID from this list:\n{choices}\nYou can also reply: all",
+    "api.drone_selection_invalid": "No matching drone was identified. Choose a name or ID from this list:\n{choices}",
     "api.drone_recall_none": "There are no active drone missions; no state was changed.",
     "api.drone_recall_all_done": "Returned to base: {names}. Their missions were closed.",
     "api.drone_recall_one_done": "{callsign} returned to base. Mission {mission_id} was closed.",
@@ -771,6 +771,15 @@ MESSAGES = {
     "orchestrator.picture.fallback_header": "Situational picture as of {time}:",
     "orchestrator.picture.missing_note": "(Operational note: no report was received from {domains})",
     "orchestrator.specialist.partial_failure": "(note: no report was received from {agents})",
+    "orchestrator.drone_selection.task": (
+        "The operator is answering which drone to return to base.\n"
+        "Open choices:\n{choices}\n\n"
+        "Operator reply:\n{reply}\n\n"
+        "If the reply names one drone, call return_drone_to_base with that Drone ID, callsign, or Mission ID. "
+        "If the reply asks to return every drone that is still on a mission, call return_all_drones_to_base. "
+        "If the reply does not settle the choice, call return_drone_to_base with an empty identifier. "
+        "Call exactly one of those two tools. Do not invent an identifier."
+    ),
     # A composed reply must never open with an acknowledgement-only phrase (nothing
     # said about what actually happened) and must never surface internal labels
     # (classification, severity, protocol name). Pipe-delimited; split in code
@@ -948,7 +957,7 @@ MESSAGES = {
     "response_team.surveillance.recall_no_match_multi": "No matching active drone was found for '{requested}' out of {count} drones in flight.",
     "response_team.surveillance.recall_no_match_single": "No matching active drone was found to recall.",
     "response_team.surveillance.recall_none_active": "There are no active drones in flight to recall right now.",
-    "response_team.surveillance.recall_selection_required": "There are {count} active drones in flight. Please specify which drone to recall, or say 'recall all'.",
+    "response_team.surveillance.recall_selection_required": "There are {count} active drones in flight. Specify which drone to recall by ID, callsign, or mission ID.",
     "response_team.surveillance.role": "Responsible for visual surveillance, the security camera network, and the tactical drone "
         "fleet. Provides drone and battery status, camera status, and drone dispatch or recall.",
     "response_team.surveillance.status.charging": "Charging {icon}",
@@ -958,9 +967,9 @@ MESSAGES = {
     "response_team.surveillance.system_prompt": "You are a specialist agent for visual surveillance and drones. "
         "You must answer only in short, precise, operational Hebrew (at most 4-5 lines). "
         "Never use English at all, except for exact identifiers (such as CAM-01, DRONE-01). "
-        "To return a drone, always call return_drone_to_base(drone_or_mission_id='') immediately. "
-        "When no specific drone is named, pass an empty string and the tool will automatically select the active drone based on fleet state. "
-        "Do not attempt preliminary scans, do not invent identifiers, and never report that there are no drones or that the tool is unavailable without having called return_drone_to_base — always call the tool immediately! "
+        "To return one drone, always call return_drone_to_base immediately. Pass a Drone ID, callsign, or Mission ID only when the task names one; otherwise pass an empty identifier. "
+        "To return every active drone, call return_all_drones_to_base immediately. "
+        "Do not attempt preliminary scans, do not invent identifiers, and never report that there are no drones or that the tool is unavailable without having called the matching recall tool — always call it immediately! "
         "To dispatch a drone, call dispatch_drone_to_area immediately with only the target area (target_area). "
         "The specific_drone_id and dispatched_by fields are entirely optional and must never be requested - the system automatically selects a ready drone from the fleet. "
         "Never report that a mission is unclear or that details are missing when the target area is known — dispatch the drone immediately instead. "
