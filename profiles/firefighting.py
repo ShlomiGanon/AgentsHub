@@ -5,7 +5,7 @@ docs/Profile_Split_Plan.md)."""
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agents import Agent, NeighboringForcesAgent, SurveillanceAgent, TeamStatusAgent, get_authenticated_request_identity, tool
+from agents import Agent, InvocationPolicy, NeighboringForcesAgent, SurveillanceAgent, TeamStatusAgent, get_authenticated_request_identity, tool
 from messages import get_catalog
 from persistence import (
     ApparatusStoreError,
@@ -17,7 +17,7 @@ from persistence import (
 from profiles.admin_tables import AdminColumn, AdminTable
 from profiles.contracts import AgentSpec, OptimizationPolicy
 from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
-from protocols import CriticalityLevel, Protocol
+from protocols import CriticalityLevel, Protocol, Step
 
 DEFAULT_LANGUAGE = "he"
 
@@ -366,6 +366,57 @@ AGENTS = [
     AgentSpec(cls=FirefightingExternalForcesAgent, tier="sub"),
 ]
 
+# A narrow, low-stakes judgment call (decide one apparatus's resulting status, and whether it also
+# indicates incident response, then call up to three known tools) never needs the agent's default
+# reasoning budget -- same mechanism SurveillanceAgent.process already uses for its own
+# tool-turn-plus-summary calls.
+_FAST_JUDGMENT_POLICY = InvocationPolicy(max_output_tokens=400, reasoning_effort="none")
+
+
+def _bind_apparatus_movement(event: dict) -> tuple[Step, ...]:
+    """Mirrors response_team.py's own _bind_report_team_movement: a direct_tool_binder skips
+    formulate_tasks entirely (no separate task-formulation model call), while the step(s) it
+    returns still run through the normal agent turn -- status and incident-linking are genuine
+    judgment calls from free text, the same class of decision _bind_update_camera_status makes
+    for a camera's resulting status, so a keyword heuristic can never pre-decide them."""
+
+    entities = event.get("entities") or []
+    area = (event.get("area") or "").strip()
+    description = (event.get("description") or "").strip()
+    missing = tuple(name for name in ("entities", "description") if not event.get(name))
+    if missing:
+        return (
+            Step(
+                agent_name="team_status_agent",
+                task_text="Record the reported apparatus status, bound directly from the event's extracted fields.",
+                allowed_tools=("update_apparatus_status",),
+                step_id="1",
+                required_event_fields=missing,
+                kind="direct_tool",
+                direct_tool_name="update_apparatus_status",
+                direct_tool_kwargs={},
+            ),
+        )
+    return tuple(
+        Step(
+            agent_name="team_status_agent",
+            task_text=(
+                f"Apparatus {identifier} was reported on{f' in area {area}' if area else ''}. Determine its "
+                f"resulting status (operational, dispatched, unavailable, or maintenance) from the report "
+                f"below, and call update_apparatus_status for {identifier} with that status. Then decide: "
+                f"does the report clearly say {identifier} is dispatched to a specific incident there (not "
+                f"merely relocated)? If so, also call join_incident_response for the same area. If the "
+                f"report also asks who/what else is responding, also call list_incident_responders for the "
+                f"same area and include its answer in your reply.\n\nReport: {description}"
+            ),
+            allowed_tools=("update_apparatus_status", "join_incident_response", "list_incident_responders"),
+            step_id=str(index + 1),
+            invocation_policy=_FAST_JUDGMENT_POLICY,
+        )
+        for index, identifier in enumerate(entities)
+    )
+
+
 PROTOCOLS = [
     Protocol(
         name="record_crew_availability_response",
@@ -425,6 +476,9 @@ PROTOCOLS = [
         approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
+        needs_insight=False,
+        direct_tool_binder=_bind_apparatus_movement,
+        direct_lane_eligible=True,
     ),
     Protocol(
         name="report_crew_status",
@@ -444,6 +498,7 @@ PROTOCOLS = [
         approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
+        direct_lane_eligible=True,
     ),
     Protocol(
         name="update_camera_observation",
@@ -486,8 +541,9 @@ PROTOCOLS = [
             "detected, spread into new terrain (a tree line, a structure, a hazardous-materials "
             "site), or a reported casualty/trapped person; does not apply to a routine, "
             "already-resolved, no-risk report (e.g. a small roadside fire already extinguished "
-            "with no risk to structures), and does not apply to a resource-dispatch decision "
-            "itself (use dispatch_mutual_aid for that)."
+            "with no risk to structures -- use log_fire_observation for that, never dispatch a "
+            "drone for an already-handled report), and does not apply to a resource-dispatch "
+            "decision itself (use dispatch_mutual_aid for that)."
         ),
         participating_agents=("surveillance_agent",),
         approved_tools=("dispatch_drone_to_area",),
@@ -499,6 +555,30 @@ PROTOCOLS = [
         # A field/citizen fire report can arrive in any group, not only the
         # camera-ops channel this protocol's own agent (surveillance_agent) is bound
         # to -- keep it selectable everywhere (orchestrator/group_routing.py).
+        safety_critical=True,
+    ),
+    Protocol(
+        # Split from report_fire_incident (over-dispatch fix, parity with response_team's
+        # report_security_incident split): an already-resolved report has no dispatch tool
+        # available at all here, structurally, not merely a prompt instruction the agent could
+        # still disregard.
+        name="log_fire_observation",
+        description=(
+            "Applies when a report describes a fire-related observation that is explicitly "
+            "already resolved, extinguished, or presents no further risk -- e.g. a small "
+            "roadside fire already extinguished with no risk to structures. Purely informational: "
+            "logs the observation; never dispatches a drone or any other resource. Does not apply "
+            "to anything still active, escalating, or unconfirmed (use report_fire_incident for "
+            "that)."
+        ),
+        participating_agents=("surveillance_agent",),
+        approved_tools=(),
+        expected_success_output="A plain acknowledgement that the observation was logged.",
+        criticality=CriticalityLevel.LOW,
+        approval_flag=False,
+        requires_confirmation=False,
+        commander_only=False,
+        needs_insight=False,
         safety_critical=True,
     ),
     Protocol(
@@ -599,7 +679,7 @@ LOOKBACK_WINDOW_DAYS = 30
 TIMEZONE = "Asia/Jerusalem"
 CONVERSATION_HISTORY_TURNS = 6
 CONVERSATION_HISTORY_TTL_HOURS = 24
-OPTIMIZATION_POLICY = OptimizationPolicy()
+OPTIMIZATION_POLICY = OptimizationPolicy(operational_decision_mode="merged", final_assessment_mode="low_risk_merged")
 
 # -- Simulations (docs/Profile_Split_Plan.md) --------------------------------
 #

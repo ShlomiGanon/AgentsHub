@@ -43,6 +43,7 @@ from orchestrator.flows import (
     answer_question,
     answer_question_from_plan,
     apply_event_data_reply,
+    attempt_direct_lane,
     build_role_aware_system_context,
     begin_report,
     begin_request,
@@ -606,19 +607,37 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     _remember("assistant", answer)
                     return jsonify({"taken_as": "clarification", "answer": answer})
 
+        received_at = _now()
+
         try:
             intent = message_plan.intent if planner_mode == "merged" and message_plan is not None else classify_intent(
                 ctx.main_agent, ctx.deps.protocol_set.all(), text, prior_messages
             )
         except OrchestrationParseError as exc:
             raise RunFailureError(str(exc)) from exc
+        except Exception as exc:
+            # A report must never vanish just because the model that classifies its intent is
+            # unavailable -- unlike a parse failure (the model answered, just unusably), this is
+            # a model-invocation failure with no event created yet. Persist the raw text now,
+            # with its outcome already recorded as failed, so it survives for later triage/retry
+            # instead of being lost with no trace (it would otherwise never reach begin_report,
+            # which every other path already calls before running any model on the report).
+            deadline_at = storage_timestamp(datetime.now(timezone.utc) + timedelta(seconds=optimization_policy.job_deadline_seconds))
+            lost_event_id = begin_report(
+                ctx.deps, text, "telegram", received_at, sender_identity, source_message_id,
+                conversation_id=conversation_id, deadline_at=deadline_at,
+                sender_permission_level=level.name.lower(),
+                telegram_chat_id=str(telegram_chat_id) if telegram_chat_id is not None else None,
+                telegram_chat_type=str(telegram_chat_type) if telegram_chat_type is not None else None,
+                ack_message_id=str(ack_message_id) if ack_message_id is not None else None,
+            )
+            record_event_outcome(ctx.deps.persistence, lost_event_id, "failed", failure_reason=f"intent classification failed: {exc}")
+            raise RunFailureError(f"intent classification failed: {exc}") from exc
 
         logger.info(
             "intent classified",
             extra={"event": "intent_classified", "intent": intent.intent, "reason": intent.reason, "trace_id": get_trace_id()},
         )
-
-        received_at = _now()
 
         if intent.intent == "needs_clarification":
             answer = intent.clarification_question or messages.text("api.clarify_action")
@@ -695,6 +714,23 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             except Exception:
                 ctx.queue.release_reservation(reservation)
                 raise
+
+            # Item 9: the direct lane runs synchronously, outside the serial queue, before this
+            # report would otherwise be queued for the full pipeline -- a cheap classification
+            # call handles it immediately when it's a simple, low-stakes, unambiguous action;
+            # anything else (a threat/risk indicator, ambiguity, a missing parameter, or simply
+            # not matching a direct-lane-eligible tool) returns None and falls through to the
+            # ordinary queued path below, completely unchanged.
+            direct_lane_result = attempt_direct_lane(ctx.deps, ctx.main_agent, event_id, sender_identity, text)
+            if direct_lane_result is not None:
+                ctx.queue.release_reservation(reservation)
+                finished_event = ctx.deps.persistence.fetch_event(event_id)
+                answer = (finished_event or {}).get("report_text") or _queued_answer_text(messages, "report", event_id)
+                _remember("assistant", answer, event_id)
+                return jsonify({
+                    "taken_as": "report", "event_id": event_id, "status": "completed",
+                    "outcome": direct_lane_result.outcome, "answer": answer,
+                })
 
             def _work() -> None:
                 with trace_context(trace_id):
@@ -857,7 +893,10 @@ def build_protocols_blueprint(ctx: "ApiContext") -> Blueprint:
 if TYPE_CHECKING:
     from api.app import ApiContext
 
-_SETTINGS_FIELDS = {"retry_count", "risk_threshold", "lookback_window_days", "safe_mode", "rich_reports_enabled"}
+_SETTINGS_FIELDS = {
+    "retry_count", "risk_threshold", "lookback_window_days", "safe_mode", "rich_reports_enabled",
+    "hold_reminder_minutes", "hold_escalation_minutes", "hold_expiry_hours",
+}
 
 
 def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
@@ -894,6 +933,8 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
                 "approval": len(ctx.deps.persistence.list_held_events("approval")),
             }
             response_payload["scheduler"] = ctx.scheduler.last_run_status()
+            if ctx.hold_sweep_scheduler is not None:
+                response_payload["hold_sweep_scheduler"] = ctx.hold_sweep_scheduler.last_run_status()
 
         if is_permitted(level, RequestedOperation.VIEW_SETTINGS):
             response_payload["settings"] = {
@@ -902,6 +943,9 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
                 "lookback_window_days": ctx.deps.settings_store.get_lookback_window_days(),
                 "safe_mode": ctx.deps.settings_store.get_safe_mode(),
                 "rich_reports_enabled": ctx.deps.settings_store.get_rich_reports_enabled(),
+                "hold_reminder_minutes": ctx.deps.settings_store.get_hold_reminder_minutes(),
+                "hold_escalation_minutes": ctx.deps.settings_store.get_hold_escalation_minutes(),
+                "hold_expiry_hours": ctx.deps.settings_store.get_hold_expiry_hours(),
             }
 
         return jsonify(response_payload)
@@ -953,6 +997,24 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
                 raise InvalidInputError(messages.text("api.rich_reports_enabled_boolean"), field="rich_reports_enabled")
             validated["rich_reports_enabled"] = setting_value
 
+        if "hold_reminder_minutes" in request_payload:
+            setting_value = request_payload["hold_reminder_minutes"]
+            if not isinstance(setting_value, (int, float)) or isinstance(setting_value, bool) or setting_value <= 0:
+                raise InvalidInputError(messages.text("api.hold_reminder_minutes_positive"), field="hold_reminder_minutes")
+            validated["hold_reminder_minutes"] = setting_value
+
+        if "hold_escalation_minutes" in request_payload:
+            setting_value = request_payload["hold_escalation_minutes"]
+            if not isinstance(setting_value, (int, float)) or isinstance(setting_value, bool) or setting_value <= 0:
+                raise InvalidInputError(messages.text("api.hold_escalation_minutes_positive"), field="hold_escalation_minutes")
+            validated["hold_escalation_minutes"] = setting_value
+
+        if "hold_expiry_hours" in request_payload:
+            setting_value = request_payload["hold_expiry_hours"]
+            if not isinstance(setting_value, (int, float)) or isinstance(setting_value, bool) or setting_value <= 0:
+                raise InvalidInputError(messages.text("api.hold_expiry_hours_positive"), field="hold_expiry_hours")
+            validated["hold_expiry_hours"] = setting_value
+
         previous_safe_mode = ctx.deps.settings_store.get_safe_mode()
         if "retry_count" in validated:
             ctx.deps.settings_store.set_retry_count(validated["retry_count"])
@@ -974,6 +1036,12 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
             )
         if "rich_reports_enabled" in validated:
             ctx.deps.settings_store.set_rich_reports_enabled(validated["rich_reports_enabled"])
+        if "hold_reminder_minutes" in validated:
+            ctx.deps.settings_store.set_hold_reminder_minutes(validated["hold_reminder_minutes"])
+        if "hold_escalation_minutes" in validated:
+            ctx.deps.settings_store.set_hold_escalation_minutes(validated["hold_escalation_minutes"])
+        if "hold_expiry_hours" in validated:
+            ctx.deps.settings_store.set_hold_expiry_hours(validated["hold_expiry_hours"])
 
         return jsonify({
             "retry_count": ctx.deps.settings_store.get_retry_count(),
@@ -1727,6 +1795,14 @@ def _resource_unavailable_alert_payload(ctx: "ApiContext", event_id: str) -> dic
     return {"event_id": event_id, "alert_text": event.get("commander_alert_text") or ""}
 
 
+def _hold_escalation_payload(ctx: "ApiContext", event_id: str) -> dict:
+    # Item 8: an unresolved hold escalated to commanders after get_hold_escalation_minutes with
+    # no answer -- the alert text is composed once, at escalation time (orchestrator.flows'
+    # _escalate_unresolved_hold), and persisted the same way commander_alert_text already is.
+    event = ctx.deps.persistence.fetch_event(event_id)
+    return {"event_id": event_id, "alert_text": event.get("hold_escalation_alert_text") or ""}
+
+
 def _precedent_closure_payload(ctx: "ApiContext", event_id: str) -> dict:
     event = ctx.deps.persistence.fetch_event(event_id)
     matched_id = event["precedent_closed_by_event_id"]
@@ -1783,6 +1859,7 @@ _PAYLOAD_BUILDERS = {
     "job_finished": _job_payload,
     "job_failed": _job_payload,
     "resource_unavailable_alert": _resource_unavailable_alert_payload,
+    "hold_escalation": _hold_escalation_payload,
 }
 
 

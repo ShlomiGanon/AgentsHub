@@ -25,6 +25,7 @@ from history.query import HistoryQueryService
 from orchestrator.flows import (
     FlowDeps,
     GroupRoutingTable,
+    HoldSweepScheduler,
     PolicyAwareEventQueue,
     ReportComposerAgent,
     SerialEventQueue,
@@ -60,6 +61,10 @@ class ApiContext:
     queue: "SerialEventQueue"
     scheduler: "SummaryScheduler"
     group_routing: "GroupRoutingTable"
+    # Optional (defaults to None) so every existing direct ApiContext(...) construction --
+    # production and test fixtures alike -- keeps working unchanged; only the real startup
+    # path (build_context, above) constructs and starts one.
+    hold_sweep_scheduler: "HoldSweepScheduler | None" = None
 
 
 def build_group_routing(persistence, registry) -> GroupRoutingTable:
@@ -167,6 +172,9 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
     scheduler = SummaryScheduler(persistence, history_agent)
     scheduler.start()
 
+    hold_sweep_scheduler = HoldSweepScheduler(deps)
+    hold_sweep_scheduler.start()
+
     group_routing = build_group_routing(persistence, registry)
     logger.info(
         "telegram group routing table loaded",
@@ -180,6 +188,7 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
         loaded_profile=loaded_profile,
         queue=queue,
         scheduler=scheduler,
+        hold_sweep_scheduler=hold_sweep_scheduler,
         group_routing=group_routing,
     )
 

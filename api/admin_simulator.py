@@ -1294,10 +1294,9 @@ SIMULATOR_BODY = """
     if (chat.kind === 'event') {
       // Sensors have no Telegram identity and were never bot traffic — unchanged
       // (docs/bot_simulation_mode_design.md §2 decision 3).
-      return { url: '/Event', body: { text: step.text, sender_identity: step.sender_identity }, identity: step.sender_identity, traceId: traceId };
-      const body = { text: step.text, sender_identity: step.sender_identity };
-      if (step.timestamp) body.timestamp = step.timestamp;
-      return { url: '/Event', body: body, identity: step.sender_identity };
+      const eventBody = { text: step.text, sender_identity: step.sender_identity };
+      if (step.timestamp) eventBody.timestamp = step.timestamp;
+      return { url: '/Event', body: eventBody, identity: step.sender_identity, traceId: traceId };
     }
     // Proxied to bot.simulator_app through api/admin.py (docs/bot_simulation_mode_design.md
     // §4.3/§4.4) so the step is fed through the real bot's own handler code, not /Msg
@@ -1320,9 +1319,8 @@ SIMULATOR_BODY = """
       source_message_id: step.source_message_id || ('sim-' + state.runId + '-' + step.step),
       trace_id: traceId,
     };
-    return { url: '/admin/simulator/bot-msg', body: body, identity: null, traceId: traceId };
     if (step.timestamp) body.timestamp = step.timestamp;
-    return { url: '/admin/simulator/bot-msg', body: body, identity: null };
+    return { url: '/admin/simulator/bot-msg', body: body, identity: null, traceId: traceId };
   }
 
   async function apiCall(method, url, identity, body, traceId) {

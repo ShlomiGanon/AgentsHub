@@ -26,6 +26,18 @@ class SettingsStore:
             if not isinstance(self._values.get("rich_reports_enabled"), bool):
                 self._values["rich_reports_enabled"] = bool(starting_rich_reports_enabled)
                 changed = True
+            # Unresolved-hold reminder/escalation/expiry (item 8): fixed defaults, not a
+            # per-profile starting value like retry_count/risk_threshold above, since every
+            # profile wants the same sender-facing SLA unless a commander changes it live.
+            if not isinstance(self._values.get("hold_reminder_minutes"), (int, float)):
+                self._values["hold_reminder_minutes"] = 10
+                changed = True
+            if not isinstance(self._values.get("hold_escalation_minutes"), (int, float)):
+                self._values["hold_escalation_minutes"] = 30
+                changed = True
+            if not isinstance(self._values.get("hold_expiry_hours"), (int, float)):
+                self._values["hold_expiry_hours"] = 2
+                changed = True
             if changed:
                 self._write()
         else:
@@ -35,6 +47,9 @@ class SettingsStore:
                 "lookback_window_days": starting_lookback_window_days,
                 "safe_mode": bool(starting_safe_mode),
                 "rich_reports_enabled": bool(starting_rich_reports_enabled),
+                "hold_reminder_minutes": 10,
+                "hold_escalation_minutes": 30,
+                "hold_expiry_hours": 2,
             }
             self._write()
 
@@ -52,6 +67,15 @@ class SettingsStore:
 
     def get_rich_reports_enabled(self) -> bool:
         return bool(self._values["rich_reports_enabled"])
+
+    def get_hold_reminder_minutes(self) -> float:
+        return self._values["hold_reminder_minutes"]
+
+    def get_hold_escalation_minutes(self) -> float:
+        return self._values["hold_escalation_minutes"]
+
+    def get_hold_expiry_hours(self) -> float:
+        return self._values["hold_expiry_hours"]
 
     def set_retry_count(self, value: int) -> None:
         self._values["retry_count"] = value
@@ -75,6 +99,24 @@ class SettingsStore:
         if not isinstance(value, bool):
             raise TypeError("rich_reports_enabled must be a bool")
         self._values["rich_reports_enabled"] = value
+        self._write()
+
+    def set_hold_reminder_minutes(self, value: float) -> None:
+        if value <= 0:
+            raise ValueError("hold_reminder_minutes must be positive")
+        self._values["hold_reminder_minutes"] = value
+        self._write()
+
+    def set_hold_escalation_minutes(self, value: float) -> None:
+        if value <= 0:
+            raise ValueError("hold_escalation_minutes must be positive")
+        self._values["hold_escalation_minutes"] = value
+        self._write()
+
+    def set_hold_expiry_hours(self, value: float) -> None:
+        if value <= 0:
+            raise ValueError("hold_expiry_hours must be positive")
+        self._values["hold_expiry_hours"] = value
         self._write()
 
     def _write(self) -> None:

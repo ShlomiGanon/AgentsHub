@@ -104,7 +104,19 @@ class PersistenceInterface(ABC):
     def resolve_held_event(self, kind: str, hold_id: str, resolution: dict) -> None:
         """Mark a hold resolved and record who resolved it and how."""
 
+    @abstractmethod
+    def mark_held_event_reminded(self, kind: str, hold_id: str, reminded_at: str) -> None:
+        """Record that a still-unresolved hold's reminder has already fired once (item 8)."""
+
+    @abstractmethod
+    def mark_held_event_escalated(self, kind: str, hold_id: str, escalated_at: str) -> None:
+        """Record that a still-unresolved hold's commander escalation has already fired once (item 8)."""
+
     # -- Notification log (work_plan.md §8.12) --------------------------
+
+    @abstractmethod
+    def insert_notification(self, kind: str, event_id: str) -> None:
+        """Re-trigger an existing notification kind on demand (item 8's hold reminder)."""
 
     @abstractmethod
     def fetch_notifications_since(self, since: int) -> list[dict]:

@@ -138,7 +138,12 @@ def execute_step_with_retry(
             _take_resource_unavailable_signal(agent)
             try:
                 with stage_context("step_execution"):
-                    agent_result = agent.process(current_task_text, list(step.allowed_tools))
+                    if step.invocation_policy is not None:
+                        agent_result = agent.process(
+                            current_task_text, list(step.allowed_tools), invocation_policy=step.invocation_policy
+                        )
+                    else:
+                        agent_result = agent.process(current_task_text, list(step.allowed_tools))
                 resource_signal = _take_resource_unavailable_signal(agent)
             finally:
                 for side_effect_lock in reversed(side_effect_locks):

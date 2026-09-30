@@ -3,8 +3,9 @@
 import functools
 import json
 import logging
+import threading
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Callable, Literal
 
 from history import (
@@ -77,9 +78,9 @@ from orchestrator.group_routing import (  # re-exported: api may only import orc
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
 from protocols import CriticalityLevel, EVENT_DATA_FIELDS, ResourceUnavailable, Step, StepOutcome
 from protocols.executor import execute_steps
-from agents import AgentModelError, AgentTimeoutError, authenticated_request_identity, is_retryable_invocation_error
+from agents import AgentModelError, AgentTimeoutError, InvocationPolicy, authenticated_request_identity, is_retryable_invocation_error
 from messages import get_catalog
-from tools import get_trace_id
+from tools import get_trace_id, stage_context
 
 if TYPE_CHECKING:
     from agents import Agent
@@ -236,6 +237,30 @@ def _log_event_outcome(event_id: str, outcome: str, **detail) -> None:
     )
 
 
+def _log_reply_latency(deps: FlowDeps, event_id: str) -> None:
+    """End-to-end latency, received_at -> the moment the reply that answers this event is ready
+    (this write is what the notification poll loop then delivers to the chat, typically within
+    one poll interval -- see run_notification_poll_loop). Called from the one place every
+    terminal outcome is recorded, so this covers every report regardless of which stage it
+    finished at, without threading a start time through every intermediate function."""
+
+    event = deps.persistence.fetch_event(event_id)
+    received_at = event.get("received_at") if event else None
+    if not received_at:
+        return
+    try:
+        elapsed_seconds = (datetime.now(timezone.utc) - parse_timestamp(received_at)).total_seconds()
+    except (TypeError, ValueError):
+        return
+    logger.info(
+        "reply latency",
+        extra={
+            "event": "reply_latency", "event_id": event_id, "elapsed_seconds": elapsed_seconds,
+            "trace_id": get_trace_id(), "telemetry_only": True,
+        },
+    )
+
+
 def _record_outcome_with_report(
     deps: FlowDeps,
     event_id: str,
@@ -244,6 +269,7 @@ def _record_outcome_with_report(
     insight_text: str | None = None,
     resource_unavailable_fact: str | None = None,
     commander_alert_text: str | None = None,
+    force_compose: bool = False,
 ) -> None:
     """The one place every terminal outcome is persisted — wraps `record_event_outcome` to also
     compose `report_text` exactly once, before the `job_finished`/`job_failed` notification this
@@ -261,10 +287,14 @@ def _record_outcome_with_report(
     `report_text` or any composer input; it is persisted on its own column, read only by the
     separate, commander-only `resource_unavailable_alert` notification (api/routes.py) — the
     reporter's own reply must never carry it, and the model must never paraphrase it.
+
+    `force_compose` (item 9's direct lane only): the reply is composed unconditionally, the same
+    way `resource_unavailable_fact` already forces it -- the direct lane's own point is "a small
+    model writes the reply", not something the rich-reports toggle should be able to switch off.
     """
 
     report_text = None
-    if deps.settings_store.get_rich_reports_enabled() or resource_unavailable_fact is not None:
+    if deps.settings_store.get_rich_reports_enabled() or resource_unavailable_fact is not None or force_compose:
         summary = build_run_summary(deps.persistence, event_id)
         summary = replace(
             summary,
@@ -280,6 +310,349 @@ def _record_outcome_with_report(
         failure_reason=failure_reason, insight_text=insight_text, report_text=report_text,
         commander_alert_text=commander_alert_text,
     )
+    _log_reply_latency(deps, event_id)
+
+
+_HOLD_DETAIL_FIELDS: dict[str, str] = {
+    "clarification": "raw_text",
+    "approval": "reason",
+    "event_data": "question",
+}
+
+
+def _hold_detail_text(kind: str, hold: dict) -> str:
+    field_name = _HOLD_DETAIL_FIELDS[kind]
+    return str(hold.get(field_name) or "")
+
+
+def _remind_unresolved_hold(deps: FlowDeps, kind: str, hold: dict) -> None:
+    """Re-sends the exact same original prompt, via the exact same notification kind
+    (`{kind}_hold`) the hold's own creation already used -- the payload builder re-reads the
+    still-unresolved hold fresh, so no new bot-side rendering is needed at all."""
+
+    deps.persistence.insert_notification(f"{kind}_hold", hold["event_id"])
+    deps.persistence.mark_held_event_reminded(kind, hold["hold_id"], _now())
+    logger.info(
+        "hold reminder sent",
+        extra={"event": "hold_reminder_sent", "hold_kind": kind, "event_id": hold["event_id"], "hold_id": hold["hold_id"]},
+    )
+
+
+def _escalate_unresolved_hold(deps: FlowDeps, kind: str, hold: dict, age_minutes: float) -> None:
+    alert_text = deps.message_catalog.text(
+        "orchestrator.hold_escalation.commander_alert",
+        hold_kind=kind, age_minutes=int(age_minutes), detail=_hold_detail_text(kind, hold),
+    )
+    record_event_state(deps.persistence, hold["event_id"], {"hold_escalation_alert_text": alert_text})
+    deps.persistence.insert_notification("hold_escalation", hold["event_id"])
+    deps.persistence.mark_held_event_escalated(kind, hold["hold_id"], _now())
+    logger.info(
+        "hold escalated to commanders",
+        extra={"event": "hold_escalated", "hold_kind": kind, "event_id": hold["event_id"], "hold_id": hold["hold_id"]},
+    )
+
+
+def _expire_unresolved_hold(deps: FlowDeps, kind: str, hold: dict) -> None:
+    event_id = hold["event_id"]
+    deps.persistence.resolve_held_event(kind, hold["hold_id"], {"resolved_by": "system", "decision": "expired"})
+    _record_outcome_with_report(
+        deps, event_id, "expired",
+        failure_reason=f"no response was received to the {kind} request within the configured expiry window",
+    )
+    _log_event_outcome(event_id, "expired", hold_kind=kind, hold_id=hold["hold_id"])
+
+
+def sweep_unresolved_holds(deps: FlowDeps) -> dict:
+    """Item 8: reminder after `get_hold_reminder_minutes`, escalation to commanders after
+    `get_hold_escalation_minutes`, automatic expiry after `get_hold_expiry_hours` -- all three
+    live-configurable. Called periodically, in-process, by `HoldSweepScheduler` (below) on the
+    API server -- never the bot process: a pure sweep over already-persisted holds, no model
+    call, writing only to persistence/notification_log; the existing notification poll loop
+    delivers whatever it inserts, unchanged. Thresholds are cumulative -- a hold old enough to
+    expire has normally already been reminded and escalated first, so expiry is checked first
+    and, once applied, skips the rest for that hold (it is no longer open)."""
+
+    now = datetime.now(timezone.utc)
+    reminder_delta = timedelta(minutes=deps.settings_store.get_hold_reminder_minutes())
+    escalation_delta = timedelta(minutes=deps.settings_store.get_hold_escalation_minutes())
+    expiry_delta = timedelta(hours=deps.settings_store.get_hold_expiry_hours())
+
+    counts = {"reminded": 0, "escalated": 0, "expired": 0}
+    for kind in ("clarification", "approval", "event_data"):
+        for hold in deps.persistence.list_held_events(kind):
+            try:
+                created_at = parse_timestamp(hold["created_at"])
+            except (TypeError, ValueError):
+                continue
+            age = now - created_at
+
+            if age >= expiry_delta:
+                _expire_unresolved_hold(deps, kind, hold)
+                counts["expired"] += 1
+                continue
+
+            if age >= escalation_delta and not hold.get("escalated_at"):
+                _escalate_unresolved_hold(deps, kind, hold, age.total_seconds() / 60.0)
+                counts["escalated"] += 1
+
+            if age >= reminder_delta and not hold.get("reminded_at"):
+                _remind_unresolved_hold(deps, kind, hold)
+                counts["reminded"] += 1
+
+    return counts
+
+
+class HoldSweepScheduler:
+    """Runs `sweep_unresolved_holds` periodically on a background thread -- same shape as
+    `history.summaries.SummaryScheduler`, in-process on the API server (never the bot process:
+    the sweep only writes persistence/notification_log, delivery is the existing notification
+    poll loop's job, unchanged)."""
+
+    def __init__(self, deps: FlowDeps, poll_interval_seconds: float = 60.0):
+        self._deps = deps
+        self._poll_interval_seconds = poll_interval_seconds
+        self._wake_event = threading.Event()
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._last_run_at: str | None = None
+        self._last_run_ok: bool | None = None
+        self._last_run_error: str | None = None
+
+    def last_run_status(self) -> dict:
+        return {
+            "last_run_at": self._last_run_at,
+            "last_run_ok": self._last_run_ok,
+            "last_run_error": self._last_run_error,
+        }
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            self._wake_event.wait(self._poll_interval_seconds)
+            self._wake_event.clear()
+            if self._stop_event.is_set():
+                return
+            try:
+                sweep_unresolved_holds(self._deps)
+                self._last_run_ok = True
+                self._last_run_error = None
+            except Exception as exc:
+                self._last_run_ok = False
+                self._last_run_error = str(exc)
+                logger.exception("hold sweep failed", extra={"event": "hold_sweep_failed"})
+            finally:
+                self._last_run_at = datetime.now(timezone.utc).isoformat()
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, name="hold-sweep-scheduler", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self._thread is None:
+            return
+        self._stop_event.set()
+        self._wake_event.set()
+        self._thread.join()
+        self._thread = None
+
+
+# == Direct lane (item 9) =====================================================================
+#
+# A fast path for simple, low-stakes actions -- attendance/absence, movement, camera/equipment
+# status, shift status, a read-only lookup -- that skips the full protocol pipeline entirely:
+# one cheap model call identifies the action(s) and their parameters (or signals the message
+# needs the full pipeline instead), each tool is then called directly (protocols.executor's own
+# existing direct_tool execution -- no crewai turn for the action itself), and the existing
+# outcome-recording path writes a small, model-composed reply exactly the same way any other
+# succeeded run does. Only protocols the profile has explicitly opted in
+# (Protocol.direct_lane_eligible=True) are ever considered, and only tools already in that
+# protocol's own approved_tools are ever callable this way -- the direct lane never widens what
+# a protocol allows, and a commander_only or approval_flag protocol is never eligible (checked
+# once here, defensively, even though no profile currently marks one eligible).
+
+_DIRECT_LANE_CLASSIFY_POLICY = InvocationPolicy(max_output_tokens=400, reasoning_effort="none")
+
+
+@dataclass(frozen=True)
+class DirectLaneAction:
+    protocol_name: str
+    agent_name: str
+    tool_name: str
+    parameters: dict
+
+
+@dataclass(frozen=True)
+class DirectLaneResult:
+    eligible: bool
+    actions: tuple[DirectLaneAction, ...] = ()
+    reason: str = ""
+
+
+def _direct_lane_eligible_protocols(protocols: "tuple[Protocol, ...]") -> "tuple[Protocol, ...]":
+    return tuple(
+        protocol for protocol in protocols
+        if protocol.direct_lane_eligible and not protocol.commander_only and not protocol.approval_flag
+    )
+
+
+def _strip_json_code_fence(raw_response: str) -> str:
+    stripped = raw_response.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    if len(lines) < 3 or lines[-1].strip() != "```":
+        return stripped
+    return "\n".join(lines[1:-1]).strip()
+
+
+def _build_direct_lane_prompt(protocols: "tuple[Protocol, ...]", registry: "AgentRegistry", raw_text: str) -> tuple[str, dict]:
+    tool_lines: list[str] = []
+    tool_owner: dict[str, tuple[str, str]] = {}
+    for protocol in protocols:
+        agent_name = protocol.participating_agents[0]
+        tools_by_name = {tool_info.name: tool_info for tool_info in registry.descriptor_for(agent_name).tools}
+        for tool_name in protocol.approved_tools:
+            tool_info = tools_by_name.get(tool_name)
+            if tool_info is None or tool_name in tool_owner:
+                continue
+            tool_owner[tool_name] = (protocol.name, agent_name)
+            tool_lines.append(f"- {tool_name}: {tool_info.description}")
+
+    prompt = (
+        "You triage one incoming message for a fast lane that handles ONLY simple, low-stakes, "
+        "already-unambiguous actions. Available tools (the only ones you may name):\n"
+        + "\n".join(tool_lines)
+        + "\n\nIf this message clearly matches one or more of the tools above, with every "
+        "parameter each chosen tool needs explicitly stated in the message (never guessed), "
+        "return exactly one JSON object: "
+        '{"eligible": true, "actions": [{"tool_name": "...", "parameters": {...}}, ...]}. '
+        "A message with more than one such intent may return more than one action. Otherwise -- "
+        "if the message involves any threat, hostile/suspicious activity, an emergency, any other "
+        "risk indicator, any ambiguity, a parameter a chosen tool needs but the message does not "
+        "state, or does not clearly match any tool above -- return exactly "
+        '{"eligible": false, "reason": "..."}. When in doubt, return not eligible: the full '
+        "pipeline handles everything this lane does not.\n\n"
+        f"Message: {json.dumps(raw_text, ensure_ascii=False)}"
+    )
+    return prompt, tool_owner
+
+
+def classify_direct_lane(
+    main_agent: "MainAgent", protocols: "tuple[Protocol, ...]", registry: "AgentRegistry", raw_text: str
+) -> DirectLaneResult:
+    eligible_protocols = _direct_lane_eligible_protocols(protocols)
+    if not eligible_protocols:
+        return DirectLaneResult(eligible=False, reason="no direct-lane-eligible protocols declared")
+
+    prompt, tool_owner = _build_direct_lane_prompt(eligible_protocols, registry, raw_text)
+    try:
+        with stage_context("direct_lane_classification"):
+            agent_result = main_agent.process(prompt, [], invocation_policy=_DIRECT_LANE_CLASSIFY_POLICY)
+    except Exception as exc:
+        return DirectLaneResult(eligible=False, reason=f"direct lane classification failed: {exc}")
+    if agent_result.status != "success":
+        return DirectLaneResult(eligible=False, reason="direct lane classification was unclear")
+
+    try:
+        payload = json.loads(_strip_json_code_fence(agent_result.text))
+    except (json.JSONDecodeError, TypeError):
+        return DirectLaneResult(eligible=False, reason="direct lane classification returned invalid JSON")
+    if not isinstance(payload, dict):
+        return DirectLaneResult(eligible=False, reason="direct lane classification returned a non-object")
+    if not payload.get("eligible"):
+        return DirectLaneResult(eligible=False, reason=str(payload.get("reason") or ""))
+
+    raw_actions = payload.get("actions")
+    if not isinstance(raw_actions, list) or not raw_actions:
+        return DirectLaneResult(eligible=False, reason="no actions returned despite eligible=true")
+
+    actions: list[DirectLaneAction] = []
+    for raw_action in raw_actions:
+        if not isinstance(raw_action, dict):
+            return DirectLaneResult(eligible=False, reason="malformed action entry")
+        tool_name = raw_action.get("tool_name")
+        owner = tool_owner.get(tool_name)
+        if owner is None:
+            # Never trust a tool name the model invented -- fall back to the full pipeline
+            # rather than calling something outside this protocol's own approved_tools.
+            return DirectLaneResult(eligible=False, reason=f"unknown or unapproved tool: {tool_name!r}")
+        parameters = raw_action.get("parameters")
+        if not isinstance(parameters, dict):
+            parameters = {}
+        protocol_name, agent_name = owner
+        actions.append(
+            DirectLaneAction(protocol_name=protocol_name, agent_name=agent_name, tool_name=tool_name, parameters=parameters)
+        )
+
+    return DirectLaneResult(eligible=True, actions=tuple(actions))
+
+
+def run_direct_lane(
+    deps: FlowDeps, event_id: str, sender_identity: str, result: DirectLaneResult,
+) -> FlowResult:
+    """Calls each identified tool directly (no crewai turn), then finishes exactly like any
+    other succeeded/failed run -- `_record_outcome_with_report` composes the small reply
+    (item 6's actions_taken makes it describe what was actually done) and inserts the same
+    job_finished/job_failed notification the queue-based pipeline already uses, so delivery is
+    entirely unchanged."""
+
+    agents_by_name = {action.agent_name: deps.registry.get(action.agent_name) for action in result.actions}
+    steps = tuple(
+        Step(
+            agent_name=action.agent_name,
+            task_text=f"Direct lane action: {action.tool_name}",
+            allowed_tools=(action.tool_name,),
+            step_id=str(index + 1),
+            kind="direct_tool",
+            direct_tool_name=action.tool_name,
+            direct_tool_kwargs=action.parameters,
+        )
+        for index, action in enumerate(result.actions)
+    )
+    _persist_step_plan(deps, event_id, steps)
+    with authenticated_request_identity(sender_identity):
+        run_result = execute_steps(list(steps), agents_by_name, deps.settings_store)
+    _persist_step_outcomes(deps, event_id, steps, run_result.step_outcomes)
+
+    if not run_result.completed:
+        _record_outcome_with_report(
+            deps, event_id, "failed", failure_reason=run_result.failure_cause, force_compose=True,
+        )
+        _log_event_outcome(event_id, "failed", failure_reason=run_result.failure_cause, stage="direct_lane")
+        return FlowResult(event_id, "failed", run_result.failure_cause or "")
+
+    _record_outcome_with_report(deps, event_id, "succeeded", insight_text="", force_compose=True)
+    _log_event_outcome(event_id, "succeeded", stage="direct_lane")
+    return FlowResult(event_id, "succeeded", "")
+
+
+def attempt_direct_lane(
+    deps: FlowDeps, main_agent: "MainAgent", event_id: str, sender_identity: str, raw_text: str,
+) -> "FlowResult | None":
+    """Entry point for the direct lane, called synchronously from the request handler (item 9:
+    "runs outside the serial queue") right after `begin_report` -- the event is already saved
+    either way. Returns None (never a FlowResult) when the message is not eligible, so the
+    caller falls back to the ordinary queued full-pipeline path unchanged; returns a real
+    FlowResult, already terminal, when the direct lane handled it."""
+
+    result = classify_direct_lane(main_agent, deps.protocol_set.all(), deps.registry, raw_text)
+    if not result.eligible:
+        logger.info(
+            "direct lane declined; falling back to full pipeline",
+            extra={"event": "direct_lane_declined", "event_id": event_id, "reason": result.reason, "trace_id": get_trace_id()},
+        )
+        return None
+
+    logger.info(
+        "direct lane accepted",
+        extra={
+            "event": "direct_lane_accepted", "event_id": event_id,
+            "actions": [action.tool_name for action in result.actions], "trace_id": get_trace_id(),
+        },
+    )
+    return run_direct_lane(deps, event_id, sender_identity, result)
 
 
 def begin_report(
@@ -366,11 +739,24 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
         record_event_state(deps.persistence, event_id, {"classification": UNCLASSIFIED_TYPE})
     resolved_classification = extraction_result.classification or UNCLASSIFIED_TYPE
 
-    gate_result = _apply_required_fields_gate(deps, event_id, main_agent, resolved_classification)
-    if gate_result is not None:
-        return gate_result
+    try:
+        gate_result = _apply_required_fields_gate(deps, event_id, main_agent, resolved_classification)
+        if gate_result is not None:
+            return gate_result
 
-    return _continue_after_required_fields(deps, event_id, main_agent, insights_agent, raw_text, resolved_classification)
+        return _continue_after_required_fields(deps, event_id, main_agent, insights_agent, raw_text, resolved_classification)
+    except Exception as exc:
+        # Last-resort safety net, mirroring the extraction step's own try/except above: this
+        # event already exists (begin_report), and everything from here on runs off the serial
+        # queue with no caller left waiting for an exception -- the queue's own worker loop only
+        # logs and moves on (orchestrator/event_queue.py), so an exception that escapes protocol
+        # selection/execution/composition here, uncaught, would otherwise leave the event with no
+        # recorded outcome and the sender with no reply at all. Known, expected failure classes
+        # deeper in the pipeline already record their own outcome and return normally; only a
+        # genuinely unhandled failure reaches this except.
+        _record_outcome_with_report(deps, event_id, "failed", failure_reason=str(exc))
+        _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="protocol_execution")
+        return FlowResult(event_id, "failed", str(exc))
 
 
 def _apply_required_fields_gate(

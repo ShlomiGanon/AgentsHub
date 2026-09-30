@@ -37,6 +37,7 @@ MESSAGES = {
     "header.precedent_closure": "[הודעה — נסגר על סמך תקדים — אין צורך להשיב]",
     "header.uncertain_verdict": "[הודעה — תוצאה לא ודאית — אין צורך להשיב]",
     "header.resource_unavailable_alert": "[התראה למפקד — נדרשת החלטה]",
+    "header.hold_escalation": "[התראה למפקד — ממתין ללא מענה]",
     "header.uncertain_reporter": "[עדכון]",
     "header.no_match": "[הודעה — אין פרוטוקול מתאים — אין צורך להשיב]",
     "header.result": "[תוצאה]",
@@ -52,6 +53,7 @@ MESSAGES = {
     "outcome.declined": "נדחה",
     "outcome.no_match_protocol": "לא נמצא פרוטוקול מתאים",
     "outcome.handled_resource_unavailable": "טופל — משאב אינו זמין",
+    "outcome.expired": "פג תוקף — לא התקבלה תגובה",
     "risk.high": "גבוה",
     "risk.low": "נמוך",
     "result.what_was_done": "מה בוצע:",
@@ -61,6 +63,7 @@ MESSAGES = {
     "report.outcome": "תוצאה: {outcome}",
     "report.failure_reason": "סיבה: {reason}",
     "report.step_line": "- {agent_name}: {task_text} -> {result}",
+    "report.action_line": "- {action}",
     "report.pending_approval_commander": "עדיין ממתין: ממתין לאישור מפקד ({risk_level}) - {risk_reason}",
     "report.pending_approval_viewer": "עדיין ממתין: ממתין לבדיקת מפקד.",
     "report.pending_clarification": "עדיין ממתין: נדרש הבהרה לגבי '{field}'.",
@@ -118,6 +121,7 @@ MESSAGES = {
     "common.by_identity": " על ידי {identity}",
     "notice.uncertain": "{header}\n\nאירוע {event_id} הסתיים בתוצאה לא ודאית.\n\nתובנה:\n{insight}",
     "notice.resource_unavailable_alert": "{header}\n\nאירוע {event_id}: {alert}",
+    "notice.hold_escalation": "{header}\n\nאירוע {event_id}: {alert}",
     "notice.uncertain_reporter": "{header}\n\nהאירוע שדיווחת עליו עדיין נבדק.\nנעדכן אותך כשיהיה מידע נוסף.",
     "notice.no_match": "{header}\n\nאין פרוטוקול קיים שיכול למלא בקשה זו.\nטקסט מקורי: {raw_text}\n"
         "{reason}\nסיכון: {risk_level} ({risk_reason})",
@@ -178,6 +182,9 @@ MESSAGES = {
     "api.retry_nonnegative_integer": "הערך 'retry_count' חייב להיות מספר שלם שאינו שלילי.",
     "api.risk_threshold_range": "הערך 'risk_threshold' חייב להיות מספר בין 0.0 ל-1.0.",
     "api.lookback_positive_integer": "הערך 'lookback_window_days' חייב להיות מספר שלם חיובי.",
+    "api.hold_reminder_minutes_positive": "הערך 'hold_reminder_minutes' חייב להיות מספר חיובי.",
+    "api.hold_escalation_minutes_positive": "הערך 'hold_escalation_minutes' חייב להיות מספר חיובי.",
+    "api.hold_expiry_hours_positive": "הערך 'hold_expiry_hours' חייב להיות מספר חיובי.",
     "api.other_identity_forbidden": "צופה אינו רשאי לצפות ברישום של זהות אחרת.",
     "api.full_name_invalid": "השדה 'full_name' חייב לכלול לפחות שתי מילים ולהיות באורך של עד 120 תווים.",
     "api.job_not_found": "לא נמצאה משימה עם המזהה '{task_id}'.",
@@ -683,6 +690,7 @@ MESSAGES = {
     # hook (already localized there) -- core never composes resource/area names itself.
     "orchestrator.resource_unavailable.commander_alert": "התראה למפקד — נדרשת החלטה: {fact} חלופות: {alternatives}",
     "orchestrator.resource_unavailable.no_alternatives": "לא ניתן היה לקבוע חלופות מהנתונים הקיימים.",
+    "orchestrator.hold_escalation.commander_alert": "בקשת {hold_kind} ללא מענה כבר למעלה מ-{age_minutes} דקות: {detail}",
     # Resource-unavailable mechanism (profiles/response_team.py::_describe_resource_unavailable):
     # resource-kind and area display names -- never the raw internal identifier in user-facing
     # text (e.g. "drone"/"east_gate").

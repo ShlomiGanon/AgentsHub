@@ -102,9 +102,14 @@ class AgentResult:
 
 
 def parse_agent_output(raw_text: str) -> AgentResult:
-    stripped = raw_text.strip()
-    if stripped.startswith(UNCLEAR_TASK_PREFIX):
-        return AgentResult(status="unclear_task", text=stripped[len(UNCLEAR_TASK_PREFIX):].strip())
+    # The prompt instruction asks for the sentinel on its own line, but a model does not always
+    # put it first -- e.g. after preamble reasoning, or on the last line. Scan every line rather
+    # than only the start of the whole text, so the real reason still reaches the reply instead
+    # of being silently missed and reported as "reason unknown".
+    for line in raw_text.splitlines():
+        candidate = line.strip()
+        if candidate.startswith(UNCLEAR_TASK_PREFIX):
+            return AgentResult(status="unclear_task", text=candidate[len(UNCLEAR_TASK_PREFIX):].strip())
     return AgentResult(status="success", text=raw_text)
 
 

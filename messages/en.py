@@ -37,6 +37,7 @@ MESSAGES = {
     "header.precedent_closure": "[NOTICE — closed on precedent — no reply needed]",
     "header.uncertain_verdict": "[NOTICE — uncertain verdict — no reply needed]",
     "header.resource_unavailable_alert": "[COMMANDER ALERT — decision needed]",
+    "header.hold_escalation": "[COMMANDER ALERT — unresolved, needs attention]",
     "header.uncertain_reporter": "[UPDATE]",
     "header.no_match": "[NOTICE — no protocol available — no reply needed]",
     "header.result": "[RESULT]",
@@ -52,6 +53,7 @@ MESSAGES = {
     "outcome.declined": "declined",
     "outcome.no_match_protocol": "no matching protocol",
     "outcome.handled_resource_unavailable": "handled — resource unavailable",
+    "outcome.expired": "expired — no response received",
     "risk.high": "high",
     "risk.low": "low",
     "result.what_was_done": "What was done:",
@@ -61,6 +63,7 @@ MESSAGES = {
     "report.outcome": "Outcome: {outcome}",
     "report.failure_reason": "Reason: {reason}",
     "report.step_line": "- {agent_name}: {task_text} -> {result}",
+    "report.action_line": "- {action}",
     "report.pending_approval_commander": "Still pending: awaiting commander approval ({risk_level}) - {risk_reason}",
     "report.pending_approval_viewer": "Still pending: awaiting commander review.",
     "report.pending_clarification": "Still pending: needs clarification on '{field}'.",
@@ -118,6 +121,7 @@ MESSAGES = {
     "common.by_identity": " by {identity}",
     "notice.uncertain": "{header}\n\nEvent {event_id} finished with an uncertain verdict.\n\nInsight:\n{insight}",
     "notice.resource_unavailable_alert": "{header}\n\nEvent {event_id}: {alert}",
+    "notice.hold_escalation": "{header}\n\nEvent {event_id}: {alert}",
     "notice.uncertain_reporter": "{header}\n\nYour reported event is still being reviewed. "
         "We'll update you if there's more to share.",
     "notice.no_match": "{header}\n\nNo existing protocol can fulfill this request.\nRaw text: {raw_text}\n"
@@ -179,6 +183,9 @@ MESSAGES = {
     "api.retry_nonnegative_integer": "'retry_count' must be a non-negative integer.",
     "api.risk_threshold_range": "'risk_threshold' must be a number between 0.0 and 1.0.",
     "api.lookback_positive_integer": "'lookback_window_days' must be a positive integer.",
+    "api.hold_reminder_minutes_positive": "'hold_reminder_minutes' must be a positive number.",
+    "api.hold_escalation_minutes_positive": "'hold_escalation_minutes' must be a positive number.",
+    "api.hold_expiry_hours_positive": "'hold_expiry_hours' must be a positive number.",
     "api.other_identity_forbidden": "A viewer may not view another identity's registration.",
     "api.full_name_invalid": "'full_name' must contain at least two words and be at most 120 characters.",
     "api.job_not_found": "No such task: '{task_id}'.",
@@ -687,6 +694,8 @@ MESSAGES = {
     # hook (already localized there) -- core never composes resource/area names itself.
     "orchestrator.resource_unavailable.commander_alert": "Commander alert — decision needed: {fact} Alternatives: {alternatives}",
     "orchestrator.resource_unavailable.no_alternatives": "no alternatives could be determined from current data.",
+    # Unresolved-hold escalation (item 8, orchestrator/flows.py::_escalate_unresolved_hold).
+    "orchestrator.hold_escalation.commander_alert": "A {hold_kind} request has been unresolved for over {age_minutes} minutes: {detail}",
     # Resource-unavailable mechanism (profiles/response_team.py::_describe_resource_unavailable):
     # resource-kind and area display names -- never the raw internal identifier in user-facing
     # text (e.g. "drone"/"east_gate").

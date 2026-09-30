@@ -324,6 +324,13 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "ALTER TABLE events ADD COLUMN retracted INTEGER NOT NULL DEFAULT 0 CHECK (retracted IN (0, 1));",
     ),
     (25, "create incident_responders table", INCIDENT_RESPONDERS_TABLE_DDL),
+    (
+        26,
+        "add reminder/escalation tracking to held_events and events",
+        "ALTER TABLE held_events ADD COLUMN reminded_at TEXT;"
+        "ALTER TABLE held_events ADD COLUMN escalated_at TEXT;"
+        "ALTER TABLE events ADD COLUMN hold_escalation_alert_text TEXT;",
+    ),
 ]
 
 

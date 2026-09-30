@@ -88,7 +88,24 @@ def test_sentinel_is_recognized_even_with_surrounding_whitespace():
 
 def test_sentinel_text_never_leaks_the_raw_prefix_into_success_path():
     # A message that merely mentions the phrase mid-sentence is not the
-    # sentinel — only a message *starting* with it is.
+    # sentinel — only a message *starting a line* with it is.
     result = parse_agent_output(f"Everything is fine, not an {UNCLEAR_TASK_PREFIX} situation.")
 
     assert result.status == "success"
+
+
+def test_sentinel_is_recognized_on_the_last_line_after_preamble():
+    # A model does not always put the sentinel first, e.g. reasoning text before it.
+    result = parse_agent_output(f"Let me check the roster first.\n{UNCLEAR_TASK_PREFIX} which member is meant")
+
+    assert result.status == "unclear_task"
+    assert result.text == "which member is meant"
+
+
+def test_sentinel_is_recognized_on_a_middle_line():
+    result = parse_agent_output(
+        f"Checking the report.\n{UNCLEAR_TASK_PREFIX} missing the area\nNo further action taken."
+    )
+
+    assert result.status == "unclear_task"
+    assert result.text == "missing the area"

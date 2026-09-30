@@ -36,6 +36,7 @@ from pathlib import Path
 
 from agents import (
     Agent,
+    InvocationPolicy,
     NeighboringForcesAgent as _NeighboringForcesAgentBase,
     SurveillanceAgent,
     TeamStatusAgent,
@@ -676,6 +677,12 @@ def _bind_update_camera_status(event: dict) -> tuple[Step, ...]:
     )
 
 
+# A narrow, low-stakes judgment call (decide whether a movement report also indicates incident
+# response, then call up to three known tools) never needs the agent's default reasoning budget --
+# same mechanism SurveillanceAgent.process already uses for its own tool-turn-plus-summary calls.
+_FAST_JUDGMENT_POLICY = InvocationPolicy(max_output_tokens=400, reasoning_effort="none")
+
+
 def _bind_report_team_movement(event: dict) -> tuple[Step, ...]:
     area = (event.get("area") or "").strip()
     description = (event.get("description") or "").strip()
@@ -711,6 +718,7 @@ def _bind_report_team_movement(event: dict) -> tuple[Step, ...]:
             ),
             allowed_tools=("report_team_movement", "join_incident_response", "list_incident_responders"),
             step_id="1",
+            invocation_policy=_FAST_JUDGMENT_POLICY,
         ),
     )
 
@@ -742,6 +750,7 @@ PROTOCOLS = [
         # that needs a model's insight/judgment.
         needs_insight=False,
         direct_tool_binder=_bind_record_attendance,
+        direct_lane_eligible=True,
     ),
     Protocol(
         name="update_camera_status",
@@ -762,28 +771,25 @@ PROTOCOLS = [
         commander_only=False,
         needs_insight=False,
         direct_tool_binder=_bind_update_camera_status,
+        direct_lane_eligible=True,
     ),
     Protocol(
         name="report_security_incident",
         description=(
-            "Applies to a report of an unconfirmed hostile, suspicious, or security-relevant "
-            "event -- a suspicious vehicle or person, gunfire, a sighted armed suspect, an "
-            "intrusion, or a breach in the perimeter fence -- confirmed or monitored, when "
-            "useful, by tasking a drone to the reported area for recon. A drone dispatch is not "
-            "always required: an already-handled, no-further-risk report (e.g. a small fire "
-            "that is already out, with no firefighter kind involved) is an information event "
-            "only, with no dispatch. Does not apply to a plain camera/sensor equipment-status "
+            "Applies to a report of an unconfirmed hostile, suspicious, or still-relevant "
+            "security event -- a suspicious vehicle or person, gunfire, a sighted armed suspect, "
+            "an intrusion, or a breach in the perimeter fence -- confirmed or monitored by "
+            "tasking a drone to the reported area for recon. Does not apply when the report "
+            "itself says the situation is already handled, resolved, or presents no further risk "
+            "(use log_security_observation for that -- never dispatch a drone for an "
+            "already-handled report). Does not apply to a plain camera/sensor equipment-status "
             "observation with no security implication (use update_camera_status for that), and "
             "does not apply to a request to actually send an external force (use "
             "dispatch_neighboring_force for that)."
         ),
         participating_agents=("surveillance_agent",),
         approved_tools=("dispatch_drone_to_area",),
-        expected_success_output=(
-            "Confirmation of drone dispatch to the reported area (callsign, ETA, mission ID) "
-            "when a dispatch was needed, or a plain acknowledgement that the report was logged "
-            "when it was not."
-        ),
+        expected_success_output="Confirmation of drone dispatch to the reported area (callsign, ETA, mission ID).",
         criticality=CriticalityLevel.HIGH,
         approval_flag=False,
         requires_confirmation=False,
@@ -791,6 +797,30 @@ PROTOCOLS = [
         # A field/civilian security report can arrive in any group, not only the
         # camera-ops channel this protocol's own agent (surveillance_agent) is bound
         # to -- keep it selectable everywhere (orchestrator/group_routing.py).
+        safety_critical=True,
+    ),
+    Protocol(
+        # Split from report_security_incident (over-dispatch fix): an already-handled report has
+        # no dispatch tool available at all here, structurally, not merely a prompt instruction
+        # the agent could still disregard -- e.g. a small fire that is already out, with no
+        # firefighter kind involved, or a suspicious situation already resolved/cleared.
+        name="log_security_observation",
+        description=(
+            "Applies when a report describes a security-relevant observation that is explicitly "
+            "already handled, resolved, or presents no further risk -- e.g. a small fire that is "
+            "already out, with no firefighter kind involved, or a suspicious situation that has "
+            "already been resolved or cleared. Purely informational: logs the observation: never "
+            "dispatches a drone or any other resource. Does not apply to anything still active, "
+            "ongoing, or unconfirmed (use report_security_incident for that)."
+        ),
+        participating_agents=("surveillance_agent",),
+        approved_tools=(),
+        expected_success_output="A plain acknowledgement that the observation was logged.",
+        criticality=CriticalityLevel.LOW,
+        approval_flag=False,
+        requires_confirmation=False,
+        commander_only=False,
+        needs_insight=False,
         safety_critical=True,
     ),
     Protocol(
@@ -831,6 +861,7 @@ PROTOCOLS = [
         commander_only=False,
         needs_insight=False,
         direct_tool_binder=_bind_report_team_movement,
+        direct_lane_eligible=True,
     ),
     Protocol(
         name="query_situational_picture",
