@@ -119,7 +119,7 @@ SIMULATOR_STYLE = """
   .sim-drop {
     flex: 1 1 320px;
     border: 2px dashed var(--line-strong);
-    border-radius: 16px;
+    border-radius: var(--radius);
     padding: 18px;
     text-align: center;
     cursor: pointer;
@@ -128,7 +128,7 @@ SIMULATOR_STYLE = """
     font-size: 14px;
     display: flex; align-items: center; justify-content: center;
   }
-  .sim-drop.dragover { border-color: var(--lime); background: #F3FAE8; color: #3F6B12; }
+  .sim-drop.dragover { border-color: var(--lime); background: var(--lime-dim); color: #3f6212; }
   .sim-paste { flex: 1 1 320px; display: flex; flex-direction: column; gap: 6px; }
   .sim-paste textarea { min-height: 72px; resize: vertical; }
   .sim-actions { display: flex; flex-direction: column; gap: 6px; justify-content: center; }
@@ -136,10 +136,10 @@ SIMULATOR_STYLE = """
   .sim-header {
     background: var(--panel);
     border: 1px solid var(--line);
-    border-radius: 16px;
+    border-radius: var(--radius);
     padding: 18px 22px;
     margin-bottom: 20px;
-    box-shadow: 0 8px 24px rgba(11, 31, 58, .05);
+    box-shadow: var(--shadow);
   }
   .sim-header h2 { font-size: 20px; font-weight: 500; margin: 0 0 6px; }
   .sim-header .description { color: var(--text-dim); font-size: 15px; margin: 0; line-height: 1.5; }
@@ -156,13 +156,17 @@ SIMULATOR_STYLE = """
   .chat-card {
     background: var(--panel);
     border: 1px solid var(--line);
-    border-radius: 16px;
+    border-radius: var(--radius);
     display: flex; flex-direction: column;
     height: 620px;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
-    box-shadow: 0 8px 24px rgba(11, 31, 58, .05);
+    transition: border-color 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;
+    box-shadow: var(--shadow);
   }
-  .chat-card.active-next { border-color: var(--lime); box-shadow: 0 0 0 3px rgba(140,198,63,.28); }
+  .chat-card:hover { box-shadow: var(--shadow-lg); }
+  .chat-card.active-next { border-color: var(--lime); box-shadow: 0 0 0 3px rgba(132,204,22,.28); }
+  @media (prefers-reduced-motion: reduce) {
+    .chat-card { transition: none; }
+  }
   .chat-header { padding: 12px 16px; border-bottom: 1px solid var(--line); }
   .chat-title { font-weight: 600; font-size: 15px; }
   .chat-meta { font-family: var(--mono); font-size: 12px; color: var(--text-faint); margin-top: 2px; }

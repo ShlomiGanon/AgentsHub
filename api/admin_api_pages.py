@@ -12,19 +12,26 @@ API_CONSOLE_STYLE = """
   .api-identity-bar { display:flex; gap:12px; align-items:end; flex-wrap:wrap; }
   .api-identity-bar .identity-field { min-width:280px; flex:1; }
   .api-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:18px; }
-  .api-card { border:1px solid var(--line); background:#fff; padding:18px; border-radius:16px; box-shadow:0 8px 24px rgba(11,31,58,.05); }
+  .api-card {
+    border:1px solid var(--line); background:var(--panel); padding:18px; border-radius:var(--radius);
+    box-shadow:var(--shadow); transition: box-shadow .25s ease, border-color .25s ease;
+  }
+  .api-card:hover { box-shadow:var(--shadow-lg); border-color: rgba(37, 99, 235, .28); }
   .api-output { direction:ltr; text-align:left; unicode-bidi:plaintext; white-space:pre-wrap; overflow-wrap:anywhere;
     min-height:80px; max-height:360px; overflow:auto; margin:12px 0 0; padding:12px;
-    border:1px solid var(--line); background:rgba(255,255,255,.25); font-size:12px; }
-  .api-output[data-state="ok"] { border-inline-start:4px solid #2f7d4f; }
-  .api-output[data-state="error"] { border-inline-start:4px solid #a33a3a; }
+    border:1px solid var(--line); background:#f8fafc; font-size:12px; border-radius:12px; }
+  .api-output[data-state="ok"] { border-inline-start:4px solid var(--lime); }
+  .api-output[data-state="error"] { border-inline-start:4px solid var(--danger); }
   .api-output[data-state="loading"] { opacity:.72; }
   .api-hint { color:var(--text-dim); font-size:13px; line-height:1.55; }
   .api-form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
   .api-form-grid .wide { grid-column:1/-1; }
   .api-form-grid label { display:block; font-size:12px; color:var(--text-dim); margin-bottom:5px; }
   .api-list { display:grid; gap:10px; margin-top:12px; }
-  .api-list-item { border:1px solid var(--line); padding:12px; border-radius:12px; background:#fff; }
+  .api-list-item {
+    border:1px solid var(--line); padding:12px; border-radius:var(--radius); background:var(--panel);
+    box-shadow:var(--shadow);
+  }
   @media (max-width:640px) { .api-form-grid { grid-template-columns:1fr; } .api-form-grid .wide { grid-column:auto; } }
 </style>
 """

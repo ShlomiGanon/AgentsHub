@@ -117,6 +117,25 @@ def test_login_page_renders_when_configured(tmp_path, teardown_ctx, _admin_env):
     assert b"Username" in resp.data
 
 
+def test_admin_chrome_uses_leadspotting_logo_instead_of_wordmark_text(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+
+    logo = client.get("/static/leadspotting-logo.gif")
+    mark = client.get("/static/leadspotting-mark.gif")
+    assert logo.status_code == 200 and logo.mimetype == "image/gif"
+    assert mark.status_code == 200 and mark.mimetype == "image/gif"
+
+    login = client.get("/admin/login")
+    assert b"leadspotting-logo.gif" in login.data
+    assert b"ls-wordmark-lead" not in login.data
+
+    _login(client)
+    dashboard = client.get("/admin/")
+    assert b"leadspotting-logo.gif" in dashboard.data
+    assert b"leadspotting-mark.gif" in dashboard.data
+    assert b"ls-wordmark-lead" not in dashboard.data
+
+
 def test_dashboard_redirects_to_login_when_not_authenticated(tmp_path, teardown_ctx, _admin_env):
     client = _client(tmp_path, teardown_ctx)
 
@@ -135,6 +154,24 @@ def test_admin_menu_links_to_all_seven_management_pages(tmp_path, teardown_ctx, 
         b'/admin/groups', b'/admin/simulator', b'/admin/server',
     ):
         assert b'href="' + path + b'"' in page
+
+
+def test_admin_design_system_uses_heebo_and_card_hover_motion(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+    page = client.get("/admin/").data.decode("utf-8")
+    assert 'dir="rtl"' in page or 'dir="ltr"' in page
+    assert "Heebo" in page
+    assert "ls-service-card" in page
+    assert "scale(1.02)" in page
+    assert "#84cc16" in page
+    assert "#0B192C" in page
+    assert "#2563eb" in page
+    profiles = client.get("/admin/profiles").data.decode("utf-8")
+    assert "Heebo" in profiles
+    simulator = client.get("/admin/simulator").data.decode("utf-8")
+    assert "Heebo" in simulator
+    assert "var(--shadow-lg)" in simulator
 
 
 @pytest.mark.parametrize(

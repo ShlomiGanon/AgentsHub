@@ -20,6 +20,9 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AgentsHub • Live Agent Execution & Communication Graph</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
       --bg-base: #060913;
@@ -35,14 +38,14 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       --accent-cyan: #38bdf8;
       --accent-blue: #3b82f6;
       --accent-indigo: #818cf8;
-      --accent-emerald: #10b981;
+      --accent-emerald: #84cc16;
       --accent-rose: #f43f5e;
       --accent-amber: #f59e0b;
       --accent-purple: #c084fc;
       --glow-cyan: 0 0 24px rgba(56, 189, 248, 0.25);
-      --glow-emerald: 0 0 24px rgba(16, 185, 129, 0.25);
+      --glow-emerald: 0 0 24px rgba(132, 204, 22, 0.25);
       --glow-rose: 0 0 24px rgba(244, 63, 94, 0.25);
-      --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --font-family: Heebo, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
     * {
