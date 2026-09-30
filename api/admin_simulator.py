@@ -1950,6 +1950,7 @@ SIMULATOR_BODY = """
     let currentTraceId = null;
     let pollTimer = null;
     let pollFailures = 0;
+    let traceFetchInFlight = false;
     const POLL_BTS_INTERVAL_MS = 1000;
 
     let selectedNodeId = null;
@@ -2128,15 +2129,29 @@ SIMULATOR_BODY = """
       hideNodeDetail();
     }
 
-    function renderHeader(traceId, status) {
+    function renderHeader(traceId, status, deliveryStatus) {
       if (traceIdLabel) traceIdLabel.textContent = traceId || '—';
       if (!statusBadge) return;
       if (status === 'running') {
         statusBadge.className = 'bts-badge bts-badge-live';
         statusBadge.textContent = '● ' + t('bts.live_badge');
+      } else if (status === 'awaiting_approval') {
+        statusBadge.className = 'bts-badge bts-badge-pending';
+        statusBadge.textContent = '⏳ ממתין לאישור';
+      } else if (status === 'partial') {
+        statusBadge.className = 'bts-badge bts-badge-pending';
+        statusBadge.textContent = '◐ הושלם חלקית';
+      } else if (status === 'unknown') {
+        statusBadge.className = 'bts-badge bts-badge-pending';
+        statusBadge.textContent = '○ מצב לא ידוע — נדרש בירור';
+      } else if (status === 'disconnected') {
+        statusBadge.className = 'bts-badge bts-badge-pending';
+        statusBadge.textContent = '↻ אין חיבור ל־Trace · מנסה להתחבר מחדש';
       } else if (status === 'succeeded' || status === 'completed') {
         statusBadge.className = 'bts-badge bts-badge-completed';
-        statusBadge.textContent = '✔ ' + t('bts.completed_badge');
+        statusBadge.textContent = deliveryStatus === 'confirmed'
+          ? '✔ הושלם ונמסר'
+          : '✔ ה־API הושלם · אישור מסירה לא זמין';
       } else if (status === 'failed') {
         statusBadge.className = 'bts-badge bts-badge-failed';
         statusBadge.textContent = '✖ ' + t('bts.failed_badge');
@@ -2148,26 +2163,42 @@ SIMULATOR_BODY = """
 
     async function fetchTrace() {
       if (!currentTraceId || !isOpen) return;
+      if (traceFetchInFlight) return;
+      traceFetchInFlight = true;
+      const requestedTraceId = currentTraceId;
+      let controller = null;
+      let requestTimeout = null;
       try {
-        const response = await fetch('/admin/simulator/trace/' + encodeURIComponent(currentTraceId), {
+        if (typeof AbortController !== 'undefined') {
+          controller = new AbortController();
+          requestTimeout = setTimeout(function () { controller.abort(); }, 8000);
+        }
+        const response = await fetch('/admin/simulator/trace/' + encodeURIComponent(requestedTraceId), {
           method: 'GET',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'same-origin',
+          signal: controller ? controller.signal : undefined,
         });
         if (!response.ok) {
           pollFailures++;
-          if (pollFailures > 6) stopPolling();
+          if (pollFailures >= 3 && requestedTraceId === currentTraceId) renderHeader(currentTraceId, 'disconnected');
           return;
         }
-        pollFailures = 0;
         const data = await response.json();
+        if (requestedTraceId !== currentTraceId) return;
+        pollFailures = 0;
         render(data);
 
-        if (data.terminal) {
+        if (data.terminal || data.execution_status === 'unknown' || data.diagnostic_state === 'job_stopped_without_outcome') {
           stopPolling();
         }
       } catch (err) {
         console.warn('Behind-the-scenes trace fetch error:', err);
+        pollFailures++;
+        if (pollFailures >= 3 && requestedTraceId === currentTraceId) renderHeader(currentTraceId, 'disconnected');
+      } finally {
+        if (requestTimeout !== null) clearTimeout(requestTimeout);
+        traceFetchInFlight = false;
       }
     }
 
@@ -2225,10 +2256,12 @@ SIMULATOR_BODY = """
       const isDone = data.terminal;
       const hasEvents = (data.event_count || 0) > 0;
       const outcome = data.outcome;
+      const executionStatus = data.execution_status || (!hasEvents ? 'unknown' : (isDone ? (outcome === 'failed' ? 'failed' : 'succeeded') : 'running'));
 
       renderHeader(
         data.trace_id || currentTraceId,
-        !hasEvents ? 'pending' : (isDone ? (outcome === 'failed' ? 'failed' : 'completed') : 'running')
+        executionStatus,
+        data.delivery_status
       );
 
       // 1. KPI Metrics Bar
@@ -2241,7 +2274,8 @@ SIMULATOR_BODY = """
         } else {
           const mod = m.model_latency_ms ? (m.model_latency_ms.toLocaleString() + ' ' + t('bts.ms')) : '0';
           const tool = m.tools_duration_ms ? (m.tools_duration_ms.toLocaleString() + ' ' + t('bts.ms')) : '0';
-          metricBreakdown.textContent = 'מודל: ' + mod + ' | כלים: ' + tool;
+          const queue = m.queue_wait_ms == null ? 'לא זמין' : (m.queue_wait_ms.toLocaleString() + ' ' + t('bts.ms'));
+          metricBreakdown.textContent = 'ספק מצטבר: ' + mod + ' | כלים: ' + tool + ' | תור: ' + queue;
         }
       }
       if (metricLlm) {
@@ -2271,9 +2305,11 @@ SIMULATOR_BODY = """
 
       // 2. Agents & Parallel KPI
       const graphData = data.graph || { nodes: [], edges: [] };
-      const specialists = (graphData.nodes || []).filter(function (n) { return n.type === 'specialist'; });
+      const specialists = (graphData.nodes || []).filter(function (n) {
+        return n.type === 'invocation' && !['main_agent', 'report_composer_agent', 'insights_agent'].includes(n.agent_name || n.label);
+      });
       const toolsCount = (graphData.nodes || []).filter(function (n) { return n.type === 'tool'; }).length;
-      const parallelCount = (graphData.nodes || []).filter(function (n) { return n.type === 'specialist' && n.is_parallel; }).length;
+      const parallelCount = graphData.parallel_invocation_count || 0;
 
       if (metricAgents) {
         metricAgents.textContent = specialists.length + ' מומחים | ' + toolsCount + ' כלים';
@@ -2312,7 +2348,7 @@ SIMULATOR_BODY = """
       const cx = 500;
       const posMap = {};
       const hasInvocationGraph = nodes.some(function (n) {
-        return ['invocation', 'model', 'routing', 'result'].includes(n.type);
+        return ['invocation', 'model', 'routing', 'result', 'persistence', 'composition'].includes(n.type);
       });
 
       if (hasInvocationGraph) {
@@ -2323,6 +2359,8 @@ SIMULATOR_BODY = """
           nodes.filter(function (n) { return n.type === 'invocation'; }),
           nodes.filter(function (n) { return n.type === 'model'; }),
           nodes.filter(function (n) { return n.type === 'tool'; }),
+          nodes.filter(function (n) { return n.type === 'persistence'; }),
+          nodes.filter(function (n) { return n.type === 'composition'; }),
           nodes.filter(function (n) { return n.type === 'result' || n.type === 'outcome'; }),
         ];
         rows.forEach(function (row, rowIndex) {
@@ -2431,6 +2469,12 @@ SIMULATOR_BODY = """
           path.setAttribute('stroke-width', '1.2');
         }
 
+        if (edge.type === 'unattributed') {
+          strokeColor = '#64748b';
+          markerId = 'marker-pending';
+          path.setAttribute('stroke-dasharray', '3 5');
+        }
+
         path.setAttribute('stroke', strokeColor);
         path.setAttribute('marker-end', 'url(#' + markerId + ')');
         edgesLayer.appendChild(path);
@@ -2508,6 +2552,9 @@ SIMULATOR_BODY = """
         } else if (node.type === 'routing') {
           bgFill = '#172033';
           strokeColor = '#64748b';
+        } else if (node.type === 'composition') {
+          bgFill = '#11152b';
+          strokeColor = '#818cf8';
         } else if (node.type === 'result') {
           bgFill = '#10251c';
           strokeColor = node.status === 'failed' ? '#ef4444' : '#059669';
@@ -2535,6 +2582,7 @@ SIMULATOR_BODY = """
         if (node.type === 'invocation') stripFill = 'rgba(168, 85, 247, 0.15)';
         if (node.type === 'model') stripFill = 'rgba(56, 189, 248, 0.15)';
         if (node.type === 'routing') stripFill = 'rgba(100, 116, 139, 0.15)';
+        if (node.type === 'composition') stripFill = 'rgba(129, 140, 248, 0.18)';
         if (node.type === 'result') stripFill = 'rgba(16, 185, 129, 0.15)';
         if (node.type === 'persistence') stripFill = 'rgba(245, 158, 11, 0.18)';
         strip.setAttribute('fill', stripFill);
@@ -2547,6 +2595,7 @@ SIMULATOR_BODY = """
         if (node.type === 'invocation') icon = '🤖';
         if (node.type === 'model') icon = '🧠';
         if (node.type === 'routing') icon = '🧭';
+        if (node.type === 'composition') icon = '📝';
         if (node.type === 'result') icon = '📥';
         if (node.type === 'persistence') icon = '💾';
 
@@ -2618,6 +2667,10 @@ SIMULATOR_BODY = """
             vColor = '#f59e0b'; vBg = 'rgba(245, 158, 11, 0.25)'; vLabel = '⚠ ללא אימות';
           } else if (node.verification === 'failed') {
             vColor = '#ef4444'; vBg = 'rgba(239, 68, 68, 0.25)'; vLabel = '✖ נכשל';
+          } else if (node.verification === 'blocked') {
+            vColor = '#ef4444'; vBg = 'rgba(239, 68, 68, 0.25)'; vLabel = '⛔ נחסם';
+          } else if (node.verification === 'verification_unavailable' || node.verification === 'unavailable') {
+            vColor = '#94a3b8'; vBg = 'rgba(148, 163, 184, 0.2)'; vLabel = '? אימות לא זמין';
           }
 
           vRect.setAttribute('fill', vBg);
@@ -2694,6 +2747,7 @@ SIMULATOR_BODY = """
       if (node.type === 'model') icon = '🧠';
       if (node.type === 'routing') icon = '🧭';
       if (node.type === 'result') icon = '📥';
+      if (node.type === 'composition') icon = '📝';
 
       if (detIcon) detIcon.textContent = icon;
       if (detTitle) detTitle.textContent = node.label || node.id;
@@ -2724,7 +2778,13 @@ SIMULATOR_BODY = """
 
       // Duration & Calls
       if (detDur) detDur.textContent = node.duration_ms ? (node.duration_ms + ' ' + t('bts.ms')) : t('bts.na');
-      if (detCalls) detCalls.textContent = (node.call_count || node.llm_calls || 1) + ' הפעלות';
+      if (detCalls) {
+        const llmCount = Array.isArray(node.llm_calls) ? node.llm_calls.length : 0;
+        const count = Number(node.call_count) || llmCount || 1;
+        detCalls.textContent = node.model_completion_event
+          ? 'אירוע סיום מודל (לא קריאת ספק מזוהה)'
+          : (count + (node.type === 'model' ? ' קריאת ספק' : ' הפעלות'));
+      }
 
       // Parallel Status
       if (detParallel) {
@@ -2754,6 +2814,7 @@ SIMULATOR_BODY = """
               'Purpose / stage: ' + (c.purpose || 'unattributed') + ' / ' + (c.stage || 'unattributed'),
               'Protocol / tool: ' + (c.protocol_name || 'לא זמין') + ' / ' + (c.tool_name || 'לא זמין'),
               'Provider request: ' + (c.provider_request_id || 'לא זמין') + ' · sequence ' + (c.sequence_number ?? 'לא זמין'),
+              'שיוך: ' + (node.attribution_status || (c.agent_invocation_id ? 'attributed' : (c.agent_name ? 'partial' : 'unattributed'))),
               'התחלה/סיום: ' + (c.started_at || 'לא זמין') + ' / ' + (c.finished_at || 'לא זמין'),
               'זמן: ' + (c.latency_ms ?? 'לא זמין') + ' מ״ש · finish: ' + (c.finish_reason || c.status || 'לא ידוע'),
               'טוקנים קלט/פלט/מטמון: ' + (c.input_tokens ?? '?') + '/' + (c.output_tokens ?? '?') + '/' + (c.cache_tokens ?? '?'),
@@ -2770,7 +2831,8 @@ SIMULATOR_BODY = """
             '\\nInvocation ID: ' + (node.invocation_id || 'לא זמין') +
             '\\nParent: ' + (node.parent_agent || 'Orchestrator') +
             '\\nProtocol: ' + (node.protocol_name || 'לא זמין') +
-            '\\nProvider calls: ' + calls.length;
+            '\\nProvider calls: ' + calls.length +
+            (node.model_status ? ('\\nריצת מודל: ' + node.model_status + ' · ' + (node.model_duration_ms ?? 'לא זמין') + ' מ״ש · טוקנים קלט/פלט: ' + (node.model_input_tokens ?? '?') + '/' + (node.model_output_tokens ?? '?')) : '');
         } else if (node.type === 'main') {
           detTaskTitle.textContent = 'כוונה ופרוטוקול שנבחרו';
           detTaskContent.textContent = (node.intent || 'מעבד בקשה') + (node.protocol ? '\\nפרוטוקול: ' + node.protocol : '');
@@ -2783,10 +2845,15 @@ SIMULATOR_BODY = """
           }
         } else if (node.type === 'tool') {
           detTaskTitle.textContent = 'מטרת הפעלת הכלי';
-          detTaskContent.textContent = node.summary || ('הפעלת ' + (node.label || 'כלי'));
+          detTaskContent.textContent = (node.summary || ('הפעלת ' + (node.label || 'כלי'))) +
+            '\nCaller: ' + (node.caller_agent_name || 'לא נשמר') +
+            '\nInvocation ID: ' + (node.agent_invocation_id || 'לא נשמר');
         } else if (node.type === 'persistence') {
           detTaskTitle.textContent = 'פעולת שמירה ואימות';
           detTaskContent.textContent = node.details || 'שמירה ב-SQLite ואימות מצב תפעולי.';
+        } else if (node.type === 'composition') {
+          detTaskTitle.textContent = 'הרכבת תשובה';
+          detTaskContent.textContent = node.details || 'נרשם אירוע הרכבת תשובה; תוכן גולמי מוסתר.';
         }
       }
 
@@ -2832,6 +2899,10 @@ SIMULATOR_BODY = """
               vTag.textContent = '⚠ ללא אימות (בוצע ללא בדיקה)';
             } else if (vKind === 'failed') {
               vTag.textContent = '✖ נכשל';
+            } else if (vKind === 'blocked') {
+              vTag.textContent = '⛔ נחסם';
+            } else if (vKind === 'unavailable' || vKind === 'verification_unavailable') {
+              vTag.textContent = '? אימות לא זמין';
             } else {
               vTag.textContent = vKind;
             }

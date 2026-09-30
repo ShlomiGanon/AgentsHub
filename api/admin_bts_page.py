@@ -602,6 +602,11 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       stroke: var(--accent-rose);
       stroke-width: 2px;
     }
+    .bts-edge-path.edge-unattributed {
+      stroke: #64748b;
+      stroke-dasharray: 3 5;
+      opacity: 0.85;
+    }
 
     .bts-edge-label-bg {
       fill: #0b1120;
@@ -657,6 +662,14 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
     .bts-node-card.status-waiting {
       border-color: rgba(245, 158, 11, 0.7);
     }
+    .bts-node-card.type-invocation { border-inline-start: 4px solid var(--accent-purple); }
+    .bts-node-card.type-model { border-inline-start: 4px solid var(--accent-cyan); }
+    .bts-node-card.type-tool { border-inline-start: 4px solid #14b8a6; }
+    .bts-node-card.type-routing { border-inline-start: 4px solid #64748b; }
+    .bts-node-card.type-persistence { border-inline-start: 4px solid var(--accent-amber); }
+    .bts-node-card.type-composition { border-inline-start: 4px solid var(--accent-indigo); }
+    .bts-node-card.type-result,
+    .bts-node-card.type-outcome { border-inline-start: 4px solid var(--accent-emerald); }
 
     .bts-node-top {
       display: flex;
@@ -756,6 +769,31 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
     @keyframes packet-flow {
       to { stroke-dashoffset: -28; }
     }
+
+    @media (max-width: 1100px) {
+      body { height: auto; min-height: 100vh; overflow: auto; }
+      .bts-header { flex-wrap: wrap; }
+      .bts-header-center { order: 3; flex-basis: 100%; max-width: none; }
+      .bts-workspace { flex-direction: column; min-height: 90vh; overflow: visible; }
+      .bts-canvas-container { min-height: 52vh; flex: 0 0 52vh; }
+      .bts-right-panel { width: 100%; min-height: 32vh; border-right: 0; border-top: 1px solid var(--border-subtle); }
+      .bts-metrics-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 640px) {
+      body { height: auto; min-height: 100vh; overflow: auto; }
+      .bts-header { padding: 10px; gap: 8px; }
+      .bts-header-left, .bts-header-right { width: 100%; justify-content: space-between; }
+      .bts-header-center { flex-direction: column; align-items: stretch; }
+      .bts-trace-select { max-width: none; }
+      .bts-metrics-bar { grid-template-columns: 1fr 1fr; padding: 8px; gap: 8px; }
+      .bts-metric-card { padding: 10px; }
+      .bts-metric-val { font-size: 14px; }
+      .bts-workspace { min-height: 100vh; overflow: visible; }
+      .bts-canvas-container { min-height: 58vh; flex-basis: 58vh; }
+      .bts-right-panel { min-height: 40vh; }
+      .bts-panel-tabs { position: sticky; top: 0; }
+    }
   </style>
 </head>
 <body>
@@ -814,7 +852,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
 
     <div class="bts-metric-card">
       <div class="bts-metric-title">
-        <span>טוקנים ועלות</span>
+        <span>טוקנים</span>
         <span>📊</span>
       </div>
       <div id="m-tokens" class="bts-metric-val">—</div>
@@ -1050,6 +1088,8 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
         const invocations = nodes.filter(n => n.type === 'invocation');
         const models = nodes.filter(n => n.type === 'model');
         const tools = nodes.filter(n => n.type === 'tool');
+        const persistence = nodes.filter(n => n.type === 'persistence');
+        const composition = nodes.filter(n => n.type === 'composition');
         const otherNodes = nodes.filter(n => n.type === 'result' || n.type === 'outcome');
 
         if (userNode) positions.set(userNode.id, { x: 420, y: 40 });
@@ -1068,33 +1108,61 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
         placeRows(invocations);
         placeRows(models);
         placeRows(tools);
+        placeRows(persistence);
+        placeRows(composition);
         placeRows(otherNodes);
 
         return positions;
       }
 
-      // Fetch active trace
+      // Fetch active trace without overlapping polls; retain last known data on disconnect.
+      let traceFetchInFlight = false;
       async function fetchTrace() {
         if (!currentTraceId) return;
+        if (traceFetchInFlight) return;
+        traceFetchInFlight = true;
+        const requestedTraceId = currentTraceId;
+        let controller = null;
+        let requestTimeout = null;
         try {
-          const res = await fetch('/admin/simulator/trace/' + encodeURIComponent(currentTraceId));
-          if (!res.ok) return;
+          if (typeof AbortController !== 'undefined') {
+            controller = new AbortController();
+            requestTimeout = setTimeout(() => controller.abort(), 8000);
+          }
+          const res = await fetch('/admin/simulator/trace/' + encodeURIComponent(requestedTraceId), {
+            signal: controller ? controller.signal : undefined,
+          });
+          if (!res.ok) throw new Error('Trace endpoint returned ' + res.status);
           const data = await res.json();
+          if (requestedTraceId !== currentTraceId) return;
           currentData = data;
           render(data);
 
-          if (data.diagnostic_state === 'job_stopped_without_outcome') {
+          if (data.execution_status === 'awaiting_approval') {
+            beacon.className = 'bts-live-beacon is-idle';
+            beaconText.textContent = 'ממתין לאישור';
+          } else if (data.execution_status === 'partial') {
+            beacon.className = 'bts-live-beacon is-idle';
+            beaconText.textContent = 'הביצוע הסתיים חלקית';
+          } else if (data.execution_status === 'unknown' || data.diagnostic_state === 'job_stopped_without_outcome') {
             beacon.className = 'bts-live-beacon is-idle';
             beaconText.textContent = 'ה־Job נעצר בלי תוצאה שמורה — נדרש בירור';
           } else if (data.terminal) {
             beacon.className = 'bts-live-beacon is-idle';
-            beaconText.textContent = data.outcome === 'succeeded' ? 'הושלם בהצלחה' : 'הסתיים (' + (data.outcome || 'סיום') + ')';
+            beaconText.textContent = data.execution_status === 'succeeded'
+              ? (data.delivery_status === 'confirmed' ? 'הושלם ונמסר' : 'ה־API הושלם · אישור מסירה לא זמין')
+              : 'הסתיים (' + (data.outcome || 'סיום') + ')';
           } else {
             beacon.className = 'bts-live-beacon';
             beaconText.textContent = 'שידור חי פעיל';
           }
         } catch (err) {
           console.warn('Trace fetch error:', err);
+          beacon.className = 'bts-live-beacon is-idle';
+          beaconText.textContent = currentData ? 'אין חיבור ל־Trace · מוצגים הנתונים האחרונים' : 'אין חיבור ל־Trace · ממתין לחיבור מחדש';
+        } finally {
+          if (requestTimeout !== null) clearTimeout(requestTimeout);
+          traceFetchInFlight = false;
         }
       }
 
@@ -1103,7 +1171,8 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
         // 1. Update Metrics
         const m = data.metrics || {};
         mWall.textContent = m.total_wall_clock_ms ? (m.total_wall_clock_ms.toLocaleString() + ' מ"ש') : '—';
-        mWallBreakdown.textContent = 'מודל: ' + (m.model_latency_ms || 0) + ' מ"ש | כלים: ' + (m.tools_duration_ms || 0) + ' מ"ש';
+        const queueTime = m.queue_wait_ms == null ? 'לא זמין' : m.queue_wait_ms;
+        mWallBreakdown.textContent = 'ספק מצטבר: ' + (m.model_latency_ms || 0) + ' מ"ש | כלים: ' + (m.tools_duration_ms || 0) + ' מ"ש | תור: ' + queueTime + ' מ"ש';
         mLlm.textContent = m.llm_call_count ? (m.llm_call_count + ' קריאות') : '0';
         mRetries.textContent = 'ניסיונות חוזרים: ' + (m.retries_count || 0);
         mTokens.textContent = m.tokens ? m.tokens.total.toLocaleString() : '—';
@@ -1157,8 +1226,8 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
           const cy2 = y2 - dy * 0.6;
 
           const d = 'M ' + x1 + ' ' + y1 + ' C ' + cx1 + ' ' + cy1 + ', ' + cx2 + ' ' + cy2 + ', ' + x2 + ' ' + y2;
-          const statusClass = edge.status === 'active' ? 'edge-active' : (edge.status === 'completed' ? 'edge-completed' : (edge.status === 'failed' ? 'edge-failed' : 'edge-pending'));
-          const markerId = edge.status === 'active' ? 'arrow-active' : (edge.status === 'completed' ? 'arrow-completed' : (edge.status === 'failed' ? 'arrow-failed' : 'arrow-pending'));
+          const statusClass = edge.type === 'unattributed' ? 'edge-unattributed' : (edge.status === 'active' ? 'edge-active' : (edge.status === 'completed' ? 'edge-completed' : (edge.status === 'failed' ? 'edge-failed' : 'edge-pending')));
+          const markerId = edge.type === 'unattributed' ? 'arrow-pending' : (edge.status === 'active' ? 'arrow-active' : (edge.status === 'completed' ? 'arrow-completed' : (edge.status === 'failed' ? 'arrow-failed' : 'arrow-pending')));
 
           // Edge path
           edgesHtml += '<path d="' + d + '" class="bts-edge-path ' + statusClass + '" marker-end="url(#' + markerId + ')"></path>';
@@ -1191,12 +1260,15 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
           else if (node.status === 'unknown') statusText = 'מצב לא ידוע';
 
           const timerText = node.duration_ms ? (node.duration_ms + ' מ"ש') : (node.status === 'running' ? '⏱️ פועל' : '');
-          const previewText = node.protocol || node.intent || (node.tasks && node.tasks[0]) || node.summary || node.details || '';
+          const previewText = node.selected_agents && node.selected_agents.length
+            ? node.selected_agents.join(', ')
+            : (node.sublabel || node.protocol || node.intent || (node.tasks && node.tasks[0]) || node.summary || node.details || '');
+          const nodeTypeClass = 'type-' + (node.type || 'unknown');
 
           nodesHtml += '<foreignObject x="' + pos.x + '" y="' + pos.y + '" width="' + NODE_WIDTH + '" height="' + NODE_HEIGHT + '">' +
-            '<div class="bts-node-card ' + isSelected + ' ' + statusClass + '" data-id="' + node.id + '">' +
+            '<div class="bts-node-card ' + isSelected + ' ' + esc(statusClass) + ' ' + esc(nodeTypeClass) + '" data-id="' + esc(node.id) + '">' +
               '<div class="bts-node-top">' +
-                '<div class="bts-node-avatar">' + (node.icon || '🤖') + '</div>' +
+                '<div class="bts-node-avatar">' + esc(node.icon || '🤖') + '</div>' +
                 '<div class="bts-node-titles">' +
                 '<div class="bts-node-name">' + esc(node.label) + '</div>' +
                 '<div class="bts-node-sub">' + esc(node.sublabel || '') + '</div>' +
@@ -1265,6 +1337,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
               ' · ' + (c.latency_ms ?? '?') + ' מ״ש · ' + (c.finish_reason || c.status || 'unknown') +
               ' · טוקנים קלט/פלט/מטמון: ' + (c.input_tokens ?? '?') + '/' + (c.output_tokens ?? '?') + '/' + (c.cache_tokens ?? '?') +
               '\nיוזם: ' + (c.parent_agent || 'unattributed') + ' · שלב: ' + (c.stage || 'unattributed') +
+              ' · parent invocation: ' + (c.parent_invocation_id || 'לא נשמר') +
               ' · פרוטוקול: ' + (c.protocol_name || 'לא רלוונטי/לא זמין') +
               ' · ' + (c.tool_name ? ('אחרי כלי ' + c.tool_name) : (c.call_type && String(c.call_type).toLowerCase().includes('tool_call') ? 'החלטת כלי' : 'לפני כלי / סינתזה לא ידוע')) +
               '\nמזהה בקשת ספק: ' + (c.provider_request_id || 'unavailable') + ' · הפעלה: ' + (c.agent_invocation_id || 'unattributed') +
@@ -1272,6 +1345,17 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
               ' · סיכום בטוח: ' + (c.result_summary || 'אין תקציר בטוח זמין')
             )).join('<br><br>') + '</div>') : '') +
             (node.tools && node.tools.length ? ('<div class="bts-inspect-section-title">כלים (' + node.tools.length + ')</div><div class="bts-inspect-box">' + esc(node.tools.join(', ')) + '</div>') : '') +
+            (node.type === 'tool' ? ('<div class="bts-inspect-section-title">שיוך והיקף הכלי</div><div class="bts-inspect-box">' +
+              'Caller: ' + esc(node.caller_agent_name || 'לא נשמר') + '<br>' +
+              'Invocation ID: ' + esc(node.agent_invocation_id || 'לא נשמר') + '<br>' +
+              'סוג: ' + (node.side_effecting ? 'פעולת כתיבה' : 'קריאה בלבד') + '<br>' +
+              'אימות: ' + esc(node.verification_note || node.verification || 'לא זמין') +
+              '</div>') : '') +
+            (node.type === 'invocation' && node.model_status ? ('<div class="bts-inspect-section-title">ריצת מודל (נפרדת מתוצאת Agent)</div><div class="bts-inspect-box">' +
+              'סטטוס מודל: ' + esc(node.model_status) + '<br>' +
+              'זמן מודל: ' + esc(node.model_duration_ms ?? 'לא זמין') + ' מ״ש<br>' +
+              'טוקנים קלט/פלט: ' + esc(node.model_input_tokens ?? '?') + '/' + esc(node.model_output_tokens ?? '?') +
+              '</div>') : '') +
             (node.summary ? ('<div class="bts-inspect-section-title">סיכום כלי</div><div class="bts-inspect-box">' + esc(node.summary) + '</div>') : '') +
             (node.details ? ('<div class="bts-inspect-section-title">פרטים נוספים</div><div class="bts-inspect-box">' + esc(node.details) + '</div>') : '') +
           '</div>';
@@ -1319,10 +1403,17 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       async function loadRecentTraces() {
         try {
           const res = await fetch('/admin/simulator/traces/recent?limit=20');
-          if (!res.ok) return;
+          if (!res.ok) throw new Error('Recent traces endpoint returned ' + res.status);
           const data = await res.json();
           const items = data.items || [];
-          if (!items.length) return;
+          if (!items.length) {
+            traceSelect.innerHTML = '<option value="">אין Traces להצגה כרגע</option>';
+            if (!currentTraceId) {
+              beacon.className = 'bts-live-beacon is-idle';
+              beaconText.textContent = 'ממתין לבקשה ראשונה';
+            }
+            return;
+          }
 
           traceSelect.innerHTML = '';
           items.forEach(item => {
@@ -1344,13 +1435,22 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
           }
         } catch (err) {
           console.warn('Recent traces error:', err);
+          if (!currentTraceId) {
+            beacon.className = 'bts-live-beacon is-idle';
+            beaconText.textContent = 'אין חיבור לרשימת ה־Traces';
+          }
         }
       }
 
       function switchTrace(newTraceId) {
         if (!newTraceId || newTraceId === currentTraceId) return;
         currentTraceId = newTraceId;
+        currentData = null;
+        selectedNodeId = null;
         traceIdPill.textContent = newTraceId;
+        beacon.className = 'bts-live-beacon is-idle';
+        beaconText.textContent = 'טוען Trace…';
+        render({ metrics: {}, graph: { nodes: [], edges: [] }, messages: [] });
         window.history.replaceState(null, '', '?trace_id=' + encodeURIComponent(newTraceId));
         fetchTrace();
       }
@@ -1400,7 +1500,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       if (currentTraceId) fetchTrace();
 
       // Poll Loop
-      pollTimer = setInterval(fetchTrace, 450);
+      pollTimer = setInterval(fetchTrace, 1000);
       recentTimer = setInterval(loadRecentTraces, 2500);
 
       // Fit to view once layout rendered
