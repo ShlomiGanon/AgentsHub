@@ -926,6 +926,17 @@ SIMULATOR_BODY = """
     });
   }
 
+  function formatDurationMs(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return t('bts.na');
+    const seconds = number / 1000;
+    const precision = seconds < 1 ? 2 : (seconds < 10 ? 2 : 1);
+    let text = seconds.toFixed(precision);
+    while (text.includes('.') && text.endsWith('0')) text = text.slice(0, -1);
+    if (text.endsWith('.')) text = text.slice(0, -1);
+    return text + 's';
+  }
+
   function el(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -2252,15 +2263,15 @@ SIMULATOR_BODY = """
 
       // 1. KPI Metrics Bar
       if (metricWall) {
-        metricWall.textContent = (hasEvents && m.total_wall_clock_ms) ? (m.total_wall_clock_ms.toLocaleString() + ' ' + t('bts.ms')) : t('bts.na');
+        metricWall.textContent = (hasEvents && m.total_wall_clock_ms != null) ? formatDurationMs(m.total_wall_clock_ms) : t('bts.na');
       }
       if (metricBreakdown) {
         if (!hasEvents) {
           metricBreakdown.textContent = t('bts.no_trace_events') || 'אין נתוני מעקב עדיין';
         } else {
-          const mod = m.model_latency_ms ? (m.model_latency_ms.toLocaleString() + ' ' + t('bts.ms')) : '0';
-          const tool = m.tools_duration_ms ? (m.tools_duration_ms.toLocaleString() + ' ' + t('bts.ms')) : '0';
-          const queue = m.queue_wait_ms == null ? 'לא זמין' : (m.queue_wait_ms.toLocaleString() + ' ' + t('bts.ms'));
+          const mod = formatDurationMs(m.model_latency_ms || 0);
+          const tool = formatDurationMs(m.tools_duration_ms || 0);
+          const queue = m.queue_wait_ms == null ? 'לא זמין' : formatDurationMs(m.queue_wait_ms);
           metricBreakdown.textContent = 'ספק מצטבר: ' + mod + ' | כלים: ' + tool + ' | תור: ' + queue;
         }
       }
@@ -2691,7 +2702,7 @@ SIMULATOR_BODY = """
           statStr = '⏳ פעיל...';
           statFill = '#38bdf8';
         } else if (node.status === 'success' || node.status === 'completed') {
-          statStr = '✔ הושלם' + (node.duration_ms ? ' (' + node.duration_ms + ' ms)' : '');
+          statStr = '✔ הושלם' + (node.duration_ms != null ? ' (' + formatDurationMs(node.duration_ms) + ')' : '');
           statFill = '#34d399';
         } else if (node.status === 'failed') {
           statStr = '✖ נכשל';
@@ -2763,7 +2774,7 @@ SIMULATOR_BODY = """
       }
 
       // Duration & Calls
-      if (detDur) detDur.textContent = node.duration_ms ? (node.duration_ms + ' ' + t('bts.ms')) : t('bts.na');
+      if (detDur) detDur.textContent = node.duration_ms != null ? formatDurationMs(node.duration_ms) : t('bts.na');
       if (detCalls) {
         const llmCount = Array.isArray(node.llm_calls) ? node.llm_calls.length : 0;
         const count = Number(node.call_count) || llmCount || 1;
@@ -2802,7 +2813,7 @@ SIMULATOR_BODY = """
               'Provider request: ' + (c.provider_request_id || 'לא זמין') + ' · sequence ' + (c.sequence_number ?? 'לא זמין'),
               'שיוך: ' + (node.attribution_status || (c.agent_invocation_id ? 'attributed' : (c.agent_name ? 'partial' : 'unattributed'))),
               'התחלה/סיום: ' + (c.started_at || 'לא זמין') + ' / ' + (c.finished_at || 'לא זמין'),
-              'זמן: ' + (c.latency_ms ?? 'לא זמין') + ' מ״ש · finish: ' + (c.finish_reason || c.status || 'לא ידוע'),
+              'זמן: ' + (c.latency_ms == null ? 'לא זמין' : formatDurationMs(c.latency_ms)) + ' · finish: ' + (c.finish_reason || c.status || 'לא ידוע'),
               'טוקנים קלט/פלט/מטמון: ' + (c.input_tokens ?? '?') + '/' + (c.output_tokens ?? '?') + '/' + (c.cache_tokens ?? '?'),
               'סיכום בטוח: ' + (c.result_summary || 'לא זמין'),
             ].join('\\n');
@@ -2818,7 +2829,7 @@ SIMULATOR_BODY = """
             '\\nParent: ' + (node.parent_agent || 'Orchestrator') +
             '\\nProtocol: ' + (node.protocol_name || 'לא זמין') +
             '\\nProvider calls: ' + calls.length +
-            (node.model_status ? ('\\nריצת מודל: ' + node.model_status + ' · ' + (node.model_duration_ms ?? 'לא זמין') + ' מ״ש · טוקנים קלט/פלט: ' + (node.model_input_tokens ?? '?') + '/' + (node.model_output_tokens ?? '?')) : '');
+            (node.model_status ? ('\\nריצת מודל: ' + node.model_status + ' · ' + (node.model_duration_ms == null ? 'לא זמין' : formatDurationMs(node.model_duration_ms)) + ' · טוקנים קלט/פלט: ' + (node.model_input_tokens ?? '?') + '/' + (node.model_output_tokens ?? '?')) : '');
         } else if (node.type === 'main') {
           detTaskTitle.textContent = 'כוונה ופרוטוקול שנבחרו';
           detTaskContent.textContent = (node.intent || 'מעבד בקשה') + (node.protocol ? '\\nפרוטוקול: ' + node.protocol : '');

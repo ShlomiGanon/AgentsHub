@@ -326,7 +326,7 @@ class Agent:
             def _tracked_tool(*args, _wrapped=wrapped, _invocation_id=invocation_id, _trace_id=invocation_trace_id, **kwargs):
                 # CrewAI may run the tool in a different thread. Capture the ID in
                 # this wrapper instead of assuming ContextVar propagation.
-                with (trace_context(_trace_id) if _trace_id else nullcontext()), invocation_scope(_invocation_id, agent_name=agent_name, parent_agent=current_invocation_agent()):
+                with (trace_context(_trace_id) if _trace_id else nullcontext()), invocation_scope(_invocation_id, agent_name=self.name, parent_agent=current_invocation_agent()):
                     return _wrapped(*args, **kwargs)
 
             invocation_tools[name] = _tracked_tool
