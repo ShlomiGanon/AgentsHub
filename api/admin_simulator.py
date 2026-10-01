@@ -856,7 +856,8 @@ SIMULATOR_BODY = """
   const DATA = JSON.parse(document.getElementById('sim-data').textContent);
   const STRINGS = DATA.strings || {};
   const QUEUED_ACK_PREFIXES = DATA.queued_ack_prefixes || [];
-  const POLL_INTERVAL_MS = 2000;
+  const POLL_INTERVAL_MS = 250;
+  const JOB_WAIT_SECONDS = 15;
   const POLL_TIMEOUT_MS = 5 * 60 * 1000;
   const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'uncertain', 'closed_on_precedent', 'declined']);
   const CHAT_TYPES = new Set(['private', 'group', 'supergroup']);
@@ -1450,10 +1451,9 @@ SIMULATOR_BODY = """
   async function pollJob(eventId, identity, bubble, header) {
     const startedAt = Date.now();
     while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
-      await new Promise(function (resolve) { setTimeout(resolve, POLL_INTERVAL_MS); });
       let result;
       try {
-        result = await apiCall('GET', '/Job/' + encodeURIComponent(eventId), identity);
+        result = await apiCall('GET', '/Job/' + encodeURIComponent(eventId) + '?wait_seconds=' + JOB_WAIT_SECONDS, identity);
       } catch (error) {
         setBubbleText(bubble, header, t('delivery_unknown'), true);
         return true; // The event may have been persisted; do not offer an implicit replay.
@@ -1466,6 +1466,7 @@ SIMULATOR_BODY = """
       const body = jobBodyText(job);
       setBubbleText(bubble, body ? header + '\\n\\n' + body : header, jobStatusText(job), job.status === 'failed');
       if (TERMINAL_STATUSES.has(job.status) || job.status === 'held_for_clarification' || job.status === 'held_for_approval' || job.status === 'waiting_for_event_data') return true;
+      await new Promise(function (resolve) { setTimeout(resolve, POLL_INTERVAL_MS); });
     }
     setBubbleText(bubble, header, t('delivery_unknown'), true);
     return true;

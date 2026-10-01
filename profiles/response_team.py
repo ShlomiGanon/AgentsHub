@@ -95,7 +95,11 @@ LOOKBACK_WINDOW_DAYS = 30
 TIMEZONE = "Asia/Jerusalem"
 CONVERSATION_HISTORY_TURNS = 6
 CONVERSATION_HISTORY_TTL_HOURS = 24
-OPTIMIZATION_POLICY = OptimizationPolicy(operational_decision_mode="merged", final_assessment_mode="low_risk_merged")
+OPTIMIZATION_POLICY = OptimizationPolicy(
+    operational_decision_mode="merged",
+    final_assessment_mode="low_risk_merged",
+    event_queue_mode="policy",
+)
 
 
 # == Profile declarations (docs/responce_improve.md) ==========================

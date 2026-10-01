@@ -66,6 +66,47 @@ def test_run_stops_children_when_start_fails(monkeypatch):
     assert calls == ["start", "stop"]
 
 
+def test_spawn_opens_child_logs_under_the_profile_log_dir(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    opened = []
+    monkeypatch.setenv("AGENTSHUB_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setattr(run_stack, "available_profile", lambda module: SimpleNamespace(
+        profile_name="Demo", api_port=18907, simulator_port=None,
+    ))
+    monkeypatch.setattr(run_stack, "_port_is_open", lambda host, port: False)
+    monkeypatch.setattr(run_stack, "_wait_until_port_open", lambda *args, **kwargs: None)
+    monkeypatch.setattr(run_stack, "_http_responds", lambda url: True)
+    monkeypatch.setattr(run_stack, "_announce", lambda message: None)
+    monkeypatch.setattr(run_stack, "write_status", lambda **kwargs: None)
+
+    supervisor = run_stack.StackSupervisor("profiles.response_team")
+
+    def _open_log(self, path):
+        opened.append(path)
+        handle = SimpleNamespace(close=lambda: None)
+        self._logs.append(handle)
+        return handle
+
+    monkeypatch.setattr(run_stack.StackSupervisor, "_open_log", _open_log)
+    monkeypatch.setattr(
+        run_stack.subprocess,
+        "Popen",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout=SimpleNamespace(),
+            stderr=SimpleNamespace(),
+            pid=1,
+            poll=lambda: None,
+        ),
+    )
+    monkeypatch.setattr(run_stack.threading, "Thread", lambda **kwargs: SimpleNamespace(start=lambda: None))
+
+    supervisor.start()
+
+    assert any(path.endswith("api.stdout.log") for path in opened)
+    assert all("logs" in path.replace("\\", "/") for path in opened)
+
+
 def test_start_refuses_an_already_occupied_api_port(monkeypatch):
     from types import SimpleNamespace
 

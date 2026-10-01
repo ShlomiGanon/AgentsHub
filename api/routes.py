@@ -74,6 +74,22 @@ def _now() -> str:
     return storage_timestamp(datetime.now(timezone.utc))
 
 
+_STORE_KEYS_BY_AGENT = {
+    "roster_agent": "store:roster",
+    "team_status_agent": "store:roster",
+    "surveillance_agent": "store:cameras",
+    "neighboring_forces_agent": "store:forces",
+}
+
+
+def _work_concurrency_keys(sender_identity: str, scoped_agent: str | None = None) -> tuple[str, ...]:
+    keys = [f"sender:{sender_identity}"]
+    store_key = _STORE_KEYS_BY_AGENT.get(scoped_agent or "")
+    if store_key:
+        keys.append(store_key)
+    return tuple(keys)
+
+
 def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
     blueprint = Blueprint("events", __name__)
     messages = ctx.loaded_profile.message_catalog
@@ -140,7 +156,7 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
             WorkItem(
                 (event_id, _work), trace_id=trace_id,
                 deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
-                concurrency_keys=(f"sender:{sender_identity}",),
+                concurrency_keys=_work_concurrency_keys(sender_identity, "surveillance_agent"),
             ),
             reservation,
         )
@@ -419,7 +435,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                         trace_id=trace_id,
                         priority=0,
                         deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
-                        concurrency_keys=(f"sender:{caller_identity}",),
+                        concurrency_keys=_work_concurrency_keys(caller_identity, scoped_agent),
                     ),
                     reservation,
                 )
@@ -482,7 +498,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                         (event_id, _work_fast_path),
                         trace_id=trace_id,
                         deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
-                        concurrency_keys=(f"sender:{sender_identity}",),
+                        concurrency_keys=_work_concurrency_keys(sender_identity, scoped_agent),
                     ),
                     reservation,
                 )
@@ -706,7 +722,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 WorkItem(
                     (event_id, _work), trace_id=trace_id,
                     deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
-                    concurrency_keys=(f"sender:{sender_identity}",),
+                    concurrency_keys=_work_concurrency_keys(sender_identity, scoped_agent),
                 ),
                 reservation,
             )
@@ -746,7 +762,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             WorkItem(
                 (event_id, _work), trace_id=trace_id,
                 deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
-                concurrency_keys=(f"sender:{sender_identity}",),
+                concurrency_keys=_work_concurrency_keys(sender_identity, scoped_agent),
             ),
             reservation,
         )
@@ -1524,6 +1540,30 @@ def build_jobs_blueprint(ctx: "ApiContext") -> Blueprint:
         if status is None:
             raise NotFoundError(messages.text("api.job_not_found", task_id=event_id))
 
+        try:
+            wait_seconds = int(request.args.get("wait_seconds", "0"))
+        except (TypeError, ValueError) as exc:
+            raise InvalidInputError(messages.text("api.wait_invalid"), field="wait_seconds") from exc
+        if not 0 <= wait_seconds <= 30:
+            raise InvalidInputError(messages.text("api.wait_invalid"), field="wait_seconds")
+
+        waiter = getattr(ctx.deps.persistence, "wait_for_notifications_since", None)
+        if wait_seconds and waiter is not None and status.get("status") in {"queued", "running"}:
+            deadline = time.monotonic() + wait_seconds
+            existing = ctx.deps.persistence.fetch_notifications_since(0)
+            since = existing[-1]["sequence_id"] if existing else 0
+            while status.get("status") in {"queued", "running"}:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                waiter(since, remaining)
+                status = job_status(ctx, event_id)
+                if status is None:
+                    raise NotFoundError(messages.text("api.job_not_found", task_id=event_id))
+                rows = ctx.deps.persistence.fetch_notifications_since(since)
+                if rows:
+                    since = rows[-1]["sequence_id"]
+
         return jsonify(status)
 
     return blueprint
@@ -1644,7 +1684,7 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
                 (event_id, _work), trace_id=trace_id,
                 priority=0,
                 deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
-                concurrency_keys=(f"sender:{identity}",),
+                concurrency_keys=_work_concurrency_keys(identity),
             ),
             reservation,
         )
@@ -1695,7 +1735,7 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
             WorkItem(
                 (event_id, _work), trace_id=trace_id, priority=0,
                 deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
-                concurrency_keys=(f"sender:{identity}",),
+                concurrency_keys=_work_concurrency_keys(identity),
             ),
             reservation,
         )

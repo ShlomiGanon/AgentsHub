@@ -327,6 +327,74 @@ def test_the_widened_window_does_not_pull_in_a_genuinely_later_event(tmp_path):
         store.close()
 
 
+def test_retrieve_range_uses_one_window_query_for_a_raw_30_day_gap(tmp_path):
+    store = open_persistence(str(tmp_path / "range-batch.db"))
+    try:
+        first = store.append_event({
+            "received_at": "2026-08-01T10:00:00", "source": "sensor", "sender_identity": "sensor-1",
+            "occurred_at": "2026-08-01T10:00:00", "raw_text": "fire a",
+            "classification": "fire", "area": "north_sector", "outcome": "succeeded",
+        })
+        second = store.append_event({
+            "received_at": "2026-08-20T10:00:00", "source": "sensor", "sender_identity": "sensor-1",
+            "occurred_at": "2026-08-20T10:00:00", "raw_text": "fire b",
+            "classification": "fire", "area": "north_sector", "outcome": "succeeded",
+        })
+        calls = []
+        original = store.fetch_events_range
+
+        def _counting(start, end):
+            calls.append((start, end))
+            return original(start, end)
+
+        store.fetch_events_range = _counting
+        sources = retrieve_range(
+            store,
+            datetime(2026, 8, 1, tzinfo=timezone.utc),
+            datetime(2026, 8, 31, tzinfo=timezone.utc),
+            "fire",
+            "north_sector",
+        )
+        assert len(calls) == 1
+        assert {source.source_id for source in sources if source.level == "raw_event"} == {first, second}
+    finally:
+        store.close()
+
+
+def test_find_precedents_uses_the_indexed_type_area_window(tmp_path):
+    store = open_persistence(str(tmp_path / "precedent-window.db"))
+    try:
+        match_id = store.append_event({
+            "received_at": "2026-08-20T10:00:00", "source": "sensor", "sender_identity": "sensor-1",
+            "occurred_at": "2026-08-20T10:00:00", "raw_text": "fire a",
+            "classification": "fire", "area": "north_sector", "outcome": "succeeded",
+        })
+        store.append_event({
+            "received_at": "2026-08-20T11:00:00", "source": "sensor", "sender_identity": "sensor-1",
+            "occurred_at": "2026-08-20T11:00:00", "raw_text": "medical",
+            "classification": "medical", "area": "north_sector", "outcome": "succeeded",
+        })
+        calls = []
+        original = store.fetch_events_by_type_area_window
+
+        def _counting(*args, **kwargs):
+            calls.append((args, kwargs))
+            return original(*args, **kwargs)
+
+        store.fetch_events_by_type_area_window = _counting
+        range_calls = []
+        store.fetch_events_range = lambda *args, **kwargs: range_calls.append((args, kwargs)) or []
+
+        matches = find_precedents(
+            store, _FakeSettingsStore(), "target-event-id", "fire", "north_sector", "2026-08-24T19:42:07",
+        )
+        assert len(calls) == 1
+        assert range_calls == []
+        assert [match.event_id for match in matches] == [match_id]
+    finally:
+        store.close()
+
+
 def test_retrieve_range_itself_is_unaffected_by_the_precedent_specific_widening(tmp_path):
     # The fix is scoped to find_precedents; retrieve_range's own general
     # contract (used directly by history/query.py) keeps its ordinary

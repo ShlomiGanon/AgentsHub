@@ -152,6 +152,16 @@ def extract_event(
     except (json.JSONDecodeError, TypeError) as exc:
         raise ExtractionExecutionError("model response was not valid JSON") from exc
 
+    return extraction_result_from_payload(payload, source, received_at, event_type_registry, area_registry)
+
+
+def extraction_result_from_payload(
+    payload: dict,
+    source: str,
+    received_at: str,
+    event_type_registry,
+    area_registry,
+) -> ExtractionResult:
     if not isinstance(payload, dict):
         raise ExtractionExecutionError("model response must be one JSON object")
 
@@ -401,11 +411,20 @@ def record_extracted_fields(
 
 
 def record_step_execution(persistence, event_id: str, step: StepExecutionEnvelope) -> None:
-    if step.step_index < 0:
-        raise ValueError("step_index must not be negative")
-    if step.attempt_count < 0:
-        raise ValueError("attempt_count must not be negative")
-    persistence.update_event(event_id, {"steps": [asdict(step)]})
+    record_step_executions(persistence, event_id, (step,))
+
+
+def record_step_executions(persistence, event_id: str, steps: tuple[StepExecutionEnvelope, ...] | list[StepExecutionEnvelope]) -> None:
+    if not steps:
+        return
+    payloads = []
+    for step in steps:
+        if step.step_index < 0:
+            raise ValueError("step_index must not be negative")
+        if step.attempt_count < 0:
+            raise ValueError("attempt_count must not be negative")
+        payloads.append(asdict(step))
+    persistence.update_event(event_id, {"steps": payloads})
 
 
 def record_event_outcome(

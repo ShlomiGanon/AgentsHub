@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -12,12 +11,12 @@ from typing import TYPE_CHECKING, Callable
 from agents import AgentInvocationError, ToolResult, is_retryable_invocation_error
 from agents import last_finished_invocation_id, record_finished_invocation_id
 from protocols.contracts import ProtocolRunResult, ResourceUnavailable, Step, StepOutcome
-from tools import get_trace_id, stage_context
+from tools import stage_context
+from tools.log_events import direct_tool_step_error, step_failed, step_result, step_retry, step_started, step_unclear
 
 if TYPE_CHECKING:
     from agents import Agent
 
-logger = logging.getLogger(__name__)
 _side_effect_locks: dict[str, threading.Lock] = {}
 _side_effect_locks_guard = threading.Lock()
 
@@ -79,10 +78,7 @@ def _execute_direct_tool_step(agent: Agent, step: Step) -> StepOutcome:
         tool_method = getattr(agent, step.direct_tool_name)
         result = _as_tool_result(tool_method(**step.direct_tool_kwargs))
     except Exception as exc:
-        logger.info(
-            "direct tool step raised",
-            extra={"event": "direct_tool_step_error", "agent": step.agent_name, "tool": step.direct_tool_name, "cause": str(exc), "trace_id": get_trace_id()},
-        )
+        direct_tool_step_error(agent=step.agent_name, tool=step.direct_tool_name, cause=str(exc))
         _take_resource_unavailable_signal(agent)
         return StepOutcome(step=step, result_text=None, attempt_count=1, succeeded=False, failure_reason=str(exc), status="failed")
     finally:
@@ -146,10 +142,7 @@ def execute_step_with_retry(
         except AgentInvocationError as exc:
             _take_resource_unavailable_signal(agent)
             last_failure_reason = str(exc)
-            logger.info(
-                "step execution failed",
-                extra={"event": "step_failed", "agent": step.agent_name, "attempt": attempts, "cause": last_failure_reason, "trace_id": get_trace_id()},
-            )
+            step_failed(agent=step.agent_name, attempt=attempts, cause=last_failure_reason)
 
             if attempts >= attempt_limit or not _can_retry(step, agent) or not is_retryable_invocation_error(exc):
                 return StepOutcome(
@@ -157,16 +150,13 @@ def execute_step_with_retry(
                     failure_reason=last_failure_reason, status="failed",
                 )
 
-            logger.info("retrying step", extra={"event": "step_retry", "agent": step.agent_name, "attempt": attempts + 1, "cause": last_failure_reason, "trace_id": get_trace_id()})
+            step_retry(agent=step.agent_name, attempt=attempts + 1, cause=last_failure_reason)
             sleep_fn(backoff_seconds)
             continue
 
         if agent_result.status == "unclear_task":
             last_failure_reason = f"task unclear: {agent_result.text}"
-            logger.info(
-                "step reported task unclear",
-                extra={"event": "step_unclear", "agent": step.agent_name, "attempt": attempts, "missing": agent_result.text, "trace_id": get_trace_id()},
-            )
+            step_unclear(agent=step.agent_name, attempt=attempts, missing=agent_result.text)
 
             if task_rewriter is None:
                 return StepOutcome(
@@ -181,7 +171,7 @@ def execute_step_with_retry(
                 )
 
             current_task_text = task_rewriter(step, agent_result.text)
-            logger.info("retrying step with rewritten task", extra={"event": "step_retry", "agent": step.agent_name, "attempt": attempts + 1, "cause": last_failure_reason, "trace_id": get_trace_id()})
+            step_retry(agent=step.agent_name, attempt=attempts + 1, cause=last_failure_reason)
             sleep_fn(backoff_seconds)
             continue
 
@@ -255,27 +245,29 @@ def execute_steps(
 
         agent = agents_by_name[step.agent_name]
 
-        logger.info(
-            "executing step",
-            extra={"event": "step_start", "agent": step.agent_name, "step_index": index, "task_text": step.task_text, "trace_id": get_trace_id()},
+        event_id = (event_data or {}).get("event_id")
+        step_started(
+            agent=step.agent_name,
+            step_index=index,
+            task_text=step.task_text,
+            step_id=step.step_id,
+            event_id=event_id,
+            allowed_tools=step.allowed_tools,
         )
 
         record_finished_invocation_id(None)
         outcome = execute_step_with_retry(agent, step, settings_store, task_rewriter=task_rewriter, sleep_fn=sleep_fn)
         outcomes.append(outcome)
 
-        logger.info(
-            "step finished",
-            extra={
-                "event": "step_result",
-                "agent": step.agent_name,
-                "step_index": index,
-                "succeeded": outcome.succeeded,
-                "attempt_count": outcome.attempt_count,
-                "result_text": outcome.result_text,
-                "invocation_id": last_finished_invocation_id(),
-                "trace_id": get_trace_id(),
-            },
+        step_result(
+            agent=step.agent_name,
+            step_index=index,
+            succeeded=outcome.succeeded,
+            attempt_count=outcome.attempt_count,
+            result_text=outcome.result_text,
+            invocation_id=last_finished_invocation_id(),
+            step_id=step.step_id,
+            event_id=event_id,
         )
 
         if not outcome.succeeded:
@@ -354,35 +346,29 @@ def _execute_dependency_steps(
         def _run(step_id: str) -> tuple[str, StepOutcome]:
             step = steps[index_by_id[step_id]]
             index = index_by_id[step_id]
-            logger.info(
-                "executing step",
-                extra={
-                    "event": "step_start",
-                    "agent": step.agent_name,
-                    "step_index": index,
-                    "step_id": step_id,
-                    "task_text": step.task_text,
-                    "trace_id": get_trace_id(),
-                },
+            event_id = (event_data or {}).get("event_id")
+            step_started(
+                agent=step.agent_name,
+                step_index=index,
+                task_text=step.task_text,
+                step_id=step_id,
+                event_id=event_id,
+                allowed_tools=step.allowed_tools,
             )
             record_finished_invocation_id(None)
             outcome = execute_step_with_retry(
                 agents_by_name[step.agent_name], step, settings_store,
                 task_rewriter=task_rewriter, sleep_fn=sleep_fn,
             )
-            logger.info(
-                "step finished",
-                extra={
-                    "event": "step_result",
-                    "agent": step.agent_name,
-                    "step_index": index,
-                    "step_id": step_id,
-                    "succeeded": outcome.succeeded,
-                    "attempt_count": outcome.attempt_count,
-                    "result_text": outcome.result_text,
-                    "invocation_id": last_finished_invocation_id(),
-                    "trace_id": get_trace_id(),
-                },
+            step_result(
+                agent=step.agent_name,
+                step_index=index,
+                succeeded=outcome.succeeded,
+                attempt_count=outcome.attempt_count,
+                result_text=outcome.result_text,
+                invocation_id=last_finished_invocation_id(),
+                step_id=step_id,
+                event_id=event_id,
             )
             return step_id, outcome
 

@@ -34,8 +34,20 @@ from agents.contracts import (
     tool_info_of,
 )
 from agents.provider_telemetry import track_provider_finish_reasons
-from agents.invocation_context import current_invocation_id, current_invocation_agent, invocation_scope, record_finished_invocation_id, record_invocation_tool
+from agents.invocation_context import (
+    current_invocation_id, current_invocation_agent, invocation_scope,
+    record_finished_invocation_id, record_invocation_tool,
+)
 from tools import deep_debug_enabled, get_current_stage, get_trace_id, log_ai_interaction, stage_context, trace_context
+from tools.log_events import (
+    agent_invocation_finished,
+    agent_invocation_started,
+    model_invocation_finished,
+    model_warmup_finished,
+    model_warmup_started,
+    tool_blocked,
+    tool_call,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,18 +62,14 @@ _tool_class_cache_lock = threading.Lock()
 _llm_cache: "OrderedDict[tuple[str, str, str], object]" = OrderedDict()
 _llm_cache_lock = threading.Lock()
 _LLM_CACHE_MAX_SIZE = 32
+_AGENT_CACHE_MAX_SIZE = 32
+_agent_pool: "OrderedDict[tuple, list]" = OrderedDict()
+_agent_pool_lock = threading.Lock()
+_AGENT_POOL_PER_KEY = 4
 _provider_semaphore = threading.BoundedSemaphore(8)
 _structured_output_mode = "off"
 _max_iter = 8
 _model_timeout_seconds = 30.0
-
-
-def _observe_invocation(event: str, **fields) -> None:
-    """Optional telemetry must never interrupt an agent or a committed tool call."""
-    try:
-        logger.info(event.replace("_", " "), extra={"event": event, "trace_id": get_trace_id(), "telemetry_only": True, **fields})
-    except Exception:
-        pass
 
 
 def get_authenticated_request_identity() -> str | None:
@@ -186,10 +194,7 @@ def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> 
     def _wrapped(*args, **kwargs):
         allowed = _current_allowed_tools.get()
         if allowed is None or tool_info.name not in allowed:
-            logger.info(
-                "tool call blocked: not in this call's allowed_tools",
-                extra={"event": "tool_blocked", "agent": agent_name, "tool": tool_info.name, "invocation_id": current_invocation_id(), "trace_id": get_trace_id()},
-            )
+            tool_blocked(agent=agent_name, tool=tool_info.name, invocation_id=current_invocation_id())
             return f"Tool '{tool_info.name}' is not permitted for this task."
 
         started = time.monotonic()
@@ -197,34 +202,25 @@ def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> 
         try:
             tool_result = bound_method(*args, **kwargs)
         except Exception:
-            logger.exception(
-                "tool call failed",
-                extra={
-                    "event": "tool_call",
-                    "agent": agent_name,
-                    "invocation_id": current_invocation_id(),
-                    "tool": tool_info.name,
-                    "side_effecting": bool(tool_info.side_effecting),
-                    "status": "error",
-                    "duration_seconds": time.monotonic() - started,
-                    "trace_id": get_trace_id(),
-                },
+            tool_call(
+                agent=agent_name,
+                tool=tool_info.name,
+                invocation_id=current_invocation_id(),
+                side_effecting=bool(tool_info.side_effecting),
+                status="error",
+                duration_seconds=time.monotonic() - started,
+                exc_info=True,
             )
             raise
         summary = str(tool_result)[:140] if tool_result is not None else ""
-        logger.info(
-            "tool call",
-            extra={
-                "event": "tool_call",
-                "agent": agent_name,
-                "invocation_id": current_invocation_id(),
-                "tool": tool_info.name,
-                "side_effecting": bool(tool_info.side_effecting),
-                "status": "success" if not isinstance(tool_result, ToolResult) or tool_result.ok else "error",
-                "duration_seconds": time.monotonic() - started,
-                "result_summary": summary,
-                "trace_id": get_trace_id(),
-            },
+        tool_call(
+            agent=agent_name,
+            tool=tool_info.name,
+            invocation_id=current_invocation_id(),
+            side_effecting=bool(tool_info.side_effecting),
+            status="success" if not isinstance(tool_result, ToolResult) or tool_result.ok else "error",
+            duration_seconds=time.monotonic() - started,
+            result_summary=summary,
         )
         return tool_result.text if isinstance(tool_result, ToolResult) else tool_result
 
@@ -336,33 +332,42 @@ class Agent:
         token = _current_allowed_tools.set(allowed)
         record_finished_invocation_id(None)
         started = time.monotonic()
-        _observe_invocation(
-            "agent_invocation_started", invocation_id=invocation_id,
-            parent_invocation_id=parent_invocation_id, agent=self.name,
-            stage=get_current_stage(), allowed_tools=sorted(allowed),
+        parent_agent = current_invocation_agent()
+        agent_invocation_started(
+            agent=self.name,
+            invocation_id=invocation_id,
+            allowed_tools=sorted(allowed),
             task_summary=text[:120],
+            parent_agent=parent_agent,
+            parent_invocation_id=parent_invocation_id,
         )
         try:
-            with invocation_scope(invocation_id, agent_name=self.name, parent_agent=current_invocation_agent(), parent_invocation_id=parent_invocation_id):
+            with invocation_scope(invocation_id, agent_name=self.name, parent_agent=parent_agent, parent_invocation_id=parent_invocation_id):
                 if invocation_policy is None:
                     raw_text = invoke(invocation_descriptor, invocation_tools, text, self.timeout_seconds)
                 else:
                     raw_text = invoke(invocation_descriptor, invocation_tools, text, self.timeout_seconds, invocation_policy)
                 result = parse_agent_output(raw_text)
-            _observe_invocation(
-                "agent_invocation_finished", invocation_id=invocation_id, agent=self.name,
-                stage=get_current_stage(), status=result.status,
+            agent_invocation_finished(
+                agent=self.name,
+                invocation_id=invocation_id,
+                status=result.status,
                 duration_ms=round((time.monotonic() - started) * 1000, 3),
                 result_chars=len(result.text),
+                parent_agent=parent_agent,
+                parent_invocation_id=parent_invocation_id,
             )
             record_finished_invocation_id(invocation_id)
             return result
         except Exception as exc:
-            _observe_invocation(
-                "agent_invocation_finished", invocation_id=invocation_id, agent=self.name,
-                stage=get_current_stage(), status="error",
+            agent_invocation_finished(
+                agent=self.name,
+                invocation_id=invocation_id,
+                status="error",
                 duration_ms=round((time.monotonic() - started) * 1000, 3),
                 error_type=type(exc).__name__,
+                parent_agent=parent_agent,
+                parent_invocation_id=parent_invocation_id,
             )
             record_finished_invocation_id(invocation_id)
             raise
@@ -470,6 +475,59 @@ def _clear_llm_cache() -> None:
         _llm_cache.clear()
 
 
+def _agent_cache_key(
+    descriptor: AgentDescriptor,
+    tool_names: tuple[str, ...],
+    crewai_timeout_seconds: int,
+    invocation_policy: InvocationPolicy | None,
+    llm: object,
+) -> tuple:
+    policy_key = ()
+    if invocation_policy is not None:
+        schema = invocation_policy.response_schema
+        policy_key = (
+            invocation_policy.max_output_tokens,
+            invocation_policy.timeout_seconds,
+            invocation_policy.reasoning_effort,
+            json.dumps(schema, sort_keys=True, default=str) if schema is not None else None,
+        )
+    return (
+        descriptor.name,
+        descriptor.model,
+        tool_names,
+        crewai_timeout_seconds,
+        policy_key,
+        id(llm),
+    )
+
+
+def _checkout_crewai_agent(cache_key: tuple, factory):
+    with _agent_pool_lock:
+        pool = _agent_pool.get(cache_key)
+        if pool:
+            agent = pool.pop()
+            _agent_pool.move_to_end(cache_key)
+            return agent, True
+    return factory(), False
+
+
+def _checkin_crewai_agent(cache_key: tuple, agent) -> None:
+    with _agent_pool_lock:
+        pool = _agent_pool.setdefault(cache_key, [])
+        if len(pool) < _AGENT_POOL_PER_KEY:
+            pool.append(agent)
+        _agent_pool.move_to_end(cache_key)
+        while len(_agent_pool) > _AGENT_CACHE_MAX_SIZE:
+            _agent_pool.popitem(last=False)
+
+
+def _clear_agent_cache() -> None:
+    """Test/process-lifecycle helper; normal process restart clears the cache."""
+
+    with _agent_pool_lock:
+        _agent_pool.clear()
+
+
 def initialize_agent_runtime(agents: tuple["Agent", ...] | list["Agent"]) -> tuple[str, ...]:
     """Import CrewAI and verify each unique configured provider/model.
 
@@ -488,17 +546,7 @@ def initialize_agent_runtime(agents: tuple["Agent", ...] | list["Agent"]) -> tup
         for model, descriptor in unique_descriptors.items():
             provider = model.split("/", 1)[0]
             started = time.monotonic()
-            logger.info(
-                "model warmup started",
-                extra={
-                    "event": "model_warmup_started",
-                    "stage": "warmup",
-                    "provider": provider,
-                    "model": model,
-                    "trace_id": startup_trace_id,
-                    "telemetry_only": True,
-                },
-            )
+            model_warmup_started(provider=provider, model=model)
             try:
                 with stage_context("warmup"):
                     warmup_options = _llm_options(descriptor, timeout_seconds=_model_timeout_seconds)
@@ -508,19 +556,13 @@ def initialize_agent_runtime(agents: tuple["Agent", ...] | list["Agent"]) -> tup
                 if not isinstance(response, str) or not response.strip():
                     raise ValueError("provider returned an empty or non-text warmup response")
             except Exception as exc:
-                logger.error(
-                    "model warmup failed",
-                    extra={
-                        "event": "model_warmup_finished",
-                        "stage": "warmup",
-                        "provider": provider,
-                        "model": model,
-                        "status": "error",
-                        "termination_reason": type(exc).__name__,
-                        "latency_ms": round((time.monotonic() - started) * 1000, 3),
-                        "trace_id": startup_trace_id,
-                        "telemetry_only": True,
-                    },
+                model_warmup_finished(
+                    provider=provider,
+                    model=model,
+                    status="error",
+                    termination_reason=type(exc).__name__,
+                    latency_ms=round((time.monotonic() - started) * 1000, 3),
+                    level=logging.ERROR,
                 )
                 raise AgentWarmupError(
                     "runtime",
@@ -528,19 +570,12 @@ def initialize_agent_runtime(agents: tuple["Agent", ...] | list["Agent"]) -> tup
                     trace_id=startup_trace_id,
                     cause=exc,
                 ) from exc
-            logger.info(
-                "model warmup finished",
-                extra={
-                    "event": "model_warmup_finished",
-                    "stage": "warmup",
-                    "provider": provider,
-                    "model": model,
-                    "status": "success",
-                    "termination_reason": "completed",
-                    "latency_ms": round((time.monotonic() - started) * 1000, 3),
-                    "trace_id": startup_trace_id,
-                    "telemetry_only": True,
-                },
+            model_warmup_finished(
+                provider=provider,
+                model=model,
+                status="success",
+                termination_reason="completed",
+                latency_ms=round((time.monotonic() - started) * 1000, 3),
             )
             warmed_models.append(model)
     return tuple(warmed_models)
@@ -633,19 +668,61 @@ def invoke(
     llm = _build_or_reuse_llm(crewai_module, descriptor, llm_options)
     llm_built_at = time.monotonic()
 
-    crewai_agent = crewai_module.Agent(
-        role=descriptor.role,
-        goal="Complete the task given, or state clearly what is missing if it cannot be completed.",
-        backstory=backstory,
-        llm=llm,
-        tools=crewai_tools,
-        max_iter=_max_iter,
-        max_retry_limit=0,
-        max_execution_time=crewai_timeout_seconds,
-        verbose=False,
+    cache_key = _agent_cache_key(
+        descriptor,
+        tuple(sorted(wrapped_tools)),
+        crewai_timeout_seconds,
+        invocation_policy,
+        llm,
     )
+
+    def _build_crewai_agent():
+        return crewai_module.Agent(
+            role=descriptor.role,
+            goal="Complete the task given, or state clearly what is missing if it cannot be completed.",
+            backstory=backstory,
+            llm=llm,
+            tools=crewai_tools,
+            max_iter=_max_iter,
+            max_retry_limit=0,
+            max_execution_time=crewai_timeout_seconds,
+            verbose=False,
+        )
+
+    crewai_agent, _cache_hit = _checkout_crewai_agent(cache_key, _build_crewai_agent)
     agent_built_at = time.monotonic()
 
+    try:
+        return _run_crewai_kickoff(
+            descriptor,
+            wrapped_tools,
+            text,
+            crewai_agent,
+            backstory,
+            effective_timeout,
+            imported_at,
+            setup_started,
+            tools_built_at,
+            llm_built_at,
+            agent_built_at,
+        )
+    finally:
+        _checkin_crewai_agent(cache_key, crewai_agent)
+
+
+def _run_crewai_kickoff(
+    descriptor,
+    wrapped_tools,
+    text,
+    crewai_agent,
+    backstory,
+    effective_timeout,
+    imported_at,
+    setup_started,
+    tools_built_at,
+    llm_built_at,
+    agent_built_at,
+) -> str:
     invocation_started_at = time.monotonic()
     try:
         acquired = _provider_semaphore.acquire(timeout=effective_timeout)
@@ -657,45 +734,29 @@ def invoke(
         finally:
             _provider_semaphore.release()
     except TimeoutError as exc:
-        logger.info(
-            "model invocation finished",
-            extra={
-                "event": "model_invocation_finished",
-                "invocation_id": current_invocation_id(),
-                "agent": descriptor.name,
-                "model": descriptor.model,
-                "provider": descriptor.model.split("/", 1)[0],
-                "stage": get_current_stage(),
-                "attempt": 1,
-                "status": "error",
-                "termination_reason": "timeout",
-                "timeout_seconds": effective_timeout,
-                "latency_ms": round((time.monotonic() - invocation_started_at) * 1000, 3),
-                "trace_id": get_trace_id(),
-                "telemetry_only": True,
-            },
+        model_invocation_finished(
+            agent=descriptor.name,
+            invocation_id=current_invocation_id(),
+            model=descriptor.model,
+            provider=descriptor.model.split("/", 1)[0],
+            status="error",
+            termination_reason="timeout",
+            timeout_seconds=effective_timeout,
+            latency_ms=round((time.monotonic() - invocation_started_at) * 1000, 3),
         )
         raise AgentTimeoutError(
             descriptor.name, f"timed out after {effective_timeout}s", trace_id=get_trace_id(), cause=exc
         ) from exc
     except Exception as exc:
-        logger.info(
-            "model invocation finished",
-            extra={
-                "event": "model_invocation_finished",
-                "invocation_id": current_invocation_id(),
-                "agent": descriptor.name,
-                "model": descriptor.model,
-                "provider": descriptor.model.split("/", 1)[0],
-                "stage": get_current_stage(),
-                "attempt": 1,
-                "status": "error",
-                "termination_reason": type(exc).__name__,
-                "timeout_seconds": effective_timeout,
-                "latency_ms": round((time.monotonic() - invocation_started_at) * 1000, 3),
-                "trace_id": get_trace_id(),
-                "telemetry_only": True,
-            },
+        model_invocation_finished(
+            agent=descriptor.name,
+            invocation_id=current_invocation_id(),
+            model=descriptor.model,
+            provider=descriptor.model.split("/", 1)[0],
+            status="error",
+            termination_reason=type(exc).__name__,
+            timeout_seconds=effective_timeout,
+            latency_ms=round((time.monotonic() - invocation_started_at) * 1000, 3),
         )
         raise AgentModelError(descriptor.name, "the model call failed", trace_id=get_trace_id(), cause=exc) from exc
 
@@ -705,22 +766,14 @@ def invoke(
     # can safely reject incomplete text and use their existing fallback.
     has_write_tool = any(info.side_effecting for info in descriptor.tools if info.name in wrapped_tools)
     if finish_reasons and finish_reasons[-1] == "length" and not has_write_tool:
-        logger.info(
-            "model invocation finished",
-            extra={
-                "event": "model_invocation_finished",
-                "invocation_id": current_invocation_id(),
-                "agent": descriptor.name,
-                "model": descriptor.model,
-                "provider": descriptor.model.split("/", 1)[0],
-                "stage": get_current_stage(),
-                "attempt": 1,
-                "status": "error",
-                "termination_reason": "length",
-                "latency_ms": round((time.monotonic() - invocation_started_at) * 1000, 3),
-                "trace_id": get_trace_id(),
-                "telemetry_only": True,
-            },
+        model_invocation_finished(
+            agent=descriptor.name,
+            invocation_id=current_invocation_id(),
+            model=descriptor.model,
+            provider=descriptor.model.split("/", 1)[0],
+            status="error",
+            termination_reason="length",
+            latency_ms=round((time.monotonic() - invocation_started_at) * 1000, 3),
         )
         raise AgentOutputParseError(
             descriptor.name, "the model's final response was cut off at its output limit", trace_id=get_trace_id()
@@ -757,33 +810,25 @@ def invoke(
                 return usage[name]
         return None
 
-    logger.info(
-        "model invocation finished",
-        extra={
-            "event": "model_invocation_finished",
-            "invocation_id": current_invocation_id(),
-            "agent": descriptor.name,
-            "model": descriptor.model,
-            "provider": descriptor.model.split("/", 1)[0],
-            "stage": get_current_stage(),
-            "attempt": 1,
-            "status": "success",
-            "termination_reason": "completed",
-            "timeout_seconds": effective_timeout,
-            "ttft_seconds": getattr(crewai_output, "ttft_seconds", None),
-            "input_tokens": _usage_value("prompt_tokens", "input_tokens"),
-            "output_tokens": _usage_value("completion_tokens", "output_tokens"),
-            "cache_tokens": _usage_value("cached_tokens", "cache_read_tokens"),
-            "total_tokens": _usage_value("total_tokens"),
-            "latency_ms": round((time.monotonic() - invocation_started_at) * 1000, 3),
-            "trace_id": get_trace_id(),
-            "runtime_import_seconds": imported_at - setup_started,
-            "runtime_tools_seconds": tools_built_at - imported_at,
-            "runtime_llm_seconds": llm_built_at - tools_built_at,
-            "runtime_agent_seconds": agent_built_at - llm_built_at,
-            "runtime_kickoff_seconds": time.monotonic() - agent_built_at,
-            "telemetry_only": True,
-        },
+    model_invocation_finished(
+        agent=descriptor.name,
+        invocation_id=current_invocation_id(),
+        model=descriptor.model,
+        provider=descriptor.model.split("/", 1)[0],
+        status="success",
+        termination_reason="completed",
+        timeout_seconds=effective_timeout,
+        ttft_seconds=getattr(crewai_output, "ttft_seconds", None),
+        input_tokens=_usage_value("prompt_tokens", "input_tokens"),
+        output_tokens=_usage_value("completion_tokens", "output_tokens"),
+        cache_tokens=_usage_value("cached_tokens", "cache_read_tokens"),
+        total_tokens=_usage_value("total_tokens"),
+        latency_ms=round((time.monotonic() - invocation_started_at) * 1000, 3),
+        runtime_import_seconds=imported_at - setup_started,
+        runtime_tools_seconds=tools_built_at - imported_at,
+        runtime_llm_seconds=llm_built_at - tools_built_at,
+        runtime_agent_seconds=agent_built_at - llm_built_at,
+        runtime_kickoff_seconds=time.monotonic() - agent_built_at,
     )
     return raw_text
 

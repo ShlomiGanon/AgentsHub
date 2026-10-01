@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 _current_trace_id: ContextVar[str] = ContextVar("current_trace_id", default="")
 _current_stage: ContextVar[str] = ContextVar("current_stage", default="")
 _current_protocol: ContextVar[str | None] = ContextVar("current_protocol", default=None)
+_current_event_id: ContextVar[str | None] = ContextVar("current_event_id", default=None)
+_active_profile_name = ""
 _TRACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _latency_samples: dict[str, list[float]] = defaultdict(list)
 _latency_lock = threading.Lock()
@@ -214,6 +216,14 @@ def get_current_protocol() -> str | None:
     return _current_protocol.get()
 
 
+def get_current_event_id() -> str | None:
+    return _current_event_id.get()
+
+
+def get_profile_name() -> str:
+    return _active_profile_name
+
+
 @contextmanager
 def protocol_context(protocol_name: str):
     token = _current_protocol.set(protocol_name)
@@ -221,6 +231,15 @@ def protocol_context(protocol_name: str):
         yield
     finally:
         _current_protocol.reset(token)
+
+
+@contextmanager
+def event_id_context(event_id: str | None):
+    token = _current_event_id.set(event_id)
+    try:
+        yield
+    finally:
+        _current_event_id.reset(token)
 
 
 @contextmanager
@@ -252,17 +271,12 @@ def stage_context(stage: str):
         if _stage_histogram is not None:
             _stage_histogram.record(duration_seconds, {"stage": stage, "status": status})
 
-        logger.info(
-            "stage finished",
-            extra={
-                "event": "stage_finished",
-                "stage": stage,
-                "status": status,
-                "termination_reason": termination_reason,
-                "duration_seconds": duration_seconds,
-                "trace_id": get_trace_id(),
-                "telemetry_only": True,
-            },
+        from tools.log_events import stage_finished
+        stage_finished(
+            stage=stage,
+            status=status,
+            termination_reason=termination_reason,
+            duration_seconds=duration_seconds,
         )
 
         if span_context is not None:
@@ -497,7 +511,36 @@ def _render_tool_call(f: dict[str, Any], record: logging.LogRecord) -> str:
 
 
 def _render_queue_processing_failed(f: dict[str, Any], record: logging.LogRecord) -> str:
-    return f"queue item failed → {_truncate(f.get('item', ''))}"
+    return f"queue item failed → {f.get('event_id') or '?'}"
+
+
+def _render_specialist_started(f: dict[str, Any], record: logging.LogRecord) -> str:
+    return f"specialist started → {f.get('agent', '?')}"
+
+
+def _render_specialist_finished(f: dict[str, Any], record: logging.LogRecord) -> str:
+    return f"specialist {f.get('status', '?')} → {f.get('agent', '?')} ({f.get('duration_ms', '?')}ms)"
+
+
+def _render_specialist_failed(f: dict[str, Any], record: logging.LogRecord) -> str:
+    return f"specialist failed → {f.get('agent', '?')} ({_truncate(f.get('cause', ''))})"
+
+
+def _render_specialist_timeout(f: dict[str, Any], record: logging.LogRecord) -> str:
+    return f"specialist timed out → {f.get('agent', '?')} after {f.get('timeout_seconds', '?')}s"
+
+
+def _render_queue_started(f: dict[str, Any], record: logging.LogRecord) -> str:
+    event_id = f.get("event_id") or "-"
+    return f"queue started → {event_id} (wait {f.get('queue_wait_seconds', '?')}s)"
+
+
+def _render_agent_invocation_started(f: dict[str, Any], record: logging.LogRecord) -> str:
+    return f"agent invocation started → {f.get('agent') or f.get('agent_name', '?')}"
+
+
+def _render_agent_invocation_finished(f: dict[str, Any], record: logging.LogRecord) -> str:
+    return f"agent invocation {f.get('status', '?')} → {f.get('agent') or f.get('agent_name', '?')}"
 
 
 def _render_api_error(f: dict[str, Any], record: logging.LogRecord) -> str:
@@ -539,6 +582,13 @@ _EVENT_RENDERERS: dict[str, Callable[[dict[str, Any], logging.LogRecord], str]] 
     "tool_blocked": _render_tool_blocked,
     "tool_call": _render_tool_call,
     "queue_processing_failed": _render_queue_processing_failed,
+    "queue_started": _render_queue_started,
+    "specialist_started": _render_specialist_started,
+    "specialist_finished": _render_specialist_finished,
+    "specialist_failed": _render_specialist_failed,
+    "specialist_timeout": _render_specialist_timeout,
+    "agent_invocation_started": _render_agent_invocation_started,
+    "agent_invocation_finished": _render_agent_invocation_finished,
     "api_error": _render_api_error,
     "api_unexpected_error": _render_api_unexpected_error,
     "model_io": _render_model_io,
@@ -604,6 +654,9 @@ class _PersistenceLogHandler(logging.Handler):
             "provider_request_failed",
             "queue_started",
             "stage_finished",
+            "agent_invocation_started",
+            "agent_invocation_finished",
+            "reply_latency",
         }
         if (
             getattr(record, "telemetry_only", False)
@@ -667,6 +720,10 @@ def configure_logging(profile_name: str, level: int | None = None, persistence: 
 
     root = logging.getLogger()
     root.setLevel(level if level is not None else (logging.DEBUG if base_config.DEBUG_FLAG else logging.INFO))
+    from logging.handlers import RotatingFileHandler
+    for handler in list(root.handlers):
+        if isinstance(handler, RotatingFileHandler):
+            handler.close()
     root.handlers.clear()
     if not any(isinstance(log_filter, _RedundantCrewAIErrorFilter) for log_filter in root.filters):
         root.addFilter(_RedundantCrewAIErrorFilter())
@@ -682,6 +739,15 @@ def configure_logging(profile_name: str, level: int | None = None, persistence: 
 
     if persistence is not None:
         root.addHandler(_PersistenceLogHandler(persistence))
+
+    from tools.log_paths import server_jsonl_path, should_write_server_jsonl
+    if should_write_server_jsonl():
+        jsonl_path = server_jsonl_path(profile_name)
+        file_handler = RotatingFileHandler(
+            jsonl_path, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8",
+        )
+        file_handler.setFormatter(_JsonFormatter())
+        root.addHandler(file_handler)
 
 
 def verbose_logging_enabled() -> bool:

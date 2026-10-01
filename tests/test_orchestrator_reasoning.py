@@ -16,8 +16,10 @@ from orchestrator.main_agent import (
     assess_risk,
     construct_core_agents,
     formulate_event_data_question,
+    extract_and_decide,
     make_operational_decision,
 )
+from profiles import AreaRegistry, EventTypeRegistry
 from protocols.model import CriticalityLevel, Protocol
 
 
@@ -375,6 +377,69 @@ def test_make_operational_decision_auto_resolves_an_ambiguous_selection_with_a_s
     assert decision.risk.level == "low"  # the safety_critical candidate is what must trigger this, not risk
     assert decision.selection.status == "selected"
     assert decision.selection.protocol_name == "report_security_incident"
+
+
+def _extract_and_decide_payload(**overrides):
+    payload = {
+        "classification": "attendance",
+        "area": "north",
+        "entities": [],
+        "description": "available today",
+        "severity": None,
+        "occurred_at": None,
+        "availability_start": None,
+        "availability_end": None,
+        "absence_reason": None,
+        "risk_score": 0.1,
+        "risk_reason": "routine attendance",
+        "protocol_status": "selected",
+        "protocol_name": "record_attendance",
+        "candidate_names": [],
+        "protocol_reason": "matches attendance",
+    }
+    payload.update(overrides)
+    import json
+    return json.dumps(payload)
+
+
+def test_extract_and_decide_returns_the_same_fields_as_the_two_step_path():
+    agent = _ScriptedMainAgent(_extract_and_decide_payload())
+    extraction, decision = extract_and_decide(
+        agent,
+        "available today",
+        "telegram",
+        "2026-08-20T10:00:00",
+        EventTypeRegistry(("attendance", "fire")),
+        AreaRegistry(("north",)),
+        _one_protocol(),
+        risk_threshold=0.5,
+    )
+
+    assert extraction.classification == "attendance"
+    assert extraction.area == "north"
+    assert extraction.description == "available today"
+    assert decision is not None
+    assert decision.risk.level == "low"
+    assert decision.selection.status == "selected"
+    assert decision.selection.protocol_name == "record_attendance"
+    assert len(agent.calls) == 1
+
+
+def test_extract_and_decide_falls_back_to_extraction_only_when_operational_fields_are_unusable():
+    agent = _ScriptedMainAgent(_extract_and_decide_payload(risk_score=2, protocol_reason=""))
+    extraction, decision = extract_and_decide(
+        agent,
+        "available today",
+        "telegram",
+        "2026-08-20T10:00:00",
+        EventTypeRegistry(("attendance", "fire")),
+        AreaRegistry(("north",)),
+        _one_protocol(),
+        risk_threshold=0.5,
+    )
+
+    assert extraction.classification == "attendance"
+    assert decision is None
 
 
 def test_make_operational_decision_leaves_a_low_risk_non_safety_critical_ambiguity_unresolved():

@@ -145,29 +145,7 @@ def _decode_summary_row(summary_row: sqlite3.Row) -> dict:
     return decoded
 
 
-def _upsert_steps(connection: sqlite3.Connection, event_id: str, steps: list[dict]) -> None:
-    for step in steps:
-        requested_status = step.get("status", "auto")
-        status = (
-            "succeeded" if step.get("result_text") is not None else "failed"
-        ) if requested_status == "auto" else requested_status
-        payload = {
-            "event_id": event_id,
-            "step_index": step["step_index"],
-            "agent_name": step["agent_name"],
-            "task_text": step["task_text"],
-            "allowed_tools": json.dumps(step.get("allowed_tools", [])),
-            "result_text": step.get("result_text"),
-            "attempt_count": step.get("attempt_count", 0),
-            "step_id": step.get("step_id") or str(step["step_index"]),
-            "depends_on": json.dumps(step.get("depends_on", [])),
-            "required_event_fields": json.dumps(step.get("required_event_fields", [])),
-            "missing_event_fields": json.dumps(step.get("missing_event_fields", [])),
-            "status": status,
-            "failure_reason": step.get("failure_reason"),
-        }
-        connection.execute(
-            """
+_UPSERT_STEPS_SQL = """
             INSERT INTO event_steps (
                 event_id, step_index, agent_name, task_text, allowed_tools, result_text, attempt_count,
                 step_id, depends_on, required_event_fields, missing_event_fields, status, failure_reason
@@ -188,9 +166,33 @@ def _upsert_steps(connection: sqlite3.Connection, event_id: str, steps: list[dic
                 missing_event_fields = excluded.missing_event_fields,
                 status = excluded.status,
                 failure_reason = excluded.failure_reason
-            """,
-            payload,
-        )
+            """
+
+
+def _upsert_steps(connection: sqlite3.Connection, event_id: str, steps: list[dict]) -> None:
+    payloads = []
+    for step in steps:
+        requested_status = step.get("status", "auto")
+        status = (
+            "succeeded" if step.get("result_text") is not None else "failed"
+        ) if requested_status == "auto" else requested_status
+        payloads.append({
+            "event_id": event_id,
+            "step_index": step["step_index"],
+            "agent_name": step["agent_name"],
+            "task_text": step["task_text"],
+            "allowed_tools": json.dumps(step.get("allowed_tools", [])),
+            "result_text": step.get("result_text"),
+            "attempt_count": step.get("attempt_count", 0),
+            "step_id": step.get("step_id") or str(step["step_index"]),
+            "depends_on": json.dumps(step.get("depends_on", [])),
+            "required_event_fields": json.dumps(step.get("required_event_fields", [])),
+            "missing_event_fields": json.dumps(step.get("missing_event_fields", [])),
+            "status": status,
+            "failure_reason": step.get("failure_reason"),
+        })
+    if payloads:
+        connection.executemany(_UPSERT_STEPS_SQL, payloads)
 
 
 def _insert_notification(connection: sqlite3.Connection, kind: str, event_id: str) -> None:

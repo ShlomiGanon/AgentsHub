@@ -69,6 +69,42 @@ def test_duplicate_source_message_returns_the_existing_event(tmp_path):
         store.close()
 
 
+def test_policy_queue_shared_store_key_serializes_different_senders():
+    processed: list[str] = []
+    event_queue = PolicyAwareEventQueue(processed.append, workers=2, max_size=10, reserved_continuation_percent=20)
+    event_queue.start()
+    event_queue.submit(WorkItem("first", concurrency_keys=("sender:a", "store:roster")))
+    event_queue.submit(WorkItem("second", concurrency_keys=("sender:b", "store:roster")))
+    event_queue.wait_until_idle()
+    event_queue.stop()
+
+    assert processed == ["first", "second"]
+
+
+def test_policy_queue_different_store_keys_run_together():
+    started: list[str] = []
+    release = threading.Event()
+
+    def _work(item):
+        started.append(item)
+        release.wait(timeout=1.0)
+
+    event_queue = PolicyAwareEventQueue(_work, workers=2, max_size=10, reserved_continuation_percent=20)
+    event_queue.start()
+    event_queue.submit(WorkItem("roster", concurrency_keys=("sender:a", "store:roster")))
+    event_queue.submit(WorkItem("cameras", concurrency_keys=("sender:b", "store:cameras")))
+    try:
+        for _ in range(200):
+            if len(started) == 2:
+                break
+            time.sleep(0.01)
+        assert set(started) == {"roster", "cameras"}
+    finally:
+        release.set()
+        event_queue.wait_until_idle()
+        event_queue.stop()
+
+
 def test_policy_queue_preserves_same_resource_order_and_runs_to_idle():
     processed: list[str] = []
     event_queue = PolicyAwareEventQueue(processed.append, workers=2, max_size=10, reserved_continuation_percent=20)

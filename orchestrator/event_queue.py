@@ -1,6 +1,5 @@
 """Bounded event queues with legacy serial and policy-aware modes."""
 
-import logging
 import queue
 import threading
 import time
@@ -8,9 +7,8 @@ from dataclasses import dataclass, field
 from itertools import count
 from typing import Callable
 
-from tools import get_trace_id, stage_context, trace_context
-
-logger = logging.getLogger(__name__)
+from tools import stage_context, trace_context
+from tools.log_events import queue_deadline_expired, queue_processing_failed, queue_started, queue_stop_timeout
 _STOP = object()
 STOP_JOIN_TIMEOUT_SECONDS = 2.0
 
@@ -70,14 +68,7 @@ class SerialEventQueue:
         self._queue.put(_STOP)
         self._worker.join(timeout=STOP_JOIN_TIMEOUT_SECONDS)
         if self._worker.is_alive():
-            logger.warning(
-                "event queue worker still running after stop timeout",
-                extra={
-                    "event": "queue_stop_timeout",
-                    "queue_name": type(self).__name__,
-                    "timeout_seconds": STOP_JOIN_TIMEOUT_SECONDS,
-                },
-            )
+            queue_stop_timeout(queue_name=type(self).__name__, timeout_seconds=STOP_JOIN_TIMEOUT_SECONDS)
 
     def _run(self) -> None:
         while True:
@@ -90,22 +81,15 @@ class SerialEventQueue:
             self._currently_processing = queued_item
             try:
                 with trace_context(work_item.trace_id or None):
-                    logger.info(
-                        "queue item started",
-                        extra={
-                            "event": "queue_started",
-                            "trace_id": get_trace_id(),
-                            "queue_wait_seconds": time.monotonic() - work_item.submitted_at,
-                            "telemetry_only": True,
-                        },
+                    queue_started(
+                        queue_wait_seconds=time.monotonic() - work_item.submitted_at,
+                        payload=queued_item,
+                        concurrency_keys=work_item.concurrency_keys,
                     )
                     with stage_context("queue_execution"):
                         self._process_fn(queued_item)
             except Exception:
-                logger.exception(
-                    "event processing failed; continuing with the next queued event",
-                    extra={"event": "queue_processing_failed", "item": repr(queued_item)},
-                )
+                queue_processing_failed(payload=queued_item)
             finally:
                 self._currently_processing = None
                 self._queue.task_done()
@@ -191,14 +175,7 @@ class PolicyAwareEventQueue:
             remaining = deadline - time.monotonic()
             worker.join(timeout=max(0.0, remaining))
         if any(worker.is_alive() for worker in self._workers):
-            logger.warning(
-                "event queue worker still running after stop timeout",
-                extra={
-                    "event": "queue_stop_timeout",
-                    "queue_name": type(self).__name__,
-                    "timeout_seconds": STOP_JOIN_TIMEOUT_SECONDS,
-                },
-            )
+            queue_stop_timeout(queue_name=type(self).__name__, timeout_seconds=STOP_JOIN_TIMEOUT_SECONDS)
 
     def _locks_for(self, keys: tuple[str, ...]) -> list[threading.Lock]:
         with self._resource_lock_guard:
@@ -221,24 +198,22 @@ class PolicyAwareEventQueue:
             with self._state_lock:
                 self._currently_processing[worker_id] = payload
             try:
-                logger.info(
-                    "queue item started",
-                    extra={
-                        "event": "queue_started",
-                        "trace_id": work_item.trace_id,
-                        "queue_wait_seconds": time.monotonic() - work_item.submitted_at,
-                        "telemetry_only": True,
-                    },
-                )
-                if work_item.deadline_monotonic is not None and time.monotonic() >= work_item.deadline_monotonic:
-                    logger.warning("queue item deadline expired", extra={"event": "queue_deadline_expired", "item": repr(payload)})
-                else:
-                    for resource_lock in locks:
-                        resource_lock.acquire()
-                    with trace_context(work_item.trace_id or None), stage_context("queue_execution"):
-                        self._process_fn(payload)
+                with trace_context(work_item.trace_id or None):
+                    queue_started(
+                        queue_wait_seconds=time.monotonic() - work_item.submitted_at,
+                        payload=payload,
+                        concurrency_keys=work_item.concurrency_keys,
+                    )
+                    if work_item.deadline_monotonic is not None and time.monotonic() >= work_item.deadline_monotonic:
+                        queue_deadline_expired(payload=payload)
+                    else:
+                        for resource_lock in locks:
+                            resource_lock.acquire()
+                        with stage_context("queue_execution"):
+                            self._process_fn(payload)
             except Exception:
-                logger.exception("event processing failed; continuing", extra={"event": "queue_processing_failed", "item": repr(payload)})
+                with trace_context(work_item.trace_id or None):
+                    queue_processing_failed(payload=payload)
             finally:
                 for resource_lock in reversed(locks):
                     if resource_lock.locked():

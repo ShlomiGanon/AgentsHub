@@ -33,8 +33,10 @@ class _FakeBaseTool:
 @pytest.fixture(autouse=True)
 def _empty_llm_cache():
     adapter._clear_llm_cache()
+    adapter._clear_agent_cache()
     yield
     adapter._clear_llm_cache()
+    adapter._clear_agent_cache()
 
 
 def _make_fake_crewai(kickoff_behavior):
@@ -141,6 +143,35 @@ def test_invoke_without_crewai_installed_raises_the_same_error(monkeypatch):
 
 
 # -- invoke() against a fake crewai ------------------------------------------
+
+
+def test_invoke_reuses_a_cached_crewai_agent_on_the_same_name_tools_and_policy(monkeypatch):
+    constructions = []
+
+    class _CountingAgent:
+        def __init__(self, **kwargs):
+            constructions.append(kwargs)
+
+        def kickoff(self, text):
+            return _FakeOutput(f"handled: {text}")
+
+    class _FakeLLM:
+        def __init__(self, **kwargs):
+            pass
+
+    fake_module = types.SimpleNamespace(Agent=_CountingAgent, LLM=_FakeLLM, tools=types.SimpleNamespace(BaseTool=_FakeBaseTool))
+    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+    monkeypatch.setattr(
+        adapter,
+        "provider_capabilities",
+        lambda model: ProviderCapabilities(thread_safe_client=True),
+    )
+
+    descriptor = _descriptor(model="model-x")
+    adapter.invoke(descriptor, {}, "first", 30)
+    adapter.invoke(descriptor, {}, "second", 30)
+
+    assert len(constructions) == 1
 
 
 def test_invoke_returns_raw_text_on_success(monkeypatch):
@@ -330,7 +361,7 @@ def test_explicitly_thread_safe_provider_reuses_identical_llm_configuration(monk
     adapter.invoke(descriptor, {}, "two", 30)
 
     assert len(created_llms) == 1
-    assert agent_llms[0] is agent_llms[1]
+    assert len(agent_llms) == 1
 
 
 def test_llm_cache_isolates_credentials_and_invocation_options(monkeypatch):

@@ -126,12 +126,44 @@ def _summary_source(level: str, summary: dict, classification: str | None, area:
     )
 
 
+def _raw_event_sources(events: list[dict], classification: str | None, area: str | None) -> list[RetrievedSource]:
+    sources = []
+    for event in events:
+        if classification is not None and event.get("classification") != classification:
+            continue
+        if area is not None and event.get("area") != area:
+            continue
+        period = event.get("occurred_at") or event["received_at"]
+        sources.append(
+            RetrievedSource(
+                level="raw_event",
+                period_start=period,
+                period_end=period,
+                source_id=event["event_id"],
+                content=event,
+                matched_event_ids=(event["event_id"],),
+            )
+        )
+    return sources
+
+
 def retrieve_range(persistence, start: datetime, end: datetime, classification: str | None, area: str | None) -> list[RetrievedSource]:
     if end <= start:
         raise ValueError("time_end must be later than time_start")
 
     sources = []
     cursor = start
+    raw_gap_start = None
+
+    def flush_raw(gap_end: datetime) -> None:
+        nonlocal raw_gap_start
+        if raw_gap_start is None or gap_end <= raw_gap_start:
+            raw_gap_start = None
+            return
+        events = persistence.fetch_events_range(storage_timestamp(raw_gap_start), storage_timestamp(gap_end))
+        sources.extend(_raw_event_sources(events, classification, area))
+        raw_gap_start = None
+
     while cursor < end:
         candidates = []
         year_start, year_end = year_bounds(cursor)
@@ -151,6 +183,7 @@ def retrieve_range(persistence, start: datetime, end: datetime, classification: 
             if summary is None:
                 continue
 
+            flush_raw(cursor)
             history_source = _summary_source(level, summary, classification, area)
             if history_source is not None:
                 sources.append(history_source)
@@ -161,26 +194,11 @@ def retrieve_range(persistence, start: datetime, end: datetime, classification: 
         if used_summary:
             continue
 
-        raw_end = min(day_end, end)
-        events = persistence.fetch_events_range(storage_timestamp(cursor), storage_timestamp(raw_end))
-        for event in events:
-            if classification is not None and event.get("classification") != classification:
-                continue
-            if area is not None and event.get("area") != area:
-                continue
-            period = event.get("occurred_at") or event["received_at"]
-            sources.append(
-                RetrievedSource(
-                    level="raw_event",
-                    period_start=period,
-                    period_end=period,
-                    source_id=event["event_id"],
-                    content=event,
-                    matched_event_ids=(event["event_id"],),
-                )
-            )
-        cursor = raw_end
+        if raw_gap_start is None:
+            raw_gap_start = cursor
+        cursor = min(day_end, end)
 
+    flush_raw(end)
     return sources
 
 
@@ -196,18 +214,11 @@ def find_precedents(
     window_start = window_end - timedelta(days=settings_store.get_lookback_window_days())
 
     events_by_id = {}
-    sources = retrieve_range(persistence, window_start, window_end, classification, area)
-    for source in sources:
-        if source.level == "raw_event":
-            event = source.content
-            if event["event_id"] != target_event_id:
-                events_by_id[event["event_id"]] = event
-            continue
-
-        events = persistence.fetch_events_by_type_area_window(classification, area, source.period_start, source.period_end)
-        for event in events:
-            if event["event_id"] != target_event_id:
-                events_by_id[event["event_id"]] = event
+    for event in persistence.fetch_events_by_type_area_window(
+        classification, area, storage_timestamp(window_start), storage_timestamp(window_end),
+    ):
+        if event["event_id"] != target_event_id:
+            events_by_id[event["event_id"]] = event
 
     matches = [
         PrecedentMatch(

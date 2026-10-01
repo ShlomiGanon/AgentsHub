@@ -156,6 +156,11 @@ def test_querying_by_trace_id_returns_every_log_row_for_one_request_in_order(tmp
         "model_invocation_finished",
         "queue_started",
         "stage_finished",
+        "agent_invocation_started",
+        "agent_invocation_finished",
+        "reply_latency",
+        "provider_request_finished",
+        "provider_request_failed",
     }
     events_in_order = [
         e["event"] for e in entries
@@ -451,6 +456,7 @@ def test_a_disallowed_tool_is_not_exposed_through_a_real_protocol_run(tmp_path, 
     """
 
     exposed_tool_names = []
+    adapter._clear_agent_cache()
     monkeypatch.setattr(
         adapter,
         "_get_crewai",
@@ -489,6 +495,7 @@ def test_a_transient_step_failure_is_retried_and_both_are_logged_with_cause(tmp_
     """
 
     fake_module, calls = _fake_crewai_failing_once_then_succeeding()
+    adapter._clear_agent_cache()
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
     agent = happy_path_agent(risk_score="0.2", selected="status_check", verdict="success")

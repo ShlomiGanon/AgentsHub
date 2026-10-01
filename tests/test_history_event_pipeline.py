@@ -241,6 +241,7 @@ from history.interface import (
     record_extracted_fields,
     record_initial_event,
     record_step_execution,
+    record_step_executions,
 )
 from persistence.interface import open_persistence
 
@@ -276,6 +277,31 @@ def test_initial_event_rejects_an_unknown_sender_permission_level(store):
                 sender_permission_level="administrator",
             ),
         )
+
+
+def test_record_step_executions_writes_every_step_in_one_update(store):
+    event_id = _initial(store)
+    writes = []
+    original = store.update_event
+
+    def _counting(event_id, updates):
+        writes.append(updates)
+        return original(event_id, updates)
+
+    store.update_event = _counting
+    record_step_executions(
+        store,
+        event_id,
+        (
+            StepExecutionEnvelope(0, "a", "one", ["read"], None, 0, status="pending"),
+            StepExecutionEnvelope(1, "b", "two", ["write"], None, 0, status="pending"),
+        ),
+    )
+
+    assert len(writes) == 1
+    assert [step["step_index"] for step in writes[0]["steps"]] == [0, 1]
+    event = store.fetch_event(event_id)
+    assert [step["task_text"] for step in event["steps"]] == ["one", "two"]
 
 
 def test_history_write_path_is_incremental(store):

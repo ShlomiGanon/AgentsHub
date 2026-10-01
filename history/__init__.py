@@ -29,6 +29,7 @@ from history.event_pipeline import (
     record_extracted_fields,
     record_initial_event,
     record_step_execution,
+    record_step_executions,
     storage_timestamp,
     year_bounds,
 )
@@ -73,6 +74,7 @@ __all__ = [
     "record_extracted_fields",
     "record_initial_event",
     "record_step_execution",
+    "record_step_executions",
     "retrieve_range",
     "storage_timestamp",
 ]

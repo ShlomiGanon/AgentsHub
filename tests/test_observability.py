@@ -364,6 +364,57 @@ def test_disabling_console_json_never_affects_the_db_sink(capsys, monkeypatch):
     assert details["message"] == "something happened"
     assert details["reason"] == "why"  # full detail, unaffected by the console flag either way
 
+
+def test_configure_logging_creates_server_jsonl(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTSHUB_LOG_DIR", str(tmp_path))
+    configure_logging("profiles.response_team")
+    logging.getLogger("test").info("hello-jsonl", extra={"event": "report_received"})
+
+    path = tmp_path / "server.jsonl"
+    assert path.exists()
+    record = json.loads(path.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert record["message"] == "hello-jsonl"
+    assert record["event"] == "report_received"
+
+
+def test_agent_invocation_started_is_written_when_persistence_is_attached():
+    from tools.log_events import agent_invocation_started
+
+    fake = _FakePersistence()
+    configure_logging("test_profile", persistence=fake)
+    with trace_context("trace-invocation"):
+        agent_invocation_started(
+            agent="main_agent",
+            invocation_id="inv-1",
+            allowed_tools=["check_status"],
+            task_summary="inspect gate",
+            parent_agent="orchestrator",
+        )
+
+    events = {details["event"]: details for _trace_id, details in fake.calls}
+    assert "agent_invocation_started" in events
+    details = events["agent_invocation_started"]
+    assert details["agent"] == "main_agent"
+    assert details["agent_name"] == "main_agent"
+    assert details["allowed_tools"] == ["check_status"]
+    assert details["parent_agent"] == "orchestrator"
+    written = [trace_id for trace_id, details in fake.calls if details.get("event") == "agent_invocation_started"]
+    assert written == ["trace-invocation"]
+
+
+def test_reply_latency_is_written_when_persistence_is_attached():
+    from tools.log_events import reply_latency
+
+    fake = _FakePersistence()
+    configure_logging("test_profile", persistence=fake)
+    with trace_context("trace-latency"):
+        reply_latency(event_id="evt-1", elapsed_seconds=1.5)
+
+    events = {details["event"]: details for _trace_id, details in fake.calls}
+    assert events["reply_latency"]["event_id"] == "evt-1"
+    assert events["reply_latency"]["elapsed_seconds"] == 1.5
+
+
 """tools/simulator.py (work_plan.md §9.1)."""
 
 import types

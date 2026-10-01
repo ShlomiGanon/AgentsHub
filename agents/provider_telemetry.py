@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from contextlib import contextmanager
 from contextvars import ContextVar
-import logging
 import threading
 from collections import OrderedDict
 from typing import Any
@@ -12,8 +11,7 @@ from typing import Any
 from agents.invocation_context import (current_invocation_agent, current_invocation_id,
     current_parent_agent, current_parent_invocation_id, last_invocation_tool)
 from tools import get_current_protocol, get_current_stage, get_trace_id
-
-logger = logging.getLogger(__name__)
+from tools.log_events import provider_request_finished
 
 
 @dataclass(frozen=True)
@@ -152,47 +150,42 @@ def _write_finish(start: _CallStart, event: Any) -> None:
     if start.finish_reasons is not None and finish_reason is not None:
         start.finish_reasons.append(str(finish_reason))
     finished_at = event.timestamp
-    logger.info(
-        "provider request failed" if failed else "provider request finished",
-        extra={
-            "event": "provider_request_failed" if failed else "provider_request_finished",
-            "call_id": event.call_id,
-            "provider_request_id": getattr(event, "response_id", None) or event.call_id,
-            "telemetry_call_id": event.call_id,
-            "invocation_id": start.invocation_id,
-            "agent": start.agent,
-            "agent_name": start.agent,
-            "agent_invocation_id": start.invocation_id,
-            "parent_agent": start.parent_agent,
-            "parent_invocation_id": start.parent_invocation_id,
-            "provider": _provider_name(start.model),
-            "model": start.model,
-            "stage": start.stage,
-            "purpose": start.purpose,
-            "protocol_name": start.protocol_name,
-            "tool_name": start.tool_name,
-            "sequence_number": start.sequence_number,
-            "started_at": start.started_at.isoformat(),
-            "finished_at": finished_at.isoformat(),
-            "attempt": 1,
-            "status": "error" if failed else "success",
-            "error_detail": _provider_error_detail(event) if failed else None,
-            "termination_reason": (
-                type(getattr(event, "error", None)).__name__
-                if failed and not isinstance(getattr(event, "error", None), str)
-                else ("provider_error" if failed else (finish_reason or "completed"))
-            ),
-            "latency_ms": round(elapsed_ms, 3),
-            "input_tokens": _usage_value(usage, "prompt_tokens", "input_tokens"),
-            "output_tokens": _usage_value(usage, "completion_tokens", "output_tokens"),
-            "cache_tokens": _cache_tokens(usage),
-            "total_tokens": _usage_value(usage, "total_tokens"),
-            "finish_reason": finish_reason,
-            "response_id": getattr(event, "response_id", None),
-            "call_type": str(getattr(event, "call_type", "")) or None,
-            "trace_id": start.trace_id,
-            "telemetry_only": True,
-        },
+    provider_request_finished(
+        call_id=event.call_id,
+        provider_request_id=getattr(event, "response_id", None) or event.call_id,
+        telemetry_call_id=event.call_id,
+        invocation_id=start.invocation_id,
+        agent=start.agent,
+        agent_name=start.agent,
+        agent_invocation_id=start.invocation_id,
+        parent_agent=start.parent_agent,
+        parent_invocation_id=start.parent_invocation_id,
+        provider=_provider_name(start.model),
+        model=start.model,
+        stage=start.stage,
+        purpose=start.purpose,
+        protocol_name=start.protocol_name,
+        tool_name=start.tool_name,
+        sequence_number=start.sequence_number,
+        started_at=start.started_at.isoformat(),
+        finished_at=finished_at.isoformat(),
+        attempt=1,
+        status="error" if failed else "success",
+        error_detail=_provider_error_detail(event) if failed else None,
+        termination_reason=(
+            type(getattr(event, "error", None)).__name__
+            if failed and not isinstance(getattr(event, "error", None), str)
+            else ("provider_error" if failed else (finish_reason or "completed"))
+        ),
+        latency_ms=round(elapsed_ms, 3),
+        input_tokens=_usage_value(usage, "prompt_tokens", "input_tokens"),
+        output_tokens=_usage_value(usage, "completion_tokens", "output_tokens"),
+        cache_tokens=_cache_tokens(usage),
+        total_tokens=_usage_value(usage, "total_tokens"),
+        finish_reason=finish_reason,
+        response_id=getattr(event, "response_id", None),
+        call_type=str(getattr(event, "call_type", "")) or None,
+        trace_id=start.trace_id or None,
     )
 
 

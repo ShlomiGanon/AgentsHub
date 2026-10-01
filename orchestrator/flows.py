@@ -2,7 +2,6 @@
 
 import functools
 import json
-import logging
 import threading
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -19,7 +18,7 @@ from history import (
     record_event_state,
     record_extracted_fields,
     record_initial_event,
-    record_step_execution,
+    record_step_executions,
     storage_timestamp,
 )
 from orchestrator.holds import (
@@ -51,6 +50,7 @@ from orchestrator.reasoning import (
     make_operational_decision,
     plan_message,
     rewrite_task,
+    extract_and_decide,
     extract_event_data_update,
     select_protocol,
     ProtocolSelectionResult,
@@ -82,7 +82,34 @@ from protocols import CriticalityLevel, EVENT_DATA_FIELDS, ResourceUnavailable, 
 from protocols.executor import execute_steps
 from agents import AgentModelError, AgentTimeoutError, InvocationPolicy, authenticated_request_identity, is_retryable_invocation_error
 from messages import get_catalog
-from tools import get_trace_id, stage_context
+from tools import event_id_context, get_trace_id, protocol_context, stage_context
+from tools.log_events import (
+    direct_lane_accepted,
+    direct_lane_declined,
+    event_correction_recorded,
+    event_outcome,
+    extraction_result as log_extraction_result,
+    extraction_retry,
+    final_assessment_invalid,
+    final_verdict,
+    hold_created,
+    hold_escalated,
+    hold_reminder_sent,
+    hold_resolved,
+    hold_sweep_failed,
+    insight_generated,
+    operational_decision_invalid,
+    precedent_closure,
+    protocol_selection,
+    protocol_waiting_for_event_data,
+    reply_latency,
+    report_received,
+    request_received,
+    resource_unavailable_alert,
+    resource_unavailable_description_failed,
+    risk_assessed,
+    synthesis_failed,
+)
 
 if TYPE_CHECKING:
     from agents import Agent
@@ -97,8 +124,6 @@ if TYPE_CHECKING:
     from protocols import Protocol, ProtocolSet
     from profiles import AreaRegistry, EventTypeRegistry
     from messages import MessageCatalog
-
-logger = logging.getLogger(__name__)
 
 
 def _deadline_failure(deps: "FlowDeps", event_id: str, next_stage: str) -> "FlowResult | None":
@@ -220,14 +245,7 @@ def _model_invoker_for(main_agent: "MainAgent"):
             # task formulation and success judgment. MODEL_TIMEOUT_SECONDS and
             # the zero provider-retry configuration are untouched; this is one
             # additional application-level attempt, not a provider retry.
-            logger.info(
-                "retrying extraction after model error",
-                extra={
-                    "event": "extraction_retry",
-                    "cause": type(exc).__name__,
-                    "trace_id": get_trace_id(),
-                },
-            )
+            extraction_retry(cause=type(exc).__name__)
             agent_result = main_agent.process(prompt, [])
         if agent_result.status != "success":
             raise ExtractionExecutionError(f"main agent could not produce a usable extraction response: {agent_result.text}")
@@ -243,10 +261,7 @@ def _now() -> str:
 def _log_event_outcome(event_id: str, outcome: str, **detail) -> None:
     """One place every terminal outcome (§1.8's "final verdict") is logged — closed on precedent, declined, failed, succeeded, or uncertain — so a run can be reassembled by querying it..."""
 
-    logger.info(
-        "event outcome",
-        extra={"event": "event_outcome", "event_id": event_id, "outcome": outcome, "trace_id": get_trace_id(), **detail},
-    )
+    event_outcome(event_id=event_id, outcome=outcome, **detail)
 
 
 def _log_reply_latency(deps: FlowDeps, event_id: str) -> None:
@@ -264,13 +279,7 @@ def _log_reply_latency(deps: FlowDeps, event_id: str) -> None:
         elapsed_seconds = (datetime.now(timezone.utc) - parse_timestamp(received_at)).total_seconds()
     except (TypeError, ValueError):
         return
-    logger.info(
-        "reply latency",
-        extra={
-            "event": "reply_latency", "event_id": event_id, "elapsed_seconds": elapsed_seconds,
-            "trace_id": get_trace_id(), "telemetry_only": True,
-        },
-    )
+    reply_latency(event_id=event_id, elapsed_seconds=elapsed_seconds)
 
 
 def _record_outcome_with_report(
@@ -350,10 +359,7 @@ def _remind_unresolved_hold(deps: FlowDeps, kind: str, hold: dict) -> None:
 
     deps.persistence.insert_notification(f"{kind}_hold", hold["event_id"])
     deps.persistence.mark_held_event_reminded(kind, hold["hold_id"], _now())
-    logger.info(
-        "hold reminder sent",
-        extra={"event": "hold_reminder_sent", "hold_kind": kind, "event_id": hold["event_id"], "hold_id": hold["hold_id"]},
-    )
+    hold_reminder_sent(hold_kind=kind, event_id=hold["event_id"], hold_id=hold["hold_id"])
 
 
 def _escalate_unresolved_hold(deps: FlowDeps, kind: str, hold: dict, age_minutes: float) -> None:
@@ -364,10 +370,7 @@ def _escalate_unresolved_hold(deps: FlowDeps, kind: str, hold: dict, age_minutes
     record_event_state(deps.persistence, hold["event_id"], {"hold_escalation_alert_text": alert_text})
     deps.persistence.insert_notification("hold_escalation", hold["event_id"])
     deps.persistence.mark_held_event_escalated(kind, hold["hold_id"], _now())
-    logger.info(
-        "hold escalated to commanders",
-        extra={"event": "hold_escalated", "hold_kind": kind, "event_id": hold["event_id"], "hold_id": hold["hold_id"]},
-    )
+    hold_escalated(hold_kind=kind, event_id=hold["event_id"], hold_id=hold["hold_id"])
 
 
 def _expire_unresolved_hold(deps: FlowDeps, kind: str, hold: dict) -> None:
@@ -456,7 +459,7 @@ class HoldSweepScheduler:
             except Exception as exc:
                 self._last_run_ok = False
                 self._last_run_error = str(exc)
-                logger.exception("hold sweep failed", extra={"event": "hold_sweep_failed"})
+                hold_sweep_failed()
             finally:
                 self._last_run_at = datetime.now(timezone.utc).isoformat()
 
@@ -657,19 +660,10 @@ def attempt_direct_lane(
 
     result = classify_direct_lane(main_agent, deps.protocol_set.all(), deps.registry, raw_text)
     if not result.eligible:
-        logger.info(
-            "direct lane declined; falling back to full pipeline",
-            extra={"event": "direct_lane_declined", "event_id": event_id, "reason": result.reason, "trace_id": get_trace_id()},
-        )
+        direct_lane_declined(event_id=event_id, reason=result.reason)
         return None
 
-    logger.info(
-        "direct lane accepted",
-        extra={
-            "event": "direct_lane_accepted", "event_id": event_id,
-            "actions": [action.tool_name for action in result.actions], "trace_id": get_trace_id(),
-        },
-    )
+    direct_lane_accepted(event_id=event_id, actions=[action.tool_name for action in result.actions])
     return run_direct_lane(deps, event_id, sender_identity, result)
 
 
@@ -700,12 +694,8 @@ def begin_report(
         ),
     )
 
-    logger.info(
-        "report received",
-        extra={
-            "event": "report_received", "event_id": event_id, "source": source,
-            "sender_identity": sender_identity, "raw_text": raw_text, "trace_id": get_trace_id(),
-        },
+    report_received(
+        event_id=event_id, source=source, sender_identity=sender_identity, raw_text=raw_text,
     )
 
     return event_id
@@ -721,27 +711,43 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
     event = deps.persistence.fetch_event(event_id)
     raw_text, source, received_at = event["raw_text"], event["source"], event["received_at"]
 
+    operational_decision = None
     try:
-        extraction_result = extract_event(
-            raw_text, source, received_at, deps.event_type_registry, deps.area_registry,
-            model_invoker=_model_invoker_for(main_agent),
-        )
+        if deps.optimization_policy.operational_decision_mode == "merged":
+            try:
+                extraction_result, operational_decision = extract_and_decide(
+                    main_agent,
+                    raw_text,
+                    source,
+                    received_at,
+                    deps.event_type_registry,
+                    deps.area_registry,
+                    deps.protocol_set.all(),
+                    deps.settings_store.get_risk_threshold(),
+                    preferred_agent_hint=deps.preferred_agent_hint,
+                )
+            except ExtractionExecutionError:
+                extraction_result = extract_event(
+                    raw_text, source, received_at, deps.event_type_registry, deps.area_registry,
+                    model_invoker=_model_invoker_for(main_agent),
+                )
+                operational_decision = None
+        else:
+            extraction_result = extract_event(
+                raw_text, source, received_at, deps.event_type_registry, deps.area_registry,
+                model_invoker=_model_invoker_for(main_agent),
+            )
     except ExtractionExecutionError as exc:
         _record_outcome_with_report(deps, event_id, "failed", failure_reason=str(exc))
         _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="extraction")
         return FlowResult(event_id, "failed", str(exc))
 
-    logger.info(
-        "extraction result",
-        extra={
-            "event": "extraction_result",
-            "event_id": event_id,
-            "classification": extraction_result.classification,
-            "area": extraction_result.area,
-            "missing_fields": list(extraction_result.missing_fields),
-            "occurred_at_is_fallback": extraction_result.occurred_at_is_fallback,
-            "trace_id": get_trace_id(),
-        },
+    log_extraction_result(
+        event_id=event_id,
+        classification=extraction_result.classification,
+        area=extraction_result.area,
+        missing_fields=extraction_result.missing_fields,
+        occurred_at_is_fallback=extraction_result.occurred_at_is_fallback,
     )
 
     record_extracted_fields(deps.persistence, event_id, extraction_result)
@@ -762,7 +768,10 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
         if gate_result is not None:
             return gate_result
 
-        return _continue_after_required_fields(deps, event_id, main_agent, insights_agent, raw_text, resolved_classification)
+        return _continue_after_required_fields(
+            deps, event_id, main_agent, insights_agent, raw_text, resolved_classification,
+            operational_decision=operational_decision,
+        )
     except Exception as exc:
         # Last-resort safety net, mirroring the extraction step's own try/except above: this
         # event already exists (begin_report), and everything from here on runs off the serial
@@ -831,12 +840,8 @@ def _apply_required_fields_gate(
     # waiting_step_ids=() — no protocol has been selected yet. This is what
     # lets resume_after_event_data tell this hold apart from a per-step one.
     create_event_data_hold(deps.persistence, event_id, missing, question, ())
-    logger.info(
-        "hold created",
-        extra={
-            "event": "hold_created", "hold_kind": "event_data", "event_id": event_id,
-            "missing_fields": list(missing), "classification": classification, "trace_id": get_trace_id(),
-        },
+    hold_created(
+        hold_kind="event_data", event_id=event_id, missing_fields=missing, classification=classification,
     )
     return FlowResult(event_id, "waiting_for_event_data", question)
 
@@ -844,6 +849,7 @@ def _apply_required_fields_gate(
 def _continue_after_required_fields(
     deps: "FlowDeps", event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent",
     raw_text: str, classification: str,
+    operational_decision: "OperationalDecision | None" = None,
 ) -> "FlowResult":
     """What extraction would have done next, had the event type's required
     fields already been present — shared by the fresh path
@@ -853,13 +859,14 @@ def _continue_after_required_fields(
     if classification == UNCLASSIFIED_TYPE:
         create_clarification_hold(deps.persistence, event_id, raw_text)
         record_event_state(deps.persistence, event_id, {"clarification_held": True, "clarification_unresolved_field": UNRESOLVED_FIELD})
-        logger.info(
-            "hold created",
-            extra={"event": "hold_created", "hold_kind": "clarification", "event_id": event_id, "unresolved_field": UNRESOLVED_FIELD, "trace_id": get_trace_id()},
+        hold_created(
+            hold_kind="clarification", event_id=event_id, unresolved_field=UNRESOLVED_FIELD,
         )
         return FlowResult(event_id, "held_for_clarification")
 
-    return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent)
+    return continue_from_risk_assessment(
+        deps, event_id, main_agent, insights_agent, operational_decision=operational_decision,
+    )
 
 
 def process_report(
@@ -904,13 +911,7 @@ def begin_request(
     )
     record_event_state(deps.persistence, event_id, {"classification": HUMAN_ACTIVATION_TYPE})
 
-    logger.info(
-        "request received",
-        extra={
-            "event": "request_received", "event_id": event_id,
-            "sender_identity": sender_identity, "raw_text": raw_text, "trace_id": get_trace_id(),
-        },
-    )
+    request_received(event_id=event_id, sender_identity=sender_identity, raw_text=raw_text)
 
     return event_id
 
@@ -987,12 +988,9 @@ def resolve_clarification(
         {"classification": chosen_classification, "clarification_resolved_by": answering_identity, "clarification_chosen_classification": chosen_classification},
     )
 
-    logger.info(
-        "clarification hold resolved",
-        extra={
-            "event": "hold_resolved", "hold_kind": "clarification", "event_id": event_id,
-            "resolved_by": answering_identity, "chosen_classification": chosen_classification, "trace_id": get_trace_id(),
-        },
+    hold_resolved(
+        hold_kind="clarification", event_id=event_id,
+        resolved_by=answering_identity, chosen_classification=chosen_classification,
     )
 
     return answer
@@ -1061,13 +1059,9 @@ def resolve_approval(
         },
     )
 
-    logger.info(
-        "approval hold resolved",
-        extra={
-            "event": "hold_resolved", "hold_kind": "approval", "event_id": event_id, "resolved_by": answering_identity,
-            "decision": decision, "status": answer.status, "selected_protocol": answer.hold["selected_protocol_name"],
-            "trace_id": get_trace_id(),
-        },
+    hold_resolved(
+        hold_kind="approval", event_id=event_id, resolved_by=answering_identity,
+        decision=decision, status=answer.status, selected_protocol=answer.hold["selected_protocol_name"],
     )
 
     return answer
@@ -1088,7 +1082,10 @@ def continue_after_approval(deps: FlowDeps, event_id: str, main_agent: "MainAgen
     event = deps.persistence.fetch_event(event_id)
     precedent_matches = _look_up_precedent_if_possible(deps, event_id, event)
 
-    return _run_protocol(deps, event_id, main_agent, insights_agent, protocol, precedent_matches, event["raw_text"], event["classification"], event["area"], event["description"])
+    return _run_protocol(
+        deps, event_id, main_agent, insights_agent, protocol, precedent_matches,
+        event["raw_text"], event["classification"], event["area"], event["description"], event=event,
+    )
 
 
 def resume_after_approval(
@@ -1133,6 +1130,7 @@ def continue_from_risk_assessment(
     insights_agent: "InsightsAgent",
     originated_from_commander: bool | None = None,
     selected_protocol: "Protocol | None" = None,
+    operational_decision: "OperationalDecision | None" = None,
 ) -> FlowResult:
     deadline_failure = _deadline_failure(deps, event_id, "risk_assessment")
     if deadline_failure is not None:
@@ -1153,18 +1151,16 @@ def continue_from_risk_assessment(
             score=0.8 if risk_level == "high" else 0.2,
             reason="Deterministic button protocol selection",
         )
-        record_event_state(deps.persistence, event_id, {"risk_level": risk_assessment.level, "risk_reason": risk_assessment.reason})
         selection = ProtocolSelectionResult(
             status="selected",
             protocol_name=selected_protocol.name,
             candidate_names=(selected_protocol.name,),
             reason="Deterministic button protocol mapping",
         )
-        record_event_state(deps.persistence, event_id, {"selected_protocol": selection.protocol_name, "protocol_reason": selection.reason})
     else:
         operational_mode = deps.optimization_policy.operational_decision_mode
-        combined_decision = None
-        if operational_mode in {"shadow", "merged"}:
+        combined_decision = operational_decision if operational_mode == "merged" else None
+        if combined_decision is None and operational_mode in {"shadow", "merged"}:
             try:
                 combined_decision = make_operational_decision(
                     main_agent, raw_text, classification, area, description, severity,
@@ -1172,10 +1168,7 @@ def continue_from_risk_assessment(
                     preferred_agent_hint=deps.preferred_agent_hint,
                 )
             except OrchestrationParseError as exc:
-                logger.warning(
-                    "combined operational decision failed validation",
-                    extra={"event": "operational_decision_invalid", "mode": operational_mode, "reason": str(exc), "trace_id": get_trace_id()},
-                )
+                operational_decision_invalid(mode=operational_mode, reason=str(exc))
                 if operational_mode == "merged":
                     _record_outcome_with_report(deps, event_id, "failed", failure_reason=str(exc))
                     return FlowResult(event_id, "failed", str(exc))
@@ -1193,13 +1186,9 @@ def continue_from_risk_assessment(
             _record_outcome_with_report(deps, event_id, "failed", failure_reason=str(exc))
             _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="risk_assessment")
             return FlowResult(event_id, "failed", str(exc))
-        record_event_state(deps.persistence, event_id, {"risk_level": risk_assessment.level, "risk_reason": risk_assessment.reason})
-        logger.info(
-            "risk assessed",
-            extra={
-                "event": "risk_assessed", "event_id": event_id, "risk_level": risk_assessment.level,
-                "risk_score": risk_assessment.score, "risk_reason": risk_assessment.reason, "trace_id": get_trace_id(),
-            },
+        risk_assessed(
+            event_id=event_id, risk_level=risk_assessment.level,
+            risk_score=risk_assessment.score, risk_reason=risk_assessment.reason,
         )
 
         deadline_failure = _deadline_failure(deps, event_id, "protocol_selection")
@@ -1219,25 +1208,23 @@ def continue_from_risk_assessment(
             _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="protocol_selection")
             return FlowResult(event_id, "failed", str(exc))
 
-        if selection.status == "selected":
-            record_event_state(deps.persistence, event_id, {"selected_protocol": selection.protocol_name, "protocol_reason": selection.reason})
-
-    logger.info(
-        "protocol selection",
-        extra={
-            "event": "protocol_selection", "event_id": event_id, "status": selection.status,
-            "protocol_name": selection.protocol_name, "candidate_names": list(selection.candidate_names),
-            "reason": selection.reason, "trace_id": get_trace_id(),
-        },
+    protocol_selection(
+        event_id=event_id, status=selection.status, protocol_name=selection.protocol_name,
+        candidate_names=selection.candidate_names, reason=selection.reason,
     )
 
     precedent_matches = _look_up_precedent_if_possible(deps, event_id, event)
+    state_updates = {
+        "risk_level": risk_assessment.level,
+        "risk_reason": risk_assessment.reason,
+    }
+    if selection.status == "selected":
+        state_updates["selected_protocol"] = selection.protocol_name
+        state_updates["protocol_reason"] = selection.reason
     if precedent_matches:
-        record_event_state(
-            deps.persistence,
-            event_id,
-            {"precedent_matched_event_ids": [precedent_match.event_id for precedent_match in precedent_matches]},
-        )
+        state_updates["precedent_matched_event_ids"] = [precedent_match.event_id for precedent_match in precedent_matches]
+    record_event_state(deps.persistence, event_id, state_updates)
+    event.update(state_updates)
 
     # A precedent can answer an informational report, but it cannot stand in for
     # executing a fresh attendance write.  Repeated availability reports must
@@ -1251,13 +1238,11 @@ def continue_from_risk_assessment(
         if precedent_closure_blocked
         else determine_closure(risk_assessment.level, classification, precedent_matches)
     )
-    logger.info(
-        "precedent closure decision",
-        extra={
-            "event": "precedent_closure", "event_id": event_id,
-            "matched_event_ids": [precedent_match.event_id for precedent_match in precedent_matches],
-            "closed": closing_event_id is not None, "closing_event_id": closing_event_id, "trace_id": get_trace_id(),
-        },
+    precedent_closure(
+        event_id=event_id,
+        matched_event_ids=[precedent_match.event_id for precedent_match in precedent_matches],
+        closed=closing_event_id is not None,
+        closing_event_id=closing_event_id,
     )
     if closing_event_id is not None:
         record_event_state(deps.persistence, event_id, {"precedent_closed_by_event_id": closing_event_id})
@@ -1277,14 +1262,14 @@ def continue_from_risk_assessment(
     if hold_reason is not None:
         create_approval_hold(deps.persistence, event_id, hold_reason, selection, risk_assessment)
         record_event_state(deps.persistence, event_id, {"approval_held": True, "approval_reason": hold_reason})
-        logger.info(
-            "hold created",
-            extra={"event": "hold_created", "hold_kind": "approval", "event_id": event_id, "reason": hold_reason, "trace_id": get_trace_id()},
-        )
+        hold_created(hold_kind="approval", event_id=event_id, reason=hold_reason)
         return FlowResult(event_id, "held_for_approval", hold_reason)
 
     protocol = protocols_by_name[selection.protocol_name]
-    return _run_protocol(deps, event_id, main_agent, insights_agent, protocol, precedent_matches, raw_text, classification, area, description)
+    return _run_protocol(
+        deps, event_id, main_agent, insights_agent, protocol, precedent_matches,
+        raw_text, classification, area, description, event=event,
+    )
 
 
 def _run_protocol(
@@ -1298,21 +1283,24 @@ def _run_protocol(
     classification: str | None,
     area: str | None,
     description: str | None,
+    event: dict | None = None,
 ) -> FlowResult:
     deadline_failure = _deadline_failure(deps, event_id, "formulation")
     if deadline_failure is not None:
         return deadline_failure
+    if event is None:
+        event = deps.persistence.fetch_event(event_id)
     if protocol.direct_tool_binder is not None:
         # Declared direct-tool steps (Phase A): parameters are bound from the event's own
         # extracted fields by the profile's own binder, never by the model — no
         # formulate_tasks/task_rewrite call at all, so precedent_matches (whatever comparable
         # history this event has) structurally cannot reach or escalate a direct-tool step's
         # instructions, since no instructions are ever written for one.
-        direct_tool_steps = protocol.direct_tool_binder(deps.persistence.fetch_event(event_id))
+        direct_tool_steps = protocol.direct_tool_binder(event)
         return _execute_protocol_plan(
             deps, event_id, main_agent, insights_agent, protocol, direct_tool_steps, precedent_matches,
+            event=event,
         )
-    event = deps.persistence.fetch_event(event_id)
     conversation_messages: tuple = ()
     conversation_id = (event or {}).get("conversation_id")
     if conversation_id and deps.conversation_history_turns > 0:
@@ -1334,27 +1322,22 @@ def _run_protocol(
         # only ever accepts one of the RESOLVED precedents it was shown) before reaching here.
         record_event_state(deps.persistence, event_id, {"corrects_event_id": formulation.corrects_event_id})
         record_event_state(deps.persistence, formulation.corrects_event_id, {"retracted": True})
-        logger.info(
-            "event correction recorded",
-            extra={
-                "event": "event_correction_recorded", "event_id": event_id,
-                "corrects_event_id": formulation.corrects_event_id, "trace_id": get_trace_id(),
-            },
-        )
+        event_correction_recorded(event_id=event_id, corrects_event_id=formulation.corrects_event_id)
     if not formulation.success:
         _record_outcome_with_report(deps, event_id, "failed", failure_reason=formulation.failure_reason)
         _log_event_outcome(event_id, "failed", failure_reason=formulation.failure_reason, stage="formulation")
         return FlowResult(event_id, "failed", formulation.failure_reason or "")
     return _execute_protocol_plan(
         deps, event_id, main_agent, insights_agent, protocol, formulation.steps, precedent_matches,
+        event=event,
     )
 
 
 def _persist_step_plan(deps: FlowDeps, event_id: str, steps: tuple[Step, ...]) -> None:
-    for index, step in enumerate(steps):
-        record_step_execution(
-            deps.persistence,
-            event_id,
+    record_step_executions(
+        deps.persistence,
+        event_id,
+        tuple(
             StepExecutionEnvelope(
                 step_index=index,
                 agent_name=step.agent_name,
@@ -1366,8 +1349,10 @@ def _persist_step_plan(deps: FlowDeps, event_id: str, steps: tuple[Step, ...]) -
                 depends_on=step.depends_on,
                 required_event_fields=step.required_event_fields,
                 status="pending",
-            ),
-        )
+            )
+            for index, step in enumerate(steps)
+        ),
+    )
 
 
 def _step_from_row(row: dict) -> Step:
@@ -1437,13 +1422,12 @@ def _persist_step_outcomes(
     nothing about it changes if the step was mutated in the meantime."""
 
     index_by_step_id = {step.step_id: index for index, step in enumerate(steps) if step.step_id}
+    envelopes = []
     for position, outcome in enumerate(outcomes):
         step_key = outcome.step.step_id
         index = index_by_step_id[step_key] if step_key else position
         persisted_step = steps[index]
-        record_step_execution(
-            deps.persistence,
-            event_id,
+        envelopes.append(
             StepExecutionEnvelope(
                 step_index=index,
                 agent_name=persisted_step.agent_name,
@@ -1457,8 +1441,9 @@ def _persist_step_outcomes(
                 missing_event_fields=outcome.missing_event_fields,
                 status=outcome.status,
                 failure_reason=outcome.failure_reason,
-            ),
+            )
         )
+    record_step_executions(deps.persistence, event_id, envelopes)
 
 
 def _execute_protocol_plan(
@@ -1471,8 +1456,10 @@ def _execute_protocol_plan(
     precedent_matches: tuple,
     *,
     resumed: bool = False,
+    event: dict | None = None,
 ) -> FlowResult:
-    event = deps.persistence.fetch_event(event_id)
+    if event is None:
+        event = deps.persistence.fetch_event(event_id)
     if not resumed:
         deadline_failure = _deadline_failure(deps, event_id, "execution")
         if deadline_failure is not None:
@@ -1514,7 +1501,7 @@ def _execute_protocol_plan(
         )
         for step in steps
     )
-    with authenticated_request_identity(event["sender_identity"]):
+    with event_id_context(event_id), protocol_context(protocol.name), authenticated_request_identity(event["sender_identity"]):
         run_result = execute_steps(
             list(execution_steps),
             agents_by_name,
@@ -1553,14 +1540,8 @@ def _execute_protocol_plan(
         create_event_data_hold(
             deps.persistence, event_id, run_result.missing_event_fields, question, waiting_step_ids
         )
-        logger.info(
-            "protocol waiting for event data",
-            extra={
-                "event": "protocol_waiting_for_event_data",
-                "event_id": event_id,
-                "missing_event_fields": list(run_result.missing_event_fields),
-                "trace_id": get_trace_id(),
-            },
+        protocol_waiting_for_event_data(
+            event_id=event_id, missing_event_fields=run_result.missing_event_fields,
         )
         return FlowResult(event_id, "waiting_for_event_data", question)
 
@@ -1622,10 +1603,7 @@ def _finish_with_resource_unavailable(
                 resource.resource_kind, resource.area, resource.reason, deps.registry
             )
         except Exception as exc:
-            logger.warning(
-                "resource unavailable description failed",
-                extra={"event": "resource_unavailable_description_failed", "resource_kind": resource.resource_kind, "reason": str(exc), "trace_id": get_trace_id()},
-            )
+            resource_unavailable_description_failed(resource_kind=resource.resource_kind, reason=str(exc))
     if not alternatives:
         alternatives = deps.message_catalog.text("orchestrator.resource_unavailable.no_alternatives")
 
@@ -1637,12 +1615,8 @@ def _finish_with_resource_unavailable(
         deps, event_id, "handled_resource_unavailable",
         resource_unavailable_fact=fact_sentence, commander_alert_text=commander_alert_text,
     )
-    logger.info(
-        "resource unavailable, alerting commanders",
-        extra={
-            "event": "resource_unavailable_alert", "event_id": event_id, "resource_kind": resource.resource_kind,
-            "area": resource.area, "reason": resource.reason, "trace_id": get_trace_id(),
-        },
+    resource_unavailable_alert(
+        event_id=event_id, resource_kind=resource.resource_kind, area=resource.area, reason=resource.reason,
     )
     _log_event_outcome(event_id, "handled_resource_unavailable", resource_kind=resource.resource_kind, area=resource.area)
     return FlowResult(event_id, "handled_resource_unavailable", fact_sentence)
@@ -1692,10 +1666,7 @@ def _finish_protocol_assessment(
         try:
             final_assessment = assess_final_once(main_agent, protocol, step_outcomes, precedent_matches)
         except OrchestrationParseError as exc:
-            logger.warning(
-                "merged final assessment failed; using separate verifiers",
-                extra={"event": "final_assessment_invalid", "reason": str(exc), "trace_id": get_trace_id()},
-            )
+            final_assessment_invalid(reason=str(exc))
 
     insight_text = (
         final_assessment.insight
@@ -1723,16 +1694,8 @@ def _finish_protocol_assessment(
             if synthesis:
                 insight_text = synthesis
         except Exception as exc:
-            logger.warning(
-                "multi-agent synthesis failed: %s", exc, extra={"event": "synthesis_failed", "trace_id": get_trace_id()}
-            )
-    logger.info(
-        "insight generated",
-        extra={
-            "event": "insight_generated", "event_id": event_id, "protocol": protocol.name,
-            "insight_text": insight_text, "trace_id": get_trace_id(),
-        },
-    )
+            synthesis_failed(cause=str(exc))
+    insight_generated(event_id=event_id, protocol=protocol.name, insight_text=insight_text)
 
     if enforce_deadline:
         deadline_failure = _deadline_failure(deps, event_id, "judgment")
@@ -1756,13 +1719,7 @@ def _finish_protocol_assessment(
 
     outcome = _VERDICT_TO_OUTCOME[verdict.verdict]
     _record_outcome_with_report(deps, event_id, outcome, insight_text=insight_text)
-    logger.info(
-        "final verdict",
-        extra={
-            "event": "final_verdict", "event_id": event_id, "verdict": verdict.verdict,
-            "reasoning": verdict.reasoning, "trace_id": get_trace_id(),
-        },
-    )
+    final_verdict(event_id=event_id, verdict=verdict.verdict, reasoning=verdict.reasoning)
     _log_event_outcome(event_id, outcome, reasoning=verdict.reasoning)
     return FlowResult(event_id, outcome, verdict.reasoning)
 
@@ -1940,5 +1897,6 @@ def resume_after_event_data(
         steps = tuple(_step_from_row(row) for row in rows)
     precedent_matches = _look_up_precedent_if_possible(deps, event_id, event)
     return _execute_protocol_plan(
-        deps, event_id, main_agent, insights_agent, protocol, steps, precedent_matches, resumed=True,
+        deps, event_id, main_agent, insights_agent, protocol, steps, precedent_matches,
+        resumed=True, event=event,
     )

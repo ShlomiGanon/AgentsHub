@@ -12,6 +12,9 @@ from messages import get_catalog
 from orchestrator.main_agent import OrchestrationParseError
 from orchestrator.queue import SerialEventQueue
 from orchestrator.reasoning import SpecialistFailure, SpecialistResult, answer_question, run_parallel_specialists
+from tools.logging_config import configure_logging
+from tools.observability import event_id_context, protocol_context
+from tools.tracing import trace_context
 
 
 class _ScriptedAgent:
@@ -373,6 +376,81 @@ def test_run_parallel_specialists_does_not_treat_answer_text_as_a_failure_signal
     )
 
     assert results["agent"] == SpecialistResult(answer="(timeout: real finding)")
+
+
+def test_specialist_logs_include_agent_trace_and_event_id(capsys):
+    import json
+
+    configure_logging("test_profile")
+
+    def _ok():
+        return SpecialistResult(answer="done")
+
+    with trace_context("trace-specialist"), event_id_context("evt-42"), protocol_context("status_check"):
+        run_parallel_specialists([("reference_agent", _ok)])
+
+    records = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines() if line]
+    started = next(record for record in records if record.get("event") == "specialist_started")
+    finished = next(record for record in records if record.get("event") == "specialist_finished")
+    assert started["agent"] == "reference_agent"
+    assert started["parent_agent"] == "main_agent"
+    assert started["trace_id"] == "trace-specialist"
+    assert started["event_id"] == "evt-42"
+    assert started["protocol_name"] == "status_check"
+    assert finished["agent"] == "reference_agent"
+    assert finished["trace_id"] == "trace-specialist"
+    assert finished["event_id"] == "evt-42"
+
+
+def test_specialist_timeout_includes_trace_id(capsys):
+    import json
+
+    configure_logging("test_profile")
+
+    def _slow():
+        time.sleep(0.4)
+        return SpecialistResult(answer="late")
+
+    def _ok():
+        return SpecialistResult(answer="done")
+
+    with trace_context("trace-timeout"):
+        run_parallel_specialists(
+            [("slow_agent", _slow), ("ok_agent", _ok)],
+            max_workers=2,
+            timeout_per_specialist=0.05,
+        )
+
+    records = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines() if line]
+    timeout = next(record for record in records if record.get("event") == "specialist_timeout")
+    assert timeout["agent"] == "slow_agent"
+    assert timeout["trace_id"] == "trace-timeout"
+
+
+def test_queue_started_includes_event_id_and_concurrency_keys(capsys):
+    import json
+
+    from orchestrator.event_queue import SerialEventQueue, WorkItem
+
+    configure_logging("test_profile")
+    seen = []
+
+    def _process(payload):
+        seen.append(payload[0])
+
+    queue = SerialEventQueue(_process)
+    queue.start()
+    with trace_context("trace-queue"):
+        queue.submit(WorkItem(("evt-7", lambda: None), trace_id="trace-queue", concurrency_keys=("area:north",)))
+        queue.wait_until_idle()
+    queue.stop()
+
+    records = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines() if line]
+    started = next(record for record in records if record.get("event") == "queue_started")
+    assert started["event_id"] == "evt-7"
+    assert started["trace_id"] == "trace-queue"
+    assert started["concurrency_keys"] == ["area:north"]
+    assert seen == ["evt-7"]
 
 
 # -- Direct-lookup classification (bypasses agent-selection entirely) ------

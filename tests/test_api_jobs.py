@@ -229,6 +229,32 @@ def test_get_job_route_requires_authentication(ctx):
     assert resp.status_code == 401
 
 
+def test_get_job_route_rejects_an_invalid_wait_seconds(ctx):
+    client = build_app(ctx).test_client()
+    event_id = _new_event(ctx)
+
+    resp = client.get(f"/Job/{event_id}?wait_seconds=99", headers=auth_headers(VIEWER_IDENTITY))
+
+    assert resp.status_code == 400
+
+
+def test_get_job_route_wait_returns_when_the_job_finishes(ctx):
+    client = build_app(ctx).test_client()
+    event_id = _new_event(ctx)
+
+    def _finish():
+        time.sleep(0.05)
+        record_event_outcome(ctx.deps.persistence, event_id, "succeeded", insight_text="done")
+
+    worker = threading.Thread(target=_finish)
+    worker.start()
+    resp = client.get(f"/Job/{event_id}?wait_seconds=2", headers=auth_headers(VIEWER_IDENTITY))
+    worker.join()
+
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "succeeded"
+
+
 def test_get_job_route_returns_the_status_body(ctx):
     client = build_app(ctx).test_client()
     event_id = _new_event(ctx)

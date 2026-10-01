@@ -373,6 +373,100 @@ AGENTS = [
 _FAST_JUDGMENT_POLICY = InvocationPolicy(max_output_tokens=400, reasoning_effort="none")
 
 
+def _as_aware_iso(value: str) -> str:
+    """A persisted event timestamp is stored without an explicit offset but is always UTC
+    — the crew-status tools reject a naive string, so make it explicit before a direct bind."""
+
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.isoformat()
+
+
+def _bind_record_crew_availability(event: dict) -> tuple[Step, ...]:
+    """Same tool and kwargs as response_team attendance: record_attendance_response from extracted fields."""
+
+    absence_reason = (event.get("absence_reason") or "").strip()
+    received_at = event.get("received_at") or ""
+    base_kwargs = {
+        "source_message_id": event.get("source_message_id") or "",
+        "original_text": event.get("raw_text") or "",
+        "received_at": _as_aware_iso(received_at) if received_at else "",
+    }
+    if not absence_reason:
+        kwargs = {**base_kwargs, "availability": "available", "reason": "", "unavailable_days": 0}
+        required: tuple[str, ...] = ()
+    else:
+        missing = tuple(name for name in ("availability_start", "availability_end") if not event.get(name))
+        kwargs = {**base_kwargs, "availability": "unavailable", "reason": absence_reason}
+        if missing:
+            required = missing
+        else:
+            start = datetime.fromisoformat(event["availability_start"])
+            end = datetime.fromisoformat(event["availability_end"])
+            days = (end - start).total_seconds() / 86400
+            kwargs["unavailable_days"] = max(1, int(days + 0.999999))
+            required = ()
+    return (
+        Step(
+            agent_name="team_status_agent",
+            task_text="Record the reporter's own crew availability response, bound directly from the event's extracted fields.",
+            allowed_tools=("record_attendance_response",),
+            step_id="1",
+            required_event_fields=required,
+            kind="direct_tool",
+            direct_tool_name="record_attendance_response",
+            direct_tool_kwargs=kwargs,
+        ),
+    )
+
+
+def _bind_record_crew_shift_status(event: dict) -> tuple[Step, ...]:
+    """Commander shift declaration: record_crew_shift_status with member_identities='all', plus one
+    apparatus-status step per extracted entity — the same tools a successful CrewAI formulation uses."""
+
+    absence_reason = (event.get("absence_reason") or "").strip()
+    received_at = event.get("received_at") or ""
+    shift_kwargs = {
+        "member_identities": "all",
+        "availability": "unavailable" if absence_reason else "available",
+        "source_message_id": event.get("source_message_id") or "",
+        "original_text": event.get("raw_text") or "",
+        "received_at": _as_aware_iso(received_at) if received_at else "",
+    }
+    steps = [
+        Step(
+            agent_name="team_status_agent",
+            task_text="Record the commander's crew shift availability declaration for the entire approved crew.",
+            allowed_tools=("record_crew_shift_status",),
+            step_id="1",
+            kind="direct_tool",
+            direct_tool_name="record_crew_shift_status",
+            direct_tool_kwargs=shift_kwargs,
+        )
+    ]
+    entities = event.get("entities") or []
+    description = (event.get("description") or "").strip()
+    area = (event.get("area") or "").strip()
+    for index, identifier in enumerate(entities):
+        steps.append(
+            Step(
+                agent_name="team_status_agent",
+                task_text=(
+                    f"Apparatus {identifier} was named in the shift declaration"
+                    f"{f' in area {area}' if area else ''}. Determine its resulting status "
+                    f"(operational, dispatched, unavailable, or maintenance) from the report "
+                    f"below, and call update_apparatus_status for {identifier} with that status.\n\n"
+                    f"Report: {description}"
+                ),
+                allowed_tools=("update_apparatus_status",),
+                step_id=str(index + 2),
+                invocation_policy=_FAST_JUDGMENT_POLICY,
+            )
+        )
+    return tuple(steps)
+
+
 def _bind_apparatus_movement(event: dict) -> tuple[Step, ...]:
     """Mirrors response_team.py's own _bind_report_team_movement: a direct_tool_binder skips
     formulate_tasks entirely (no separate task-formulation model call), while the step(s) it
@@ -433,6 +527,9 @@ PROTOCOLS = [
         approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
+        needs_insight=False,
+        direct_tool_binder=_bind_record_crew_availability,
+        direct_lane_eligible=True,
     ),
     Protocol(
         name="record_crew_shift_status",
@@ -451,6 +548,8 @@ PROTOCOLS = [
         approval_flag=False,
         requires_confirmation=False,
         commander_only=True,
+        needs_insight=False,
+        direct_tool_binder=_bind_record_crew_shift_status,
     ),
     Protocol(
         name="report_apparatus_movement",
@@ -679,7 +778,11 @@ LOOKBACK_WINDOW_DAYS = 30
 TIMEZONE = "Asia/Jerusalem"
 CONVERSATION_HISTORY_TURNS = 6
 CONVERSATION_HISTORY_TTL_HOURS = 24
-OPTIMIZATION_POLICY = OptimizationPolicy(operational_decision_mode="merged", final_assessment_mode="low_risk_merged")
+OPTIMIZATION_POLICY = OptimizationPolicy(
+    operational_decision_mode="merged",
+    final_assessment_mode="low_risk_merged",
+    event_queue_mode="policy",
+)
 
 # -- Simulations (docs/Profile_Split_Plan.md) --------------------------------
 #

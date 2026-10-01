@@ -28,6 +28,7 @@ from config.server_control import (
     save_selected_profile,
     write_status,
 )
+from tools.log_paths import child_log_paths, log_dir_for
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger("stack_runner")
@@ -195,10 +196,12 @@ class StackSupervisor:
         return handle
 
     def _spawn(self, label: str, args: list[str], env: dict[str, str], slug: str) -> subprocess.Popen:
-        stdout_log = self._open_log(f"{label}-{slug}.stdout.log")
-        stderr_log = self._open_log(f"{label}-{slug}.stderr.log")
+        stdout_path, stderr_path = child_log_paths(self.profile_module, label)
+        stdout_log = self._open_log(str(stdout_path))
+        stderr_log = self._open_log(str(stderr_path))
         child_env = env.copy()
         child_env["PYTHONUNBUFFERED"] = "1"
+        child_env.setdefault("AGENTSHUB_LOG_DIR", str(log_dir_for(self.profile_module)))
         process = subprocess.Popen(
             args,
             stdout=subprocess.PIPE,
