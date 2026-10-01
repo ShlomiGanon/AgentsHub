@@ -24,6 +24,7 @@ from orchestrator.main_agent import RiskAssessment
 from orchestrator.main_agent import ProtocolSelectionResult
 from tests.api_fakes import auth_headers, build_context
 from tests.helpers import write_profile_module
+from tests.crewai_fakes import install_crewai_stub
 
 BOT_TOKEN_ENV = "TEST_INT_USER_ADMIN_TOKEN"
 MODEL_CRED_ENV = "TEST_INT_USER_ADMIN_MODEL_KEY"
@@ -31,19 +32,7 @@ MODEL_CRED_ENV = "TEST_INT_USER_ADMIN_MODEL_KEY"
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
-    class _FakeOutput:
-        def __init__(self, raw):
-            self.raw = raw
-
-    class _FakeCrewAgent:
-        def __init__(self, **kwargs):
-            pass
-
-        def kickoff(self, text):
-            return _FakeOutput("status nominal")
-
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
-    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+    install_crewai_stub(monkeypatch, 'status nominal')
 
 
 def test_a_commander_added_via_the_admin_command_can_approve_a_real_held_run(tmp_path, monkeypatch, real_tier_env):

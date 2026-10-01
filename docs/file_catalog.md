@@ -179,6 +179,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/__init__.py` | Test | Internal | Marks the automated test suite as a package. |
 | `tests/api_fakes.py` | Test | Internal | Provides reusable API contexts, clients, and server fakes for tests. |
 | `tests/bot_fakes.py` | Test | Internal | Provides reusable bot API and Telegram fakes for tests. |
+| `tests/crewai_fakes.py` | Test | Internal | Shared CrewAI adapter stub for tests that never talk to a real model. |
 | `tests/helpers.py` | Test | Internal | Provides shared test builders and persistence helpers. |
 | `tests/sanity_check_real_model_call.py` | Test | Internal | Runs an opt-in billed real-model smoke check outside pytest discovery. |
 | `tests/test_agent_permission_enforcement.py` | Test | Internal | Verifies agent permission enforcement behavior and edge cases. |

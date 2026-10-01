@@ -43,30 +43,12 @@ from protocols.loader import ProtocolSet
 from protocols.model import CriticalityLevel, Protocol, Step
 from profiles import AreaRegistry
 from profiles import EventTypeRegistry
+from tests.crewai_fakes import install_crewai_stub
 
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
-    """Autouse for this whole file: whenever a *real* Agent (ReferenceAgent,
-    HistoryAgent — never the scripted main/insights-agent stand-ins below,
-    which implement .process() directly and never touch the adapter) is
-    actually invoked, it goes through this fake instead of needing crewai
-    installed.
-    """
-
-    class _FakeOutput:
-        def __init__(self, raw):
-            self.raw = raw
-
-    class _FakeCrewAgent:
-        def __init__(self, **kwargs):
-            pass
-
-        def kickoff(self, text):
-            return _FakeOutput("status nominal, no anomalies")
-
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
-    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+    install_crewai_stub(monkeypatch)
 
 
 # -- assemble_core_agents (from Part A) --------------------------------

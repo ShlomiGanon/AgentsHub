@@ -5,15 +5,14 @@ import http.server
 import json
 import re
 import threading
-import types
 
 import pytest
 
-from agents import adapter
 from api.admin import AdminConfigError, LoginRateLimiter, _format_duration_phrase, resolve_admin_config
 from api.app import build_app
 from messages import get_catalog, get_current_catalog, set_current_catalog
-from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, build_context
+from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, build_context, teardown_ctx
+from tests.crewai_fakes import install_crewai_stub
 
 ADMIN_USERNAME = "test-admin"
 ADMIN_PASSWORD = "test-admin-password"
@@ -22,28 +21,7 @@ ADMIN_SESSION_SECRET = "test-admin-session-secret"
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
-    class _FakeOutput:
-        def __init__(self, raw):
-            self.raw = raw
-
-    class _FakeCrewAgent:
-        def __init__(self, **kwargs):
-            pass
-
-        def kickoff(self, text):
-            return _FakeOutput("status nominal")
-
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
-    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
-
-
-@pytest.fixture
-def teardown_ctx():
-    contexts = []
-    yield contexts
-    for ctx in contexts:
-        ctx.queue.stop()
-        ctx.deps.persistence.close()
+    install_crewai_stub(monkeypatch, 'status nominal')
 
 
 @pytest.fixture
@@ -1258,6 +1236,7 @@ def test_admin_pages_render_rtl_hebrew_for_a_hebrew_profile(tmp_path, teardown_c
     dashboard = client.get("/admin/").data.decode("utf-8")
     assert '<html lang="he" dir="rtl">' in dashboard
     assert hebrew.text("admin.menu_title") in dashboard
+    assert hebrew.text("admin.menu_all") in dashboard
     assert hebrew.text("admin.menu_groups") in dashboard
     assert hebrew.text("admin.menu_simulator") in dashboard
     assert hebrew.text("admin.menu_profiles") in dashboard
@@ -1356,10 +1335,9 @@ def test_simulator_page_talks_to_the_real_endpoints_only(tmp_path, teardown_ctx,
     assert "'/Msg'" not in page
     assert "/admin/simulator/dispatch" not in page  # never a client-side dispatch shortcut
     assert "/admin/simulator/example" not in page  # the legacy bundled-fixture route is gone
-    # Rebuilding the <select> must keep an empty-value placeholder. Without it the
-    # option text ("בחר סימולציה מוצהרת") becomes GET /Simulations/<label> → 404.
-    assert "placeholder.value = ''" in page
-    assert "profileSimLoadButton.disabled = !enabled || !profileSimSelect.value" in page
+    assert "function syncProfileSimButtons()" in page
+    assert "show-profile-simulation-json" in page
+    assert "JSON.stringify(result.payload, null, 2)" in page
 
 
 def test_simulator_script_is_syntactically_valid_javascript(tmp_path, teardown_ctx, _admin_env):

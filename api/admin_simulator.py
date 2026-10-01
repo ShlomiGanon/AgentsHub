@@ -35,7 +35,7 @@ Scenario JSON shape (documented in docs/unified_command_guide.md):
       ],
       "steps": [
         {"step": 1, "chat": "response_team", "sender_identity": "1002003", "sender_name": "...",
-         "text": "...", "timestamp": "2026-09-06T07:30:00Z"},
+         "text": "..."},
         {"step": 2, "chat": "fence_sensors", "sender_identity": "sensor-north-1", "text": "..."},
         {"step": 3, "chat": "commander_dm", "sender_identity": "5551", "text": "...",
          "protocol_hint": "overall_situational_picture", "source_message_id": "4821"}
@@ -48,10 +48,11 @@ path, since the real bot handler now derives them itself, exactly as it would fo
 message (docs/bot_simulation_mode_design.md §10); `kind: "event"` steps still go straight to
 `POST /Event`. An edited pending step updates the in-memory queue and the
 payload that is actually sent: `text` and `sender_identity` always, and
-`timestamp` when set (message-kind steps carry it to the simulation-mode bot
-as Telegram `message.date`; event-kind steps send it to `POST /Event` as
-`received_at`). `sender_name`, `label`, `title`, `description` and `tags`
-remain display-only.
+`timestamp` when the operator fills the optional datetime field (message-kind
+steps carry it to the simulation-mode bot as Telegram `message.date`;
+event-kind steps send it to `POST /Event` as `received_at`). Declared
+simulations omit `timestamp` so send-time is used. `sender_name`, `label`,
+`title`, `description` and `tags` remain display-only.
 """
 
 from __future__ import annotations
@@ -651,7 +652,8 @@ SIMULATOR_BODY = """
         <option value="{{ simulation.key }}">{{ simulation.title or simulation.key }}</option>
         {% endfor %}
       </select>
-      <button type="button" class="btn btn-console-primary" id="load-profile-simulation" {% if not page_data.profile_simulations %}disabled{% endif %}>{{ t('admin.simulator.load_profile_simulation') }}</button>
+      <button type="button" class="btn btn-console-primary" id="load-profile-simulation" disabled>{{ t('admin.simulator.load_profile_simulation') }}</button>
+      <button type="button" class="btn btn-console" id="show-profile-simulation-json" disabled>{{ t('admin.simulator.show_simulation_json') }}</button>
       <div class="subtitle" id="profile-sim-hint" style="font-size:12px; margin:0;">{% if page_data.profile_simulations_hint_key %}{{ t(page_data.profile_simulations_hint_key) }}{% endif %}</div>
     </div>
     <div class="sim-flow-join" aria-hidden="true"></div>
@@ -1927,12 +1929,16 @@ SIMULATOR_BODY = """
 
   const profileSimSelect = document.getElementById('profile-simulation-select');
   const profileSimLoadButton = document.getElementById('load-profile-simulation');
+  const profileSimJsonButton = document.getElementById('show-profile-simulation-json');
 
-  profileSimSelect.addEventListener('change', function () {
-    if (!profileSimSelect.disabled) {
-      profileSimLoadButton.disabled = !profileSimSelect.value;
-    }
-  });
+  function syncProfileSimButtons() {
+    const disabled = profileSimSelect.disabled || !profileSimSelect.value;
+    profileSimLoadButton.disabled = disabled;
+    profileSimJsonButton.disabled = disabled;
+  }
+
+  profileSimSelect.addEventListener('change', syncProfileSimButtons);
+  syncProfileSimButtons();
 
   profileSimLoadButton.addEventListener('click', async function () {
     const key = profileSimSelect.value;
@@ -1951,7 +1957,25 @@ SIMULATOR_BODY = """
     } catch (error) {
       showAlert(t('profile_simulation_load_failed', { message: error.message }), true);
     } finally {
-      profileSimLoadButton.disabled = !profileSimSelect.value;
+      syncProfileSimButtons();
+    }
+  });
+
+  profileSimJsonButton.addEventListener('click', async function () {
+    const key = profileSimSelect.value;
+    if (!key) return;
+    profileSimJsonButton.disabled = true;
+    try {
+      const result = await apiCall('GET', '/Simulations/' + encodeURIComponent(key), DATA.api_identity);
+      if (result.status >= 400 || !result.payload) {
+        showAlert(t('profile_simulation_load_failed', { message: errorMessage(result) }), true);
+        return;
+      }
+      document.getElementById('paste-input').value = JSON.stringify(result.payload, null, 2);
+    } catch (error) {
+      showAlert(t('profile_simulation_load_failed', { message: error.message }), true);
+    } finally {
+      syncProfileSimButtons();
     }
   });
 

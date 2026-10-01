@@ -1161,7 +1161,7 @@ def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
 
         commanders = [
             u for u in ctx.deps.persistence.list_users()
-            if u["permission_level"] == "commander" and u["telegram_identity"] != "bot-service"
+            if u["permission_level"] == "commander" and u["telegram_identity"] != BOT_SERVICE_IDENTITY
         ]
         return jsonify({"commanders": [{"telegram_identity": u["telegram_identity"]} for u in commanders]})
 
@@ -1889,7 +1889,7 @@ def _target_chat_ids(ctx: "ApiContext", kind: str, event_id: str) -> list[str]:
         and bool(sender_record.get("auto_register", False))
     ):
         return []
-    if sender == "bot-service":
+    if sender == BOT_SERVICE_IDENTITY:
         return []
     if kind in ("job_finished", "job_failed"):
         # Falls back to the sender's own identity for events that predate this column, or

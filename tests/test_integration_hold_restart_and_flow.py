@@ -28,23 +28,12 @@ from orchestrator.holds import create_approval_hold, create_clarification_hold
 from orchestrator.main_agent import RiskAssessment
 from orchestrator.main_agent import ProtocolSelectionResult
 from tests.api_fakes import COMMANDER_IDENTITY, RunningApiServer, build_context, happy_path_agent
+from tests.crewai_fakes import install_crewai_stub
 
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
-    class _FakeOutput:
-        def __init__(self, raw):
-            self.raw = raw
-
-    class _FakeCrewAgent:
-        def __init__(self, **kwargs):
-            pass
-
-        def kickoff(self, text):
-            return _FakeOutput("status nominal")
-
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
-    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+    install_crewai_stub(monkeypatch, 'status nominal')
 
 
 def test_a_clarification_hold_survives_a_real_restart_and_is_resolvable_through_the_real_api(tmp_path):

@@ -7,7 +7,8 @@ import pytest
 
 from agents import adapter
 from api.app import build_app
-from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, auth_headers, build_context
+from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, auth_headers, build_context, teardown_ctx
+from tests.crewai_fakes import install_crewai_stub
 
 _PROFILE_TEMPLATE = """
 from protocols.model import Protocol, CriticalityLevel
@@ -32,19 +33,7 @@ MODEL_CREDENTIAL_ENVS = []
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
-    class _FakeOutput:
-        def __init__(self, raw):
-            self.raw = raw
-
-    class _FakeCrewAgent:
-        def __init__(self, **kwargs):
-            pass
-
-        def kickoff(self, text):
-            return _FakeOutput("status nominal, no anomalies")
-
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
-    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+    install_crewai_stub(monkeypatch)
 
 
 @pytest.fixture
@@ -57,14 +46,6 @@ def hashable_profile_module(tmp_path, monkeypatch):
     yield module_name, path
     sys.modules.pop(module_name, None)
 
-
-@pytest.fixture
-def teardown_ctx():
-    contexts = []
-    yield contexts
-    for ctx in contexts:
-        ctx.queue.stop()
-        ctx.deps.persistence.close()
 
 
 def test_get_system_reports_profile_agents_protocols_types_areas(tmp_path, teardown_ctx):

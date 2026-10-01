@@ -841,37 +841,37 @@ SIMULATIONS = [
         "chats": list(FIRE002_CHATS),
         "steps": [
             {
-                "step": 1, "chat": "fire_response_team", "sender_identity": "lahav_avi_shift_commander", "timestamp": "2026-09-09T07:00:00Z",
+                "step": 1, "chat": "fire_response_team", "sender_identity": "lahav_avi_shift_commander",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.lahav_avi_shift_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase1.step1.text"),
             },
             {
-                "step": 2, "chat": "fire_response_team", "sender_identity": "omri_firefighter", "timestamp": "2026-09-09T07:45:00Z",
+                "step": 2, "chat": "fire_response_team", "sender_identity": "omri_firefighter",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.omri_firefighter"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase1.step2.text"),
             },
             {
-                "step": 3, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator", "timestamp": "2026-09-09T08:30:00Z",
+                "step": 3, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.roni_surveillance_operator"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase1.step3.text"),
             },
             {
-                "step": 4, "chat": "fire_external_forces", "sender_identity": "kkl_mountains_sector", "timestamp": "2026-09-09T09:15:00Z",
+                "step": 4, "chat": "fire_external_forces", "sender_identity": "kkl_mountains_sector",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.kkl_mountains_sector"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase1.step4.text"),
             },
             {
-                "step": 5, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator", "timestamp": "2026-09-09T10:00:00Z",
+                "step": 5, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.roni_surveillance_operator"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase1.step5.text"),
             },
             {
-                "step": 6, "chat": "fire_external_forces", "sender_identity": "police_hub_agam", "timestamp": "2026-09-09T11:00:00Z",
+                "step": 6, "chat": "fire_external_forces", "sender_identity": "police_hub_agam",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.police_hub_agam"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase1.step6.text"),
             },
             {
-                "step": 7, "chat": "fire_commander_dm", "sender_identity": "station_commander", "timestamp": "2026-09-09T11:30:00Z",
+                "step": 7, "chat": "fire_commander_dm", "sender_identity": "station_commander",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.station_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase1.step7.text"),
             },
@@ -894,37 +894,37 @@ SIMULATIONS = [
         "chats": list(FIRE002_CHATS),
         "steps": [
             {
-                "step": 1, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator", "timestamp": "2026-09-09T12:15:00Z",
+                "step": 1, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.roni_surveillance_operator"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase2.step1.text"),
             },
             {
-                "step": 2, "chat": "fire_external_forces", "sender_identity": "police_hub_agam", "timestamp": "2026-09-09T12:22:00Z",
+                "step": 2, "chat": "fire_external_forces", "sender_identity": "police_hub_agam",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.police_hub_agam"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase2.step2.text"),
             },
             {
-                "step": 3, "chat": "fire_response_team", "sender_identity": "lahav_avi_shift_commander", "timestamp": "2026-09-09T12:30:00Z",
+                "step": 3, "chat": "fire_response_team", "sender_identity": "lahav_avi_shift_commander",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.lahav_avi_shift_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase2.step3.text"),
             },
             {
-                "step": 4, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator", "timestamp": "2026-09-09T12:38:00Z",
+                "step": 4, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.roni_surveillance_operator"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase2.step4.text"),
             },
             {
-                "step": 5, "chat": "fire_response_team", "sender_identity": "yuval_ashed3_commander", "timestamp": "2026-09-09T12:42:00Z",
+                "step": 5, "chat": "fire_response_team", "sender_identity": "yuval_ashed3_commander",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.yuval_ashed3_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase2.step5.text"),
             },
             {
-                "step": 6, "chat": "fire_external_forces", "sender_identity": "kkl_mountains_sector", "timestamp": "2026-09-09T12:45:00Z",
+                "step": 6, "chat": "fire_external_forces", "sender_identity": "kkl_mountains_sector",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.kkl_mountains_sector"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase2.step6.text"),
             },
             {
-                "step": 7, "chat": "fire_commander_dm", "sender_identity": "station_commander", "timestamp": "2026-09-09T12:50:00Z",
+                "step": 7, "chat": "fire_commander_dm", "sender_identity": "station_commander",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.station_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase2.step7.text"),
             },
@@ -947,47 +947,47 @@ SIMULATIONS = [
         "chats": list(FIRE002_CHATS),
         "steps": [
             {
-                "step": 1, "chat": "fire_response_team", "sender_identity": "yuval_ashed3_commander", "timestamp": "2026-09-09T13:00:00Z",
+                "step": 1, "chat": "fire_response_team", "sender_identity": "yuval_ashed3_commander",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.yuval_ashed3_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase3.step1.text"),
             },
             {
-                "step": 2, "chat": "fire_external_forces", "sender_identity": "police_hub_agam", "timestamp": "2026-09-09T13:03:00Z",
+                "step": 2, "chat": "fire_external_forces", "sender_identity": "police_hub_agam",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.police_hub_agam"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase3.step2.text"),
             },
             {
-                "step": 3, "chat": "fire_response_team", "sender_identity": "citizen_reports_group", "timestamp": "2026-09-09T13:07:00Z",
+                "step": 3, "chat": "fire_response_team", "sender_identity": "citizen_reports_group",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.citizen_reports_group"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase3.step3.text"),
             },
             {
-                "step": 4, "chat": "fire_commander_dm", "sender_identity": "station_commander", "timestamp": "2026-09-09T13:10:00Z",
+                "step": 4, "chat": "fire_commander_dm", "sender_identity": "station_commander",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.station_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase3.step4.text"),
             },
             {
-                "step": 5, "chat": "fire_external_forces", "sender_identity": "fire_police_patrol", "timestamp": "2026-09-09T13:14:00Z",
+                "step": 5, "chat": "fire_external_forces", "sender_identity": "fire_police_patrol",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.fire_police_patrol"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase3.step5.text"),
             },
             {
-                "step": 6, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator", "timestamp": "2026-09-09T13:18:00Z",
+                "step": 6, "chat": "fire_cameras", "sender_identity": "roni_surveillance_operator",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.roni_surveillance_operator"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase3.step6.text"),
             },
             {
-                "step": 7, "chat": "fire_external_forces", "sender_identity": "district_fire_commander", "timestamp": "2026-09-09T13:25:00Z",
+                "step": 7, "chat": "fire_external_forces", "sender_identity": "district_fire_commander",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.district_fire_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase3.step7.text"),
             },
             {
-                "step": 8, "chat": "fire_response_team", "sender_identity": "lahav_avi_shift_commander", "timestamp": "2026-09-09T13:45:00Z",
+                "step": 8, "chat": "fire_response_team", "sender_identity": "lahav_avi_shift_commander",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.lahav_avi_shift_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase3.step8.text"),
             },
             {
-                "step": 9, "chat": "fire_commander_dm", "sender_identity": "station_commander", "timestamp": "2026-09-09T14:15:00Z",
+                "step": 9, "chat": "fire_commander_dm", "sender_identity": "station_commander",
                 "sender_name": _catalog_text("firefighting.simulation.fire002.persona.station_commander"),
                 "text": _catalog_text("firefighting.simulation.fire002.phase3.step9.text"),
             },

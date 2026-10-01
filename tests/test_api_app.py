@@ -19,13 +19,12 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import types
 
 import pytest
 
-from agents import adapter
 from api import app as api_app
 from api.app import build_app, build_context, ensure_bot_service
+from tests.crewai_fakes import install_crewai_stub
 
 BOT_TOKEN_ENV = "AGENTSHUB_FIXTURE_BOT_TOKEN"
 MODEL_CRED_ENV = "AGENTSHUB_FIXTURE_MODEL_KEY"
@@ -52,19 +51,7 @@ def _mock_crewai(monkeypatch):
     # agents/base.py) — kept anyway for consistency with every other api/
     # test file, and so this file stays safe if a future test here does
     # end up invoking an agent.
-    class _FakeOutput:
-        def __init__(self, raw):
-            self.raw = raw
-
-    class _FakeCrewAgent:
-        def __init__(self, **kwargs):
-            pass
-
-        def kickoff(self, text):
-            return _FakeOutput("status nominal, no anomalies")
-
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
-    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+    install_crewai_stub(monkeypatch)
     monkeypatch.setattr(api_app, "initialize_agent_runtime", lambda agents: tuple(agent.model for agent in agents))
 
 

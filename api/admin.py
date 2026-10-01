@@ -68,7 +68,7 @@ from api.admin_tables import (
     find_admin_table,
     parse_admin_table_form,
 )
-from api.request_boundary import BOT_SERVICE_KEY_ENV_VAR, SERVICE_KEY_HEADER
+from api.request_boundary import BOT_SERVICE_IDENTITY, BOT_SERVICE_KEY_ENV_VAR, SERVICE_KEY_HEADER
 from auth.permissions import InvalidFullNameError, PermissionLevel, normalize_full_name
 from config import discover_profiles, read_server_status, submit_server_command, supervisor_available
 from messages import get_current_catalog
@@ -89,12 +89,6 @@ if TYPE_CHECKING:
     from api.app import ApiContext
 
 logger = logging.getLogger(__name__)
-
-# Duplicated rather than imported from bot.contracts.BOT_SERVICE_IDENTITY: api may not import
-# bot (tests/test_architecture.py enforces the package boundary — bot calls api over HTTP, not
-# api importing bot's Python code). See api/request_boundary.py's identical duplication and
-# comment. Keep this in sync with bot.contracts.BOT_SERVICE_IDENTITY if it ever changes.
-BOT_SERVICE_IDENTITY = "bot-service"
 
 
 class AdminConfigError(Exception):
@@ -1015,23 +1009,25 @@ _SHELL_OPEN = """
     <img class="ls-mark" src="{{ url_for('static', filename='leadspotting-mark.gif') }}" alt="">
     <img class="ls-logo" src="{{ url_for('static', filename='leadspotting-logo.gif') }}" alt="">
   </a>
-  <nav class="ls-nav" aria-label="{{ t('admin.menu_title') }}">
+    <nav class="ls-nav" aria-label="{{ t('admin.menu_title') }}">
+    <div class="ls-nav-group">
+      <a class="ls-nav-item{% if request.endpoint == 'admin.dashboard' %} is-active{% endif %}" href="{{ url_for('admin.dashboard') }}">""" + _ICON_HOME + """<span class="ls-nav-label">{{ t('admin.menu_all') }}</span></a>
+    </div>
     <div class="ls-nav-group">
       <span class="ls-nav-group-label">{{ t('admin.nav_group_management') }}</span>
-      <a class="ls-nav-item{% if request.endpoint == 'admin.dashboard' %} is-active{% endif %}" href="{{ url_for('admin.dashboard') }}">""" + _ICON_HOME + """<span class="ls-nav-label">{{ t('admin.menu_title') }}</span></a>
-      <a class="ls-nav-item{% if request.endpoint == 'admin.profiles' %} is-active{% endif %}" href="{{ url_for('admin.profiles') }}">""" + _ICON_PROFILES + """<span class="ls-nav-label">{{ t('admin.menu_profiles') }}</span></a>
-      <a class="ls-nav-item{% if request.endpoint == 'admin.protocols' %} is-active{% endif %}" href="{{ url_for('admin.protocols') }}">""" + _ICON_PROTOCOLS + """<span class="ls-nav-label">{{ t('admin.menu_protocols') }}</span></a>
       <a class="ls-nav-item{% if request.endpoint == 'admin.users' %} is-active{% endif %}" href="{{ url_for('admin.users') }}">""" + _ICON_USERS + """<span class="ls-nav-label">{{ t('admin.menu_users') }}</span></a>
       <a class="ls-nav-item{% if request.endpoint == 'admin.groups' %} is-active{% endif %}" href="{{ url_for('admin.groups') }}">""" + _ICON_GROUPS + """<span class="ls-nav-label">{{ t('admin.menu_groups') }}</span></a>
     </div>
     <div class="ls-nav-group">
       <span class="ls-nav-group-label">{{ t('admin.nav_group_operations') }}</span>
+      <a class="ls-nav-item{% if request.endpoint == 'admin.profiles' %} is-active{% endif %}" href="{{ url_for('admin.profiles') }}">""" + _ICON_PROFILES + """<span class="ls-nav-label">{{ t('admin.menu_profiles') }}</span></a>
+      <a class="ls-nav-item{% if request.endpoint == 'admin.protocols' %} is-active{% endif %}" href="{{ url_for('admin.protocols') }}">""" + _ICON_PROTOCOLS + """<span class="ls-nav-label">{{ t('admin.menu_protocols') }}</span></a>
       <a class="ls-nav-item{% if request.endpoint == 'admin.events' %} is-active{% endif %}" href="{{ url_for('admin.events') }}">""" + _ICON_EVENTS + """<span class="ls-nav-label">{{ t('admin.menu_events') }}</span></a>
-      <a class="ls-nav-item{% if request.endpoint == 'admin.simulator' %} is-active{% endif %}" href="{{ url_for('admin.simulator') }}">""" + _ICON_SIMULATOR + """<span class="ls-nav-label">{{ t('admin.menu_simulator') }}</span></a>
     </div>
     <div class="ls-nav-group">
       <span class="ls-nav-group-label">{{ t('admin.nav_group_system') }}</span>
       <a class="ls-nav-item{% if request.endpoint == 'admin.server' %} is-active{% endif %}" href="{{ url_for('admin.server') }}">""" + _ICON_SERVER + """<span class="ls-nav-label">{{ t('admin.menu_server') }}</span></a>
+      <a class="ls-nav-item{% if request.endpoint == 'admin.simulator' %} is-active{% endif %}" href="{{ url_for('admin.simulator') }}">""" + _ICON_SIMULATOR + """<span class="ls-nav-label">{{ t('admin.menu_simulator') }}</span></a>
     </div>
     <div class="ls-nav-group">
       <span class="ls-nav-group-label">{{ t('admin.nav_group_data') }}</span>
@@ -1255,8 +1251,6 @@ _MENU_TEMPLATE = """<!DOCTYPE html>
   <section class="ls-home-group">
     <h2 class="ls-home-group-title">{{ t('admin.home_group_configuration') }}</h2>
     <div class="ls-service-grid">
-      <a class="ls-service-card" href="{{ url_for('admin.profiles') }}"><span class="ls-service-icon">""" + _ICON_PROFILES + """</span><h2>{{ t('admin.menu_profiles') }}</h2><span class="subtitle">{{ t('admin.profiles.subtitle') }}</span></a>
-      <a class="ls-service-card" href="{{ url_for('admin.protocols') }}"><span class="ls-service-icon">""" + _ICON_PROTOCOLS + """</span><h2>{{ t('admin.menu_protocols') }}</h2><span class="subtitle">{{ t('admin.protocols.subtitle') }}</span></a>
       <a class="ls-service-card" href="{{ url_for('admin.users') }}"><span class="ls-service-icon">""" + _ICON_USERS + """</span><h2>{{ t('admin.menu_users') }}</h2><span class="subtitle">{{ t('admin.users_subtitle') }}</span></a>
       <a class="ls-service-card" href="{{ url_for('admin.groups') }}"><span class="ls-service-icon">""" + _ICON_GROUPS + """</span><h2>{{ t('admin.menu_groups') }}</h2><span class="subtitle">{{ t('admin.groups_page_subtitle') }}</span></a>
     </div>
@@ -1264,14 +1258,16 @@ _MENU_TEMPLATE = """<!DOCTYPE html>
   <section class="ls-home-group">
     <h2 class="ls-home-group-title">{{ t('admin.home_group_operations') }}</h2>
     <div class="ls-service-grid">
+      <a class="ls-service-card" href="{{ url_for('admin.profiles') }}"><span class="ls-service-icon">""" + _ICON_PROFILES + """</span><h2>{{ t('admin.menu_profiles') }}</h2><span class="subtitle">{{ t('admin.profiles.subtitle') }}</span></a>
+      <a class="ls-service-card" href="{{ url_for('admin.protocols') }}"><span class="ls-service-icon">""" + _ICON_PROTOCOLS + """</span><h2>{{ t('admin.menu_protocols') }}</h2><span class="subtitle">{{ t('admin.protocols.subtitle') }}</span></a>
       <a class="ls-service-card is-featured" href="{{ url_for('admin.events') }}"><span class="ls-service-icon">""" + _ICON_EVENTS + """</span><h2>{{ t('admin.menu_events') }}</h2><span class="subtitle">{{ t('admin.events.subtitle') }}</span></a>
-      <a class="ls-service-card is-featured" href="{{ url_for('admin.simulator') }}"><span class="ls-service-icon">""" + _ICON_SIMULATOR + """</span><h2>{{ t('admin.menu_simulator') }}</h2><span class="subtitle">{{ t('admin.simulator.subtitle') }}</span></a>
     </div>
   </section>
   <section class="ls-home-group">
     <h2 class="ls-home-group-title">{{ t('admin.home_group_system') }}</h2>
     <div class="ls-service-grid">
       <a class="ls-service-card is-featured is-featured-navy" href="{{ url_for('admin.server') }}"><span class="ls-service-icon">""" + _ICON_SERVER + """</span><h2>{{ t('admin.menu_server') }}</h2><span class="subtitle">{{ t('admin.server_subtitle') }}</span></a>
+      <a class="ls-service-card is-featured" href="{{ url_for('admin.simulator') }}"><span class="ls-service-icon">""" + _ICON_SIMULATOR + """</span><h2>{{ t('admin.menu_simulator') }}</h2><span class="subtitle">{{ t('admin.simulator.subtitle') }}</span></a>
     </div>
   </section>
   {% if admin_tables %}
@@ -2466,10 +2462,10 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         if csrf_response is not None:
             return csrf_response
 
-        # The exact same write cli.user_admin's `add`/`update` commands make — not a
-        # separate mechanism, one source of truth for user storage either way.
-        ctx.deps.persistence.write_user(BOT_SERVICE_IDENTITY, "commander")
-        ctx.deps.persistence.approve_user(BOT_SERVICE_IDENTITY)
+        # Same write as api.app.ensure_bot_service (startup auto-register) — one source of truth.
+        from api.app import ensure_bot_service
+
+        ensure_bot_service(ctx.deps.persistence)
         logger.info(
             "admin (re-)provisioned the bot-service identity",
             extra={"event": "admin_bot_service_provisioned", "trace_id": get_trace_id()},

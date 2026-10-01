@@ -8,11 +8,9 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import types
 
 import pytest
 
-from agents import adapter
 from agents.contracts import AgentDescriptor, AgentResult, ToolInfo
 from agents.runtime import AgentRegistry
 from api.app import build_app, build_group_routing
@@ -20,35 +18,14 @@ from api.routes import SITUATIONAL_PICTURE_PROTOCOL
 from history import HistoryAnswer
 from history.query import HistoryQueryError
 from protocols import CriticalityLevel, Protocol, ProtocolSet
-from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, auth_headers, build_context
+from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, auth_headers, build_context, teardown_ctx
+from tests.crewai_fakes import install_crewai_stub
 
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
-    class _FakeOutput:
-        def __init__(self, raw):
-            self.raw = raw
+    install_crewai_stub(monkeypatch)
 
-    class _FakeCrewAgent:
-        def __init__(self, **kwargs):
-            pass
-
-        def kickoff(self, text):
-            return _FakeOutput("status nominal, no anomalies")
-
-    fake_module = types.SimpleNamespace(
-        Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object)
-    )
-    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
-
-
-@pytest.fixture
-def teardown_ctx():
-    contexts = []
-    yield contexts
-    for ctx in contexts:
-        ctx.queue.stop()
-        ctx.deps.persistence.close()
 
 
 class _LiveSpecialist:

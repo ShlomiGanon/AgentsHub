@@ -24,17 +24,9 @@ from bot import app, interactions
 from bot.contracts import BotDeps, HoldAnswerOutcome
 from messages import get_catalog
 from persistence import open_persistence
-from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, auth_headers, build_context
+from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, auth_headers, build_context, teardown_ctx
 from tests.bot_fakes import FakeBotApiClient, FakeTelegramClient
 
-
-@pytest.fixture
-def teardown_ctx():
-    contexts = []
-    yield contexts
-    for ctx in contexts:
-        ctx.queue.stop()
-        ctx.deps.persistence.close()
 
 
 def _make_bot_deps(api_client, telegram_client):

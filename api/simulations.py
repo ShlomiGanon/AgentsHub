@@ -54,12 +54,13 @@ def materialize_simulation(
 ) -> dict:
     """The scenario's canonical `{scenario, chats, steps}` JSON, with every declared
     persona/group *key* it references replaced by its deterministic reserved
-    Telegram ID. Every other field (labels, text, timestamps, protocol hints,
-    non-persona sender identities such as a sensor's) passes through unchanged —
-    this never restructures the existing contract, only substitutes the two ID
-    fields. `profiles.loader.validate_profile` already guarantees, at profile
-    load time, that every placeholder a declared scenario references resolves to
-    a declared persona/group key, so an unresolved key is not expected here.
+    Telegram ID. Custom step timestamps are dropped so send-time is used
+    (`POST /Event` and the simulation-mode bot default to now when omitted).
+    Every other field (labels, text, protocol hints, non-persona sender
+    identities such as a sensor's) passes through unchanged. `profiles.loader.validate_profile`
+    already guarantees, at profile load time, that every placeholder a declared
+    scenario references resolves to a declared persona/group key, so an unresolved
+    key is not expected here.
     """
 
     user_ids_by_key = {persona.key: simulation_user_telegram_id(persona.offset) for persona in simulation_users}
@@ -73,6 +74,7 @@ def materialize_simulation(
             chat["telegram_chat_id"] = group_ids_by_key[chat_id_key]
 
     for step in materialized.get("steps", []):
+        step.pop("timestamp", None)
         sender_key = step.get("sender_identity")
         if sender_key in user_ids_by_key:
             step["sender_identity"] = user_ids_by_key[sender_key]

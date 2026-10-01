@@ -1,45 +1,23 @@
 """/Groups CRUD, /TeamStatus/AttendanceCheck, and Telegram-group scoping of /Msg."""
 
 import dataclasses
-import types
 
 import pytest
 
-from agents import adapter
 from agents.reference import ReferenceAgent
 from agents.runtime import build_agent_registry
 from api.app import build_app, build_group_routing
 from protocols.loader import ProtocolSet
 from protocols.model import CriticalityLevel, Protocol
-from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, auth_headers, build_context, happy_path_agent, protocols
+from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, auth_headers, build_context, happy_path_agent, protocols, teardown_ctx
+from tests.crewai_fakes import install_crewai_stub
 
 GROUP = "-100200300"
 
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
-    class _FakeOutput:
-        def __init__(self, raw):
-            self.raw = raw
-
-    class _FakeCrewAgent:
-        def __init__(self, **kwargs):
-            pass
-
-        def kickoff(self, text):
-            return _FakeOutput("status nominal, no anomalies")
-
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
-    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
-
-
-@pytest.fixture
-def teardown_ctx():
-    contexts = []
-    yield contexts
-    for ctx in contexts:
-        ctx.queue.stop()
-        ctx.deps.persistence.close()
+    install_crewai_stub(monkeypatch)
 
 
 class _OtherAgent(ReferenceAgent):

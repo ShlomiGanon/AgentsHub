@@ -1,8 +1,8 @@
 """Shared building blocks for the api/ test suite.
 
-Plain helper functions and classes, not fixtures — each test_api_*.py
-file wires its own pytest fixtures around these, the same pattern
-tests/helpers.py already established for profile-validation fakes.
+Helpers and a couple of pytest fixtures — each test_api_*.py file wires
+additional fixtures around these, the same pattern tests/helpers.py already
+established for profile-validation fakes.
 
 `build_context` constructs a real `api.app.ApiContext` — real
 `SQLitePersistence`, a real `AgentRegistry` with a real `ReferenceAgent`
@@ -12,11 +12,12 @@ Main/Insights Agent slots filled by a caller-supplied scripted stand-in,
 mirroring tests/test_orchestrator_flows.py's own `deps` fixture. Nothing
 here talks to a real model; `agents.adapter._get_crewai` still needs
 monkeypatching wherever a real `ReferenceAgent`/`HistoryAgent` is actually
-invoked — each test file brings its own autouse fixture for that, same as
-tests/test_orchestrator_flows.py already does.
+invoked — use `tests.crewai_fakes.install_crewai_stub` for the common stub.
 """
 
 import threading
+
+import pytest
 
 from agents.history import HistoryAgent
 from agents.reference import ReferenceAgent
@@ -338,3 +339,12 @@ class RunningApiServer:
 
     def __exit__(self, *exc_info) -> None:
         self.close()
+
+
+@pytest.fixture
+def teardown_ctx():
+    contexts = []
+    yield contexts
+    for ctx in contexts:
+        ctx.queue.stop()
+        ctx.deps.persistence.close()

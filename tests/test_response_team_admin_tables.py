@@ -16,7 +16,7 @@ from config.base import TierModel
 from profiles import build_area_registry, build_event_type_registry
 from profiles.loader import load_profile
 from protocols.loader import ProtocolSet
-from tests.api_fakes import build_context
+from tests.api_fakes import build_context, teardown_ctx
 
 CORE_MODEL = TierModel(model="openai/test-core-model", api_key="test-key")
 SUB_MODEL = TierModel(model="openai/test-sub-model", api_key="test-key")
@@ -24,14 +24,6 @@ SUB_MODEL = TierModel(model="openai/test-sub-model", api_key="test-key")
 ADMIN_USERNAME = "test-admin"
 ADMIN_PASSWORD = "test-admin-password"
 
-
-@pytest.fixture
-def teardown_ctx():
-    contexts = []
-    yield contexts
-    for ctx in contexts:
-        ctx.queue.stop()
-        ctx.deps.persistence.close()
 
 
 @pytest.fixture

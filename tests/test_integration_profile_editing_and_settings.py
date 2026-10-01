@@ -13,16 +13,15 @@ selecting the newly-added protocol, and a risk-threshold change taking
 effect on the very next event submitted through the real API.
 """
 
-import types
 import uuid
 
 import pytest
 
-from agents import adapter
 from api.app import build_app
 from profiles.loader import load_profile
 from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, auth_headers, build_context, happy_path_agent
 from tests.helpers import write_profile_module
+from tests.crewai_fakes import install_crewai_stub
 
 BOT_TOKEN_ENV = "TEST_INT_PROFILE_EDIT_TOKEN"
 MODEL_CRED_ENV = "TEST_INT_PROFILE_EDIT_MODEL_KEY"
@@ -30,19 +29,7 @@ MODEL_CRED_ENV = "TEST_INT_PROFILE_EDIT_MODEL_KEY"
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
-    class _FakeOutput:
-        def __init__(self, raw):
-            self.raw = raw
-
-    class _FakeCrewAgent:
-        def __init__(self, **kwargs):
-            pass
-
-        def kickoff(self, text):
-            return _FakeOutput("status nominal")
-
-    fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
-    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+    install_crewai_stub(monkeypatch, 'status nominal')
 
 
 _PROFILE_TEMPLATE = """

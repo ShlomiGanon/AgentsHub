@@ -7,16 +7,8 @@ from history.write import record_event_outcome
 from orchestrator.holds import create_approval_hold, create_clarification_hold, create_event_data_hold
 from orchestrator.main_agent import RiskAssessment
 from orchestrator.main_agent import ProtocolSelectionResult
-from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, auth_headers, build_context
+from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, auth_headers, build_context, teardown_ctx
 
-
-@pytest.fixture
-def teardown_ctx():
-    contexts = []
-    yield contexts
-    for ctx in contexts:
-        ctx.queue.stop()
-        ctx.deps.persistence.close()
 
 
 def _minimal_event(persistence, **overrides):

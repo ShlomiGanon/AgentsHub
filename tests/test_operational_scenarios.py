@@ -39,7 +39,7 @@ from orchestrator.flows import resume_after_event_data
 from profiles import build_area_registry, build_event_type_registry
 from profiles.loader import load_profile
 from protocols.loader import ProtocolSet
-from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, FakeResult, ScriptedAgent, auth_headers, build_context
+from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, FakeResult, ScriptedAgent, auth_headers, build_context, teardown_ctx
 
 CORE_MODEL = TierModel(model="openai/test-core-model", api_key="test-key")
 SUB_MODEL = TierModel(model="openai/test-sub-model", api_key="test-key")
@@ -78,14 +78,6 @@ def _mock_crewai(monkeypatch):
 def _bot_tokens(monkeypatch):
     monkeypatch.setenv("BOT_TOKEN", "operational-test-token")
 
-
-@pytest.fixture
-def teardown_ctx():
-    contexts = []
-    yield contexts
-    for ctx in contexts:
-        ctx.queue.stop()
-        ctx.deps.persistence.close()
 
 
 _USERS = (

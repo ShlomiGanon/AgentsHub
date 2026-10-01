@@ -6,19 +6,18 @@ itself, including its thread/asyncio-loop bridge (docs/bot_simulation_mode_desig
 
 import asyncio
 import threading
-import types
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from profiles import SimulationGroup, SimulationPersona, simulation_group_chat_id, simulation_user_telegram_id
 
-from agents import adapter
 from bot.contracts import BOT_SERVICE_IDENTITY, BotDeps, MessageSubmissionResult
 from bot.simulator_app import SimulatorRequestRefused, SimulatorRuntime, build_flask_app
 from bot.transports import HttpApiClient
 from messages import get_catalog
 from tests.api_fakes import RunningApiServer, build_context, happy_path_agent
 from tests.bot_fakes import FakeBotApiClient
+from tests.crewai_fakes import install_crewai_stub
 
 
 def _run(coro):
@@ -419,21 +418,7 @@ def test_a_report_in_a_group_is_answered_in_the_group_with_viewer_audience(tmp_p
     # protocol step through the real crewai adapter — fake the framework boundary
     # exactly like tests/test_orchestrator_flows.py's own autouse fixture does, so
     # this never reaches a real model provider.
-    class _FakeOutput:
-        def __init__(self, raw):
-            self.raw = raw
-
-    class _FakeCrewAgent:
-        def __init__(self, **kwargs):
-            pass
-
-        def kickoff(self, text):
-            return _FakeOutput("status nominal, no anomalies")
-
-    fake_module = types.SimpleNamespace(
-        Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object)
-    )
-    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+    install_crewai_stub(monkeypatch)
 
     monkeypatch.setenv("BOT_SERVICE_KEY", "test-service-key")
     agent = happy_path_agent(intent="report")  # already scripted for "smoke at gate 3" -> status_check/reference_agent/success

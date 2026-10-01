@@ -6,16 +6,14 @@ runs successfully through the real `/Msg`/`/Event` endpoints — the same code
 path `bot/transports.py` uses for a real Telegram message, with no shortcut.
 """
 
-import types
-
 import pytest
 
-from agents import adapter
 from api.app import build_app
 from api.simulations import materialize_simulation
 from profiles.simulation import SimulationGroup, SimulationPersona, SimulationScenario
 from profiles.simulation_provisioning import ensure_simulation_entities
-from tests.api_fakes import auth_headers, build_context, happy_path_agent
+from tests.api_fakes import auth_headers, build_context, happy_path_agent, teardown_ctx
+from tests.crewai_fakes import install_crewai_stub
 
 
 @pytest.fixture(autouse=True)
@@ -25,30 +23,8 @@ def _mock_crewai(monkeypatch):
     invokes real CrewAI construction, faked here exactly like every other
     api/ test file fakes it (tests/test_api_groups.py's own fixture)."""
 
-    class _FakeOutput:
-        def __init__(self, raw):
-            self.raw = raw
+    install_crewai_stub(monkeypatch)
 
-    class _FakeCrewAgent:
-        def __init__(self, **kwargs):
-            pass
-
-        def kickoff(self, text):
-            return _FakeOutput("status nominal, no anomalies")
-
-    fake_module = types.SimpleNamespace(
-        Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object)
-    )
-    monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
-
-
-@pytest.fixture
-def teardown_ctx():
-    contexts = []
-    yield contexts
-    for ctx in contexts:
-        ctx.queue.stop()
-        ctx.deps.persistence.close()
 
 
 def _build_request(chat: dict, step: dict) -> tuple[str, dict]:

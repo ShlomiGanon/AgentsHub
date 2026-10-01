@@ -53,6 +53,7 @@ from orchestrator.reasoning import (
     extract_and_decide,
     extract_event_data_update,
     select_protocol,
+    _unwrap_json_code_fence,
     ProtocolSelectionResult,
     RiskAssessment,
     SpecialistFailure,
@@ -518,16 +519,6 @@ def _direct_lane_eligible_protocols(protocols: "tuple[Protocol, ...]") -> "tuple
     )
 
 
-def _strip_json_code_fence(raw_response: str) -> str:
-    stripped = raw_response.strip()
-    if not stripped.startswith("```"):
-        return stripped
-    lines = stripped.splitlines()
-    if len(lines) < 3 or lines[-1].strip() != "```":
-        return stripped
-    return "\n".join(lines[1:-1]).strip()
-
-
 def _build_direct_lane_prompt(protocols: "tuple[Protocol, ...]", registry: "AgentRegistry", raw_text: str) -> tuple[str, dict]:
     tool_lines: list[str] = []
     tool_owner: dict[str, tuple[str, str]] = {}
@@ -577,7 +568,7 @@ def classify_direct_lane(
         return DirectLaneResult(eligible=False, reason="direct lane classification was unclear")
 
     try:
-        payload = json.loads(_strip_json_code_fence(agent_result.text))
+        payload = json.loads(_unwrap_json_code_fence(agent_result.text))
     except (json.JSONDecodeError, TypeError):
         return DirectLaneResult(eligible=False, reason="direct lane classification returned invalid JSON")
     if not isinstance(payload, dict):
