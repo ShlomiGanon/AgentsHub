@@ -11,6 +11,7 @@ import pytest
 from api.admin import AdminConfigError, LoginRateLimiter, _format_duration_phrase, resolve_admin_config
 from api.app import build_app
 from messages import get_catalog, get_current_catalog, set_current_catalog
+from profiles.admin_tables import AdminColumn, AdminTable
 from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, build_context, teardown_ctx
 from tests.crewai_fakes import install_crewai_stub
 
@@ -150,6 +151,37 @@ def test_admin_design_system_uses_heebo_and_card_hover_motion(tmp_path, teardown
     simulator = client.get("/admin/simulator").data.decode("utf-8")
     assert "Heebo" in simulator
     assert "var(--shadow-lg)" in simulator
+
+
+def test_dashboard_service_cards_use_one_color_per_category(tmp_path, teardown_ctx, _admin_env):
+    table = AdminTable(
+        key="widgets",
+        label="Widgets",
+        primary_key="id",
+        columns=(AdminColumn("id", "ID"),),
+        list_fn=lambda deps: [],
+        get_fn=lambda deps, row_id: None,
+        write_fn=lambda deps, row: None,
+    )
+    client = _client(tmp_path, teardown_ctx, admin_tables=(table,))
+    _login(client)
+    page = client.get("/admin/").data.decode("utf-8")
+    cards = {
+        href: cls
+        for cls, href in re.findall(r'<a class="(ls-service-card[^"]*)" href="([^"]+)"', page)
+    }
+
+    assert "--gold: #eab308" in page
+    assert ".ls-service-card.is-live" in page
+    assert "2px solid var(--gold)" in page
+    assert cards["/admin/users"] == "ls-service-card"
+    assert cards["/admin/groups"] == "ls-service-card"
+    assert cards["/admin/profiles"] == "ls-service-card is-featured"
+    assert cards["/admin/protocols"] == "ls-service-card is-featured"
+    assert cards["/admin/events"] == "ls-service-card is-featured"
+    assert cards["/admin/server"] == "ls-service-card is-featured is-featured-navy"
+    assert cards["/admin/simulator"] == "ls-service-card is-featured is-featured-navy"
+    assert cards["/admin/tables/widgets"] == "ls-service-card is-live"
 
 
 @pytest.mark.parametrize(

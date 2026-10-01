@@ -283,6 +283,7 @@ _DASHBOARD_STYLE = """
     --danger-dim: #fee2e2;
     --warning: #b45309;
     --warning-dim: #fef3c7;
+    --gold: #eab308;
     --shadow: 0 1px 2px rgba(11, 25, 44, .04), 0 6px 18px rgba(11, 25, 44, .05);
     --shadow-lg: 0 8px 22px rgba(11, 25, 44, .09);
     --radius: 10px;
@@ -555,6 +556,12 @@ _DASHBOARD_STYLE = """
   .ls-service-card.is-featured-navy { background: var(--navy); border-color: var(--navy); }
   .ls-service-card.is-featured-navy:hover, .ls-service-card.is-featured-navy:focus-visible {
     background: var(--navy-soft); border-color: var(--navy-soft);
+  }
+  .ls-service-card.is-live {
+    background: var(--panel); border: 2px solid var(--gold);
+  }
+  .ls-service-card.is-live:hover, .ls-service-card.is-live:focus-visible {
+    border-color: var(--gold);
   }
   @media (max-width: 980px) { .ls-service-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   @media (max-width: 640px) {
@@ -1258,8 +1265,8 @@ _MENU_TEMPLATE = """<!DOCTYPE html>
   <section class="ls-home-group">
     <h2 class="ls-home-group-title">{{ t('admin.home_group_operations') }}</h2>
     <div class="ls-service-grid">
-      <a class="ls-service-card" href="{{ url_for('admin.profiles') }}"><span class="ls-service-icon">""" + _ICON_PROFILES + """</span><h2>{{ t('admin.menu_profiles') }}</h2><span class="subtitle">{{ t('admin.profiles.subtitle') }}</span></a>
-      <a class="ls-service-card" href="{{ url_for('admin.protocols') }}"><span class="ls-service-icon">""" + _ICON_PROTOCOLS + """</span><h2>{{ t('admin.menu_protocols') }}</h2><span class="subtitle">{{ t('admin.protocols.subtitle') }}</span></a>
+      <a class="ls-service-card is-featured" href="{{ url_for('admin.profiles') }}"><span class="ls-service-icon">""" + _ICON_PROFILES + """</span><h2>{{ t('admin.menu_profiles') }}</h2><span class="subtitle">{{ t('admin.profiles.subtitle') }}</span></a>
+      <a class="ls-service-card is-featured" href="{{ url_for('admin.protocols') }}"><span class="ls-service-icon">""" + _ICON_PROTOCOLS + """</span><h2>{{ t('admin.menu_protocols') }}</h2><span class="subtitle">{{ t('admin.protocols.subtitle') }}</span></a>
       <a class="ls-service-card is-featured" href="{{ url_for('admin.events') }}"><span class="ls-service-icon">""" + _ICON_EVENTS + """</span><h2>{{ t('admin.menu_events') }}</h2><span class="subtitle">{{ t('admin.events.subtitle') }}</span></a>
     </div>
   </section>
@@ -1267,7 +1274,7 @@ _MENU_TEMPLATE = """<!DOCTYPE html>
     <h2 class="ls-home-group-title">{{ t('admin.home_group_system') }}</h2>
     <div class="ls-service-grid">
       <a class="ls-service-card is-featured is-featured-navy" href="{{ url_for('admin.server') }}"><span class="ls-service-icon">""" + _ICON_SERVER + """</span><h2>{{ t('admin.menu_server') }}</h2><span class="subtitle">{{ t('admin.server_subtitle') }}</span></a>
-      <a class="ls-service-card is-featured" href="{{ url_for('admin.simulator') }}"><span class="ls-service-icon">""" + _ICON_SIMULATOR + """</span><h2>{{ t('admin.menu_simulator') }}</h2><span class="subtitle">{{ t('admin.simulator.subtitle') }}</span></a>
+      <a class="ls-service-card is-featured is-featured-navy" href="{{ url_for('admin.simulator') }}"><span class="ls-service-icon">""" + _ICON_SIMULATOR + """</span><h2>{{ t('admin.menu_simulator') }}</h2><span class="subtitle">{{ t('admin.simulator.subtitle') }}</span></a>
     </div>
   </section>
   {% if admin_tables %}
@@ -1275,7 +1282,7 @@ _MENU_TEMPLATE = """<!DOCTYPE html>
     <h2 class="ls-home-group-title">{{ t('admin.home_group_data') }}</h2>
     <div class="ls-service-grid">
       {% for table in admin_tables %}
-      <a class="ls-service-card" href="{{ url_for('admin.admin_table_list', table_key=table.key) }}"><span class="ls-service-icon">""" + _ICON_TABLE + """</span><h2>{{ table.label }}</h2><span class="subtitle">{{ t('admin.tables.menu_subtitle') }}</span></a>
+      <a class="ls-service-card is-live" href="{{ url_for('admin.admin_table_list', table_key=table.key) }}"><span class="ls-service-icon">""" + _ICON_TABLE + """</span><h2>{{ table.label }}</h2><span class="subtitle">{{ t('admin.tables.menu_subtitle') }}</span></a>
       {% endfor %}
     </div>
   </section>
