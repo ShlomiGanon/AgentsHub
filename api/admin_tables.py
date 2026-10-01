@@ -66,22 +66,33 @@ def parse_admin_table_form(table: "AdminTable", form) -> dict:
 # many page bodies.
 
 ADMIN_TABLES_LIST_BODY = """
-<div class="ls-page">
-  <h1>{{ table.label }}</h1>
-  <p class="subtitle mb-4">{{ t('admin.tables.list_subtitle') }}</p>
+<div class="ls-page-wide">
+  <div class="ls-page-header">
+    <div>
+      <h1>{{ table.label }}</h1>
+      <p class="subtitle">{{ t('admin.tables.list_subtitle') }}</p>
+    </div>
+    <a class="btn btn-console btn-sm" href="{{ url_for('admin.admin_table_list', table_key=table.key) }}">{{ t('admin.api.refresh') }}</a>
+  </div>
   {% for category, message in get_flashed_messages(with_categories=true) %}
     <div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>
   {% endfor %}
-  <table class="table table-console mb-4">
+  <div class="ls-table-toolbar">
+    <span class="ls-count">{{ t('admin.tables.record_count', count=rows|length) }}</span>
+  </div>
+  {% if rows %}
+  <div class="table-responsive ls-table-card">
+  <table class="table table-console ls-compact-table mb-0">
     <thead><tr>
       {% for column in table.columns %}<th>{{ column.label }}</th>{% endfor %}
-      <th></th>
+      <th>{{ t('admin.col_actions') }}</th>
     </tr></thead>
     <tbody>
       {% for row in rows %}
       <tr>
-        {% for column in table.columns %}<td>{{ row.get(column.name, "") }}</td>{% endfor %}
+        {% for column in table.columns %}<td {% if column.name in ('id', 'event_id', 'chat_id', 'telegram_identity', 'callsign', 'mission_id', 'status') %}class="identity" title="{{ row.get(column.name, '') }}"{% endif %}>{% if column.name == 'status' %}<span class="tag">{{ row.get(column.name, "") }}</span>{% else %}{{ row.get(column.name, "") }}{% endif %}</td>{% endfor %}
         <td class="text-end">
+          <div class="ls-actions justify-content-end">
           <a class="btn btn-console btn-sm" href="{{ url_for('admin.admin_table_edit', table_key=table.key, row_id=row.get(table.primary_key)) }}">{{ t('admin.tables.edit') }}</a>
           {% if table.delete_fn %}
           <form class="d-inline" method="post" action="{{ url_for('admin.admin_table_delete', table_key=table.key, row_id=row.get(table.primary_key)) }}"
@@ -90,20 +101,27 @@ ADMIN_TABLES_LIST_BODY = """
             <button type="submit" class="btn btn-console-danger btn-sm">{{ t('admin.remove') }}</button>
           </form>
           {% endif %}
+          </div>
         </td>
       </tr>
-      {% else %}
-      <tr><td colspan="{{ table.columns|length + 1 }}">{{ t('admin.tables.no_rows') }}</td></tr>
       {% endfor %}
     </tbody>
   </table>
+  </div>
+  {% else %}
+  <div class="ls-empty-state">
+    <svg class="ls-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 10h8"/><path d="M8 14h5"/></svg>
+    <strong>{{ t('admin.tables.empty_title') }}</strong>
+    <p>{{ t('admin.tables.no_rows') }}</p>
+  </div>
+  {% endif %}
 </div>
 """
 
 
 ADMIN_TABLES_EDIT_BODY = """
 <div class="ls-page">
-  <div class="d-flex justify-content-between align-items-baseline mb-1"><h1>{{ t('admin.tables.edit_title', label=table.label) }}</h1>
+  <div class="ls-page-header"><div><h1>{{ t('admin.tables.edit_title', label=table.label) }}</h1></div>
     <a class="nav-console" href="{{ url_for('admin.admin_table_list', table_key=table.key) }}">{{ t('admin.tables.back_to_list') }}</a></div>
   {% for category, message in get_flashed_messages(with_categories=true) %}
     <div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>
