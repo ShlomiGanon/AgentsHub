@@ -188,6 +188,11 @@ class SimulatorRuntime:
         return {
             "reply_text": reply_text,
             **self.telegram_client.changes_since(mark, chat_id),
+            # A private follow-up can be emitted by the notification loop while this
+            # request is still being handled. The simulator's group response cannot
+            # include it (it belongs to another chat), so expose the pre-handler cursor
+            # for a second, private-chat poll without replaying older messages.
+            "request_watermark": _mark_to_dict(mark),
             "watermark": _mark_to_dict(self.telegram_client.mark()),
             "trace_id": current_trace,
         }

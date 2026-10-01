@@ -59,6 +59,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from api.admin_api_pages import FLASH_MESSAGES, IDENTITY_BAR
+from api.simulations import simulation_catalog_payload
 from messages import MessageCatalog
 
 if TYPE_CHECKING:
@@ -77,10 +78,10 @@ def simulator_page_context(
 
     `api_identity` is the admin's currently-selected registered identity (the same
     `IDENTITY_BAR`/`api_identity` mechanism the Profiles/Protocols/Events pages already
-    use, `api/admin_api_pages.py`) — the script's only use for it is authenticating its
-    own `GET /Simulations`/`GET /Simulations/<key>` calls to discover and load this
-    profile's declared simulations; it is unrelated to any scenario step's own
-    `sender_identity`, which is always used for that step's own request."""
+    use, `api/admin_api_pages.py`) — it gates the server-rendered simulation catalog and
+    authenticates the selected scenario's `GET /Simulations/<key>` materialization request;
+    it is unrelated to any scenario step's own `sender_identity`, which is always used for
+    that step's own request."""
 
     groups = [
         {"chat_id": binding.chat_id, "agent_name": binding.agent_name, "label": binding.label}
@@ -94,6 +95,17 @@ def simulator_page_context(
         }
         for user in sorted(ctx.deps.persistence.list_users(), key=lambda user: user["telegram_identity"])
     ]
+    selected_user = next((user for user in users if user["telegram_identity"] == api_identity), None)
+    can_view_simulations = bool(selected_user and selected_user["permission_level"] == "commander")
+    profile_simulations = simulation_catalog_payload(ctx.loaded_profile) if can_view_simulations else []
+    if not api_identity:
+        profile_simulations_hint_key = "admin.simulator.select_identity_first"
+    elif not can_view_simulations:
+        profile_simulations_hint_key = "admin.simulator.profile_simulations_commander_required"
+    elif not profile_simulations:
+        profile_simulations_hint_key = "admin.simulator.no_profile_simulations"
+    else:
+        profile_simulations_hint_key = ""
     strings = {
         key[len(SIMULATOR_STRING_PREFIX):]: template
         for key, template in catalog.messages.items()
@@ -105,6 +117,8 @@ def simulator_page_context(
         "routable_agents": list(ctx.group_routing.routable_targets),
         "bot_service_identity": bot_service_identity,
         "api_identity": api_identity,
+        "profile_simulations": profile_simulations,
+        "profile_simulations_hint_key": profile_simulations_hint_key,
         "strings": strings,
         "queued_ack_prefixes": [
             catalog.messages[key] for key in ("api.queued_report", "api.queued_request") if key in catalog.messages
@@ -447,6 +461,8 @@ SIMULATOR_STYLE = """
     cursor: grab;
     user-select: none;
     -webkit-user-select: none;
+    direction: ltr;
+    unicode-bidi: isolate;
   }
   .bts-graph-canvas:active {
     cursor: grabbing;
@@ -629,9 +645,14 @@ SIMULATOR_BODY = """
     <div class="sim-step">
       <div class="sim-step-head"><span class="sim-step-num">1</span><div class="sim-step-label">{{ t('admin.simulator.step_choose') }}</div></div>
       <label class="form-label-console" for="profile-simulation-select">{{ t('admin.simulator.profile_simulations') }}</label>
-      <select id="profile-simulation-select" class="form-select form-select-console" disabled><option value="">{{ t('admin.simulator.choose_profile_simulation') }}</option></select>
-      <button type="button" class="btn btn-console" id="load-profile-simulation" disabled>{{ t('admin.simulator.load_profile_simulation') }}</button>
-      <div class="subtitle" id="profile-sim-hint" style="font-size:12px; margin:0;"></div>
+      <select id="profile-simulation-select" class="form-select form-select-console" {% if not page_data.profile_simulations %}disabled{% endif %}>
+        <option value="">{{ t('admin.simulator.choose_profile_simulation') }}</option>
+        {% for simulation in page_data.profile_simulations %}
+        <option value="{{ simulation.key }}">{{ simulation.title or simulation.key }}</option>
+        {% endfor %}
+      </select>
+      <button type="button" class="btn btn-console-primary" id="load-profile-simulation" {% if not page_data.profile_simulations %}disabled{% endif %}>{{ t('admin.simulator.load_profile_simulation') }}</button>
+      <div class="subtitle" id="profile-sim-hint" style="font-size:12px; margin:0;">{% if page_data.profile_simulations_hint_key %}{{ t(page_data.profile_simulations_hint_key) }}{% endif %}</div>
     </div>
     <div class="sim-flow-join" aria-hidden="true"></div>
     <div class="sim-step">
@@ -763,7 +784,7 @@ SIMULATOR_BODY = """
     </div>
 
     <!-- SVG Graph -->
-    <svg id="bts-graph-svg" class="bts-graph-canvas" xmlns="http://www.w3.org/2000/svg">
+    <svg id="bts-graph-svg" class="bts-graph-canvas" xmlns="http://www.w3.org/2000/svg" direction="ltr">
       <defs>
         <!-- Filter glow effects -->
         <filter id="bts-glow-cyan" x="-20%" y="-20%" width="140%" height="140%">
@@ -898,11 +919,41 @@ SIMULATOR_BODY = """
   // step's own status message is even sent, let alone edited.
   const pollGenerationByChatId = {};
   const statusBubblesByChatId = {};
+  // The simulator's notification stream is global, while follow-up messages can be sent to a
+  // reporter's private chat even when the triggering step came from a group. Keep a per-DM
+  // watermark so a newer watcher for that same persona can resume without replaying messages.
+  const privatePollWatermarksByIdentity = {};
+
+  function copyPollWatermark(mark) {
+    return {
+      status_len: Number(mark && mark.status_len) || 0,
+      sent_len: Number(mark && mark.sent_len) || 0,
+    };
+  }
+
+  function privatePollWatermark(identity, fallback) {
+    const baseline = copyPollWatermark(fallback);
+    const previous = privatePollWatermarksByIdentity[identity];
+    if (!previous) return baseline;
+    return {
+      status_len: Math.max(previous.status_len, baseline.status_len),
+      sent_len: Math.max(previous.sent_len, baseline.sent_len),
+    };
+  }
 
   function claimPollGeneration(chatId) {
     const myGeneration = (pollGenerationByChatId[chatId] || 0) + 1;
     pollGenerationByChatId[chatId] = myGeneration;
     return myGeneration;
+  }
+
+  function invalidatePollWatchers() {
+    Object.keys(pollGenerationByChatId).forEach(function (chatId) {
+      pollGenerationByChatId[chatId] += 1;
+    });
+    Object.keys(privatePollWatermarksByIdentity).forEach(function (identity) {
+      delete privatePollWatermarksByIdentity[identity];
+    });
   }
   const registeredIdentities = new Set((DATA.users || []).map(function (user) { return String(user.telegram_identity); }));
   const usersByIdentity = {};
@@ -914,6 +965,17 @@ SIMULATOR_BODY = """
     return template.replace(/\\{(\\w+)\\}/g, function (match, name) {
       return values && Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : match;
     });
+  }
+
+  function formatDurationMs(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return t('bts.na');
+    const seconds = number / 1000;
+    const precision = seconds < 1 ? 2 : (seconds < 10 ? 2 : 1);
+    let text = seconds.toFixed(precision);
+    while (text.includes('.') && text.endsWith('0')) text = text.slice(0, -1);
+    if (text.endsWith('.')) text = text.slice(0, -1);
+    return t('bts.duration_seconds', { value: text });
   }
 
   function el(tag, className, text) {
@@ -942,7 +1004,7 @@ SIMULATOR_BODY = """
 
   // ---- scenario model -------------------------------------------------------------------
 
-  const state = { scenario: null, chats: [], chatsByKey: {}, queues: {}, runId: null, busy: false };
+  const state = { scenario: null, scenarioSteps: [], chats: [], chatsByKey: {}, queues: {}, runId: null, busy: false };
   // Non-null while #mapping-panel is open for a manually-pasted/uploaded scenario missing IDs
   // (docs/profile_simulations_design.md) — {groupsNeedingId, personaValues}; null when closed.
   let mappingMode = null;
@@ -1031,8 +1093,10 @@ SIMULATOR_BODY = """
     // panel from a different path can stay on screen (docs/profile_simulations_design.md).
     closeMappingPanel();
     closeEditDialog();
+    invalidatePollWatchers();
     const parsed = validateScenario(raw);
     state.scenario = parsed.scenario;
+    state.scenarioSteps = parsed.steps;
     state.chats = parsed.chats;
     state.chatsByKey = parsed.chatsByKey;
     state.queues = {};
@@ -1457,7 +1521,21 @@ SIMULATOR_BODY = """
   // wait until here) — this loop just needs to know the generation it's watching for, not
   // claim its own. Checked both before each request (skip a poll entirely once superseded)
   // and after (discard a response that was already in flight when superseded).
-  async function pollSimulatorChat(chatKey, chatId, watermark, myGeneration, reply, ackMessageId, traceId, waitingForJob) {
+  function privateChatKeyForIdentity(identity) {
+    const matches = state.chats.filter(function (chat) {
+      if (chat.kind !== 'message' || chat.telegram_chat_type !== 'private') return false;
+      return state.scenarioSteps.some(function (step) {
+        return step.chat === chat.key && step.sender_identity === identity;
+      });
+    });
+    return matches.length === 1 ? matches[0].key : null;
+  }
+
+  async function pollSimulatorChat(
+    chatKey, chatId, watermark, myGeneration, reply, ackMessageId, traceId,
+    deliveryState, privateTargetIdentity, privateFollowupWatcher, privateMessageChatKey
+  ) {
+    if (!deliveryState) deliveryState = { waitingForJob: false };
     const startedAt = Date.now();
     let mark = watermark || { status_len: 0, sent_len: 0 };
     let pollFailures = 0;
@@ -1466,7 +1544,7 @@ SIMULATOR_BODY = """
     while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
       await new Promise(function (resolve) { setTimeout(resolve, POLL_INTERVAL_MS); });
       if (pollGenerationByChatId[chatId] !== myGeneration) {
-        if (waitingForJob) setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
+        if (deliveryState.waitingForJob && !privateFollowupWatcher) setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
         return;
       }
       let result;
@@ -1479,19 +1557,19 @@ SIMULATOR_BODY = """
         );
       } catch (error) {
         pollFailures += 1;
-        if (pollFailures >= 3 && waitingForJob) {
+        if (pollFailures >= 3 && deliveryState.waitingForJob && !privateFollowupWatcher) {
           setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
           return;
         }
         continue;
       }
       if (pollGenerationByChatId[chatId] !== myGeneration) {
-        if (waitingForJob) setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
+        if (deliveryState.waitingForJob && !privateFollowupWatcher) setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
         return;
       }
       if (result.status !== 200 || !result.payload) {
         pollFailures += 1;
-        if (pollFailures >= 3 && waitingForJob) {
+        if (pollFailures >= 3 && deliveryState.waitingForJob && !privateFollowupWatcher) {
           setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
           return;
         }
@@ -1499,27 +1577,81 @@ SIMULATOR_BODY = """
       }
       pollFailures = 0;
       if (result.payload.watermark) mark = result.payload.watermark;
+      if (privateTargetIdentity && result.payload.watermark) {
+        privatePollWatermarksByIdentity[privateTargetIdentity] = copyPollWatermark(result.payload.watermark);
+      }
       const structured = Array.isArray(result.payload.status_updates) && Array.isArray(result.payload.sent_messages);
+      let receivedPrivateMessage = false;
       if (structured) {
         for (const update of result.payload.status_updates) {
+          if (privateFollowupWatcher && (update.kind === 'send' || update.kind === 'edit')) {
+            if (!statusBubblesByChatId[chatId]) statusBubblesByChatId[chatId] = new Map();
+            const privateStatusBubbles = statusBubblesByChatId[chatId];
+            const knownPrivateBubble = privateStatusBubbles.get(String(update.message_id));
+            if (update.kind === 'edit' && knownPrivateBubble) {
+              setBubbleText(knownPrivateBubble, update.text, null, false);
+            } else {
+              const bubble = appendBubble(
+                privateMessageChatKey || chatKey,
+                'sys',
+                t('private_followup_label', { identity: privateTargetIdentity }),
+                update.text,
+                null,
+                null,
+                traceId
+              );
+              privateStatusBubbles.set(String(update.message_id), bubble);
+            }
+            receivedPrivateMessage = true;
+            continue;
+          }
           const knownBubble = statusBubblesByChatId[chatId] && statusBubblesByChatId[chatId].get(String(update.message_id));
           if (update.kind === 'edit' && knownBubble) {
             setBubbleText(knownBubble, update.text, null, false);
-            if (String(update.message_id) === String(ackMessageId)) waitingForJob = false;
+            if (String(update.message_id) === String(ackMessageId)) deliveryState.waitingForJob = false;
           } else if (update.kind === 'send' || update.kind === 'edit') {
             appendBubble(chatKey, 'sys', t('system_label'), update.text, null);
+            if (privateTargetIdentity) receivedPrivateMessage = true;
           }
         }
-        for (const text of result.payload.sent_messages) appendBubble(chatKey, 'sys', t('system_label'), text, null);
+        for (const text of result.payload.sent_messages) {
+          appendBubble(
+            privateFollowupWatcher ? (privateMessageChatKey || chatKey) : chatKey,
+            'sys',
+            privateFollowupWatcher ? t('private_followup_label', { identity: privateTargetIdentity }) : t('system_label'),
+            text,
+            null,
+            null,
+            privateFollowupWatcher ? traceId : null
+          );
+          if (privateTargetIdentity) receivedPrivateMessage = true;
+        }
       } else if (result.payload.reply_text) {
-        if (waitingForJob) {
+        if (deliveryState.waitingForJob && !privateFollowupWatcher) {
           setBubbleText(reply, result.payload.reply_text, null, false);
-          waitingForJob = false;
         } else {
-          appendBubble(chatKey, 'sys', t('system_label'), result.payload.reply_text, null);
+          appendBubble(
+            privateFollowupWatcher ? (privateMessageChatKey || chatKey) : chatKey,
+            'sys',
+            privateFollowupWatcher ? t('private_followup_label', { identity: privateTargetIdentity }) : t('system_label'),
+            result.payload.reply_text,
+            null,
+            null,
+            privateFollowupWatcher ? traceId : null
+          );
+          if (privateFollowupWatcher) receivedPrivateMessage = true;
         }
       }
-      if (waitingForJob && Date.now() - lastTraceCheck >= 8000) {
+      if (receivedPrivateMessage && deliveryState.waitingForJob) {
+        setBubbleText(
+          reply,
+          t('private_followup_waiting', { identity: privateTargetIdentity }),
+          t('private_followup_status'),
+          false
+        );
+        deliveryState.waitingForJob = false;
+      }
+      if (deliveryState.waitingForJob && Date.now() - lastTraceCheck >= 8000) {
         lastTraceCheck = Date.now();
         try {
           const traceResult = await apiCall('GET', '/admin/simulator/trace/' + encodeURIComponent(traceId), null);
@@ -1548,7 +1680,7 @@ SIMULATOR_BODY = """
         } catch (error) { /* Trace display is diagnostic only. */ }
       }
     }
-    if (waitingForJob) setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
+    if (deliveryState.waitingForJob && !privateFollowupWatcher) setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('delivery_unknown'), true);
   }
 
   async function sendNext(chatKey) {
@@ -1628,8 +1760,39 @@ SIMULATOR_BODY = """
       statusBubblesByChatId[request.body.chat_id].set(String(ackEvent.message_id), reply);
     }
     const waitingForJob = QUEUED_ACK_PREFIXES.some(prefix => (payload.reply_text || '').startsWith(prefix));
-    pollSimulatorChat(chatKey, request.body.chat_id, payload.watermark, myGeneration,
-      reply, ackEvent && ackEvent.message_id, finalTraceId, waitingForJob);
+    const deliveryState = { waitingForJob: waitingForJob };
+    const senderIdentity = String(request.body.sender_identity || '');
+    const isPrivateOrigin = request.body.chat_type === 'private';
+    const originWatermark = payload.watermark;
+    pollSimulatorChat(
+      chatKey,
+      request.body.chat_id,
+      originWatermark,
+      myGeneration,
+      reply,
+      ackEvent && ackEvent.message_id,
+      finalTraceId,
+      deliveryState,
+      null,
+      false,
+      chatKey
+    );
+    if (waitingForJob && !isPrivateOrigin && senderIdentity && senderIdentity !== String(request.body.chat_id || '')) {
+      const privateGeneration = claimPollGeneration(senderIdentity);
+      pollSimulatorChat(
+        chatKey,
+        senderIdentity,
+        privatePollWatermark(senderIdentity, payload.request_watermark || payload.watermark),
+        privateGeneration,
+        reply,
+        null,
+        finalTraceId,
+        deliveryState,
+        senderIdentity,
+        true,
+        privateChatKeyForIdentity(senderIdentity)
+      );
+    }
   }
 
   // ---- mapping panel: prompts for any Telegram ID a manually-provided scenario is missing ----
@@ -1756,56 +1919,13 @@ SIMULATOR_BODY = """
     }
   }
 
-  // ---- profile-declared simulations: server-queried, no manual ID entry ------------------
-  // The admin page discovers and loads these purely by querying the server (GET /Simulations,
-  // GET /Simulations/<key>) — it holds no knowledge of any simulation user/group ID itself.
-  // The response is already the exact canonical scenario shape, so it feeds straight into the
-  // same loadScenario() the manual paste/drop path already uses.
+  // ---- profile-declared simulations: server-rendered catalog, no manual ID entry ----------
+  // The catalog is rendered from the already-loaded profile and is exposed only for an acting
+  // commander. Selecting an entry still fetches its canonical materialized scenario from
+  // GET /Simulations/<key>; the browser never constructs simulation Telegram IDs.
 
   const profileSimSelect = document.getElementById('profile-simulation-select');
   const profileSimLoadButton = document.getElementById('load-profile-simulation');
-  const profileSimHint = document.getElementById('profile-sim-hint');
-
-  // Single place that sets the disabled/enabled state AND makes the reason visible —
-  // a short inline hint (matches this page's existing .subtitle idiom, no new UI pattern)
-  // plus a native title tooltip on both controls, so "why is this greyed out" is never
-  // left to guessing at a disabled <select>'s own option text alone.
-  function setProfileSimAvailability(enabled, hint) {
-    profileSimSelect.disabled = !enabled;
-    profileSimLoadButton.disabled = !enabled || !profileSimSelect.value;
-    profileSimHint.textContent = hint || '';
-    profileSimSelect.title = hint || '';
-    profileSimLoadButton.title = hint || '';
-  }
-
-  async function loadProfileSimulationCatalog() {
-    profileSimSelect.innerHTML = '';
-    const placeholder = el('option', null, t('choose_profile_simulation'));
-    placeholder.value = '';
-    profileSimSelect.appendChild(placeholder);
-    if (!DATA.api_identity) {
-      setProfileSimAvailability(false, t('select_identity_first'));
-      return;
-    }
-    let result;
-    try {
-      result = await apiCall('GET', '/Simulations', DATA.api_identity);
-    } catch (error) {
-      setProfileSimAvailability(false, t('profile_simulation_load_failed', { message: error.message }));
-      return;
-    }
-    const simulations = (result.payload && result.payload.simulations) || [];
-    if (result.status >= 400 || !simulations.length) {
-      setProfileSimAvailability(false, t('no_profile_simulations'));
-      return;
-    }
-    simulations.forEach(function (simulation) {
-      const option = el('option', null, simulation.title || simulation.key);
-      option.value = simulation.key;
-      profileSimSelect.appendChild(option);
-    });
-    setProfileSimAvailability(true, '');
-  }
 
   profileSimSelect.addEventListener('change', function () {
     if (!profileSimSelect.disabled) {
@@ -1833,8 +1953,6 @@ SIMULATOR_BODY = """
       profileSimLoadButton.disabled = !profileSimSelect.value;
     }
   });
-
-  loadProfileSimulationCatalog();
 
   // ---- wiring --------------------------------------------------------------------------------
 
@@ -1877,6 +1995,7 @@ SIMULATOR_BODY = """
     let currentTraceId = null;
     let pollTimer = null;
     let pollFailures = 0;
+    let traceFetchInFlight = false;
     const POLL_BTS_INTERVAL_MS = 1000;
 
     let selectedNodeId = null;
@@ -2055,15 +2174,29 @@ SIMULATOR_BODY = """
       hideNodeDetail();
     }
 
-    function renderHeader(traceId, status) {
+    function renderHeader(traceId, status, deliveryStatus) {
       if (traceIdLabel) traceIdLabel.textContent = traceId || '—';
       if (!statusBadge) return;
       if (status === 'running') {
         statusBadge.className = 'bts-badge bts-badge-live';
         statusBadge.textContent = '● ' + t('bts.live_badge');
+      } else if (status === 'awaiting_approval') {
+        statusBadge.className = 'bts-badge bts-badge-pending';
+        statusBadge.textContent = '⏳ ' + t('bts.awaiting_approval');
+      } else if (status === 'partial') {
+        statusBadge.className = 'bts-badge bts-badge-pending';
+        statusBadge.textContent = '◐ ' + t('bts.partial_complete');
+      } else if (status === 'unknown') {
+        statusBadge.className = 'bts-badge bts-badge-pending';
+        statusBadge.textContent = '○ ' + t('bts.unknown_investigate');
+      } else if (status === 'disconnected') {
+        statusBadge.className = 'bts-badge bts-badge-pending';
+        statusBadge.textContent = '↻ ' + t('bts.disconnected_retry');
       } else if (status === 'succeeded' || status === 'completed') {
         statusBadge.className = 'bts-badge bts-badge-completed';
-        statusBadge.textContent = '✔ ' + t('bts.completed_badge');
+        statusBadge.textContent = deliveryStatus === 'confirmed'
+          ? '✔ ' + t('bts.completed_delivered')
+          : '✔ ' + t('bts.completed_delivery_unknown');
       } else if (status === 'failed') {
         statusBadge.className = 'bts-badge bts-badge-failed';
         statusBadge.textContent = '✖ ' + t('bts.failed_badge');
@@ -2075,26 +2208,45 @@ SIMULATOR_BODY = """
 
     async function fetchTrace() {
       if (!currentTraceId || !isOpen) return;
+      if (traceFetchInFlight) return;
+      traceFetchInFlight = true;
+      const requestedTraceId = currentTraceId;
+      let controller = null;
+      let requestTimeout = null;
       try {
-        const response = await fetch('/admin/simulator/trace/' + encodeURIComponent(currentTraceId), {
+        if (typeof AbortController !== 'undefined') {
+          controller = new AbortController();
+          requestTimeout = setTimeout(function () { controller.abort(); }, 8000);
+        }
+        const response = await fetch('/admin/simulator/trace/' + encodeURIComponent(requestedTraceId), {
           method: 'GET',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'same-origin',
+          signal: controller ? controller.signal : undefined,
         });
         if (!response.ok) {
           pollFailures++;
-          if (pollFailures > 6) stopPolling();
+          if (pollFailures >= 3 && requestedTraceId === currentTraceId) renderHeader(currentTraceId, 'disconnected');
           return;
         }
-        pollFailures = 0;
         const data = await response.json();
+        if (requestedTraceId !== currentTraceId) return;
+        pollFailures = 0;
         render(data);
 
-        if (data.terminal) {
+        // `unknown` can be a transient aggregate state while the queue is still writing
+        // the next synthesis/picture events. Only stop on a real terminal outcome or a
+        // confirmed queue stop; otherwise the graph must keep following the trace.
+        if (data.terminal || data.diagnostic_state === 'job_stopped_without_outcome') {
           stopPolling();
         }
       } catch (err) {
         console.warn('Behind-the-scenes trace fetch error:', err);
+        pollFailures++;
+        if (pollFailures >= 3 && requestedTraceId === currentTraceId) renderHeader(currentTraceId, 'disconnected');
+      } finally {
+        if (requestTimeout !== null) clearTimeout(requestTimeout);
+        traceFetchInFlight = false;
       }
     }
 
@@ -2152,23 +2304,27 @@ SIMULATOR_BODY = """
       const isDone = data.terminal;
       const hasEvents = (data.event_count || 0) > 0;
       const outcome = data.outcome;
+      const executionStatus = data.execution_status || (!hasEvents ? 'unknown' : (isDone ? (outcome === 'failed' ? 'failed' : 'succeeded') : 'running'));
 
       renderHeader(
         data.trace_id || currentTraceId,
-        !hasEvents ? 'pending' : (isDone ? (outcome === 'failed' ? 'failed' : 'completed') : 'running')
+        executionStatus,
+        data.delivery_status
       );
 
       // 1. KPI Metrics Bar
       if (metricWall) {
-        metricWall.textContent = (hasEvents && m.total_wall_clock_ms) ? (m.total_wall_clock_ms.toLocaleString() + ' ' + t('bts.ms')) : t('bts.na');
+        metricWall.textContent = (hasEvents && m.total_wall_clock_ms != null) ? formatDurationMs(m.total_wall_clock_ms) : t('bts.na');
       }
       if (metricBreakdown) {
         if (!hasEvents) {
           metricBreakdown.textContent = t('bts.no_trace_events');
         } else {
-          const mod = m.model_latency_ms ? (m.model_latency_ms.toLocaleString() + ' ' + t('bts.ms')) : '0';
-          const tool = m.tools_duration_ms ? (m.tools_duration_ms.toLocaleString() + ' ' + t('bts.ms')) : '0';
-          metricBreakdown.textContent = t('bts.model_tools_breakdown', { model: mod, tools: tool });
+          metricBreakdown.textContent = t('bts.model_tools_queue_breakdown', {
+            model: formatDurationMs(m.model_latency_ms || 0),
+            tools: formatDurationMs(m.tools_duration_ms || 0),
+            queue: m.queue_wait_ms == null ? t('bts.na') : formatDurationMs(m.queue_wait_ms),
+          });
         }
       }
       if (metricLlm) {
@@ -2202,9 +2358,11 @@ SIMULATOR_BODY = """
 
       // 2. Agents & Parallel KPI
       const graphData = data.graph || { nodes: [], edges: [] };
-      const specialists = (graphData.nodes || []).filter(function (n) { return n.type === 'specialist'; });
+      const specialists = (graphData.nodes || []).filter(function (n) {
+        return n.type === 'invocation' && !['main_agent', 'report_composer_agent', 'insights_agent'].includes(n.agent_name || n.label);
+      });
       const toolsCount = (graphData.nodes || []).filter(function (n) { return n.type === 'tool'; }).length;
-      const parallelCount = (graphData.nodes || []).filter(function (n) { return n.type === 'specialist' && n.is_parallel; }).length;
+      const parallelCount = graphData.parallel_invocation_count || 0;
 
       if (metricAgents) {
         metricAgents.textContent = t('bts.agents_tools_count', { specialists: specialists.length, tools: toolsCount });
@@ -2244,67 +2402,88 @@ SIMULATOR_BODY = """
 
       const cx = 500;
       const posMap = {};
-
-      const mainNode = nodes.find(function (n) { return n.type === 'main'; });
-      const specialists = nodes.filter(function (n) { return n.type === 'specialist'; });
-      const directTools = nodes.filter(function (n) { return n.type === 'tool' && (!n.parent || n.parent === 'main_agent'); });
-      const persistence = nodes.find(function (n) { return n.type === 'persistence'; });
-
-      // Layout Main Orchestrator
-      if (mainNode) {
-        mainNode.w = 260;
-        mainNode.h = 92;
-        mainNode.x = cx;
-        mainNode.y = 80;
-        posMap[mainNode.id] = mainNode;
-      }
-
-      // Layout Specialists
-      const numSpec = specialists.length;
-      let maxBottomY = 280;
-
-      if (numSpec > 0) {
-        const spacing = Math.max(250, Math.min(320, 840 / Math.max(1, numSpec)));
-        const startX = cx - ((numSpec - 1) * spacing) / 2;
-
-        specialists.forEach(function (spec, idx) {
-          spec.w = 230;
-          spec.h = 88;
-          spec.x = startX + idx * spacing;
-          spec.y = 260;
-          posMap[spec.id] = spec;
-
-          // Tools executed by this specialist
-          const specTools = nodes.filter(function (n) { return n.type === 'tool' && n.parent === spec.id; });
-          specTools.forEach(function (tool, tIdx) {
-            tool.w = 190;
-            tool.h = 64;
-            const offsetX = specTools.length > 1 ? (tIdx % 2 === 0 ? -60 : 60) : 0;
-            tool.x = spec.x + offsetX;
-            tool.y = 410 + Math.floor(tIdx / 2) * 76;
-            posMap[tool.id] = tool;
-            if (tool.y + 40 > maxBottomY) maxBottomY = tool.y + 40;
-          });
-        });
-      }
-
-      // Layout Direct Tools
-      directTools.forEach(function (tool, idx) {
-        tool.w = 180;
-        tool.h = 60;
-        tool.x = cx - 340;
-        tool.y = 90 + idx * 72;
-        posMap[tool.id] = tool;
-        if (tool.y + 40 > maxBottomY) maxBottomY = tool.y + 40;
+      const hasInvocationGraph = nodes.some(function (n) {
+        return ['invocation', 'model', 'routing', 'result', 'persistence', 'composition'].includes(n.type);
       });
 
-      // Layout Persistence Store
-      if (persistence) {
-        persistence.w = 240;
-        persistence.h = 76;
-        persistence.x = numSpec > 0 ? cx : cx + 320;
-        persistence.y = numSpec > 0 ? Math.max(480, maxBottomY + 70) : 80;
-        posMap[persistence.id] = persistence;
+      if (hasInvocationGraph) {
+        const rows = [
+          nodes.filter(function (n) { return n.type === 'user'; }),
+          nodes.filter(function (n) { return n.type === 'main'; }),
+          nodes.filter(function (n) { return n.type === 'routing'; }),
+          nodes.filter(function (n) { return n.type === 'invocation'; }),
+          nodes.filter(function (n) { return n.type === 'model'; }),
+          nodes.filter(function (n) { return n.type === 'tool'; }),
+          nodes.filter(function (n) { return n.type === 'persistence'; }),
+          nodes.filter(function (n) { return n.type === 'composition'; }),
+          nodes.filter(function (n) { return n.type === 'result' || n.type === 'outcome'; }),
+        ];
+        rows.forEach(function (row, rowIndex) {
+          if (!row.length) return;
+          const width = 210;
+          const gap = 34;
+          const rowWidth = row.length * width + (row.length - 1) * gap;
+          const left = Math.max(115, cx - rowWidth / 2 + width / 2);
+          row.forEach(function (node, index) {
+            node.w = width;
+            node.h = node.type === 'main' ? 84 : 72;
+            node.x = left + index * (width + gap);
+            node.y = 55 + rowIndex * 112;
+            posMap[node.id] = node;
+          });
+        });
+      } else {
+        const mainNode = nodes.find(function (n) { return n.type === 'main'; });
+        const specialists = nodes.filter(function (n) { return n.type === 'specialist'; });
+        const directTools = nodes.filter(function (n) { return n.type === 'tool' && (!n.parent || n.parent === 'main_agent'); });
+        const persistence = nodes.find(function (n) { return n.type === 'persistence'; });
+
+        if (mainNode) {
+          mainNode.w = 260;
+          mainNode.h = 92;
+          mainNode.x = cx;
+          mainNode.y = 80;
+          posMap[mainNode.id] = mainNode;
+        }
+
+        const numSpec = specialists.length;
+        let maxBottomY = 280;
+        if (numSpec > 0) {
+          const spacing = Math.max(250, Math.min(320, 840 / Math.max(1, numSpec)));
+          const startX = cx - ((numSpec - 1) * spacing) / 2;
+          specialists.forEach(function (spec, idx) {
+            spec.w = 230;
+            spec.h = 88;
+            spec.x = startX + idx * spacing;
+            spec.y = 260;
+            posMap[spec.id] = spec;
+            const specTools = nodes.filter(function (n) { return n.type === 'tool' && n.parent === spec.id; });
+            specTools.forEach(function (tool, tIdx) {
+              tool.w = 190;
+              tool.h = 64;
+              const offsetX = specTools.length > 1 ? (tIdx % 2 === 0 ? -60 : 60) : 0;
+              tool.x = spec.x + offsetX;
+              tool.y = 410 + Math.floor(tIdx / 2) * 76;
+              posMap[tool.id] = tool;
+              if (tool.y + 40 > maxBottomY) maxBottomY = tool.y + 40;
+            });
+          });
+        }
+        directTools.forEach(function (tool, idx) {
+          tool.w = 180;
+          tool.h = 60;
+          tool.x = cx - 340;
+          tool.y = 90 + idx * 72;
+          posMap[tool.id] = tool;
+          if (tool.y + 40 > maxBottomY) maxBottomY = tool.y + 40;
+        });
+        if (persistence) {
+          persistence.w = 240;
+          persistence.h = 76;
+          persistence.x = numSpec > 0 ? cx : cx + 320;
+          persistence.y = numSpec > 0 ? Math.max(480, maxBottomY + 70) : 80;
+          posMap[persistence.id] = persistence;
+        }
       }
 
       // 1. Draw Edges
@@ -2343,6 +2522,12 @@ SIMULATOR_BODY = """
           path.setAttribute('stroke-width', '2');
         } else {
           path.setAttribute('stroke-width', '1.2');
+        }
+
+        if (edge.type === 'unattributed') {
+          strokeColor = '#64748b';
+          markerId = 'marker-pending';
+          path.setAttribute('stroke-dasharray', '3 5');
         }
 
         path.setAttribute('stroke', strokeColor);
@@ -2413,6 +2598,21 @@ SIMULATOR_BODY = """
           bgFill = '#061a1a';
           strokeColor = node.status === 'failed' ? '#ef4444' : '#0d9488';
           if (node.status === 'success') strokeColor = '#059669';
+        } else if (node.type === 'invocation') {
+          bgFill = '#160d2b';
+          strokeColor = node.status === 'failed' ? '#ef4444' : '#7c3aed';
+        } else if (node.type === 'model') {
+          bgFill = '#0c1d30';
+          strokeColor = node.status === 'failed' ? '#ef4444' : '#0284c7';
+        } else if (node.type === 'routing') {
+          bgFill = '#172033';
+          strokeColor = '#64748b';
+        } else if (node.type === 'composition') {
+          bgFill = '#11152b';
+          strokeColor = '#818cf8';
+        } else if (node.type === 'result') {
+          bgFill = '#10251c';
+          strokeColor = node.status === 'failed' ? '#ef4444' : '#059669';
         } else if (node.type === 'persistence') {
           bgFill = '#1a1306';
           strokeColor = node.status === 'failed' ? '#ef4444' : '#d97706';
@@ -2434,6 +2634,11 @@ SIMULATOR_BODY = """
         let stripFill = 'rgba(56, 189, 248, 0.12)';
         if (node.type === 'specialist') stripFill = node.is_parallel ? 'rgba(192, 132, 252, 0.22)' : 'rgba(168, 85, 247, 0.15)';
         if (node.type === 'tool') stripFill = 'rgba(16, 185, 129, 0.15)';
+        if (node.type === 'invocation') stripFill = 'rgba(168, 85, 247, 0.15)';
+        if (node.type === 'model') stripFill = 'rgba(56, 189, 248, 0.15)';
+        if (node.type === 'routing') stripFill = 'rgba(100, 116, 139, 0.15)';
+        if (node.type === 'composition') stripFill = 'rgba(129, 140, 248, 0.18)';
+        if (node.type === 'result') stripFill = 'rgba(16, 185, 129, 0.15)';
         if (node.type === 'persistence') stripFill = 'rgba(245, 158, 11, 0.18)';
         strip.setAttribute('fill', stripFill);
         g.appendChild(strip);
@@ -2442,22 +2647,33 @@ SIMULATOR_BODY = """
         let icon = '🤖';
         if (node.type === 'specialist') icon = '🔬';
         if (node.type === 'tool') icon = node.side_effecting ? '🛠️' : '🔍';
+        if (node.type === 'invocation') icon = '🤖';
+        if (node.type === 'model') icon = '🧠';
+        if (node.type === 'routing') icon = '🧭';
+        if (node.type === 'composition') icon = '📝';
+        if (node.type === 'result') icon = '📥';
         if (node.type === 'persistence') icon = '💾';
 
         const titleText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        titleText.setAttribute('x', '10');
+        titleText.setAttribute('x', String(p.w / 2));
         titleText.setAttribute('y', '15');
+        titleText.setAttribute('text-anchor', 'middle');
+        titleText.setAttribute('dominant-baseline', 'middle');
         titleText.setAttribute('fill', '#f8fafc');
         titleText.setAttribute('font-size', '12');
         titleText.setAttribute('font-weight', '700');
         titleText.setAttribute('font-family', 'sans-serif');
-        titleText.textContent = icon + ' ' + (node.label || node.id);
+        let titleContent = icon + ' ' + (node.label || node.id);
+        if (titleContent.length > 28) titleContent = titleContent.slice(0, 27) + '…';
+        titleText.textContent = titleContent;
         g.appendChild(titleText);
 
         // Subtitle
         const subText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        subText.setAttribute('x', '10');
+        subText.setAttribute('x', String(p.w / 2));
         subText.setAttribute('y', '38');
+        subText.setAttribute('text-anchor', 'middle');
+        subText.setAttribute('dominant-baseline', 'middle');
         subText.setAttribute('fill', '#94a3b8');
         subText.setAttribute('font-size', '10');
         subText.setAttribute('font-family', 'monospace');
@@ -2512,6 +2728,10 @@ SIMULATOR_BODY = """
             vColor = '#f59e0b'; vBg = 'rgba(245, 158, 11, 0.25)'; vLabel = t('bts.verify_unverified_short');
           } else if (node.verification === 'failed') {
             vColor = '#ef4444'; vBg = 'rgba(239, 68, 68, 0.25)'; vLabel = t('bts.node_failed');
+          } else if (node.verification === 'blocked') {
+            vColor = '#ef4444'; vBg = 'rgba(239, 68, 68, 0.25)'; vLabel = t('bts.verify_blocked');
+          } else if (node.verification === 'verification_unavailable' || node.verification === 'unavailable') {
+            vColor = '#94a3b8'; vBg = 'rgba(148, 163, 184, 0.2)'; vLabel = t('bts.verify_unavailable_short');
           }
 
           vRect.setAttribute('fill', vBg);
@@ -2534,8 +2754,10 @@ SIMULATOR_BODY = """
 
         // Status & Duration bottom strip
         const statText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        statText.setAttribute('x', '10');
+        statText.setAttribute('x', String(p.w / 2));
         statText.setAttribute('y', p.h - 12);
+        statText.setAttribute('text-anchor', 'middle');
+        statText.setAttribute('dominant-baseline', 'middle');
         statText.setAttribute('font-size', '10');
         statText.setAttribute('font-family', 'sans-serif');
 
@@ -2546,7 +2768,9 @@ SIMULATOR_BODY = """
           statStr = t('bts.node_running');
           statFill = '#38bdf8';
         } else if (node.status === 'success' || node.status === 'completed') {
-          statStr = node.duration_ms ? t('bts.node_completed_ms', { ms: node.duration_ms }) : t('bts.node_completed');
+          statStr = node.duration_ms != null
+            ? t('bts.node_completed_duration', { duration: formatDurationMs(node.duration_ms) })
+            : t('bts.node_completed');
           statFill = '#34d399';
         } else if (node.status === 'failed') {
           statStr = t('bts.node_failed');
@@ -2585,6 +2809,10 @@ SIMULATOR_BODY = """
       if (node.type === 'specialist') icon = '🔬';
       if (node.type === 'tool') icon = node.side_effecting ? '🛠️' : '🔍';
       if (node.type === 'persistence') icon = '💾';
+      if (node.type === 'model') icon = '🧠';
+      if (node.type === 'routing') icon = '🧭';
+      if (node.type === 'result') icon = '📥';
+      if (node.type === 'composition') icon = '📝';
 
       if (detIcon) detIcon.textContent = icon;
       if (detTitle) detTitle.textContent = node.label || node.id;
@@ -2604,6 +2832,9 @@ SIMULATOR_BODY = """
         } else if (node.status === 'retry') {
           detStatus.className = 'bts-badge bts-badge-pending';
           detStatus.textContent = t('bts.node_retry', { count: (node.retries || 1) });
+        } else if (node.status === 'unknown') {
+          detStatus.className = 'bts-badge bts-badge-pending';
+          detStatus.textContent = t('bts.node_unknown_missing_finish');
         } else {
           detStatus.className = 'bts-badge bts-badge-pending';
           detStatus.textContent = t('bts.node_pending');
@@ -2611,8 +2842,14 @@ SIMULATOR_BODY = """
       }
 
       // Duration & Calls
-      if (detDur) detDur.textContent = node.duration_ms ? (node.duration_ms + ' ' + t('bts.ms')) : t('bts.na');
-      if (detCalls) detCalls.textContent = t('bts.calls_count', { count: (node.call_count || node.llm_calls || 1) });
+      if (detDur) detDur.textContent = node.duration_ms != null ? formatDurationMs(node.duration_ms) : t('bts.na');
+      if (detCalls) {
+        const llmCount = Array.isArray(node.llm_calls) ? node.llm_calls.length : 0;
+        const count = Number(node.call_count) || llmCount || 1;
+        detCalls.textContent = node.model_completion_event
+          ? t('bts.model_completion_event')
+          : (node.type === 'model' ? t('bts.llm_calls_count', { count: count }) : t('bts.calls_count', { count: count }));
+      }
 
       // Parallel Status
       if (detParallel) {
@@ -2632,7 +2869,51 @@ SIMULATOR_BODY = """
 
       // Task / Directives
       if (detTaskTitle && detTaskContent) {
-        if (node.type === 'main') {
+        if (node.type === 'model' && Array.isArray(node.llm_calls)) {
+          detTaskTitle.textContent = t('bts.task_model');
+          detTaskContent.textContent = node.llm_calls.map(function (c) {
+            return t('bts.llm_call_detail', {
+              agent: c.agent_name || 'unattributed',
+              parent: c.parent_agent || 'unattributed',
+              invocation: c.agent_invocation_id || 'unattributed',
+              purpose: c.purpose || 'unattributed',
+              stage: c.stage || 'unattributed',
+              protocol: c.protocol_name || t('bts.na'),
+              tool: c.tool_name || t('bts.na'),
+              request: c.provider_request_id || t('bts.na'),
+              sequence: (c.sequence_number ?? t('bts.na')),
+              attribution: (node.attribution_status || (c.agent_invocation_id ? 'attributed' : (c.agent_name ? 'partial' : 'unattributed'))),
+              started: c.started_at || t('bts.na'),
+              finished: c.finished_at || t('bts.na'),
+              duration: (c.latency_ms == null ? t('bts.na') : formatDurationMs(c.latency_ms)),
+              finish: (c.finish_reason || c.status || t('bts.node_unknown')),
+              input: (c.input_tokens ?? '?'),
+              output: (c.output_tokens ?? '?'),
+              cache: (c.cache_tokens ?? '?'),
+              summary: c.result_summary || t('bts.na'),
+            });
+          }).join('\\n\\n');
+        } else if (node.type === 'routing' || node.type === 'result') {
+          detTaskTitle.textContent = node.type === 'routing' ? t('bts.task_routing') : t('bts.task_result');
+          detTaskContent.textContent = node.details || node.task || t('bts.no_extra_details');
+        } else if (node.type === 'invocation') {
+          detTaskTitle.textContent = t('bts.task_invocation');
+          const calls = Array.isArray(node.llm_calls) ? node.llm_calls : [];
+          const modelRun = node.model_status ? t('bts.invocation_model_run', {
+            status: node.model_status,
+            duration: (node.model_duration_ms == null ? t('bts.na') : formatDurationMs(node.model_duration_ms)),
+            input: (node.model_input_tokens ?? '?'),
+            output: (node.model_output_tokens ?? '?'),
+          }) : '';
+          detTaskContent.textContent = t('bts.invocation_detail', {
+            task: node.task || t('bts.task_summary_missing'),
+            invocation: node.invocation_id || t('bts.na'),
+            parent: node.parent_agent || 'Orchestrator',
+            protocol: node.protocol_name || t('bts.na'),
+            calls: calls.length,
+            model_run: modelRun,
+          });
+        } else if (node.type === 'main') {
           detTaskTitle.textContent = t('bts.task_intent_protocol');
           detTaskContent.textContent = (node.intent || t('bts.processing_request')) + (node.protocol ? '\\n' + t('bts.protocol_line', { protocol: node.protocol }) : '');
         } else if (node.type === 'specialist') {
@@ -2644,10 +2925,17 @@ SIMULATOR_BODY = """
           }
         } else if (node.type === 'tool') {
           detTaskTitle.textContent = t('bts.task_tool');
-          detTaskContent.textContent = node.summary || t('bts.invoking_label', { label: (node.label || t('bts.legend_tool')) });
+          detTaskContent.textContent = (node.summary || t('bts.invoking_label', { label: (node.label || t('bts.legend_tool')) })) +
+            '\\n' + t('bts.tool_scope', {
+              caller: node.caller_agent_name || t('bts.na'),
+              invocation: node.agent_invocation_id || t('bts.na'),
+            });
         } else if (node.type === 'persistence') {
           detTaskTitle.textContent = t('bts.task_persist');
           detTaskContent.textContent = node.details || t('bts.persist_default');
+        } else if (node.type === 'composition') {
+          detTaskTitle.textContent = t('bts.task_composition');
+          detTaskContent.textContent = node.details || t('bts.composition_default');
         }
       }
 
@@ -2693,6 +2981,10 @@ SIMULATOR_BODY = """
               vTag.textContent = t('bts.verify_unverified');
             } else if (vKind === 'failed') {
               vTag.textContent = t('bts.node_failed');
+            } else if (vKind === 'blocked') {
+              vTag.textContent = t('bts.verify_blocked');
+            } else if (vKind === 'unavailable' || vKind === 'verification_unavailable') {
+              vTag.textContent = t('bts.verify_unavailable_short');
             } else {
               vTag.textContent = vKind;
             }
@@ -2853,7 +3145,8 @@ SIMULATOR_BODY = """
   });
   document.getElementById('reset-view').addEventListener('click', function () {
     // View only: clears the cards and the queues. Nothing already sent is undone on the server.
-    state.scenario = null; state.chats = []; state.chatsByKey = {}; state.queues = {}; state.runId = null; state.busy = false;
+    invalidatePollWatchers();
+    state.scenario = null; state.scenarioSteps = []; state.chats = []; state.chatsByKey = {}; state.queues = {}; state.runId = null; state.busy = false;
     document.getElementById('chats-container').innerHTML = '';
     document.getElementById('scenario-title').textContent = t('no_scenario');
     document.getElementById('scenario-desc').textContent = '';

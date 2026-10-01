@@ -1439,6 +1439,7 @@ def _history_query_spec_from_payload(payload: object) -> HistoryQuerySpec:
 
 
 def _parse_agent_selection_response(raw_text: str) -> AgentSelectionResult:
+    raw_text = _unwrap_json_code_fence(raw_text)
     if raw_text.lstrip().startswith("{"):
         payload = _load_unique_json_object(raw_text, "question routing")
         route = payload.get("route")

@@ -96,6 +96,17 @@ def test_process_exposes_only_tools_allowed_for_this_invocation(monkeypatch):
     assert captured == {"tool_descriptors": ("first",), "wrapped_tools": ("first",)}
 
 
+def test_process_tool_wrapper_uses_the_current_agent_name(monkeypatch):
+    def fake_invoke(descriptor, wrapped_tools, text, timeout_seconds, invocation_policy=None):
+        return wrapped_tools["first"]()
+
+    monkeypatch.setattr(adapter, "invoke", fake_invoke)
+
+    result = _ScopedToolAgent("test-model").process("use first", ["first"])
+
+    assert result.text == "first"
+
+
 def test_process_rejects_unknown_allowed_tool_before_model_call(monkeypatch):
     monkeypatch.setattr(adapter, "invoke", lambda *args, **kwargs: pytest.fail("model must not be called"))
 

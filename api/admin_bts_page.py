@@ -309,6 +309,8 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       position: absolute;
       top: 0;
       left: 0;
+      direction: ltr;
+      unicode-bidi: isolate;
     }
 
     /* Zoom Controls Floating Box */
@@ -609,6 +611,11 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       stroke: var(--accent-rose);
       stroke-width: 2px;
     }
+    .bts-edge-path.edge-unattributed {
+      stroke: #64748b;
+      stroke-dasharray: 3 5;
+      opacity: 0.85;
+    }
 
     .bts-edge-label-bg {
       fill: #0b1120;
@@ -624,25 +631,38 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       dominant-baseline: central;
     }
 
-    /* Node Foreign Object Card */
+    /* Graph cards live inside SVG foreignObject. Isolate layout to LTR so the
+       card box matches the foreignObject coordinate system; label glyphs still
+       follow their own script via unicode-bidi. */
+    .bts-node-host {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      direction: ltr;
+      box-sizing: border-box;
+    }
     .bts-node-card {
       background: rgba(15, 23, 42, 0.95);
       backdrop-filter: blur(8px);
       border: 1.5px solid var(--border-medium);
       border-radius: 10px;
-      padding: 12px;
+      padding: 10px 12px;
       display: flex;
       flex-direction: column;
+      align-items: center;
+      justify-content: center;
       gap: 6px;
       cursor: pointer;
-      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
       width: 100%;
       height: 100%;
+      overflow: hidden;
+      box-sizing: border-box;
+      direction: ltr;
+      text-align: center;
       box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6);
-      direction: rtl;
     }
     .bts-node-card:hover {
-      transform: translateY(-2px);
       border-color: var(--accent-cyan);
       box-shadow: 0 12px 30px rgba(56, 189, 248, 0.25);
     }
@@ -664,11 +684,22 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
     .bts-node-card.status-waiting {
       border-color: rgba(245, 158, 11, 0.7);
     }
+    .bts-node-card.type-invocation { border-inline-start: 4px solid var(--accent-purple); }
+    .bts-node-card.type-model { border-inline-start: 4px solid var(--accent-cyan); }
+    .bts-node-card.type-tool { border-inline-start: 4px solid #14b8a6; }
+    .bts-node-card.type-routing { border-inline-start: 4px solid #64748b; }
+    .bts-node-card.type-persistence { border-inline-start: 4px solid var(--accent-amber); }
+    .bts-node-card.type-composition { border-inline-start: 4px solid var(--accent-indigo); }
+    .bts-node-card.type-result,
+    .bts-node-card.type-outcome { border-inline-start: 4px solid var(--accent-emerald); }
 
     .bts-node-top {
       display: flex;
       align-items: center;
+      justify-content: center;
       gap: 10px;
+      width: 100%;
+      min-width: 0;
     }
 
     .bts-node-avatar {
@@ -685,8 +716,10 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     .bts-node-titles {
-      flex: 1;
+      flex: 1 1 auto;
+      min-width: 0;
       overflow: hidden;
+      text-align: center;
     }
 
     .bts-node-name {
@@ -696,6 +729,8 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      unicode-bidi: plaintext;
+      text-align: center;
     }
 
     .bts-node-sub {
@@ -705,14 +740,18 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      unicode-bidi: plaintext;
+      text-align: center;
     }
 
     .bts-node-badge-row {
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: center;
+      flex-wrap: wrap;
       gap: 6px;
-      margin-top: 4px;
+      width: 100%;
+      margin-top: 2px;
     }
 
     .bts-node-status-pill {
@@ -751,7 +790,10 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      margin-top: 4px;
+      margin-top: 2px;
+      max-width: 100%;
+      unicode-bidi: plaintext;
+      text-align: center;
     }
 
     @keyframes pulse-ring {
@@ -762,6 +804,31 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
 
     @keyframes packet-flow {
       to { stroke-dashoffset: -28; }
+    }
+
+    @media (max-width: 1100px) {
+      body { height: auto; min-height: 100vh; overflow: auto; }
+      .bts-header { flex-wrap: wrap; }
+      .bts-header-center { order: 3; flex-basis: 100%; max-width: none; }
+      .bts-workspace { flex-direction: column; min-height: 90vh; overflow: visible; }
+      .bts-canvas-container { min-height: 52vh; flex: 0 0 52vh; }
+      .bts-right-panel { width: 100%; min-height: 32vh; border-right: 0; border-top: 1px solid var(--border-subtle); }
+      .bts-metrics-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 640px) {
+      body { height: auto; min-height: 100vh; overflow: auto; }
+      .bts-header { padding: 10px; gap: 8px; }
+      .bts-header-left, .bts-header-right { width: 100%; justify-content: space-between; }
+      .bts-header-center { flex-direction: column; align-items: stretch; }
+      .bts-trace-select { max-width: none; }
+      .bts-metrics-bar { grid-template-columns: 1fr 1fr; padding: 8px; gap: 8px; }
+      .bts-metric-card { padding: 10px; }
+      .bts-metric-val { font-size: 14px; }
+      .bts-workspace { min-height: 100vh; overflow: visible; }
+      .bts-canvas-container { min-height: 58vh; flex-basis: 58vh; }
+      .bts-right-panel { min-height: 40vh; }
+      .bts-panel-tabs { position: sticky; top: 0; }
     }
   </style>
 </head>
@@ -821,7 +888,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
 
     <div class="bts-metric-card">
       <div class="bts-metric-title">
-        <span>{{ t('admin.simulator.bts.metric_tokens_cost') }}</span>
+        <span>{{ t('admin.simulator.bts.metric_tokens') }}</span>
         <span>📊</span>
       </div>
       <div id="m-tokens" class="bts-metric-val">—</div>
@@ -843,7 +910,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
     <!-- Interactive Graph Canvas -->
     <div id="canvas-container" class="bts-canvas-container">
       <div class="bts-grid-pattern"></div>
-      <svg id="graph-svg" class="bts-canvas-svg">
+      <svg id="graph-svg" class="bts-canvas-svg" xmlns="http://www.w3.org/2000/svg" direction="ltr">
         <defs>
           <marker id="arrow-active" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
             <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#38bdf8"></path>
@@ -975,6 +1042,17 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
         return String(value == null ? '' : value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
       }
 
+      function formatDurationMs(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return t('bts.na');
+        const seconds = number / 1000;
+        const precision = seconds < 1 ? 2 : (seconds < 10 ? 2 : 1);
+        let text = seconds.toFixed(precision);
+        while (text.includes('.') && text.endsWith('0')) text = text.slice(0, -1);
+        if (text.endsWith('.')) text = text.slice(0, -1);
+        return t('bts.duration_seconds', { value: text });
+      }
+
       // Transform application
       function applyTransform() {
         if (sceneGroup) {
@@ -1060,9 +1138,13 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
         const positions = new Map();
         const userNode = nodes.find(n => n.type === 'user');
         const mainNode = nodes.find(n => n.type === 'main');
+        const routing = nodes.filter(n => n.type === 'routing');
         const invocations = nodes.filter(n => n.type === 'invocation');
+        const models = nodes.filter(n => n.type === 'model');
         const tools = nodes.filter(n => n.type === 'tool');
-        const otherNodes = nodes.filter(n => n.type === 'model' || n.type === 'outcome');
+        const persistence = nodes.filter(n => n.type === 'persistence');
+        const composition = nodes.filter(n => n.type === 'composition');
+        const otherNodes = nodes.filter(n => n.type === 'result' || n.type === 'outcome');
 
         if (userNode) positions.set(userNode.id, { x: 420, y: 40 });
         if (mainNode) positions.set(mainNode.id, { x: 420, y: userNode ? 205 : 40 });
@@ -1076,35 +1158,69 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
             nextY += 185;
           }
         }
+        placeRows(routing);
         placeRows(invocations);
+        placeRows(models);
         placeRows(tools);
+        placeRows(persistence);
+        placeRows(composition);
         placeRows(otherNodes);
 
         return positions;
       }
 
-      // Fetch active trace
+      // Fetch active trace without overlapping polls; retain last known data on disconnect.
+      let traceFetchInFlight = false;
       async function fetchTrace() {
         if (!currentTraceId) return;
+        if (traceFetchInFlight) return;
+        traceFetchInFlight = true;
+        const requestedTraceId = currentTraceId;
+        let controller = null;
+        let requestTimeout = null;
         try {
-          const res = await fetch('/admin/simulator/trace/' + encodeURIComponent(currentTraceId));
-          if (!res.ok) return;
+          if (typeof AbortController !== 'undefined') {
+            controller = new AbortController();
+            requestTimeout = setTimeout(() => controller.abort(), 8000);
+          }
+          const res = await fetch('/admin/simulator/trace/' + encodeURIComponent(requestedTraceId), {
+            signal: controller ? controller.signal : undefined,
+          });
+          if (!res.ok) throw new Error('Trace endpoint returned ' + res.status);
           const data = await res.json();
+          if (requestedTraceId !== currentTraceId) return;
           currentData = data;
           render(data);
 
-          if (data.diagnostic_state === 'job_stopped_without_outcome') {
+          if (data.execution_status === 'awaiting_approval') {
+            beacon.className = 'bts-live-beacon is-idle';
+            beaconText.textContent = t('bts.awaiting_approval');
+          } else if (data.execution_status === 'partial') {
+            beacon.className = 'bts-live-beacon is-idle';
+            beaconText.textContent = t('bts.partial_execution');
+          } else if (data.execution_status === 'unknown' || data.diagnostic_state === 'job_stopped_without_outcome') {
             beacon.className = 'bts-live-beacon is-idle';
             beaconText.textContent = t('job_stopped');
           } else if (data.terminal) {
             beacon.className = 'bts-live-beacon is-idle';
-            beaconText.textContent = data.outcome === 'succeeded' ? t('bts.status_completed_ok') : t('bts.job_ended', { outcome: (data.outcome || t('bts.outcome_fallback')) });
+            if (data.execution_status === 'succeeded') {
+              beaconText.textContent = data.delivery_status === 'confirmed'
+                ? t('bts.completed_delivered')
+                : t('bts.completed_delivery_unknown');
+            } else {
+              beaconText.textContent = t('bts.job_ended', { outcome: (data.outcome || t('bts.outcome_fallback')) });
+            }
           } else {
             beacon.className = 'bts-live-beacon';
             beaconText.textContent = t('bts.live_broadcast');
           }
         } catch (err) {
           console.warn('Trace fetch error:', err);
+          beacon.className = 'bts-live-beacon is-idle';
+          beaconText.textContent = currentData ? t('bts.trace_disconnected_stale') : t('bts.trace_disconnected_wait');
+        } finally {
+          if (requestTimeout !== null) clearTimeout(requestTimeout);
+          traceFetchInFlight = false;
         }
       }
 
@@ -1112,10 +1228,11 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       function render(data) {
         // 1. Update Metrics
         const m = data.metrics || {};
-        mWall.textContent = m.total_wall_clock_ms ? (m.total_wall_clock_ms.toLocaleString() + ' ' + t('bts.ms')) : '—';
-        mWallBreakdown.textContent = t('bts.model_tools_breakdown', {
-          model: (m.model_latency_ms || 0) + ' ' + t('bts.ms'),
-          tools: (m.tools_duration_ms || 0) + ' ' + t('bts.ms')
+        mWall.textContent = m.total_wall_clock_ms != null ? formatDurationMs(m.total_wall_clock_ms) : '—';
+        mWallBreakdown.textContent = t('bts.model_tools_queue_breakdown', {
+          model: formatDurationMs(m.model_latency_ms || 0),
+          tools: formatDurationMs(m.tools_duration_ms || 0),
+          queue: m.queue_wait_ms == null ? t('bts.na') : formatDurationMs(m.queue_wait_ms),
         });
         mLlm.textContent = m.llm_call_count ? t('bts.calls_short', { count: m.llm_call_count }) : '0';
         mRetries.textContent = t('bts.retries_count', { count: (m.retries_count || 0) });
@@ -1170,8 +1287,8 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
           const cy2 = y2 - dy * 0.6;
 
           const d = 'M ' + x1 + ' ' + y1 + ' C ' + cx1 + ' ' + cy1 + ', ' + cx2 + ' ' + cy2 + ', ' + x2 + ' ' + y2;
-          const statusClass = edge.status === 'active' ? 'edge-active' : (edge.status === 'completed' ? 'edge-completed' : (edge.status === 'failed' ? 'edge-failed' : 'edge-pending'));
-          const markerId = edge.status === 'active' ? 'arrow-active' : (edge.status === 'completed' ? 'arrow-completed' : (edge.status === 'failed' ? 'arrow-failed' : 'arrow-pending'));
+          const statusClass = edge.type === 'unattributed' ? 'edge-unattributed' : (edge.status === 'active' ? 'edge-active' : (edge.status === 'completed' ? 'edge-completed' : (edge.status === 'failed' ? 'edge-failed' : 'edge-pending')));
+          const markerId = edge.type === 'unattributed' ? 'arrow-pending' : (edge.status === 'active' ? 'arrow-active' : (edge.status === 'completed' ? 'arrow-completed' : (edge.status === 'failed' ? 'arrow-failed' : 'arrow-pending')));
 
           // Edge path
           edgesHtml += '<path d="' + d + '" class="bts-edge-path ' + statusClass + '" marker-end="url(#' + markerId + ')"></path>';
@@ -1203,13 +1320,19 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
           else if (node.status === 'waiting') statusText = t('bts.node_waiting_approval');
           else if (node.status === 'unknown') statusText = t('bts.node_unknown');
 
-          const timerText = node.duration_ms ? (node.duration_ms + ' ' + t('bts.ms')) : (node.status === 'running' ? t('bts.running_timer') : '');
-          const previewText = node.protocol || node.intent || (node.tasks && node.tasks[0]) || node.summary || node.details || '';
+          const timerText = node.duration_ms != null
+            ? formatDurationMs(node.duration_ms)
+            : (node.status === 'running' ? t('bts.running_timer') : '');
+          const previewText = node.selected_agents && node.selected_agents.length
+            ? node.selected_agents.join(', ')
+            : (node.sublabel || node.protocol || node.intent || (node.tasks && node.tasks[0]) || node.summary || node.details || '');
+          const nodeTypeClass = 'type-' + (node.type || 'unknown');
 
-          nodesHtml += '<foreignObject x="' + pos.x + '" y="' + pos.y + '" width="' + NODE_WIDTH + '" height="' + NODE_HEIGHT + '">' +
-            '<div class="bts-node-card ' + isSelected + ' ' + statusClass + '" data-id="' + node.id + '">' +
+          nodesHtml += '<foreignObject x="' + pos.x + '" y="' + pos.y + '" width="' + NODE_WIDTH + '" height="' + NODE_HEIGHT + '" overflow="hidden">' +
+            '<div xmlns="http://www.w3.org/1999/xhtml" class="bts-node-host" dir="ltr">' +
+            '<div class="bts-node-card ' + isSelected + ' ' + esc(statusClass) + ' ' + esc(nodeTypeClass) + '" data-id="' + esc(node.id) + '">' +
               '<div class="bts-node-top">' +
-                '<div class="bts-node-avatar">' + (node.icon || '🤖') + '</div>' +
+                '<div class="bts-node-avatar">' + esc(node.icon || '🤖') + '</div>' +
                 '<div class="bts-node-titles">' +
                 '<div class="bts-node-name">' + esc(node.label) + '</div>' +
                 '<div class="bts-node-sub">' + esc(node.sublabel || '') + '</div>' +
@@ -1220,7 +1343,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
                 '<span class="bts-node-timer">' + esc(timerText) + '</span>' +
               '</div>' +
               (previewText ? ('<div class="bts-node-preview" title="' + esc(previewText) + '">' + esc(previewText) + '</div>') : '') +
-            '</div>' +
+            '</div></div>' +
           '</foreignObject>';
         });
         nodesLayer.innerHTML = nodesHtml;
@@ -1267,14 +1390,43 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
               '<span class="bts-inspect-label">' + t('bts.inspect_status') + '</span>' +
               '<span class="bts-inspect-val">' + esc(statusBadge) + '</span>' +
             '</div>' +
-            (node.duration_ms ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">' + t('bts.inspect_duration') + '</span><span class="bts-inspect-val">' + node.duration_ms + ' ' + t('bts.ms') + '</span></div>') : '') +
+            (node.duration_ms != null ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">' + t('bts.inspect_duration') + '</span><span class="bts-inspect-val">' + formatDurationMs(node.duration_ms) + '</span></div>') : '') +
             (node.call_count ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">' + t('bts.inspect_calls') + '</span><span class="bts-inspect-val">' + node.call_count + '</span></div>') : '') +
             (node.is_parallel ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">' + t('bts.inspect_run_mode') + '</span><span class="bts-inspect-val" style="color:var(--accent-cyan)">' + t('bts.inspect_parallel') + '</span></div>') : '') +
             (node.verification ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">' + t('bts.inspect_verification') + '</span><span class="bts-inspect-val">' + esc(node.verification_note || node.verification) + '</span></div>') : '') +
             (node.task ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_task') + '</div><div class="bts-inspect-box">' + esc(node.task) + '</div>') : '') +
             (node.result ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_result') + '</div><div class="bts-inspect-box">' + esc(node.result) + '</div>') : '') +
-            (node.llm_calls && node.llm_calls.length ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_llm_calls', { count: node.llm_calls.length }) + '</div><div class="bts-inspect-box">' + node.llm_calls.map(c => esc(t('bts.llm_call_line', { model: c.model, ms: (c.latency_ms || 0), reason: (c.finish_reason || c.status), input: (c.input_tokens || 0), output: (c.output_tokens || 0) }))).join('<br>') + '</div>') : '') +
+            (node.llm_calls && node.llm_calls.length ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_llm_calls', { count: node.llm_calls.length }) + '</div><div class="bts-inspect-box">' + node.llm_calls.map(c => esc(t('bts.llm_call_inspect', {
+              sequence: (c.sequence_number || '?'),
+              purpose: (c.purpose || 'unattributed'),
+              agent: (c.agent_name || node.label || 'unattributed'),
+              duration: (c.latency_ms == null ? t('bts.na') : formatDurationMs(c.latency_ms)),
+              reason: (c.finish_reason || c.status || 'unknown'),
+              input: (c.input_tokens ?? '?'),
+              output: (c.output_tokens ?? '?'),
+              cache: (c.cache_tokens ?? '?'),
+              parent: (c.parent_agent || 'unattributed'),
+              stage: (c.stage || 'unattributed'),
+              parent_invocation: (c.parent_invocation_id || t('bts.na')),
+              protocol: (c.protocol_name || t('bts.na')),
+              tool_context: (c.tool_name ? t('bts.after_tool', { tool: c.tool_name }) : (c.call_type && String(c.call_type).toLowerCase().includes('tool_call') ? t('bts.tool_decision') : t('bts.before_tool_unknown'))),
+              request: (c.provider_request_id || 'unavailable'),
+              invocation: (c.agent_invocation_id || 'unattributed'),
+              started: (c.started_at || 'unavailable'),
+              finished: (c.finished_at || 'unavailable'),
+              summary: (c.result_summary || t('bts.na')),
+            }))).join('<br><br>') + '</div>') : '') +
             (node.tools && node.tools.length ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_tools', { count: node.tools.length }) + '</div><div class="bts-inspect-box">' + esc(node.tools.join(', ')) + '</div>') : '') +
+            (node.type === 'tool' ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_tool_scope') + '</div><div class="bts-inspect-box">' +
+              esc(t('bts.tool_scope', { caller: node.caller_agent_name || t('bts.na'), invocation: node.agent_invocation_id || t('bts.na') })).replaceAll('\n', '<br>') + '<br>' +
+              esc(t('bts.tool_kind', { kind: node.side_effecting ? t('bts.tool_write_action') : t('bts.tool_read_only') })) + '<br>' +
+              esc(t('bts.tool_verification_value', { verification: node.verification_note || node.verification || t('bts.na') })) +
+              '</div>') : '') +
+            (node.type === 'invocation' && node.model_status ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_model_run') + '</div><div class="bts-inspect-box">' +
+              esc(t('bts.inspect_model_status', { status: node.model_status })) + '<br>' +
+              esc(t('bts.inspect_model_duration', { duration: node.model_duration_ms == null ? t('bts.na') : formatDurationMs(node.model_duration_ms) })) + '<br>' +
+              esc(t('bts.inspect_model_tokens', { input: node.model_input_tokens ?? '?', output: node.model_output_tokens ?? '?' })) +
+              '</div>') : '') +
             (node.summary ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_tool_summary') + '</div><div class="bts-inspect-box">' + esc(node.summary) + '</div>') : '') +
             (node.details ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_details') + '</div><div class="bts-inspect-box">' + esc(node.details) + '</div>') : '') +
           '</div>';
@@ -1322,10 +1474,17 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       async function loadRecentTraces() {
         try {
           const res = await fetch('/admin/simulator/traces/recent?limit=20');
-          if (!res.ok) return;
+          if (!res.ok) throw new Error('Recent traces endpoint returned ' + res.status);
           const data = await res.json();
           const items = data.items || [];
-          if (!items.length) return;
+          if (!items.length) {
+            traceSelect.innerHTML = '<option value="">' + t('bts.no_traces') + '</option>';
+            if (!currentTraceId) {
+              beacon.className = 'bts-live-beacon is-idle';
+              beaconText.textContent = t('bts.waiting_first_request');
+            }
+            return;
+          }
 
           traceSelect.innerHTML = '';
           items.forEach(item => {
@@ -1347,13 +1506,22 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
           }
         } catch (err) {
           console.warn('Recent traces error:', err);
+          if (!currentTraceId) {
+            beacon.className = 'bts-live-beacon is-idle';
+            beaconText.textContent = t('bts.trace_list_disconnected');
+          }
         }
       }
 
       function switchTrace(newTraceId) {
         if (!newTraceId || newTraceId === currentTraceId) return;
         currentTraceId = newTraceId;
+        currentData = null;
+        selectedNodeId = null;
         traceIdPill.textContent = newTraceId;
+        beacon.className = 'bts-live-beacon is-idle';
+        beaconText.textContent = t('bts.loading_trace');
+        render({ metrics: {}, graph: { nodes: [], edges: [] }, messages: [] });
         window.history.replaceState(null, '', '?trace_id=' + encodeURIComponent(newTraceId));
         fetchTrace();
       }
@@ -1403,7 +1571,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       if (currentTraceId) fetchTrace();
 
       // Poll Loop
-      pollTimer = setInterval(fetchTrace, 450);
+      pollTimer = setInterval(fetchTrace, 1000);
       recentTimer = setInterval(loadRecentTraces, 2500);
 
       // Fit to view once layout rendered
