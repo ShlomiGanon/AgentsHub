@@ -28,6 +28,10 @@ def child_log_paths(profile_name: str, label: str) -> tuple[Path, Path]:
     return directory / f"{label}.stdout.log", directory / f"{label}.stderr.log"
 
 
+def supervisor_log_path(profile_name: str) -> Path:
+    return log_dir_for(profile_name) / "stack.stderr.log"
+
+
 def server_jsonl_path(profile_name: str) -> Path:
     return log_dir_for(profile_name) / "server.jsonl"
 

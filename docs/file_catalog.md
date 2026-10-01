@@ -35,13 +35,21 @@ This English catalog describes every tracked or pending first-party file in the 
 | `api/admin.py` | Production | Private implementation | Serves the login-gated, seven-page admin web panel under `/admin`, in the profile's catalog language. |
 | `api/admin_api_pages.py` | Production | Private implementation | Provides the tailored profiles, protocols, and events management UI; live endpoint actions use the selected `X-Identity` and retain normal API authorization. |
 | `api/admin_bts_page.py` | Production | Private implementation | Renders the standalone Behind-the-Scenes live agent execution/communication dashboard. |
+| `api/admin_chrome.py` | Production | Private implementation | Holds shared admin HTML/CSS chrome and assembled page templates. |
+| `api/admin_config.py` | Production | Private implementation | Resolves admin-panel enablement, credentials, and the global login lockout. |
 | `api/admin_simulator.py` | Production | Private implementation | Style, body and script of the admin scenario simulator page, plus the helper that gathers its embedded data. |
+| `api/admin_simulator_assets.py` | Production | Private implementation | Inline CSS and HTML/JS for the admin scenario simulator page. |
 | `api/admin_tables.py` | Production | Private implementation | Generic admin-panel table rendering and form validation for whatever `AdminTable`s the active profile declares (docs/Admin_Tables_Plan.md); routes live in `api/admin.py`. |
 | `api/admin_trace.py` | Production | Private implementation | Admin routes for the Behind-the-Scenes simulator trace panel. |
 | `api/app.py` | Production | Public entry point | Builds API dependencies, owns ApiContext, and starts Flask. |
 | `api/request_boundary.py` | Production | Private implementation | Authenticates requests and translates API and HTTP failures into responses. |
-| `api/routes.py` | Production | Private implementation | Defines ingestion, management, hold, job, system, and notification routes. |
+| `api/routes.py` | Production | Private implementation | Facade that exports ingestion, management, hold, job, system, and notification route builders. |
+| `api/routes_holds.py` | Production | Private implementation | Hold listing and Clarify/Approve continuation routes. |
+| `api/routes_messages.py` | Production | Private implementation | Message ingestion route (`POST /Msg`). |
+| `api/routes_notifications.py` | Production | Private implementation | Notification polling route and payload builders. |
 | `api/simulations.py` | Production | Private implementation | Converts a profile's declared simulations into the existing admin-simulator scenario JSON, substituting reserved simulation IDs for persona/group keys. |
+| `api/static/leadspotting-logo.gif` | Production | Private implementation | LeadSpotting wordmark used by the admin panel chrome. |
+| `api/static/leadspotting-mark.gif` | Production | Private implementation | LeadSpotting mark used by the admin panel chrome. |
 | `auth/__init__.py` | Production | Public facade | Exposes authorization contracts. |
 | `auth/permissions.py` | Production | Private implementation | Maps actions to permission levels and evaluates authorization. |
 | `auth/user_names.py` | Production | Private implementation | Normalizes and validates the single full-name field associated with a Telegram identity. |
@@ -139,9 +147,15 @@ This English catalog describes every tracked or pending first-party file in the 
 | `orchestrator/capabilities.py` | Production | Private implementation | Builds the role-aware, per-caller Main Agent capability and system context. |
 | `orchestrator/event_queue.py` | Production | Private implementation | Serializes event processing on a dedicated worker. |
 | `orchestrator/flows.py` | Production | Private implementation | Coordinates report, request, hold-resume, protocol, and outcome workflows. |
+| `orchestrator/flows_direct_lane.py` | Production | Private implementation | Classifies and executes the fast direct-lane path for simple low-stakes actions. |
+| `orchestrator/flows_hold_sweep.py` | Production | Private implementation | Reminds, escalates, and expires unresolved holds on a background scheduler. |
+| `orchestrator/flows_protocol.py` | Production | Private implementation | Executes a selected protocol plan and continues persisted steps. |
 | `orchestrator/group_routing.py` | Production | Private implementation | Holds the in-memory, DB-backed Telegram group to agent routing table and scopes flow dependencies per group. |
 | `orchestrator/holds.py` | Production | Private implementation | Creates and resolves clarification and approval holds. |
 | `orchestrator/reasoning.py` | Production | Private implementation | Prompts and parses Main/Insights decisions, questions, selection, formulation, and judgment. |
+| `orchestrator/reasoning_qa.py` | Production | Private implementation | Plans messages, selects specialists, and answers questions in parallel. |
+| `orchestrator/reasoning_report.py` | Production | Private implementation | Extracts events, assesses risk, selects protocols, formulates tasks, and judges outcomes. |
+| `orchestrator/reasoning_schemas.py` | Production | Private implementation | Shared orchestration parse types, JSON repair, and decision schemas. |
 | `orchestrator/report_composer.py` | Production | Private implementation | Composes a grounded, audience-scoped run report with a SUB-tier model call, falling back to render_summary on any failure, timeout, or empty response. |
 | `orchestrator/run_report.py` | Production | Private implementation | Builds a structured RunSummary from persisted event/step/hold data and renders it deterministically, audience-aware, without a model call. |
 | `orchestrator/situational_picture.py` | Production | Private implementation | Builds the multi-domain situational picture at request time: the Main Agent plans one live question per specialist, gathers their answers and the recent event log concurrently, and composes the picture from those findings only. |
@@ -163,8 +177,16 @@ This English catalog describes every tracked or pending first-party file in the 
 | `profiles/fire_station.py` | Production | Private implementation | Defines the Fire and Rescue Station profile (structure/hazmat fire, rescue, mutual-aid dispatch, attendance) (docs/bar_improves.md). |
 | `profiles/fire_station_sim.py` | Production | Private implementation | Defines the Fire and Rescue Station simulation deployment, reusing the live profile's declared content (docs/bar_improves.md). |
 | `profiles/firefighting.py` | Production | Private implementation | Defines the Firefighting profile (crew status, visual surveillance, mutual-aid dispatch) and the FIRE_002 simulations (docs/Profile_Split_Plan.md). |
+| `profiles/firefighting_admin_tables.py` | Production | Private implementation | Declares Firefighting admin-table adapters. |
+| `profiles/firefighting_agents.py` | Production | Private implementation | Implements Firefighting specialist agents. |
+| `profiles/firefighting_protocols.py` | Production | Private implementation | Declares Firefighting protocols and direct-tool binders. |
+| `profiles/firefighting_simulation.py` | Production | Private implementation | Declares Firefighting operational seed data and simulations. |
 | `profiles/loader.py` | Production | Private implementation | Imports, validates, hashes, and constructs deployment profiles and registries. |
 | `profiles/response_team.py` | Production | Private implementation | Defines the unified Response Team profile (roster/attendance, camera/drone surveillance, neighboring-force dispatch) and the SEC_001 simulations, all in one profile-owned database (docs/responce_improve.md). |
+| `profiles/response_team_admin_tables.py` | Production | Private implementation | Declares Response Team admin-table adapters. |
+| `profiles/response_team_agents.py` | Production | Private implementation | Implements Response Team specialist agents and resource-unavailable copy. |
+| `profiles/response_team_protocols.py` | Production | Private implementation | Declares Response Team protocols and direct-tool binders. |
+| `profiles/response_team_simulation.py` | Production | Private implementation | Declares Response Team operational seed data and simulations. |
 | `profiles/simulation.py` | Production | Private implementation | Defines simulation persona, group, scenario, and roster declarations and the reserved Telegram ID scheme. |
 | `profiles/simulation_provisioning.py` | Production | Private implementation | Ensures a profile's declared simulation users and groups exist, registers/approves any of them on the agent-owned rosters they declare, and runs a profile's own optional OPERATIONAL_SEED hook (docs/responce_improve.md). |
 | `profiles/template.py` | Production | Private implementation | Provides a reference template for authoring deployment profiles. |
@@ -216,6 +238,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_file_catalog.py` | Test | Internal | Ensures this catalog exactly matches the first-party repository tree. |
 | `tests/test_friendly_forces_agent.py` | Test | Internal | Verifies friendly forces agent dispatch tools and coordination records. |
 | `tests/test_firefighting_admin_tables.py` | Test | Internal | Verifies the drones/attendance/forces admin-table wirings for `profiles/firefighting.py`, against its own DBs. |
+| `tests/test_firefighting_direct_tool_binders.py` | Test | Internal | Verifies Firefighting direct-tool protocol binders. |
 | `tests/test_neighboring_forces_agent.py` | Test | Internal | Verifies the shared, parameterized `agents/neighboring_forces_agent.py` base class directly, independent of either profile. |
 | `tests/test_firefighting_external_forces_agent.py` | Test | Internal | Verifies FirefightingExternalForcesAgent's shared, persisted `dispatch_neighboring_force` tool and per-kind capacity (docs/Admin_Tables_Plan.md). |
 | `tests/test_firefighting_apparatus_movement.py` | Test | Internal | Verifies FirefightingCrewStatusAgent's update_apparatus_status "who else is at this area" reporting and the report_apparatus_movement protocol (memory/continuity audit fix 4: incident-scoped responder tracking). |
@@ -242,6 +265,8 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_integration_serial_processing_under_load.py` | Test | Internal | Verifies the serial processing under load scenario across real subsystem boundaries. |
 | `tests/test_integration_user_administration.py` | Test | Internal | Verifies the user administration scenario across real subsystem boundaries. |
 | `tests/test_legacy_imports.py` | Test | Internal | Verifies supported implementation-path aliases resolve to canonical modules. |
+| `tests/test_log_events.py` | Test | Internal | Verifies structured execution-event log helpers. |
+| `tests/test_log_paths.py` | Test | Internal | Verifies per-profile log directory and child-process log path helpers. |
 | `tests/test_migrations.py` | Test | Internal | Verifies migrations behavior and edge cases. |
 | `tests/test_messages.py` | Test | Internal | Verifies language catalogs, key and placeholder parity, strict formatting, and selection. |
 | `tests/test_observability.py` | Test | Internal | Verifies tracing and structured logging behavior. |
@@ -286,6 +311,8 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tools/behind_the_scenes.py` | Production | Private implementation | Read-only trace aggregation and diagnostics engine extracting execution stages, agent collaboration graphs, tool side-effects, and performance metrics from raw log_entries. |
 | `tools/observability.py` | Production | Private implementation | Provides trace contexts, structured logging, and human/JSON output. |
 | `tools/evaluate_response_pipeline.py` | Production | Public entry point | Runs versioned offline response evals and opt-in billed live evaluation. |
+| `tools/log_events.py` | Production | Private implementation | Emits structured execution-event log lines used by Behind-the-Scenes and operators. |
+| `tools/log_paths.py` | Production | Private implementation | Resolves per-profile log directories and child-process log files. |
 | `tools/simulator.py` | Production | Public entry point | Provides the event-simulator executable entry point. |
 | `tools/terminal_client_commander.py` | Production | Public entry point | Provides the commander terminal-client executable workflow. |
 | `tools/terminal_client_viewer.py` | Production | Public entry point | Provides the viewer terminal-client executable workflow. |

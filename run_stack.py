@@ -28,7 +28,7 @@ from config.server_control import (
     save_selected_profile,
     write_status,
 )
-from tools.log_paths import child_log_paths, log_dir_for
+from tools.log_paths import child_log_paths, log_dir_for, supervisor_log_path
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger("stack_runner")
@@ -169,6 +169,7 @@ class StackSupervisor:
         self.bot_sim_proc: subprocess.Popen | None = None
         self._logs: list[object] = []
         self._relays: list[threading.Thread] = []
+        self._supervisor_log_handler: logging.Handler | None = None
         self.last_error = ""
 
     def _status(self, state: str) -> None:
@@ -194,6 +195,32 @@ class StackSupervisor:
         handle = open(path, "a", encoding="utf-8")
         self._logs.append(handle)
         return handle
+
+    def _attach_supervisor_log(self) -> None:
+        self._detach_supervisor_log()
+        path = supervisor_log_path(self.profile_module)
+        handler = logging.FileHandler(path, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s %(message)s", datefmt="%H:%M:%S"))
+        logger.addHandler(handler)
+        self._supervisor_log_handler = handler
+
+    def _detach_supervisor_log(self) -> None:
+        handler = self._supervisor_log_handler
+        if handler is None:
+            return
+        logger.removeHandler(handler)
+        handler.close()
+        self._supervisor_log_handler = None
+
+    def _unexpected_child_exit(self) -> str | None:
+        for label, process in (
+            ("api", self.api_proc),
+            ("bot", self.bot_proc),
+            ("bot-sim", self.bot_sim_proc),
+        ):
+            if process is not None and process.poll() is not None:
+                return f"{label} exited unexpectedly with code {process.returncode} (pid {process.pid})"
+        return None
 
     def _spawn(self, label: str, args: list[str], env: dict[str, str], slug: str) -> subprocess.Popen:
         stdout_path, stderr_path = child_log_paths(self.profile_module, label)
@@ -231,94 +258,99 @@ class StackSupervisor:
         info = available_profile(self.profile_module)
         if info is None:
             raise ValueError(f"unknown profile: {self.profile_module}")
-        env = os.environ.copy()
-        env["AGENTSHUB_SUPERVISOR"] = "1"
-        slug = self.profile_module.rsplit(".", 1)[-1]
-        api_url = f"http://{_API_BIND_HOST}:{info.api_port}"
-        admin_url = f"{api_url}/admin/login"
-        self._status("starting")
+        self._attach_supervisor_log()
+        try:
+            env = os.environ.copy()
+            env["AGENTSHUB_SUPERVISOR"] = "1"
+            slug = self.profile_module.rsplit(".", 1)[-1]
+            api_url = f"http://{_API_BIND_HOST}:{info.api_port}"
+            admin_url = f"{api_url}/admin/login"
+            self._status("starting")
 
-        _require_port_free(_API_BIND_HOST, info.api_port, "API")
-        if info.simulator_port:
-            _require_port_free(_API_BIND_HOST, info.simulator_port, "simulation-mode bot")
+            _require_port_free(_API_BIND_HOST, info.api_port, "API")
+            if info.simulator_port:
+                _require_port_free(_API_BIND_HOST, info.simulator_port, "simulation-mode bot")
 
-        _announce(
-            f"Starting API for {info.profile_name} ({self.profile_module}); "
-            f"waiting until {api_url} accepts connections"
-        )
-        self.api_proc = self._spawn(
-            "api",
-            [self.python_executable, "-m", "api.app", self.profile_module],
-            env,
-            slug,
-        )
-        _wait_until_port_open(
-            self.api_proc, _API_BIND_HOST, info.api_port, "API", _API_READY_TIMEOUT_SECONDS
-        )
-        if not _http_responds(admin_url) and not _http_responds(api_url):
-            raise RuntimeError(
-                f"API bound {api_url} but HTTP requests to {admin_url} and {api_url} failed"
-            )
-        _announce(f"API is up at {api_url} (pid {self.api_proc.pid})")
-        _announce(f"Admin panel is up at {admin_url}")
-
-        _announce("Starting Telegram bot; waiting until the process stays alive")
-        self.bot_proc = self._spawn(
-            "bot",
-            [self.python_executable, "-m", "bot.app", self.profile_module],
-            env,
-            slug,
-        )
-        bot_deadline = time.monotonic() + _BOT_READY_GRACE_SECONDS
-        while time.monotonic() < bot_deadline:
-            if self.bot_proc.poll() is not None:
-                raise RuntimeError(
-                    f"Telegram bot exited during startup with code {self.bot_proc.returncode} "
-                    f"(pid {self.bot_proc.pid})"
-                )
-            time.sleep(0.2)
-        _announce(
-            f"Telegram bot is running (pid {self.bot_proc.pid}); "
-            "it talks to Telegram, not HTTP"
-        )
-
-        if info.simulator_port:
-            sim_url = f"http://{_API_BIND_HOST}:{info.simulator_port}"
             _announce(
-                f"Starting simulation-mode bot; waiting until {sim_url} accepts connections"
+                f"Starting API for {info.profile_name} ({self.profile_module}); "
+                f"waiting until {api_url} accepts connections"
             )
-            self.bot_sim_proc = self._spawn(
-                "bot-sim",
-                [self.python_executable, "-m", "bot.simulator_app", self.profile_module],
+            self.api_proc = self._spawn(
+                "api",
+                [self.python_executable, "-m", "api.app", self.profile_module],
                 env,
                 slug,
             )
             _wait_until_port_open(
-                self.bot_sim_proc,
-                _API_BIND_HOST,
-                info.simulator_port,
-                "simulation-mode bot",
-                _SIMULATOR_READY_TIMEOUT_SECONDS,
+                self.api_proc, _API_BIND_HOST, info.api_port, "API", _API_READY_TIMEOUT_SECONDS
             )
+            if not _http_responds(admin_url) and not _http_responds(api_url):
+                raise RuntimeError(
+                    f"API bound {api_url} but HTTP requests to {admin_url} and {api_url} failed"
+                )
+            _announce(f"API is up at {api_url} (pid {self.api_proc.pid})")
+            _announce(f"Admin panel is up at {admin_url}")
+
+            _announce("Starting Telegram bot; waiting until the process stays alive")
+            self.bot_proc = self._spawn(
+                "bot",
+                [self.python_executable, "-m", "bot.app", self.profile_module],
+                env,
+                slug,
+            )
+            bot_deadline = time.monotonic() + _BOT_READY_GRACE_SECONDS
+            while time.monotonic() < bot_deadline:
+                if self.bot_proc.poll() is not None:
+                    raise RuntimeError(
+                        f"Telegram bot exited during startup with code {self.bot_proc.returncode} "
+                        f"(pid {self.bot_proc.pid})"
+                    )
+                time.sleep(0.2)
             _announce(
-                f"Simulation-mode bot is up at {sim_url} (pid {self.bot_sim_proc.pid})"
+                f"Telegram bot is running (pid {self.bot_proc.pid}); "
+                "it talks to Telegram, not HTTP"
             )
 
-        self.last_error = ""
-        self._status("running")
-        sim_line = ""
-        if self.bot_sim_proc and info.simulator_port:
-            sim_line = (
-                f"\n  Simulation bot: http://{_API_BIND_HOST}:{info.simulator_port} "
-                f"(pid {self.bot_sim_proc.pid})"
+            if info.simulator_port:
+                sim_url = f"http://{_API_BIND_HOST}:{info.simulator_port}"
+                _announce(
+                    f"Starting simulation-mode bot; waiting until {sim_url} accepts connections"
+                )
+                self.bot_sim_proc = self._spawn(
+                    "bot-sim",
+                    [self.python_executable, "-m", "bot.simulator_app", self.profile_module],
+                    env,
+                    slug,
+                )
+                _wait_until_port_open(
+                    self.bot_sim_proc,
+                    _API_BIND_HOST,
+                    info.simulator_port,
+                    "simulation-mode bot",
+                    _SIMULATOR_READY_TIMEOUT_SECONDS,
+                )
+                _announce(
+                    f"Simulation-mode bot is up at {sim_url} (pid {self.bot_sim_proc.pid})"
+                )
+
+            self.last_error = ""
+            self._status("running")
+            sim_line = ""
+            if self.bot_sim_proc and info.simulator_port:
+                sim_line = (
+                    f"\n  Simulation bot: http://{_API_BIND_HOST}:{info.simulator_port} "
+                    f"(pid {self.bot_sim_proc.pid})"
+                )
+            _announce(
+                "Stack is up — all required processes accepted connections:\n"
+                f"  Profile:         {info.profile_name} ({self.profile_module})\n"
+                f"  API:             {api_url} (pid {self.api_proc.pid})\n"
+                f"  Admin:           {admin_url}\n"
+                f"  Telegram bot:    pid {self.bot_proc.pid}{sim_line}"
             )
-        _announce(
-            "Stack is up — all required processes accepted connections:\n"
-            f"  Profile:         {info.profile_name} ({self.profile_module})\n"
-            f"  API:             {api_url} (pid {self.api_proc.pid})\n"
-            f"  Admin:           {admin_url}\n"
-            f"  Telegram bot:    pid {self.bot_proc.pid}{sim_line}"
-        )
+        except Exception:
+            self._detach_supervisor_log()
+            raise
 
     def stop(self) -> None:
         self._status("stopping")
@@ -390,12 +422,8 @@ class StackSupervisor:
                             self._status("running")
                     elif command.get("action") == "switch_profile":
                         self.switch(str(command.get("profile_module", "")))
-                elif (
-                    (self.api_proc and self.api_proc.poll() is not None)
-                    or (self.bot_proc and self.bot_proc.poll() is not None)
-                    or (self.bot_sim_proc and self.bot_sim_proc.poll() is not None)
-                ):
-                    self.last_error = "A child process exited unexpectedly; the active profile was restarted."
+                elif (exited := self._unexpected_child_exit()) is not None:
+                    self.last_error = f"{exited}; the active profile was restarted."
                     logger.error(self.last_error)
                     self.stop()
                     time.sleep(1)
@@ -415,6 +443,7 @@ class StackSupervisor:
                 )
             except OSError as exc:
                 logger.warning("Could not write stopped stack status: %s", exc)
+            self._detach_supervisor_log()
 
 
 def main() -> None:

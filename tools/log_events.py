@@ -140,6 +140,16 @@ def queue_stop_timeout(*, queue_name: str, timeout_seconds: float) -> None:
     )
 
 
+def _emit_safely(event: str, **fields: Any) -> None:
+    try:
+        emit(event, **fields)
+    except Exception:
+        try:
+            _logger.exception("%s log failed", event.replace("_", " "))
+        except Exception:
+            pass
+
+
 def agent_invocation_started(
     *,
     agent: str,
@@ -149,20 +159,17 @@ def agent_invocation_started(
     parent_agent: str | None = None,
     parent_invocation_id: str | None = None,
 ) -> None:
-    try:
-        emit(
-            "agent_invocation_started",
-            agent=agent,
-            agent_name=agent,
-            invocation_id=invocation_id,
-            allowed_tools=list(allowed_tools),
-            task_summary=task_summary,
-            parent_agent=parent_agent,
-            parent_invocation_id=parent_invocation_id,
-            telemetry_only=True,
-        )
-    except Exception:
-        pass
+    _emit_safely(
+        "agent_invocation_started",
+        agent=agent,
+        agent_name=agent,
+        invocation_id=invocation_id,
+        allowed_tools=list(allowed_tools),
+        task_summary=task_summary,
+        parent_agent=parent_agent,
+        parent_invocation_id=parent_invocation_id,
+        telemetry_only=True,
+    )
 
 
 def agent_invocation_finished(
@@ -176,22 +183,19 @@ def agent_invocation_finished(
     parent_agent: str | None = None,
     parent_invocation_id: str | None = None,
 ) -> None:
-    try:
-        emit(
-            "agent_invocation_finished",
-            agent=agent,
-            agent_name=agent,
-            invocation_id=invocation_id,
-            status=status,
-            duration_ms=duration_ms,
-            result_chars=result_chars,
-            error_type=error_type,
-            parent_agent=parent_agent,
-            parent_invocation_id=parent_invocation_id,
-            telemetry_only=True,
-        )
-    except Exception:
-        pass
+    _emit_safely(
+        "agent_invocation_finished",
+        agent=agent,
+        agent_name=agent,
+        invocation_id=invocation_id,
+        status=status,
+        duration_ms=duration_ms,
+        result_chars=result_chars,
+        error_type=error_type,
+        parent_agent=parent_agent,
+        parent_invocation_id=parent_invocation_id,
+        telemetry_only=True,
+    )
 
 
 def model_invocation_finished(

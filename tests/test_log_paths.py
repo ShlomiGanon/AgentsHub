@@ -32,3 +32,10 @@ def test_child_and_server_paths_live_under_the_profile_dir(tmp_path, monkeypatch
     assert stderr == tmp_path / "logs" / "api.stderr.log"
     assert server_jsonl_path("profiles.response_team") == tmp_path / "logs" / "server.jsonl"
     assert stdout.parent == Path(tmp_path / "logs")
+
+
+def test_supervisor_log_lives_under_the_profile_dir(tmp_path, monkeypatch):
+    from tools.log_paths import supervisor_log_path
+
+    monkeypatch.setenv("AGENTSHUB_LOG_DIR", str(tmp_path / "logs"))
+    assert supervisor_log_path("profiles.response_team") == tmp_path / "logs" / "stack.stderr.log"

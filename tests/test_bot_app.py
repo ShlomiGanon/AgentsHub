@@ -887,6 +887,25 @@ def test_the_real_message_id_is_forwarded_to_submit_message():
     assert ("submit_message", "there is smoke near the depot", "v1", "9988") in api.calls
 
 
+def test_get_open_approval_holds_logs_when_the_database_cannot_be_read(monkeypatch, caplog):
+    import sqlite3
+
+    from bot.interactions import get_open_approval_holds, register_open_approval_hold, unregister_open_approval_hold
+
+    def _boom(*args, **kwargs):
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(sqlite3, "connect", _boom)
+    register_open_approval_hold("evt-keep")
+    try:
+        with caplog.at_level("ERROR"):
+            holds = get_open_approval_holds("unused.db")
+        assert "evt-keep" in holds
+        assert "failed to load open approval holds" in caplog.text
+    finally:
+        unregister_open_approval_hold("evt-keep")
+
+
 def _deps(api):
     from bot.deps import BotDeps
 

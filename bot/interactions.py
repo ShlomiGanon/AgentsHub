@@ -1,5 +1,6 @@
 """Bot commands, holds, user checks, and message formatting."""
 
+import logging
 from typing import TYPE_CHECKING, Literal
 
 from dataclasses import dataclass
@@ -7,10 +8,10 @@ from dataclasses import dataclass
 from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
 from messages import MessageCatalog, MessageCatalogError, get_catalog
 
-from typing import TYPE_CHECKING
-
 if TYPE_CHECKING:
     from bot.contracts import FailureNotice, JobResult
+
+logger = logging.getLogger(__name__)
 
 TELEGRAM_MESSAGE_LIMIT = 4096
 _EVENT_DATA_REPLY_TARGETS: dict[tuple[str, str], str] = {}
@@ -536,7 +537,11 @@ def get_open_approval_holds(db_path: str | None = None) -> list[str]:
             finally:
                 conn.close()
         except Exception:
-            pass
+            logger.exception(
+                "failed to load open approval holds from %s",
+                db_path,
+                extra={"event": "approval_holds_load_failed"},
+            )
     return list(_OPEN_APPROVAL_HOLDS)
 
 

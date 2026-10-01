@@ -102,9 +102,12 @@ def test_spawn_opens_child_logs_under_the_profile_log_dir(tmp_path, monkeypatch)
     monkeypatch.setattr(run_stack.threading, "Thread", lambda **kwargs: SimpleNamespace(start=lambda: None))
 
     supervisor.start()
-
-    assert any(path.endswith("api.stdout.log") for path in opened)
-    assert all("logs" in path.replace("\\", "/") for path in opened)
+    try:
+        assert any(path.endswith("api.stdout.log") for path in opened)
+        assert all("logs" in path.replace("\\", "/") for path in opened)
+        assert (tmp_path / "logs" / "stack.stderr.log").is_file()
+    finally:
+        supervisor._detach_supervisor_log()
 
 
 def test_start_refuses_an_already_occupied_api_port(monkeypatch):
@@ -120,6 +123,15 @@ def test_start_refuses_an_already_occupied_api_port(monkeypatch):
     supervisor = run_stack.StackSupervisor("profiles.response_team")
     with pytest.raises(RuntimeError, match="already in use"):
         supervisor.start()
+
+
+def test_unexpected_child_exit_names_the_process_and_code():
+    from types import SimpleNamespace
+
+    supervisor = run_stack.StackSupervisor("profiles.response_team")
+    supervisor.bot_proc = SimpleNamespace(poll=lambda: 1, returncode=1, pid=99)
+
+    assert supervisor._unexpected_child_exit() == "bot exited unexpectedly with code 1 (pid 99)"
 
 
 def test_reset_refuses_a_declared_non_database_path(tmp_path):

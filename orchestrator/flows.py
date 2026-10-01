@@ -126,7 +126,6 @@ if TYPE_CHECKING:
     from profiles import AreaRegistry, EventTypeRegistry
     from messages import MessageCatalog
 
-
 def _deadline_failure(deps: "FlowDeps", event_id: str, next_stage: str) -> "FlowResult | None":
     event = deps.persistence.fetch_event(event_id)
     # Approval is an explicit asynchronous pause.  Its original queue deadline
@@ -163,7 +162,6 @@ _VERDICT_TO_OUTCOME: dict[str, FlowOutcome] = {
     "uncertain": "uncertain",
 }
 
-
 def assemble_core_agents(loaded_profile: "LoadedProfile", base_config: "BaseConfig") -> dict[str, "Agent"]:
     """The merge point for core-agent construction — see module docstring."""
 
@@ -172,7 +170,6 @@ def assemble_core_agents(loaded_profile: "LoadedProfile", base_config: "BaseConf
         **construct_main_agent(base_config),
         **construct_insights_agent(base_config),
     }
-
 
 @dataclass(frozen=True)
 class FlowDeps:
@@ -202,13 +199,11 @@ class FlowDeps:
     # falls back to its own generic phrasing rather than raising.
     resource_unavailable_description: "Callable[[str, str, str, object], tuple[str, str]] | None" = None
 
-
 @dataclass(frozen=True)
 class FlowResult:
     event_id: str
     outcome: FlowOutcome
     detail: str = ""
-
 
 @dataclass(frozen=True)
 class EventDataReplyResult:
@@ -220,16 +215,13 @@ class EventDataReplyResult:
     # see the ambiguity check in `apply_event_data_reply`. Empty otherwise.
     ambiguous_event_ids: tuple[str, ...] = ()
 
-
 @dataclass(frozen=True)
 class DroneSelectionReplyResult:
     event_id: str
     message: str
     status: Literal["waiting_for_drone_selection", "succeeded"]
 
-
 _DRONE_RECALL_TOOLS = ("return_drone_to_base", "return_all_drones_to_base")
-
 
 def _model_invoker_for(main_agent: "MainAgent"):
     def _invoke(prompt: str) -> str:
@@ -254,16 +246,13 @@ def _model_invoker_for(main_agent: "MainAgent"):
 
     return _invoke
 
-
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
 
 def _log_event_outcome(event_id: str, outcome: str, **detail) -> None:
     """One place every terminal outcome (§1.8's "final verdict") is logged — closed on precedent, declined, failed, succeeded, or uncertain — so a run can be reassembled by querying it..."""
 
     event_outcome(event_id=event_id, outcome=outcome, **detail)
-
 
 def _log_reply_latency(deps: FlowDeps, event_id: str) -> None:
     """End-to-end latency, received_at -> the moment the reply that answers this event is ready
@@ -281,7 +270,6 @@ def _log_reply_latency(deps: FlowDeps, event_id: str) -> None:
     except (TypeError, ValueError):
         return
     reply_latency(event_id=event_id, elapsed_seconds=elapsed_seconds)
-
 
 def _record_outcome_with_report(
     deps: FlowDeps,
@@ -340,146 +328,6 @@ def _record_outcome_with_report(
     )
     _log_reply_latency(deps, event_id)
 
-
-_HOLD_DETAIL_FIELDS: dict[str, str] = {
-    "clarification": "raw_text",
-    "approval": "reason",
-    "event_data": "question",
-}
-
-
-def _hold_detail_text(kind: str, hold: dict) -> str:
-    field_name = _HOLD_DETAIL_FIELDS[kind]
-    return str(hold.get(field_name) or "")
-
-
-def _remind_unresolved_hold(deps: FlowDeps, kind: str, hold: dict) -> None:
-    """Re-sends the exact same original prompt, via the exact same notification kind
-    (`{kind}_hold`) the hold's own creation already used -- the payload builder re-reads the
-    still-unresolved hold fresh, so no new bot-side rendering is needed at all."""
-
-    deps.persistence.insert_notification(f"{kind}_hold", hold["event_id"])
-    deps.persistence.mark_held_event_reminded(kind, hold["hold_id"], _now())
-    hold_reminder_sent(hold_kind=kind, event_id=hold["event_id"], hold_id=hold["hold_id"])
-
-
-def _escalate_unresolved_hold(deps: FlowDeps, kind: str, hold: dict, age_minutes: float) -> None:
-    alert_text = deps.message_catalog.text(
-        "orchestrator.hold_escalation.commander_alert",
-        hold_kind=kind, age_minutes=int(age_minutes), detail=_hold_detail_text(kind, hold),
-    )
-    record_event_state(deps.persistence, hold["event_id"], {"hold_escalation_alert_text": alert_text})
-    deps.persistence.insert_notification("hold_escalation", hold["event_id"])
-    deps.persistence.mark_held_event_escalated(kind, hold["hold_id"], _now())
-    hold_escalated(hold_kind=kind, event_id=hold["event_id"], hold_id=hold["hold_id"])
-
-
-def _expire_unresolved_hold(deps: FlowDeps, kind: str, hold: dict) -> None:
-    event_id = hold["event_id"]
-    deps.persistence.resolve_held_event(kind, hold["hold_id"], {"resolved_by": "system", "decision": "expired"})
-    _record_outcome_with_report(
-        deps, event_id, "expired",
-        failure_reason=f"no response was received to the {kind} request within the configured expiry window",
-    )
-    _log_event_outcome(event_id, "expired", hold_kind=kind, hold_id=hold["hold_id"])
-
-
-def sweep_unresolved_holds(deps: FlowDeps) -> dict:
-    """Item 8: reminder after `get_hold_reminder_minutes`, escalation to commanders after
-    `get_hold_escalation_minutes`, automatic expiry after `get_hold_expiry_hours` -- all three
-    live-configurable. Called periodically, in-process, by `HoldSweepScheduler` (below) on the
-    API server -- never the bot process: a pure sweep over already-persisted holds, no model
-    call, writing only to persistence/notification_log; the existing notification poll loop
-    delivers whatever it inserts, unchanged. Thresholds are cumulative -- a hold old enough to
-    expire has normally already been reminded and escalated first, so expiry is checked first
-    and, once applied, skips the rest for that hold (it is no longer open)."""
-
-    now = datetime.now(timezone.utc)
-    reminder_delta = timedelta(minutes=deps.settings_store.get_hold_reminder_minutes())
-    escalation_delta = timedelta(minutes=deps.settings_store.get_hold_escalation_minutes())
-    expiry_delta = timedelta(hours=deps.settings_store.get_hold_expiry_hours())
-
-    counts = {"reminded": 0, "escalated": 0, "expired": 0}
-    for kind in ("clarification", "approval", "event_data"):
-        for hold in deps.persistence.list_held_events(kind):
-            try:
-                created_at = parse_timestamp(hold["created_at"])
-            except (TypeError, ValueError):
-                continue
-            age = now - created_at
-
-            if age >= expiry_delta:
-                _expire_unresolved_hold(deps, kind, hold)
-                counts["expired"] += 1
-                continue
-
-            if age >= escalation_delta and not hold.get("escalated_at"):
-                _escalate_unresolved_hold(deps, kind, hold, age.total_seconds() / 60.0)
-                counts["escalated"] += 1
-
-            if age >= reminder_delta and not hold.get("reminded_at"):
-                _remind_unresolved_hold(deps, kind, hold)
-                counts["reminded"] += 1
-
-    return counts
-
-
-class HoldSweepScheduler:
-    """Runs `sweep_unresolved_holds` periodically on a background thread -- same shape as
-    `history.summaries.SummaryScheduler`, in-process on the API server (never the bot process:
-    the sweep only writes persistence/notification_log, delivery is the existing notification
-    poll loop's job, unchanged)."""
-
-    def __init__(self, deps: FlowDeps, poll_interval_seconds: float = 60.0):
-        self._deps = deps
-        self._poll_interval_seconds = poll_interval_seconds
-        self._wake_event = threading.Event()
-        self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._last_run_at: str | None = None
-        self._last_run_ok: bool | None = None
-        self._last_run_error: str | None = None
-
-    def last_run_status(self) -> dict:
-        return {
-            "last_run_at": self._last_run_at,
-            "last_run_ok": self._last_run_ok,
-            "last_run_error": self._last_run_error,
-        }
-
-    def _run(self) -> None:
-        while not self._stop_event.is_set():
-            self._wake_event.wait(self._poll_interval_seconds)
-            self._wake_event.clear()
-            if self._stop_event.is_set():
-                return
-            try:
-                sweep_unresolved_holds(self._deps)
-                self._last_run_ok = True
-                self._last_run_error = None
-            except Exception as exc:
-                self._last_run_ok = False
-                self._last_run_error = str(exc)
-                hold_sweep_failed()
-            finally:
-                self._last_run_at = datetime.now(timezone.utc).isoformat()
-
-    def start(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run, name="hold-sweep-scheduler", daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        if self._thread is None:
-            return
-        self._stop_event.set()
-        self._wake_event.set()
-        self._thread.join()
-        self._thread = None
-
-
 # == Direct lane (item 9) =====================================================================
 #
 # A fast path for simple, low-stakes actions -- attendance/absence, movement, camera/equipment
@@ -493,170 +341,6 @@ class HoldSweepScheduler:
 # protocol's own approved_tools are ever callable this way -- the direct lane never widens what
 # a protocol allows, and a commander_only or approval_flag protocol is never eligible (checked
 # once here, defensively, even though no profile currently marks one eligible).
-
-_DIRECT_LANE_CLASSIFY_POLICY = InvocationPolicy(max_output_tokens=400, reasoning_effort="none")
-
-
-@dataclass(frozen=True)
-class DirectLaneAction:
-    protocol_name: str
-    agent_name: str
-    tool_name: str
-    parameters: dict
-
-
-@dataclass(frozen=True)
-class DirectLaneResult:
-    eligible: bool
-    actions: tuple[DirectLaneAction, ...] = ()
-    reason: str = ""
-
-
-def _direct_lane_eligible_protocols(protocols: "tuple[Protocol, ...]") -> "tuple[Protocol, ...]":
-    return tuple(
-        protocol for protocol in protocols
-        if protocol.direct_lane_eligible and not protocol.commander_only and not protocol.approval_flag
-    )
-
-
-def _build_direct_lane_prompt(protocols: "tuple[Protocol, ...]", registry: "AgentRegistry", raw_text: str) -> tuple[str, dict]:
-    tool_lines: list[str] = []
-    tool_owner: dict[str, tuple[str, str]] = {}
-    for protocol in protocols:
-        agent_name = protocol.participating_agents[0]
-        tools_by_name = {tool_info.name: tool_info for tool_info in registry.descriptor_for(agent_name).tools}
-        for tool_name in protocol.approved_tools:
-            tool_info = tools_by_name.get(tool_name)
-            if tool_info is None or tool_name in tool_owner:
-                continue
-            tool_owner[tool_name] = (protocol.name, agent_name)
-            tool_lines.append(f"- {tool_name}: {tool_info.description}")
-
-    prompt = (
-        "You triage one incoming message for a fast lane that handles ONLY simple, low-stakes, "
-        "already-unambiguous actions. Available tools (the only ones you may name):\n"
-        + "\n".join(tool_lines)
-        + "\n\nIf this message clearly matches one or more of the tools above, with every "
-        "parameter each chosen tool needs explicitly stated in the message (never guessed), "
-        "return exactly one JSON object: "
-        '{"eligible": true, "actions": [{"tool_name": "...", "parameters": {...}}, ...]}. '
-        "A message with more than one such intent may return more than one action. Otherwise -- "
-        "if the message involves any threat, hostile/suspicious activity, an emergency, any other "
-        "risk indicator, any ambiguity, a parameter a chosen tool needs but the message does not "
-        "state, or does not clearly match any tool above -- return exactly "
-        '{"eligible": false, "reason": "..."}. When in doubt, return not eligible: the full '
-        "pipeline handles everything this lane does not.\n\n"
-        f"Message: {json.dumps(raw_text, ensure_ascii=False)}"
-    )
-    return prompt, tool_owner
-
-
-def classify_direct_lane(
-    main_agent: "MainAgent", protocols: "tuple[Protocol, ...]", registry: "AgentRegistry", raw_text: str
-) -> DirectLaneResult:
-    eligible_protocols = _direct_lane_eligible_protocols(protocols)
-    if not eligible_protocols:
-        return DirectLaneResult(eligible=False, reason="no direct-lane-eligible protocols declared")
-
-    prompt, tool_owner = _build_direct_lane_prompt(eligible_protocols, registry, raw_text)
-    try:
-        with stage_context("direct_lane_classification"):
-            agent_result = main_agent.process(prompt, [], invocation_policy=_DIRECT_LANE_CLASSIFY_POLICY)
-    except Exception as exc:
-        return DirectLaneResult(eligible=False, reason=f"direct lane classification failed: {exc}")
-    if agent_result.status != "success":
-        return DirectLaneResult(eligible=False, reason="direct lane classification was unclear")
-
-    try:
-        payload = json.loads(_unwrap_json_code_fence(agent_result.text))
-    except (json.JSONDecodeError, TypeError):
-        return DirectLaneResult(eligible=False, reason="direct lane classification returned invalid JSON")
-    if not isinstance(payload, dict):
-        return DirectLaneResult(eligible=False, reason="direct lane classification returned a non-object")
-    if not payload.get("eligible"):
-        return DirectLaneResult(eligible=False, reason=str(payload.get("reason") or ""))
-
-    raw_actions = payload.get("actions")
-    if not isinstance(raw_actions, list) or not raw_actions:
-        return DirectLaneResult(eligible=False, reason="no actions returned despite eligible=true")
-
-    actions: list[DirectLaneAction] = []
-    for raw_action in raw_actions:
-        if not isinstance(raw_action, dict):
-            return DirectLaneResult(eligible=False, reason="malformed action entry")
-        tool_name = raw_action.get("tool_name")
-        owner = tool_owner.get(tool_name)
-        if owner is None:
-            # Never trust a tool name the model invented -- fall back to the full pipeline
-            # rather than calling something outside this protocol's own approved_tools.
-            return DirectLaneResult(eligible=False, reason=f"unknown or unapproved tool: {tool_name!r}")
-        parameters = raw_action.get("parameters")
-        if not isinstance(parameters, dict):
-            parameters = {}
-        protocol_name, agent_name = owner
-        actions.append(
-            DirectLaneAction(protocol_name=protocol_name, agent_name=agent_name, tool_name=tool_name, parameters=parameters)
-        )
-
-    return DirectLaneResult(eligible=True, actions=tuple(actions))
-
-
-def run_direct_lane(
-    deps: FlowDeps, event_id: str, sender_identity: str, result: DirectLaneResult,
-) -> FlowResult:
-    """Calls each identified tool directly (no crewai turn), then finishes exactly like any
-    other succeeded/failed run -- `_record_outcome_with_report` composes the small reply
-    (item 6's actions_taken makes it describe what was actually done) and inserts the same
-    job_finished/job_failed notification the queue-based pipeline already uses, so delivery is
-    entirely unchanged."""
-
-    agents_by_name = {action.agent_name: deps.registry.get(action.agent_name) for action in result.actions}
-    steps = tuple(
-        Step(
-            agent_name=action.agent_name,
-            task_text=f"Direct lane action: {action.tool_name}",
-            allowed_tools=(action.tool_name,),
-            step_id=str(index + 1),
-            kind="direct_tool",
-            direct_tool_name=action.tool_name,
-            direct_tool_kwargs=action.parameters,
-        )
-        for index, action in enumerate(result.actions)
-    )
-    _persist_step_plan(deps, event_id, steps)
-    with authenticated_request_identity(sender_identity):
-        run_result = execute_steps(list(steps), agents_by_name, deps.settings_store)
-    _persist_step_outcomes(deps, event_id, steps, run_result.step_outcomes)
-
-    if not run_result.completed:
-        _record_outcome_with_report(
-            deps, event_id, "failed", failure_reason=run_result.failure_cause, force_compose=True,
-        )
-        _log_event_outcome(event_id, "failed", failure_reason=run_result.failure_cause, stage="direct_lane")
-        return FlowResult(event_id, "failed", run_result.failure_cause or "")
-
-    _record_outcome_with_report(deps, event_id, "succeeded", insight_text="", force_compose=True)
-    _log_event_outcome(event_id, "succeeded", stage="direct_lane")
-    return FlowResult(event_id, "succeeded", "")
-
-
-def attempt_direct_lane(
-    deps: FlowDeps, main_agent: "MainAgent", event_id: str, sender_identity: str, raw_text: str,
-) -> "FlowResult | None":
-    """Entry point for the direct lane, called synchronously from the request handler (item 9:
-    "runs outside the serial queue") right after `begin_report` -- the event is already saved
-    either way. Returns None (never a FlowResult) when the message is not eligible, so the
-    caller falls back to the ordinary queued full-pipeline path unchanged; returns a real
-    FlowResult, already terminal, when the direct lane handled it."""
-
-    result = classify_direct_lane(main_agent, deps.protocol_set.all(), deps.registry, raw_text)
-    if not result.eligible:
-        direct_lane_declined(event_id=event_id, reason=result.reason)
-        return None
-
-    direct_lane_accepted(event_id=event_id, actions=[action.tool_name for action in result.actions])
-    return run_direct_lane(deps, event_id, sender_identity, result)
-
 
 def begin_report(
     deps: FlowDeps,
@@ -690,7 +374,6 @@ def begin_report(
     )
 
     return event_id
-
 
 def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent") -> FlowResult:
     """The rest of a report: extraction through outcome."""
@@ -776,7 +459,6 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
         _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="protocol_execution")
         return FlowResult(event_id, "failed", str(exc))
 
-
 def _apply_required_fields_gate(
     deps: "FlowDeps", event_id: str, main_agent: "MainAgent", classification: str
 ) -> "FlowResult | None":
@@ -836,7 +518,6 @@ def _apply_required_fields_gate(
     )
     return FlowResult(event_id, "waiting_for_event_data", question)
 
-
 def _continue_after_required_fields(
     deps: "FlowDeps", event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent",
     raw_text: str, classification: str,
@@ -859,7 +540,6 @@ def _continue_after_required_fields(
         deps, event_id, main_agent, insights_agent, operational_decision=operational_decision,
     )
 
-
 def process_report(
     deps: FlowDeps,
     main_agent: "MainAgent",
@@ -873,7 +553,6 @@ def process_report(
 
     event_id = begin_report(deps, raw_text, source, received_at, sender_identity)
     return run_report_extraction(deps, event_id, main_agent, insights_agent)
-
 
 def begin_request(
     deps: FlowDeps,
@@ -906,7 +585,6 @@ def begin_request(
 
     return event_id
 
-
 def process_request(
     deps: FlowDeps,
     main_agent: "MainAgent",
@@ -926,7 +604,6 @@ def process_request(
         sender_permission_level="commander" if originated_from_commander else "viewer",
     )
     return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent)
-
 
 def process_message(
     deps: FlowDeps,
@@ -958,7 +635,6 @@ def process_message(
 
     raise OrchestrationParseError(f"unsupported message intent: {intent.intent!r}")
 
-
 def resolve_clarification(
     deps: FlowDeps,
     hold_id: str,
@@ -986,7 +662,6 @@ def resolve_clarification(
 
     return answer
 
-
 def continue_after_clarification(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent") -> FlowResult:
     """Resume at risk assessment, not extraction — the other extracted fields are still valid and re-running extraction would discard the commander's decision (§6.2's own rule).
 
@@ -1007,7 +682,6 @@ def continue_after_clarification(deps: FlowDeps, event_id: str, main_agent: "Mai
 
     return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent)
 
-
 def resume_after_clarification(
     deps: FlowDeps,
     main_agent: "MainAgent",
@@ -1025,7 +699,6 @@ def resume_after_clarification(
         return answer  # unauthorized / not_found / invalid_classification — nothing to resume
 
     return continue_after_clarification(deps, answer.hold["event_id"], main_agent, insights_agent)
-
 
 def resolve_approval(
     deps: FlowDeps,
@@ -1057,14 +730,12 @@ def resolve_approval(
 
     return answer
 
-
 def decline(deps: FlowDeps, event_id: str) -> FlowResult:
     """Record a rejected approval hold's outcome as declined — the synchronous, no-continuation-needed branch `resume_after_approval` and `api.operations`'s deny path (§7.11) both share."""
 
     _record_outcome_with_report(deps, event_id, "declined")
     _log_event_outcome(event_id, "declined")
     return FlowResult(event_id, "declined")
-
 
 def continue_after_approval(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent", selected_protocol_name: str) -> FlowResult:
     """Resume execution from task formulation through protocol execution — the approved branch only."""
@@ -1077,7 +748,6 @@ def continue_after_approval(deps: FlowDeps, event_id: str, main_agent: "MainAgen
         deps, event_id, main_agent, insights_agent, protocol, precedent_matches,
         event["raw_text"], event["classification"], event["area"], event["description"], event=event,
     )
-
 
 def resume_after_approval(
     deps: FlowDeps,
@@ -1101,7 +771,6 @@ def resume_after_approval(
 
     return continue_after_approval(deps, event_id, main_agent, insights_agent, answer.hold["selected_protocol_name"])
 
-
 def _look_up_precedent_if_possible(deps: FlowDeps, event_id: str, event: dict) -> tuple:
     # Precedent-lookback fix (same root cause as the recency fix,
     # DIAGNOSTIC_FINDINGS.MD A.2): an unresolved occurred_at used to skip
@@ -1112,7 +781,6 @@ def _look_up_precedent_if_possible(deps: FlowDeps, event_id: str, event: dict) -
         return ()
     anchor_time = event["occurred_at"] or event["received_at"]
     return look_up_precedent(deps.history_query_service, event_id, event["classification"], event["area"], anchor_time)
-
 
 def continue_from_risk_assessment(
     deps: FlowDeps,
@@ -1262,459 +930,6 @@ def continue_from_risk_assessment(
         raw_text, classification, area, description, event=event,
     )
 
-
-def _run_protocol(
-    deps: FlowDeps,
-    event_id: str,
-    main_agent: "MainAgent",
-    insights_agent: "InsightsAgent",
-    protocol: "Protocol",
-    precedent_matches: tuple,
-    raw_text: str,
-    classification: str | None,
-    area: str | None,
-    description: str | None,
-    event: dict | None = None,
-) -> FlowResult:
-    deadline_failure = _deadline_failure(deps, event_id, "formulation")
-    if deadline_failure is not None:
-        return deadline_failure
-    if event is None:
-        event = deps.persistence.fetch_event(event_id)
-    if protocol.direct_tool_binder is not None:
-        # Declared direct-tool steps (Phase A): parameters are bound from the event's own
-        # extracted fields by the profile's own binder, never by the model — no
-        # formulate_tasks/task_rewrite call at all, so precedent_matches (whatever comparable
-        # history this event has) structurally cannot reach or escalate a direct-tool step's
-        # instructions, since no instructions are ever written for one.
-        direct_tool_steps = protocol.direct_tool_binder(event)
-        return _execute_protocol_plan(
-            deps, event_id, main_agent, insights_agent, protocol, direct_tool_steps, precedent_matches,
-            event=event,
-        )
-    conversation_messages: tuple = ()
-    conversation_id = (event or {}).get("conversation_id")
-    if conversation_id and deps.conversation_history_turns > 0:
-        conversation_messages = tuple(
-            deps.persistence.fetch_conversation_messages(conversation_id, deps.conversation_history_turns * 2)
-        )
-    formulation = formulate_tasks(
-        main_agent, protocol, deps.registry, raw_text, classification, area, description,
-        precedent_context=precedent_matches, event_data=event,
-        # The event type's statically-declared required fields (item #6's
-        # EVENT_TYPE_REQUIRED_FIELDS), unioned into every formulated step's own
-        # required_event_fields regardless of what the model declares — see
-        # formulate_tasks' docstring.
-        required_fields_floor=deps.event_type_registry.required_fields_for(classification),
-        conversation_messages=conversation_messages,
-    )
-    if formulation.success and formulation.corrects_event_id:
-        # Correction/retraction linkage: the target event_id was already validated (formulate_tasks
-        # only ever accepts one of the RESOLVED precedents it was shown) before reaching here.
-        record_event_state(deps.persistence, event_id, {"corrects_event_id": formulation.corrects_event_id})
-        record_event_state(deps.persistence, formulation.corrects_event_id, {"retracted": True})
-        event_correction_recorded(event_id=event_id, corrects_event_id=formulation.corrects_event_id)
-    if not formulation.success:
-        _record_outcome_with_report(deps, event_id, "failed", failure_reason=formulation.failure_reason)
-        _log_event_outcome(event_id, "failed", failure_reason=formulation.failure_reason, stage="formulation")
-        return FlowResult(event_id, "failed", formulation.failure_reason or "")
-    return _execute_protocol_plan(
-        deps, event_id, main_agent, insights_agent, protocol, formulation.steps, precedent_matches,
-        event=event,
-    )
-
-
-def _persist_step_plan(deps: FlowDeps, event_id: str, steps: tuple[Step, ...]) -> None:
-    record_step_executions(
-        deps.persistence,
-        event_id,
-        tuple(
-            StepExecutionEnvelope(
-                step_index=index,
-                agent_name=step.agent_name,
-                task_text=step.task_text,
-                allowed_tools=list(step.allowed_tools),
-                result_text=None,
-                attempt_count=0,
-                step_id=step.step_id,
-                depends_on=step.depends_on,
-                required_event_fields=step.required_event_fields,
-                status="pending",
-            )
-            for index, step in enumerate(steps)
-        ),
-    )
-
-
-def _step_from_row(row: dict) -> Step:
-    return Step(
-        agent_name=row["agent_name"],
-        task_text=row["task_text"],
-        allowed_tools=tuple(row.get("allowed_tools") or ()),
-        step_id=row.get("step_id") or str(row["step_index"]),
-        depends_on=tuple(row.get("depends_on") or ()),
-        required_event_fields=tuple(row.get("required_event_fields") or ()),
-    )
-
-
-def _prior_outcomes(rows: list[dict], steps: tuple[Step, ...]) -> tuple[StepOutcome, ...]:
-    by_index = {row["step_index"]: row for row in rows}
-    outcomes: list[StepOutcome] = []
-    for index, step in enumerate(steps):
-        row = by_index.get(index, {})
-        outcomes.append(
-            StepOutcome(
-                step=step,
-                result_text=row.get("result_text"),
-                attempt_count=row.get("attempt_count", 0),
-                succeeded=row.get("status") == "succeeded",
-                failure_reason=row.get("failure_reason"),
-                status=row.get("status", "pending"),
-                missing_event_fields=tuple(row.get("missing_event_fields") or ()),
-            )
-        )
-    return tuple(outcomes)
-
-
-def _persist_step_outcomes(
-    deps: FlowDeps,
-    event_id: str,
-    steps: tuple[Step, ...],
-    outcomes: tuple[StepOutcome, ...],
-) -> None:
-    """Match each outcome back to the step it belongs to, by `step_id` where
-    one exists. `outcome.step` is not necessarily `is`-identical to its
-    entry in `steps` — this function receives the *original* `steps`, but
-    `_execute_protocol_plan` runs a derived copy where any step with a
-    non-empty `required_event_fields` has its `task_text` rewritten first
-    (the "Current validated event data JSON" injection, above) — so an
-    outcome's step can differ from the original by value once that
-    injection applies.
-
-    A previous version of this function fell back to matching by full
-    value-equality (`step == outcome.step`) whenever a step's `step_id` was
-    empty, on the unstated assumption that a step_id-less step's fields
-    never get mutated after formulation — true only by accident, and it
-    broke the moment a step_id-less step also had a non-empty
-    `required_event_fields`.
-
-    Every step's `step_id` is empty only on one production path today: the
-    legacy AGENT:/TASK: fallback in `orchestrator.reasoning.formulate_tasks`
-    (the JSON formulation path always assigns each step a unique, non-empty
-    id, and reloading a persisted plan via `_step_from_row` always
-    substitutes `str(step_index)` for an absent one) — and a legacy-parsed
-    plan, having no step_id or depends_on on any step, can only ever run
-    through `protocols.executor.execute_steps`' plain sequential branch
-    (never the dependency-graph one), which is guaranteed to produce
-    `outcomes` in exactly the same order and position as `steps`, truncated
-    at most (a blocked or failed run stops partway through) but never
-    reordered or skipped over. So when `step_id` is empty, this outcome's
-    own position *is* its step's position — no value comparison needed, and
-    nothing about it changes if the step was mutated in the meantime."""
-
-    index_by_step_id = {step.step_id: index for index, step in enumerate(steps) if step.step_id}
-    envelopes = []
-    for position, outcome in enumerate(outcomes):
-        step_key = outcome.step.step_id
-        index = index_by_step_id[step_key] if step_key else position
-        persisted_step = steps[index]
-        envelopes.append(
-            StepExecutionEnvelope(
-                step_index=index,
-                agent_name=persisted_step.agent_name,
-                task_text=persisted_step.task_text,
-                allowed_tools=list(persisted_step.allowed_tools),
-                result_text=outcome.result_text,
-                attempt_count=outcome.attempt_count,
-                step_id=persisted_step.step_id,
-                depends_on=persisted_step.depends_on,
-                required_event_fields=persisted_step.required_event_fields,
-                missing_event_fields=outcome.missing_event_fields,
-                status=outcome.status,
-                failure_reason=outcome.failure_reason,
-            )
-        )
-    record_step_executions(deps.persistence, event_id, envelopes)
-
-
-def _execute_protocol_plan(
-    deps: FlowDeps,
-    event_id: str,
-    main_agent: "MainAgent",
-    insights_agent: "InsightsAgent",
-    protocol: "Protocol",
-    steps: tuple[Step, ...],
-    precedent_matches: tuple,
-    *,
-    resumed: bool = False,
-    event: dict | None = None,
-) -> FlowResult:
-    if event is None:
-        event = deps.persistence.fetch_event(event_id)
-    if not resumed:
-        deadline_failure = _deadline_failure(deps, event_id, "execution")
-        if deadline_failure is not None:
-            return deadline_failure
-
-    agents_by_name = {name: deps.registry.get(name) for name in protocol.participating_agents}
-    persisted_rows = event.get("steps", [])
-    prior = _prior_outcomes(persisted_rows, steps)
-    # Every agent step receives the complete immutable envelope of the event that
-    # caused the protocol run.  Previously only fields listed in
-    # ``required_event_fields`` were injected.  That let a model see the parsed
-    # absence interval while not seeing the sender identity, source message ID,
-    # original text, or receipt time needed by write tools such as
-    # ``record_attendance_response``.  Those values already exist in persistence
-    # and the authenticated execution context; exposing them here prevents a
-    # needless UNCLEAR_TASK refusal without allowing the model to invent them.
-    event_envelope = {
-        "event_id": event.get("event_id"),
-        "sender_identity": event.get("sender_identity"),
-        "sender_permission_level": event.get("sender_permission_level"),
-        "source": event.get("source"),
-        "source_message_id": event.get("source_message_id"),
-        "received_at": event.get("received_at"),
-        "raw_text": event.get("raw_text"),
-        "validated_event_fields": {name: event.get(name) for name in EVENT_DATA_FIELDS},
-    }
-    event_envelope_text = (
-        "\n\nAuthoritative event envelope (use these values; do not ask the caller to provide them): "
-        + json.dumps(event_envelope, ensure_ascii=False, sort_keys=True)
-    )
-    execution_steps = tuple(
-        replace(
-            step,
-            task_text=(
-                f"{step.task_text}\n\nCurrent validated event data JSON (use this as the source of truth): "
-                f"{json.dumps({name: event.get(name) for name in step.required_event_fields}, ensure_ascii=False, sort_keys=True)}"
-                f"{event_envelope_text}"
-            ),
-        )
-        for step in steps
-    )
-    with event_id_context(event_id), protocol_context(protocol.name), authenticated_request_identity(event["sender_identity"]):
-        run_result = execute_steps(
-            list(execution_steps),
-            agents_by_name,
-            deps.settings_store,
-            task_rewriter=functools.partial(rewrite_task, main_agent),
-            event_data=event,
-            prior_outcomes=prior,
-        )
-    if run_result.waiting_for_event_data and not persisted_rows:
-        _persist_step_plan(deps, event_id, steps)
-    _persist_step_outcomes(deps, event_id, steps, run_result.step_outcomes)
-
-    if run_result.waiting_for_event_data:
-        latest_event = deps.persistence.fetch_event(event_id)
-        conversation_messages: tuple[dict, ...] = ()
-        if latest_event.get("conversation_id"):
-            conversation_messages = tuple(
-                deps.persistence.fetch_conversation_messages(latest_event["conversation_id"], 12)
-            )
-        question = formulate_event_data_question(
-            main_agent, latest_event, run_result.missing_event_fields, conversation_messages, deps.message_catalog
-        )
-        waiting_step_ids = tuple(
-            outcome.step.step_id for outcome in run_result.step_outcomes
-            if outcome.status == "waiting_for_event_data"
-        )
-        if latest_event.get("conversation_id") and deps.conversation_history_turns > 0:
-            deps.persistence.append_conversation_message(
-                latest_event["conversation_id"],
-                "assistant",
-                question,
-                ttl_hours=deps.conversation_history_ttl_hours,
-                max_turns=deps.conversation_history_turns,
-                event_id=event_id,
-            )
-        create_event_data_hold(
-            deps.persistence, event_id, run_result.missing_event_fields, question, waiting_step_ids
-        )
-        protocol_waiting_for_event_data(
-            event_id=event_id, missing_event_fields=run_result.missing_event_fields,
-        )
-        return FlowResult(event_id, "waiting_for_event_data", question)
-
-    if not run_result.completed:
-        _record_outcome_with_report(deps, event_id, "failed", failure_reason=run_result.failure_cause)
-        _log_event_outcome(
-            event_id, "failed", failure_reason=run_result.failure_cause, stage="execution",
-            failed_step_agent=run_result.failed_step_agent,
-        )
-        return FlowResult(event_id, "failed", run_result.failure_cause or "")
-
-    recall_selection = next(
-        (
-            outcome.result_text
-            for outcome in run_result.step_outcomes
-            if outcome.selection_required and outcome.result_text
-        ),
-        None,
-    )
-    if protocol.name in {"return_drone_to_base", "recall_drone_to_base"} and recall_selection is not None:
-        create_event_data_hold(
-            deps.persistence,
-            event_id,
-            ("drone_selection",),
-            recall_selection,
-            tuple(outcome.step.step_id for outcome in run_result.step_outcomes),
-        )
-        return FlowResult(event_id, "waiting_for_drone_selection", recall_selection)
-
-    return _finish_protocol_assessment(
-        deps, event_id, main_agent, insights_agent, protocol, run_result.step_outcomes, precedent_matches,
-        enforce_deadline=not resumed,
-    )
-
-
-def _finish_with_resource_unavailable(
-    deps: FlowDeps, event_id: str, resource: "ResourceUnavailable",
-) -> FlowResult:
-    """The resource-unavailable outcome. Two strictly separate texts, both grounded in
-    `resource` alone, never in each other:
-
-    - `fact_sentence`: what happened, in plain already-localized language (the profile's own
-      `resource_unavailable_description` hook translates `resource`, which is why core never
-      hardcodes "drone"/"east_gate"-style identifiers into user-facing text itself). Fed to the
-      *reporter's own* report composer as an ordinary input fact (`resource_unavailable_fact`
-      on `RunSummary`) — reaches the reporter through the normal composed reply (or its
-      deterministic fallback), for every audience. Never contains alternatives.
-    - `commander_alert_text`: the fact plus concrete alternatives, persisted on its own column,
-      read only by the separate `resource_unavailable_alert` notification (api/routes.py),
-      delivered only to each commander's own private chat (bot/interactions.py). Never part of
-      `report_text`, never reaches the reporter's own chat, never model-composed.
-    """
-
-    fact_sentence = f"{resource.resource_kind} was unavailable for {resource.area}: {resource.reason}"
-    alternatives = ""
-    if deps.resource_unavailable_description is not None:
-        try:
-            fact_sentence, alternatives = deps.resource_unavailable_description(
-                resource.resource_kind, resource.area, resource.reason, deps.registry
-            )
-        except Exception as exc:
-            resource_unavailable_description_failed(resource_kind=resource.resource_kind, reason=str(exc))
-    if not alternatives:
-        alternatives = deps.message_catalog.text("orchestrator.resource_unavailable.no_alternatives")
-
-    commander_alert_text = deps.message_catalog.text(
-        "orchestrator.resource_unavailable.commander_alert", fact=fact_sentence, alternatives=alternatives,
-    )
-
-    _record_outcome_with_report(
-        deps, event_id, "handled_resource_unavailable",
-        resource_unavailable_fact=fact_sentence, commander_alert_text=commander_alert_text,
-    )
-    resource_unavailable_alert(
-        event_id=event_id, resource_kind=resource.resource_kind, area=resource.area, reason=resource.reason,
-    )
-    _log_event_outcome(event_id, "handled_resource_unavailable", resource_kind=resource.resource_kind, area=resource.area)
-    return FlowResult(event_id, "handled_resource_unavailable", fact_sentence)
-
-
-def _finish_protocol_assessment(
-    deps: FlowDeps,
-    event_id: str,
-    main_agent: "MainAgent",
-    insights_agent: "InsightsAgent",
-    protocol: "Protocol",
-    step_outcomes: tuple[StepOutcome, ...],
-    precedent_matches: tuple,
-    *,
-    enforce_deadline: bool,
-) -> FlowResult:
-    if enforce_deadline:
-        deadline_failure = _deadline_failure(deps, event_id, "final_assessment")
-        if deadline_failure is not None:
-            return deadline_failure
-
-    resource_unavailable = next(
-        (outcome.resource_unavailable for outcome in step_outcomes if outcome.resource_unavailable is not None), None
-    )
-    if resource_unavailable is not None:
-        # A deterministic, DB-sourced signal always wins over the normal judgment path (below)
-        # for THIS aspect of the outcome, regardless of `protocol.needs_insight` — a model
-        # judging "no drone was available" as plain failure would be both wrong (the report
-        # itself was handled correctly) and inconsistent across protocols, since only some
-        # declare needs_insight=False. See `_finish_with_resource_unavailable`.
-        return _finish_with_resource_unavailable(deps, event_id, resource_unavailable)
-
-    if not protocol.needs_insight:
-        # Deterministic verdict, no build_insight/judge_success call at all (Phase A): every
-        # step succeeded -> succeeded, else failed with the first failing step's own reason.
-        # Recording a report exactly as given IS correct behavior for a direct-tool step, not
-        # something that needs a model's judgment call.
-        first_failure = next((outcome for outcome in step_outcomes if not outcome.succeeded), None)
-        outcome = "succeeded" if first_failure is None else "failed"
-        failure_reason = first_failure.failure_reason if first_failure is not None else None
-        _record_outcome_with_report(deps, event_id, outcome, failure_reason=failure_reason, insight_text="")
-        _log_event_outcome(event_id, outcome, failure_reason=failure_reason)
-        return FlowResult(event_id, outcome, failure_reason or "")
-    final_assessment = None
-    persisted_event = deps.persistence.fetch_event(event_id)
-    if deps.optimization_policy.final_assessment_mode == "low_risk_merged" and persisted_event.get("risk_level") == "low":
-        try:
-            final_assessment = assess_final_once(main_agent, protocol, step_outcomes, precedent_matches)
-        except OrchestrationParseError as exc:
-            final_assessment_invalid(reason=str(exc))
-
-    insight_text = (
-        final_assessment.insight
-        if final_assessment is not None
-        else build_insight(insights_agent, protocol, step_outcomes, comparable_history=precedent_matches)
-    )
-    if len(protocol.participating_agents) > 1:
-        # A multi-domain protocol's insight is the live picture composed from what the
-        # specialists just reported plus the recent event log, never a prepared text.
-        # The viewer/commander ownership scope follows the event's persisted role snapshot.
-        sender_filter = (
-            None
-            if persisted_event.get("sender_permission_level") == "commander"
-            else persisted_event.get("sender_identity")
-        )
-        try:
-            synthesis = compose_picture_from_step_outcomes(
-                main_agent,
-                protocol,
-                step_outcomes,
-                persisted_event.get("raw_text", ""),
-                deps.history_query_service,
-                sender_identity_filter=sender_filter,
-            )
-            if synthesis:
-                insight_text = synthesis
-        except Exception as exc:
-            synthesis_failed(cause=str(exc))
-    insight_generated(event_id=event_id, protocol=protocol.name, insight_text=insight_text)
-
-    if enforce_deadline:
-        deadline_failure = _deadline_failure(deps, event_id, "judgment")
-        if deadline_failure is not None:
-            return deadline_failure
-    if final_assessment is not None:
-        verdict = final_assessment.verdict
-    else:
-        try:
-            verdict = judge_success(main_agent, protocol, step_outcomes, insight_text=insight_text)
-        except OrchestrationParseError:
-            try:
-                verdict = judge_success(main_agent, protocol, step_outcomes, insight_text=insight_text)
-            except OrchestrationParseError as exc:
-                _record_outcome_with_report(
-                    deps, event_id, "failed",
-                    failure_reason=f"success judgment failed: {exc}", insight_text=insight_text,
-                )
-                _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="judgment")
-                return FlowResult(event_id, "failed", str(exc))
-
-    outcome = _VERDICT_TO_OUTCOME[verdict.verdict]
-    _record_outcome_with_report(deps, event_id, outcome, insight_text=insight_text)
-    final_verdict(event_id=event_id, verdict=verdict.verdict, reasoning=verdict.reasoning)
-    _log_event_outcome(event_id, outcome, reasoning=verdict.reasoning)
-    return FlowResult(event_id, outcome, verdict.reasoning)
-
-
 def apply_event_data_reply(
     deps: FlowDeps,
     main_agent: "MainAgent",
@@ -1809,7 +1024,6 @@ def apply_event_data_reply(
         parsed.reply_text,
     )
 
-
 def apply_drone_selection_reply(
     deps: FlowDeps,
     reply_text: str,
@@ -1853,7 +1067,6 @@ def apply_drone_selection_reply(
     record_event_outcome(deps.persistence, event_id, "succeeded")
     return DroneSelectionReplyResult(event_id, result.text, "succeeded")
 
-
 def resume_after_event_data(
     deps: FlowDeps,
     event_id: str,
@@ -1891,3 +1104,22 @@ def resume_after_event_data(
         deps, event_id, main_agent, insights_agent, protocol, steps, precedent_matches,
         resumed=True, event=event,
     )
+
+from orchestrator.flows_hold_sweep import HoldSweepScheduler, sweep_unresolved_holds
+from orchestrator.flows_protocol import (
+    _execute_protocol_plan,
+    _finish_protocol_assessment,
+    _finish_with_resource_unavailable,
+    _persist_step_outcomes,
+    _persist_step_plan,
+    _prior_outcomes,
+    _run_protocol,
+    _step_from_row,
+)
+from orchestrator.flows_direct_lane import (
+    DirectLaneAction,
+    DirectLaneResult,
+    attempt_direct_lane,
+    classify_direct_lane,
+    run_direct_lane,
+)

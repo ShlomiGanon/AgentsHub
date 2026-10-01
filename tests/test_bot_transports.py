@@ -677,6 +677,21 @@ def test_send_reply_references_the_original_message(client, monkeypatch):
     send.assert_awaited_once_with(chat_id="chat-1", text="here's your result", reply_to_message_id="msg-42")
 
 
+def test_send_reply_logs_and_retries_without_reference_when_reply_to_fails(client, monkeypatch, caplog):
+    sent_message = type("Sent", (), {"message_id": 91})()
+    send = AsyncMock(side_effect=[RuntimeError("message to reply to not found"), sent_message])
+    monkeypatch.setattr(type(client._application.bot), "send_message", send)
+
+    with caplog.at_level("WARNING"):
+        message_id = _run(client.send_reply("chat-1", "here's your result", "msg-42"))
+
+    assert message_id == "91"
+    assert send.await_count == 2
+    assert send.await_args_list[0].kwargs["reply_to_message_id"] == "msg-42"
+    assert "reply_to_message_id" not in send.await_args_list[1].kwargs
+    assert "sending without reference" in caplog.text
+
+
 def test_answer_callback_query_acknowledges_the_button_press(client, monkeypatch):
     answer = AsyncMock()
     monkeypatch.setattr(type(client._application.bot), "answer_callback_query", answer)

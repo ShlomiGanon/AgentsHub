@@ -35,6 +35,32 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+async def _sleep_backoff_or_interval(
+    *,
+    had_error: bool,
+    current_backoff: float,
+    cap: float,
+    interval: float,
+    skip_interval: bool = False,
+) -> float:
+    """Sleep the error-backoff (capped) or the steady poll interval. Returns the next backoff."""
+
+    if had_error:
+        jitter = random.uniform(0.8, 1.2)
+        await asyncio.sleep(min(cap, current_backoff * jitter))
+        return min(cap, current_backoff * 2.0)
+    if not skip_interval:
+        await asyncio.sleep(interval)
+    return current_backoff
+
+
+async def _for_each_target_chat(chat_ids: list[str], send) -> None:
+    """Run `send(chat_id)` for each target chat, in the existing iteration order."""
+
+    for chat_id in chat_ids:
+        await send(chat_id)
+
+
 async def dispatch_notification(deps: "BotDeps", notification: "BotNotification") -> None:
     if notification.kind == "clarification_hold":
         await interactions.push_clarification_prompt(deps, notification.payload)
@@ -46,12 +72,15 @@ async def dispatch_notification(deps: "BotDeps", notification: "BotNotification"
 
     if notification.kind == "event_data_hold":
         text = interactions.format_event_data_needed(notification.payload, message_catalog_for(deps))
-        for chat_id in notification.target_chat_ids:
+
+        async def _send_event_data(chat_id: str) -> None:
             prompt_message_id = await deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id)
             if prompt_message_id is not None:
                 interactions.register_event_data_reply_target(
                     chat_id, prompt_message_id, notification.payload.event_id
                 )
+
+        await _for_each_target_chat(notification.target_chat_ids, _send_event_data)
         return
 
     if notification.kind == "uncertain_verdict":
@@ -68,8 +97,10 @@ async def dispatch_notification(deps: "BotDeps", notification: "BotNotification"
 
     if notification.kind == "uncertain_verdict_reporter":
         text = interactions.format_uncertain_verdict_reporter_notice(message_catalog_for(deps))
-        for chat_id in notification.target_chat_ids:
-            await deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id)
+        await _for_each_target_chat(
+            notification.target_chat_ids,
+            lambda chat_id: deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id),
+        )
         return
 
     if notification.kind == "precedent_closure":
@@ -148,13 +179,13 @@ async def run_notification_poll_loop(
 
         iterations += 1
         if max_iterations is None or iterations < max_iterations:
-            if had_error:
-                jitter = random.uniform(0.8, 1.2)
-                sleep_duration = min(30.0, current_backoff * jitter)
-                await asyncio.sleep(sleep_duration)
-                current_backoff = min(30.0, current_backoff * 2.0)
-            elif wait_seconds == 0:
-                await asyncio.sleep(poll_interval_seconds)
+            current_backoff = await _sleep_backoff_or_interval(
+                had_error=had_error,
+                current_backoff=current_backoff,
+                cap=30.0,
+                interval=poll_interval_seconds,
+                skip_interval=wait_seconds != 0,
+            )
 
 
 # -- group attendance checks ---------------------------------------------------
@@ -265,12 +296,12 @@ async def run_attendance_check_loop(
 
         iterations += 1
         if max_iterations is None or iterations < max_iterations:
-            if had_error:
-                jitter = random.uniform(0.8, 1.2)
-                await asyncio.sleep(min(60.0, current_backoff * jitter))
-                current_backoff = min(60.0, current_backoff * 2.0)
-            else:
-                await asyncio.sleep(poll_interval_seconds)
+            current_backoff = await _sleep_backoff_or_interval(
+                had_error=had_error,
+                current_backoff=current_backoff,
+                cap=60.0,
+                interval=poll_interval_seconds,
+            )
 
 
 if TYPE_CHECKING:
@@ -308,7 +339,7 @@ async def deliver_failure_notification(deps: "BotDeps", notification: "BotNotifi
     text = notice.report_text or format_failure_notice(notice, message_catalog_for(deps))
     messages = message_catalog_for(deps)
 
-    for chat_id in notification.target_chat_ids:
+    async def _send_failure(chat_id: str) -> None:
         if notification.ack_message_id:
             try:
                 await deps.telegram_client.edit_status(chat_id, notification.ack_message_id, messages.text("failure.ack_not_completed"))
@@ -319,6 +350,8 @@ async def deliver_failure_notification(deps: "BotDeps", notification: "BotNotifi
                 )
         await deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id)
 
+    await _for_each_target_chat(notification.target_chat_ids, _send_failure)
+
 
 if TYPE_CHECKING:
     from bot.contracts import BotDeps, BotNotification
@@ -328,8 +361,10 @@ async def deliver_job_result(deps: "BotDeps", notification: "BotNotification") -
     job_result = notification.payload
     text = job_result.report_text or format_job_result(job_result, message_catalog_for(deps))
 
-    for chat_id in notification.target_chat_ids:
-        await _deliver_editing_the_ack_first(deps, chat_id, text, notification)
+    await _for_each_target_chat(
+        notification.target_chat_ids,
+        lambda chat_id: _deliver_editing_the_ack_first(deps, chat_id, text, notification),
+    )
 
 
 if TYPE_CHECKING:

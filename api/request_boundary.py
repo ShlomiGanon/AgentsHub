@@ -85,13 +85,20 @@ BOT_SERVICE_IDENTITY = "bot-service"
 BOT_SERVICE_KEY_ENV_VAR = "BOT_SERVICE_KEY"
 
 
-def _bot_service_key_matches(provided: str | None) -> bool:
-    configured = os.environ.get(BOT_SERVICE_KEY_ENV_VAR)
-    if not configured or not provided:
+def secrets_equal(provided: str | None, expected: str | None) -> bool:
+    """Constant-time UTF-8 compare. Empty or missing values never match.
+
+    Compare as bytes, not str: hmac.compare_digest raises TypeError on a non-ASCII str
+    (a malformed/garbage header would then 500 instead of the intended 401/reject).
+    """
+
+    if not expected or not provided:
         return False
-    # Compare as bytes, not str: hmac.compare_digest raises TypeError on a non-ASCII str
-    # (a malformed/garbage header would then 500 instead of the intended 401).
-    return hmac.compare_digest(provided.encode("utf-8"), configured.encode("utf-8"))
+    return hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
+
+
+def _bot_service_key_matches(provided: str | None) -> bool:
+    return secrets_equal(provided, os.environ.get(BOT_SERVICE_KEY_ENV_VAR))
 
 
 def is_authenticated_bot_request() -> bool:

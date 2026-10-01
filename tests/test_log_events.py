@@ -49,6 +49,34 @@ def test_queue_helper_never_logs_a_callable(capsys):
     assert "<function" not in blob
 
 
+def test_agent_invocation_helpers_log_when_emit_fails(monkeypatch, capsys):
+    import tools.log_events as log_events
+    from tools.log_events import agent_invocation_finished, agent_invocation_started
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("handler exploded")
+
+    configure_logging("test_profile")
+    monkeypatch.setattr(log_events, "emit", _boom)
+
+    agent_invocation_started(
+        agent="main_agent",
+        invocation_id="inv-1",
+        allowed_tools=["check_status"],
+        task_summary="inspect gate",
+    )
+    agent_invocation_finished(
+        agent="main_agent",
+        invocation_id="inv-1",
+        status="error",
+        duration_ms=12.0,
+    )
+
+    messages = [record["message"] for record in _records(capsys)]
+    assert "agent invocation started log failed" in messages
+    assert "agent invocation finished log failed" in messages
+
+
 def test_event_id_from_queue_payload_ignores_callables():
     assert event_id_from_queue_payload(("evt-1", lambda: None)) == "evt-1"
     assert event_id_from_queue_payload(lambda: None) is None

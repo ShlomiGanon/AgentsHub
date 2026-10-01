@@ -1,6 +1,7 @@
 """HTTP and Telegram transport implementations."""
 
 import asyncio
+import logging
 from contextlib import contextmanager
 from contextvars import ContextVar
 
@@ -49,6 +50,8 @@ from typing import Callable, Sequence
 
 from bot.interactions import split_message
 from tools import get_trace_id, new_trace_id, stage_context
+
+logger = logging.getLogger(__name__)
 
 _TELEGRAM_REQUEST_CONTEXT: ContextVar[tuple[str, str] | None] = ContextVar(
     "telegram_request_context", default=None
@@ -674,6 +677,12 @@ class PTBTelegramClient(TelegramClient):
                     )
                 except Exception:
                     if reply_to_message_id is not None:
+                        logger.warning(
+                            "telegram reply_to %s failed; sending without reference",
+                            reply_to_message_id,
+                            extra={"event": "telegram_reply_fallback", "chat_id": chat_id},
+                            exc_info=True,
+                        )
                         sent = await self._application.bot.send_message(chat_id=chat_id, text=chunks[0])
                     else:
                         raise
