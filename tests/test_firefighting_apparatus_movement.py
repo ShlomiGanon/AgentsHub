@@ -13,6 +13,7 @@ from protocols import CriticalityLevel
 def _agent(tmp_path, monkeypatch):
     monkeypatch.setattr(ff.FirefightingCrewStatusAgent, "status_db_path", str(tmp_path / "crew.db"))
     monkeypatch.setattr(ff, "FIREFIGHTING_APPARATUS_DB_PATH", str(tmp_path / "apparatus.db"))
+    monkeypatch.setattr(ff, "FIREFIGHTING_FIRES_DB_PATH", str(tmp_path / "fires.db"))
     monkeypatch.setattr(ff, "DB_PATH", str(tmp_path / "firefighting_history.db"))
     agent = ff.FirefightingCrewStatusAgent(model="test-model")
     agent.apparatus_store.ensure_apparatus(apparatus_id="APP-ASHED-3", callsign="Ashed 3", status="operational")

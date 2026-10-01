@@ -68,6 +68,8 @@ def test_attendance_tool_binds_to_requester_and_cannot_update_another_member(tmp
 
 def test_firefighting_shift_declaration_records_all_named_crew_members(tmp_path, monkeypatch):
     monkeypatch.setattr(FirefightingCrewStatusAgent, "status_db_path", str(tmp_path / "fire-crew.db"))
+    monkeypatch.setattr("profiles.firefighting.FIREFIGHTING_FIRES_DB_PATH", str(tmp_path / "fires.db"))
+    monkeypatch.setattr("profiles.firefighting.FIREFIGHTING_APPARATUS_DB_PATH", str(tmp_path / "apparatus.db"))
     agent = FirefightingCrewStatusAgent(model="test-model")
     opened_at = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
     for identity, name in (("201", "Avi"), ("202", "Omri"), ("203", "Yuval")):

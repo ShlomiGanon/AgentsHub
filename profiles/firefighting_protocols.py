@@ -1,5 +1,6 @@
 """Firefighting protocol declarations and direct-tool binders."""
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -187,6 +188,95 @@ def _bind_dispatch_drone(event: dict) -> tuple[Step, ...]:
     )
 
 
+def _bind_report_fire_incident(event: dict) -> tuple[Step, ...]:
+    """Record the fire as burning in the COP registry, then dispatch recon -- the
+    registry write is a direct_tool so a first report is never camera-only."""
+
+    area = (event.get("area") or "").strip()
+    missing = tuple(name for name in ("area",) if not area)
+    fire_kwargs: dict = {}
+    if not missing:
+        fire_kwargs = {
+            "area": area,
+            "status": "burning",
+            "source_event_id": (event.get("event_id") or "").strip(),
+        }
+    fire_step = Step(
+        agent_name="team_status_agent",
+        task_text="Record the reported fire as currently burning in the fires registry.",
+        allowed_tools=("record_fire_status",),
+        step_id="1",
+        required_event_fields=missing,
+        kind="direct_tool",
+        direct_tool_name="record_fire_status",
+        direct_tool_kwargs=fire_kwargs,
+    )
+    if missing:
+        return (fire_step,)
+    drone_step = replace(_bind_dispatch_drone(event)[0], step_id="2")
+    return (fire_step, drone_step)
+
+
+def _bind_dispatch_drone_to_incident(event: dict) -> tuple[Step, ...]:
+    """Follow-up recon: refresh the burning fire's last_updated (TTL clock), then dispatch."""
+
+    area = (event.get("area") or "").strip()
+    missing = tuple(name for name in ("area",) if not area)
+    touch_kwargs: dict = {}
+    if not missing:
+        touch_kwargs = {"area": area}
+    touch_step = Step(
+        agent_name="team_status_agent",
+        task_text="Refresh the burning fire currently on record for this area, if any.",
+        allowed_tools=("touch_active_fire",),
+        step_id="1",
+        required_event_fields=missing,
+        kind="direct_tool",
+        direct_tool_name="touch_active_fire",
+        direct_tool_kwargs=touch_kwargs,
+    )
+    if missing:
+        return (touch_step,)
+    drone_step = replace(_bind_dispatch_drone(event)[0], step_id="2")
+    return (touch_step, drone_step)
+
+
+def _bind_log_fire_observation(event: dict) -> tuple[Step, ...]:
+    area = (event.get("area") or "").strip()
+    missing = tuple(name for name in ("area",) if not area)
+    kwargs: dict = {}
+    if not missing:
+        kwargs = {"area": area, "status": "extinguished"}
+    return (
+        Step(
+            agent_name="team_status_agent",
+            task_text="Record the reported fire as extinguished in the fires registry.",
+            allowed_tools=("record_fire_status",),
+            step_id="1",
+            required_event_fields=missing,
+            kind="direct_tool",
+            direct_tool_name="record_fire_status",
+            direct_tool_kwargs=kwargs,
+        ),
+    )
+
+
+def _bind_report_active_fires(event: dict) -> tuple[Step, ...]:
+    area = (event.get("area") or "").strip()
+    kwargs = {"area": area} if area else {}
+    return (
+        Step(
+            agent_name="team_status_agent",
+            task_text="List currently burning fires from the fires registry after two-day stale-expiry.",
+            allowed_tools=("list_active_fires",),
+            step_id="1",
+            kind="direct_tool",
+            direct_tool_name="list_active_fires",
+            direct_tool_kwargs=kwargs,
+        ),
+    )
+
+
 def _bind_dispatch_mutual_aid(event: dict) -> tuple[Step, ...]:
     area = (event.get("area") or "").strip()
     description = _report_text(event)
@@ -305,7 +395,8 @@ PROTOCOLS = [
             "multiple members' availability (use "
             "record_crew_shift_status for that), and does not apply to a single member's own "
             "availability report (use "
-            "record_crew_availability_response for that)."
+            "record_crew_availability_response for that). Does not apply to a question about "
+            "which fires are currently burning (use report_active_fires for that)."
         ),
         participating_agents=("team_status_agent",),
         approved_tools=("report_team_availability", "get_apparatus_status"),
@@ -343,14 +434,15 @@ PROTOCOLS = [
             "Applies when someone explicitly asks to send aerial drone recon to a fire that is "
             "already known or being monitored -- confirming a smoke sighting already on the "
             "log, or checking fire proximity to a hazardous structure after the fire itself was "
-            "reported. Does not apply to the first report of a new active fire (use "
-            "report_fire_incident for that). Does not apply to a routine camera/sensor status "
-            "update with no active fire (use update_camera_observation for that). Does not apply "
-            "to an already-extinguished roadside brush fire with no remaining risk (use "
-            "log_fire_observation for that)."
+            "reported. Refreshes that fire's last_updated on the fires registry so the two-day "
+            "stale-expiry clock restarts. Does not apply to the first report of a new active "
+            "fire (use report_fire_incident for that). Does not apply to a routine camera/sensor "
+            "status update with no active fire (use update_camera_observation for that). Does "
+            "not apply to an already-extinguished roadside brush fire with no remaining risk "
+            "(use log_fire_observation for that)."
         ),
-        participating_agents=("surveillance_agent",),
-        approved_tools=("dispatch_drone_to_area",),
+        participating_agents=("team_status_agent", "surveillance_agent"),
+        approved_tools=("touch_active_fire", "dispatch_drone_to_area"),
         expected_success_output=(
             "Confirmation of drone dispatch to the reported location, with callsign, ETA, and mission ID."
         ),
@@ -359,7 +451,7 @@ PROTOCOLS = [
         requires_confirmation=False,
         commander_only=False,
         needs_insight=False,
-        direct_tool_binder=_bind_dispatch_drone,
+        direct_tool_binder=_bind_dispatch_drone_to_incident,
     ),
     Protocol(
         name="report_fire_incident",
@@ -367,9 +459,11 @@ PROTOCOLS = [
             "Applies to a first report of an active or escalating fire -- smoke or flame first "
             "detected on pine ridge or Route 444, spread into new terrain (a tree line, a "
             "structure, the industrial park, the chemical plant), or a reported casualty/trapped "
-            "person. Confirmed or monitored by tasking a drone to the reported area. Does not "
-            "apply to a follow-up request that only asks to send a drone after the fire is "
-            "already on the log (use dispatch_drone_to_incident for that). Does not apply to a "
+            "person. Records the fire as burning in the fires registry and confirms or monitors "
+            "it by tasking a drone to the reported area. Does not apply to a follow-up request "
+            "that only asks to send a drone after the fire is already on the log (use "
+            "dispatch_drone_to_incident for that). Does not apply to a question about which "
+            "fires are currently burning (use report_active_fires for that). Does not apply to a "
             "routine, already-resolved, no-risk report (e.g. a small roadside fire already "
             "extinguished with no risk to structures -- use log_fire_observation for that). "
             "Does not apply to camera equipment status (use update_camera_observation for that). "
@@ -377,15 +471,15 @@ PROTOCOLS = [
             "dispatch_mutual_aid for that), and does not apply to moving Ashed 3 or Carmel 1 "
             "(use report_apparatus_movement for that)."
         ),
-        participating_agents=("surveillance_agent",),
-        approved_tools=("dispatch_drone_to_area",),
-        expected_success_output="Confirmation of drone dispatch to confirm/monitor the reported fire.",
+        participating_agents=("team_status_agent", "surveillance_agent"),
+        approved_tools=("record_fire_status", "dispatch_drone_to_area"),
+        expected_success_output="Confirmation that the fire was recorded as burning and a drone was dispatched to confirm/monitor it.",
         criticality=CriticalityLevel.HIGH,
         approval_flag=True,
         requires_confirmation=True,
         commander_only=False,
         needs_insight=False,
-        direct_tool_binder=_bind_dispatch_drone,
+        direct_tool_binder=_bind_report_fire_incident,
         # A field/citizen fire report can arrive in any group, not only the
         # camera-ops channel this protocol's own agent (surveillance_agent) is bound
         # to -- keep it selectable everywhere (orchestrator/group_routing.py).
@@ -395,26 +489,51 @@ PROTOCOLS = [
         # Split from report_fire_incident (over-dispatch fix, parity with response_team's
         # report_security_incident split): an already-resolved report has no dispatch tool
         # available at all here, structurally, not merely a prompt instruction the agent could
-        # still disregard.
+        # still disregard. It does write the fires registry (extinguished) so the COP matches
+        # the report.
         name="log_fire_observation",
         description=(
             "Applies when a report describes a fire-related observation that is explicitly "
             "already resolved, extinguished, or presents no further risk -- e.g. a small "
             "roadside fire already extinguished with no risk to structures, including a "
-            "Route 444 brush fire that a patrol already has on scene. Purely informational: "
-            "logs the observation; never dispatches a drone or any other resource. Does not apply "
-            "to anything still active, escalating, or unconfirmed (use report_fire_incident for "
-            "that)."
+            "Route 444 brush fire that a patrol already has on scene. Records the fire as "
+            "extinguished in the fires registry; never dispatches a drone or any other "
+            "resource. Does not apply to anything still active, escalating, or unconfirmed "
+            "(use report_fire_incident for that)."
         ),
-        participating_agents=("surveillance_agent",),
-        approved_tools=(),
-        expected_success_output="A plain acknowledgement that the observation was logged.",
+        participating_agents=("team_status_agent",),
+        approved_tools=("record_fire_status",),
+        expected_success_output="Confirmation that the fire was recorded as extinguished.",
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
         needs_insight=False,
+        direct_tool_binder=_bind_log_fire_observation,
         safety_critical=True,
+    ),
+    Protocol(
+        name="report_active_fires",
+        description=(
+            "Applies when someone asks which fires are currently burning, where fires are now, "
+            "or which fires are still alight -- a read of the fires registry after the two-day "
+            "stale-expiry (a fire with no update for two days is treated as extinguished). Does "
+            "not apply to the first report of a new fire (use report_fire_incident for that). "
+            "Does not apply to camera snapshots or equipment status (use "
+            "update_camera_observation or overall_situational_picture for those). Does not "
+            "apply to a retrospective debrief of a closed incident (use "
+            "query_historical_incidents for that)."
+        ),
+        participating_agents=("team_status_agent",),
+        approved_tools=("list_active_fires",),
+        expected_success_output="A read-only list of currently burning fires from the fires registry.",
+        criticality=CriticalityLevel.LOW,
+        approval_flag=False,
+        requires_confirmation=False,
+        commander_only=False,
+        needs_insight=False,
+        direct_tool_binder=_bind_report_active_fires,
+        direct_lane_eligible=True,
     ),
     Protocol(
         name="dispatch_mutual_aid",
@@ -440,18 +559,19 @@ PROTOCOLS = [
     Protocol(
         name="overall_situational_picture",
         description=(
-            "Applies when a commander asks for a combined snapshot spanning both the crew's "
-            "roster/vehicle availability and the camera/surveillance picture in one request -- "
-            "e.g. 'what's our force and vehicle availability' or 'urgent picture: exact fire "
-            "location and crew status'. Also applies when a commander describes multiple "
-            "critical hot spots or reports at once and asks to prioritize response or allocate "
-            "crews/water -- pull the actual current records rather than trusting the "
-            "commander's own recap of what was reported earlier. Does not apply when only one "
-            "of the two domains is asked about (use report_crew_status for crew/apparatus only)."
+            "Applies when a commander asks for a combined snapshot spanning the crew's "
+            "roster/vehicle availability, currently burning fires, and the camera/surveillance "
+            "picture in one request -- e.g. 'what's our force and vehicle availability' or "
+            "'urgent picture: exact fire location and crew status'. Also applies when a "
+            "commander describes multiple critical hot spots or reports at once and asks to "
+            "prioritize response or allocate crews/water -- pull the actual current records "
+            "rather than trusting the commander's own recap of what was reported earlier. Does "
+            "not apply when only crew/apparatus is asked about (use report_crew_status). Does "
+            "not apply when only currently burning fires are asked about (use report_active_fires)."
         ),
         participating_agents=("surveillance_agent", "team_status_agent"),
-        approved_tools=("get_surveillance_overview", "report_team_availability"),
-        expected_success_output="One combined report covering both current camera status and crew availability.",
+        approved_tools=("get_surveillance_overview", "report_team_availability", "list_active_fires"),
+        expected_success_output="One combined report covering current camera status, crew availability, and burning fires.",
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
         requires_confirmation=False,
@@ -463,8 +583,9 @@ PROTOCOLS = [
             "Applies when a commander asks for a retrospective, end-to-end debrief of an "
             "incident already underway or closed -- a timeline, resource management, which "
             "reports turned out to be false alarms, or guidance for residents returning home; "
-            "does not apply to a question about the current, live state of the crew or cameras "
-            "(use overall_situational_picture or report_crew_status for that)."
+            "does not apply to a question about the current, live state of the crew, cameras, "
+            "or currently burning fires (use overall_situational_picture, report_crew_status, "
+            "or report_active_fires for that)."
         ),
         participating_agents=("history_agent",),
         approved_tools=(),

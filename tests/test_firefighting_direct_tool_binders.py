@@ -2,9 +2,13 @@
 
 from profiles.firefighting import (
     _bind_dispatch_drone,
+    _bind_dispatch_drone_to_incident,
     _bind_dispatch_mutual_aid,
+    _bind_log_fire_observation,
     _bind_record_crew_availability,
     _bind_record_crew_shift_status,
+    _bind_report_active_fires,
+    _bind_report_fire_incident,
     _bind_update_camera_observation,
 )
 
@@ -105,3 +109,60 @@ def test_dispatch_mutual_aid_requires_area_then_asks_the_agent_to_call_the_tool(
     assert step.allowed_tools == ("dispatch_neighboring_force",)
     assert "MUST call dispatch_neighboring_force exactly once" in step.task_text
     assert "chemical_plant" in step.task_text
+
+
+def test_report_fire_incident_records_burning_then_dispatches_drone():
+    event = {
+        "area": "pine_ridge",
+        "event_id": "EVT-1",
+        "description": "smoke first detected",
+        "raw_text": "smoke on the ridge",
+    }
+
+    fire_step, drone_step = _bind_report_fire_incident(event)
+
+    assert fire_step.direct_tool_name == "record_fire_status"
+    assert fire_step.direct_tool_kwargs == {
+        "area": "pine_ridge",
+        "status": "burning",
+        "source_event_id": "EVT-1",
+    }
+    assert fire_step.agent_name == "team_status_agent"
+    assert drone_step.direct_tool_name == "dispatch_drone_to_area"
+    assert drone_step.step_id == "2"
+
+
+def test_report_fire_incident_without_area_requires_it():
+    (step,) = _bind_report_fire_incident({"area": None, "raw_text": "there is a fire"})
+
+    assert step.required_event_fields == ("area",)
+    assert step.direct_tool_name == "record_fire_status"
+
+
+def test_dispatch_drone_to_incident_touches_then_dispatches():
+    event = {"area": "quarry_junction", "description": "confirm the smoke", "raw_text": "send a drone"}
+
+    touch_step, drone_step = _bind_dispatch_drone_to_incident(event)
+
+    assert touch_step.direct_tool_name == "touch_active_fire"
+    assert touch_step.direct_tool_kwargs == {"area": "quarry_junction"}
+    assert drone_step.direct_tool_name == "dispatch_drone_to_area"
+    assert drone_step.step_id == "2"
+
+
+def test_log_fire_observation_records_extinguished():
+    (step,) = _bind_log_fire_observation({"area": "route_444", "raw_text": "brush fire already out"})
+
+    assert step.direct_tool_name == "record_fire_status"
+    assert step.direct_tool_kwargs == {"area": "route_444", "status": "extinguished"}
+    assert step.agent_name == "team_status_agent"
+
+
+def test_report_active_fires_lists_the_registry():
+    (step,) = _bind_report_active_fires({"area": "pine_ridge"})
+
+    assert step.direct_tool_name == "list_active_fires"
+    assert step.direct_tool_kwargs == {"area": "pine_ridge"}
+
+    (all_areas,) = _bind_report_active_fires({})
+    assert all_areas.direct_tool_kwargs == {}

@@ -9,7 +9,9 @@ from agents import Agent, InvocationPolicy, NeighboringForcesAgent, Surveillance
 from messages import get_catalog
 from persistence import (
     ApparatusStoreError,
+    FireStoreError,
     open_apparatus_store,
+    open_fire_store,
     open_incident_responder_store,
     open_response_team_surveillance_store,
     open_team_status_persistence,
@@ -45,9 +47,10 @@ FIREFIGHTING_SURVEILLANCE_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_survei
 FIREFIGHTING_CREW_STATUS_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_crew_status.db")
 FIREFIGHTING_FORCES_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_forces.db")
 FIREFIGHTING_APPARATUS_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_apparatus.db")
+FIREFIGHTING_FIRES_DB_PATH = str(_PROFILE_DATA_DIR / "firefighting_fires.db")
 RESETTABLE_DATABASES = (
     DB_PATH, FIREFIGHTING_SURVEILLANCE_DB_PATH, FIREFIGHTING_CREW_STATUS_DB_PATH, FIREFIGHTING_FORCES_DB_PATH,
-    FIREFIGHTING_APPARATUS_DB_PATH,
+    FIREFIGHTING_APPARATUS_DB_PATH, FIREFIGHTING_FIRES_DB_PATH,
 )
 
 # Mutual-aid force kinds and their home/staging area -- one of this profile's own 6 declared
@@ -233,9 +236,13 @@ from profiles.firefighting_protocols import (
     _as_aware_iso,
     _bind_apparatus_movement,
     _bind_dispatch_drone,
+    _bind_dispatch_drone_to_incident,
     _bind_dispatch_mutual_aid,
+    _bind_log_fire_observation,
     _bind_record_crew_availability,
     _bind_record_crew_shift_status,
+    _bind_report_active_fires,
+    _bind_report_fire_incident,
     _bind_update_camera_observation,
 )
 from profiles.firefighting_simulation import (

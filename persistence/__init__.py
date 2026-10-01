@@ -43,6 +43,12 @@ from persistence.apparatus_store import (
     ApparatusStoreError,
     open_apparatus_store,
 )
+from persistence.fire_store import (
+    FIRE_ACTIVE_TTL,
+    FireStore,
+    FireStoreError,
+    open_fire_store,
+)
 from persistence.incident_responder_store import (
     IncidentResponderStore,
     open_incident_responder_store,
@@ -80,6 +86,10 @@ __all__ = [
     "ApparatusStore",
     "ApparatusStoreError",
     "open_apparatus_store",
+    "FIRE_ACTIVE_TTL",
+    "FireStore",
+    "FireStoreError",
+    "open_fire_store",
     "IncidentResponderStore",
     "open_incident_responder_store",
 ]

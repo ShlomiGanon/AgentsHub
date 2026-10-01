@@ -7,6 +7,7 @@ from agents import Agent, InvocationPolicy, NeighboringForcesAgent, Surveillance
 from messages import get_catalog
 from persistence import (
     ApparatusStoreError,
+    FireStoreError,
     open_apparatus_store,
     open_incident_responder_store,
     open_response_team_surveillance_store,
@@ -57,6 +58,19 @@ def _forces_get(deps, request_id: str):
 def _forces_write(deps, row: dict) -> None:
     store = deps.registry.get("neighboring_forces_agent").dispatch_store
     store.admin_update_dispatch(row["request_id"], **{k: v for k, v in row.items() if k != "request_id"})
+
+
+def _fires_list(deps) -> list:
+    return deps.registry.get("team_status_agent").fire_store.list_fires()
+
+
+def _fires_get(deps, fire_id: str):
+    return deps.registry.get("team_status_agent").fire_store.get_fire(fire_id)
+
+
+def _fires_write(deps, row: dict) -> None:
+    store = deps.registry.get("team_status_agent").fire_store
+    store.admin_update_fire(row["fire_id"], **{k: v for k, v in row.items() if k != "fire_id"})
 
 
 ADMIN_TABLES = (
@@ -118,6 +132,24 @@ ADMIN_TABLES = (
             AdminColumn("event_id", "Event ID", editable=False),
         ),
         list_fn=_forces_list, get_fn=_forces_get, write_fn=_forces_write,
+    ),
+    AdminTable(
+        key="fires",
+        label="Fires",
+        primary_key="fire_id",
+        columns=(
+            AdminColumn("fire_id", "Fire ID", editable=False),
+            AdminColumn("area", "Area", required=True),
+            AdminColumn(
+                "status", "Status", kind="select",
+                choices=("burning", "extinguished"), required=True,
+            ),
+            AdminColumn("source_event_id", "Source event ID", editable=False),
+            AdminColumn("last_updated", "Last updated", editable=False),
+            AdminColumn("extinguished_at", "Extinguished at", editable=False),
+            AdminColumn("expiry_reason", "Expiry reason", editable=False),
+        ),
+        list_fn=_fires_list, get_fn=_fires_get, write_fn=_fires_write,
     ),
 )
 

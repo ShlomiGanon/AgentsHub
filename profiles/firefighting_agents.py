@@ -7,7 +7,9 @@ from agents import Agent, InvocationPolicy, NeighboringForcesAgent, Surveillance
 from messages import get_catalog
 from persistence import (
     ApparatusStoreError,
+    FireStoreError,
     open_apparatus_store,
+    open_fire_store,
     open_incident_responder_store,
     open_surveillance_store,
     open_team_status_persistence,
@@ -58,9 +60,82 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
     def __init__(self, model: str, api_key: str | None = None):
         super().__init__(model, api_key)
         self.apparatus_store = open_apparatus_store(_facade.FIREFIGHTING_APPARATUS_DB_PATH)
+        self.fire_store = open_fire_store(_facade.FIREFIGHTING_FIRES_DB_PATH)
         # Incident linkage is keyed against core `events`, which live in this profile's
         # `DB_PATH` -- a different file from the apparatus/crew-status stores above.
         self.incident_store = open_incident_responder_store(_facade.DB_PATH)
+
+    @tool(
+        "record_fire_status",
+        "Records one fire's current COP status in the fires registry: status='burning' "
+        "for an active/escalating fire (creates the row or refreshes last_updated if that "
+        "area already has a burning fire), or status='extinguished' for a fire that is "
+        "already out or no longer a risk. area is one of this station's declared areas. "
+        "Optional source_event_id links the row to the events journal. Side-effecting and "
+        "idempotent. Does not dispatch any resource.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def record_fire_status(self, area: str = "", status: str = "", source_event_id: str = "") -> str:
+        cleaned_area = area.strip()
+        cleaned_status = status.strip().lower()
+        if not cleaned_area:
+            return failed_tool_result("Clarification required: area is required.")
+        if cleaned_status not in {"burning", "extinguished"}:
+            return failed_tool_result("Clarification required: status must be burning or extinguished.")
+        try:
+            if cleaned_status == "burning":
+                row = self.fire_store.upsert_burning(
+                    area=cleaned_area, source_event_id=source_event_id.strip() or None,
+                )
+            else:
+                row = self.fire_store.extinguish(cleaned_area, reason="reported")
+        except FireStoreError as exc:
+            return failed_tool_result(f"The fire status was not stored: {exc}")
+        return (
+            f"Fire {row['fire_id']} in {row['area']} recorded: {row['status'].upper()} "
+            f"(updated {row['last_updated']})."
+        )
+
+    @tool(
+        "touch_active_fire",
+        "Refreshes last_updated on the burning fire currently on record for `area`, so the "
+        "two-day stale-expiry clock restarts -- use after aerial recon or any other update "
+        "that confirms that fire is still active. Does not create a fire if none is burning "
+        "there, and does not dispatch. Harmless if no burning fire is on record. "
+        "Side-effecting and idempotent.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def touch_active_fire(self, area: str = "") -> str:
+        cleaned_area = area.strip()
+        if not cleaned_area:
+            return failed_tool_result("Clarification required: area is required.")
+        try:
+            row = self.fire_store.touch(cleaned_area)
+        except FireStoreError as exc:
+            return failed_tool_result(f"The fire was not updated: {exc}")
+        if row is None:
+            return f"No burning fire is currently on record for '{cleaned_area}'."
+        return f"Fire {row['fire_id']} in {row['area']} still BURNING (updated {row['last_updated']})."
+
+    @tool(
+        "list_active_fires",
+        "Returns currently burning fires from the fires registry after applying the two-day "
+        "stale-expiry (a fire with no registry update for two days is treated as extinguished). "
+        "Optional area filters to one declared area. This is the live COP of active fires -- "
+        "not the events journal and not camera snapshots. Read-only.",
+        side_effecting=False,
+    )
+    def list_active_fires(self, area: str = "") -> str:
+        rows = self.fire_store.list_active(area=area.strip() or None)
+        if not rows:
+            scope = f" in '{area.strip()}'" if area.strip() else ""
+            return f"No burning fires are currently on record{scope}."
+        lines = ["Currently burning fires:"]
+        for row in rows:
+            lines.append(f"- {row['fire_id']}: {row['area']} (updated {row['last_updated']})")
+        return "\n".join(lines)
 
     @tool(
         "get_apparatus_status",

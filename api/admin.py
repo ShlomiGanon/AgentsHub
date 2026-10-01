@@ -63,6 +63,7 @@ from messages import get_current_catalog
 from orchestrator.flows import InvalidRoutingTargetError
 from persistence import (
     EventSearchCriteria,
+    FireStoreError,
     NeighboringForceStoreError,
     NotFoundError,
     PersistenceError,
@@ -70,7 +71,10 @@ from persistence import (
     TeamStatusPersistenceError,
 )
 
-_ADMIN_TABLE_WRITE_ERRORS = (PersistenceError, SurveillancePersistenceError, TeamStatusPersistenceError, NeighboringForceStoreError)
+_ADMIN_TABLE_WRITE_ERRORS = (
+    PersistenceError, SurveillancePersistenceError, TeamStatusPersistenceError,
+    NeighboringForceStoreError, FireStoreError,
+)
 from tools import get_trace_id, record_telegram_security_metric
 
 if TYPE_CHECKING:

@@ -7,7 +7,9 @@ from agents import Agent, InvocationPolicy, NeighboringForcesAgent, Surveillance
 from messages import get_catalog
 from persistence import (
     ApparatusStoreError,
+    FireStoreError,
     open_apparatus_store,
+    open_fire_store,
     open_incident_responder_store,
     open_response_team_surveillance_store,
     open_team_status_persistence,

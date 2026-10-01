@@ -162,6 +162,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `orchestrator/tone.py` | Production | Private implementation | Shared, catalog-driven banned-opener check for every model-composed user-facing reply (report composition, event-data questions) -- deterministic post-check, no raw Hebrew/English literals outside the message catalog. |
 | `persistence/__init__.py` | Production | Public facade | Exposes persistence contracts, constructors, and compatibility aliases. |
 | `persistence/apparatus_store.py` | Production | Private implementation | Minimal SQLite registry for a fire station's own apparatus (engines/vehicles) -- create-if-missing seed plus a status/area update, no dispatch-log/capacity modeling (docs/Admin_Tables_Plan.md's simulation-data-alignment audit). |
+| `persistence/fire_store.py` | Production | Private implementation | Firefighting-owned fires COP registry (burning/extinguished, one burning fire per area, two-day stale-expiry on read), with admin-panel update of area and status. |
 | `persistence/contracts.py` | Production | Private implementation | Defines persistence interfaces and domain errors. |
 | `persistence/incident_responder_store.py` | Production | Private implementation | Shared, cross-profile store linking an identity (person or apparatus) to the one specific real event it is responding to -- never area co-location; used by both profiles' roster/crew-status agents for join/list/leave incident-response tracking. |
 | `persistence/response_team_store.py` | Production | Private implementation | Implements the Response Team profile's own roster/attendance, surveillance, and neighboring-force-dispatch tables against the profile's shared DB_PATH (docs/responce_improve.md). |
@@ -239,8 +240,10 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_environment_config.py` | Test | Internal | Verifies environment-backed model and runtime configuration. |
 | `tests/test_file_catalog.py` | Test | Internal | Ensures this catalog exactly matches the first-party repository tree. |
 | `tests/test_friendly_forces_agent.py` | Test | Internal | Verifies friendly forces agent dispatch tools and coordination records. |
-| `tests/test_firefighting_admin_tables.py` | Test | Internal | Verifies the drones/attendance/forces admin-table wirings for `profiles/firefighting.py`, against its own DBs. |
+| `tests/test_firefighting_admin_tables.py` | Test | Internal | Verifies the drones/attendance/forces/fires admin-table wirings for `profiles/firefighting.py`, against its own DBs. |
 | `tests/test_firefighting_direct_tool_binders.py` | Test | Internal | Verifies Firefighting direct-tool protocol binders. |
+| `tests/test_firefighting_fires.py` | Test | Internal | Verifies FirefightingCrewStatusAgent fires-registry tools: burning/extinguished status, two-day stale-expiry, and COP listing. |
+| `tests/test_fire_store.py` | Test | Internal | Verifies the FireStore COP registry: upsert, TTL expiry, extinguish, and admin status edits. |
 | `tests/test_neighboring_forces_agent.py` | Test | Internal | Verifies the shared, parameterized `agents/neighboring_forces_agent.py` base class directly, independent of either profile. |
 | `tests/test_firefighting_external_forces_agent.py` | Test | Internal | Verifies FirefightingExternalForcesAgent's shared, persisted `dispatch_neighboring_force` tool and per-kind capacity (docs/Admin_Tables_Plan.md). |
 | `tests/test_firefighting_resource_unavailable.py` | Test | Internal | Verifies Firefighting resource-unavailable copy, alternatives, and localized shortage reasons. |

@@ -42,6 +42,10 @@ def test_firefighting_drone_protocols_are_exclusive_and_not_copied_from_response
     assert drone.direct_tool_binder is not None
     assert camera.direct_tool_binder is not None
     assert mutual.direct_tool_binder is not None
+    assert "record_fire_status" in fire.approved_tools
+    assert "list_active_fires" in by_name["report_active_fires"].approved_tools
+    assert "report_active_fires" in fire.description
+    assert "report_fire_incident" in by_name["report_active_fires"].description
 
     rt_text = " ".join(protocol.description for protocol in response_team.PROTOCOLS)
     ff_text = " ".join(protocol.description for protocol in firefighting.PROTOCOLS)

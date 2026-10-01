@@ -213,3 +213,31 @@ def test_firefighting_force_dispatch_status_edit_is_immediately_visible_to_the_l
     assert updated["status"] == "arrived"
     listing = forces.list_neighboring_force_dispatches(status="arrived")
     assert dispatch["request_id"] in listing
+
+
+# -- Fires registry (COP table + admin status edit) ------------------------------------------
+
+
+def test_firefighting_fire_status_edit_is_immediately_visible_to_the_list_tool(tmp_path, teardown_ctx, _admin_env):
+    ctx = _fire_ctx(tmp_path, teardown_ctx)
+    crew = ctx.deps.registry.get("team_status_agent")
+    fire = crew.fire_store.upsert_burning(area="pine_ridge", source_event_id="admin-test")
+    client = build_app(ctx).test_client()
+    _login(client)
+    token = _csrf_token(client)
+
+    client.post(
+        f"/admin/tables/fires/edit/{fire['fire_id']}",
+        data={"csrf_token": token, "area": "pine_ridge", "status": "extinguished"},
+        follow_redirects=False,
+    )
+
+    updated = crew.fire_store.get_fire(fire["fire_id"])
+    assert updated["status"] == "extinguished"
+    listing = crew.list_active_fires()
+    assert fire["fire_id"] not in listing
+    assert "No burning fires" in listing
+
+    page = client.get("/admin/tables/fires")
+    assert fire["fire_id"].encode() in page.data
+    assert b"extinguished" in page.data
