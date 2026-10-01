@@ -25,7 +25,7 @@ import pytest
 
 from agents import adapter
 from api import app as api_app
-from api.app import build_app, build_context
+from api.app import build_app, build_context, ensure_bot_service
 
 BOT_TOKEN_ENV = "AGENTSHUB_FIXTURE_BOT_TOKEN"
 MODEL_CRED_ENV = "AGENTSHUB_FIXTURE_MODEL_KEY"
@@ -83,9 +83,31 @@ def test_build_context_succeeds_against_a_real_profile(test_core_model, test_sub
         assert ctx.main_agent is not None
         assert ctx.insights_agent is not None
         assert "history_agent" in [a.name for a in ctx.deps.registry.all()]
+        bot_service = ctx.deps.persistence.read_user("bot-service")
+        assert bot_service is not None
+        assert bot_service["permission_level"] == "commander"
+        assert not bot_service["auto_register"]
     finally:
         ctx.queue.stop()
         ctx.deps.persistence.close()
+
+
+def test_ensure_bot_service_registers_a_missing_identity_and_is_idempotent(tmp_path):
+    from persistence.sqlite_store import SQLitePersistence
+
+    store = SQLitePersistence(str(tmp_path / "bot_service.db"))
+    try:
+        assert store.read_user("bot-service") is None
+        assert ensure_bot_service(store) is True
+        user = store.read_user("bot-service")
+        assert user["permission_level"] == "commander"
+        assert not user["auto_register"]
+        assert ensure_bot_service(store) is False
+        store.write_user("bot-service", "viewer")
+        assert ensure_bot_service(store) is True
+        assert store.read_user("bot-service")["permission_level"] == "commander"
+    finally:
+        store.close()
 
 
 def test_model_warmup_finishes_before_queue_and_scheduler_start(monkeypatch, test_core_model, test_sub_model):

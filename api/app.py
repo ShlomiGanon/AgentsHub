@@ -41,9 +41,29 @@ if TYPE_CHECKING:
     from agents import Agent
     from history import SummaryScheduler
     from orchestrator.flows import FlowDeps, GroupRoutingTable, SerialEventQueue
+    from persistence import PersistenceInterface
     from profiles.loader import LoadedProfile
 
 logger = logging.getLogger(__name__)
+
+
+def ensure_bot_service(persistence: "PersistenceInterface") -> bool:
+    """Register the bot's own service identity at commander level when missing.
+
+    Profile-agnostic: the identity string is a deployment fixture, not a
+    simulation user. Same write as the admin provision button. Returns True
+    when a row was created or upgraded.
+    """
+
+    from api.request_boundary import BOT_SERVICE_IDENTITY
+
+    user = persistence.read_user(BOT_SERVICE_IDENTITY)
+    if user is not None and user["permission_level"] == "commander" and not user.get("auto_register"):
+        return False
+    persistence.write_user(BOT_SERVICE_IDENTITY, "commander")
+    persistence.approve_user(BOT_SERVICE_IDENTITY)
+    return True
+
 
 # Agents a Telegram group may never be bound to directly: they are the
 # orchestration core, not a specialist a group "belongs" to. `main_agent` is
@@ -93,6 +113,12 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
 
     persistence = open_persistence(loaded_profile.db_path)
     configure_logging(loaded_profile.module_path, persistence=persistence)
+
+    if ensure_bot_service(persistence):
+        logger.info(
+            "bot-service identity provisioned",
+            extra={"event": "bot_service_provisioned"},
+        )
 
     # On every profile load, ensure this profile's declared simulation users/groups
     # exist (docs/profile_simulations_design.md) — before group_routing below does its
