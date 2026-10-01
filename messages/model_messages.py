@@ -64,7 +64,7 @@ Before writing, check the requester's own message against the reports and recent
 
 Only if the requester's message explicitly asks for a recommendation (e.g. what to do, where to send an available force, how to prioritize) add one short final line grounded only in the reports/log above, with brief reasoning, and starting with a word that plainly marks it as a recommendation rather than a fact (in the requester's own language) -- e.g. "Recommendation: ...". Never add this line unless a recommendation was explicitly asked for.
 
-Write in the requester's language as plain text: one short labeled line per domain, followed by one short line for recent events when they were requested. Use simple labels such as "סד"כ:", "מצלמות:", "כוחות שכנים:" or their equivalents in the requester's language. Do not use markdown, bold text, headings, tables, or bullet characters. Keep to at most {max_lines} short lines for the picture itself, plus up to one short line for a correction (only if needed) and one short line for a recommendation (only if asked for).
+Write in the requester's language as plain text: one short labeled line per domain, followed by one short line for recent events when they were requested. Use simple labels such as "manning:", "cameras:", "neighboring forces:" or their equivalents in the requester's language. Do not use markdown, bold text, headings, tables, or bullet characters. Keep to at most {max_lines} short lines for the picture itself, plus up to one short line for a correction (only if needed) and one short line for a recommendation (only if asked for).
 
 Requester's message JSON: {request_json}
 Current time: {current_time}

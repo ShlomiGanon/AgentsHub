@@ -938,7 +938,7 @@ SIMULATOR_BODY = """
     let text = seconds.toFixed(precision);
     while (text.includes('.') && text.endsWith('0')) text = text.slice(0, -1);
     if (text.endsWith('.')) text = text.slice(0, -1);
-    return text + ' שניות';
+    return t('bts.duration_seconds', { value: text });
   }
 
   function el(tag, className, text) {
@@ -1498,6 +1498,7 @@ SIMULATOR_BODY = """
     chatKey, chatId, watermark, myGeneration, reply, ackMessageId, traceId,
     deliveryState, privateTargetIdentity, privateFollowupWatcher, privateMessageChatKey
   ) {
+    if (!deliveryState) deliveryState = { waitingForJob: false };
     const startedAt = Date.now();
     let mark = watermark || { status_len: 0, sent_len: 0 };
     let pollFailures = 0;
@@ -2138,21 +2139,21 @@ SIMULATOR_BODY = """
         statusBadge.textContent = '● ' + t('bts.live_badge');
       } else if (status === 'awaiting_approval') {
         statusBadge.className = 'bts-badge bts-badge-pending';
-        statusBadge.textContent = '⏳ ממתין לאישור';
+        statusBadge.textContent = '⏳ ' + t('bts.awaiting_approval');
       } else if (status === 'partial') {
         statusBadge.className = 'bts-badge bts-badge-pending';
-        statusBadge.textContent = '◐ הושלם חלקית';
+        statusBadge.textContent = '◐ ' + t('bts.partial_complete');
       } else if (status === 'unknown') {
         statusBadge.className = 'bts-badge bts-badge-pending';
-        statusBadge.textContent = '○ מצב לא ידוע — נדרש בירור';
+        statusBadge.textContent = '○ ' + t('bts.unknown_investigate');
       } else if (status === 'disconnected') {
         statusBadge.className = 'bts-badge bts-badge-pending';
-        statusBadge.textContent = '↻ אין חיבור ל־Trace · מנסה להתחבר מחדש';
+        statusBadge.textContent = '↻ ' + t('bts.disconnected_retry');
       } else if (status === 'succeeded' || status === 'completed') {
         statusBadge.className = 'bts-badge bts-badge-completed';
         statusBadge.textContent = deliveryStatus === 'confirmed'
-          ? '✔ הושלם ונמסר'
-          : '✔ ה־API הושלם · אישור מסירה לא זמין';
+          ? '✔ ' + t('bts.completed_delivered')
+          : '✔ ' + t('bts.completed_delivery_unknown');
       } else if (status === 'failed') {
         statusBadge.className = 'bts-badge bts-badge-failed';
         statusBadge.textContent = '✖ ' + t('bts.failed_badge');
@@ -2276,13 +2277,11 @@ SIMULATOR_BODY = """
         if (!hasEvents) {
           metricBreakdown.textContent = t('bts.no_trace_events');
         } else {
-          const mod = m.model_latency_ms ? (m.model_latency_ms.toLocaleString() + ' ' + t('bts.ms')) : '0';
-          const tool = m.tools_duration_ms ? (m.tools_duration_ms.toLocaleString() + ' ' + t('bts.ms')) : '0';
-          metricBreakdown.textContent = t('bts.model_tools_breakdown', { model: mod, tools: tool });
-          const mod = formatDurationMs(m.model_latency_ms || 0);
-          const tool = formatDurationMs(m.tools_duration_ms || 0);
-          const queue = m.queue_wait_ms == null ? 'לא זמין' : formatDurationMs(m.queue_wait_ms);
-          metricBreakdown.textContent = 'ספק מצטבר: ' + mod + ' | כלים: ' + tool + ' | תור: ' + queue;
+          metricBreakdown.textContent = t('bts.model_tools_queue_breakdown', {
+            model: formatDurationMs(m.model_latency_ms || 0),
+            tools: formatDurationMs(m.tools_duration_ms || 0),
+            queue: m.queue_wait_ms == null ? t('bts.na') : formatDurationMs(m.queue_wait_ms),
+          });
         }
       }
       if (metricLlm) {
@@ -2680,11 +2679,10 @@ SIMULATOR_BODY = """
             vColor = '#f59e0b'; vBg = 'rgba(245, 158, 11, 0.25)'; vLabel = t('bts.verify_unverified_short');
           } else if (node.verification === 'failed') {
             vColor = '#ef4444'; vBg = 'rgba(239, 68, 68, 0.25)'; vLabel = t('bts.node_failed');
-            vColor = '#ef4444'; vBg = 'rgba(239, 68, 68, 0.25)'; vLabel = '✖ נכשל';
           } else if (node.verification === 'blocked') {
-            vColor = '#ef4444'; vBg = 'rgba(239, 68, 68, 0.25)'; vLabel = '⛔ נחסם';
+            vColor = '#ef4444'; vBg = 'rgba(239, 68, 68, 0.25)'; vLabel = t('bts.verify_blocked');
           } else if (node.verification === 'verification_unavailable' || node.verification === 'unavailable') {
-            vColor = '#94a3b8'; vBg = 'rgba(148, 163, 184, 0.2)'; vLabel = '? אימות לא זמין';
+            vColor = '#94a3b8'; vBg = 'rgba(148, 163, 184, 0.2)'; vLabel = t('bts.verify_unavailable_short');
           }
 
           vRect.setAttribute('fill', vBg);
@@ -2719,8 +2717,9 @@ SIMULATOR_BODY = """
           statStr = t('bts.node_running');
           statFill = '#38bdf8';
         } else if (node.status === 'success' || node.status === 'completed') {
-          statStr = node.duration_ms ? t('bts.node_completed_ms', { ms: node.duration_ms }) : t('bts.node_completed');
-          statStr = '✔ הושלם' + (node.duration_ms != null ? ' (' + formatDurationMs(node.duration_ms) + ')' : '');
+          statStr = node.duration_ms != null
+            ? t('bts.node_completed_duration', { duration: formatDurationMs(node.duration_ms) })
+            : t('bts.node_completed');
           statFill = '#34d399';
         } else if (node.status === 'failed') {
           statStr = t('bts.node_failed');
@@ -2782,10 +2781,9 @@ SIMULATOR_BODY = """
         } else if (node.status === 'retry') {
           detStatus.className = 'bts-badge bts-badge-pending';
           detStatus.textContent = t('bts.node_retry', { count: (node.retries || 1) });
-          detStatus.textContent = '🔄 ניסיון חוזר (' + (node.retries || 1) + ')';
         } else if (node.status === 'unknown') {
           detStatus.className = 'bts-badge bts-badge-pending';
-          detStatus.textContent = '○ מצב לא ידוע — חסר אירוע סיום';
+          detStatus.textContent = t('bts.node_unknown_missing_finish');
         } else {
           detStatus.className = 'bts-badge bts-badge-pending';
           detStatus.textContent = t('bts.node_pending');
@@ -2793,15 +2791,13 @@ SIMULATOR_BODY = """
       }
 
       // Duration & Calls
-      if (detDur) detDur.textContent = node.duration_ms ? (node.duration_ms + ' ' + t('bts.ms')) : t('bts.na');
-      if (detCalls) detCalls.textContent = t('bts.calls_count', { count: (node.call_count || node.llm_calls || 1) });
       if (detDur) detDur.textContent = node.duration_ms != null ? formatDurationMs(node.duration_ms) : t('bts.na');
       if (detCalls) {
         const llmCount = Array.isArray(node.llm_calls) ? node.llm_calls.length : 0;
         const count = Number(node.call_count) || llmCount || 1;
         detCalls.textContent = node.model_completion_event
-          ? 'אירוע סיום מודל (לא קריאת ספק מזוהה)'
-          : (count + (node.type === 'model' ? ' קריאת ספק' : ' הפעלות'));
+          ? t('bts.model_completion_event')
+          : (node.type === 'model' ? t('bts.llm_calls_count', { count: count }) : t('bts.calls_count', { count: count }));
       }
 
       // Parallel Status
@@ -2822,41 +2818,53 @@ SIMULATOR_BODY = """
 
       // Task / Directives
       if (detTaskTitle && detTaskContent) {
-        if (node.type === 'main') {
-          detTaskTitle.textContent = t('bts.task_intent_protocol');
-          detTaskContent.textContent = (node.intent || t('bts.processing_request')) + (node.protocol ? '\\n' + t('bts.protocol_line', { protocol: node.protocol }) : '');
         if (node.type === 'model' && Array.isArray(node.llm_calls)) {
-          detTaskTitle.textContent = 'Provider request — metadata בטוח';
+          detTaskTitle.textContent = t('bts.task_model');
           detTaskContent.textContent = node.llm_calls.map(function (c) {
-            return [
-              'Agent: ' + (c.agent_name || 'unattributed'),
-              'יוזם: ' + (c.parent_agent || 'unattributed'),
-              'Invocation: ' + (c.agent_invocation_id || 'unattributed'),
-              'Purpose / stage: ' + (c.purpose || 'unattributed') + ' / ' + (c.stage || 'unattributed'),
-              'Protocol / tool: ' + (c.protocol_name || 'לא זמין') + ' / ' + (c.tool_name || 'לא זמין'),
-              'Provider request: ' + (c.provider_request_id || 'לא זמין') + ' · sequence ' + (c.sequence_number ?? 'לא זמין'),
-              'שיוך: ' + (node.attribution_status || (c.agent_invocation_id ? 'attributed' : (c.agent_name ? 'partial' : 'unattributed'))),
-              'התחלה/סיום: ' + (c.started_at || 'לא זמין') + ' / ' + (c.finished_at || 'לא זמין'),
-              'זמן: ' + (c.latency_ms == null ? 'לא זמין' : formatDurationMs(c.latency_ms)) + ' · finish: ' + (c.finish_reason || c.status || 'לא ידוע'),
-              'טוקנים קלט/פלט/מטמון: ' + (c.input_tokens ?? '?') + '/' + (c.output_tokens ?? '?') + '/' + (c.cache_tokens ?? '?'),
-              'סיכום בטוח: ' + (c.result_summary || 'לא זמין'),
-            ].join('\\n');
+            return t('bts.llm_call_detail', {
+              agent: c.agent_name || 'unattributed',
+              parent: c.parent_agent || 'unattributed',
+              invocation: c.agent_invocation_id || 'unattributed',
+              purpose: c.purpose || 'unattributed',
+              stage: c.stage || 'unattributed',
+              protocol: c.protocol_name || t('bts.na'),
+              tool: c.tool_name || t('bts.na'),
+              request: c.provider_request_id || t('bts.na'),
+              sequence: (c.sequence_number ?? t('bts.na')),
+              attribution: (node.attribution_status || (c.agent_invocation_id ? 'attributed' : (c.agent_name ? 'partial' : 'unattributed'))),
+              started: c.started_at || t('bts.na'),
+              finished: c.finished_at || t('bts.na'),
+              duration: (c.latency_ms == null ? t('bts.na') : formatDurationMs(c.latency_ms)),
+              finish: (c.finish_reason || c.status || t('bts.node_unknown')),
+              input: (c.input_tokens ?? '?'),
+              output: (c.output_tokens ?? '?'),
+              cache: (c.cache_tokens ?? '?'),
+              summary: c.result_summary || t('bts.na'),
+            });
           }).join('\\n\\n');
         } else if (node.type === 'routing' || node.type === 'result') {
-          detTaskTitle.textContent = node.type === 'routing' ? 'בחירת צעד — ללא הנחת invocation' : 'תוצאת invocation';
-          detTaskContent.textContent = node.details || node.task || 'לא נשמרו פרטים נוספים.';
+          detTaskTitle.textContent = node.type === 'routing' ? t('bts.task_routing') : t('bts.task_result');
+          detTaskContent.textContent = node.details || node.task || t('bts.no_extra_details');
         } else if (node.type === 'invocation') {
-          detTaskTitle.textContent = 'Agent invocation';
+          detTaskTitle.textContent = t('bts.task_invocation');
           const calls = Array.isArray(node.llm_calls) ? node.llm_calls : [];
-          detTaskContent.textContent = (node.task || 'תקציר משימה לא נשמר.') +
-            '\\nInvocation ID: ' + (node.invocation_id || 'לא זמין') +
-            '\\nParent: ' + (node.parent_agent || 'Orchestrator') +
-            '\\nProtocol: ' + (node.protocol_name || 'לא זמין') +
-            '\\nProvider calls: ' + calls.length +
-            (node.model_status ? ('\\nריצת מודל: ' + node.model_status + ' · ' + (node.model_duration_ms == null ? 'לא זמין' : formatDurationMs(node.model_duration_ms)) + ' · טוקנים קלט/פלט: ' + (node.model_input_tokens ?? '?') + '/' + (node.model_output_tokens ?? '?')) : '');
+          const modelRun = node.model_status ? t('bts.invocation_model_run', {
+            status: node.model_status,
+            duration: (node.model_duration_ms == null ? t('bts.na') : formatDurationMs(node.model_duration_ms)),
+            input: (node.model_input_tokens ?? '?'),
+            output: (node.model_output_tokens ?? '?'),
+          }) : '';
+          detTaskContent.textContent = t('bts.invocation_detail', {
+            task: node.task || t('bts.task_summary_missing'),
+            invocation: node.invocation_id || t('bts.na'),
+            parent: node.parent_agent || 'Orchestrator',
+            protocol: node.protocol_name || t('bts.na'),
+            calls: calls.length,
+            model_run: modelRun,
+          });
         } else if (node.type === 'main') {
-          detTaskTitle.textContent = 'כוונה ופרוטוקול שנבחרו';
-          detTaskContent.textContent = (node.intent || 'מעבד בקשה') + (node.protocol ? '\\nפרוטוקול: ' + node.protocol : '');
+          detTaskTitle.textContent = t('bts.task_intent_protocol');
+          detTaskContent.textContent = (node.intent || t('bts.processing_request')) + (node.protocol ? '\\n' + t('bts.protocol_line', { protocol: node.protocol }) : '');
         } else if (node.type === 'specialist') {
           detTaskTitle.textContent = t('bts.task_specialist');
           if (Array.isArray(node.tasks) && node.tasks.length > 0) {
@@ -2866,20 +2874,17 @@ SIMULATOR_BODY = """
           }
         } else if (node.type === 'tool') {
           detTaskTitle.textContent = t('bts.task_tool');
-          detTaskContent.textContent = node.summary || t('bts.invoking_label', { label: (node.label || t('bts.legend_tool')) });
+          detTaskContent.textContent = (node.summary || t('bts.invoking_label', { label: (node.label || t('bts.legend_tool')) })) +
+            '\\n' + t('bts.tool_scope', {
+              caller: node.caller_agent_name || t('bts.na'),
+              invocation: node.agent_invocation_id || t('bts.na'),
+            });
         } else if (node.type === 'persistence') {
           detTaskTitle.textContent = t('bts.task_persist');
           detTaskContent.textContent = node.details || t('bts.persist_default');
-          detTaskTitle.textContent = 'מטרת הפעלת הכלי';
-          detTaskContent.textContent = (node.summary || ('הפעלת ' + (node.label || 'כלי'))) +
-            '\\nCaller: ' + (node.caller_agent_name || 'לא נשמר') +
-            '\\nInvocation ID: ' + (node.agent_invocation_id || 'לא נשמר');
-        } else if (node.type === 'persistence') {
-          detTaskTitle.textContent = 'פעולת שמירה ואימות';
-          detTaskContent.textContent = node.details || 'שמירה ב-SQLite ואימות מצב תפעולי.';
         } else if (node.type === 'composition') {
-          detTaskTitle.textContent = 'הרכבת תשובה';
-          detTaskContent.textContent = node.details || 'נרשם אירוע הרכבת תשובה; תוכן גולמי מוסתר.';
+          detTaskTitle.textContent = t('bts.task_composition');
+          detTaskContent.textContent = node.details || t('bts.composition_default');
         }
       }
 
@@ -2925,11 +2930,10 @@ SIMULATOR_BODY = """
               vTag.textContent = t('bts.verify_unverified');
             } else if (vKind === 'failed') {
               vTag.textContent = t('bts.node_failed');
-              vTag.textContent = '✖ נכשל';
             } else if (vKind === 'blocked') {
-              vTag.textContent = '⛔ נחסם';
+              vTag.textContent = t('bts.verify_blocked');
             } else if (vKind === 'unavailable' || vKind === 'verification_unavailable') {
-              vTag.textContent = '? אימות לא זמין';
+              vTag.textContent = t('bts.verify_unavailable_short');
             } else {
               vTag.textContent = vKind;
             }

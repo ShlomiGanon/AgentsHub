@@ -1,4 +1,4 @@
-"""Behind-the-Scenes trace aggregation and diagnostics engine.
+"""Behind-The-Scenes trace aggregation and diagnostics engine.
 
 Extracts real execution stages, agent collaboration graphs, tool side-effects,
 and performance metrics from raw SQLite log_entries without altering any core logic.
@@ -194,8 +194,6 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
     has_input = any(e.get("event") in {"report_received", "request_received"} for e in entries)
     if has_input:
         nodes.append({"id": "input", "type": "user", "label": "Message received", "status": "success", "icon": "👤"})
-    root = {"id": "orchestrator", "type": "main", "label": "Orchestrator", "status": "success" if outcome else "running", "icon": "🤖"}
-        nodes.append({"id": "input", "type": "user", "label": "הודעה התקבלה", "status": "success", "icon": "👤"})
     root_status = (
         "success" if outcome in {"succeeded", "completed", "closed_on_precedent"}
         else ("failed" if outcome in {"failed", "failure", "error"} else ("unknown" if outcome else "running"))
@@ -215,23 +213,6 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
         if event in {"picture_planned", "report_composed", "picture_composed", "response_composed", "question_composition"}:
             composition_events.append(entry)
         if event == "agent_invocation_started" and invocation_id:
-            node_id = f"invocation_{invocation_id}"
-            node = {
-                "id": node_id, "type": "invocation", "label": entry.get("agent") or "agent",
-                "sublabel": entry.get("stage") or "agent invocation", "icon": "🤖",
-                "status": "running", "started_at": entry.get("timestamp"),
-                "task": _safe_str(entry.get("task_summary"), 120),
-                "allowed_tools": entry.get("allowed_tools") or [], "llm_calls": [], "tools": [],
-                "parent_invocation_id": entry.get("parent_invocation_id"),
-            }
-            nodes.append(node)
-            by_id[invocation_id] = node
-        elif event == "agent_invocation_finished" and invocation_id in by_id:
-            node = by_id[invocation_id]
-            node["status"] = "success" if entry.get("status") == "success" else "failed"
-            node["finished_at"] = entry.get("timestamp")
-            node["duration_ms"] = entry.get("duration_ms")
-            node["result"] = f"{entry.get('result_chars', 0)} characters" if entry.get("status") == "success" else _safe_str(entry.get("error_type"))
             node = ensure_invocation(invocation_id, entry.get("agent_name") or entry.get("agent"), entry)
             if node is not None:
                 node["status"] = "running"
@@ -247,7 +228,7 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
                 if finished_at:
                     node["started_at"] = (finished_at - timedelta(milliseconds=_number(node["duration_ms"]))).isoformat()
                     node["started_at_source"] = "inferred_from_agent_duration"
-            node["result"] = f"{entry.get('result_chars', 0)} תווים" if node["status"] == "success" else _safe_str(entry.get("error_type"))
+            node["result"] = f"{entry.get('result_chars', 0)} characters" if node["status"] == "success" else _safe_str(entry.get("error_type"))
             invocation_completions[invocation_id] = entry
         elif event == "model_invocation_finished" and invocation_id:
             node = ensure_invocation(invocation_id, entry.get("agent_name") or entry.get("agent"), entry)
@@ -262,18 +243,15 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
         elif event == "model_invocation_finished" and not invocation_id:
             # Preserve the completion evidence, but do not label it as an Agent invocation.
             node = {
-                "id": f"legacy_invocation_{index}", "type": "invocation",
-                "label": entry.get("agent") or "agent", "sublabel": entry.get("stage") or "model",
-                "icon": "🤖", "status": "success" if entry.get("status") == "success" else "failed",
                 "id": f"legacy_model_completion_{index}", "type": "model",
-                "label": f"השלמת מודל · {entry.get('agent') or 'Agent לא ידוע'} · מזהה הפעלה חסר",
-                "sublabel": entry.get("stage") or "שלב לא ידוע",
+                "label": f"Model completion · {entry.get('agent') or 'unknown Agent'} · missing invocation id",
+                "sublabel": entry.get("stage") or "unknown stage",
                 "icon": "🤖", "status": _trace_status(entry.get("status"), event=event),
                 "finished_at": entry.get("timestamp"), "duration_ms": entry.get("latency_ms"),
                 "llm_calls": [], "call_count": 0, "legacy": True, "model_completion_event": True,
                 "agent_name": entry.get("agent"), "attribution_status": "unattributed",
-                "task": "אירוע סיום מודל נשמר ללא agent_invocation_id; הוא אינו הוכחה להפעלת Agent מזוהה.",
-                "result": "פלט גולמי אינו מוצג.",
+                "task": "A model completion event was stored without agent_invocation_id; it is not proof of an identified Agent invocation.",
+                "result": "Raw output is not shown.",
             }
             finish_dt = _parse_timestamp(entry.get("timestamp"))
             if finish_dt and isinstance(entry.get("latency_ms"), (int, float)):
@@ -377,8 +355,8 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
             "finish_reason": entry.get("finish_reason"), "input_tokens": entry.get("input_tokens"),
             "output_tokens": entry.get("output_tokens"), "cache_tokens": entry.get("cache_tokens"),
             "call_type": entry.get("call_type"),
-            "result_summary": ("בקשת הספק נכשלה" if entry.get("status") == "error" else
-                ("הספק החזיר בקשת כלי" if "tool_call" in str(entry.get("call_type") or "").lower() else "הספק החזיר תשובה")),
+            "result_summary": ("Provider request failed" if entry.get("status") == "error" else
+                ("Provider requested a tool" if "tool_call" in str(entry.get("call_type") or "").lower() else "Provider returned a response")),
         }
         model_id = f"provider_request_{_safe_str(entry.get('provider_request_id') or entry.get('call_id') or index, 64)}"
         purpose_label = call["purpose"] if call["purpose"] != "unattributed" else (call["stage"] or "unattributed")
@@ -388,7 +366,7 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
             model_label = "LLM: " + purpose_label
             attribution_status = "attributed"
         elif known_agent:
-            model_label = f"LLM: {call['agent_name']} · מזהה הפעלה חסר"
+            model_label = f"LLM: {call['agent_name']} · missing invocation id"
             attribution_status = "partial"
         else:
             model_label = "LLM: unattributed"
@@ -396,12 +374,12 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
         model_node = {
             "id": model_id, "type": "model",
             "label": model_label,
-            "sublabel": call["stage"] or "שלב לא ידוע", "icon": "🧠",
+            "sublabel": call["stage"] or "unknown stage", "icon": "🧠",
             "status": provider_status,
             "duration_ms": call["latency_ms"], "llm_calls": [call], "call_count": 1,
-            "task": ("מטרה: " + purpose_label) if node is not None else (
-                f"Agent ידוע: {call['agent_name']}; לא נשמר agent_invocation_id."
-                if known_agent else "לא נשמר קישור ודאי להפעלת הסוכן."
+            "task": ("Purpose: " + purpose_label) if node is not None else (
+                f"Known Agent: {call['agent_name']}; agent_invocation_id was not stored."
+                if known_agent else "No reliable link to an agent invocation was stored."
             ),
             "result": call["result_summary"], "agent_invocation_id": call["agent_invocation_id"],
             "agent_name": call["agent_name"], "protocol_name": call["protocol_name"],
@@ -419,14 +397,11 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
                 "status": "failed" if provider_status == "failed" else ("active" if provider_status == "running" else "completed"),
             })
         else:
-            nodes.append({
-                "id": f"unattributed_model_{len(nodes)}", "type": "model", "label": "Unattributed model call",
-                "icon": "🧠", "status": "failed" if entry.get("status") == "error" else "success", "llm_calls": [call],
             # Keep provider work visible when only partial attribution survived.
             # This edge explicitly describes missing linkage; it does not invent an Agent invocation.
             edges.append({
                 "id": f"provider_unlinked_{index}_{model_id}", "source": "orchestrator", "target": model_id,
-                "type": "unattributed", "label": "קריאת ספק · שיוך חלקי" if known_agent else "קריאת ספק · ללא שיוך",
+                "type": "unattributed", "label": "Provider call · partial attribution" if known_agent else "Provider call · unattributed",
                 "status": "failed" if provider_status == "failed" else ("active" if provider_status == "running" else "completed"),
             })
 
@@ -444,10 +419,7 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
         if duration_ms is None:
             duration_ms = _number(entry.get("duration_seconds")) * 1000
         tool_node = {
-            "id": f"tool_call_{index}", "type": "tool", "label": entry.get("tool") or "tool",
-            "icon": "🔧", "status": "failed" if entry.get("status") in {"error", "blocked"} else "success",
-            "duration_ms": round(float(entry.get("duration_seconds") or 0) * 1000, 1),
-            "id": f"tool_call_{index}", "type": "tool", "label": entry.get("tool_name") or entry.get("tool") or "כלי",
+            "id": f"tool_call_{index}", "type": "tool", "label": entry.get("tool_name") or entry.get("tool") or "tool",
             "icon": "🔧", "status": tool_status,
             "duration_ms": round(_number(duration_ms), 1),
             "summary": _safe_str(entry.get("result_summary"), 120),
@@ -456,9 +428,9 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
             "side_effecting": bool(entry.get("side_effecting")),
             "verification": explicit_verification,
             "verification_note": _safe_str(entry.get("verification_note"), 120) or (
-                "הכלי נחסם" if explicit_verification == "blocked" else
-                ("אימות מפורש קיים" if explicit_verification == "verified" else
-                 ("קריאה בלבד" if explicit_verification == "read_only" else "אימות שמירה אינו זמין"))
+                "Tool was blocked" if explicit_verification == "blocked" else
+                ("Explicit verification present" if explicit_verification == "verified" else
+                 ("Read only" if explicit_verification == "read_only" else "Persistence verification unavailable"))
             ),
             "started_at": entry.get("started_at"), "finished_at": entry.get("finished_at"),
         }
@@ -477,20 +449,15 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
             ]
             source_id = prior_decisions[-1]["id"] if prior_decisions else invocation["id"]
             edges.append({
-                "id": f"tool_edge_{index}", "source": invocation["id"], "target": tool_node["id"],
-                "type": "tool_call", "label": "Tool call", "status": "completed",
-            })
-        else:
-            tool_node["details"] = "No agent invocation was recorded; no inferred link is shown."
                 "id": f"tool_edge_{index}", "source": source_id, "target": tool_node["id"],
-                "type": "tool_call", "label": "הפעלת כלי",
+                "type": "tool_call", "label": "Tool call",
                 "status": "failed" if tool_status == "failed" else ("active" if tool_status == "running" else ("completed" if tool_status == "success" else "pending")),
             })
         else:
             tool_node["details"] = (
-                f"נרשם caller={tool_node['caller_agent_name']}, אך לא נשמר agent_invocation_id; "
-                "לא מוצגת הפעלת Agent משוערת."
-                if tool_node["caller_agent_name"] else "שיוך להפעלת סוכן לא נרשם; לא מוצג קשר משוער."
+                f"Recorded caller={tool_node['caller_agent_name']}, but agent_invocation_id was not stored; "
+                "No inferred Agent invocation is shown."
+                if tool_node["caller_agent_name"] else "No agent-invocation attribution was recorded; no inferred link is shown."
             )
 
     for index, entry in enumerate(provider_events):
@@ -511,7 +478,7 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
             tool = candidates[-1]
             edges.append({
                 "id": f"tool_result_{index}_{provider_node_id}", "source": tool["id"], "target": provider_node_id,
-                "type": "tool_result", "label": "תוצאת כלי למודל", "status": "completed",
+                "type": "tool_result", "label": "Tool result to model", "status": "completed",
             })
 
     for invocation_id, completion in invocation_completions.items():
@@ -526,10 +493,10 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
             else _trace_status(completion.get("status"), event=completion.get("event"))
         )
         result_node = {
-            "id": result_id, "type": "result", "label": f"תוצאת {invocation.get('label', 'Agent')}",
+            "id": result_id, "type": "result", "label": f"Result of {invocation.get('label', 'Agent')}",
             "sublabel": "Agent invocation result", "icon": "📥",
             "status": completion_status,
-            "details": "הפעלת הסוכן הסתיימה; תוכן פלט גולמי אינו מוצג.",
+            "details": "The agent invocation finished; raw output is not shown.",
         }
         nodes.append(result_node)
         children = []
@@ -543,14 +510,14 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
         source_id = max(children)[1] if children else invocation["id"]
         edges.append({
             "id": f"result_edge_{invocation_id}", "source": source_id, "target": result_id,
-            "type": "agent_result", "label": "תוצאת הפעלה",
+            "type": "agent_result", "label": "Invocation result",
             "status": "completed" if completion_status == "success" else ("failed" if completion_status == "failed" else "pending"),
         })
         parent_id = invocation.get("parent_invocation_id")
         parent_target = f"invocation_{parent_id}" if parent_id in by_id else "orchestrator"
         edges.append({
             "id": f"result_return_{invocation_id}", "source": result_id, "target": parent_target,
-            "type": "result", "label": "תוצאה הוחזרה",
+            "type": "result", "label": "Result returned",
             "status": "completed" if completion_status == "success" else ("failed" if completion_status == "failed" else "pending"),
         })
 
@@ -561,10 +528,10 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
             target_agent = entry.get("agent_name") or entry.get("agent") or entry.get("preferred_agent_hint")
             node = {
                 "id": route_id, "type": "routing", "routing_kind": "group_target",
-                "label": "רמז ניתוב קבוצה", "sublabel": _safe_str(target_agent or "לא צוין", 70),
+                "label": "Group routing hint", "sublabel": _safe_str(target_agent or "unspecified", 70),
                 "icon": "🧭", "status": "success" if target_agent else "unknown",
                 "target_agent": _safe_str(target_agent, 100),
-                "details": "נרשם יעד/רמז לקבוצה; אין בכך הוכחה להפעלת הסוכן או לחסימת סוכנים אחרים.",
+                "details": "A group target/hint was recorded; that is not proof an agent ran or that others were blocked.",
                 "timestamp": entry.get("timestamp"),
             }
         elif event == "agent_selection":
@@ -578,22 +545,22 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
             route_status = _trace_status(recorded_status, event=event)
             if route_status == "unknown" and selected:
                 route_status = "success"
-            routing_mode = _safe_str(entry.get("routing_mode") or "לא נשמר", 60)
-            source_stage = _safe_str(entry.get("source_stage") or entry.get("stage") or "לא נשמר", 60)
+            routing_mode = _safe_str(entry.get("routing_mode") or "not stored", 60)
+            source_stage = _safe_str(entry.get("source_stage") or entry.get("stage") or "not stored", 60)
             node = {
                 "id": route_id, "type": "routing", "routing_kind": "agent_selection",
-                "label": "בחירת יעדי Agent", "sublabel": ", ".join(selected) or "לא נשמרו יעדים",
+                "label": "Agent target selection", "sublabel": ", ".join(selected) or "no targets stored",
                 "icon": "🧭", "status": route_status,
                 "selected_agents": selected, "routing_mode": routing_mode,
                 "source_stage": source_stage, "selection_count": len(selected),
                 "timestamp": entry.get("timestamp"),
                 "details": (
-                    f"נרשמו יעדי routing: {', '.join(selected) if selected else 'ללא יעד מפורש'}. "
-                    "בחירה לוגית אינה הוכחה להפעלת Agent; ההפעלות מוצגות בנפרד רק אם נצפו."
+                    f"Recorded routing targets: {', '.join(selected) if selected else 'no explicit target'}. "
+                    "A logical selection is not proof an Agent ran; invocations appear separately only if observed."
                 ),
             }
         else:  # protocol_selection
-            protocol_name = _safe_str(entry.get("protocol_name") or "לא נשמר", 100)
+            protocol_name = _safe_str(entry.get("protocol_name") or "not stored", 100)
             protocol_owner = _safe_str(entry.get("protocol_owner") or entry.get("owner") or "", 80)
             candidates = entry.get("candidate_names") or []
             if isinstance(candidates, str):
@@ -603,14 +570,14 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
             route_status = "waiting" if raw_status == "ambiguous" else _trace_status(raw_status, event=event)
             node = {
                 "id": route_id, "type": "routing", "routing_kind": "protocol_selection",
-                "label": "בחירת פרוטוקול", "sublabel": protocol_name,
+                "label": "Protocol selection", "sublabel": protocol_name,
                 "icon": "🧭", "status": route_status, "protocol_name": protocol_name,
                 "protocol_owner": protocol_owner,
                 "candidate_names": candidates, "timestamp": entry.get("timestamp"),
                 "details": (
-                    f"פרוטוקול שנרשם: {protocol_name}. "
-                    + (f"בעל הפרוטוקול לפי האירוע: {protocol_owner}. " if protocol_owner else "")
-                    + "בחירת פרוטוקול או בעל תחום אינה הוכחה להפעלת Agent."
+                    f"Recorded protocol: {protocol_name}. "
+                    + (f"Protocol owner from the event: {protocol_owner}. " if protocol_owner else "")
+                    + "Protocol or domain-owner selection is not proof an Agent ran."
                 ),
             }
         nodes.append(node)
@@ -621,7 +588,7 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
 
     for step_index, step in enumerate(step_events):
         start, finish = step["start"], step["finish"]
-        agent_name = start.get("agent") or "סוכן לא ידוע"
+        agent_name = start.get("agent") or "unknown agent"
         step_id = start.get("step_id", start.get("step_index", step_index))
         invocation_id = (finish or {}).get("invocation_id")
         linked_invocation = by_id.get(invocation_id) if isinstance(invocation_id, str) else None
@@ -634,28 +601,28 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
         step_node_id = f"protocol_step_{step_index}_{_safe_str(step_id, 40)}"
         step_node = {
             "id": step_node_id, "type": "routing", "routing_kind": "protocol_step",
-            "label": f"צעד פרוטוקול: {agent_name}", "sublabel": f"צעד {step_id}", "icon": "🧭",
+            "label": f"Protocol step: {agent_name}", "sublabel": f"Step {step_id}", "icon": "🧭",
             "status": status, "target_agent": _safe_str(agent_name, 100),
             "execution_kind": _safe_str(execution_kind, 40),
             "invocation_id": invocation_id if linked_invocation else None,
             "task": _safe_str(start.get("task_summary"), 120),
             "details": (
-                f"צעד פרוטוקול; יעד לוגי: {agent_name}. "
-                + (f"נקשר להפעלת Agent לפי invocation_id={invocation_id}." if linked_invocation else
-                   "אין מזהה invocation תואם ב־Trace; לא מוסק שהסוכן הופעל.")
+                f"Protocol step; logical target: {agent_name}. "
+                + (f"Linked to an Agent invocation via invocation_id={invocation_id}." if linked_invocation else
+                   "No matching invocation id in the Trace; the agent is not assumed to have run.")
             ),
             "started_at": start.get("timestamp"), "finished_at": (finish or {}).get("timestamp"),
         }
         nodes.append(step_node)
         edges.append({
             "id": f"route_step_{step_index}", "source": "orchestrator", "target": step_node_id,
-            "type": "routing", "label": "צעד פרוטוקול", "status": status,
+            "type": "routing", "label": "Protocol step", "status": status,
         })
         if linked_invocation is not None:
             edges.append({
                 "id": f"step_invocation_{step_index}_{linked_invocation['id']}",
                 "source": step_node_id, "target": linked_invocation["id"],
-                "type": "delegation", "label": "Invocation לפי מזהה מדויק", "status": status,
+                "type": "delegation", "label": "Invocation by exact id", "status": status,
             })
 
     for persistence_index, entry in enumerate(persistence_events):
@@ -668,41 +635,41 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
         )
         node_id = f"persistence_{persistence_index}_{event}"
         details = (
-            "אימות שמירה מפורש נצפה ב־Trace."
+            "Explicit persistence verification was observed in the Trace."
             if verification == "verified" else
-            ("אימות שמירה נכשל לפי אירוע מפורש." if verification == "failed" else
-             "נרשם אירוע שמירה, אך אין ראיית אימות עצמאית ב־Trace.")
+            ("Persistence verification failed according to an explicit event." if verification == "failed" else
+             "A save event was recorded, but the Trace has no independent verification evidence.")
         )
         nodes.append({
-            "id": node_id, "type": "persistence", "label": "שמירה ואימות",
-            "sublabel": "אימות מפורש" if is_verification_event else "אירוע שמירה",
+            "id": node_id, "type": "persistence", "label": "Save and verify",
+            "sublabel": "Explicit verification" if is_verification_event else "Save event",
             "icon": "🗄️", "status": "success" if verification == "verified" else ("failed" if verification == "failed" else "unknown"),
             "verification": verification, "details": details, "timestamp": entry.get("timestamp"),
             "record_type": _safe_str(entry.get("record_type") or entry.get("table") or "", 60),
         })
         edges.append({
             "id": f"persistence_edge_{persistence_index}", "source": "orchestrator", "target": node_id,
-            "type": "persistence", "label": "אירוע שמירה/אימות נצפה",
+            "type": "persistence", "label": "Save/verification event observed",
             "status": "completed" if verification == "verified" else ("failed" if verification == "failed" else "pending"),
         })
 
     for composition_index, entry in enumerate(composition_events):
         event = entry.get("event")
         node_id = f"composition_{composition_index}_{event}"
-        composer = entry.get("agent_name") or entry.get("agent") or "מרכיב לא צוין"
+        composer = entry.get("agent_name") or entry.get("agent") or "composer unspecified"
         node_status = _trace_status(entry.get("status"), event=event)
         if node_status == "unknown":
             node_status = "success"
         nodes.append({
-            "id": node_id, "type": "composition", "label": "הרכבת תשובה",
+            "id": node_id, "type": "composition", "label": "Response composition",
             "sublabel": _safe_str(composer, 70), "icon": "📝", "status": node_status,
-            "details": "נרשם אירוע הרכבת תשובה; תוכן גולמי אינו מוצג.",
+            "details": "A composition event was recorded; raw content is hidden.",
             "timestamp": entry.get("timestamp"),
             "invocation_id": entry.get("invocation_id"),
         })
         edges.append({
             "id": f"composition_edge_{composition_index}", "source": "orchestrator", "target": node_id,
-            "type": "composition", "label": "הרכבת תשובה נצפתה", "status": "completed" if node_status == "success" else node_status,
+            "type": "composition", "label": "Response composition observed", "status": "completed" if node_status == "success" else node_status,
         })
 
     if outcome:
@@ -714,25 +681,20 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
             entry.get("event") in {"response_delivered", "telegram_message_sent", "simulator_response_received"}
             for entry in entries
         )
-        outcome_details = "תוצאה נשמרה; אין בכך הוכחה למסירה בדפדפן."
+        outcome_details = "Outcome saved; that is not proof of browser delivery."
         if api_completion and api_completion.get("status_code") == 200 and not delivery_confirmed:
-            outcome_details = "ה־API הסתיים בהצלחה; אישור הגעת התשובה לדפדפן/לצ'אט אינו זמין ב־Trace."
+            outcome_details = "The API finished successfully; confirmation that the reply reached the browser/chat is not in the Trace."
         outcome_node_status = (
             "success" if outcome in {"succeeded", "closed_on_precedent", "completed"}
             else ("failed" if outcome in {"failed", "failure", "error"} else "unknown")
         )
         nodes.append({
             "id": "persisted_outcome", "type": "outcome", "label": f"Job outcome: {outcome}",
-            "icon": "📌", "status": "success" if outcome in {"succeeded", "closed_on_precedent"} else "failed",
-            "details": "Outcome was persisted; that is not proof of browser delivery.",
-        })
-        edges.append({"id": "outcome_edge", "source": "orchestrator", "target": "persisted_outcome", "type": "outcome", "label": "Outcome saved", "status": "completed"})
-            "id": "persisted_outcome", "type": "outcome", "label": f"תוצאת Job: {outcome}",
             "icon": "📌", "status": outcome_node_status,
             "details": outcome_details,
             "delivery_status": "confirmed" if delivery_confirmed else "unavailable",
         })
-        edges.append({"id": "outcome_edge", "source": "orchestrator", "target": "persisted_outcome", "type": "outcome", "label": "תוצאת Job", "status": "completed" if outcome_node_status == "success" else ("failed" if outcome_node_status == "failed" else "pending")})
+        edges.append({"id": "outcome_edge", "source": "orchestrator", "target": "persisted_outcome", "type": "outcome", "label": "Job outcome", "status": "completed" if outcome_node_status == "success" else ("failed" if outcome_node_status == "failed" else "pending")})
 
     specialist_nodes = [
         node for node in nodes
@@ -764,12 +726,9 @@ def _execution_graph(entries: list[dict[str, Any]], outcome: str | None) -> tupl
     explanation = ""
     if not specialist_nodes:
         explanation = (
-            "Closed on precedent before specialists and tools ran."
-            if outcome == "closed_on_precedent" else
-            "No specialist invocation was recorded on this trace; do not infer that one ran."
-            "נסגר על בסיס תקדים; ב־Trace הזה לא נצפו מומחים או כלים."
+            "Closed on precedent; this Trace observed no specialists or tools."
             if outcome == "closed_on_precedent" and not tool_events else
-            "לא נרשמה הפעלת מומחה ב־Trace הזה; אין להסיק שהתרחשה אחת."
+            "No specialist invocation was recorded in this Trace; do not infer that one occurred."
         )
     graph_nodes_by_id = {node["id"]: node for node in nodes}
     actual_messages = [
@@ -839,7 +798,7 @@ def aggregate_trace_data(
     stages: dict[str, dict[str, Any]] = {
         "ingestion": {
             "id": "ingestion",
-            "name": "Message ingestion",
+            "name": "Message intake",
             "status": "pending",
             "agent": "API / Ingestion",
             "details": "",
@@ -848,7 +807,7 @@ def aggregate_trace_data(
         },
         "routing": {
             "id": "routing",
-            "name": "Sector and group routing",
+            "name": "Area and group routing",
             "status": "pending",
             "agent": "Router",
             "details": "",
@@ -894,7 +853,7 @@ def aggregate_trace_data(
         },
         "persistence_verification": {
             "id": "persistence_verification",
-            "name": "Persistence and operational verification",
+            "name": "Operational save and verify",
             "status": "pending",
             "agent": "Persistence Store",
             "details": "",
@@ -903,7 +862,7 @@ def aggregate_trace_data(
         },
         "synthesis": {
             "id": "synthesis",
-            "name": "Result collection and reply",
+            "name": "Collect results and compose a reply",
             "status": "pending",
             "agent": "Main Agent",
             "details": "",
@@ -949,7 +908,7 @@ def aggregate_trace_data(
                 "kind": "input",
                 "badge": "Report intake",
                 "title": "User message received",
-                "summary": txt[:110] if txt else "Simulator opening message",
+                "summary": txt[:110] if txt else "Simulation opening message",
                 "body": txt,
                 "status": "success",
             })
@@ -958,11 +917,8 @@ def aggregate_trace_data(
         if event == "group_scope_applied":
             stages["routing"]["status"] = "success"
             stages["routing"]["started_at"] = stages["routing"]["started_at"] or ts_raw
-            agent = entry.get("agent", "")
-            chat = entry.get("chat_id", "")
-            stages["routing"]["details"] = f"Bound to agent {agent} in chat {chat}"
-            agent = entry.get("agent_name") or entry.get("agent") or entry.get("preferred_agent_hint") or "לא צוין"
-            stages["routing"]["details"] = f"נרשם רמז ניתוב לקבוצה: {agent}; אין בכך הוכחת הפעלת Agent."
+            agent = entry.get("agent_name") or entry.get("agent") or entry.get("preferred_agent_hint") or "unspecified"
+            stages["routing"]["details"] = f"A group routing hint was recorded: {agent}; that is not proof an Agent ran."
         elif event == "group_binding_written":
             stages["routing"]["status"] = "success"
 
@@ -971,9 +927,7 @@ def aggregate_trace_data(
             stages["intent_extraction"]["status"] = "success"
             stages["intent_extraction"]["started_at"] = stages["intent_extraction"]["started_at"] or ts_raw
             intent = entry.get("intent", "?")
-            reason = _safe_str(entry.get("reason", ""))
-            stages["intent_extraction"]["details"] = f"Intent: {intent} ({reason})"
-            stages["intent_extraction"]["details"] = f"כוונה שסווגה: {intent}"
+            stages["intent_extraction"]["details"] = f"Classified intent: {intent}"
             messages.append({
                 "id": f"msg_{len(messages) + 1}",
                 "time": ts_raw,
@@ -984,27 +938,23 @@ def aggregate_trace_data(
                 "to_label": "Main Agent (intent)",
                 "to_icon": "🧠",
                 "kind": "intent",
-                "badge": "Intent",
+                "badge": "Intent understanding",
                 "title": f"Intent classification: {intent}",
-                "summary": f"Intent: {intent} — {reason[:90]}",
-                "body": f"Intent: {intent}\nReason: {reason}",
-                "badge": "הבנת כוונה",
-                "title": f"סיווג כוונה: {intent}",
-                "summary": f"כוונה שסווגה: {intent}",
-                "body": f"כוונה שסווגה: {intent}; תוכן reasoning אינו מוצג.",
+                "summary": f"Classified intent: {intent}",
+                "body": f"Classified intent: {intent}; reasoning content is not shown.",
                 "status": "success",
             })
         elif event == "extraction_result":
             stages["intent_extraction"]["status"] = "success"
             cls_name = entry.get("classification") or "unclassified"
-            area = entry.get("area") or "no sector"
+            area = entry.get("area") or "no area"
             missing = entry.get("missing_fields") or []
-            suffix = f" | Missing: {', '.join(missing)}" if missing else ""
-            stages["intent_extraction"]["details"] += f" | Sector: {area}, classification: {cls_name}{suffix}"
+            suffix = f" | missing: {', '.join(missing)}" if missing else ""
+            stages["intent_extraction"]["details"] += f" | area: {area}, classification: {cls_name}{suffix}"
         elif event == "risk_assessed":
             risk = entry.get("risk_level", "?")
             score = entry.get("risk_score", "")
-            stages["intent_extraction"]["details"] += f" | Risk: {risk} (score: {score})"
+            stages["intent_extraction"]["details"] += f" | risk: {risk} (score: {score})"
 
         # 4. Agent Selection & Specialist Execution
         if event == "agent_selection":
@@ -1018,12 +968,9 @@ def aggregate_trace_data(
             if stages["agent_selection"]["status"] == "unknown" and selected:
                 stages["agent_selection"]["status"] = "success"
             stages["agent_selection"]["started_at"] = stages["agent_selection"]["started_at"] or ts_raw
-            chosen = entry.get("chosen_agents") or []
-            reason = _safe_str(entry.get("reason", ""))
-            stages["agent_selection"]["details"] = f"Selected agents: {', '.join(chosen) if chosen else 'none'} ({reason})"
             stages["agent_selection"]["details"] = (
-                f"יעדי routing שנרשמו: {', '.join(_safe_str(a, 80) for a in selected) if selected else 'ללא'}; "
-                "בחירה אינה הוכחת הפעלה."
+                f"Recorded routing targets: {', '.join(_safe_str(a, 80) for a in selected) if selected else 'none'}; "
+                "Selection is not proof of invocation."
             )
         elif event == "picture_planned":
             stages["agent_selection"]["status"] = "success"
@@ -1034,7 +981,7 @@ def aggregate_trace_data(
             ag = entry.get("agent", "")
             if ag and ag != "main_agent":
                 active_specialists.add(ag)
-                task_text = _safe_str(entry.get("task_summary") or "תקציר משימה בטוח לא נשמר")
+                task_text = _safe_str(entry.get("task_summary") or "Safe task summary was not stored")
                 step_idx = entry.get("step_index", len(agent_invocations.get(ag, [])) + 1)
                 agent_invocations.setdefault(ag, []).append({
                     "run_index": len(agent_invocations[ag]) + 1,
@@ -1058,7 +1005,7 @@ def aggregate_trace_data(
                     "kind": "delegation",
                     "badge": "Task order",
                     "title": f"Task order (step {step_idx}) to {_agent_display_name(ag)}",
-                    "summary": f"Specialist task: {task_text[:110]}",
+                    "summary": f"Task for specialist: {task_text[:110]}",
                     "body": task_text,
                     "status": "running",
                 })
@@ -1068,15 +1015,15 @@ def aggregate_trace_data(
                 "step_id": entry.get("step_id"), "started_at": ts_raw,
                 "status": "running", "invocation_id": None,
             })
-            ag = entry.get("agent") or "סוכן לא ידוע"
+            ag = entry.get("agent") or "unknown agent"
             messages.append({
                 "id": f"msg_{len(messages) + 1}", "time": ts_raw,
-                "from_id": "main_agent", "from_label": "מנוע הפרוטוקול", "from_icon": "🧭",
-                "to_id": "protocol_flow", "to_label": f"צעד פרוטוקול עבור {ag}", "to_icon": _agent_icon(ag),
-                "kind": "protocol_step", "badge": "בחירת צעד",
-                "title": f"הפרוטוקול בחר צעד עבור {ag}",
-                "summary": "בחירת צעד אינה הוכחה להפעלת Agent.",
-                "body": "צומת Agent יופיע רק אם Trace מכיל invocation מזוהה.", "status": "running",
+                "from_id": "main_agent", "from_label": "Protocol engine", "from_icon": "🧭",
+                "to_id": "protocol_flow", "to_label": f"Protocol step for {ag}", "to_icon": _agent_icon(ag),
+                "kind": "protocol_step", "badge": "Step selection",
+                "title": f"The protocol selected a step for {ag}",
+                "summary": "Step selection is not proof an Agent ran.",
+                "body": "An Agent node appears only if the Trace contains an identified invocation.", "status": "running",
             })
         elif event in {"specialist_finished", "specialist_failed", "specialist_timeout"}:
             ag = entry.get("agent", "")
@@ -1085,7 +1032,7 @@ def aggregate_trace_data(
                 runs = agent_invocations.get(ag, [])
                 is_err = "failed" in event or "timeout" in event or not entry.get("succeeded", True)
                 st = "failed" if is_err else "success"
-                res_text = _safe_str(entry.get("result_summary") or "תוצאת המומחה התקבלה; פלט גולמי אינו מוצג")
+                res_text = _safe_str(entry.get("result_summary") or "The specialist result was received; raw output is not shown")
                 dur_ms = entry.get("duration_ms")
                 if runs:
                     runs[-1]["status"] = st
@@ -1113,11 +1060,11 @@ def aggregate_trace_data(
                     "badge": "Specialist result" if st == "success" else "Specialist error",
                     "title": f"Result returned from {_agent_display_name(ag)}",
                     "summary": f"Result: {res_text[:110]}" if res_text else ("The action failed" if st == "failed" else "The action completed"),
-                    "body": res_text or ("Specialist step failed" if st == "failed" else "Completed with no content"),
+                    "body": res_text or ("Error while executing the specialist step" if st == "failed" else "Completed with no content"),
                     "status": st,
                 })
         elif event in {"step_result", "step_failed"}:
-            ag = entry.get("agent") or "סוכן לא ידוע"
+            ag = entry.get("agent") or "unknown agent"
             step_idx = entry.get("step_index")
             for step in reversed(protocol_steps):
                 if step.get("agent") == entry.get("agent") and step.get("step_index") == step_idx and step.get("status") == "running":
@@ -1127,12 +1074,12 @@ def aggregate_trace_data(
                     break
             messages.append({
                 "id": f"msg_{len(messages) + 1}", "time": ts_raw,
-                "from_id": "protocol_flow", "from_label": "מנוע הפרוטוקול", "from_icon": "🧭",
-                "to_id": "main_agent", "to_label": "סוכן ראשי", "to_icon": "🤖",
-                "kind": "protocol_step_result", "badge": "תוצאת צעד פרוטוקול",
-                "title": f"צעד הפרוטוקול עבור {ag} הסתיים",
-                "summary": ("קיים מזהה invocation" if entry.get("invocation_id") else "לא נצפתה הפעלת Agent מזוהה"),
-                "body": "תוצאת השלב נשמרה ברמת הפרוטוקול; אין להסיק ממנה שהסוכן עצמו הופעל.",
+                "from_id": "protocol_flow", "from_label": "Protocol engine", "from_icon": "🧭",
+                "to_id": "main_agent", "to_label": "Main Agent", "to_icon": "🤖",
+                "kind": "protocol_step_result", "badge": "Protocol step result",
+                "title": f"The protocol step for {ag} finished",
+                "summary": ("invocation id present" if entry.get("invocation_id") else "No identified Agent invocation was observed"),
+                "body": "The step result was stored at protocol level; do not infer that the agent itself ran.",
                 "status": "success" if entry.get("succeeded", event == "step_result") else "failed",
             })
 
@@ -1143,16 +1090,14 @@ def aggregate_trace_data(
             stages["protocol_selection"]["started_at"] = stages["protocol_selection"]["started_at"] or ts_raw
             if status == "selected":
                 stages["protocol_selection"]["status"] = "success"
-                stages["protocol_selection"]["details"] = f"Selected: {proto} ({reason})"
-                stages["protocol_selection"]["details"] = f"נבחר פרוטוקול: {proto}"
+                stages["protocol_selection"]["details"] = f"Selected protocol: {proto}"
             elif status == "ambiguous":
                 stages["protocol_selection"]["status"] = "running"
                 cand = entry.get("candidate_names") or []
-                stages["protocol_selection"]["details"] = f"Choosing between: {', '.join(cand)}"
+                stages["protocol_selection"]["details"] = f"Deciding between: {', '.join(cand)}"
             else:
                 stages["protocol_selection"]["status"] = "failed"
-                stages["protocol_selection"]["details"] = f"No protocol found: {reason}"
-                stages["protocol_selection"]["details"] = f"לא נבחר פרוטוקול ({status or 'סטטוס לא ידוע'})."
+                stages["protocol_selection"]["details"] = f"No protocol was selected ({status or 'unknown status'})."
 
         # 6. Tool Execution
         if event == "tool_call":
@@ -1172,19 +1117,13 @@ def aggregate_trace_data(
             # Read-only tools cannot mutate state -> "read_only"
             # Write tools must show verified ONLY if authoritative verification exists
             res_summary = _safe_str(entry.get("result_summary", ""))
-            verified = "read_only"
-            verification_note = "Read only (no state change)"
-            if side_effecting:
-                # Default for an unverified write is strictly "verification unavailable"
-                verified = "unverified"
-                verification_note = "Verification unavailable (no verification read ran)"
             verified = entry.get("verification_status") or entry.get("verification")
             allowed_verification = {"verified", "unverified", "failed", "verification_unavailable", "read_only", "blocked"}
             if verified not in allowed_verification:
                 verified = "unverified" if side_effecting else "read_only"
             verification_note = _safe_str(entry.get("verification_note"), 120) or (
-                "אימות מפורש נרשם באירוע הכלי" if verified == "verified" else
-                ("אימות לא זמין; הצלחת הכלי לבדה אינה אימות שמירה" if side_effecting else "קריאה בלבד (ללא שינוי מצב)")
+                "Explicit verification was recorded on the tool event" if verified == "verified" else
+                ("Verification unavailable; tool success alone is not persistence verification" if side_effecting else "Read only (no state change)")
             )
 
             item = {
@@ -1199,7 +1138,7 @@ def aggregate_trace_data(
                 "verification_note": verification_note,
             }
             tool_items.append(item)
-            stages["tool_execution"]["details"] = f"{len(tool_items)} tools invoked"
+            stages["tool_execution"]["details"] = f"Invoked {len(tool_items)} tools"
             messages.append({
                 "id": f"msg_{len(messages) + 1}",
                 "time": ts_raw,
@@ -1212,7 +1151,7 @@ def aggregate_trace_data(
                 "kind": "tool",
                 "badge": "Tool (write)" if side_effecting else "Tool (read)",
                 "title": f"Invoking tool {tool_name}",
-                "summary": f"Tool call {tool_name}: {res_summary[:90]}",
+                "summary": f"Call to tool {tool_name}: {res_summary[:90]}",
                 "body": res_summary,
                 "status": status,
                 "duration_ms": round(dur * 1000, 1),
@@ -1227,7 +1166,7 @@ def aggregate_trace_data(
                 "status": "blocked",
                 "duration_ms": 0,
                 "timestamp": ts_raw,
-                "summary": "The action was blocked by permissions",
+                "summary": "The action was blocked due to permissions",
                 "verification": "blocked",
                 "verification_note": "Action blocked",
             })
@@ -1243,7 +1182,7 @@ def aggregate_trace_data(
                 "kind": "tool",
                 "badge": "Tool blocked",
                 "title": f"Blocked tool {tool_name}",
-                "summary": f"Tool call {tool_name} was blocked by permissions",
+                "summary": f"Call to tool {tool_name} was blocked due to permissions",
                 "body": "The action was blocked",
                 "status": "failed",
             })
@@ -1254,8 +1193,7 @@ def aggregate_trace_data(
             kind = entry.get("hold_kind", "approval")
             if event == "hold_created":
                 stages["persistence_verification"]["status"] = "waiting"
-                stages["persistence_verification"]["details"] = f"Hold active: {kind} ({_safe_str(entry.get('reason', ''))})"
-                stages["persistence_verification"]["details"] = f"השהיה פעילה: {kind}; פרטי הנימוק אינם מוצגים ב־BTS."
+                stages["persistence_verification"]["details"] = f"Hold is active: {kind}; the rationale is not shown in BTS."
                 messages.append({
                     "id": f"msg_{len(messages) + 1}",
                     "time": ts_raw,
@@ -1268,12 +1206,8 @@ def aggregate_trace_data(
                     "kind": "hold",
                     "badge": "Hold for approval",
                     "title": f"Approval request ({kind})",
-                    "summary": f"Hold active: {_safe_str(entry.get('reason', ''))[:90]}",
-                    "body": _safe_str(entry.get('reason', '')),
-                    "badge": "השהיה לאישור",
-                    "title": f"בקשת אישור ({kind})",
-                    "summary": f"השהיה פעילה: {kind}",
-                    "body": "הבקשה ממתינה לאישור; פרטי הנימוק אינם מוצגים.",
+                    "summary": f"Hold is active: {kind}",
+                    "body": "The request is waiting for approval; the rationale is not shown.",
                     "status": "waiting",
                 })
             else:
@@ -1281,8 +1215,7 @@ def aggregate_trace_data(
                 stages["persistence_verification"]["details"] = f"Hold approved by {entry.get('resolved_by', 'commander')}"
         elif event == "event_data_saved" or event == "attendance_cycle_opened":
             stages["persistence_verification"]["status"] = "success"
-            stages["persistence_verification"]["details"] = "State record saved to the store"
-            stages["persistence_verification"]["details"] = "נרשם אירוע שמירה; אין ב־Trace הזה אימות עצמאי נפרד."
+            stages["persistence_verification"]["details"] = "A save event was recorded; this Trace has no separate independent verification."
             messages.append({
                 "id": f"msg_{len(messages) + 1}",
                 "time": ts_raw,
@@ -1295,12 +1228,8 @@ def aggregate_trace_data(
                 "kind": "persistence",
                 "badge": "Saved to store",
                 "title": "Operational state updated in the store",
-                "summary": "Event record saved to the database and verified",
-                "body": "Saving a state record to the database and verifying it",
-                "badge": "שמירה במסד",
-                "title": "עדכון מצב תפעולי במסד",
-                "summary": "נרשם אירוע שמירה במסד; אימות עצמאי אינו זמין",
-                "body": "ה־Trace כולל אירוע שמירה, אך אינו כולל ראיית אימות עצמאית.",
+                "summary": "A store save event was recorded; independent verification is unavailable",
+                "body": "The Trace includes a save event but no independent verification evidence.",
                 "status": "success",
             })
 
@@ -1313,7 +1242,7 @@ def aggregate_trace_data(
             if event == "step_result":
                 succeeded = entry.get("succeeded", False)
                 stages["synthesis"]["status"] = "running"
-                stages["synthesis"]["details"] = f"Step {idx} ({ag}) completed successfully" if succeeded else f"Step {idx} ({ag}) failed"
+                stages["synthesis"]["details"] = f"Stage {idx} ({ag}) completed successfully" if succeeded else f"Stage {idx} ({ag}) failed"
 
         if event in {"picture_composed", "report_composed"}:
             stages["synthesis"]["status"] = "running"
@@ -1340,20 +1269,10 @@ def aggregate_trace_data(
                 "kind": "outcome",
                 "badge": "Final reply",
                 "title": f"Summary reply to the user ({outcome})",
-                "summary": f"Outcome: {outcome} — {terminal_reason[:90] if terminal_reason else 'The request was handled in full'}",
+                "summary": f"Result: {outcome} — {terminal_reason[:90] if terminal_reason else 'The request was fully handled'}",
                 "body": terminal_reason or f"Status: {outcome}",
                 "status": "success" if outcome in {"succeeded", "closed_on_precedent"} else "failed",
             })
-
-            # If outcome is confirmed succeeded, verify side-effecting tools that completed
-            if outcome == "succeeded":
-                stages["persistence_verification"]["status"] = "success"
-                if not stages["persistence_verification"]["details"]:
-                    stages["persistence_verification"]["details"] = "Operational state record verified"
-                for t_item in tool_items:
-                    if t_item["side_effecting"] and t_item["status"] == "success":
-                        t_item["verification"] = "verified"
-                        t_item["verification_note"] = "Verified by an authoritative event-outcome record"
 
         if event == "api_request_finished":
             status_code = entry.get("status_code")
@@ -1362,8 +1281,7 @@ def aggregate_trace_data(
                 terminal_outcome = "succeeded"
                 if stages["synthesis"]["status"] == "pending":
                     stages["synthesis"]["status"] = "success"
-                    stages["synthesis"]["details"] = "The reply was completed and delivered"
-                    stages["synthesis"]["details"] = "ה־API הסתיים ב־HTTP 200; אישור הגעה לצ'אט/דפדפן אינו זמין ב־Trace."
+                    stages["synthesis"]["details"] = "The API finished with HTTP 200; confirmation of chat/browser delivery is not in the Trace."
             elif status_code and status_code >= 400 and not is_terminal:
                 is_terminal = True
                 terminal_outcome = "failed"
@@ -1422,7 +1340,7 @@ def aggregate_trace_data(
             "input": input_tokens,
             "output": output_tokens,
             "cache": cache_tokens,
-            "display": f"{total_tokens:,} (in: {input_tokens:,}, out: {output_tokens:,}, cache: {cache_tokens:,})",
+            "display": f"{total_tokens:,} (input: {input_tokens:,}, output: {output_tokens:,}, cache: {cache_tokens:,})",
         }
 
     # Format metrics
@@ -1547,7 +1465,7 @@ def aggregate_trace_data(
             "type": "delegation",
             "status": edge_status,
             "is_parallel": is_parallel,
-            "label": "Parallel" if is_parallel else "Task order",
+            "label": "Parallel ⚡" if is_parallel else "Task order",
             "message_count": len(spec_msgs),
             "last_message": last_spec_msg,
         })

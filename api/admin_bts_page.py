@@ -644,7 +644,6 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       width: 100%;
       height: 100%;
       box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6);
-      direction: rtl;
     }
     .bts-node-card:hover {
       transform: translateY(-2px);
@@ -859,8 +858,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
 
     <div class="bts-metric-card">
       <div class="bts-metric-title">
-        <span>{{ t('admin.simulator.bts.metric_tokens_cost') }}</span>
-        <span>טוקנים</span>
+        <span>{{ t('admin.simulator.bts.metric_tokens') }}</span>
         <span>📊</span>
       </div>
       <div id="m-tokens" class="bts-metric-val">—</div>
@@ -1016,13 +1014,13 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
 
       function formatDurationMs(value) {
         const number = Number(value);
-        if (!Number.isFinite(number)) return 'לא זמין';
+        if (!Number.isFinite(number)) return t('bts.na');
         const seconds = number / 1000;
         const precision = seconds < 1 ? 2 : (seconds < 10 ? 2 : 1);
         let text = seconds.toFixed(precision);
         while (text.includes('.') && text.endsWith('0')) text = text.slice(0, -1);
         if (text.endsWith('.')) text = text.slice(0, -1);
-        return text + ' שניות';
+        return t('bts.duration_seconds', { value: text });
       }
 
       // Transform application
@@ -1166,19 +1164,22 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
 
           if (data.execution_status === 'awaiting_approval') {
             beacon.className = 'bts-live-beacon is-idle';
-            beaconText.textContent = 'ממתין לאישור';
+            beaconText.textContent = t('bts.awaiting_approval');
           } else if (data.execution_status === 'partial') {
             beacon.className = 'bts-live-beacon is-idle';
-            beaconText.textContent = 'הביצוע הסתיים חלקית';
+            beaconText.textContent = t('bts.partial_execution');
           } else if (data.execution_status === 'unknown' || data.diagnostic_state === 'job_stopped_without_outcome') {
             beacon.className = 'bts-live-beacon is-idle';
             beaconText.textContent = t('job_stopped');
           } else if (data.terminal) {
             beacon.className = 'bts-live-beacon is-idle';
-            beaconText.textContent = data.outcome === 'succeeded' ? t('bts.status_completed_ok') : t('bts.job_ended', { outcome: (data.outcome || t('bts.outcome_fallback')) });
-            beaconText.textContent = data.execution_status === 'succeeded'
-              ? (data.delivery_status === 'confirmed' ? 'הושלם ונמסר' : 'ה־API הושלם · אישור מסירה לא זמין')
-              : 'הסתיים (' + (data.outcome || 'סיום') + ')';
+            if (data.execution_status === 'succeeded') {
+              beaconText.textContent = data.delivery_status === 'confirmed'
+                ? t('bts.completed_delivered')
+                : t('bts.completed_delivery_unknown');
+            } else {
+              beaconText.textContent = t('bts.job_ended', { outcome: (data.outcome || t('bts.outcome_fallback')) });
+            }
           } else {
             beacon.className = 'bts-live-beacon';
             beaconText.textContent = t('bts.live_broadcast');
@@ -1186,7 +1187,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
         } catch (err) {
           console.warn('Trace fetch error:', err);
           beacon.className = 'bts-live-beacon is-idle';
-          beaconText.textContent = currentData ? 'אין חיבור ל־Trace · מוצגים הנתונים האחרונים' : 'אין חיבור ל־Trace · ממתין לחיבור מחדש';
+          beaconText.textContent = currentData ? t('bts.trace_disconnected_stale') : t('bts.trace_disconnected_wait');
         } finally {
           if (requestTimeout !== null) clearTimeout(requestTimeout);
           traceFetchInFlight = false;
@@ -1197,18 +1198,14 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       function render(data) {
         // 1. Update Metrics
         const m = data.metrics || {};
-        mWall.textContent = m.total_wall_clock_ms ? (m.total_wall_clock_ms.toLocaleString() + ' ' + t('bts.ms')) : '—';
-        mWallBreakdown.textContent = t('bts.model_tools_breakdown', {
-          model: (m.model_latency_ms || 0) + ' ' + t('bts.ms'),
-          tools: (m.tools_duration_ms || 0) + ' ' + t('bts.ms')
+        mWall.textContent = m.total_wall_clock_ms != null ? formatDurationMs(m.total_wall_clock_ms) : '—';
+        mWallBreakdown.textContent = t('bts.model_tools_queue_breakdown', {
+          model: formatDurationMs(m.model_latency_ms || 0),
+          tools: formatDurationMs(m.tools_duration_ms || 0),
+          queue: m.queue_wait_ms == null ? t('bts.na') : formatDurationMs(m.queue_wait_ms),
         });
         mLlm.textContent = m.llm_call_count ? t('bts.calls_short', { count: m.llm_call_count }) : '0';
         mRetries.textContent = t('bts.retries_count', { count: (m.retries_count || 0) });
-        mWall.textContent = m.total_wall_clock_ms != null ? formatDurationMs(m.total_wall_clock_ms) : '—';
-        const queueTime = m.queue_wait_ms == null ? 'לא זמין' : m.queue_wait_ms;
-        mWallBreakdown.textContent = 'ספק מצטבר: ' + formatDurationMs(m.model_latency_ms || 0) + ' | כלים: ' + formatDurationMs(m.tools_duration_ms || 0) + ' | תור: ' + (m.queue_wait_ms == null ? queueTime : formatDurationMs(m.queue_wait_ms));
-        mLlm.textContent = m.llm_call_count ? (m.llm_call_count + ' קריאות') : '0';
-        mRetries.textContent = 'ניסיונות חוזרים: ' + (m.retries_count || 0);
         mTokens.textContent = m.tokens ? m.tokens.total.toLocaleString() : '—';
         mTokensSub.textContent = m.tokens ? t('bts.tokens_io', { input: m.tokens.input.toLocaleString(), output: m.tokens.output.toLocaleString() }) : t('bts.no_token_data');
 
@@ -1293,9 +1290,9 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
           else if (node.status === 'waiting') statusText = t('bts.node_waiting_approval');
           else if (node.status === 'unknown') statusText = t('bts.node_unknown');
 
-          const timerText = node.duration_ms ? (node.duration_ms + ' ' + t('bts.ms')) : (node.status === 'running' ? t('bts.running_timer') : '');
-          const previewText = node.protocol || node.intent || (node.tasks && node.tasks[0]) || node.summary || node.details || '';
-          const timerText = node.duration_ms != null ? formatDurationMs(node.duration_ms) : (node.status === 'running' ? '⏱️ פועל' : '');
+          const timerText = node.duration_ms != null
+            ? formatDurationMs(node.duration_ms)
+            : (node.status === 'running' ? t('bts.running_timer') : '');
           const previewText = node.selected_agents && node.selected_agents.length
             ? node.selected_agents.join(', ')
             : (node.sublabel || node.protocol || node.intent || (node.tasks && node.tasks[0]) || node.summary || node.details || '');
@@ -1362,48 +1359,45 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
               '<span class="bts-inspect-label">' + t('bts.inspect_status') + '</span>' +
               '<span class="bts-inspect-val">' + esc(statusBadge) + '</span>' +
             '</div>' +
-            (node.duration_ms ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">' + t('bts.inspect_duration') + '</span><span class="bts-inspect-val">' + node.duration_ms + ' ' + t('bts.ms') + '</span></div>') : '') +
+            (node.duration_ms != null ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">' + t('bts.inspect_duration') + '</span><span class="bts-inspect-val">' + formatDurationMs(node.duration_ms) + '</span></div>') : '') +
             (node.call_count ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">' + t('bts.inspect_calls') + '</span><span class="bts-inspect-val">' + node.call_count + '</span></div>') : '') +
             (node.is_parallel ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">' + t('bts.inspect_run_mode') + '</span><span class="bts-inspect-val" style="color:var(--accent-cyan)">' + t('bts.inspect_parallel') + '</span></div>') : '') +
             (node.verification ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">' + t('bts.inspect_verification') + '</span><span class="bts-inspect-val">' + esc(node.verification_note || node.verification) + '</span></div>') : '') +
             (node.task ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_task') + '</div><div class="bts-inspect-box">' + esc(node.task) + '</div>') : '') +
             (node.result ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_result') + '</div><div class="bts-inspect-box">' + esc(node.result) + '</div>') : '') +
-            (node.llm_calls && node.llm_calls.length ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_llm_calls', { count: node.llm_calls.length }) + '</div><div class="bts-inspect-box">' + node.llm_calls.map(c => esc(t('bts.llm_call_line', { model: c.model, ms: (c.latency_ms || 0), reason: (c.finish_reason || c.status), input: (c.input_tokens || 0), output: (c.output_tokens || 0) }))).join('<br>') + '</div>') : '') +
+            (node.llm_calls && node.llm_calls.length ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_llm_calls', { count: node.llm_calls.length }) + '</div><div class="bts-inspect-box">' + node.llm_calls.map(c => esc(t('bts.llm_call_inspect', {
+              sequence: (c.sequence_number || '?'),
+              purpose: (c.purpose || 'unattributed'),
+              agent: (c.agent_name || node.label || 'unattributed'),
+              duration: (c.latency_ms == null ? t('bts.na') : formatDurationMs(c.latency_ms)),
+              reason: (c.finish_reason || c.status || 'unknown'),
+              input: (c.input_tokens ?? '?'),
+              output: (c.output_tokens ?? '?'),
+              cache: (c.cache_tokens ?? '?'),
+              parent: (c.parent_agent || 'unattributed'),
+              stage: (c.stage || 'unattributed'),
+              parent_invocation: (c.parent_invocation_id || t('bts.na')),
+              protocol: (c.protocol_name || t('bts.na')),
+              tool_context: (c.tool_name ? t('bts.after_tool', { tool: c.tool_name }) : (c.call_type && String(c.call_type).toLowerCase().includes('tool_call') ? t('bts.tool_decision') : t('bts.before_tool_unknown'))),
+              request: (c.provider_request_id || 'unavailable'),
+              invocation: (c.agent_invocation_id || 'unattributed'),
+              started: (c.started_at || 'unavailable'),
+              finished: (c.finished_at || 'unavailable'),
+              summary: (c.result_summary || t('bts.na')),
+            }))).join('<br><br>') + '</div>') : '') +
             (node.tools && node.tools.length ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_tools', { count: node.tools.length }) + '</div><div class="bts-inspect-box">' + esc(node.tools.join(', ')) + '</div>') : '') +
+            (node.type === 'tool' ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_tool_scope') + '</div><div class="bts-inspect-box">' +
+              esc(t('bts.tool_scope', { caller: node.caller_agent_name || t('bts.na'), invocation: node.agent_invocation_id || t('bts.na') })).replaceAll('\n', '<br>') + '<br>' +
+              esc(t('bts.tool_kind', { kind: node.side_effecting ? t('bts.tool_write_action') : t('bts.tool_read_only') })) + '<br>' +
+              esc(t('bts.tool_verification_value', { verification: node.verification_note || node.verification || t('bts.na') })) +
+              '</div>') : '') +
+            (node.type === 'invocation' && node.model_status ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_model_run') + '</div><div class="bts-inspect-box">' +
+              esc(t('bts.inspect_model_status', { status: node.model_status })) + '<br>' +
+              esc(t('bts.inspect_model_duration', { duration: node.model_duration_ms == null ? t('bts.na') : formatDurationMs(node.model_duration_ms) })) + '<br>' +
+              esc(t('bts.inspect_model_tokens', { input: node.model_input_tokens ?? '?', output: node.model_output_tokens ?? '?' })) +
+              '</div>') : '') +
             (node.summary ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_tool_summary') + '</div><div class="bts-inspect-box">' + esc(node.summary) + '</div>') : '') +
             (node.details ? ('<div class="bts-inspect-section-title">' + t('bts.inspect_details') + '</div><div class="bts-inspect-box">' + esc(node.details) + '</div>') : '') +
-            (node.duration_ms != null ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">זמן ביצוע:</span><span class="bts-inspect-val">' + formatDurationMs(node.duration_ms) + '</span></div>') : '') +
-            (node.call_count ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">מספר הפעלות / סבבים:</span><span class="bts-inspect-val">' + node.call_count + '</span></div>') : '') +
-            (node.is_parallel ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">מצב הרצה:</span><span class="bts-inspect-val" style="color:var(--accent-cyan)">⚡ הרצה במקביל (Concurrent)</span></div>') : '') +
-            (node.verification ? ('<div class="bts-inspect-row"><span class="bts-inspect-label">רמת אימות פעולה:</span><span class="bts-inspect-val">' + esc(node.verification_note || node.verification) + '</span></div>') : '') +
-            (node.task ? ('<div class="bts-inspect-section-title">תקציר משימה</div><div class="bts-inspect-box">' + esc(node.task) + '</div>') : '') +
-            (node.result ? ('<div class="bts-inspect-section-title">תוצאה / שגיאה</div><div class="bts-inspect-box">' + esc(node.result) + '</div>') : '') +
-            (node.llm_calls && node.llm_calls.length ? ('<div class="bts-inspect-section-title">קריאות מודל (' + node.llm_calls.length + ')</div><div class="bts-inspect-box">' + node.llm_calls.map(c => esc(
-              '#' + (c.sequence_number || '?') + ' · ' + (c.purpose || 'unattributed') + ' · ' + (c.agent_name || node.label || 'unattributed') +
-              ' · ' + (c.latency_ms == null ? 'לא זמין' : formatDurationMs(c.latency_ms)) + ' · ' + (c.finish_reason || c.status || 'unknown') +
-              ' · טוקנים קלט/פלט/מטמון: ' + (c.input_tokens ?? '?') + '/' + (c.output_tokens ?? '?') + '/' + (c.cache_tokens ?? '?') +
-              '\nיוזם: ' + (c.parent_agent || 'unattributed') + ' · שלב: ' + (c.stage || 'unattributed') +
-              ' · parent invocation: ' + (c.parent_invocation_id || 'לא נשמר') +
-              ' · פרוטוקול: ' + (c.protocol_name || 'לא רלוונטי/לא זמין') +
-              ' · ' + (c.tool_name ? ('אחרי כלי ' + c.tool_name) : (c.call_type && String(c.call_type).toLowerCase().includes('tool_call') ? 'החלטת כלי' : 'לפני כלי / סינתזה לא ידוע')) +
-              '\nמזהה בקשת ספק: ' + (c.provider_request_id || 'unavailable') + ' · הפעלה: ' + (c.agent_invocation_id || 'unattributed') +
-              '\nהתחלה: ' + (c.started_at || 'unavailable') + ' · סיום: ' + (c.finished_at || 'unavailable') +
-              ' · סיכום בטוח: ' + (c.result_summary || 'אין תקציר בטוח זמין')
-            )).join('<br><br>') + '</div>') : '') +
-            (node.tools && node.tools.length ? ('<div class="bts-inspect-section-title">כלים (' + node.tools.length + ')</div><div class="bts-inspect-box">' + esc(node.tools.join(', ')) + '</div>') : '') +
-            (node.type === 'tool' ? ('<div class="bts-inspect-section-title">שיוך והיקף הכלי</div><div class="bts-inspect-box">' +
-              'Caller: ' + esc(node.caller_agent_name || 'לא נשמר') + '<br>' +
-              'Invocation ID: ' + esc(node.agent_invocation_id || 'לא נשמר') + '<br>' +
-              'סוג: ' + (node.side_effecting ? 'פעולת כתיבה' : 'קריאה בלבד') + '<br>' +
-              'אימות: ' + esc(node.verification_note || node.verification || 'לא זמין') +
-              '</div>') : '') +
-            (node.type === 'invocation' && node.model_status ? ('<div class="bts-inspect-section-title">ריצת מודל (נפרדת מתוצאת Agent)</div><div class="bts-inspect-box">' +
-              'סטטוס מודל: ' + esc(node.model_status) + '<br>' +
-              'זמן מודל: ' + esc(node.model_duration_ms == null ? 'לא זמין' : formatDurationMs(node.model_duration_ms)) + '<br>' +
-              'טוקנים קלט/פלט: ' + esc(node.model_input_tokens ?? '?') + '/' + esc(node.model_output_tokens ?? '?') +
-              '</div>') : '') +
-            (node.summary ? ('<div class="bts-inspect-section-title">סיכום כלי</div><div class="bts-inspect-box">' + esc(node.summary) + '</div>') : '') +
-            (node.details ? ('<div class="bts-inspect-section-title">פרטים נוספים</div><div class="bts-inspect-box">' + esc(node.details) + '</div>') : '') +
           '</div>';
         inspectorContent.innerHTML = html;
       }
@@ -1453,10 +1447,10 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
           const data = await res.json();
           const items = data.items || [];
           if (!items.length) {
-            traceSelect.innerHTML = '<option value="">אין Traces להצגה כרגע</option>';
+            traceSelect.innerHTML = '<option value="">' + t('bts.no_traces') + '</option>';
             if (!currentTraceId) {
               beacon.className = 'bts-live-beacon is-idle';
-              beaconText.textContent = 'ממתין לבקשה ראשונה';
+              beaconText.textContent = t('bts.waiting_first_request');
             }
             return;
           }
@@ -1483,7 +1477,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
           console.warn('Recent traces error:', err);
           if (!currentTraceId) {
             beacon.className = 'bts-live-beacon is-idle';
-            beaconText.textContent = 'אין חיבור לרשימת ה־Traces';
+            beaconText.textContent = t('bts.trace_list_disconnected');
           }
         }
       }
@@ -1495,7 +1489,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
         selectedNodeId = null;
         traceIdPill.textContent = newTraceId;
         beacon.className = 'bts-live-beacon is-idle';
-        beaconText.textContent = 'טוען Trace…';
+        beaconText.textContent = t('bts.loading_trace');
         render({ metrics: {}, graph: { nodes: [], edges: [] }, messages: [] });
         window.history.replaceState(null, '', '?trace_id=' + encodeURIComponent(newTraceId));
         fetchTrace();
