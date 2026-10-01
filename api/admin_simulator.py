@@ -440,6 +440,8 @@ SIMULATOR_STYLE = """
     cursor: grab;
     user-select: none;
     -webkit-user-select: none;
+    direction: ltr;
+    unicode-bidi: isolate;
   }
   .bts-graph-canvas:active {
     cursor: grabbing;
@@ -747,7 +749,7 @@ SIMULATOR_BODY = """
     </div>
 
     <!-- SVG Graph -->
-    <svg id="bts-graph-svg" class="bts-graph-canvas" xmlns="http://www.w3.org/2000/svg">
+    <svg id="bts-graph-svg" class="bts-graph-canvas" xmlns="http://www.w3.org/2000/svg" direction="ltr">
       <defs>
         <!-- Filter glow effects -->
         <filter id="bts-glow-cyan" x="-20%" y="-20%" width="140%" height="140%">
@@ -2612,19 +2614,25 @@ SIMULATOR_BODY = """
         if (node.type === 'persistence') icon = '💾';
 
         const titleText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        titleText.setAttribute('x', '10');
+        titleText.setAttribute('x', String(p.w / 2));
         titleText.setAttribute('y', '15');
+        titleText.setAttribute('text-anchor', 'middle');
+        titleText.setAttribute('dominant-baseline', 'middle');
         titleText.setAttribute('fill', '#f8fafc');
         titleText.setAttribute('font-size', '12');
         titleText.setAttribute('font-weight', '700');
         titleText.setAttribute('font-family', 'sans-serif');
-        titleText.textContent = icon + ' ' + (node.label || node.id);
+        let titleContent = icon + ' ' + (node.label || node.id);
+        if (titleContent.length > 28) titleContent = titleContent.slice(0, 27) + '…';
+        titleText.textContent = titleContent;
         g.appendChild(titleText);
 
         // Subtitle
         const subText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        subText.setAttribute('x', '10');
+        subText.setAttribute('x', String(p.w / 2));
         subText.setAttribute('y', '38');
+        subText.setAttribute('text-anchor', 'middle');
+        subText.setAttribute('dominant-baseline', 'middle');
         subText.setAttribute('fill', '#94a3b8');
         subText.setAttribute('font-size', '10');
         subText.setAttribute('font-family', 'monospace');
@@ -2705,8 +2713,10 @@ SIMULATOR_BODY = """
 
         // Status & Duration bottom strip
         const statText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        statText.setAttribute('x', '10');
+        statText.setAttribute('x', String(p.w / 2));
         statText.setAttribute('y', p.h - 12);
+        statText.setAttribute('text-anchor', 'middle');
+        statText.setAttribute('dominant-baseline', 'middle');
         statText.setAttribute('font-size', '10');
         statText.setAttribute('font-family', 'sans-serif');
 

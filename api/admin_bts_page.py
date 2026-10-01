@@ -309,6 +309,8 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       position: absolute;
       top: 0;
       left: 0;
+      direction: ltr;
+      unicode-bidi: isolate;
     }
 
     /* Zoom Controls Floating Box */
@@ -629,24 +631,38 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       dominant-baseline: central;
     }
 
-    /* Node Foreign Object Card */
+    /* Graph cards live inside SVG foreignObject. Isolate layout to LTR so the
+       card box matches the foreignObject coordinate system; label glyphs still
+       follow their own script via unicode-bidi. */
+    .bts-node-host {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      direction: ltr;
+      box-sizing: border-box;
+    }
     .bts-node-card {
       background: rgba(15, 23, 42, 0.95);
       backdrop-filter: blur(8px);
       border: 1.5px solid var(--border-medium);
       border-radius: 10px;
-      padding: 12px;
+      padding: 10px 12px;
       display: flex;
       flex-direction: column;
+      align-items: center;
+      justify-content: center;
       gap: 6px;
       cursor: pointer;
-      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
       width: 100%;
       height: 100%;
+      overflow: hidden;
+      box-sizing: border-box;
+      direction: ltr;
+      text-align: center;
       box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6);
     }
     .bts-node-card:hover {
-      transform: translateY(-2px);
       border-color: var(--accent-cyan);
       box-shadow: 0 12px 30px rgba(56, 189, 248, 0.25);
     }
@@ -680,7 +696,10 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
     .bts-node-top {
       display: flex;
       align-items: center;
+      justify-content: center;
       gap: 10px;
+      width: 100%;
+      min-width: 0;
     }
 
     .bts-node-avatar {
@@ -697,8 +716,10 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     .bts-node-titles {
-      flex: 1;
+      flex: 1 1 auto;
+      min-width: 0;
       overflow: hidden;
+      text-align: center;
     }
 
     .bts-node-name {
@@ -708,6 +729,8 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      unicode-bidi: plaintext;
+      text-align: center;
     }
 
     .bts-node-sub {
@@ -717,14 +740,18 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      unicode-bidi: plaintext;
+      text-align: center;
     }
 
     .bts-node-badge-row {
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: center;
+      flex-wrap: wrap;
       gap: 6px;
-      margin-top: 4px;
+      width: 100%;
+      margin-top: 2px;
     }
 
     .bts-node-status-pill {
@@ -763,7 +790,10 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      margin-top: 4px;
+      margin-top: 2px;
+      max-width: 100%;
+      unicode-bidi: plaintext;
+      text-align: center;
     }
 
     @keyframes pulse-ring {
@@ -880,7 +910,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
     <!-- Interactive Graph Canvas -->
     <div id="canvas-container" class="bts-canvas-container">
       <div class="bts-grid-pattern"></div>
-      <svg id="graph-svg" class="bts-canvas-svg">
+      <svg id="graph-svg" class="bts-canvas-svg" xmlns="http://www.w3.org/2000/svg" direction="ltr">
         <defs>
           <marker id="arrow-active" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
             <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#38bdf8"></path>
@@ -1298,7 +1328,8 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
             : (node.sublabel || node.protocol || node.intent || (node.tasks && node.tasks[0]) || node.summary || node.details || '');
           const nodeTypeClass = 'type-' + (node.type || 'unknown');
 
-          nodesHtml += '<foreignObject x="' + pos.x + '" y="' + pos.y + '" width="' + NODE_WIDTH + '" height="' + NODE_HEIGHT + '">' +
+          nodesHtml += '<foreignObject x="' + pos.x + '" y="' + pos.y + '" width="' + NODE_WIDTH + '" height="' + NODE_HEIGHT + '" overflow="hidden">' +
+            '<div xmlns="http://www.w3.org/1999/xhtml" class="bts-node-host" dir="ltr">' +
             '<div class="bts-node-card ' + isSelected + ' ' + esc(statusClass) + ' ' + esc(nodeTypeClass) + '" data-id="' + esc(node.id) + '">' +
               '<div class="bts-node-top">' +
                 '<div class="bts-node-avatar">' + esc(node.icon || '🤖') + '</div>' +
@@ -1312,7 +1343,7 @@ HTML_PAGE_TEMPLATE = r"""<!DOCTYPE html>
                 '<span class="bts-node-timer">' + esc(timerText) + '</span>' +
               '</div>' +
               (previewText ? ('<div class="bts-node-preview" title="' + esc(previewText) + '">' + esc(previewText) + '</div>') : '') +
-            '</div>' +
+            '</div></div>' +
           '</foreignObject>';
         });
         nodesLayer.innerHTML = nodesHtml;
