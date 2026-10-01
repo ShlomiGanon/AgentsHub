@@ -380,6 +380,25 @@ def _fallback_text(reports: tuple[DomainReport, ...], current_time: str, hours: 
     return "\n".join(line for line in lines if line)
 
 
+def _normalize_picture_text(text: str) -> str:
+    """Keep the operator-facing picture plain and readable even if the model adds markup."""
+
+    lines: list[str] = []
+    for raw_line in str(text or "").replace("\r\n", "\n").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = line.replace("**", "").replace("__", "")
+        line = re.sub(r"^\s*#{1,6}\s*", "", line)
+        line = re.sub(r"^\s*[-*•]\s+", "", line)
+        line = re.sub(r"^\[([^\]]+)\]\s*$", r"\1", line)
+        line = line.replace("\\_", "_")
+        line = re.sub(r"[ \t]+", " ", line).strip()
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
+
+
 def compose_situational_picture(
     main_agent: "MainAgent",
     reports: tuple[DomainReport, ...],
@@ -392,7 +411,7 @@ def compose_situational_picture(
     """Have the Main Agent write the picture from the collected findings only."""
 
     if not any(report.succeeded for report in reports):
-        return _fallback_text(reports, current_time, recent_events_hours)
+        return _normalize_picture_text(_fallback_text(reports, current_time, recent_events_hours))
 
     prompt = SITUATIONAL_PICTURE_COMPOSE_INSTRUCTION.format(
         max_lines=max_lines,
@@ -409,16 +428,16 @@ def compose_situational_picture(
             "situational picture composition failed; returning collected findings",
             extra={"event": "picture_compose_fallback", "reason": str(exc), "trace_id": get_trace_id()},
         )
-        return _fallback_text(reports, current_time, recent_events_hours)
+        return _normalize_picture_text(_fallback_text(reports, current_time, recent_events_hours))
     if result.status != "success" or not result.text.strip():
-        return _fallback_text(reports, current_time, recent_events_hours)
+        return _normalize_picture_text(_fallback_text(reports, current_time, recent_events_hours))
 
-    text = result.text.strip()
+    text = _normalize_picture_text(result.text)
     missing = [report.domain for report in reports if not report.succeeded]
     if missing:
         note = get_current_catalog().text("orchestrator.picture.missing_note", domains=", ".join(missing))
         text = f"{text}\n{note}"
-    return text
+    return _normalize_picture_text(text)
 
 
 def build_situational_picture(

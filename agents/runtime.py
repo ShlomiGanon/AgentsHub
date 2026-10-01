@@ -34,7 +34,7 @@ from agents.contracts import (
     tool_info_of,
 )
 from agents.provider_telemetry import track_provider_finish_reasons
-from agents.invocation_context import current_invocation_id, invocation_scope, record_finished_invocation_id
+from agents.invocation_context import current_invocation_id, current_invocation_agent, invocation_scope, record_finished_invocation_id, record_invocation_tool
 from tools import deep_debug_enabled, get_current_stage, get_trace_id, log_ai_interaction, stage_context, trace_context
 
 logger = logging.getLogger(__name__)
@@ -193,6 +193,7 @@ def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> 
             return f"Tool '{tool_info.name}' is not permitted for this task."
 
         started = time.monotonic()
+        record_invocation_tool(current_invocation_id(), tool_info.name)
         try:
             tool_result = bound_method(*args, **kwargs)
         except Exception:
@@ -327,7 +328,7 @@ class Agent:
             def _tracked_tool(*args, _wrapped=wrapped, _invocation_id=invocation_id, _trace_id=invocation_trace_id, **kwargs):
                 # CrewAI may run the tool in a different thread. Capture the ID in
                 # this wrapper instead of assuming ContextVar propagation.
-                with (trace_context(_trace_id) if _trace_id else nullcontext()), invocation_scope(_invocation_id):
+                with (trace_context(_trace_id) if _trace_id else nullcontext()), invocation_scope(_invocation_id, agent_name=self.name, parent_agent=current_invocation_agent()):
                     return _wrapped(*args, **kwargs)
 
             invocation_tools[name] = _tracked_tool
@@ -342,7 +343,7 @@ class Agent:
             task_summary=text[:120],
         )
         try:
-            with invocation_scope(invocation_id):
+            with invocation_scope(invocation_id, agent_name=self.name, parent_agent=current_invocation_agent(), parent_invocation_id=parent_invocation_id):
                 if invocation_policy is None:
                     raw_text = invoke(invocation_descriptor, invocation_tools, text, self.timeout_seconds)
                 else:

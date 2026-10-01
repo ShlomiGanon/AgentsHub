@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
 _current_trace_id: ContextVar[str] = ContextVar("current_trace_id", default="")
 _current_stage: ContextVar[str] = ContextVar("current_stage", default="")
+_current_protocol: ContextVar[str | None] = ContextVar("current_protocol", default=None)
 _TRACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _latency_samples: dict[str, list[float]] = defaultdict(list)
 _latency_lock = threading.Lock()
@@ -207,6 +208,19 @@ def set_trace_id(trace_id: str) -> None:
 
 def get_current_stage() -> str:
     return _current_stage.get()
+
+
+def get_current_protocol() -> str | None:
+    return _current_protocol.get()
+
+
+@contextmanager
+def protocol_context(protocol_name: str):
+    token = _current_protocol.set(protocol_name)
+    try:
+        yield
+    finally:
+        _current_protocol.reset(token)
 
 
 @contextmanager

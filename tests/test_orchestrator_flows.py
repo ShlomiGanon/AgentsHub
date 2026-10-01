@@ -1214,6 +1214,27 @@ def test_report_text_is_composed_and_persisted_when_rich_reports_enabled(deps):
     assert composer.calls  # the composer was actually invoked, once
 
 
+def test_situational_picture_report_returns_the_picture_without_generic_rich_report(deps):
+    deps.settings_store.rich_reports_enabled = True
+    composer = _ScriptedComposerAgent("this generic report must not be used")
+    deps_with_composer = replace(deps, report_composer_agent=composer)
+    event_id = begin_report(
+        deps_with_composer, "show the situational picture", "telegram", "2026-08-20T10:00:00",
+        "commander-1", sender_permission_level="commander", telegram_chat_type="private",
+    )
+    flows_module.record_event_state(
+        deps.persistence, event_id, {"selected_protocol": "query_situational_picture"}
+    )
+
+    flows_module._record_outcome_with_report(
+        deps_with_composer, event_id, "succeeded", insight_text="סד״כ: 2 זמינים\nמצלמות: CAM-01 כבויה"
+    )
+
+    event = deps.persistence.fetch_event(event_id)
+    assert event["report_text"] == "סד״כ: 2 זמינים\nמצלמות: CAM-01 כבויה"
+    assert composer.calls == []
+
+
 def test_report_text_falls_back_to_render_summary_when_no_composer_agent_is_available(deps):
     deps.settings_store.rich_reports_enabled = True  # deps.report_composer_agent stays None
     agent = _happy_path_agent(risk_score="0.1", selected="status_check", verdict="success")

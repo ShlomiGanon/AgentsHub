@@ -51,7 +51,10 @@ def _prompt(raw_text: str, source: str, received_at: str, event_types, areas, ev
         "availability_end are only present when the report is someone stating their own "
         "unavailability and they gave a time interval — ISO-8601 timestamps, or null if no interval "
         "was stated; never infer or estimate one. absence_reason is the reporter's own stated reason "
-        "for being unavailable, or null if none was given. "
+        "for being unavailable, or null if none was given. A phone/contact-number change, a statement "
+        "that the person is checking availability, or being on call is not an absence and must not be "
+        "put in absence_reason; use null unless the report explicitly says the reporter is unavailable, "
+        "absent, cannot attend, or otherwise will not participate. "
         f"{timestamp_rule}\nEvent text:\n{raw_text}"
     )
 
