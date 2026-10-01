@@ -103,6 +103,18 @@ CAPABILITY_DESCRIPTORS: tuple[CapabilityDescriptor, ...] = (
         has_side_effects=True,
     ),
     CapabilityDescriptor(
+        name="explain_approval_policy",
+        description=(
+            "Explain how protocol approval works: only a commander can approve or reject a held "
+            "run, and only by tapping the in-chat approval buttons — typing words such as "
+            "approve or yes does not resolve a hold. Missing operational details are requested "
+            "from the reporter first. Viewers cannot approve. Some profiles require commander "
+            "approval before a protocol executes; others run viewer reports immediately."
+        ),
+        operation=RequestedOperation.ASK_QUESTION,
+        requires_human_review=True,
+    ),
+    CapabilityDescriptor(
         name="view_commander_roster",
         description="List every registered commander identity.",
         operation=RequestedOperation.VIEW_COMMANDER_ROSTER,

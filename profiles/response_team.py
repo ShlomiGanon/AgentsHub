@@ -252,6 +252,7 @@ EVENT_TYPES = [
     "camera_status",
     "security_incident",
     "force_dispatch",
+    "squad_dispatch",
     "team_movement",
     "situational_query",
     "incident_summary",
@@ -274,7 +275,10 @@ EVENT_TYPE_DESCRIPTIONS = {
     ),
     "force_dispatch": (
         "A request to dispatch a real neighboring/external force (ambulance, police, K9, or "
-        "YASAM) to an area."
+        "YASAM) to an area -- never this site's own roster."
+    ),
+    "squad_dispatch": (
+        "A request to send this site's own response-team roster, squad, or members to an area."
     ),
     "team_movement": "A team member's own movement or current position while on duty.",
     "situational_query": (
@@ -289,6 +293,7 @@ EVENT_TYPE_REQUIRED_FIELDS = {
     "camera_status": ("area", "entities"),
     "security_incident": ("area",),
     "force_dispatch": ("area",),
+    "squad_dispatch": ("area",),
     "team_movement": ("area",),
 }
 
@@ -301,8 +306,20 @@ from profiles.response_team_agents import (
     NeighboringForcesAgent,
     ResponseTeamRosterAgent,
     ResponseTeamSurveillanceAgent,
+    _AREA_LABELS,
+    _RESOURCE_KIND_LABELS,
+    _describe_resource_unavailable,
+    _find_resource_alternatives,
 )
-from profiles.response_team_protocols import PROTOCOLS
+from profiles.response_team_protocols import (
+    PROTOCOLS,
+    _as_aware_iso,
+    _bind_dispatch_drone,
+    _bind_dispatch_own_squad,
+    _bind_record_attendance,
+    _bind_report_team_movement,
+    _bind_update_camera_status,
+)
 from profiles.response_team_simulation import (
     OPERATIONAL_SEED,
     SIMULATION_GROUPS,

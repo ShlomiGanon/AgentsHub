@@ -245,7 +245,7 @@ class NeighboringForcesAgent(_NeighboringForcesAgentBase):
 
     def __init__(self, model: str, api_key: str | None = None):
         super().__init__(model, api_key)
-        self.roster_store = open_response_team_roster_store(DB_PATH)
+        self.roster_store = open_response_team_roster_store(_facade.DB_PATH)
 
     def _valid_kinds(self) -> "tuple[str, ...]":
         return tuple(sorted((*self.force_bases, SQUAD_KIND)))
@@ -274,6 +274,20 @@ class NeighboringForcesAgent(_NeighboringForcesAgentBase):
             "response_team.resource_unavailable.force_reason",
             remaining=remaining, pool_size=self.force_pool_size,
             resource=_RESOURCE_KIND_LABELS.get(kind_norm, kind_norm), unit_count=unit_count,
+        )
+
+    @tool(
+        "dispatch_squad",
+        "Dispatches this site's own response-team roster to a named target area. This is not a "
+        "neighboring/external force -- ambulance, police, K9, and YASAM go through "
+        "dispatch_neighboring_force instead. unit_count defaults to 1. Side-effecting and not "
+        "idempotent.",
+        side_effecting=True,
+        idempotent=False,
+    )
+    def dispatch_squad(self, target_area: str, unit_count: int = 1, note: str = "") -> str:
+        return self.dispatch_neighboring_force(
+            kind=SQUAD_KIND, target_area=target_area, unit_count=unit_count, note=note,
         )
 
 
@@ -360,10 +374,33 @@ def _find_resource_alternatives(area: str, registry) -> str:
     return "; ".join(parts)
 
 
+_ENGLISH_REASON_KEYS = {
+    "No ready drones available in fleet for immediate dispatch.": "response_team.resource_unavailable.drone_reason",
+    "no active camera covering the area": "response_team.resource_unavailable.camera_no_cover",
+}
+
+
+def _localize_unavailable_reason(reason: str) -> str:
+    """Map known English persistence/tool reasons onto catalog copy so reporters never see them."""
+
+    cleaned = (reason or "").strip()
+    key = _ENGLISH_REASON_KEYS.get(cleaned)
+    if key:
+        return _catalog_text(key)
+    if cleaned.startswith("Requested drone ") and "is not currently available" in cleaned:
+        return _catalog_text("response_team.resource_unavailable.drone_specific_reason")
+    return cleaned
+
+
 def _describe_resource_unavailable(resource_kind: str, area: str, reason: str, registry) -> tuple[str, str]:
     resource_label = _RESOURCE_KIND_LABELS.get(resource_kind, resource_kind)
     area_label = _AREA_LABELS.get(area, area)
-    fact = _catalog_text("response_team.resource_unavailable.fact", resource=resource_label, area=area_label, reason=reason)
+    fact = _catalog_text(
+        "response_team.resource_unavailable.fact",
+        resource=resource_label,
+        area=area_label,
+        reason=_localize_unavailable_reason(reason),
+    )
     alternatives = _find_resource_alternatives(area, registry)
     return fact, alternatives
 

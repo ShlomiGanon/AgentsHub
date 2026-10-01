@@ -16,6 +16,7 @@ import types
 import pytest
 
 from agents import adapter
+from agents import runtime
 from tests.api_fakes import SENSOR_IDENTITY, RunningApiServer, build_context, happy_path_agent
 from tools.simulator import _post_event
 
@@ -31,6 +32,7 @@ def _mock_crewai_always_fails(monkeypatch):
 
     fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+    monkeypatch.setattr(runtime, "_get_crewai", lambda: fake_module)
 
 
 _TEST_BOT_SERVICE_KEY = "test-bot-service-key-0123456789abcdef"

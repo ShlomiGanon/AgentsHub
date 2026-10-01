@@ -34,6 +34,10 @@ from persistence.response_team_store import (
     open_response_team_roster_store,
     open_response_team_surveillance_store,
 )
+
+# Domain-neutral alias: the store is shared camera/drone persistence, not a
+# response_team-only type. Keep the original name so existing imports stay valid.
+open_surveillance_store = open_response_team_surveillance_store
 from persistence.apparatus_store import (
     ApparatusStore,
     ApparatusStoreError,
@@ -72,6 +76,7 @@ __all__ = [
     "open_neighboring_force_store",
     "open_response_team_roster_store",
     "open_response_team_surveillance_store",
+    "open_surveillance_store",
     "ApparatusStore",
     "ApparatusStoreError",
     "open_apparatus_store",

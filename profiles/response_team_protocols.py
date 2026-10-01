@@ -25,11 +25,13 @@ from profiles.admin_tables import AdminColumn, AdminTable
 from profiles.contracts import AgentSpec, OptimizationPolicy
 from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
 from protocols import CriticalityLevel, Protocol, Step
+from protocols import as_aware_iso as _as_aware_iso
+from protocols import bind_record_attendance_response
 
 import profiles.response_team as _facade
 globals().update({name: getattr(_facade, name) for name in dir(_facade) if not name.startswith("__")})
 
-# == Direct-tool step binders (Phase A, docs/responce_improve.md) ===========
+# == Direct-tool step binders =================================================
 #
 # Each skips formulate_tasks/task_rewrite by binding a protocol's step(s) straight from the
 # event's own extracted fields, which are always already model-produced (classify_intent's
@@ -41,71 +43,33 @@ globals().update({name: getattr(_facade, name) for name in dir(_facade) if not n
 #
 # Most of these bind a `kind="direct_tool"` step (protocols/executor.py::_execute_direct_tool_step):
 # no specialist-agent LLM turn for the tool call itself, since every parameter is already known.
-# `_bind_update_camera_status` instead binds a normal `kind="agent"` step once entities/description
-# are present: camera_id is deterministic (from `entities`), but the resulting status is a genuine
-# judgment call from the free-text report, so the specialist agent decides and calls the tool
-# itself rather than a keyword heuristic pre-deciding it.
-
-def _as_aware_iso(value: str) -> str:
-    """A persisted event timestamp is stored without an explicit offset but is always UTC
-    (config/environment.py's own timestamp convention) — agents/team_status_agent.py's
-    `_aware_datetime` rejects a naive string outright, so make it explicit before handing it
-    to a tool, the same way a real model call would when it reformats a timestamp itself."""
-
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.isoformat()
+# Camera status and team-movement incident-linking still bind a normal `kind="agent"` step once
+# identifiers/area are present: those remaining fields are genuine judgment calls from free text.
 
 
 def _bind_record_attendance(event: dict) -> tuple[Step, ...]:
-    absence_reason = (event.get("absence_reason") or "").strip()
-    received_at = event.get("received_at") or ""
-    base_kwargs = {
-        "source_message_id": event.get("source_message_id") or "",
-        "original_text": event.get("raw_text") or "",
-        "received_at": _as_aware_iso(received_at) if received_at else "",
-    }
-    if not absence_reason:
-        kwargs = {**base_kwargs, "availability": "available", "reason": "", "unavailable_days": 0}
-        required: tuple[str, ...] = ()
-    else:
-        missing = tuple(name for name in ("availability_start", "availability_end") if not event.get(name))
-        kwargs = {**base_kwargs, "availability": "unavailable", "reason": absence_reason}
-        if missing:
-            required = missing
-        else:
-            start = datetime.fromisoformat(event["availability_start"])
-            end = datetime.fromisoformat(event["availability_end"])
-            days = (end - start).total_seconds() / 86400
-            kwargs["unavailable_days"] = max(1, int(days + 0.999999))
-            required = ()
-    return (
-        Step(
-            agent_name="roster_agent",
-            task_text="Record the reporter's own attendance/availability response, bound directly from the event's extracted fields.",
-            allowed_tools=("record_attendance_response",),
-            step_id="1",
-            required_event_fields=required,
-            kind="direct_tool",
-            direct_tool_name="record_attendance_response",
-            direct_tool_kwargs=kwargs,
-        ),
+    return bind_record_attendance_response(
+        event,
+        agent_name="roster_agent",
+        task_text="Record the reporter's own attendance/availability response, bound directly from the event's extracted fields.",
     )
+
+
+def _report_text(event: dict) -> str:
+    return (event.get("description") or event.get("raw_text") or "").strip()
 
 
 def _bind_update_camera_status(event: dict) -> tuple[Step, ...]:
     entities = event.get("entities") or []
-    description = (event.get("description") or "").strip()
-    missing = tuple(name for name in ("entities", "description") if not event.get(name))
-    if missing:
+    description = _report_text(event)
+    if not entities:
         return (
             Step(
                 agent_name="surveillance_agent",
                 task_text="Record the reported camera(s) status, bound directly from the event's extracted fields.",
                 allowed_tools=("update_camera_status",),
                 step_id="1",
-                required_event_fields=missing,
+                required_event_fields=("entities",),
                 kind="direct_tool",
                 direct_tool_name="update_camera_status",
                 direct_tool_kwargs={},
@@ -115,14 +79,67 @@ def _bind_update_camera_status(event: dict) -> tuple[Step, ...]:
         Step(
             agent_name="surveillance_agent",
             task_text=(
-                f"Camera {camera_id} was reported on. Determine its resulting status (active, offline, "
-                f"or degraded) from the report below, and call update_camera_status for {camera_id} with "
-                f"that status and a short observation.\n\nReport: {description}"
+                f"You MUST call update_camera_status exactly once for camera {camera_id} and for "
+                f"no other camera. Do not skip the tool call. Map the report to status: offline "
+                f"(no signal, physically down, cut cable, communications cut), degraded "
+                f"(intermittent, glare, smoke-blinded, flaky, heat-alert), or active (back online, "
+                f"restored, working again). Observation is a short restatement of what was reported "
+                f"for this camera only.\n\nReport: {description}"
             ),
             allowed_tools=("update_camera_status",),
             step_id=str(index + 1),
         )
         for index, camera_id in enumerate(entities)
+    )
+
+
+def _bind_dispatch_drone(event: dict) -> tuple[Step, ...]:
+    area = (event.get("area") or "").strip()
+    description = _report_text(event)
+    missing = tuple(name for name in ("area",) if not area)
+    kwargs: dict = {}
+    if not missing:
+        kwargs = {
+            "target_area": area,
+            "incident_description": description or "Reported security incident",
+            "mission_type": "recon",
+        }
+    return (
+        Step(
+            agent_name="surveillance_agent",
+            task_text="Dispatch a recon drone to the reported area, bound directly from the event's extracted fields.",
+            allowed_tools=("dispatch_drone_to_area",),
+            step_id="1",
+            required_event_fields=missing,
+            kind="direct_tool",
+            direct_tool_name="dispatch_drone_to_area",
+            direct_tool_kwargs=kwargs,
+        ),
+    )
+
+
+def _bind_dispatch_own_squad(event: dict) -> tuple[Step, ...]:
+    area = (event.get("area") or "").strip()
+    description = _report_text(event)
+    missing = tuple(name for name in ("area",) if not area)
+    kwargs: dict = {}
+    if not missing:
+        kwargs = {
+            "target_area": area,
+            "unit_count": 1,
+            "note": description,
+        }
+    return (
+        Step(
+            agent_name="neighboring_forces_agent",
+            task_text="Dispatch this site's own response-team roster to the reported area, bound directly from the event's extracted fields.",
+            allowed_tools=("dispatch_squad",),
+            step_id="1",
+            required_event_fields=missing,
+            kind="direct_tool",
+            direct_tool_name="dispatch_squad",
+            direct_tool_kwargs=kwargs,
+        ),
     )
 
 
@@ -134,8 +151,8 @@ _FAST_JUDGMENT_POLICY = InvocationPolicy(max_output_tokens=400, reasoning_effort
 
 def _bind_report_team_movement(event: dict) -> tuple[Step, ...]:
     area = (event.get("area") or "").strip()
-    description = (event.get("description") or "").strip()
-    missing = tuple(name for name in ("area",) if not event.get(name))
+    description = _report_text(event)
+    missing = tuple(name for name in ("area",) if not area)
     if missing:
         return (
             Step(
@@ -174,7 +191,9 @@ def _bind_report_team_movement(event: dict) -> tuple[Step, ...]:
 
 # == Protocols (authored for SEC_001; docs/responce_improve.md) ==============
 #
-# All seven: approval_flag=False, commander_only=False, requires_confirmation=False.
+# All eight: approval_flag=False, commander_only=False, requires_confirmation=False.
+# Descriptions are exclusive: each names what it is for and which sibling protocol to use
+# instead. Do not copy these descriptions into profiles.firefighting.
 
 PROTOCOLS = [
     Protocol(
@@ -204,12 +223,15 @@ PROTOCOLS = [
     Protocol(
         name="update_camera_status",
         description=(
-            "Applies when a technician or operator reports a camera's own operating condition -- "
-            "offline, degraded, back online, or a physically cut communications cable -- for one "
-            "or more named camera identifiers. Does not apply to what a camera shows about a "
-            "hostile or suspicious event (use report_security_incident for that). Record the "
-            "physical observation reported (what was seen); any stated cause or suspicion from "
-            "the reporter is the reporter's own claim, never recorded as fact."
+            "Applies when a technician or operator reports one or more named cameras' own "
+            "operating condition -- offline, degraded, back online, a physically cut "
+            "communications cable, frozen frame, or intermittent reception -- including when "
+            "two cameras (for example CAM-01 and CAM-02) are reported down in the same message. "
+            "Camera identifiers belong in entities; call update_camera_status once per named "
+            "camera. Does not apply to what a camera shows about a hostile or suspicious event "
+            "(use report_security_incident for that). Record the physical observation reported "
+            "(what was seen); any stated cause or suspicion from the reporter is the reporter's "
+            "own claim, never recorded as fact."
         ),
         participating_agents=("surveillance_agent",),
         approved_tools=("update_camera_status",),
@@ -232,9 +254,10 @@ PROTOCOLS = [
             "itself says the situation is already handled, resolved, or presents no further risk "
             "(use log_security_observation for that -- never dispatch a drone for an "
             "already-handled report). Does not apply to a plain camera/sensor equipment-status "
-            "observation with no security implication (use update_camera_status for that), and "
-            "does not apply to a request to actually send an external force (use "
-            "dispatch_neighboring_force for that)."
+            "observation with no security implication, including dual-camera outages or a cut "
+            "cable (use update_camera_status for that). Does not apply to sending this site's "
+            "own roster/squad (use dispatch_own_squad for that). Does not apply to a request to "
+            "send an external neighboring force (use dispatch_neighboring_force for that)."
         ),
         participating_agents=("surveillance_agent",),
         approved_tools=("dispatch_drone_to_area",),
@@ -243,6 +266,9 @@ PROTOCOLS = [
         approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
+        needs_insight=False,
+        direct_tool_binder=_bind_dispatch_drone,
+        direct_lane_eligible=True,
         # A field/civilian security report can arrive in any group, not only the
         # camera-ops channel this protocol's own agent (surveillance_agent) is bound
         # to -- keep it selectable everywhere (orchestrator/group_routing.py).
@@ -278,9 +304,10 @@ PROTOCOLS = [
             "Applies when a report requires dispatching a real neighboring/external force -- "
             "ambulance, police, K9, or YASAM (YAMAG folds into YASAM) -- to an area, most "
             "commonly a casualty needing medical response, a confirmed threat needing a "
-            "police/YASAM response, or a search needing a K9 unit. Does not apply to a mere "
-            "report or recon request with no dispatch decision yet (use "
-            "report_security_incident first for that)."
+            "police/YASAM response, or a search needing a K9 unit. Does not apply to sending "
+            "this site's own response-team roster, squad, or members (use dispatch_own_squad "
+            "for that -- never kind=squad here). Does not apply to a mere report or recon "
+            "request with no dispatch decision yet (use report_security_incident first for that)."
         ),
         participating_agents=("neighboring_forces_agent",),
         approved_tools=("dispatch_neighboring_force",),
@@ -289,6 +316,27 @@ PROTOCOLS = [
         approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
+    ),
+    Protocol(
+        name="dispatch_own_squad",
+        description=(
+            "Applies when a report requires sending this site's own response-team roster, "
+            "squad, or members to an area -- our people, not police, ambulance, K9, or YASAM. "
+            "Does not apply to a neighboring/external force (use dispatch_neighboring_force "
+            "for that). Does not apply to drone recon of an unconfirmed hostile event (use "
+            "report_security_incident for that)."
+        ),
+        participating_agents=("neighboring_forces_agent",),
+        approved_tools=("dispatch_squad",),
+        expected_success_output="Confirmation that the site's own squad was dispatched, en route, with its ETA.",
+        criticality=CriticalityLevel.HIGH,
+        approval_flag=False,
+        requires_confirmation=False,
+        commander_only=False,
+        needs_insight=False,
+        direct_tool_binder=_bind_dispatch_own_squad,
+        direct_lane_eligible=True,
+        safety_critical=True,
     ),
     Protocol(
         name="report_team_movement",
@@ -351,4 +399,3 @@ PROTOCOLS = [
         commander_only=False,
     ),
 ]
-

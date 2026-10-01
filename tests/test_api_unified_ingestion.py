@@ -69,8 +69,8 @@ def test_event_and_msg_report_call_the_same_orchestrator_functions(tmp_path, tea
     # neither may implement a second, parallel sequence.
     calls = []
 
-    import api.ingestion as events_module
-    import api.ingestion as messages_module
+    import api.routes as events_module
+    import api.routes_messages as messages_module
 
     original_begin_report = events_module.begin_report
 

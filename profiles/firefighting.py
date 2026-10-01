@@ -61,6 +61,7 @@ FORCE_BASES = {
     "ambulance": "ornim_street",
 }
 FORCE_POOL_SIZE = 2
+FORCE_BUSY_SECONDS = 2 * 60 * 60
 
 # Cameras: create-if-missing only (OPERATIONAL_SEED, below), mirroring
 # profiles/response_team.py's own CAMERAS/_ensure_operational_seed_data pattern exactly
@@ -97,6 +98,27 @@ APPARATUS = (
     {"apparatus_id": "APP-CARMEL-1", "callsign": "Carmel 1", "status": "operational", "current_area": "fire_station"},
 )
 
+# Aerial recon fleet for report_fire_incident / dispatch_drone_to_incident -- home is the
+# station, matching FIREFIGHTING_DRONE_HOME. Create-if-missing only, same idiom as CAMERAS.
+DRONES = (
+    {
+        "drone_id": "DRONE-FF-01",
+        "callsign": "Lookout-1",
+        "model": "Matrice 350 RTK",
+        "status": "ready",
+        "battery_percent": 100,
+        "current_area": FIREFIGHTING_DRONE_HOME,
+    },
+    {
+        "drone_id": "DRONE-FF-02",
+        "callsign": "Lookout-2",
+        "model": "Matrice 350 RTK",
+        "status": "ready",
+        "battery_percent": 100,
+        "current_area": FIREFIGHTING_DRONE_HOME,
+    },
+)
+
 
 # The dashboard runs exactly one profile at a time.  Both selectable profiles
 # therefore use the deployment's single Telegram bot token; the supervisor
@@ -118,6 +140,39 @@ EVENT_TYPES = [
 EVENT_TYPE_REQUIRED_FIELDS = {
     "fire_incident": ("area",),
     "mutual_aid_dispatch": ("area",),
+    "drone_dispatch": ("area",),
+    "surveillance_report": ("entities",),
+    "apparatus_movement": ("entities",),
+}
+
+EVENT_TYPE_DESCRIPTIONS = {
+    "crew_availability": (
+        "A firefighting crew member reporting their own shift availability, or a commander "
+        "declaring the crew's opening-shift status including named station apparatus."
+    ),
+    "surveillance_report": (
+        "A fire camera or thermal sensor's own operating condition -- heat-alert, lens cleaning, "
+        "smoke/glare, thermal confusion, or a frozen feed. Camera identifiers go into entities."
+    ),
+    "fire_incident": (
+        "A first report of an active or escalating fire -- smoke or flame newly detected, spread "
+        "into new terrain, or a casualty/trapped person. Not an already-extinguished no-risk brush fire."
+    ),
+    "mutual_aid_dispatch": (
+        "A request to dispatch an external mutual-aid resource -- water tankers, firefighting "
+        "aircraft, police, or ambulance -- never this station's own Ashed 3 or Carmel 1 engines."
+    ),
+    "drone_dispatch": (
+        "An explicit request for aerial drone recon of a fire already known or being monitored, "
+        "not the first report of a new fire."
+    ),
+    "historical_query": (
+        "A request for a retrospective, end-to-end debrief of an incident already underway or closed."
+    ),
+    "apparatus_movement": (
+        "A report that a named station apparatus (Ashed 3 or Carmel 1) left the station, is en "
+        "route, or changed operating status."
+    ),
 }
 
 # Originally approved (decision 1, Profile Split Plan implementation prompt) as exactly six,
@@ -164,11 +219,25 @@ OPTIMIZATION_POLICY = OptimizationPolicy(
 
 from profiles.firefighting_agents import (
     AGENTS,
+    RESOURCE_UNAVAILABLE_DESCRIPTION,
     FirefightingCrewStatusAgent,
     FirefightingExternalForcesAgent,
     FirefightingSurveillanceAgent,
+    _AREA_LABELS,
+    _RESOURCE_KIND_LABELS,
+    _describe_resource_unavailable,
+    _find_resource_alternatives,
 )
-from profiles.firefighting_protocols import PROTOCOLS
+from profiles.firefighting_protocols import (
+    PROTOCOLS,
+    _as_aware_iso,
+    _bind_apparatus_movement,
+    _bind_dispatch_drone,
+    _bind_dispatch_mutual_aid,
+    _bind_record_crew_availability,
+    _bind_record_crew_shift_status,
+    _bind_update_camera_observation,
+)
 from profiles.firefighting_simulation import (
     OPERATIONAL_SEED,
     SIMULATION_GROUPS,

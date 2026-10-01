@@ -578,13 +578,18 @@ def test_scenario_9_malformed_optional_field_proceeds_with_it_null(tmp_path, tea
             "Extract this operational event": malformed_extraction,
             "RISK_SCORE": "RISK_SCORE: 0.2\nREASON: routine",
             "Choose the protocol": "SELECTED: report_security_incident\nREASON: unconfirmed suspicious activity",
-            "participating in the": _single_agent_formulation(
-                "surveillance_agent", "log the observation at south_corner; no drone dispatch needed"
-            ),
-            "VERDICT:": _VERDICT_SUCCESS,
         }
     )
     ctx = _sec_ctx(tmp_path, teardown_ctx, agent)
+    surveillance = ctx.deps.registry.get("surveillance_agent")
+    from persistence import open_response_team_surveillance_store
+    import profiles.response_team as rt
+
+    surveillance.surveillance_store = open_response_team_surveillance_store(
+        str(tmp_path / "scenario9_surv.db"), eta_fn=rt.eta_seconds, home_area=rt.DRONES_WAREHOUSE
+    )
+    for drone in rt.DRONES:
+        surveillance.surveillance_store.ensure_drone(**drone)
     client = build_app(ctx).test_client()
 
     event_id = _submit(client, VIEWER_IDENTITY, "unusual activity reported near the south corner")

@@ -31,6 +31,8 @@ def _ensure_operational_seed_data() -> None:
     )
     for camera in CAMERAS:
         surveillance.ensure_camera(**camera)
+    for drone in DRONES:
+        surveillance.ensure_drone(**drone)
 
     apparatus_store = open_apparatus_store(FIREFIGHTING_APPARATUS_DB_PATH)
     for apparatus in APPARATUS:

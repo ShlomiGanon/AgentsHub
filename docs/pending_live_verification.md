@@ -2,10 +2,10 @@
 
 **Why this file exists:** the OpenRouter key backing the isolated response_team stack ran out
 of credits mid-session (every model call returned `402 Payment Required`; zero events were
-created in the last attempted run). Everything below is implemented, unit-tested, and the full
-suite is green, but has **not** been confirmed against a real model call. When credits are
-restored, run this file top to bottom on a **fresh isolated DB** (never production) and update
-it with pass/fail per item.
+created in the last attempted run). Everything below is implemented and unit-tested. A live
+run against real models on a fresh isolated DB was completed on **2026-10-01** — results are
+in the dated section immediately after the setup recipe. Keep the case list below as the
+repeatable playbook.
 
 Isolated stack setup (repeat exactly, per the established pattern this session used):
 1. Kill any listener on the isolated ports, wipe `data/response_team/response_team_history.db*`.
@@ -26,6 +26,140 @@ Sender identities below are resolved numeric persona IDs (`SimulationPersona.off
 throughout this session's drivers.
 
 ---
+
+## Live run 2026-10-01 (isolated simulator stack)
+
+Ran this checklist against a **blank** `profiles.response_team` DB using local `.env`
+models (`CORE`/`SUB` = `openrouter` / `anthropic/claude-sonnet-4.6`; OpenRouter
+`limit_remaining` ≈ $37 at start). Stack: `python -m api.app` on `API_PORT=18907` and
+`python -m bot.simulator_app` on `SIMULATOR_PORT=18915` only — **no** `bot.app`. Existing
+`data/response_team/response_team_history.db*` was snapshotted, wiped for the run, then
+restored. `api.app.ensure_bot_service` provisioned `bot-service` as commander on the
+fresh DB; the extra `write_user` step below is no longer required.
+
+| Item | Result | Notes |
+| --- | --- | --- |
+| §0 simulator commander-alert delivery | **PASS** | After case 3, `/Simulator-msg/poll` on `9000000000000004` showed the `resource_unavailable_alert` text in the commander's private chat (stub `send_text`). Delivery path confirmed for `bot.simulator_app`; real `bot.app` still unconfirmed. |
+| §1 case 1 (#8 drone 1/2) | **PASS** | `outcome=succeeded`, `report_security_incident`, `drone_missions` gained `MSN-C6CCECBC` (`DRONE-01` in_flight). |
+| §1 case 2 (#11 drone 2/2) | **PASS** | `outcome=succeeded`, second mission `MSN-600A77EA`; both drones `in_flight`, ready list empty. |
+| §1 case 3 (#19 drone unavailable) | **PASS** (mechanism) | `handled_resource_unavailable` (not `failed`). `job_finished.target_chat_ids==[-9000000000000000]` (reporter group only). Separate `resource_unavailable_alert` with `target_chat_ids==[]`. Report Hebrew uses רחפן / שער מזרח, not `drone`/`east_gate`. Commander alert lists alternatives. English fragment in commander alert: `(No ready drones available in fleet for immediate dispatch.)`. |
+| §1 case 4 (#20) | **PASS** (mechanism) | Same notification split; report uses כטב"מ / שער מערבי. Same English fragment in commander alert. |
+| §1 case 5a (2 police) | **PASS** | `dispatch_neighboring_force`, `succeeded`, `unit_count=2` `force_kind=police`. |
+| §1 case 5b (pool exhausted) | **PASS** | `handled_resource_unavailable`; report names משטרה / שער מזרחי; commander alert remaining `מד"א 2/2`, כלבנים `2/2`, יס"מ `2/2`, משטרה `0/2`. |
+| §1 case 6 (squad member) | **FINDING** (doc-predicted UX gap) | Model did **not** pick `kind=squad`. Chose `report_security_incident` and reported drone-unavailable instead of "חבר צוות". Mechanism itself not exercised for squad. |
+| §2.1 lookup no camera alert | **PASS** | `מה מצב המצלמות באזור המטעים המזרחיים?` answered (no cameras in `east_orchards`); no event; no `resource_unavailable_alert`. |
+| §2.2 leak-prevention | **PASS** | Case 1 immediately after the lookup still `succeeded` with a real drone dispatch, not resource-unavailable. |
+| §3 reporter fluency | **FAIL** (tone/fabrication, not mechanism) | Case 3 `report_text` fabricates camera confirmation ("אושרה דרך מצלמות האבטחה") and a future auto-dispatch. Case 4 is cleaner but still mentions camera-feed access. Banned openers not used. |
+| §4 #24 × 10 | **PASS** (protocol stability) | 10/10 `selected_protocol=report_security_incident` (0 protocol divergence). 9/10 `handled_resource_unavailable`, **1/10 `failed`** (round 2) — outcome inconsistency, not an unsafe protocol downgrade. Reused one DB with fresh senders. |
+| §5 | skipped | Doc marks non-blocking. |
+| §6.1 situational picture | **PASS** with note | Treated as a question (no new event). Answer scoped to the latest incident, not a multi-domain COP. No crash. |
+| §6.2 roster question | **PASS** | Model called `report_team_availability`; 6 members awaiting. Date in the answer was wrong (`15.07.2025`). |
+| §6.3 approval-policy question | **FAIL** | Model refused ("אין כלי מתאים לשאלת סמכויות") instead of describing commander button approval from `system_context`. |
+| §6.4 CAM-01 resembling policy | **PASS** | Not canned-policy. `outcome=succeeded`; CAM-01 store status `offline`. `classification`/`selected_protocol` were null but `update_camera_status` ran. |
+| §6.5 cancel phrase | **PARTIAL** | Incomplete report did **not** open an `event_data` hold (bot asked a clarifying question, no event). Cancel text `עזוב, תשכח מזה, לא חשוב` became a new event, `no_match_protocol`, harmless "לא נעשה דבר". |
+| §6.6 free-text אישור | **N/A** | All `profiles.response_team` protocols have `approval_flag=False`; no approval hold to type against. |
+| §6.7 camera statuses | **MIXED** | Intermittent → CAM-01 `degraded` **PASS**. Dual offline **FAIL** (`outcome=failed`, neither camera updated). Cut-cable **FAIL** (picked `report_security_incident`, agent said camera-status tool unavailable). Recovery **PASS** (CAM-01 and CAM-02 `active`). |
+
+---
+
+## Dual-profile live run 2026-10-01 (evening) — isolated blank DBs
+
+Post-refactor verification of `profiles.response_team` and `profiles.firefighting` as
+independent domains. Unit suite immediately before this run: **1813 passed**, 1 known flake
+(`tests/test_integration_retry_exhaustion.py`, `succeeded` vs `failed` under the CrewAI mock;
+passed isolated in 6.1s). `profiles.fire_station` was not started.
+
+**Method:** snapshot existing profile DBs → wipe `RESETTABLE_DATABASES` → start
+`python -m api.app` + `python -m bot.simulator_app` only (never `bot.app`) → one message at a
+time → restore originals. Ports: Response Team `18907`/`18915`; Firefighting `18906`/`18916`.
+`API_PORT`/`SIMULATOR_PORT` were set only in the child env so the declared ports were not
+overridden by a leftover shell. Driver: `data/_dual_live_e2e/driver.py` (under `data/`,
+gitignored). Models: local `.env` `CORE`/`SUB` = `openrouter` / `anthropic/claude-sonnet-4.6`.
+Holds were resolved as bot-service via `POST /Approve/<event_id>` with `decision=approved`
+(the first Firefighting pass used `decision=approve`, which `orchestrator/holds.py` treats as
+reject — that pass is discarded; numbers below are the second Firefighting pass).
+
+Raw per-case JSON: `data/_dual_live_e2e/results.jsonl`.
+
+### Response Team (SEC_001) — ports 18907 / 18915
+
+| Item | Result | Notes |
+| --- | --- | --- |
+| Case 1 (#8 drone 1/2) | **PASS** | `outcome=succeeded`, `report_security_incident`, mission `MSN-BC7CBCAC` (`Falcon-1` / `DRONE-01` `in_flight`). |
+| Case 2 (#11 drone 2/2) | **PASS** | `outcome=succeeded`, mission `MSN-F50F0349`; both drones `in_flight`. |
+| Case 3 (#19 drone unavailable) | **PASS** | `handled_resource_unavailable` (not `failed`). Hebrew report uses רחפן / שער מזרחי. `resource_unavailable_alert` + `job_finished`. Commander alert lists 0 ready drones and camera/roster alternatives. |
+| Case 4 (#20 drone unavailable) | **PASS** | Same mechanism for שער מערבי. |
+| Case 5a (2 police) | **PASS** | `dispatch_neighboring_force`, `succeeded`, `unit_count=2` `force_kind=police`. |
+| Case 5b (pool exhausted) | **PASS** | `handled_resource_unavailable`; report names משטרה; commander alert remaining `0/2` police. |
+| Case 6 (own squad) | **PASS** (protocol) / **FINDING** (hold) | Model now selects `dispatch_own_squad` (not drone / neighboring force). Outcome stayed open on an `event_data` hold (`area` missing) so the empty-roster resource-unavailable path was not reached. |
+| §6.4 CAM-01 policy-resembling | **PASS** | Processed as a camera report, not a canned policy answer. CAM-01 store status `offline`. |
+| §6.7 intermittent | **PASS** | CAM-01 `degraded`. |
+| §6.7 dual offline | **PASS** | CAM-01 and CAM-02 both `offline` (this failed on the morning run). |
+| §6.7 cut-cable | **PASS** | `update_camera_status`, CAM-01 `offline` from the physical-cut corpus sentence. |
+| §6.7 recovery | **PASS** | CAM-01 and CAM-02 returned to `active`. |
+| §4 #24 × 10 | **MIXED** (stable enough, new shape) | Message: phase3 step3 casualty + כיתת כוננות. **5/10** `dispatch_own_squad` + `event_data` hold; **4/10** clarifying question about שכונת ההרחבה (no event); **1/10** English “Could you clarify…”. **0/10** silent protocol downgrade. Selecting the new squad protocol for “אבטחה של כיתת כוננות” is domain-correct; missing required fields still block execution. |
+
+Reporter fluency on cases 3–4: natural Hebrew, no camera-confirmation fabrication, no
+“Commander alert” leaked into the reporter text. Minor wording: “כטיל/כטל סיור” instead of
+רחפן/כטב״מ on the successful drone reports.
+
+### Firefighting (FIRE_002) — ports 18906 / 18916
+
+All three catalogued simulation phases (23 steps) were sent through `bot.simulator_app` on a
+blank Firefighting DB. Protocol selection and side effects:
+
+| Step | Protocol / outcome | Notes |
+| --- | --- | --- |
+| P1.1 opening shift | `record_crew_shift_status` / `succeeded` | Crew recorded. Model also tried to write Ashed 3 / Carmel 1 through the crew tool (“not in the equipment registry”) even though `apparatus` already listed both as `operational`. |
+| P1.2 Omri medical | `record_crew_availability_response` / `succeeded` | 12:00–15:00 recorded. |
+| P1.3 heat alert | `update_camera_observation` / `succeeded` | Correct protocol (not a fire report). Tool used IDs the store does not have; CAM-02/03 stayed `active`. |
+| P1.4 fire-ban notice | no protocol | Informational KKL message; no event settled. |
+| P1.5 CAM-02 paused | `update_camera_observation` / `succeeded` | Correct protocol. Store lookup used `"02"` not `CAM-02`; row unchanged. |
+| P1.6 resolved brush fire | `report_fire_incident` / `succeeded` | **FINDING:** should have been `log_fire_observation` (already extinguished, no risk). Dispatched `Lookout-1` to `route_444`. |
+| P1.7 COP question | `overall_situational_picture` / `succeeded` | Crew 5/6, both engines operational, Lookout-1 already in flight. |
+| P2.1 first smoke (CAM-03) | `report_fire_incident` / `succeeded` | Correct first-fire protocol. `Lookout-2` dispatched to `ornim_street`. Fleet now empty. |
+| P2.2 citizen smoke | `report_fire_incident` / `handled_resource_unavailable` | Hebrew רחפן; no third mission. Mechanism holds on this profile independently of Response Team. |
+| P2.3 Ashed 3 movement | classified `apparatus_movement` | Protocol/outcome did not settle in the wait window; both engines remained `operational`. |
+| P2.4 CAM-03 thermal freeze | `update_camera_observation` / `closed_on_precedent` | Correct family (equipment, not a new fire). |
+| P2.5 fire jumped trail | `report_fire_incident` / `handled_resource_unavailable` | Same empty-fleet path. |
+| P2.6 KKL tractors | `dispatch_mutual_aid` | Protocol selected (not drone / not own apparatus). |
+| P2.7 commander COP | conversational | Answered from live state (drones en route, 5/6 crew, Ashed 3 / Carmel 1). |
+| P3.1 Chemi-Kal | `report_fire_incident` / `handled_resource_unavailable` | High-risk fire, still no spare drone. |
+| P3.2 evacuation | `dispatch_mutual_aid` | Protocol selected. |
+| P3.3 trapped children | `report_fire_incident` / `handled_resource_unavailable` | Not a camera-observation or mutual-aid misroute. |
+| P3.4 prioritize | `overall_situational_picture` / `succeeded` | Combined crew + surveillance snapshot. |
+| P3.5 false alarm | `log_fire_observation` / `closed_on_precedent` | Correct split vs `report_fire_incident`. |
+| P3.6 water curtain | `dispatch_mutual_aid` | Protocol selected. |
+| P3.8 district aid arrived | `dispatch_mutual_aid` / `succeeded` | `water_tankers` × 1 to `chemical_plant` (`NFD-2D18C94F`). Fire-domain force kind, not police/squad. |
+| P3.9 debrief | `query_historical_incidents` / `uncertain` | History agent asked for records it was not given in the task text. |
+
+`dispatch_drone_to_incident` was not selected in this corpus (FIRE_002 never contains a
+follow-up “send a drone, the fire is already on the log” sentence). First fires used
+`report_fire_incident`; extra recon after fleet empty used the same protocol and then the
+resource-unavailable path. Camera steps stayed on `update_camera_observation`. Mutual aid
+stayed on `dispatch_mutual_aid` with `water_tankers`, never Response Team force kinds.
+
+### Isolation checks
+
+- Response Team events named Falcon-1/2, CAM-01/02/03, משטרה, כיתת כוננות / `dispatch_own_squad`.
+- Firefighting events named Lookout-1/2, CAM-02/03, Ashed 3, Carmel 1, `water_tankers`,
+  רכס אורנים / כביש 444 / מפעל כימי-קל.
+- No YASAM/squad/east_gate strings in Firefighting reports; no Ashed/Carmel/water_tankers in
+  Response Team reports.
+
+### Open findings (not blockers for the protocol split)
+
+1. Firefighting camera binders still depend on the model emitting `CAM-02`/`CAM-03`; spoken
+   “מצלמה 02/03” does not match the store.
+2. P1.6 (resolved roadside fire) still over-selects `report_fire_incident` and dispatches a
+   drone — the description split is not yet sufficient for that sentence.
+3. `dispatch_own_squad` is discoverable live, but required-field holds (`area`) block the
+   empty-roster resource-unavailable demonstration.
+4. Restore of Firefighting DBs hit Windows file-lock (`WinError 32`) until the API process
+   was killed; originals were restored after that.
+
+---
+
 
 ## 0. Prerequisite check: does bot.simulator_app dispatch the new notification kind at all?
 
@@ -340,3 +474,135 @@ replacement actually behaves as intended.
   `surveillance_agent.surveillance_store.list_cameras()` on the live/isolated DB.
 - **Fail:** a wrong status, a missed camera (only one of several updated), or the model failing
   to call the tool at all for one of the named cameras.
+
+---
+
+## LLM Cost & Latency Optimization Strategies
+
+This section is the dual-profile follow-up to `docs/cost_latency_review.md`, `IMPROVE.MD`,
+and the deferred stages in `docs/Next_Plan.md`. It is a strategy note, not authorization to
+change public HTTP, BTS, loader, or LLM contracts. The live evening run above is the
+production-shaped evidence: wall-clock time was dominated by sequential provider calls, not
+SQLite or Flask.
+
+### Where time and money actually go
+
+A successful one-step Telegram report still pays for several serial model calls before the
+user sees a result:
+
+1. intent classification
+2. extraction
+3. risk assessment
+4. protocol selection
+5. task formulation (skipped when `direct_tool_binder` is set)
+6. specialist execution (CrewAI tool loop, often more than one inner call)
+7. insight generation (skipped when `needs_insight=False`)
+8. final judgment (skipped on the deterministic resource-unavailable path)
+
+Precedent closure already drops formulation, execution, insights, and judgment. The dual-profile
+rewrite added two further structural skips that showed up live tonight:
+
+- **Direct-tool binders** on `report_security_incident`, `dispatch_own_squad`,
+  `report_fire_incident`, `dispatch_drone_to_incident`, camera updates, and mutual aid — no
+  formulation call, and the tool actually runs so fleet exhaustion is `handled_resource_unavailable`
+  instead of a judged `failed`.
+- **`needs_insight=False`** on those same deterministic protocols — Insights Agent is not
+  invoked just to restate a tool result.
+
+Those two skips are the highest-leverage *already-shipped* cost cuts. Further savings should
+not re-introduce keyword classifiers or merge domains.
+
+### Reduce the number of provider round-trips
+
+Work in this order. Each item removes or collapses a call without shrinking safety checks.
+
+1. **Keep binders and `needs_insight=False` on every protocol whose success is a single
+   known tool.** Do not send a formulation prompt to invent arguments the event already has.
+   Empty `approved_tools` (e.g. `log_fire_observation`) must stay empty so the model cannot
+   “helpfully” dispatch.
+2. **Do not call Insights or Judgment to narrate a resource-unavailable fact.** The executor
+   already owns `signal_resource_unavailable` → `handled_resource_unavailable`. Composer
+   grounding (empty `actions_taken` ⇒ no invented dispatch/camera confirmation) is cheaper
+   and safer than another verifier call.
+3. **Evaluate a merged `MessagePlan` for conversation/question routes only**
+   (`docs/Next_Plan.md` Stage 1). Direct questions and COP asks paid a full intent+router
+   tax tonight; a single validated plan can cut that path by ~30% p50 if the safety gate
+   holds. Leave report/request on the current chain until the planner is non-inferior on
+   authorization and clarification.
+4. **Evaluate combining risk + protocol selection** (Stage 2) only behind a high-risk
+   false-negative gate of zero. Tonight’s protocol choices were the quality-sensitive step;
+   merging it with risk is a cost win only if Firefighting’s
+   `report_fire_incident` vs `log_fire_observation` split does not regress.
+5. **Put insight and judgment on one Insights Agent invocation** (Stage 3) for low-risk
+   one-step successes. Keep them split for high-risk, partial failure, and RU-adjacent runs.
+6. **Replace CrewAI’s open tool loop with a validated tool plan** (Stage 6) on read-only
+   specialists first. The Firefighting camera failures tonight were wasted inner loops on
+   IDs the store does not contain (`02` vs `CAM-02`). A schema-validated `camera_id` enum
+   would have been one failed call, not a multi-iteration search.
+
+### Shrink prompt overhead (tokens in, tokens out)
+
+Output tokens dominate latency. Input tokens dominate cost.
+
+- **Stable prefix, volatile suffix.** Put protocol catalogs, schemas, and composer rules
+  before the user text so provider prompt caches can reuse the prefix across events in the
+  same process.
+- **Do not paste sibling-profile text.** Dual-profile isolation is also a token cut:
+  Firefighting must not carry Response Team protocol descriptions, FORCE_BASES, or Hebrew
+  squad language, and vice versa. Shared modules stay mechanism-only (UTC, attendance
+  kwargs, executor, composer rules) with no domain strings.
+- **Pass structured facts, not transcripts, into later stages.** Precedent matches are
+  already forwarded into insights; do the same for extraction JSON into binders so the
+  specialist prompt is the tool schema plus one event object, not the raw chat history.
+- **Cap specialist `max_iter`.** Profiles already require `MAX_ITER = 8`; camera and
+  apparatus tools should fail closed after one invalid ID rather than retrying the same
+  missing key.
+- **Ask for short, schema-constrained outputs** (selected protocol name, camera_id enum,
+  force_kind enum). Do not request chain-of-thought. User-facing Hebrew is composed once,
+  from facts, in the report composer.
+- **Strip Deep Debug from the live path.** `DEEP_DEBUG=false` was used tonight; leaving it
+  on persists raw prompts and adds status chatter without helping the model.
+
+### Cut waiting that is not model work
+
+These are free relative to an extra Sonnet call:
+
+- ACK immediately (`מטפל בזה...`) and finish on the queue — already in place.
+- Auto-approve holds only through the existing `POST /Approve` contract
+  (`decision=approved`), never by adding a keyword “אישור” path.
+- Serial event queue is a latency floor under load; a policy-aware worker pool
+  (`docs/Next_Plan.md` Stage 5) is the right later lever, with one SQLite writer kept.
+- Startup warmup of each unique provider/model pair stays; it must not be repeated per
+  request.
+
+### Route cheaper models only after quality gates
+
+`STAGE_MODEL_POLICIES` is defined and still disconnected (`docs/Next_Plan.md` Stage 4).
+When it is turned on:
+
+| Stage | Bias | Why |
+| --- | --- | --- |
+| Intent, extraction, camera/apparatus binders | faster / cheaper tier | Closed vocabularies, easy to validate. |
+| Protocol selection, high-risk fire/casualty | current core tier | Tonight’s remaining errors are selection errors, not transport. |
+| Composer / conversational answer | current core tier until groundedness evals exist | Fabrication risk is user-visible. |
+| Insights/judgment on deterministic successes | skip entirely | Already skipped via `needs_insight=False`. |
+
+Never pick a cheaper model as a silent fallback. Log the resolved policy on every
+invocation.
+
+### What not to do
+
+- Do not restore keyword classifiers for speed. They were the CAM-01 policy-question bug.
+- Do not share protocol description templates across profiles.
+- Do not parallelize side-effecting steps of one event.
+- Do not add provider-level automatic retries (they multiply cost on the same bad prompt).
+- Do not stream tokens; status + one edit remains the UX.
+
+### Suggested measurement after the next change
+
+Re-run `pytest tests/test_integration_cost_and_latency_review.py -s` for call *counts*, then
+one isolated live sample per route (conversation, question, one-step report, RU report, hold
+continuation) recording p50/p95 wall time, provider-request count, and input/output tokens.
+Use the post-`SPEED_PLAN.MD` + dual-profile binder path as the baseline, not the 2026-08
+mocked 348 ms figure.
+

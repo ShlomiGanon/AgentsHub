@@ -4,6 +4,8 @@ protocols.executor.execute_step_with_retry's kind='direct_tool' path."""
 
 from profiles.response_team import (
     _as_aware_iso,
+    _bind_dispatch_drone,
+    _bind_dispatch_own_squad,
     _bind_record_attendance,
     _bind_report_team_movement,
     _bind_update_camera_status,
@@ -86,6 +88,7 @@ def test_update_camera_status_single_camera_binds_a_model_driven_step():
     assert step.allowed_tools == ("update_camera_status",)
     assert "CAM-03" in step.task_text
     assert "intermittent reception" in step.task_text
+    assert "MUST call update_camera_status exactly once" in step.task_text
 
 
 def test_update_camera_status_multi_camera_produces_one_step_per_camera():
@@ -105,7 +108,7 @@ def test_update_camera_status_missing_fields_raises_no_camera_calls():
     steps = _bind_update_camera_status(event)
 
     assert len(steps) == 1
-    assert set(steps[0].required_event_fields) == {"entities", "description"}
+    assert set(steps[0].required_event_fields) == {"entities"}
     assert steps[0].direct_tool_kwargs == {}
 
 
@@ -134,3 +137,38 @@ def test_report_team_movement_without_area_requires_it():
 
     assert step.required_event_fields == ("area",)
     assert step.direct_tool_kwargs == {}
+
+
+def test_dispatch_drone_binds_area_and_description():
+    event = {"area": "east_gate", "description": "suspicious person", "raw_text": "person at east gate"}
+
+    (step,) = _bind_dispatch_drone(event)
+
+    assert step.kind == "direct_tool"
+    assert step.direct_tool_name == "dispatch_drone_to_area"
+    assert step.direct_tool_kwargs["target_area"] == "east_gate"
+    assert step.direct_tool_kwargs["incident_description"] == "suspicious person"
+    assert step.direct_tool_kwargs["mission_type"] == "recon"
+
+
+def test_dispatch_drone_without_area_requires_it():
+    event = {"area": None, "raw_text": "something hostile"}
+
+    (step,) = _bind_dispatch_drone(event)
+
+    assert step.required_event_fields == ("area",)
+    assert step.direct_tool_kwargs == {}
+
+
+def test_dispatch_own_squad_binds_unit_count_one():
+    event = {"area": "east_orchards", "description": "send our people", "raw_text": "send our squad"}
+
+    (step,) = _bind_dispatch_own_squad(event)
+
+    assert step.kind == "direct_tool"
+    assert step.direct_tool_name == "dispatch_squad"
+    assert step.direct_tool_kwargs == {
+        "target_area": "east_orchards",
+        "unit_count": 1,
+        "note": "send our people",
+    }

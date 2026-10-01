@@ -288,3 +288,27 @@ def test_describe_resource_unavailable_returns_a_hebrew_fact_and_alternatives():
     assert rt._AREA_LABELS["east_gate"] in fact
     assert "east_gate" not in fact  # never the raw internal area identifier
     assert "CAM-01" in alternatives
+
+
+def test_describe_resource_unavailable_replaces_the_english_drone_fleet_reason():
+    registry = _fake_registry()
+
+    fact, _alternatives = rt._describe_resource_unavailable(
+        "drone",
+        "east_gate",
+        "No ready drones available in fleet for immediate dispatch.",
+        registry,
+    )
+
+    assert "No ready drones" not in fact
+    assert "אין רחפנים מוכנים" in fact or "no ready drones available for immediate dispatch" in fact
+
+
+def test_dispatch_squad_wraps_kind_squad(tmp_path, monkeypatch):
+    agent = _neighboring_forces_agent(tmp_path, monkeypatch)
+    result = agent.dispatch_squad(target_area="east_orchards", unit_count=1)
+
+    assert "squad dispatch failed" in result
+    resource_kind, area, _reason = agent.take_resource_unavailable_signal()
+    assert resource_kind == "squad_member"
+    assert area == "east_orchards"

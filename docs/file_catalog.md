@@ -190,7 +190,8 @@ This English catalog describes every tracked or pending first-party file in the 
 | `profiles/simulation.py` | Production | Private implementation | Defines simulation persona, group, scenario, and roster declarations and the reserved Telegram ID scheme. |
 | `profiles/simulation_provisioning.py` | Production | Private implementation | Ensures a profile's declared simulation users and groups exist, registers/approves any of them on the agent-owned rosters they declare, and runs a profile's own optional OPERATIONAL_SEED hook (docs/responce_improve.md). |
 | `profiles/template.py` | Production | Private implementation | Provides a reference template for authoring deployment profiles. |
-| `protocols/__init__.py` | Production | Public facade | Exposes protocol contracts, execution, repository operations, and aliases. |
+| `protocols/__init__.py` | Production | Public facade | Exposes protocol contracts, execution, repository operations, binders, and aliases. |
+| `protocols/binders.py` | Production | Private implementation | Shared direct-tool binder helpers (UTC timestamps, attendance kwargs) used by profile protocol modules. |
 | `protocols/contracts.py` | Production | Private implementation | Defines protocols, steps, criticality, results, and edit errors. |
 | `protocols/executor.py` | Production | Private implementation | Executes protocol steps with retry and idempotency enforcement. |
 | `protocols/repository.py` | Production | Private implementation | Loads protocols and atomically edits declarations in profile source. |
@@ -234,6 +235,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_bot_simulator_transport.py` | Test | Internal | Verifies `FakeBotRequest`, `SimulatorTelegramClient`, and synthetic-Update construction against real PTB filters. |
 | `tests/test_bot_transports.py` | Test | Internal | Verifies bot HTTP clients, abstract client behavior, and Telegram transports. |
 | `tests/test_cli_group_admin.py` | Test | Internal | Verifies the Telegram group routing administration command. |
+| `tests/test_dual_profile_protocol_separation.py` | Test | Internal | Verifies exclusive Response Team vs Firefighting protocol descriptions and the approval-policy capability. |
 | `tests/test_environment_config.py` | Test | Internal | Verifies environment-backed model and runtime configuration. |
 | `tests/test_file_catalog.py` | Test | Internal | Ensures this catalog exactly matches the first-party repository tree. |
 | `tests/test_friendly_forces_agent.py` | Test | Internal | Verifies friendly forces agent dispatch tools and coordination records. |
@@ -241,6 +243,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_firefighting_direct_tool_binders.py` | Test | Internal | Verifies Firefighting direct-tool protocol binders. |
 | `tests/test_neighboring_forces_agent.py` | Test | Internal | Verifies the shared, parameterized `agents/neighboring_forces_agent.py` base class directly, independent of either profile. |
 | `tests/test_firefighting_external_forces_agent.py` | Test | Internal | Verifies FirefightingExternalForcesAgent's shared, persisted `dispatch_neighboring_force` tool and per-kind capacity (docs/Admin_Tables_Plan.md). |
+| `tests/test_firefighting_resource_unavailable.py` | Test | Internal | Verifies Firefighting resource-unavailable copy, alternatives, and localized shortage reasons. |
 | `tests/test_firefighting_apparatus_movement.py` | Test | Internal | Verifies FirefightingCrewStatusAgent's update_apparatus_status "who else is at this area" reporting and the report_apparatus_movement protocol (memory/continuity audit fix 4: incident-scoped responder tracking). |
 | `tests/test_group_routing.py` | Test | Internal | Verifies the group routing table, staleness refresh, scope resolution, and dependency scoping. |
 | `tests/test_group_scoping_safety_critical.py` | Test | Internal | Regression: a safety_critical protocol (e.g. report_security_incident, report_fire_incident) stays a selection candidate from every declared simulation group in a profile, regardless of which specialist that group is bound to. |
@@ -284,6 +287,7 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_persistence_events.py` | Test | Internal | Verifies persistence events behavior and edge cases. |
 | `tests/test_profile_loading.py` | Test | Internal | Verifies profile imports, validation, construction, and registry configuration. |
 | `tests/test_profile_simulations.py` | Test | Internal | Verifies the simulation ID scheme, profile validation, provisioning, and JSON materialization. |
+| `tests/test_protocols_binders.py` | Test | Internal | Verifies shared direct-tool binder helpers used by both operational profiles. |
 | `tests/test_protocol_repository.py` | Test | Internal | Verifies protocol loading, validation, rendering, and atomic editing. |
 | `tests/test_protocol_retry.py` | Test | Internal | Verifies protocol retry behavior and edge cases. |
 | `tests/test_provider_telemetry.py` | Test | Internal | Verifies CrewAI provider-event correlation, usage fields, failures, and race recovery. |

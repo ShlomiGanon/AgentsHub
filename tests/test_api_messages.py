@@ -135,6 +135,8 @@ def test_a_report_includes_the_task_id_under_deep_debug(tmp_path, teardown_ctx, 
     every caller sees identical text regardless of its own environment."""
 
     monkeypatch.setattr(routes, "deep_debug_enabled", lambda: True)
+    from api import routes_messages
+    monkeypatch.setattr(routes_messages, "deep_debug_enabled", lambda: True)
     agent = happy_path_agent(risk_score="0.1", selected="status_check", intent="report")
     ctx = _ctx_with(tmp_path, agent)
     teardown_ctx.append(ctx)

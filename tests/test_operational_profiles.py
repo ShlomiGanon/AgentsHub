@@ -60,6 +60,7 @@ def test_response_team_exposes_exactly_its_declared_event_types(sec_profile):
         "camera_status",
         "security_incident",
         "force_dispatch",
+        "squad_dispatch",
         "team_movement",
         "situational_query",
         "incident_summary",
@@ -83,8 +84,8 @@ def test_response_team_exposes_exactly_its_declared_agents(sec_profile):
 def test_response_team_exposes_exactly_its_declared_protocols(sec_profile):
     assert {protocol.name for protocol in sec_profile.protocols} == {
         "record_attendance", "update_camera_status", "report_security_incident",
-        "log_security_observation", "dispatch_neighboring_force", "report_team_movement",
-        "query_situational_picture", "query_incident_summary",
+        "log_security_observation", "dispatch_neighboring_force", "dispatch_own_squad",
+        "report_team_movement", "query_situational_picture", "query_incident_summary",
     }
 
 
@@ -153,6 +154,7 @@ _EXPECTED_IDEMPOTENCY = {
     "recall_drone": True,
     "dispatch_drone_to_area": False,
     "dispatch_neighboring_force": False,
+    "dispatch_squad": False,
     # FIRE
     "dispatch_station_crew": False,
     "request_mutual_aid": False,

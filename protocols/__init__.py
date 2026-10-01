@@ -3,6 +3,7 @@
 import sys
 
 from protocols import contracts
+from protocols.binders import as_aware_iso, attendance_tool_kwargs, bind_record_attendance_response
 from protocols.contracts import (
     CriticalityLevel,
     EVENT_DATA_FIELDS,
@@ -37,6 +38,9 @@ sys.modules[f"{__name__}.loader"] = repository
 sys.modules[f"{__name__}.editor"] = repository
 
 __all__ = [
+    "as_aware_iso",
+    "attendance_tool_kwargs",
+    "bind_record_attendance_response",
     "CriticalityLevel",
     "EVENT_DATA_FIELDS",
     "EDIT_SUCCESS_MESSAGE",

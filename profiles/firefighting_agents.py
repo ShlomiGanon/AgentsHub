@@ -1,6 +1,6 @@
 """Firefighting specialist agents."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from agents import Agent, InvocationPolicy, NeighboringForcesAgent, SurveillanceAgent, TeamStatusAgent, failed_tool_result, get_authenticated_request_identity, tool
@@ -9,7 +9,7 @@ from persistence import (
     ApparatusStoreError,
     open_apparatus_store,
     open_incident_responder_store,
-    open_response_team_surveillance_store,
+    open_surveillance_store,
     open_team_status_persistence,
 )
 from profiles.admin_tables import AdminColumn, AdminTable
@@ -35,7 +35,7 @@ class FirefightingSurveillanceAgent(SurveillanceAgent):
     surveillance_db_path = FIREFIGHTING_SURVEILLANCE_DB_PATH
 
     def __init__(self, model: str, api_key: str | None = None):
-        self.surveillance_store = open_response_team_surveillance_store(
+        self.surveillance_store = open_surveillance_store(
             self.surveillance_db_path, home_area=FIREFIGHTING_DRONE_HOME
         )
         Agent.__init__(self, model, api_key)
@@ -57,10 +57,10 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
 
     def __init__(self, model: str, api_key: str | None = None):
         super().__init__(model, api_key)
-        self.apparatus_store = open_apparatus_store(FIREFIGHTING_APPARATUS_DB_PATH)
+        self.apparatus_store = open_apparatus_store(_facade.FIREFIGHTING_APPARATUS_DB_PATH)
         # Incident linkage is keyed against core `events`, which live in this profile's
         # `DB_PATH` -- a different file from the apparatus/crew-status stores above.
-        self.incident_store = open_incident_responder_store(DB_PATH)
+        self.incident_store = open_incident_responder_store(_facade.DB_PATH)
 
     @tool(
         "get_apparatus_status",
@@ -254,6 +254,118 @@ class FirefightingExternalForcesAgent(NeighboringForcesAgent):
     dispatch_db_path = FIREFIGHTING_FORCES_DB_PATH
     force_bases = FORCE_BASES
     force_pool_size = FORCE_POOL_SIZE
+    force_busy_seconds = FORCE_BUSY_SECONDS
+
+    def _capacity_shortage_text(self, kind_norm: str, remaining: int, unit_count: int) -> str:
+        return _catalog_text(
+            "firefighting.resource_unavailable.force_reason",
+            remaining=remaining,
+            pool_size=self.force_pool_size,
+            resource=_RESOURCE_KIND_LABELS.get(kind_norm, kind_norm),
+            unit_count=unit_count,
+        )
+
+
+_RESOURCE_KIND_LABELS = {
+    "drone": _catalog_text("firefighting.resource_kind.drone"),
+    "camera": _catalog_text("firefighting.resource_kind.camera"),
+    "police": _catalog_text("firefighting.resource_kind.police"),
+    "ambulance": _catalog_text("firefighting.resource_kind.ambulance"),
+    "water_tankers": _catalog_text("firefighting.resource_kind.water_tankers"),
+    "aircraft": _catalog_text("firefighting.resource_kind.aircraft"),
+    "apparatus": _catalog_text("firefighting.resource_kind.apparatus"),
+}
+
+_AREA_LABELS = {
+    "pine_ridge": _catalog_text("firefighting.area.pine_ridge"),
+    "quarry_junction": _catalog_text("firefighting.area.quarry_junction"),
+    "industrial_park": _catalog_text("firefighting.area.industrial_park"),
+    "ornim_street": _catalog_text("firefighting.area.ornim_street"),
+    "chemical_plant": _catalog_text("firefighting.area.chemical_plant"),
+    "fire_station": _catalog_text("firefighting.area.fire_station"),
+    "route_444": _catalog_text("firefighting.area.route_444"),
+}
+
+_ENGLISH_REASON_KEYS = {
+    "No ready drones available in fleet for immediate dispatch.": "firefighting.resource_unavailable.drone_reason",
+    "no active camera covering the area": "firefighting.resource_unavailable.camera_no_cover",
+}
+
+
+def _localize_unavailable_reason(reason: str) -> str:
+    cleaned = (reason or "").strip()
+    key = _ENGLISH_REASON_KEYS.get(cleaned)
+    if key:
+        return _catalog_text(key)
+    return cleaned
+
+
+def _force_remaining_capacity(neighboring_forces_agent) -> dict[str, int]:
+    busy_since = (datetime.now(timezone.utc) - timedelta(seconds=FORCE_BUSY_SECONDS)).isoformat()
+    busy_by_kind: dict[str, int] = {}
+    for dispatch in neighboring_forces_agent.dispatch_store.list_dispatches():
+        if dispatch["dispatched_at"] > busy_since:
+            busy_by_kind[dispatch["force_kind"]] = busy_by_kind.get(dispatch["force_kind"], 0) + dispatch["unit_count"]
+    return {kind: max(FORCE_POOL_SIZE - busy_by_kind.get(kind, 0), 0) for kind in FORCE_BASES}
+
+
+def _find_resource_alternatives(area: str, registry) -> str:
+    parts: list[str] = []
+    area_label = _AREA_LABELS.get(area, area)
+
+    surveillance_agent = registry.get("surveillance_agent")
+    cameras = surveillance_agent.surveillance_store.list_cameras(area=area)
+    if cameras:
+        camera_text = ", ".join(f"{camera['camera_id']} ({camera['status']})" for camera in cameras)
+        parts.append(_catalog_text("firefighting.resource_unavailable.alternatives.cameras_covering", area=area_label, cameras=camera_text))
+    else:
+        parts.append(_catalog_text("firefighting.resource_unavailable.alternatives.no_cameras", area=area_label))
+
+    ready_drones = surveillance_agent.surveillance_store.list_drones(status="ready")
+    parts.append(_catalog_text("firefighting.resource_unavailable.alternatives.ready_drones", count=len(ready_drones)))
+
+    crew_agent = registry.get("team_status_agent")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    available_members = [
+        entry["full_name"] for entry in crew_agent.status_store.availability_snapshot(now_iso)
+        if entry["availability"] == "available"
+    ]
+    if available_members:
+        parts.append(_catalog_text("firefighting.resource_unavailable.alternatives.available_crew", members=", ".join(available_members)))
+    else:
+        parts.append(_catalog_text("firefighting.resource_unavailable.alternatives.no_crew"))
+
+    neighboring_forces_agent = registry.get("neighboring_forces_agent")
+    remaining_by_kind = _force_remaining_capacity(neighboring_forces_agent)
+    force_lines = [
+        f"{_RESOURCE_KIND_LABELS[kind]} ({remaining_by_kind[kind]}/{FORCE_POOL_SIZE})" for kind in sorted(FORCE_BASES)
+    ]
+    parts.append(_catalog_text("firefighting.resource_unavailable.alternatives.forces", forces=", ".join(force_lines)))
+
+    apparatus_rows = crew_agent.apparatus_store.list_apparatus()
+    if apparatus_rows:
+        apparatus_text = ", ".join(
+            f"{row['callsign']} ({row['status']})" for row in apparatus_rows
+        )
+        parts.append(_catalog_text("firefighting.resource_unavailable.alternatives.apparatus", apparatus=apparatus_text))
+
+    return "; ".join(parts)
+
+
+def _describe_resource_unavailable(resource_kind: str, area: str, reason: str, registry) -> tuple[str, str]:
+    resource_label = _RESOURCE_KIND_LABELS.get(resource_kind, resource_kind)
+    area_label = _AREA_LABELS.get(area, area)
+    fact = _catalog_text(
+        "firefighting.resource_unavailable.fact",
+        resource=resource_label,
+        area=area_label,
+        reason=_localize_unavailable_reason(reason),
+    )
+    alternatives = _find_resource_alternatives(area, registry)
+    return fact, alternatives
+
+
+RESOURCE_UNAVAILABLE_DESCRIPTION = _describe_resource_unavailable
 
 
 AGENTS = [
@@ -261,7 +373,3 @@ AGENTS = [
     AgentSpec(cls=FirefightingCrewStatusAgent, tier="sub"),
     AgentSpec(cls=FirefightingExternalForcesAgent, tier="sub"),
 ]
-
-# A narrow, low-stakes judgment call (decide one apparatus's resulting status, and whether it also
-# indicates incident response, then call up to three known tools) never needs the agent's default
-# reasoning budget -- same mechanism SurveillanceAgent.process already uses for its own
