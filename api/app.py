@@ -103,6 +103,7 @@ _NON_ROUTABLE_AGENTS = frozenset({"main_agent", "insights_agent", "history_agent
 
 @dataclass(frozen=True)
 class ApiContext:
+    """Wired API process: persistence, agents, queue, schedulers, and group routing."""
     deps: "FlowDeps"
     main_agent: "Agent"
     insights_agent: "Agent"
@@ -254,10 +255,13 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
 
 
 def build_app(ctx: ApiContext) -> Flask:
+    """Build the Flask app: JSON blueprints, request tracing, and optional admin panel."""
+
     app = Flask(__name__)
 
     @app.before_request
     def _reset_trace_id_for_this_request() -> None:
+        """Bind catalog, trace id, and safe-mode gate for this HTTP request."""
         set_current_catalog(ctx.loaded_profile.message_catalog)
         set_trace_id(normalize_trace_id(request.headers.get("X-Trace-ID")))
         g.request_started_at = time.monotonic()
@@ -276,6 +280,7 @@ def build_app(ctx: ApiContext) -> Flask:
 
     @app.after_request
     def _finish_request(response):
+        """Log duration, set security/trace headers, and clear the invocation deadline."""
         logger.info(
             "API request finished",
             extra={
@@ -338,7 +343,7 @@ def build_app(ctx: ApiContext) -> Flask:
 
 
 def create_app(module_path: str, core_model: TierModel, sub_model: TierModel) -> Flask:
-    return build_app(build_context(module_path, core_model=core_model, sub_model=sub_model))
+    """Load one profile and return a fully wired Flask application."""
 
 
 def _tier_model_from_environ(prefix: str) -> TierModel:

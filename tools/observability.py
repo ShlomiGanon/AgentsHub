@@ -59,10 +59,12 @@ def record_telegram_security_metric(action: str, entity: str) -> None:
 
 
 def new_trace_id() -> str:
+    """A fresh 32-character hex trace id."""
     return uuid.uuid4().hex
 
 
 def normalize_trace_id(value: str | None) -> str:
+    """Keep a well-formed caller id, or mint a new one when it is missing or invalid."""
     candidate = (value or "").strip()
     return candidate if _TRACE_ID_PATTERN.fullmatch(candidate) else new_trace_id()
 

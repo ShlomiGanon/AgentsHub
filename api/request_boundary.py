@@ -19,10 +19,14 @@ logger = logging.getLogger(__name__)
 
 
 class ApiError(Exception):
+    """HTTP-facing API error with a stable error_class, status, and optional field."""
+
     error_class = "invalid_input"
     status_code = 400
 
     def __init__(self, message: str, field: str | None = None, details: dict | None = None):
+        """Store the public message plus optional field name and extra details."""
+
         self.message = message
         self.field = field
         self.details = dict(details or {})
@@ -30,31 +34,45 @@ class ApiError(Exception):
 
 
 class InvalidInputError(ApiError):
+    """400: the request body or query is malformed or missing a required field."""
+
     status_code = 400
 
 
 class NotFoundError(ApiError):
+    """404: the named resource does not exist."""
+
     status_code = 404
 
 
 class ConflictError(ApiError):
+    """409: the resource exists but is in a conflicting state."""
+
     status_code = 409
 
 
 class AuthenticationError(ApiError):
+    """401: the caller did not present a registered identity."""
+
     status_code = 401
 
 
 class AuthorizationError(ApiError):
+    """403: the caller is known but not allowed to perform this operation."""
+
     status_code = 403
 
 
 class RunFailureError(ApiError):
+    """422: orchestration could not produce a usable result for this run."""
+
     error_class = "run_failure"
     status_code = 422
 
 
 class ServiceUnavailableError(ApiError):
+    """503: the queue or another required service cannot accept work now."""
+
     error_class = "service_unavailable"
     status_code = 503
 
@@ -100,6 +118,8 @@ def secrets_equal(provided: str | None, expected: str | None) -> bool:
 
 
 def _bot_service_key_matches(provided: str | None) -> bool:
+    """Whether the presented service key matches BOT_SERVICE_KEY."""
+
     return secrets_equal(provided, os.environ.get(BOT_SERVICE_KEY_ENV_VAR))
 
 
@@ -138,6 +158,8 @@ def enforce_safe_mode_for_bot_request(persistence, settings_store) -> None:
 
 
 def authenticate(persistence: "PersistenceInterface", identity: str | None) -> PermissionLevel:
+    """Resolve X-Identity to a permission level, or raise AuthenticationError."""
+
     if not identity:
         raise AuthenticationError(get_current_catalog().text("api.identity_required"))
 
@@ -162,6 +184,8 @@ def authenticate(persistence: "PersistenceInterface", identity: str | None) -> P
 
 
 def require(level: PermissionLevel, operation: RequestedOperation) -> None:
+    """Raise AuthorizationError when this permission level may not perform the operation."""
+
     if not is_permitted(level, operation):
         raise AuthorizationError(
             get_current_catalog().text(
@@ -173,8 +197,11 @@ def require(level: PermissionLevel, operation: RequestedOperation) -> None:
 
 
 def register_error_handlers(app: Flask) -> None:
+    """Translate ApiError, HTTPException, and unexpected exceptions into JSON responses."""
+
     @app.errorhandler(ApiError)
     def _handle_api_error(error: ApiError):
+        """Return the public JSON body for a known API error."""
         logger.warning(
             "API request refused",
             extra={
@@ -197,6 +224,7 @@ def register_error_handlers(app: Flask) -> None:
 
     @app.errorhandler(HTTPException)
     def _handle_http_exception(error: HTTPException):
+        """Return JSON for a Flask/Werkzeug HTTP error."""
         error_payload = {
             "error_class": "invalid_input",
             "error_code": "invalid_input",
@@ -206,6 +234,7 @@ def register_error_handlers(app: Flask) -> None:
 
     @app.errorhandler(Exception)
     def _handle_unexpected(error: Exception):
+        """Log an unexpected exception and return a generic 500 JSON body."""
         logger.exception(
             "unhandled exception in an API request",
             extra={"event": "api_unexpected_error", "trace_id": get_trace_id()},

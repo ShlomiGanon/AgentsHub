@@ -15,6 +15,8 @@ from orchestrator.group_routing import GroupBinding
 
 @dataclass(frozen=True)
 class AttendanceDispatch:
+    """Which groups get today's attendance prompt, and the hour that opens the cycle."""
+
     check_hour: int | None
     target_chat_ids: tuple[str, ...]
 
@@ -25,6 +27,7 @@ def attendance_dispatch(
     *,
     safe_mode: bool = False,
 ) -> AttendanceDispatch:
+    """Pick eligible groups and the hour that opens today's attendance cycle."""
     eligible = [
         binding
         for binding in bindings

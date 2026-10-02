@@ -33,6 +33,8 @@ def _mock_crewai_always_fails(monkeypatch):
     fake_module = types.SimpleNamespace(Agent=_FakeCrewAgent, LLM=lambda **kwargs: kwargs["model"], tools=types.SimpleNamespace(BaseTool=object))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
     monkeypatch.setattr(runtime, "_get_crewai", lambda: fake_module)
+    adapter._clear_agent_cache()
+    adapter._clear_llm_cache()
 
 
 _TEST_BOT_SERVICE_KEY = "test-bot-service-key-0123456789abcdef"

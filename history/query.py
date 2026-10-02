@@ -148,6 +148,7 @@ def _raw_event_sources(events: list[dict], classification: str | None, area: str
 
 
 def retrieve_range(persistence, start: datetime, end: datetime, classification: str | None, area: str | None) -> list[RetrievedSource]:
+    """History sources covering [start, end), preferring summaries and filling gaps with raw events."""
     if end <= start:
         raise ValueError("time_end must be later than time_start")
 
@@ -257,6 +258,7 @@ def find_precedents(
 
 
 class HistoryQueryService:
+    """Persistence-backed history search, latest-event lookup, and free-text query."""
     def __init__(
         self,
         persistence,

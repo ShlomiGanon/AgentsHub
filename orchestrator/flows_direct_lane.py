@@ -1,130 +1,20 @@
 """Direct-lane classification and execution."""
 
-import functools
 import json
-import threading
-from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Callable, Literal
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from history import (
-    ExtractionExecutionError,
-    InitialEventEnvelope,
-    StepExecutionEnvelope,
-    extract_event,
-    parse_timestamp,
-    record_event_data_update,
-    record_event_outcome,
-    record_event_state,
-    record_extracted_fields,
-    record_initial_event,
-    record_step_executions,
-    storage_timestamp,
-)
-from orchestrator.holds import (
-    UNRESOLVED_FIELD,
-    answer_approval_hold,
-    answer_clarification_hold,
-    create_approval_hold,
-    create_clarification_hold,
-    create_event_data_hold,
-    determine_approval_hold,
-    determine_clarification_hold,
-    protocol_requires_approval,
-)
-from orchestrator.capabilities import CapabilityDescriptor, build_role_aware_system_context, visible_capabilities
-from orchestrator.reasoning import build_insight, construct_insights_agent
-from orchestrator.report_composer import ReportComposerAgent, compose_report  # re-exported: api may only import orchestrator.flows
-from orchestrator.run_report import build_run_summary, resolve_audience
-from orchestrator.reasoning import (
-    OrchestrationParseError,
-    answer_conversationally,
-    answer_question_from_plan,
-    assess_final_once,
-    assess_risk,
-    classify_intent,
-    construct_core_agents as construct_main_agent,
-    formulate_tasks,
-    formulate_event_data_question,
-    judge_success,
-    make_operational_decision,
-    plan_message,
-    rewrite_task,
-    extract_and_decide,
-    extract_event_data_update,
-    select_protocol,
-    _unwrap_json_code_fence,
-    ProtocolSelectionResult,
-    RiskAssessment,
-    SpecialistFailure,
-    SpecialistResult,
-    run_parallel_specialists,
-)
-from orchestrator.reasoning import answer_question, determine_closure, look_up_precedent
-from orchestrator.situational_picture import (  # re-exported: api may only import orchestrator.flows
-    SituationalPicture,
-    build_situational_picture,
-    compose_picture_from_step_outcomes,
-)
-from orchestrator.event_queue import PolicyAwareEventQueue, SerialEventQueue, WorkItem
-from orchestrator.group_routing import (  # re-exported: api may only import orchestrator.flows
-    GROUP_CHAT_TYPES,
-    MAIN_AGENT_TARGET,
-    GroupBinding,
-    GroupNotRegisteredError,
-    GroupRoutingTable,
-    InvalidRoutingTargetError,
-    is_scoped_target,
-    resolve_scope,
-    scope_deps,
-)
-from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
-from protocols import CriticalityLevel, EVENT_DATA_FIELDS, ResourceUnavailable, Step, StepOutcome
+from orchestrator.reasoning import _unwrap_json_code_fence
+from protocols import Step
 from protocols.executor import execute_steps
-from agents import AgentModelError, AgentTimeoutError, InvocationPolicy, authenticated_request_identity, is_retryable_invocation_error
-from messages import get_catalog
-from tools import event_id_context, get_trace_id, protocol_context, stage_context
-from tools.log_events import (
-    direct_lane_accepted,
-    direct_lane_declined,
-    event_correction_recorded,
-    event_outcome,
-    extraction_result as log_extraction_result,
-    extraction_retry,
-    final_assessment_invalid,
-    final_verdict,
-    hold_created,
-    hold_escalated,
-    hold_reminder_sent,
-    hold_resolved,
-    hold_sweep_failed,
-    insight_generated,
-    operational_decision_invalid,
-    precedent_closure,
-    protocol_selection,
-    protocol_waiting_for_event_data,
-    reply_latency,
-    report_received,
-    request_received,
-    resource_unavailable_alert,
-    resource_unavailable_description_failed,
-    risk_assessed,
-    synthesis_failed,
-)
+from agents import InvocationPolicy, authenticated_request_identity
+from tools import stage_context
+from tools.log_events import direct_lane_accepted, direct_lane_declined
 
 if TYPE_CHECKING:
-    from agents import Agent
     from agents.runtime import AgentRegistry
-    from auth.permissions import PermissionLevel
-    from config import BaseConfig, SettingsStore
-    from history.query import HistoryQueryService
-    from orchestrator.holds import HoldAnswerResult, HoldReason
-    from orchestrator.reasoning import InsightsAgent, MainAgent
-    from persistence import PersistenceInterface
-    from profiles.loader import LoadedProfile
-    from protocols import Protocol, ProtocolSet
-    from profiles import AreaRegistry, EventTypeRegistry
-    from messages import MessageCatalog
+    from orchestrator.reasoning import MainAgent
+    from protocols import Protocol
 
 from orchestrator.flows import FlowDeps, FlowResult, _log_event_outcome, _record_outcome_with_report
 from orchestrator.flows_protocol import _persist_step_outcomes, _persist_step_plan
@@ -133,6 +23,8 @@ _DIRECT_LANE_CLASSIFY_POLICY = InvocationPolicy(max_output_tokens=400, reasoning
 
 @dataclass(frozen=True)
 class DirectLaneAction:
+    """One tool call the direct lane will execute."""
+
     protocol_name: str
     agent_name: str
     tool_name: str
@@ -140,17 +32,23 @@ class DirectLaneAction:
 
 @dataclass(frozen=True)
 class DirectLaneResult:
+    """Whether the direct lane accepted the message, and which actions to run."""
+
     eligible: bool
     actions: tuple[DirectLaneAction, ...] = ()
     reason: str = ""
 
 def _direct_lane_eligible_protocols(protocols: "tuple[Protocol, ...]") -> "tuple[Protocol, ...]":
+    """Protocols the profile marked eligible for the direct lane."""
+
     return tuple(
         protocol for protocol in protocols
         if protocol.direct_lane_eligible and not protocol.commander_only and not protocol.approval_flag
     )
 
 def _build_direct_lane_prompt(protocols: "tuple[Protocol, ...]", registry: "AgentRegistry", raw_text: str) -> tuple[str, dict]:
+    """Prompt asking the cheap model to pick a direct-lane action or decline."""
+
     tool_lines: list[str] = []
     tool_owner: dict[str, tuple[str, str]] = {}
     for protocol in protocols:
@@ -184,6 +82,8 @@ def _build_direct_lane_prompt(protocols: "tuple[Protocol, ...]", registry: "Agen
 def classify_direct_lane(
     main_agent: "MainAgent", protocols: "tuple[Protocol, ...]", registry: "AgentRegistry", raw_text: str
 ) -> DirectLaneResult:
+    """Ask whether this message can skip the full pipeline. Returns the lane result."""
+
     eligible_protocols = _direct_lane_eligible_protocols(protocols)
     if not eligible_protocols:
         return DirectLaneResult(eligible=False, reason="no direct-lane-eligible protocols declared")

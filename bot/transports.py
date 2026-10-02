@@ -69,6 +69,8 @@ def telegram_request_context(chat_id: str, chat_type: str):
         _TELEGRAM_REQUEST_CONTEXT.reset(token)
 
 def _do_request(url: str, method: str, identity: str, request_payload: dict | None) -> tuple[int, dict]:
+    """Synchronous HTTP helper used by tests; returns status and JSON body."""
+
     try:
         response = httpx.request(
             method,
@@ -88,21 +90,31 @@ def _do_request(url: str, method: str, identity: str, request_payload: dict | No
 
 
 class HttpApiClient(BotApiClient):
+    """Async HTTP implementation of BotApiClient against the local API server."""
+
     def __init__(self, base_url: str, bot_service_key: str | None = None):
+        """Remember the API base URL and optional bot-service key."""
+
         self._base_url = base_url.rstrip("/")
         self._client: httpx.AsyncClient | None = None
         self._bot_service_key = bot_service_key
 
     async def start(self) -> None:
+        """Open the shared async HTTP client if it is not already open."""
+
         if self._client is None:
             self._client = self._build_client()
 
     async def close(self) -> None:
+        """Close the shared async HTTP client."""
+
         client, self._client = self._client, None
         if client is not None:
             await client.aclose()
 
     def _build_client(self) -> httpx.AsyncClient:
+        """A new httpx client with the bot's timeout and connection limits."""
+
         timeout = httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=75.0)
         limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
         return httpx.AsyncClient(base_url=self._base_url, timeout=timeout, limits=limits)
@@ -117,6 +129,8 @@ class HttpApiClient(BotApiClient):
         read_timeout: float | None = None,
         trace_id_override: str | None = None,
     ) -> tuple[int, dict]:
+        """One authenticated JSON request, retrying GET on transport/5xx failures."""
+
         persistent_client = self._client
         client = persistent_client or self._build_client()
         headers = {
@@ -167,6 +181,8 @@ class HttpApiClient(BotApiClient):
         chat_type: str,
         chat_label: str = "",
     ) -> TelegramAdmissionResult:
+        """POST /Telegram/Admit for this user and chat."""
+
         status, response_payload = await self._call(
             "POST",
             "/Telegram/Admission",
@@ -210,6 +226,8 @@ class HttpApiClient(BotApiClient):
 
 
     async def resolve_user(self, telegram_identity: str) -> UserLookupResult:
+        """GET /User/<identity> and map the payload to UserLookupResult."""
+
         status, response_payload = await self._call("GET", f"/User/{quote(telegram_identity, safe='')}", BOT_SERVICE_IDENTITY)
         if status >= 400:
             self._raise_for_error(status, response_payload)
@@ -221,6 +239,8 @@ class HttpApiClient(BotApiClient):
         )
 
     async def update_own_full_name(self, telegram_identity: str, full_name: str) -> str:
+        """PUT /User/<identity>/name with the caller's supplied full name."""
+
         status, response_payload = await self._call(
             "PUT", f"/User/{quote(telegram_identity, safe='')}/name", telegram_identity,
             {"full_name": full_name},
@@ -231,12 +251,16 @@ class HttpApiClient(BotApiClient):
 
 
     async def list_commander_chat_ids(self) -> tuple[str, ...]:
+        """GET /Users/commanders and return their Telegram identities."""
+
         status, response_payload = await self._call("GET", "/Commanders", BOT_SERVICE_IDENTITY)
         if status >= 400:
             self._raise_for_error(status, response_payload)
         return tuple(c["telegram_identity"] for c in response_payload["commanders"])
 
     async def list_groups(self) -> tuple[GroupBindingView, ...]:
+        """GET /Groups and map each row to GroupBindingView."""
+
         status, response_payload = await self._call("GET", "/Groups", BOT_SERVICE_IDENTITY)
         if status >= 400:
             self._raise_for_error(status, response_payload)
@@ -253,6 +277,8 @@ class HttpApiClient(BotApiClient):
         )
 
     async def run_attendance_check(self) -> AttendanceCheckResult:
+        """POST /TeamStatus/AttendanceCheck as bot-service."""
+
         status, response_payload = await self._call("POST", "/TeamStatus/AttendanceCheck", BOT_SERVICE_IDENTITY, {})
         if status >= 400:
             self._raise_for_error(status, response_payload)
@@ -278,6 +304,8 @@ class HttpApiClient(BotApiClient):
         telegram_chat_type: str | None = None,
         ack_message_id: str | None = None,
     ) -> MessageSubmissionResult:
+        """POST /Msg with the inbound Telegram text and routing metadata."""
+
         body = {"text": text, "sender_identity": sender_identity, "source_message_id": source_message_id}
         if conversation_id is not None:
             body["conversation_id"] = conversation_id
@@ -311,10 +339,14 @@ class HttpApiClient(BotApiClient):
         )
 
     async def answer_clarification_hold(self, event_id: str, chosen_classification: str, answering_identity: str) -> HoldAnswerOutcome:
+        """POST /Holds/<id>/Clarify with the chosen classification."""
+
         status, response_payload = await self._call("POST", f"/Clarify/{event_id}", answering_identity, {"classification": chosen_classification})
         return self._hold_answer_outcome(status, response_payload, invalid_field_status="invalid_classification", resolved_status="resolved")
 
     async def answer_approval_hold(self, event_id: str, decision: str, answering_identity: str) -> HoldAnswerOutcome:
+        """POST /Holds/<id>/Approve with the commander's decision."""
+
         status, response_payload = await self._call("POST", f"/Approve/{event_id}", answering_identity, {"decision": decision})
 
         if status == 200 and response_payload.get("status") == "declined":
@@ -325,12 +357,16 @@ class HttpApiClient(BotApiClient):
         return self._hold_answer_outcome(status, response_payload, invalid_field_status="invalid_candidate", resolved_status="approved")
 
     async def fetch_pending_holds(self, caller_identity: str) -> dict:
+        """GET /Holds/Pending for this commander."""
+
         status, response_payload = await self._call("GET", "/Holds/Pending", caller_identity)
         if status >= 400:
             self._raise_for_error(status, response_payload)
         return response_payload
 
     def _hold_answer_outcome(self, status: int, response_payload: dict, invalid_field_status: str, resolved_status: str) -> HoldAnswerOutcome:
+        """Map a hold-answer HTTP response onto HoldAnswerOutcome."""
+
         if status in (401, 403):
             return HoldAnswerOutcome(status="unauthorized", message=response_payload.get("message", ""))
         if status == 404:
@@ -350,6 +386,8 @@ class HttpApiClient(BotApiClient):
 
     @staticmethod
     def _parse_already_resolved_message(message: str) -> tuple[str | None, str]:
+        """Who already answered, plus the remainder of the API message."""
+
         marker = "already resolved by '"
         lowered = message.lower()
         if marker not in lowered:
@@ -360,6 +398,8 @@ class HttpApiClient(BotApiClient):
         return resolved_by, message
 
     async def _get_system(self, identity: str) -> dict:
+        """GET /SYSTEM for this identity."""
+
         status, response_payload = await self._call("GET", "/SYSTEM", identity)
         if status >= 400:
             self._raise_for_error(status, response_payload)
@@ -369,6 +409,8 @@ class HttpApiClient(BotApiClient):
         # `agents`/`protocols` are commander-only (view_system_internals) — GET
         # /SYSTEM omits them entirely for a viewer rather than sending an empty
         # hint, so they default to empty here rather than KeyError.
+        """Build ProfileView from GET /SYSTEM."""
+
         response_payload = await self._get_system(caller_identity)
         protocols = tuple(
             ProtocolView(name=protocol["name"], description=protocol["description"], criticality=protocol["criticality"], approval_flag=protocol["approval_flag"])
@@ -383,10 +425,14 @@ class HttpApiClient(BotApiClient):
         )
 
     async def get_profile_diff_status(self) -> bool:
+        """Whether GET /SYSTEM reports a pending profile restart."""
+
         response_payload = await self._get_system(BOT_SERVICE_IDENTITY)
         return response_payload["profile_file_changed"]
 
     async def write_protocol(self, action: Literal["add", "edit", "remove"], protocol_payload: dict, caller_identity: str) -> WriteResult:
+        """POST, PUT, or DELETE /Protocol for this commander."""
+
         name = protocol_payload.get("name", "")
         if action == "add":
             status, response_payload = await self._call("POST", "/Protocol", caller_identity, protocol_payload)
@@ -402,6 +448,8 @@ class HttpApiClient(BotApiClient):
         return WriteResult(accepted=True, message=response_payload.get("message", ""))
 
     async def get_settings_view(self, caller_identity: str) -> SettingsView:
+        """Build SettingsView from GET /SYSTEM."""
+
         response_payload = await self._get_system(caller_identity)
         # `settings` is commander-only (view_settings) — absent for a viewer.
         # bot.app already refuses this client-side before ever calling here;
@@ -417,6 +465,8 @@ class HttpApiClient(BotApiClient):
         )
 
     async def write_setting(self, field: str, value: object, caller_identity: str) -> WriteResult:
+        """PUT /SYSTEM with one settings field."""
+
         status, response_payload = await self._call("PUT", "/SYSTEM", caller_identity, {field: value})
 
         if status in (401, 403):
@@ -426,6 +476,8 @@ class HttpApiClient(BotApiClient):
         return WriteResult(accepted=True, message=f"'{field}' is now {response_payload[field]}.")
 
     async def get_job_result(self, job_id: str, caller_identity: str) -> JobResult | None:
+        """GET /Jobs/<id> mapped onto JobResult, or None if missing."""
+
         status, response_payload = await self._call("GET", f"/Job/{job_id}", caller_identity)
         if status == 404:
             return None
@@ -447,6 +499,8 @@ class HttpApiClient(BotApiClient):
         )
 
     async def poll_pending_notifications(self, since: int, wait_seconds: int = 0) -> tuple[tuple[BotNotification, ...], int]:
+        """GET /Notifications since the given cursor."""
+
         status, response_payload = await self._call(
             "GET",
             f"/Notifications?since={since}&wait_seconds={wait_seconds}",
@@ -476,6 +530,8 @@ class HttpApiClient(BotApiClient):
         wait_seconds: int,
         caller_identity: str,
     ) -> TracePollResult:
+        """GET /Trace/<id> for Deep Debug messages."""
+
         status, response_payload = await self._call(
             "GET",
             f"/Trace/{quote(trace_id, safe='')}?since={since}&wait_seconds={wait_seconds}",
@@ -493,6 +549,8 @@ class HttpApiClient(BotApiClient):
 
     @staticmethod
     def _parse_notification_payload(kind: str, payload: dict):
+        """Turn one notification JSON object into its typed payload."""
+
         if kind == "clarification_hold":
             return HeldClarificationNotice(
                 hold_id=payload["hold_id"],
@@ -565,6 +623,8 @@ class HttpApiClient(BotApiClient):
         raise ValueError(f"unknown notification kind: {kind!r}")
 
 class TelegramClient(ABC):
+    """Outbound Telegram operations the bot handlers depend on."""
+
     async def send_activity(self, chat_id: str, action: str) -> None:
         """Show non-text activity feedback when the transport supports it."""
     @abstractmethod
@@ -572,7 +632,10 @@ class TelegramClient(ABC):
         """True if Telegram accepts the configured token, False if it rejects it outright (§8.1's "fail at startup ..."""
 
     @abstractmethod
-    async def send_text(self, chat_id: str, text: str, keyboard: Sequence[Sequence[str]] | None = None) -> None: ...
+    async def send_text(self, chat_id: str, text: str, keyboard: Sequence[Sequence[str]] | None = None) -> None:
+        """Send a plain text message, optionally with a reply keyboard."""
+
+        ...
 
     @abstractmethod
     async def send_status(self, chat_id: str, text: str, reply_to_message_id: str | None = None) -> str:
@@ -607,12 +670,18 @@ class TelegramClient(ABC):
 
 
 class PTBTelegramClient(TelegramClient):
+    """python-telegram-bot implementation of TelegramClient."""
+
     def __init__(self, token: str):
+        """Build the PTB Application around this bot token."""
+
         from telegram.ext import ApplicationBuilder
 
         self._application = ApplicationBuilder().token(token).build()
 
     async def validate_token(self) -> bool:
+        """True when Telegram accepts getMe for this token."""
+
         from telegram.error import TelegramError
 
         try:
@@ -622,6 +691,8 @@ class PTBTelegramClient(TelegramClient):
             return False
 
     async def send_text(self, chat_id: str, text: str, keyboard: Sequence[Sequence[str]] | None = None) -> None:
+        """Send a text message through PTB, splitting when over the length limit."""
+
         from telegram import ReplyKeyboardMarkup
 
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True) if keyboard is not None else None
@@ -637,6 +708,8 @@ class PTBTelegramClient(TelegramClient):
                 await self._application.bot.send_message(chat_id=chat_id, text=chunks[-1])
 
     async def send_status(self, chat_id: str, text: str, reply_to_message_id: str | None = None) -> str:
+        """Send a status message and return its Telegram message id."""
+
         with stage_context("telegram_send"):
             message = await self._application.bot.send_message(
                 chat_id=chat_id, text=text,
@@ -645,6 +718,8 @@ class PTBTelegramClient(TelegramClient):
         return str(message.message_id)
 
     async def edit_status(self, chat_id: str, message_id: str, text: str) -> None:
+        """Edit a previously sent status message."""
+
         with stage_context("telegram_edit"):
             await self._application.bot.edit_message_text(
                 chat_id=chat_id,
@@ -653,6 +728,8 @@ class PTBTelegramClient(TelegramClient):
             )
 
     async def delete_status(self, chat_id: str, message_id: str) -> None:
+        """Delete a previously sent status message."""
+
         with stage_context("telegram_delete"):
             await self._application.bot.delete_message(chat_id=chat_id, message_id=int(message_id))
 
@@ -660,6 +737,8 @@ class PTBTelegramClient(TelegramClient):
         await self._application.bot.send_chat_action(chat_id=chat_id, action=action)
 
     async def send_with_buttons(self, chat_id: str, text: str, buttons: Sequence[tuple[str, str]]) -> None:
+        """Send text with one inline button per row."""
+
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
         markup = InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=callback_data)] for label, callback_data in buttons])
@@ -671,6 +750,8 @@ class PTBTelegramClient(TelegramClient):
             await self._application.bot.send_message(chat_id=chat_id, text=chunks[-1], reply_markup=markup)
 
     async def send_reply(self, chat_id: str, text: str, reply_to_message_id: str | None) -> str | None:
+        """Send text as a reply to the original message when an id is given."""
+
         with stage_context("telegram_send"):
             chunks = split_message(text)
             first_message_id = None
@@ -699,5 +780,7 @@ class PTBTelegramClient(TelegramClient):
         await self._application.bot.answer_callback_query(callback_query_id=callback_query_id, text=text)
 
     def run_polling(self, register_handlers: Callable[[object], None]) -> None:
+        """Register handlers and block polling Telegram until the process stops."""
+
         register_handlers(self._application)
         self._application.run_polling()

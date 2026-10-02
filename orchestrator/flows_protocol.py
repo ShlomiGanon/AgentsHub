@@ -2,129 +2,38 @@
 
 import functools
 import json
-import threading
-from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Callable, Literal
+from dataclasses import replace
+from typing import TYPE_CHECKING
 
-from history import (
-    ExtractionExecutionError,
-    InitialEventEnvelope,
-    StepExecutionEnvelope,
-    extract_event,
-    parse_timestamp,
-    record_event_data_update,
-    record_event_outcome,
-    record_event_state,
-    record_extracted_fields,
-    record_initial_event,
-    record_step_executions,
-    storage_timestamp,
-)
-from orchestrator.holds import (
-    UNRESOLVED_FIELD,
-    answer_approval_hold,
-    answer_clarification_hold,
-    create_approval_hold,
-    create_clarification_hold,
-    create_event_data_hold,
-    determine_approval_hold,
-    determine_clarification_hold,
-    protocol_requires_approval,
-)
-from orchestrator.capabilities import CapabilityDescriptor, build_role_aware_system_context, visible_capabilities
-from orchestrator.reasoning import build_insight, construct_insights_agent
-from orchestrator.report_composer import ReportComposerAgent, compose_report  # re-exported: api may only import orchestrator.flows
-from orchestrator.run_report import build_run_summary, resolve_audience
+from history import StepExecutionEnvelope, record_event_state, record_step_executions
+from orchestrator.holds import create_event_data_hold
+from orchestrator.reasoning import build_insight
 from orchestrator.reasoning import (
     OrchestrationParseError,
-    answer_conversationally,
-    answer_question_from_plan,
     assess_final_once,
-    assess_risk,
-    classify_intent,
-    construct_core_agents as construct_main_agent,
     formulate_tasks,
     formulate_event_data_question,
     judge_success,
-    make_operational_decision,
-    plan_message,
     rewrite_task,
-    extract_and_decide,
-    extract_event_data_update,
-    select_protocol,
-    _unwrap_json_code_fence,
-    ProtocolSelectionResult,
-    RiskAssessment,
-    SpecialistFailure,
-    SpecialistResult,
-    run_parallel_specialists,
 )
-from orchestrator.reasoning import answer_question, determine_closure, look_up_precedent
-from orchestrator.situational_picture import (  # re-exported: api may only import orchestrator.flows
-    SituationalPicture,
-    build_situational_picture,
-    compose_picture_from_step_outcomes,
-)
-from orchestrator.event_queue import PolicyAwareEventQueue, SerialEventQueue, WorkItem
-from orchestrator.group_routing import (  # re-exported: api may only import orchestrator.flows
-    GROUP_CHAT_TYPES,
-    MAIN_AGENT_TARGET,
-    GroupBinding,
-    GroupNotRegisteredError,
-    GroupRoutingTable,
-    InvalidRoutingTargetError,
-    is_scoped_target,
-    resolve_scope,
-    scope_deps,
-)
-from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
-from protocols import CriticalityLevel, EVENT_DATA_FIELDS, ResourceUnavailable, Step, StepOutcome
-from protocols.executor import execute_steps
-from agents import AgentModelError, AgentTimeoutError, InvocationPolicy, authenticated_request_identity, is_retryable_invocation_error
-from messages import get_catalog
-from tools import event_id_context, get_trace_id, protocol_context, stage_context
+from orchestrator.situational_picture import compose_picture_from_step_outcomes
+from protocols import EVENT_DATA_FIELDS, Step, StepOutcome
+from agents import authenticated_request_identity
+from tools import event_id_context, protocol_context
 from tools.log_events import (
-    direct_lane_accepted,
-    direct_lane_declined,
     event_correction_recorded,
-    event_outcome,
-    extraction_result as log_extraction_result,
-    extraction_retry,
     final_assessment_invalid,
     final_verdict,
-    hold_created,
-    hold_escalated,
-    hold_reminder_sent,
-    hold_resolved,
-    hold_sweep_failed,
     insight_generated,
-    operational_decision_invalid,
-    precedent_closure,
-    protocol_selection,
     protocol_waiting_for_event_data,
-    reply_latency,
-    report_received,
-    request_received,
     resource_unavailable_alert,
     resource_unavailable_description_failed,
-    risk_assessed,
     synthesis_failed,
 )
 
 if TYPE_CHECKING:
-    from agents import Agent
-    from agents.runtime import AgentRegistry
-    from auth.permissions import PermissionLevel
-    from config import BaseConfig, SettingsStore
-    from history.query import HistoryQueryService
-    from orchestrator.holds import HoldAnswerResult, HoldReason
     from orchestrator.reasoning import InsightsAgent, MainAgent
-    from persistence import PersistenceInterface
-    from profiles.loader import LoadedProfile
-    from protocols import Protocol, ProtocolSet
-    from profiles import AreaRegistry, EventTypeRegistry
-    from messages import MessageCatalog
+    from protocols import Protocol, ResourceUnavailable
 
 from orchestrator.flows import FlowDeps, FlowResult, _VERDICT_TO_OUTCOME, _deadline_failure, _log_event_outcome, _record_outcome_with_report
 
@@ -141,6 +50,8 @@ def _run_protocol(
     description: str | None,
     event: dict | None = None,
 ) -> FlowResult:
+    """Formulate or bind steps, then execute the selected protocol for this event."""
+
     deadline_failure = _deadline_failure(deps, event_id, "formulation")
     if deadline_failure is not None:
         return deadline_failure
@@ -189,6 +100,8 @@ def _run_protocol(
     )
 
 def _persist_step_plan(deps: FlowDeps, event_id: str, steps: tuple[Step, ...]) -> None:
+    """Store the formulated step plan so a later resume can continue it."""
+
     record_step_executions(
         deps.persistence,
         event_id,
@@ -210,6 +123,8 @@ def _persist_step_plan(deps: FlowDeps, event_id: str, steps: tuple[Step, ...]) -
     )
 
 def _step_from_row(row: dict) -> Step:
+    """Rebuild a Step from a persisted step row."""
+
     return Step(
         agent_name=row["agent_name"],
         task_text=row["task_text"],
@@ -220,6 +135,8 @@ def _step_from_row(row: dict) -> Step:
     )
 
 def _prior_outcomes(rows: list[dict], steps: tuple[Step, ...]) -> tuple[StepOutcome, ...]:
+    """StepOutcome values already recorded for these steps."""
+
     by_index = {row["step_index"]: row for row in rows}
     outcomes: list[StepOutcome] = []
     for index, step in enumerate(steps):
@@ -309,6 +226,8 @@ def _execute_protocol_plan(
     resumed: bool = False,
     event: dict | None = None,
 ) -> FlowResult:
+    """Run persist-execute-assess for an already formulated or rebound plan."""
+
     import orchestrator.flows as _host
 
     if event is None:
@@ -484,6 +403,8 @@ def _finish_protocol_assessment(
     *,
     enforce_deadline: bool,
 ) -> FlowResult:
+    """Judge the run, record the outcome, and return the FlowResult."""
+
     if enforce_deadline:
         deadline_failure = _deadline_failure(deps, event_id, "final_assessment")
         if deadline_failure is not None:

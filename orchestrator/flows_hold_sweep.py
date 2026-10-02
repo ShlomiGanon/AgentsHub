@@ -1,132 +1,18 @@
 """Unresolved-hold reminder, escalation, expiry, and scheduler."""
 
-import functools
-import json
 import threading
-from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Callable, Literal
+from typing import TYPE_CHECKING
 
-from history import (
-    ExtractionExecutionError,
-    InitialEventEnvelope,
-    StepExecutionEnvelope,
-    extract_event,
-    parse_timestamp,
-    record_event_data_update,
-    record_event_outcome,
-    record_event_state,
-    record_extracted_fields,
-    record_initial_event,
-    record_step_executions,
-    storage_timestamp,
-)
-from orchestrator.holds import (
-    UNRESOLVED_FIELD,
-    answer_approval_hold,
-    answer_clarification_hold,
-    create_approval_hold,
-    create_clarification_hold,
-    create_event_data_hold,
-    determine_approval_hold,
-    determine_clarification_hold,
-    protocol_requires_approval,
-)
-from orchestrator.capabilities import CapabilityDescriptor, build_role_aware_system_context, visible_capabilities
-from orchestrator.reasoning import build_insight, construct_insights_agent
-from orchestrator.report_composer import ReportComposerAgent, compose_report  # re-exported: api may only import orchestrator.flows
-from orchestrator.run_report import build_run_summary, resolve_audience
-from orchestrator.reasoning import (
-    OrchestrationParseError,
-    answer_conversationally,
-    answer_question_from_plan,
-    assess_final_once,
-    assess_risk,
-    classify_intent,
-    construct_core_agents as construct_main_agent,
-    formulate_tasks,
-    formulate_event_data_question,
-    judge_success,
-    make_operational_decision,
-    plan_message,
-    rewrite_task,
-    extract_and_decide,
-    extract_event_data_update,
-    select_protocol,
-    _unwrap_json_code_fence,
-    ProtocolSelectionResult,
-    RiskAssessment,
-    SpecialistFailure,
-    SpecialistResult,
-    run_parallel_specialists,
-)
-from orchestrator.reasoning import answer_question, determine_closure, look_up_precedent
-from orchestrator.situational_picture import (  # re-exported: api may only import orchestrator.flows
-    SituationalPicture,
-    build_situational_picture,
-    compose_picture_from_step_outcomes,
-)
-from orchestrator.event_queue import PolicyAwareEventQueue, SerialEventQueue, WorkItem
-from orchestrator.group_routing import (  # re-exported: api may only import orchestrator.flows
-    GROUP_CHAT_TYPES,
-    MAIN_AGENT_TARGET,
-    GroupBinding,
-    GroupNotRegisteredError,
-    GroupRoutingTable,
-    InvalidRoutingTargetError,
-    is_scoped_target,
-    resolve_scope,
-    scope_deps,
-)
-from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
-from protocols import CriticalityLevel, EVENT_DATA_FIELDS, ResourceUnavailable, Step, StepOutcome
-from protocols.executor import execute_steps
-from agents import AgentModelError, AgentTimeoutError, InvocationPolicy, authenticated_request_identity, is_retryable_invocation_error
-from messages import get_catalog
-from tools import event_id_context, get_trace_id, protocol_context, stage_context
-from tools.log_events import (
-    direct_lane_accepted,
-    direct_lane_declined,
-    event_correction_recorded,
-    event_outcome,
-    extraction_result as log_extraction_result,
-    extraction_retry,
-    final_assessment_invalid,
-    final_verdict,
-    hold_created,
-    hold_escalated,
-    hold_reminder_sent,
-    hold_resolved,
-    hold_sweep_failed,
-    insight_generated,
-    operational_decision_invalid,
-    precedent_closure,
-    protocol_selection,
-    protocol_waiting_for_event_data,
-    reply_latency,
-    report_received,
-    request_received,
-    resource_unavailable_alert,
-    resource_unavailable_description_failed,
-    risk_assessed,
-    synthesis_failed,
-)
+from history import parse_timestamp, record_event_state
+from tools.log_events import hold_escalated, hold_reminder_sent, hold_sweep_failed
 
-if TYPE_CHECKING:
-    from agents import Agent
-    from agents.runtime import AgentRegistry
-    from auth.permissions import PermissionLevel
-    from config import BaseConfig, SettingsStore
-    from history.query import HistoryQueryService
-    from orchestrator.holds import HoldAnswerResult, HoldReason
-    from orchestrator.reasoning import InsightsAgent, MainAgent
-    from persistence import PersistenceInterface
-    from profiles.loader import LoadedProfile
-    from protocols import Protocol, ProtocolSet
-    from profiles import AreaRegistry, EventTypeRegistry
-    from messages import MessageCatalog
-
-from orchestrator.flows import FlowDeps, FlowResult, _log_event_outcome, _now, _record_outcome_with_report
+from orchestrator.flows import (
+    FlowDeps,
+    _log_event_outcome,
+    _now,
+    _record_outcome_with_report,
+)
 
 _HOLD_DETAIL_FIELDS: dict[str, str] = {
     "clarification": "raw_text",
@@ -135,6 +21,8 @@ _HOLD_DETAIL_FIELDS: dict[str, str] = {
 }
 
 def _hold_detail_text(kind: str, hold: dict) -> str:
+    """Short description of an unresolved hold for reminder and alert text."""
+
     field_name = _HOLD_DETAIL_FIELDS[kind]
     return str(hold.get(field_name) or "")
 
@@ -148,6 +36,8 @@ def _remind_unresolved_hold(deps: FlowDeps, kind: str, hold: dict) -> None:
     hold_reminder_sent(hold_kind=kind, event_id=hold["event_id"], hold_id=hold["hold_id"])
 
 def _escalate_unresolved_hold(deps: FlowDeps, kind: str, hold: dict, age_minutes: float) -> None:
+    """Notify commanders that this hold sat unanswered past the escalation window."""
+
     alert_text = deps.message_catalog.text(
         "orchestrator.hold_escalation.commander_alert",
         hold_kind=kind, age_minutes=int(age_minutes), detail=_hold_detail_text(kind, hold),
@@ -158,6 +48,8 @@ def _escalate_unresolved_hold(deps: FlowDeps, kind: str, hold: dict, age_minutes
     hold_escalated(hold_kind=kind, event_id=hold["event_id"], hold_id=hold["hold_id"])
 
 def _expire_unresolved_hold(deps: FlowDeps, kind: str, hold: dict) -> None:
+    """Close an unanswered hold as failed once its expiry window has passed."""
+
     event_id = hold["event_id"]
     deps.persistence.resolve_held_event(kind, hold["hold_id"], {"resolved_by": "system", "decision": "expired"})
     _record_outcome_with_report(
@@ -212,6 +104,8 @@ class HoldSweepScheduler:
     poll loop's job, unchanged)."""
 
     def __init__(self, deps: FlowDeps, poll_interval_seconds: float = 60.0):
+        """Remember deps and the sweep interval."""
+
         self._deps = deps
         self._poll_interval_seconds = poll_interval_seconds
         self._wake_event = threading.Event()
@@ -222,6 +116,8 @@ class HoldSweepScheduler:
         self._last_run_error: str | None = None
 
     def last_run_status(self) -> dict:
+        """Outcome of the most recent sweep, for admin/status surfaces."""
+
         return {
             "last_run_at": self._last_run_at,
             "last_run_ok": self._last_run_ok,
@@ -229,6 +125,8 @@ class HoldSweepScheduler:
         }
 
     def _run(self) -> None:
+        """Loop: sleep, sweep, record status, until cancelled."""
+
         while not self._stop_event.is_set():
             self._wake_event.wait(self._poll_interval_seconds)
             self._wake_event.clear()
@@ -246,6 +144,8 @@ class HoldSweepScheduler:
                 self._last_run_at = datetime.now(timezone.utc).isoformat()
 
     def start(self) -> None:
+        """Start the background sweep thread if it is not already running."""
+
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop_event.clear()
@@ -253,6 +153,8 @@ class HoldSweepScheduler:
         self._thread.start()
 
     def stop(self) -> None:
+        """Stop the background sweep thread."""
+
         if self._thread is None:
             return
         self._stop_event.set()

@@ -11,6 +11,8 @@ from profiles.loader import ProfileLoadError, ProfileValidationError, load_profi
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """CLI flags and subcommands for add/update/remove/approve/list."""
+
     parser = argparse.ArgumentParser(
         prog="python -m cli.user_admin",
         description="Add, change, and remove users for one deployment.",
@@ -79,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_command(args: argparse.Namespace, store: PersistenceInterface) -> int:
+    """Apply one user-admin subcommand against the profile's users table."""
     if args.command in ("add", "update"):
         full_name = None
         if args.full_name is not None:

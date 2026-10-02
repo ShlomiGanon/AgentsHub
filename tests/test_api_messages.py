@@ -4,7 +4,6 @@ import types
 import pytest
 
 from agents import adapter
-from api import routes
 from api.app import build_app
 from api.operations import job_status
 from orchestrator.flows import begin_report
@@ -134,7 +133,6 @@ def test_a_report_includes_the_task_id_under_deep_debug(tmp_path, teardown_ctx, 
     everywhere else, read here (not by whichever bot process relays the reply) so
     every caller sees identical text regardless of its own environment."""
 
-    monkeypatch.setattr(routes, "deep_debug_enabled", lambda: True)
     from api import routes_messages
     monkeypatch.setattr(routes_messages, "deep_debug_enabled", lambda: True)
     agent = happy_path_agent(risk_score="0.1", selected="status_check", intent="report")

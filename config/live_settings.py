@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 class SettingsStore:
+    """Live retry, risk, lookback, and safe-mode values persisted next to the DB."""
     def __init__(
         self,
         db_path: str,

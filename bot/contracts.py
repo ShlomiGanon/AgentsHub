@@ -11,15 +11,23 @@ if TYPE_CHECKING:
 
 
 class BotError(Exception):
+    """Base error for bot-side failures."""
+
     pass
 
 
 class BotStartupError(BotError):
+    """The bot process cannot start with the current configuration."""
+
     pass
 
 
 class ApiNotImplementedError(BotError, NotImplementedError):
+    """The API client has no implementation for this operation yet."""
+
     def __init__(self, operation: str, blocked_on: str):
+        """Record which operation is blocked and what it still depends on."""
+
         self.operation = operation
         self.blocked_on = blocked_on
         super().__init__(
@@ -29,7 +37,11 @@ class ApiNotImplementedError(BotError, NotImplementedError):
 
 
 class ApiRequestError(BotError):
+    """The API returned an error status or the HTTP call failed."""
+
     def __init__(self, status_code: int | None, message: str, error_class: str | None = None, field: str | None = None):
+        """Store status, message, and optional error class/field from the API."""
+
         self.status_code = status_code
         self.message = message
         self.error_class = error_class
@@ -38,11 +50,15 @@ class ApiRequestError(BotError):
 
 
 class AlreadyRunningError(BotStartupError):
+    """Another bot process already holds the single-instance lock."""
+
     pass
 
 
 @dataclass(frozen=True)
 class BotDeps:
+    """Profile, Telegram client, and API client used by one bot process."""
+
     loaded_profile: "LoadedProfile"
     telegram_client: "TelegramClient"
     api_client: "BotApiClient"
@@ -83,6 +99,8 @@ HoldAnswerStatus = Literal[
 
 @dataclass(frozen=True)
 class UserLookupResult:
+    """Whether a Telegram identity is registered and at which permission level."""
+
     registered: bool
     permission_level: PermissionLevelName | None = None
     full_name: str | None = None
@@ -91,6 +109,8 @@ class UserLookupResult:
 
 @dataclass(frozen=True)
 class MessageSubmissionResult:
+    """Immediate /Msg answer: kind, optional text, and optional async job id."""
+
     kind: Literal["question", "report", "request", "conversational", "clarification", "event_update"]
     answer_text: str | None = None
     job_id: str | None = None
@@ -99,6 +119,8 @@ class MessageSubmissionResult:
 
 @dataclass(frozen=True)
 class TracePollResult:
+    """A page of Deep Debug messages plus the cursor for the next poll."""
+
     messages: tuple[str, ...]
     next_cursor: int
     terminal: bool = False
@@ -118,6 +140,8 @@ class GroupBindingView:
 
 @dataclass(frozen=True)
 class TelegramAdmissionResult:
+    """Whether this Telegram update is allowed into the system, and why."""
+
     allowed: bool
     reason: str
     safe_mode: bool
@@ -139,6 +163,8 @@ class AttendanceCheckResult:
 
 @dataclass(frozen=True)
 class JobResult:
+    """Finished-job fields the bot needs to format a result message."""
+
     job_id: str
     outcome: BotOutcome
     insight_text: str = ""
@@ -161,6 +187,8 @@ class JobResult:
 
 @dataclass(frozen=True)
 class HeldClarificationNotice:
+    """A clarification hold waiting for a commander classification."""
+
     hold_id: str
     event_id: str
     raw_text: str
@@ -170,6 +198,8 @@ class HeldClarificationNotice:
 
 @dataclass(frozen=True)
 class HeldApprovalNotice:
+    """An approval hold waiting for a commander decision."""
+
     hold_id: str
     event_id: str
     reason: Literal["flagged_protocol", "ambiguous_selection"]
@@ -181,6 +211,8 @@ class HeldApprovalNotice:
 
 @dataclass(frozen=True)
 class EventDataNeededNotice:
+    """A prompt asking the reporter for missing event data."""
+
     hold_id: str
     event_id: str
     question: str
@@ -189,6 +221,8 @@ class EventDataNeededNotice:
 
 @dataclass(frozen=True)
 class UncertainVerdictNotice:
+    """Commander-facing notice that a run ended uncertain."""
+
     event_id: str
     insight_text: str
 
@@ -228,6 +262,8 @@ class HoldEscalationNotice:
 
 @dataclass(frozen=True)
 class NoMatchNotice:
+    """Commander-facing notice that no protocol matched."""
+
     event_id: str
     raw_text: str
     reason: str
@@ -237,6 +273,8 @@ class NoMatchNotice:
 
 @dataclass(frozen=True)
 class HoldAnswerOutcome:
+    """Result of answering an approval or clarification hold."""
+
     status: HoldAnswerStatus
     resolved_by: str | None = None
     message: str = ""
@@ -246,6 +284,8 @@ class HoldAnswerOutcome:
 
 @dataclass(frozen=True)
 class PrecedentClosureNotice:
+    """Commander-facing notice that a report closed on a precedent."""
+
     event_id: str
     raw_text: str
     matched_precedent_event_id: str
@@ -254,6 +294,8 @@ class PrecedentClosureNotice:
 
 @dataclass(frozen=True)
 class ProtocolView:
+    """One protocol as shown on the profile view."""
+
     name: str
     description: str
     criticality: str
@@ -262,6 +304,8 @@ class ProtocolView:
 
 @dataclass(frozen=True)
 class ProfileView:
+    """Live profile snapshot for /profile view."""
+
     profile_name: str
     agent_names: tuple[str, ...]
     protocols: tuple[ProtocolView, ...]
@@ -271,12 +315,16 @@ class ProfileView:
 
 @dataclass(frozen=True)
 class WriteResult:
+    """Whether a protocol or settings write was accepted, plus the API message."""
+
     accepted: bool
     message: str
 
 
 @dataclass(frozen=True)
 class SettingsView:
+    """Live settings snapshot for /settings view."""
+
     retry_count: int
     risk_threshold: float
     lookback_window_days: int
@@ -302,6 +350,8 @@ BotNotificationKind = Literal[
 
 @dataclass(frozen=True)
 class FailureNotice:
+    """Failed-step fields the bot needs to format a failure message."""
+
     event_id: str
     failed_step_agent_name: str | None
     failure_reason: str
@@ -311,6 +361,8 @@ class FailureNotice:
 
 @dataclass(frozen=True)
 class BotNotification:
+    """One item from the notification poll, already typed by kind."""
+
     kind: BotNotificationKind
     target_chat_ids: tuple[str, ...]
     payload: (
@@ -348,13 +400,22 @@ class BotApiClient(ABC):
         chat_id: str,
         chat_type: str,
         chat_label: str = "",
-    ) -> TelegramAdmissionResult: ...
+    ) -> TelegramAdmissionResult:
+        """Register or refuse this Telegram user/chat before handling the update."""
+
+        ...
 
     @abstractmethod
-    async def resolve_user(self, telegram_identity: str) -> UserLookupResult: ...
+    async def resolve_user(self, telegram_identity: str) -> UserLookupResult:
+        """Look up whether this Telegram identity is a registered user."""
+
+        ...
 
     @abstractmethod
-    async def update_own_full_name(self, telegram_identity: str, full_name: str) -> str: ...
+    async def update_own_full_name(self, telegram_identity: str, full_name: str) -> str:
+        """Persist the caller's own full name after they supply it in chat."""
+
+        ...
 
     @abstractmethod
     async def list_commander_chat_ids(self) -> tuple[str, ...]:
@@ -413,7 +474,10 @@ class BotApiClient(ABC):
         """`caller_identity` — the real Telegram identity asking, already resolved and permission-checked by `bot.users.resolve_caller` before this is ever called — is what the API's own §..."""
 
     @abstractmethod
-    async def get_profile_diff_status(self) -> bool: ...
+    async def get_profile_diff_status(self) -> bool:
+        """True when a profile write is waiting for the next restart."""
+
+        ...
 
     @abstractmethod
     async def write_protocol(
@@ -461,6 +525,8 @@ class UnimplementedApiClient(BotApiClient):
         chat_type: str,
         chat_label: str = "",
     ) -> TelegramAdmissionResult:
+        """Placeholder until the HTTP client is wired."""
+
         raise ApiNotImplementedError(
             "admit_telegram_update",
             "§7 Telegram admission policy",

@@ -61,12 +61,18 @@ class FakeBotRequest(telegram.request.BaseRequest):
 
     @property
     def read_timeout(self) -> float | None:
+        """No extra read timeout for stubbed Bot API calls."""
+
         return None
 
     async def initialize(self) -> None:
+        """No-op open for the stub transport."""
+
         return None
 
     async def shutdown(self) -> None:
+        """No-op close for the stub transport."""
+
         return None
 
     async def do_request(
@@ -79,12 +85,16 @@ class FakeBotRequest(telegram.request.BaseRequest):
         connect_timeout=None,
         pool_timeout=None,
     ) -> tuple[int, bytes]:
+        """Return a successful getMe user, or True for other bootstrap calls."""
+
         result = _FAKE_BOT_USER if url.rstrip("/").endswith("getMe") else True
         return 200, json.dumps({"ok": True, "result": result}).encode("utf-8")
 
 
 @dataclass
 class SentMessage:
+    """One outbound simulator message recorded for later polling."""
+
     chat_id: str
     text: str
     buttons: tuple[tuple[str, str], ...] | None = None
@@ -100,42 +110,62 @@ class SimulatorTelegramClient(TelegramClient):
     chat would simply see)."""
 
     def __init__(self) -> None:
+        """Start with empty sent-message and status logs."""
+
         self.sent: list[SentMessage] = []
         self.status_events: list[tuple] = []
         self.answered_callback_query_ids: list[str] = []
         self._next_status_id = 1
 
     async def validate_token(self) -> bool:
+        """Always succeed; simulation mode never talks to Telegram."""
+
         return True
 
     async def send_text(self, chat_id: str, text: str, keyboard: Sequence[Sequence[str]] | None = None) -> None:
+        """Record a plain outbound message."""
+
         self.sent.append(SentMessage(chat_id=chat_id, text=text))
 
     async def send_status(self, chat_id: str, text: str, reply_to_message_id: str | None = None) -> str:
+        """Record a status message and return a synthetic id."""
+
         message_id = str(self._next_status_id)
         self._next_status_id += 1
         self.status_events.append(("send", chat_id, message_id, text))
         return message_id
 
     async def edit_status(self, chat_id: str, message_id: str, text: str) -> None:
+        """Record a status edit."""
+
         self.status_events.append(("edit", chat_id, message_id, text))
 
     async def delete_status(self, chat_id: str, message_id: str) -> None:
+        """Record a status delete."""
+
         self.status_events.append(("delete", chat_id, message_id))
 
     async def send_with_buttons(self, chat_id: str, text: str, buttons: Sequence[tuple[str, str]]) -> None:
+        """Record an outbound message with inline buttons."""
+
         self.sent.append(SentMessage(chat_id=chat_id, text=text, buttons=tuple(buttons)))
 
     async def send_reply(self, chat_id: str, text: str, reply_to_message_id: str | None) -> str:
+        """Record a reply and return a synthetic message id."""
+
         self.sent.append(SentMessage(chat_id=chat_id, text=text, reply_to_message_id=reply_to_message_id))
         message_id = str(self._next_status_id)
         self._next_status_id += 1
         return message_id
 
     async def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> None:
+        """Record that this callback query was acknowledged."""
+
         self.answered_callback_query_ids.append(callback_query_id)
 
     def run_polling(self, register_handlers) -> None:
+        """Refuse; the simulator drives updates through Flask, not polling."""
+
         raise NotImplementedError("bot.simulator_app never polls Telegram")
 
     # -- reading back one request's reply --------------------------------

@@ -1,75 +1,16 @@
 """Notification polling routes and payload builders."""
 
-import dataclasses
-from datetime import datetime, timedelta, timezone
-import time
-
 from typing import TYPE_CHECKING
 
 from flask import Blueprint, jsonify, request
 
-from api.request_boundary import BOT_SERVICE_IDENTITY, AuthorizationError, ConflictError, InvalidInputError, NotFoundError, RunFailureError, ServiceUnavailableError, authenticate, require
-from history import record_event_outcome, parse_timestamp, storage_timestamp
-
-from orchestrator.flows import begin_report, run_report_extraction
-
-from tools import (
-    deep_debug_enabled,
-    get_trace_id,
-    is_valid_trace_id,
-    new_trace_id,
-    record_telegram_security_metric,
-    render_deep_debug_entry,
-    set_trace_id,
-    stage_context,
-    trace_context,
-)
-from config import environment as base_config
-
-import logging
-
-from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
-from auth.permissions import InvalidFullNameError, normalize_full_name
-from agents import AgentInvocationError, authenticated_request_identity, set_invocation_deadline
-
-from orchestrator.flows import (
-    GroupNotRegisteredError,
-    InvalidRoutingTargetError,
-    OrchestrationParseError,
-    is_scoped_target,
-    resolve_scope,
-    scope_deps,
-    answer_conversationally,
-    answer_question,
-    answer_question_from_plan,
-    apply_event_data_reply,
-    apply_drone_selection_reply,
-    attempt_direct_lane,
-    build_role_aware_system_context,
-    begin_report,
-    begin_request,
-    classify_intent,
-    build_situational_picture,
-    plan_message,
-    protocol_requires_approval,
-    WorkItem,
-    continue_from_risk_assessment,
-    run_report_extraction,
-    resume_after_event_data,
-)
-
-from protocols import CriticalityLevel, Protocol, ProtocolEditError, add_protocol, remove_protocol, replace_protocol
-from profiles.loader import hash_profile_file
-from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy
-from persistence import NotFoundError as PersistenceNotFoundError
-from api.simulations import find_simulation_scenario, materialize_simulation, simulation_catalog_payload
-
-from orchestrator.flows import continue_after_approval, continue_after_clarification, decline, resolve_approval, resolve_clarification
+from api._route_deps import failed_step_agent_name, steps_completed
+from api.request_boundary import BOT_SERVICE_IDENTITY, InvalidInputError, authenticate, require
+from auth.permissions import RequestedOperation
+from tools import stage_context
 
 if TYPE_CHECKING:
     from api.app import ApiContext
-
-from api.routes import _failed_step_agent_name, _steps_completed
 
 def _clarification_hold_payload(ctx: "ApiContext", event_id: str, event: dict | None = None) -> dict:
     hold = ctx.deps.persistence.fetch_held_event("clarification", event_id)
@@ -158,9 +99,9 @@ def _job_payload(ctx: "ApiContext", event_id: str, event: dict | None = None) ->
         "job_id": event_id,
         "outcome": event["outcome"],
         "insight_text": event.get("insight_text") or "",
-        "steps_completed": _steps_completed(event),
+        "steps_completed": steps_completed(event),
         "failure_reason": event.get("outcome_failure_reason"),
-        "failed_step_agent_name": _failed_step_agent_name(event),
+        "failed_step_agent_name": failed_step_agent_name(event),
         # For the always-on protocol/reason suffix (item #9) — already computed
         # during the run, no new model call. `protocol_name` is None whenever no
         # protocol was ever selected (e.g. `no_match_protocol`).

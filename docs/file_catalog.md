@@ -32,21 +32,44 @@ This English catalog describes every tracked or pending first-party file in the 
 | `agents/surveillance_agent.py` | Production | Private implementation | Implements the visual-surveillance, camera-monitoring, and tactical-drone specialist. |
 | `agents/team_status_agent.py` | Production | Private implementation | Implements the readiness-team roster, attendance-cycle, response, and availability-report specialist. |
 | `api/__init__.py` | Production | Public facade | Exposes the API facade and compatibility module aliases. |
-| `api/admin.py` | Production | Private implementation | Serves the login-gated, seven-page admin web panel under `/admin`, in the profile's catalog language. |
+| `api/_route_deps.py` | Production | Private implementation | Shared JSON-route helpers used by the domain blueprint modules. |
+| `api/admin.py` | Production | Private implementation | Assembles the login-gated admin web panel under `/admin` from sibling modules. |
 | `api/admin_api_pages.py` | Production | Private implementation | Provides the tailored profiles, protocols, and events management UI; live endpoint actions use the selected `X-Identity` and retain normal API authorization. |
+| `api/admin_api_console.py` | Production | Private implementation | Inline JS for the admin API-console page. |
+| `api/admin_api_page_bodies.py` | Production | Private implementation | HTML bodies for the admin profiles, protocols, and events pages. |
+| `api/admin_bts_assets.py` | Production | Private implementation | Inline CSS/JS fragments for the Behind-the-Scenes admin page. |
 | `api/admin_bts_page.py` | Production | Private implementation | Renders the standalone Behind-the-Scenes live agent execution/communication dashboard. |
-| `api/admin_chrome.py` | Production | Private implementation | Holds shared admin HTML/CSS chrome and assembled page templates. |
+| `api/admin_chrome.py` | Production | Private implementation | Concatenates shared admin HTML/CSS chrome and assembled page templates. |
+| `api/admin_chrome_pages.py` | Production | Private implementation | Admin page HTML constants concatenated by `admin_chrome`. |
+| `api/admin_chrome_shell.py` | Production | Private implementation | Admin shell HTML constants concatenated by `admin_chrome`. |
+| `api/admin_chrome_style.py` | Production | Private implementation | Admin CSS constants concatenated by `admin_chrome`. |
 | `api/admin_config.py` | Production | Private implementation | Resolves admin-panel enablement, credentials, and the global login lockout. |
+| `api/admin_groups.py` | Production | Private implementation | Admin routes for listing and editing Telegram group bindings. |
+| `api/admin_server.py` | Production | Private implementation | Admin routes for stack status, profile switch, and database reset. |
+| `api/admin_session.py` | Production | Private implementation | Admin login, logout, CSRF, and acting-identity session routes. |
 | `api/admin_simulator.py` | Production | Private implementation | Style, body and script of the admin scenario simulator page, plus the helper that gathers its embedded data. |
-| `api/admin_simulator_assets.py` | Production | Private implementation | Inline CSS and HTML/JS for the admin scenario simulator page. |
+| `api/admin_simulator_assets.py` | Production | Private implementation | Concatenates inline CSS and HTML/JS for the admin scenario simulator page. |
+| `api/admin_simulator_body.py` | Production | Private implementation | Simulator page HTML/JS constants concatenated by `admin_simulator_assets`. |
+| `api/admin_simulator_proxy.py` | Production | Private implementation | Admin proxy routes that forward simulator requests to the bot simulator process. |
+| `api/admin_simulator_style.py` | Production | Private implementation | Simulator page CSS constants concatenated by `admin_simulator_assets`. |
+| `api/admin_support.py` | Production | Private implementation | Shared AdminPanel helpers for session, CSRF, and acting identity. |
 | `api/admin_tables.py` | Production | Private implementation | Generic admin-panel table rendering and form validation for whatever `AdminTable`s the active profile declares (docs/Admin_Tables_Plan.md); routes live in `api/admin.py`. |
 | `api/admin_trace.py` | Production | Private implementation | Admin routes for the Behind-the-Scenes simulator trace panel. |
+| `api/admin_users.py` | Production | Private implementation | Admin routes for listing and approving registered users. |
 | `api/app.py` | Production | Public entry point | Builds API dependencies, owns ApiContext, and starts Flask. |
 | `api/request_boundary.py` | Production | Private implementation | Authenticates requests and translates API and HTTP failures into responses. |
-| `api/routes.py` | Production | Private implementation | Facade that exports ingestion, management, hold, job, system, and notification route builders. |
+| `api/routes.py` | Production | Private implementation | Blueprint assembler plus re-exports for JSON route builders. |
+| `api/routes_events.py` | Production | Private implementation | Event ingestion route (`POST /Event`). |
+| `api/routes_groups.py` | Production | Private implementation | Telegram group listing and binding routes. |
 | `api/routes_holds.py` | Production | Private implementation | Hold listing and Clarify/Approve continuation routes. |
+| `api/routes_jobs.py` | Production | Private implementation | Job status route (`GET /Job/<id>`). |
 | `api/routes_messages.py` | Production | Private implementation | Message ingestion route (`POST /Msg`). |
 | `api/routes_notifications.py` | Production | Private implementation | Notification polling route and payload builders. |
+| `api/routes_protocols.py` | Production | Private implementation | Protocol list/create/update/delete routes. |
+| `api/routes_simulations.py` | Production | Private implementation | Simulation catalog routes. |
+| `api/routes_system.py` | Production | Private implementation | SYSTEM read/write and live-trace routes. |
+| `api/routes_telegram.py` | Production | Private implementation | Telegram admission route. |
+| `api/routes_users.py` | Production | Private implementation | User lookup, name, approve, and commander roster routes. |
 | `api/simulations.py` | Production | Private implementation | Converts a profile's declared simulations into the existing admin-simulator scenario JSON, substituting reserved simulation IDs for persona/group keys. |
 | `api/static/leadspotting-logo.gif` | Production | Private implementation | LeadSpotting wordmark used by the admin panel chrome. |
 | `api/static/leadspotting-mark.gif` | Production | Private implementation | LeadSpotting mark used by the admin panel chrome. |
@@ -54,14 +77,22 @@ This English catalog describes every tracked or pending first-party file in the 
 | `auth/permissions.py` | Production | Private implementation | Maps actions to permission levels and evaluates authorization. |
 | `auth/user_names.py` | Production | Private implementation | Normalizes and validates the single full-name field associated with a Telegram identity. |
 | `bot/__init__.py` | Production | Public facade | Exposes the bot facade and compatibility module aliases. |
-| `bot/app.py` | Production | Public entry point | Builds bot dependencies, routes Telegram updates, and starts polling. |
+| `bot/app.py` | Production | Public entry point | Re-exports wiring, dispatch, and handler registration; starts polling. |
 | `bot/background_services.py` | Production | Private implementation | Polls and dispatches notifications, persists cursors, and manages single-instance startup. |
 | `bot/contracts.py` | Production | Private implementation | Defines bot DTOs, client interfaces, dependency contracts, and errors. |
-| `bot/interactions.py` | Production | Private implementation | Formats messages and handles commands, holds, settings, and profile interactions. |
+| `bot/dispatch.py` | Production | Private implementation | Caller cache, `/Msg` submission, and live Deep Debug polling. |
+| `bot/handlers.py` | Production | Private implementation | Telegram command, callback, text, and chat-member handlers. |
+| `bot/interaction_commands.py` | Production | Private implementation | Profile, protocol, and settings commands sent through the bot. |
+| `bot/interaction_format.py` | Production | Private implementation | Telegram message formatting shared by commands, holds, and delivery. |
+| `bot/interaction_holds.py` | Production | Private implementation | Approval and clarification holds, prompts, and the pending-holds queue. |
+| `bot/interaction_users.py` | Production | Private implementation | Resolves Telegram callers and checks whether an operation is permitted. |
+| `bot/interactions.py` | Production | Private implementation | Re-exports commands, holds, user checks, and message formatting. |
 | `bot/presentation.py` | Production | Private implementation | Implements the shared Telegram/CLI status replacement and fallback lifecycle. |
+| `bot/runtime_state.py` | Production | Private implementation | In-memory bot caches shared by dispatch and handlers. |
 | `bot/simulator_app.py` | Production | Public entry point | Runs the simulation-mode bot process — real handlers/background loops, stubbed Telegram network (docs/bot_simulation_mode_design.md). |
 | `bot/simulator_transport.py` | Production | Private implementation | Defines the Telegram-network stubs (`FakeBotRequest`, `SimulatorTelegramClient`) and synthetic-Update construction for simulation-mode. |
 | `bot/transports.py` | Production | Private implementation | Implements HTTP API access and Telegram transport adapters. |
+| `bot/wiring.py` | Production | Private implementation | Profile load, token, clients, and polling entry for the bot process. |
 | `cli/__init__.py` | Production | Public facade | Marks the command-line package. |
 | `cli/group_admin.py` | Production | Public entry point | Provides the Telegram group routing administration command-line entry point. |
 | `cli/user_admin.py` | Production | Public entry point | Provides the user-administration command-line entry point. |
@@ -144,11 +175,13 @@ This English catalog describes every tracked or pending first-party file in the 
 | `messages/model_messages.py` | Production | Private implementation | Centralizes prompts used only to formulate natural user-facing model text. |
 | `my_fake_bot_test.py` | Test | Internal | Provides a standalone fake-bot test harness outside pytest discovery. |
 | `orchestrator/__init__.py` | Production | Public facade | Exposes orchestration capabilities and compatibility module aliases. |
+| `orchestrator/attendance_schedule.py` | Production | Private implementation | Decides whether today's attendance cycle should open for a bound group. |
 | `orchestrator/capabilities.py` | Production | Private implementation | Builds the role-aware, per-caller Main Agent capability and system context. |
 | `orchestrator/event_queue.py` | Production | Private implementation | Serializes event processing on a dedicated worker. |
-| `orchestrator/flows.py` | Production | Private implementation | Coordinates report, request, hold-resume, protocol, and outcome workflows. |
+| `orchestrator/flows.py` | Production | Private implementation | Declared entry point: re-exports ingest, protocol, holds, attendance, and run-report helpers. |
 | `orchestrator/flows_direct_lane.py` | Production | Private implementation | Classifies and executes the fast direct-lane path for simple low-stakes actions. |
 | `orchestrator/flows_hold_sweep.py` | Production | Private implementation | Reminds, escalates, and expires unresolved holds on a background scheduler. |
+| `orchestrator/flows_ingest.py` | Production | Private implementation | Persists a new message, extracts it, and routes by intent. |
 | `orchestrator/flows_protocol.py` | Production | Private implementation | Executes a selected protocol plan and continues persisted steps. |
 | `orchestrator/group_routing.py` | Production | Private implementation | Holds the in-memory, DB-backed Telegram group to agent routing table and scopes flow dependencies per group. |
 | `orchestrator/holds.py` | Production | Private implementation | Creates and resolves clarification and approval holds. |
@@ -167,7 +200,12 @@ This English catalog describes every tracked or pending first-party file in the 
 | `persistence/incident_responder_store.py` | Production | Private implementation | Shared, cross-profile store linking an identity (person or apparatus) to the one specific real event it is responding to -- never area co-location; used by both profiles' roster/crew-status agents for join/list/leave incident-response tracking. |
 | `persistence/response_team_store.py` | Production | Private implementation | Implements the Response Team profile's own roster/attendance, surveillance, and neighboring-force-dispatch tables against the profile's shared DB_PATH (docs/responce_improve.md). |
 | `persistence/schema.py` | Production | Private implementation | Owns immutable migration DDL and the current SQLite schema. |
-| `persistence/sqlite_store.py` | Production | Private implementation | Implements serialized SQLite persistence, transactions, and row conversion. |
+| `persistence/sqlite_events.py` | Production | Private implementation | Event and summary row methods mixed into `SQLitePersistence`. |
+| `persistence/sqlite_groups.py` | Production | Private implementation | Telegram group row methods mixed into `SQLitePersistence`. |
+| `persistence/sqlite_jobs.py` | Production | Private implementation | Hold, notification, log, and conversation row methods mixed into `SQLitePersistence`. |
+| `persistence/sqlite_store.py` | Production | Private implementation | Constructs `SQLitePersistence`: writer thread plus domain mixins behind the persistence contract. |
+| `persistence/sqlite_support.py` | Production | Private implementation | Shared SQLite row helpers used by the domain mixins. |
+| `persistence/sqlite_users.py` | Production | Private implementation | User row methods mixed into `SQLitePersistence`. |
 | `persistence/surveillance_contracts.py` | Production | Private implementation | Defines camera, drone, and surveillance-mission persistence contracts. |
 | `persistence/surveillance_store.py` | Production | Private implementation | Implements the isolated SQLite surveillance store. |
 | `persistence/team_status_contracts.py` | Production | Private implementation | Defines the database-agnostic readiness-team status persistence contract and constructor. |
@@ -226,6 +264,8 @@ This English catalog describes every tracked or pending first-party file in the 
 | `tests/test_api_unified_ingestion.py` | Test | Internal | Verifies api unified ingestion behavior and edge cases. |
 | `tests/test_approvals_queue.py` | Test | Internal | Verifies commander approvals queue API and Telegram interactions. |
 | `tests/test_architecture.py` | Test | Internal | Enforces package boundaries and prevents recreation of the registries package. |
+| `tests/test_attendance_broadcast_store.py` | Test | Internal | Verifies one-shot attendance broadcast claims on the team-status and response-team stores. |
+| `tests/test_attendance_schedule.py` | Test | Internal | Verifies attendance dispatch uses enabled groups and the earliest configured hour. |
 | `tests/test_bot_app.py` | Test | Internal | Verifies bot dependency wiring, entry-point behavior, and update routing. |
 | `tests/test_bot_background_services.py` | Test | Internal | Verifies notification polling, delivery, failures, results, and startup services. |
 | `tests/test_bot_groups.py` | Test | Internal | Verifies bot group handling: binding cache, ignoring unbound groups, chat metadata on messages, attendance prompts and buttons. |

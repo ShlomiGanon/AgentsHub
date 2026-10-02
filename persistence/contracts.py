@@ -15,6 +15,8 @@ class NotFoundError(PersistenceError):
 
 @dataclass(frozen=True)
 class EventSearchCriteria:
+    """Allowlisted filters for event search, count, and aggregate reads."""
+
     time_start: str | None = None
     time_end: str | None = None
     time_basis: Literal["occurred_at", "received_at"] = "occurred_at"
@@ -35,6 +37,8 @@ class EventSearchCriteria:
 
 class PersistenceInterface(ABC):
     def __init__(self, db_path: str):
+        """Remember the database path this store will open."""
+
         self.db_path = db_path
 
 

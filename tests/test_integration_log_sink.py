@@ -262,7 +262,7 @@ def test_a_failed_request_still_shares_its_trace_id_with_the_werkzeug_500_line(t
     line were written. `set_trace_id` has no such reset, on success or on
     failure.
     """
-    import api.ingestion as events_module
+    import api.routes_events as events_module
 
     monkeypatch.setattr(adapter, "_get_crewai", lambda: _fake_crewai())
     monkeypatch.setattr(events_module, "begin_report", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))

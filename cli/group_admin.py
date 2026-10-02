@@ -19,6 +19,8 @@ MAIN_AGENT_TARGET = "main_agent"
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """CLI flags and subcommands for bind/rebind/remove/list of Telegram groups."""
+
     parser = argparse.ArgumentParser(
         prog="python -m cli.group_admin",
         description="Bind, rebind, and remove Telegram groups for one deployment.",
@@ -87,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_command(args: argparse.Namespace, store: PersistenceInterface, routable: tuple[str, ...]) -> int:
+    """Apply one group-admin subcommand against the profile's telegram_groups table."""
     if args.command in ("add", "update"):
         chat_id = args.chat_id.strip()
         if not chat_id:

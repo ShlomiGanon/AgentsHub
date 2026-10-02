@@ -84,6 +84,8 @@ def _parse_risk_assessment_response(raw_text: str) -> tuple[float, str]:
     return score, reason_match.group(1).strip()
 
 def assess_risk(main_agent: MainAgent, classification: str | None, area: str | None, description: str | None, severity: str | None, risk_threshold: float) -> RiskAssessment:
+    """Score this event against the live risk threshold. Returns high or low plus a reason."""
+
     with stage_context("risk_assessment"):
         agent_result = main_agent.process(_build_risk_assessment_prompt(classification, area, description, severity), [])
     if agent_result.status != "success":
@@ -248,6 +250,8 @@ def classify_intent(
     message_text: str,
     conversation_messages: tuple[dict, ...] = (),
 ) -> IntentResult:
+    """Classify an inbound message as question, report, request, conversational, or needs clarification."""
+
     prompt = _build_intent_prompt(message_text, protocols, conversation_messages)
     last_error: OrchestrationParseError | None = None
     for attempt in range(2):
@@ -349,6 +353,8 @@ def _parse_selection_response(raw_text: str) -> ProtocolSelectionResult:
     raise OrchestrationParseError(f"could not parse protocol selection response: {raw_text!r}")
 
 def select_protocol(main_agent: MainAgent, raw_text: str, classification: str | None, area: str | None, description: str | None, protocols: tuple[Protocol, ...], risk_level: Literal["high", "low"], preferred_agent_hint: str | None = None) -> ProtocolSelectionResult:
+    """Pick the protocol for this event from the registry and risk. Returns the plan or a no-match/ambiguous status."""
+
     with stage_context("protocol_selection"):
         agent_result = main_agent.process(_build_selection_prompt(raw_text, classification, area, description, protocols, preferred_agent_hint), [])
     if agent_result.status != "success":

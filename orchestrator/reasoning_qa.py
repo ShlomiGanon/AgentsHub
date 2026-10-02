@@ -88,6 +88,8 @@ def _is_direct_most_recent_lookup(raw_text: str) -> bool:
 
 @dataclass(frozen=True)
 class AgentSelectionResult:
+    """Which specialist agents should answer this question."""
+
     status: Literal["selected", "history", "none", "clarification"]
     chosen_tasks: dict[str, str] = field(default_factory=dict)
     reason: str = ""
@@ -95,12 +97,16 @@ class AgentSelectionResult:
 
 @dataclass(frozen=True)
 class MessagePlan:
+    """Question-handling plan: intent, specialists, and the composed-answer path."""
+
     intent: IntentResult
     question_selection: AgentSelectionResult | None = None
     conversational_reply: str | None = None
 
 @dataclass(frozen=True)
 class QuestionAnswer:
+    """Final question reply plus provenance of how it was produced."""
+
     text: str
     provenance: dict | None = None
 
@@ -330,6 +336,8 @@ def plan_message(
     conversation_messages: tuple[dict, ...] = (),
     system_context: dict | None = None,
 ) -> MessagePlan:
+    """Turn a question into a specialist plan: which agents to call and what to ask them."""
+
     selectable_agents = [agent for agent in registry.all() if agent.name not in {"main_agent", "insights_agent"}]
     descriptors = [agent.descriptor for agent in selectable_agents]
     context_factory = getattr(history_query_service, "planning_context", None)
@@ -372,6 +380,8 @@ def plan_message(
     return MessagePlan(intent, question_selection, conversational_reply.strip() if conversational_reply else None)
 
 class SpecialistFailure(Enum):
+    """Why a specialist did not return a usable answer."""
+
     TIMEOUT = 1
     ERROR = 2
     NO_ANSWER = 3

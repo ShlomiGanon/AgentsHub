@@ -31,10 +31,12 @@ from protocols import CriticalityLevel, EVENT_DATA_FIELDS
 
 
 def build_area_registry(loaded_profile: "LoadedProfile") -> AreaRegistry:
+    """Closed area set declared by this loaded profile."""
     return AreaRegistry(areas=loaded_profile.areas)
 
 
 def build_event_type_registry(loaded_profile: "LoadedProfile") -> EventTypeRegistry:
+    """Closed event-type set, required fields, and descriptions from this loaded profile."""
     # UNCLASSIFIED_TYPE's required fields (and its lack of a description) are
     # fixed in EventTypeRegistry itself (item #6 / docs/bar_improves.md) —
     # not read from the profile.
@@ -45,6 +47,7 @@ def build_event_type_registry(loaded_profile: "LoadedProfile") -> EventTypeRegis
     )
 
 def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> list[str]:
+    """Human-readable validation failures for this loaded profile, or empty when it is valid."""
     failures: list[str] = []
     agents_by_name = {agent.name: agent for agent in loaded.agents}
     agents_by_name.update(dict(getattr(loaded, "core_agents", {})))

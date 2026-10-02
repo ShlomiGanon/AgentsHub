@@ -129,9 +129,13 @@ from orchestrator.reasoning_qa import (
 )
 
 def construct_core_agents(base_config: BaseConfig) -> dict[str, Agent]:
+    """Build the Main agent from core-tier model settings."""
+
     return {"main_agent": MainAgent(model=base_config.core_model.model, api_key=base_config.core_model.api_key)}
 
 class InsightsAgent(Agent):
+    """SUB-tier agent that writes one conclusion after a protocol run."""
+
     name = "insights_agent"
     role = (
         "Synthesizes the end of every protocol run: given what each sub-agent was asked and what it "
@@ -147,6 +151,8 @@ class InsightsAgent(Agent):
     )
 
 def _build_insight_prompt(protocol: Protocol, step_outcomes: tuple["StepOutcome", ...], comparable_history: tuple["PrecedentMatch", ...]) -> str:
+    """Prompt asking Insights to compare this run with comparable history."""
+
     steps_block = "\n".join(
         f"- {outcome.step.agent_name} was asked: {outcome.step.task_text!r}\n"
         f"  and {'succeeded' if outcome.succeeded else 'failed'}, returning: {outcome.result_text!r}"
@@ -172,6 +178,8 @@ def build_insight(
     step_outcomes: tuple["StepOutcome", ...],
     comparable_history: tuple["PrecedentMatch", ...] = (),
 ) -> str:
+    """Ask Insights for one conclusion about this protocol run. Returns the insight text."""
+
     with stage_context("insight_generation"):
         agent_result = insights_agent.process(_build_insight_prompt(protocol, step_outcomes, comparable_history), [])
     if agent_result.status != "success":
@@ -179,6 +187,8 @@ def build_insight(
     return agent_result.text
 
 def construct_insights_agent(base_config: BaseConfig) -> dict[str, Agent]:
+    """Build the Insights agent from core-tier model settings."""
+
     return {
         "insights_agent": InsightsAgent(
             model=base_config.core_model.model,

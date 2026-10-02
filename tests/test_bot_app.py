@@ -432,7 +432,7 @@ def test_other_api_errors_still_show_their_specific_catalog_message():
 
 
 def test_deep_debug_commander_receives_separate_trace_messages(monkeypatch):
-    monkeypatch.setattr(app, "deep_debug_enabled", lambda: True)
+    monkeypatch.setattr("bot.dispatch.deep_debug_enabled", lambda: True)
     api = FakeBotApiClient(
         users={"42": "commander"},
         message_submission_result=MessageSubmissionResult(kind="question", answer_text="final"),
@@ -452,7 +452,7 @@ def test_deep_debug_commander_receives_separate_trace_messages(monkeypatch):
 
 
 def test_deep_debug_viewer_never_polls_trace(monkeypatch):
-    monkeypatch.setattr(app, "deep_debug_enabled", lambda: True)
+    monkeypatch.setattr("bot.dispatch.deep_debug_enabled", lambda: True)
     api = FakeBotApiClient(
         users={"42": "viewer"},
         message_submission_result=MessageSubmissionResult(kind="question", answer_text="final"),
@@ -887,21 +887,13 @@ def test_the_real_message_id_is_forwarded_to_submit_message():
     assert ("submit_message", "there is smoke near the depot", "v1", "9988") in api.calls
 
 
-def test_get_open_approval_holds_logs_when_the_database_cannot_be_read(monkeypatch, caplog):
-    import sqlite3
-
+def test_get_open_approval_holds_returns_in_memory_holds_without_opening_sqlite():
     from bot.interactions import get_open_approval_holds, register_open_approval_hold, unregister_open_approval_hold
 
-    def _boom(*args, **kwargs):
-        raise sqlite3.OperationalError("unable to open database file")
-
-    monkeypatch.setattr(sqlite3, "connect", _boom)
     register_open_approval_hold("evt-keep")
     try:
-        with caplog.at_level("ERROR"):
-            holds = get_open_approval_holds("unused.db")
+        holds = get_open_approval_holds()
         assert "evt-keep" in holds
-        assert "failed to load open approval holds" in caplog.text
     finally:
         unregister_open_approval_hold("evt-keep")
 

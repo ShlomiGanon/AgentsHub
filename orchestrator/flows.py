@@ -78,6 +78,10 @@ from orchestrator.group_routing import (  # re-exported: api may only import orc
     resolve_scope,
     scope_deps,
 )
+from orchestrator.attendance_schedule import (  # re-exported: api may only import orchestrator.flows
+    AttendanceDispatch,
+    attendance_dispatch,
+)
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy, UNCLASSIFIED_TYPE
 from protocols import CriticalityLevel, EVENT_DATA_FIELDS, ResourceUnavailable, Step, StepOutcome
 from protocols.executor import execute_steps
@@ -127,6 +131,8 @@ if TYPE_CHECKING:
     from messages import MessageCatalog
 
 def _deadline_failure(deps: "FlowDeps", event_id: str, next_stage: str) -> "FlowResult | None":
+    """Failed FlowResult when the event deadline has already passed, else None."""
+
     event = deps.persistence.fetch_event(event_id)
     # Approval is an explicit asynchronous pause.  Its original queue deadline
     # must not invalidate the approved continuation while a commander is
@@ -173,6 +179,8 @@ def assemble_core_agents(loaded_profile: "LoadedProfile", base_config: "BaseConf
 
 @dataclass(frozen=True)
 class FlowDeps:
+    """Persistence, registries, and settings one orchestration run needs."""
+
     persistence: "PersistenceInterface"
     settings_store: "SettingsStore"
     registry: "AgentRegistry"
@@ -201,12 +209,16 @@ class FlowDeps:
 
 @dataclass(frozen=True)
 class FlowResult:
+    """Terminal or held outcome of one orchestration run."""
+
     event_id: str
     outcome: FlowOutcome
     detail: str = ""
 
 @dataclass(frozen=True)
 class EventDataReplyResult:
+    """Parsed extra-data reply, or the event ids that made it ambiguous."""
+
     event_id: str
     updates: dict[str, object]
     message: str
@@ -217,36 +229,17 @@ class EventDataReplyResult:
 
 @dataclass(frozen=True)
 class DroneSelectionReplyResult:
+    """Result of applying a drone-selection reply to a waiting event."""
+
     event_id: str
     message: str
     status: Literal["waiting_for_drone_selection", "succeeded"]
 
 _DRONE_RECALL_TOOLS = ("return_drone_to_base", "return_all_drones_to_base")
 
-def _model_invoker_for(main_agent: "MainAgent"):
-    def _invoke(prompt: str) -> str:
-        try:
-            agent_result = main_agent.process(prompt, [])
-        except (AgentTimeoutError, AgentModelError) as exc:
-            if not is_retryable_invocation_error(exc):
-                raise
-            # Stage 2 (docs/bar_improves.md): the raw report text is already
-            # persisted before extraction ever runs (`begin_report`), so a
-            # single transient provider timeout/error should not lose the
-            # report — retry the extraction call exactly once, mirroring the
-            # existing retry-once pattern used elsewhere in this module for
-            # task formulation and success judgment. MODEL_TIMEOUT_SECONDS and
-            # the zero provider-retry configuration are untouched; this is one
-            # additional application-level attempt, not a provider retry.
-            extraction_retry(cause=type(exc).__name__)
-            agent_result = main_agent.process(prompt, [])
-        if agent_result.status != "success":
-            raise ExtractionExecutionError(f"main agent could not produce a usable extraction response: {agent_result.text}")
-        return agent_result.text
-
-    return _invoke
-
 def _now() -> str:
+    """Current UTC timestamp in ISO-8601 storage form."""
+
     return datetime.now(timezone.utc).isoformat()
 
 def _log_event_outcome(event_id: str, outcome: str, **detail) -> None:
@@ -342,123 +335,6 @@ def _record_outcome_with_report(
 # a protocol allows, and a commander_only or approval_flag protocol is never eligible (checked
 # once here, defensively, even though no profile currently marks one eligible).
 
-def begin_report(
-    deps: FlowDeps,
-    raw_text: str,
-    source: Literal["sensor", "telegram"],
-    received_at: str,
-    sender_identity: str,
-    source_message_id: str | None = None,
-    conversation_id: str | None = None,
-    deadline_at: str | None = None,
-    sender_permission_level: str = "viewer",
-    telegram_chat_id: str | None = None,
-    telegram_chat_type: str | None = None,
-    ack_message_id: str | None = None,
-) -> str:
-    """The synchronous prefix of a report: write the raw text and return the event ID, before any model call runs (§7.2's own requirement — "before any processing begins")."""
-
-    event_id = record_initial_event(
-        deps.persistence,
-        InitialEventEnvelope(
-            raw_text=raw_text, source=source, received_at=received_at, sender_identity=sender_identity,
-            sender_permission_level=sender_permission_level,
-            source_message_id=source_message_id,
-            trace_id=get_trace_id() or None, conversation_id=conversation_id, deadline_at=deadline_at,
-            telegram_chat_id=telegram_chat_id, telegram_chat_type=telegram_chat_type, ack_message_id=ack_message_id,
-        ),
-    )
-
-    report_received(
-        event_id=event_id, source=source, sender_identity=sender_identity, raw_text=raw_text,
-    )
-
-    return event_id
-
-def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent") -> FlowResult:
-    """The rest of a report: extraction through outcome."""
-
-    deadline_failure = _deadline_failure(deps, event_id, "extraction")
-    if deadline_failure is not None:
-        return deadline_failure
-
-    event = deps.persistence.fetch_event(event_id)
-    raw_text, source, received_at = event["raw_text"], event["source"], event["received_at"]
-
-    operational_decision = None
-    try:
-        if deps.optimization_policy.operational_decision_mode == "merged":
-            try:
-                extraction_result, operational_decision = extract_and_decide(
-                    main_agent,
-                    raw_text,
-                    source,
-                    received_at,
-                    deps.event_type_registry,
-                    deps.area_registry,
-                    deps.protocol_set.all(),
-                    deps.settings_store.get_risk_threshold(),
-                    preferred_agent_hint=deps.preferred_agent_hint,
-                )
-            except ExtractionExecutionError:
-                extraction_result = extract_event(
-                    raw_text, source, received_at, deps.event_type_registry, deps.area_registry,
-                    model_invoker=_model_invoker_for(main_agent),
-                )
-                operational_decision = None
-        else:
-            extraction_result = extract_event(
-                raw_text, source, received_at, deps.event_type_registry, deps.area_registry,
-                model_invoker=_model_invoker_for(main_agent),
-            )
-    except ExtractionExecutionError as exc:
-        _record_outcome_with_report(deps, event_id, "failed", failure_reason=str(exc))
-        _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="extraction")
-        return FlowResult(event_id, "failed", str(exc))
-
-    log_extraction_result(
-        event_id=event_id,
-        classification=extraction_result.classification,
-        area=extraction_result.area,
-        missing_fields=extraction_result.missing_fields,
-        occurred_at_is_fallback=extraction_result.occurred_at_is_fallback,
-    )
-
-    record_extracted_fields(deps.persistence, event_id, extraction_result)
-
-    # A report that doesn't match any event type the active profile declares
-    # resolves to the built-in UNCLASSIFIED_TYPE fallback rather than staying
-    # `None` — a real, storable classification with its own (core-declared)
-    # required fields, distinct from `HUMAN_ACTIVATION_TYPE` (a source label,
-    # not an event type) (REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 /
-    # item #6). `determine_clarification_hold` still keys off the *original*
-    # extraction result, unchanged — this only affects what gets persisted.
-    if determine_clarification_hold(extraction_result):
-        record_event_state(deps.persistence, event_id, {"classification": UNCLASSIFIED_TYPE})
-    resolved_classification = extraction_result.classification or UNCLASSIFIED_TYPE
-
-    try:
-        gate_result = _apply_required_fields_gate(deps, event_id, main_agent, resolved_classification)
-        if gate_result is not None:
-            return gate_result
-
-        return _continue_after_required_fields(
-            deps, event_id, main_agent, insights_agent, raw_text, resolved_classification,
-            operational_decision=operational_decision,
-        )
-    except Exception as exc:
-        # Last-resort safety net, mirroring the extraction step's own try/except above: this
-        # event already exists (begin_report), and everything from here on runs off the serial
-        # queue with no caller left waiting for an exception -- the queue's own worker loop only
-        # logs and moves on (orchestrator/event_queue.py), so an exception that escapes protocol
-        # selection/execution/composition here, uncaught, would otherwise leave the event with no
-        # recorded outcome and the sender with no reply at all. Known, expected failure classes
-        # deeper in the pipeline already record their own outcome and return normally; only a
-        # genuinely unhandled failure reaches this except.
-        _record_outcome_with_report(deps, event_id, "failed", failure_reason=str(exc))
-        _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="protocol_execution")
-        return FlowResult(event_id, "failed", str(exc))
-
 def _apply_required_fields_gate(
     deps: "FlowDeps", event_id: str, main_agent: "MainAgent", classification: str
 ) -> "FlowResult | None":
@@ -539,101 +415,6 @@ def _continue_after_required_fields(
     return continue_from_risk_assessment(
         deps, event_id, main_agent, insights_agent, operational_decision=operational_decision,
     )
-
-def process_report(
-    deps: FlowDeps,
-    main_agent: "MainAgent",
-    insights_agent: "InsightsAgent",
-    raw_text: str,
-    source: Literal["sensor", "telegram"],
-    received_at: str,
-    sender_identity: str,
-) -> FlowResult:
-    """A report of something that happened, run synchronously start to finish — `begin_report` + `run_report_extraction` composed back into one call."""
-
-    event_id = begin_report(deps, raw_text, source, received_at, sender_identity)
-    return run_report_extraction(deps, event_id, main_agent, insights_agent)
-
-def begin_request(
-    deps: FlowDeps,
-    raw_text: str,
-    received_at: str,
-    sender_identity: str,
-    source_message_id: str | None = None,
-    conversation_id: str | None = None,
-    deadline_at: str | None = None,
-    sender_permission_level: str = "viewer",
-    telegram_chat_id: str | None = None,
-    telegram_chat_type: str | None = None,
-    ack_message_id: str | None = None,
-) -> str:
-    """The synchronous prefix of a request: write the raw text, already classified `human_activation` (§6.13 — there is nothing to extract), and return the event ID."""
-
-    event_id = record_initial_event(
-        deps.persistence,
-        InitialEventEnvelope(
-            raw_text=raw_text, source="telegram", received_at=received_at, sender_identity=sender_identity,
-            sender_permission_level=sender_permission_level,
-            source_message_id=source_message_id, occurred_at=received_at, occurred_at_is_fallback=False,
-            trace_id=get_trace_id() or None, conversation_id=conversation_id, deadline_at=deadline_at,
-            telegram_chat_id=telegram_chat_id, telegram_chat_type=telegram_chat_type, ack_message_id=ack_message_id,
-        ),
-    )
-    record_event_state(deps.persistence, event_id, {"classification": HUMAN_ACTIVATION_TYPE})
-
-    request_received(event_id=event_id, sender_identity=sender_identity, raw_text=raw_text)
-
-    return event_id
-
-def process_request(
-    deps: FlowDeps,
-    main_agent: "MainAgent",
-    insights_agent: "InsightsAgent",
-    raw_text: str,
-    received_at: str,
-    sender_identity: str,
-    originated_from_commander: bool,
-) -> FlowResult:
-    """A person's request for an action, run synchronously start to finish — `begin_request` + `continue_from_risk_assessment` composed back into one call."""
-
-    event_id = begin_request(
-        deps,
-        raw_text,
-        received_at,
-        sender_identity,
-        sender_permission_level="commander" if originated_from_commander else "viewer",
-    )
-    return continue_from_risk_assessment(deps, event_id, main_agent, insights_agent)
-
-def process_message(
-    deps: FlowDeps,
-    main_agent: "MainAgent",
-    insights_agent: "InsightsAgent",
-    message_text: str,
-    sender_identity: str,
-    received_at: str,
-    is_commander: bool,
-) -> tuple[Literal["question", "report", "request", "conversational", "clarification"], object]:
-    """Route a person's message by intent (§6.13)."""
-
-    intent = classify_intent(main_agent, deps.protocol_set.all(), message_text)
-
-    if intent.intent == "needs_clarification":
-        return "clarification", intent.clarification_question or "Could you clarify what you want me to do?"
-
-    if intent.intent == "conversational":
-        return "conversational", answer_conversationally(main_agent, message_text)
-
-    if intent.intent == "question":
-        return "question", answer_question(main_agent, message_text, deps.registry, deps.history_query_service)
-
-    if intent.intent == "report":
-        return "report", process_report(deps, main_agent, insights_agent, message_text, "telegram", received_at, sender_identity)
-
-    if intent.intent == "request":
-        return "request", process_request(deps, main_agent, insights_agent, message_text, received_at, sender_identity, is_commander)
-
-    raise OrchestrationParseError(f"unsupported message intent: {intent.intent!r}")
 
 def resolve_clarification(
     deps: FlowDeps,
@@ -777,6 +558,8 @@ def _look_up_precedent_if_possible(deps: FlowDeps, event_id: str, event: dict) -
     # precedent lookup for this event entirely. Fall back to received_at as
     # the lookback window's anchor instead — occurred_at is no longer
     # required for this event to be checked against precedent.
+    """Comparable prior events for this classification and area, or empty if lookup cannot run."""
+
     if event["classification"] is None or event["area"] is None:
         return ()
     anchor_time = event["occurred_at"] or event["received_at"]
@@ -791,6 +574,8 @@ def continue_from_risk_assessment(
     selected_protocol: "Protocol | None" = None,
     operational_decision: "OperationalDecision | None" = None,
 ) -> FlowResult:
+    """Run risk, protocol selection, holds, and execution from a persisted event."""
+
     deadline_failure = _deadline_failure(deps, event_id, "risk_assessment")
     if deadline_failure is not None:
         return deadline_failure
@@ -1073,6 +858,8 @@ def resume_after_event_data(
     main_agent: "MainAgent",
     insights_agent: "InsightsAgent",
 ) -> FlowResult:
+    """Continue a run after missing event fields have been filled in."""
+
     event = deps.persistence.fetch_event(event_id)
 
     if event.get("selected_protocol") is None:
@@ -1105,6 +892,15 @@ def resume_after_event_data(
         resumed=True, event=event,
     )
 
+from orchestrator.flows_ingest import (
+    begin_report,
+    begin_request,
+    process_message,
+    process_report,
+    process_request,
+    run_report_extraction,
+    _model_invoker_for,
+)
 from orchestrator.flows_hold_sweep import HoldSweepScheduler, sweep_unresolved_holds
 from orchestrator.flows_protocol import (
     _execute_protocol_plan,

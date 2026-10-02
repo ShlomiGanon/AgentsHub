@@ -6,6 +6,8 @@ from auth.user_names import InvalidFullNameError, MAX_FULL_NAME_LENGTH, normaliz
 
 
 class PermissionLevel(IntEnum):
+    """How much a registered identity may do: viewer is the allowlist; commander is unrestricted."""
+
     VIEWER = 1
     COMMANDER = 2
 

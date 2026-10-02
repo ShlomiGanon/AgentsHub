@@ -82,6 +82,7 @@ def _relay_stream(stream, console, log_file, label: str) -> None:
 
 
 def _port_is_open(host: str, port: int) -> bool:
+    """True when something already accepts TCP connections on this host:port."""
     try:
         with socket.create_connection((host, port), timeout=0.5):
             return True
@@ -102,6 +103,7 @@ def _http_responds(url: str) -> bool:
 
 
 def _require_port_free(host: str, port: int, name: str) -> None:
+    """Refuse to start if this stack port is already taken."""
     if _port_is_open(host, port):
         raise RuntimeError(
             f"{name} port {host}:{port} is already in use. A previous stack likely survived "
@@ -110,6 +112,7 @@ def _require_port_free(host: str, port: int, name: str) -> None:
 
 
 def _wait_until_port_open(proc: subprocess.Popen, host: str, port: int, name: str, timeout: float) -> None:
+    """Wait until the child opens host:port, or raise if it exits or times out."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if proc.poll() is not None:
@@ -148,6 +151,7 @@ def reset_artifacts(module_path: str) -> tuple[Path, ...]:
 
 
 def reset_profile_databases(module_path: str) -> tuple[Path, ...]:
+    """Delete declared profile DB files and known sidecars. Returns the paths that existed."""
     removed: list[Path] = []
     for path in reset_artifacts(module_path):
         if path.exists():
@@ -159,6 +163,8 @@ def reset_profile_databases(module_path: str) -> tuple[Path, ...]:
 
 
 class StackSupervisor:
+    """Owns the API, bot, and optional simulator child processes for one profile."""
+
     def __init__(self, profile_module: str, *, python_executable: str | None = None):
         self.profile_module = profile_module
         self.python_executable = python_executable or sys.executable
@@ -447,6 +453,7 @@ class StackSupervisor:
 
 
 def main() -> None:
+    """Load .env, pick the selected profile, and run the supervisor until stopped."""
     load_dotenv(".env")
     selected = load_selected_profile()
     StackSupervisor(selected).run()

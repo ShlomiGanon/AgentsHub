@@ -34,3 +34,5 @@ def install_crewai_stub(monkeypatch, kickoff_text: str = DEFAULT_KICKOFF_TEXT) -
         tools=types.SimpleNamespace(BaseTool=object),
     )
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
+    adapter._clear_agent_cache()
+    adapter._clear_llm_cache()

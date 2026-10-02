@@ -62,6 +62,7 @@ class DomainBriefing:
 
 @dataclass(frozen=True)
 class PicturePlan:
+    """Which specialists to ask and how far back to pull recent events."""
     briefings: tuple[DomainBriefing, ...]
     recent_events_hours: int
     planned_by_model: bool
@@ -79,6 +80,7 @@ class DomainReport:
 
 @dataclass(frozen=True)
 class SituationalPicture:
+    """Composed operational picture plus the specialist reports it was built from."""
     text: str
     reports: tuple[DomainReport, ...]
     generated_at: str

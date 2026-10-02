@@ -62,6 +62,8 @@ async def _for_each_target_chat(chat_ids: list[str], send) -> None:
 
 
 async def dispatch_notification(deps: "BotDeps", notification: "BotNotification") -> None:
+    """Route one notification kind to the matching Telegram delivery helper."""
+
     if notification.kind == "clarification_hold":
         await interactions.push_clarification_prompt(deps, notification.payload)
         return
@@ -74,6 +76,8 @@ async def dispatch_notification(deps: "BotDeps", notification: "BotNotification"
         text = interactions.format_event_data_needed(notification.payload, message_catalog_for(deps))
 
         async def _send_event_data(chat_id: str) -> None:
+            """Send the extra-data prompt and remember its message id for a later reply."""
+
             prompt_message_id = await deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id)
             if prompt_message_id is not None:
                 interactions.register_event_data_reply_target(
@@ -236,6 +240,8 @@ def _local_clock_time(deadline_iso: str | None, timezone_name: str | None) -> st
 
 
 def format_attendance_prompt(deps: "BotDeps", result) -> str:
+    """Group-chat text asking named members to mark today's attendance."""
+
     messages = message_catalog_for(deps)
     if not result.members_required:
         return messages.text("attendance.group_prompt_nobody")
@@ -357,6 +363,8 @@ async def deliver_failure_notification(deps: "BotDeps", notification: "BotNotifi
     messages = message_catalog_for(deps)
 
     async def _send_failure(chat_id: str) -> None:
+        """Edit the ack if possible, then send the failure as a new reply."""
+
         if notification.ack_message_id:
             try:
                 await deps.telegram_client.edit_status(chat_id, notification.ack_message_id, messages.text("failure.ack_not_completed"))
@@ -375,6 +383,8 @@ if TYPE_CHECKING:
 
 
 async def deliver_job_result(deps: "BotDeps", notification: "BotNotification") -> None:
+    """Deliver a finished job by editing the ack first, then sending the result."""
+
     job_result = notification.payload
     text = job_result.report_text or format_job_result(job_result, message_catalog_for(deps))
 
@@ -389,6 +399,8 @@ if TYPE_CHECKING:
 
 
 def format_precedent_closure_notice(notice: "PrecedentClosureNotice", catalog=None) -> str:
+    """Commander notice that this report closed on a matching precedent."""
+
     messages = catalog or interactions._catalog()
     return messages.text(
         "notice.precedent",
@@ -400,6 +412,8 @@ def format_precedent_closure_notice(notice: "PrecedentClosureNotice", catalog=No
 
 
 async def notify_precedent_closure(deps: "BotDeps", notice: "PrecedentClosureNotice") -> None:
+    """Send the precedent-closure notice to every commander private chat."""
+
     text = format_precedent_closure_notice(notice, message_catalog_for(deps))
 
     for chat_id in await deps.api_client.list_commander_chat_ids():
@@ -407,10 +421,16 @@ async def notify_precedent_closure(deps: "BotDeps", notice: "PrecedentClosureNot
 
 
 class NotificationCursorStore:
+    """Persists the notification poll cursor across bot process restarts."""
+
     def __init__(self, path: Path):
+        """Remember the file that holds the integer cursor."""
+
         self._path = path
 
     def read(self) -> int:
+        """The stored cursor, or 0 when the file is missing or unreadable."""
+
         try:
             return int(self._path.read_text().strip())
         except (FileNotFoundError, ValueError):
@@ -421,6 +441,8 @@ class NotificationCursorStore:
             return 0
 
     def write(self, cursor: int) -> None:
+        """Replace the stored cursor with this integer."""
+
         self._path.write_text(str(cursor))
 
 
@@ -463,6 +485,8 @@ def _pid_is_running(pid: int) -> bool:
 
 
 def _read_lock_pid(lock_path: Path) -> int | None:
+    """PID recorded in the lock file, or None if it cannot be read."""
+
     try:
         raw = lock_path.read_text(encoding="utf-8").strip()
     except OSError:
@@ -473,11 +497,17 @@ def _read_lock_pid(lock_path: Path) -> int | None:
 
 
 class SingleInstanceLock:
+    """File lock so only one bot process runs against this profile at a time."""
+
     def __init__(self, lock_path: Path):
+        """Remember the lock-file path for this process."""
+
         self._lock_path = lock_path
         self._fd: int | None = None
 
     def _reclaim_stale(self) -> bool:
+        """True after removing a lock whose recorded PID is no longer running."""
+
         holder = _read_lock_pid(self._lock_path)
         if holder is not None and _pid_is_running(holder):
             return False
@@ -490,6 +520,8 @@ class SingleInstanceLock:
         return True
 
     def acquire(self) -> None:
+        """Take the lock, reclaiming a stale file, or raise if another live process holds it."""
+
         try:
             self._fd = os.open(str(self._lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError as exc:
@@ -511,6 +543,8 @@ class SingleInstanceLock:
         os.write(self._fd, str(os.getpid()).encode("utf-8"))
 
     def release(self) -> None:
+        """Remove the lock file if this process created it."""
+
         if self._fd is not None:
             os.close(self._fd)
             self._fd = None
@@ -518,10 +552,14 @@ class SingleInstanceLock:
         self._lock_path.unlink(missing_ok=True)
 
     def __enter__(self) -> "SingleInstanceLock":
+        """Acquire the lock for a with-block."""
+
         self.acquire()
         return self
 
     def __exit__(self, *exc_info) -> None:
+        """Release the lock when the with-block ends."""
+
         self.release()
 
 

@@ -2,74 +2,53 @@
 
 import dataclasses
 from datetime import datetime, timedelta, timezone
+import logging
 import time
-
 from typing import TYPE_CHECKING
 
 from flask import Blueprint, jsonify, request
 
-from api.request_boundary import BOT_SERVICE_IDENTITY, AuthorizationError, ConflictError, InvalidInputError, NotFoundError, RunFailureError, ServiceUnavailableError, authenticate, require
-from history import record_event_outcome, parse_timestamp, storage_timestamp
-
-from orchestrator.flows import begin_report, run_report_extraction
-
-from tools import (
-    deep_debug_enabled,
-    get_trace_id,
-    is_valid_trace_id,
-    new_trace_id,
-    record_telegram_security_metric,
-    render_deep_debug_entry,
-    set_trace_id,
-    stage_context,
-    trace_context,
+from api._route_deps import utc_now_storage, work_concurrency_keys
+from api.request_boundary import (
+    AuthorizationError,
+    InvalidInputError,
+    RunFailureError,
+    ServiceUnavailableError,
+    authenticate,
+    require,
 )
-from config import environment as base_config
-
-import logging
-
-from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
-from auth.permissions import InvalidFullNameError, normalize_full_name
 from agents import AgentInvocationError, authenticated_request_identity, set_invocation_deadline
-
+from auth.permissions import PermissionLevel, RequestedOperation
+from history import record_event_outcome, storage_timestamp
 from orchestrator.flows import (
     GroupNotRegisteredError,
-    InvalidRoutingTargetError,
     OrchestrationParseError,
-    is_scoped_target,
-    resolve_scope,
-    scope_deps,
+    WorkItem,
     answer_conversationally,
     answer_question,
     answer_question_from_plan,
-    apply_event_data_reply,
     apply_drone_selection_reply,
+    apply_event_data_reply,
     attempt_direct_lane,
-    build_role_aware_system_context,
     begin_report,
     begin_request,
-    classify_intent,
+    build_role_aware_system_context,
     build_situational_picture,
+    classify_intent,
+    continue_from_risk_assessment,
+    is_scoped_target,
     plan_message,
     protocol_requires_approval,
-    WorkItem,
-    continue_from_risk_assessment,
-    run_report_extraction,
+    resolve_scope,
     resume_after_event_data,
+    run_report_extraction,
+    scope_deps,
 )
-
-from protocols import CriticalityLevel, Protocol, ProtocolEditError, add_protocol, remove_protocol, replace_protocol
-from profiles.loader import hash_profile_file
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy
-from persistence import NotFoundError as PersistenceNotFoundError
-from api.simulations import find_simulation_scenario, materialize_simulation, simulation_catalog_payload
-
-from orchestrator.flows import continue_after_approval, continue_after_clarification, decline, resolve_approval, resolve_clarification
+from tools import deep_debug_enabled, get_trace_id, new_trace_id, set_trace_id, trace_context
 
 if TYPE_CHECKING:
     from api.app import ApiContext
-
-from api.routes import _now, _work_concurrency_keys
 
 logger = logging.getLogger(__name__)
 
@@ -332,7 +311,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                         trace_id=trace_id,
                         priority=0,
                         deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
-                        concurrency_keys=_work_concurrency_keys(caller_identity, scoped_agent),
+                        concurrency_keys=work_concurrency_keys(caller_identity, scoped_agent),
                     ),
                     reservation,
                 )
@@ -358,7 +337,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
         matched_protocol = ctx.deps.protocol_set.get(matched_protocol_name) if matched_protocol_name else None
 
         if matched_protocol is not None:
-            received_at = _now()
+            received_at = utc_now_storage()
             is_commander = level >= PermissionLevel.COMMANDER
             needs_approval = protocol_requires_approval(matched_protocol, is_commander)
 
@@ -395,7 +374,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                         (event_id, _work_fast_path),
                         trace_id=trace_id,
                         deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
-                        concurrency_keys=_work_concurrency_keys(sender_identity, scoped_agent),
+                        concurrency_keys=work_concurrency_keys(sender_identity, scoped_agent),
                     ),
                     reservation,
                 )
@@ -482,7 +461,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     _remember("assistant", answer)
                     return jsonify({"taken_as": "clarification", "answer": answer})
 
-        received_at = _now()
+        received_at = utc_now_storage()
 
         try:
             intent = message_plan.intent if planner_mode == "merged" and message_plan is not None else classify_intent(
@@ -619,7 +598,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 WorkItem(
                     (event_id, _work), trace_id=trace_id,
                     deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
-                    concurrency_keys=_work_concurrency_keys(sender_identity, scoped_agent),
+                    concurrency_keys=work_concurrency_keys(sender_identity, scoped_agent),
                 ),
                 reservation,
             )
@@ -659,7 +638,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             WorkItem(
                 (event_id, _work), trace_id=trace_id,
                 deadline_monotonic=time.monotonic() + optimization_policy.job_deadline_seconds,
-                concurrency_keys=_work_concurrency_keys(sender_identity, scoped_agent),
+                    concurrency_keys=work_concurrency_keys(sender_identity, scoped_agent),
             ),
             reservation,
         )

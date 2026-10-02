@@ -95,6 +95,7 @@ def resolve_tier_model_from_env(
 
 @dataclass(frozen=True)
 class BaseConfig:
+    """Process-wide core model and debug flag, independent of live settings."""
     core_model: TierModel
     DEBUG_FLAG: bool = False
 

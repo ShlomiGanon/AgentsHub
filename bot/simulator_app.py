@@ -63,6 +63,8 @@ def _unix_from_iso_timestamp(value: str) -> float:
 
 
 def _tier_model_from_environ(prefix: str) -> TierModel:
+    """Read one model tier from the process environment."""
+
     return resolve_tier_model_from_env(prefix, error_type=ModelTierError)
 
 
@@ -124,6 +126,8 @@ class SimulatorRuntime:
             await self.application.post_shutdown(self.application)
 
     def _next_id(self) -> int:
+        """Allocate the next synthetic Telegram message id."""
+
         self._next_update_id += 1
         return self._next_update_id
 
@@ -219,10 +223,14 @@ class SimulatorRuntime:
 
 
 def _mark_to_dict(mark: tuple[int, int]) -> dict:
+    """JSON shape for a simulator poll cursor."""
+
     return {"status_len": mark[0], "sent_len": mark[1]}
 
 
 def _mark_from_dict(payload: dict) -> tuple[int, int]:
+    """Poll cursor from a JSON payload, defaulting to the start."""
+
     try:
         return int(payload.get("status_len", 0)), int(payload.get("sent_len", 0))
     except (TypeError, ValueError):
@@ -248,6 +256,8 @@ def build_flask_app(runtime: SimulatorRuntime, bot_service_key: str) -> Flask:
 
     @app.route("/Simulator-msg", methods=["POST"])
     def simulator_msg():
+        """Accept one simulated inbound message and return what the bot sent back."""
+
         refused = _check_service_key()
         if refused is not None:
             return refused
@@ -319,6 +329,8 @@ async def _poll_async(runtime: SimulatorRuntime, chat_id: str, since: tuple[int,
 
 
 def run_simulator(loaded_profile: "LoadedProfile") -> None:
+    """Start the simulation-mode Flask app for this profile."""
+
     if not loaded_profile.simulator_port:
         raise SystemExit(
             f"profile {loaded_profile.module_path!r} does not declare SIMULATOR_PORT — "
@@ -358,6 +370,8 @@ def run_simulator(loaded_profile: "LoadedProfile") -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    """CLI entry: load the named profile and run the simulator."""
+
     parser = argparse.ArgumentParser(
         description="Run the simulation-mode bot process for one deployment (docs/bot_simulation_mode_design.md)."
     )

@@ -628,6 +628,7 @@ def invoke(
     timeout_seconds: int,
     invocation_policy: InvocationPolicy | None = None,
 ) -> str:
+    """Run one CrewAI kickoff for this descriptor and return the captured result text."""
     setup_started = time.monotonic()
     crewai_module = _get_crewai()
     imported_at = time.monotonic()

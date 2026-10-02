@@ -1,77 +1,30 @@
 """Hold listing and continuation routes."""
 
-import dataclasses
-from datetime import datetime, timedelta, timezone
 import time
-
 from typing import TYPE_CHECKING
 
 from flask import Blueprint, jsonify, request
 
-from api.request_boundary import BOT_SERVICE_IDENTITY, AuthorizationError, ConflictError, InvalidInputError, NotFoundError, RunFailureError, ServiceUnavailableError, authenticate, require
-from history import record_event_outcome, parse_timestamp, storage_timestamp
-
-from orchestrator.flows import begin_report, run_report_extraction
-
-from tools import (
-    deep_debug_enabled,
-    get_trace_id,
-    is_valid_trace_id,
-    new_trace_id,
-    record_telegram_security_metric,
-    render_deep_debug_entry,
-    set_trace_id,
-    stage_context,
-    trace_context,
-)
-from config import environment as base_config
-
-import logging
-
-from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
-from auth.permissions import InvalidFullNameError, normalize_full_name
-from agents import AgentInvocationError, authenticated_request_identity, set_invocation_deadline
-
+from api._route_deps import work_concurrency_keys
+from api.request_boundary import ConflictError, InvalidInputError, NotFoundError, ServiceUnavailableError, authenticate, require
+from auth.permissions import RequestedOperation
 from orchestrator.flows import (
-    GroupNotRegisteredError,
-    InvalidRoutingTargetError,
-    OrchestrationParseError,
-    is_scoped_target,
-    resolve_scope,
-    scope_deps,
-    answer_conversationally,
-    answer_question,
-    answer_question_from_plan,
-    apply_event_data_reply,
-    apply_drone_selection_reply,
-    attempt_direct_lane,
-    build_role_aware_system_context,
-    begin_report,
-    begin_request,
-    classify_intent,
-    build_situational_picture,
-    plan_message,
-    protocol_requires_approval,
     WorkItem,
-    continue_from_risk_assessment,
-    run_report_extraction,
-    resume_after_event_data,
+    continue_after_approval,
+    continue_after_clarification,
+    decline,
+    resolve_approval,
+    resolve_clarification,
 )
-
-from protocols import CriticalityLevel, Protocol, ProtocolEditError, add_protocol, remove_protocol, replace_protocol
-from profiles.loader import hash_profile_file
-from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy
-from persistence import NotFoundError as PersistenceNotFoundError
-from api.simulations import find_simulation_scenario, materialize_simulation, simulation_catalog_payload
-
-from orchestrator.flows import continue_after_approval, continue_after_clarification, decline, resolve_approval, resolve_clarification
+from profiles import OptimizationPolicy
+from tools import get_trace_id, new_trace_id, set_trace_id, trace_context
 
 if TYPE_CHECKING:
     from api.app import ApiContext
 
-from api.routes import _work_concurrency_keys
-
 def _pending_hold_or_raise(ctx: "ApiContext", kind: str, event_id: str) -> dict:
+    """Return the unresolved hold, or raise NotFoundError / ConflictError."""
+
     hold = ctx.deps.persistence.fetch_held_event(kind, event_id)
     if hold is None:
         raise NotFoundError(
@@ -92,18 +45,24 @@ def _pending_hold_or_raise(ctx: "ApiContext", kind: str, event_id: str) -> dict:
     return hold
 
 def _hold_continuation_context(ctx: "ApiContext") -> tuple[str, object]:
+    """Assign a trace id and load the profile's optimization policy for a hold continuation."""
+
     trace_id = get_trace_id() or new_trace_id()
     set_trace_id(trace_id)
     policy = getattr(ctx.loaded_profile, "optimization_policy", OptimizationPolicy())
     return trace_id, policy
 
 def _reserve_continuation(ctx: "ApiContext"):
+    """Reserve a high-priority queue slot for a hold continuation, or raise 503."""
+
     reservation = ctx.queue.reserve(True)
     if reservation is None:
         raise ServiceUnavailableError(ctx.loaded_profile.message_catalog.text("api.queue_full"))
     return reservation
 
 def _reject_continuation(ctx: "ApiContext", reservation, message: str, field: str | None = None):
+    """Release the reserved slot and raise InvalidInputError."""
+
     ctx.queue.release_reservation(reservation)
     raise InvalidInputError(message, field=field)
 
@@ -117,6 +76,8 @@ def _submit_hold_work(
     reservation,
     work,
 ):
+    """Queue the continuation work and return 202 queued."""
+
     def _work() -> None:
         with trace_context(trace_id):
             work()
@@ -127,13 +88,15 @@ def _submit_hold_work(
             trace_id=trace_id,
             priority=0,
             deadline_monotonic=time.monotonic() + policy.job_deadline_seconds,
-            concurrency_keys=_work_concurrency_keys(identity),
+            concurrency_keys=work_concurrency_keys(identity),
         ),
         reservation,
     )
     return jsonify({"event_id": event_id, "status": "queued"}), 202
 
 def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
+    """JSON routes that list pending holds and continue after clarify/approve."""
+
     blueprint = Blueprint("holds", __name__)
     messages = ctx.loaded_profile.message_catalog
 
