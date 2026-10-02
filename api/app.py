@@ -52,16 +52,45 @@ def ensure_bot_service(persistence: "PersistenceInterface") -> bool:
 
     Profile-agnostic: the identity string is a deployment fixture, not a
     simulation user. Same write as the admin provision button. Returns True
-    when a row was created or upgraded.
+    when a row was created or upgraded. This identity is never an acting
+    console identity.
     """
 
-    from api.request_boundary import BOT_SERVICE_IDENTITY
+    from api.request_boundary import BOT_SERVICE_IDENTITY, SYSTEM_ADMIN_FULL_NAME
 
     user = persistence.read_user(BOT_SERVICE_IDENTITY)
+    stored_name = (user.get("full_name") or "").strip() if user else ""
     if user is not None and user["permission_level"] == "commander" and not user.get("auto_register"):
+        if stored_name == SYSTEM_ADMIN_FULL_NAME:
+            persistence.write_user(BOT_SERVICE_IDENTITY, "commander", "")
+            persistence.approve_user(BOT_SERVICE_IDENTITY)
+            return True
         return False
     persistence.write_user(BOT_SERVICE_IDENTITY, "commander")
     persistence.approve_user(BOT_SERVICE_IDENTITY)
+    return True
+
+
+def ensure_system_admin(persistence: "PersistenceInterface") -> bool:
+    """Register the console system-administrator user when missing.
+
+    Distinct from `bot-service`. Acting-identity checkbox stores this user.
+    Returns True when a row was created or upgraded (level, approval, or name).
+    """
+
+    from api.request_boundary import SYSTEM_ADMIN_FULL_NAME, SYSTEM_ADMIN_IDENTITY
+
+    user = persistence.read_user(SYSTEM_ADMIN_IDENTITY)
+    stored_name = (user.get("full_name") or "").strip() if user else ""
+    if (
+        user is not None
+        and user["permission_level"] == "commander"
+        and not user.get("auto_register")
+        and stored_name == SYSTEM_ADMIN_FULL_NAME
+    ):
+        return False
+    persistence.write_user(SYSTEM_ADMIN_IDENTITY, "commander", SYSTEM_ADMIN_FULL_NAME)
+    persistence.approve_user(SYSTEM_ADMIN_IDENTITY)
     return True
 
 
@@ -118,6 +147,11 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
         logger.info(
             "bot-service identity provisioned",
             extra={"event": "bot_service_provisioned"},
+        )
+    if ensure_system_admin(persistence):
+        logger.info(
+            "system administrator identity provisioned",
+            extra={"event": "system_admin_provisioned"},
         )
 
     # On every profile load, ensure this profile's declared simulation users/groups

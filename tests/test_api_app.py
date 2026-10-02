@@ -23,7 +23,7 @@ import sys
 import pytest
 
 from api import app as api_app
-from api.app import build_app, build_context, ensure_bot_service
+from api.app import build_app, build_context, ensure_bot_service, ensure_system_admin
 from tests.crewai_fakes import install_crewai_stub
 
 BOT_TOKEN_ENV = "AGENTSHUB_FIXTURE_BOT_TOKEN"
@@ -73,7 +73,13 @@ def test_build_context_succeeds_against_a_real_profile(test_core_model, test_sub
         bot_service = ctx.deps.persistence.read_user("bot-service")
         assert bot_service is not None
         assert bot_service["permission_level"] == "commander"
+        assert bot_service["full_name"] != "Admin"
         assert not bot_service["auto_register"]
+        system_admin = ctx.deps.persistence.read_user("Admin")
+        assert system_admin is not None
+        assert system_admin["permission_level"] == "commander"
+        assert system_admin["full_name"] == "Admin"
+        assert not system_admin["auto_register"]
     finally:
         ctx.queue.stop()
         ctx.deps.persistence.close()
@@ -89,10 +95,40 @@ def test_ensure_bot_service_registers_a_missing_identity_and_is_idempotent(tmp_p
         user = store.read_user("bot-service")
         assert user["permission_level"] == "commander"
         assert not user["auto_register"]
+        assert user["full_name"] != "Admin"
+        assert ensure_bot_service(store) is False
+        store.write_user("bot-service", "commander", "Admin")
+        assert ensure_bot_service(store) is True
+        assert store.read_user("bot-service")["full_name"] == ""
         assert ensure_bot_service(store) is False
         store.write_user("bot-service", "viewer")
         assert ensure_bot_service(store) is True
         assert store.read_user("bot-service")["permission_level"] == "commander"
+    finally:
+        store.close()
+
+
+def test_ensure_system_admin_registers_a_missing_identity_and_is_idempotent(tmp_path):
+    from persistence.sqlite_store import SQLitePersistence
+
+    store = SQLitePersistence(str(tmp_path / "system_admin.db"))
+    try:
+        assert store.read_user("Admin") is None
+        assert ensure_system_admin(store) is True
+        user = store.read_user("Admin")
+        assert user["permission_level"] == "commander"
+        assert user["full_name"] == "Admin"
+        assert not user["auto_register"]
+        assert store.read_user("bot-service") is None
+        assert ensure_system_admin(store) is False
+        store.write_user("Admin", "commander", "")
+        assert ensure_system_admin(store) is True
+        assert store.read_user("Admin")["full_name"] == "Admin"
+        store.write_user("Admin", "viewer")
+        assert ensure_system_admin(store) is True
+        upgraded = store.read_user("Admin")
+        assert upgraded["permission_level"] == "commander"
+        assert upgraded["full_name"] == "Admin"
     finally:
         store.close()
 

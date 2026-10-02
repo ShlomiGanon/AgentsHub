@@ -83,6 +83,8 @@ SERVICE_KEY_HEADER = "X-Service-Key"
 # bot.contracts.BOT_SERVICE_IDENTITY and BOT_SERVICE_KEY_ENV_VAR if either ever changes.
 BOT_SERVICE_IDENTITY = "bot-service"
 BOT_SERVICE_KEY_ENV_VAR = "BOT_SERVICE_KEY"
+SYSTEM_ADMIN_IDENTITY = "Admin"
+SYSTEM_ADMIN_FULL_NAME = "Admin"
 
 
 def secrets_equal(provided: str | None, expected: str | None) -> bool:

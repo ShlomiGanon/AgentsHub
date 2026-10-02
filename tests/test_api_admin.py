@@ -317,6 +317,21 @@ def test_login_redirects_to_acting_identity_setup(tmp_path, teardown_ctx, _admin
     assert 'id="api-identity-select"' in html
     assert 'name="use_system_admin"' in html
     assert '<option value="bot-service"' not in html
+    assert '<option value="Admin"' not in html
+
+
+def test_topbar_shows_acting_identity_on_every_shell_page(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    ctx = teardown_ctx[0]
+    ctx.deps.persistence.write_user(COMMANDER_IDENTITY, "commander", "Dana Cohen")
+    _login(client)
+
+    expected = f"connected · Dana Cohen — {COMMANDER_IDENTITY} (Commander)"
+    for path in ("/admin/", "/admin/events", "/admin/users"):
+        page = client.get(path).data.decode("utf-8")
+        assert expected in page
+        assert f'data-api-identity="{COMMANDER_IDENTITY}"' in page
+        assert 'id="api-identity-select"' not in page
 
 
 def test_acting_identity_is_registered_session_scoped_and_shared_between_pages(tmp_path, teardown_ctx, _admin_env):
@@ -326,10 +341,12 @@ def test_acting_identity_is_registered_session_scoped_and_shared_between_pages(t
     selected = _complete_acting_identity(client, VIEWER_IDENTITY)
     assert selected.status_code in (302, 303)
     assert selected.headers["Location"].endswith("/admin/")
+    expected = f"connected · Name missing — {VIEWER_IDENTITY} (Viewer)"
     for path in ("/admin/events", "/admin/profiles", "/admin/protocols", "/admin/simulator"):
         page = client.get(path).data.decode("utf-8")
         assert f'data-api-identity="{VIEWER_IDENTITY}"' in page
         assert 'id="api-identity-select"' not in page
+        assert expected in page
 
 
 def test_acting_identity_rejects_unregistered_identities(tmp_path, teardown_ctx, _admin_env):
@@ -337,9 +354,11 @@ def test_acting_identity_rejects_unregistered_identities(tmp_path, teardown_ctx,
     _login(client, identity=None)
     setup = client.get("/admin/acting-identity")
     csrf_token = _extract_csrf(setup.data)
-    assert '<option value="bot-service"' not in setup.data.decode("utf-8")
+    html = setup.data.decode("utf-8")
+    assert '<option value="bot-service"' not in html
+    assert '<option value="Admin"' not in html
 
-    for identity in ("not-registered", "bot-service"):
+    for identity in ("not-registered", "bot-service", "Admin"):
         response = client.post(
             "/admin/acting-identity",
             data={"csrf_token": csrf_token, "api_identity": identity},
@@ -350,17 +369,27 @@ def test_acting_identity_rejects_unregistered_identities(tmp_path, teardown_ctx,
         assert gated.headers["Location"].endswith("/admin/acting-identity")
 
 
-def test_acting_identity_system_admin_checkbox_stores_bot_service(tmp_path, teardown_ctx, _admin_env):
+def test_acting_identity_system_admin_checkbox_stores_admin_user(tmp_path, teardown_ctx, _admin_env):
+    from api.app import ensure_bot_service, ensure_system_admin
+
     client = _client(tmp_path, teardown_ctx)
+    store = teardown_ctx[0].deps.persistence
+    ensure_bot_service(store)
+    ensure_system_admin(store)
     _login(client, identity=None)
 
     selected = _complete_acting_identity(client, VIEWER_IDENTITY, use_system_admin=True)
     assert selected.status_code in (302, 303)
     assert selected.headers["Location"].endswith("/admin/")
+    expected = "connected · Admin — Admin (Commander)"
     for path in ("/admin/events", "/admin/profiles", "/admin/simulator"):
         page = client.get(path).data.decode("utf-8")
-        assert 'data-api-identity="bot-service"' in page
+        assert 'data-api-identity="Admin"' in page
+        assert 'data-api-identity="bot-service"' not in page
         assert 'id="api-identity-select"' not in page
+        assert expected in page
+        assert store.read_user("bot-service")["telegram_identity"] == "bot-service"
+        assert store.read_user("Admin")["full_name"] == "Admin"
 
 
 def test_acting_identity_setup_requires_csrf(tmp_path, teardown_ctx, _admin_env):

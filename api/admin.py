@@ -56,7 +56,13 @@ from api.admin_tables import (
     find_admin_table,
     parse_admin_table_form,
 )
-from api.request_boundary import BOT_SERVICE_IDENTITY, BOT_SERVICE_KEY_ENV_VAR, SERVICE_KEY_HEADER, secrets_equal
+from api.request_boundary import (
+    BOT_SERVICE_IDENTITY,
+    BOT_SERVICE_KEY_ENV_VAR,
+    SERVICE_KEY_HEADER,
+    SYSTEM_ADMIN_IDENTITY,
+    secrets_equal,
+)
 from auth.permissions import InvalidFullNameError, PermissionLevel, normalize_full_name
 from config import discover_profiles, read_server_status, submit_server_command, supervisor_available
 from messages import get_current_catalog
@@ -169,23 +175,38 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
     levels = [level.name.lower() for level in PermissionLevel]
     _page_render = globals()["_render"]
 
+    def _acting_identity_status() -> str:
+        identity = str(session.get("api_identity") or "")
+        if not identity:
+            return ""
+        user = ctx.deps.persistence.read_user(identity) or {}
+        name = (user.get("full_name") or "").strip() or _t("admin.api.missing_name")
+        level_key = user.get("permission_level") or ""
+        level = _t(f"admin.permission.{level_key}") if level_key in {"commander", "viewer"} else level_key
+        return _t("admin.connected_as", name=name, identity=identity, level=level)
+
     def _render(template: str, **context) -> str:
         context.setdefault("admin_tables", ctx.loaded_profile.admin_tables)
+        identity = str(session.get("api_identity") or "")
+        if identity:
+            context.setdefault("api_identity", identity)
+            context.setdefault("acting_identity_status", _acting_identity_status())
         return _page_render(template, **context)
 
     def _api_users() -> list[dict]:
-        """Human identities available to the browser API console.
+        """Human identities available in the acting-identity select.
 
-        The service identity is intentionally excluded: the console is meant to
-        exercise the same Telegram identities and RBAC rules as real callers,
-        not turn the admin password into an API authorization bypass.
+        `bot-service` cannot be chosen at all. The console system administrator
+        (`Admin`) is also omitted here — the setup checkbox is the only way to
+        select it.
         """
 
+        reserved = {BOT_SERVICE_IDENTITY, SYSTEM_ADMIN_IDENTITY}
         return sorted(
             (
                 user
                 for user in ctx.deps.persistence.list_users()
-                if user["telegram_identity"] != BOT_SERVICE_IDENTITY
+                if user["telegram_identity"] not in reserved
             ),
             key=lambda user: (
                 user["permission_level"] != "commander",
@@ -195,12 +216,11 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         )
 
     def _allowed_api_identities() -> set[str]:
-        """Human users from `_api_users()` plus the startup system administrator.
+        """Human users from `_api_users()` plus the console system administrator.
 
-        `bot-service` is not listed in the setup select — the checkbox is the only
-        way to choose it — but a session that already holds it stays valid."""
+        `bot-service` is never a valid acting identity."""
 
-        return {user["telegram_identity"] for user in _api_users()} | {BOT_SERVICE_IDENTITY}
+        return {user["telegram_identity"] for user in _api_users()} | {SYSTEM_ADMIN_IDENTITY}
 
     def _session_identity_valid() -> bool:
         selected = str(session.get("api_identity") or "")
@@ -226,7 +246,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
 
         After login the session has no acting identity (`_issue_session` clears it).
         Every page except login, logout, and the one-time setup form must have a
-        still-registered `api_identity` (a human user, or `bot-service`)."""
+        still-registered `api_identity` (a human user, or `Admin`)."""
 
         if not session.get("admin_authenticated"):
             return redirect(url_for("admin.login"))
@@ -350,8 +370,8 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         """One-time post-login choice of the Telegram identity this session acts as.
 
         There is no later switcher: change identity by logging out and completing
-        this step again. The system administrator (`bot-service`) is only available
-        through the checkbox, not the human-user select."""
+        this step again. The system administrator (`Admin`) is only available
+        through the checkbox. `bot-service` cannot be chosen."""
 
         redirect_response = _require_session(require_identity=False)
         if redirect_response is not None:
@@ -372,8 +392,8 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             return csrf_response
 
         if request.form.get("use_system_admin"):
-            session["api_identity"] = BOT_SERVICE_IDENTITY
-            flash(_t("admin.api.identity_selected", identity=BOT_SERVICE_IDENTITY), "ok")
+            session["api_identity"] = SYSTEM_ADMIN_IDENTITY
+            flash(_t("admin.api.identity_selected", identity=SYSTEM_ADMIN_IDENTITY), "ok")
             return redirect(url_for("admin.dashboard"))
 
         identity = request.form.get("api_identity", "").strip()

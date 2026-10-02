@@ -884,7 +884,7 @@ _SHELL_OPEN = """
 <div class="ls-main">
   <header class="ls-topbar">
     <a class="ls-btn-fill" href="{{ url_for('admin.dashboard') }}">{{ t('admin.nav_menu') }}</a>
-    <span class="ls-status-live"><span class="dot"></span>{{ t('admin.connected') }}</span>
+    <span class="ls-status-live"><span class="dot"></span>{% if acting_identity_status %}{{ acting_identity_status }}{% else %}{{ t('admin.connected') }}{% endif %}</span>
     <div class="ls-topbar-end">
       {% if csrf_token %}
       <form method="post" action="{{ url_for('admin.logout') }}">
