@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS telegram_groups (
     label TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     auto_register INTEGER NOT NULL DEFAULT 0 CHECK (auto_register IN (0, 1)),
-    attendance_check_enabled INTEGER NOT NULL DEFAULT 1 CHECK (attendance_check_enabled IN (0, 1)),
+    attendance_check_enabled INTEGER NOT NULL DEFAULT 0 CHECK (attendance_check_enabled IN (0, 1)),
     attendance_check_hour INTEGER NOT NULL DEFAULT 8 CHECK (attendance_check_hour BETWEEN 0 AND 23)
 );
 """
@@ -336,8 +336,13 @@ MIGRATIONS: list[tuple[int, str, str]] = [
     (
         27,
         "add attendance check settings to telegram_groups",
-        "ALTER TABLE telegram_groups ADD COLUMN attendance_check_enabled INTEGER NOT NULL DEFAULT 1 CHECK (attendance_check_enabled IN (0, 1));"
+        "ALTER TABLE telegram_groups ADD COLUMN attendance_check_enabled INTEGER NOT NULL DEFAULT 0 CHECK (attendance_check_enabled IN (0, 1));"
         "ALTER TABLE telegram_groups ADD COLUMN attendance_check_hour INTEGER NOT NULL DEFAULT 8 CHECK (attendance_check_hour BETWEEN 0 AND 23);",
+    ),
+    (
+        28,
+        "default telegram_groups attendance check to disabled",
+        "UPDATE telegram_groups SET attendance_check_enabled = 0;",
     ),
 ]
 
@@ -439,13 +444,19 @@ def run_migrations(db_path: str) -> None:
                     if "attendance_check_enabled" not in group_columns:
                         connection.execute(
                             "ALTER TABLE telegram_groups ADD COLUMN attendance_check_enabled "
-                            "INTEGER NOT NULL DEFAULT 1 CHECK (attendance_check_enabled IN (0, 1))"
+                            "INTEGER NOT NULL DEFAULT 0 CHECK (attendance_check_enabled IN (0, 1))"
                         )
                     if "attendance_check_hour" not in group_columns:
                         connection.execute(
                             "ALTER TABLE telegram_groups ADD COLUMN attendance_check_hour "
                             "INTEGER NOT NULL DEFAULT 8 CHECK (attendance_check_hour BETWEEN 0 AND 23)"
                         )
+            elif version == 28:
+                group_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(telegram_groups)").fetchall()
+                }
+                if "attendance_check_enabled" in group_columns:
+                    connection.execute("UPDATE telegram_groups SET attendance_check_enabled = 0")
             else:
                 connection.executescript(sql)
 

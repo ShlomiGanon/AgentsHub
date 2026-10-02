@@ -94,7 +94,7 @@ SIMULATION_USERS = [
 ]
 
 SIMULATION_GROUPS = [
-    SimulationGroup(key="response_team", offset=0, agent_name="roster_agent", label=_catalog_text("response_team.simulation.response_team_label")),
+    SimulationGroup(key="response_team", offset=0, agent_name="roster_agent", label=_catalog_text("response_team.simulation.response_team_label"), attendance_check=True, attendance_check_hour=8),
     SimulationGroup(key="cameras", offset=1, agent_name="surveillance_agent", label=_catalog_text("response_team.simulation.sec001.group.cameras.label")),
     SimulationGroup(key="external_forces", offset=2, agent_name="neighboring_forces_agent", label=_catalog_text("response_team.simulation.sec001.group.external_forces.label")),
 ]

@@ -112,7 +112,7 @@ class GroupBindingView:
     agent_name: str
     label: str = ""
     auto_register: bool = False
-    attendance_check_enabled: bool = True
+    attendance_check_enabled: bool = False
     attendance_check_hour: int = 8
 
 

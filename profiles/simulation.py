@@ -81,6 +81,8 @@ class SimulationGroup:
     offset: int
     agent_name: str = "main_agent"
     label: str = ""
+    attendance_check: bool = False
+    attendance_check_hour: int = 8
 
 
 @dataclass(frozen=True)

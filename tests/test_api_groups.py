@@ -96,13 +96,13 @@ def test_group_bindings_are_created_listed_and_removed(tmp_path, teardown_ctx):
     assert put.status_code == 200
     assert put.get_json() == {
         "chat_id": GROUP, "agent_name": "reference_agent", "label": "ops room", "auto_register": False,
-        "attendance_check_enabled": True, "attendance_check_hour": 8,
+        "attendance_check_enabled": False, "attendance_check_hour": 8,
     }
 
     listed = client.get("/Groups", headers=headers).get_json()["groups"]
     assert listed == [{
         "chat_id": GROUP, "agent_name": "reference_agent", "label": "ops room", "auto_register": False,
-        "attendance_check_enabled": True, "attendance_check_hour": 8,
+        "attendance_check_enabled": False, "attendance_check_hour": 8,
     }]
     # Write-through: the in-memory table and the DB agree without a reload.
     assert ctx.group_routing.get(GROUP).agent_name == "reference_agent"
@@ -259,7 +259,7 @@ def test_attendance_check_opens_a_due_cycle_and_names_the_bound_groups(tmp_path,
     attendance_agent = _FakeAttendanceAgent(opened)
     ctx = _two_agent_ctx(tmp_path, happy_path_agent(), extra_agents=(attendance_agent,))
     teardown_ctx.append(ctx)
-    ctx.group_routing.upsert(GROUP, "team_status_agent", "readiness")
+    ctx.group_routing.upsert(GROUP, "team_status_agent", "readiness", attendance_check_enabled=True)
     ctx.group_routing.upsert("-7", "reference_agent")
     client = build_app(ctx).test_client()
 
@@ -342,7 +342,7 @@ def test_real_attendance_agent_opens_claims_and_respects_group_hour(tmp_path, te
     agent.approve_roster("commander-1", opened_at.isoformat())
     ctx = _two_agent_ctx(tmp_path, happy_path_agent(), extra_agents=(agent,))
     teardown_ctx.append(ctx)
-    ctx.group_routing.upsert(GROUP, "team_status_agent", "readiness", attendance_check_hour=8)
+    ctx.group_routing.upsert(GROUP, "team_status_agent", "readiness", attendance_check_enabled=True, attendance_check_hour=8)
     client = build_app(ctx).test_client()
     headers = auth_headers(COMMANDER_IDENTITY)
     now = opened_at.isoformat()

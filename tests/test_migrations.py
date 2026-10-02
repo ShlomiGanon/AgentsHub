@@ -449,7 +449,43 @@ def test_migration_twenty_seven_adds_attendance_settings_to_existing_groups(tmp_
     finally:
         connection.close()
 
-    assert group == (1, 8)
+    assert group == (0, 8)
+    assert version == MIGRATIONS[-1][0]
+
+
+def test_migration_twenty_eight_disables_attendance_on_existing_groups(tmp_path):
+    db_path = str(tmp_path / "version-twenty-seven.db")
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "CREATE TABLE telegram_groups ("
+            "chat_id TEXT PRIMARY KEY, agent_name TEXT NOT NULL, "
+            "label TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, "
+            "auto_register INTEGER NOT NULL DEFAULT 0, "
+            "attendance_check_enabled INTEGER NOT NULL DEFAULT 1, "
+            "attendance_check_hour INTEGER NOT NULL DEFAULT 8)"
+        )
+        connection.execute(
+            "INSERT INTO telegram_groups VALUES "
+            "('-1001', 'team_status_agent', 'Ops', '2026-01-01', 0, 1, 8),"
+            "('-1002', 'surveillance_agent', 'Cams', '2026-01-01', 0, 1, 8)"
+        )
+        connection.execute("PRAGMA user_version = 27")
+        connection.commit()
+    finally:
+        connection.close()
+
+    run_migrations(db_path)
+    connection = sqlite3.connect(db_path)
+    try:
+        rows = connection.execute(
+            "SELECT chat_id, attendance_check_enabled FROM telegram_groups ORDER BY chat_id"
+        ).fetchall()
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        connection.close()
+
+    assert rows == [("-1001", 0), ("-1002", 0)]
     assert version == MIGRATIONS[-1][0]
 
 

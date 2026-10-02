@@ -56,6 +56,25 @@ def ensure_simulation_entities(persistence: "PersistenceInterface", loaded_profi
         chat_id = simulation_group_chat_id(group.offset)
         if persistence.ensure_group_exists(chat_id, group.agent_name, group.label):
             created_groups.append(chat_id)
+        if getattr(group, "attendance_check", False):
+            target = persistence.read_group(chat_id)
+            if target is None:
+                target = next(
+                    (
+                        row
+                        for row in persistence.list_groups()
+                        if row["agent_name"] == group.agent_name and row["label"] == group.label
+                    ),
+                    None,
+                )
+            if target is not None:
+                persistence.write_group(
+                    str(target["chat_id"]),
+                    target["agent_name"],
+                    target.get("label") or "",
+                    attendance_check_enabled=True,
+                    attendance_check_hour=int(getattr(group, "attendance_check_hour", 8)),
+                )
 
     registered_roster_members, newly_approved_rosters = _ensure_roster_memberships(loaded_profile)
 

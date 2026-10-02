@@ -725,6 +725,15 @@ def test_both_profiles_open_an_attendance_cycle_on_provision_and_after_reset(
         persistence = SQLitePersistence(str(tmp_path / f"{module_path.split('.')[-1]}-prov.db"))
         try:
             ensure_simulation_entities(persistence, isolated)
+            by_chat = {row["chat_id"]: row for row in persistence.list_groups()}
+            attendance_chat = simulation_group_chat_id(0)
+            assert by_chat[attendance_chat]["attendance_check_enabled"] is True
+            assert by_chat[attendance_chat]["attendance_check_hour"] == 8
+            assert all(
+                not row["attendance_check_enabled"]
+                for chat_id, row in by_chat.items()
+                if chat_id != attendance_chat
+            )
             store = open_store()
             assert store.latest_cycle() is not None, f"{module_path} seed did not open a cycle"
             today = datetime.now(ZoneInfo("Asia/Jerusalem")).date().isoformat()

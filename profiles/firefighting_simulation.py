@@ -74,7 +74,7 @@ SIMULATION_USERS = [
 ]
 
 SIMULATION_GROUPS = [
-    SimulationGroup(key="fire_response_team", offset=0, agent_name="team_status_agent", label=_catalog_text("firefighting.simulation.fire002.group.fire_response_team.label")),
+    SimulationGroup(key="fire_response_team", offset=0, agent_name="team_status_agent", label=_catalog_text("firefighting.simulation.fire002.group.fire_response_team.label"), attendance_check=True, attendance_check_hour=8),
     SimulationGroup(key="fire_cameras", offset=1, agent_name="surveillance_agent", label=_catalog_text("firefighting.simulation.fire002.group.fire_cameras.label")),
     SimulationGroup(key="fire_external_forces", offset=2, agent_name="neighboring_forces_agent", label=_catalog_text("firefighting.simulation.fire002.group.fire_external_forces.label")),
 ]

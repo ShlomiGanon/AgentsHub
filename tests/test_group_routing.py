@@ -40,7 +40,7 @@ class _MemoryGroups:
             "label": label,
             "created_at": existing.get("created_at", "t"),
             "auto_register": existing.get("auto_register", False),
-            "attendance_check_enabled": existing.get("attendance_check_enabled", True) if attendance_check_enabled is None else bool(attendance_check_enabled),
+            "attendance_check_enabled": existing.get("attendance_check_enabled", False) if attendance_check_enabled is None else bool(attendance_check_enabled),
             "attendance_check_hour": existing.get("attendance_check_hour", 8) if attendance_check_hour is None else int(attendance_check_hour),
         }
 

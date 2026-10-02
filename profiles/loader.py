@@ -215,6 +215,11 @@ def _validate_simulation_declarations(loaded: "LoadedProfile") -> list[str]:
         # exist) — report the type errors alone rather than cascading into AttributeErrors.
         return failures
 
+    for index, group in enumerate(simulation_groups):
+        hour = getattr(group, "attendance_check_hour", 8)
+        if not isinstance(hour, int) or isinstance(hour, bool) or hour < 0 or hour > 23:
+            failures.append(f"SIMULATION_GROUPS[{index}] attendance_check_hour must be an integer 0-23")
+
     persona_keys = [persona.key for persona in simulation_users]
     duplicate_persona_keys = sorted({key for key in persona_keys if persona_keys.count(key) > 1})
     if duplicate_persona_keys:

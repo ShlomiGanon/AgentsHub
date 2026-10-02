@@ -56,7 +56,7 @@ class GroupBinding:
     agent_name: str
     label: str = ""
     auto_register: bool = False
-    attendance_check_enabled: bool = True
+    attendance_check_enabled: bool = False
     attendance_check_hour: int = 8
 
 
@@ -68,7 +68,7 @@ def _binding_from_record(record: dict) -> GroupBinding:
         record["agent_name"],
         record.get("label") or "",
         bool(record.get("auto_register", False)),
-        True if enabled is None else bool(enabled),
+        False if enabled is None else bool(enabled),
         int(hour) if hour is not None else 8,
     )
 
