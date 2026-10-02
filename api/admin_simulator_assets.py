@@ -1,6 +1,6 @@
 """Inline CSS and HTML/JS for the admin simulator page."""
 
-from api.admin_api_pages import FLASH_MESSAGES, IDENTITY_BAR
+from api.admin_api_pages import FLASH_MESSAGES
 
 SIMULATOR_STYLE = """
 <style>
@@ -515,7 +515,7 @@ SIMULATOR_BODY = """
     </div>
   </div>
 
-  """ + IDENTITY_BAR + FLASH_MESSAGES + """
+  """ + FLASH_MESSAGES + """
 
   <div class="sim-toolbar">
     <div class="sim-step">

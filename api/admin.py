@@ -90,6 +90,7 @@ from api.admin_chrome import (
     _DASHBOARD_STYLE,
     _EVENTS_TEMPLATE,
     _GROUPS_TEMPLATE,
+    _ACTING_IDENTITY_TEMPLATE,
     _LOGIN_TEMPLATE,
     _MENU_TEMPLATE,
     _PROFILES_TEMPLATE,
@@ -193,18 +194,22 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             ),
         )
 
-    def _api_page_context(current_page: str) -> dict:
-        users = _api_users()
-        available = {user["telegram_identity"] for user in users}
+    def _allowed_api_identities() -> set[str]:
+        """Human users from `_api_users()` plus the startup system administrator.
+
+        `bot-service` is not listed in the setup select — the checkbox is the only
+        way to choose it — but a session that already holds it stays valid."""
+
+        return {user["telegram_identity"] for user in _api_users()} | {BOT_SERVICE_IDENTITY}
+
+    def _session_identity_valid() -> bool:
         selected = str(session.get("api_identity") or "")
-        if selected not in available:
-            selected = users[0]["telegram_identity"] if users else ""
-            if selected:
-                session["api_identity"] = selected
-            else:
-                session.pop("api_identity", None)
+        return selected in _allowed_api_identities()
+
+    def _api_page_context(current_page: str) -> dict:
+        selected = str(session.get("api_identity") or "")
         return {
-            "api_users": users,
+            "api_users": _api_users(),
             "api_identity": selected,
             "current_page": current_page,
         }
@@ -215,9 +220,13 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             return True
         return (time.time() - last_activity) > config.session_timeout_minutes * 60
 
-    def _require_session():
+    def _require_session(*, require_identity: bool = True):
         """None if the caller has a live admin session (and refreshes its inactivity window);
-        otherwise a redirect response the route must return immediately."""
+        otherwise a redirect response the route must return immediately.
+
+        After login the session has no acting identity (`_issue_session` clears it).
+        Every page except login, logout, and the one-time setup form must have a
+        still-registered `api_identity` (a human user, or `bot-service`)."""
 
         if not session.get("admin_authenticated"):
             return redirect(url_for("admin.login"))
@@ -226,6 +235,8 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             flash(_t("admin.session_expired"), "error")
             return redirect(url_for("admin.login"))
         session["last_activity"] = time.time()
+        if require_identity and not _session_identity_valid():
+            return redirect(url_for("admin.acting_identity"))
         return None
 
     def _lockout_context(remaining_minutes: float) -> dict:
@@ -275,7 +286,9 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
     def login():
         if request.method == "GET":
             if session.get("admin_authenticated") and not _session_expired():
-                return redirect(url_for("admin.dashboard"))
+                if _session_identity_valid():
+                    return redirect(url_for("admin.dashboard"))
+                return redirect(url_for("admin.acting_identity"))
             return _render_login()
 
         source = _client_source()  # audit logging only — the lockout itself is global, see above
@@ -299,7 +312,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
                 "admin login succeeded",
                 extra={"event": "admin_login_succeeded", "source_ip": source, "trace_id": get_trace_id()},
             )
-            return redirect(url_for("admin.dashboard"))
+            return redirect(url_for("admin.acting_identity"))
 
         remaining_after_failure = rate_limiter.record_failure()
         logger.warning(
@@ -320,7 +333,7 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
 
     @blueprint.route("/logout", methods=["POST"])
     def logout():
-        redirect_response = _require_session()
+        redirect_response = _require_session(require_identity=False)
         if redirect_response is not None:
             return redirect_response
         csrf_response = _require_csrf()
@@ -331,6 +344,46 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         session.clear()
         flash(_t("admin.signed_out"), "ok")
         return redirect(url_for("admin.login"))
+
+    @blueprint.route("/acting-identity", methods=["GET", "POST"])
+    def acting_identity():
+        """One-time post-login choice of the Telegram identity this session acts as.
+
+        There is no later switcher: change identity by logging out and completing
+        this step again. The system administrator (`bot-service`) is only available
+        through the checkbox, not the human-user select."""
+
+        redirect_response = _require_session(require_identity=False)
+        if redirect_response is not None:
+            return redirect_response
+
+        users = _api_users()
+        if request.method == "GET":
+            if _session_identity_valid():
+                return redirect(url_for("admin.dashboard"))
+            return _render(
+                _ACTING_IDENTITY_TEMPLATE,
+                csrf_token=session["csrf_token"],
+                api_users=users,
+            )
+
+        csrf_response = _require_csrf()
+        if csrf_response is not None:
+            return csrf_response
+
+        if request.form.get("use_system_admin"):
+            session["api_identity"] = BOT_SERVICE_IDENTITY
+            flash(_t("admin.api.identity_selected", identity=BOT_SERVICE_IDENTITY), "ok")
+            return redirect(url_for("admin.dashboard"))
+
+        identity = request.form.get("api_identity", "").strip()
+        if identity not in {user["telegram_identity"] for user in users}:
+            flash(_t("admin.api.identity_invalid"), "error")
+            return redirect(url_for("admin.acting_identity"))
+
+        session["api_identity"] = identity
+        flash(_t("admin.api.identity_selected", identity=identity), "ok")
+        return redirect(url_for("admin.dashboard"))
 
     @blueprint.route("/", methods=["GET"])
     def dashboard():
@@ -433,33 +486,6 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
             return redirect(url_for("admin.admin_table_list", table_key=table_key))
         flash(_t("admin.tables.deleted"), "ok")
         return redirect(url_for("admin.admin_table_list", table_key=table_key))
-
-    @blueprint.route("/identity", methods=["POST"])
-    def select_api_identity():
-        redirect_response = _require_session()
-        if redirect_response is not None:
-            return redirect_response
-        csrf_response = _require_csrf()
-        if csrf_response is not None:
-            return csrf_response
-
-        identity = request.form.get("api_identity", "").strip()
-        if identity not in {user["telegram_identity"] for user in _api_users()}:
-            flash(_t("admin.api.identity_invalid"), "error")
-        else:
-            session["api_identity"] = identity
-            flash(_t("admin.api.identity_selected", identity=identity), "ok")
-
-        destinations = {
-            "profiles": "admin.profiles",
-            "protocols": "admin.protocols",
-            "events": "admin.events",
-            "users": "admin.users",
-            "groups": "admin.groups",
-            "server": "admin.server",
-            "simulator": "admin.simulator",
-        }
-        return redirect(url_for(destinations.get(request.form.get("next_page", ""), "admin.dashboard")))
 
     @blueprint.route("/profiles", methods=["GET"])
     def profiles():

@@ -59,7 +59,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from api.admin_api_pages import FLASH_MESSAGES, IDENTITY_BAR
 from api.simulations import simulation_catalog_payload
 from messages import MessageCatalog
 
@@ -77,12 +76,11 @@ def simulator_page_context(
     unregistered sender before the API refuses it), the routable agents, and the raw
     `admin.simulator.*` message templates of the current catalog (formatted client-side).
 
-    `api_identity` is the admin's currently-selected registered identity (the same
-    `IDENTITY_BAR`/`api_identity` mechanism the Profiles/Protocols/Events pages already
-    use, `api/admin_api_pages.py`) — it gates the server-rendered simulation catalog and
-    authenticates the selected scenario's `GET /Simulations/<key>` materialization request;
-    it is unrelated to any scenario step's own `sender_identity`, which is always used for
-    that step's own request."""
+    `api_identity` is the session's acting Telegram identity (chosen once after
+    login) — it gates the server-rendered simulation catalog and authenticates
+    the selected scenario's `GET /Simulations/<key>` materialization request;
+    it is unrelated to any scenario step's own `sender_identity`, which is always
+    used for that step's own request."""
 
     groups = [
         {"chat_id": binding.chat_id, "agent_name": binding.agent_name, "label": binding.label}

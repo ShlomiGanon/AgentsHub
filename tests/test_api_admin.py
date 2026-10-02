@@ -41,8 +41,30 @@ def _client(tmp_path, teardown_ctx, **kwargs):
     return build_app(ctx).test_client()
 
 
-def _login(client, username=ADMIN_USERNAME, password=ADMIN_PASSWORD):
-    return client.post("/admin/login", data={"username": username, "password": password}, follow_redirects=False)
+def _extract_csrf(html_bytes: bytes) -> str:
+    html = html_bytes.decode()
+    marker = 'name="csrf_token" value="'
+    start = html.index(marker) + len(marker)
+    end = html.index('"', start)
+    return html[start:end]
+
+
+def _complete_acting_identity(client, identity=COMMANDER_IDENTITY, *, use_system_admin=False):
+    setup = client.get("/admin/acting-identity")
+    data = {"csrf_token": _extract_csrf(setup.data), "api_identity": identity}
+    if use_system_admin:
+        data["use_system_admin"] = "1"
+    return client.post("/admin/acting-identity", data=data, follow_redirects=False)
+
+
+def _login(client, username=ADMIN_USERNAME, password=ADMIN_PASSWORD, *, identity=COMMANDER_IDENTITY):
+    """Sign in. Tests that need a working console also complete acting-identity
+    (default: COMMANDER_IDENTITY). Pass identity=None to stop after login."""
+
+    resp = client.post("/admin/login", data={"username": username, "password": password}, follow_redirects=False)
+    if identity and resp.status_code in (302, 303) and "/admin/acting-identity" in (resp.headers.get("Location") or ""):
+        _complete_acting_identity(client, identity)
+    return resp
 
 
 # -- Enablement -------------------------------------------------------------
@@ -278,57 +300,82 @@ def test_admin_pages_do_not_show_http_methods_or_endpoint_paths(path, tmp_path, 
         assert endpoint not in visible_text
 
 
-def test_api_identity_selection_is_registered_session_scoped_and_shared_between_pages(tmp_path, teardown_ctx, _admin_env):
+def test_login_redirects_to_acting_identity_setup(tmp_path, teardown_ctx, _admin_env):
     client = _client(tmp_path, teardown_ctx)
-    _login(client)
-    csrf_token = _extract_csrf(client.get("/admin/events").data)
 
-    selected = client.post(
-        "/admin/identity",
-        data={
-            "csrf_token": csrf_token,
-            "api_identity": VIEWER_IDENTITY,
-            "next_page": "events",
-        },
-        follow_redirects=False,
-    )
+    login_resp = _login(client, identity=None)
+    assert login_resp.status_code == 302
+    assert login_resp.headers["Location"].endswith("/admin/acting-identity")
 
+    gated = client.get("/admin/", follow_redirects=False)
+    assert gated.status_code in (302, 303)
+    assert gated.headers["Location"].endswith("/admin/acting-identity")
+
+    setup = client.get("/admin/acting-identity")
+    html = setup.data.decode("utf-8")
+    assert setup.status_code == 200
+    assert 'id="api-identity-select"' in html
+    assert 'name="use_system_admin"' in html
+    assert '<option value="bot-service"' not in html
+
+
+def test_acting_identity_is_registered_session_scoped_and_shared_between_pages(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    _login(client, identity=None)
+
+    selected = _complete_acting_identity(client, VIEWER_IDENTITY)
     assert selected.status_code in (302, 303)
-    assert selected.headers["Location"].endswith("/admin/events")
-    for path in ("/admin/events", "/admin/profiles", "/admin/protocols"):
+    assert selected.headers["Location"].endswith("/admin/")
+    for path in ("/admin/events", "/admin/profiles", "/admin/protocols", "/admin/simulator"):
         page = client.get(path).data.decode("utf-8")
         assert f'data-api-identity="{VIEWER_IDENTITY}"' in page
-        assert f'<option value="{VIEWER_IDENTITY}" selected>' in page
+        assert 'id="api-identity-select"' not in page
 
 
-def test_api_identity_selection_rejects_unregistered_and_service_identities(tmp_path, teardown_ctx, _admin_env):
+def test_acting_identity_rejects_unregistered_identities(tmp_path, teardown_ctx, _admin_env):
     client = _client(tmp_path, teardown_ctx)
-    _login(client)
-    page = client.get("/admin/events")
-    csrf_token = _extract_csrf(page.data)
-    assert '<option value="bot-service"' not in page.data.decode("utf-8")
+    _login(client, identity=None)
+    setup = client.get("/admin/acting-identity")
+    csrf_token = _extract_csrf(setup.data)
+    assert '<option value="bot-service"' not in setup.data.decode("utf-8")
 
     for identity in ("not-registered", "bot-service"):
         response = client.post(
-            "/admin/identity",
-            data={"csrf_token": csrf_token, "api_identity": identity, "next_page": "events"},
+            "/admin/acting-identity",
+            data={"csrf_token": csrf_token, "api_identity": identity},
             follow_redirects=True,
         )
         assert b"not a registered human user" in response.data
+        gated = client.get("/admin/events", follow_redirects=False)
+        assert gated.headers["Location"].endswith("/admin/acting-identity")
 
 
-def test_api_identity_selection_requires_csrf(tmp_path, teardown_ctx, _admin_env):
+def test_acting_identity_system_admin_checkbox_stores_bot_service(tmp_path, teardown_ctx, _admin_env):
     client = _client(tmp_path, teardown_ctx)
-    _login(client)
+    _login(client, identity=None)
+
+    selected = _complete_acting_identity(client, VIEWER_IDENTITY, use_system_admin=True)
+    assert selected.status_code in (302, 303)
+    assert selected.headers["Location"].endswith("/admin/")
+    for path in ("/admin/events", "/admin/profiles", "/admin/simulator"):
+        page = client.get(path).data.decode("utf-8")
+        assert 'data-api-identity="bot-service"' in page
+        assert 'id="api-identity-select"' not in page
+
+
+def test_acting_identity_setup_requires_csrf(tmp_path, teardown_ctx, _admin_env):
+    client = _client(tmp_path, teardown_ctx)
+    _login(client, identity=None)
 
     response = client.post(
-        "/admin/identity",
-        data={"api_identity": VIEWER_IDENTITY, "next_page": "events"},
+        "/admin/acting-identity",
+        data={"api_identity": VIEWER_IDENTITY},
         follow_redirects=False,
     )
 
     assert response.status_code in (302, 303)
-    assert response.headers["Location"].endswith("/admin/")
+    gated = client.get("/admin/events", follow_redirects=False)
+    assert gated.headers["Location"].endswith("/admin/acting-identity")
 
 
 @pytest.mark.parametrize(
@@ -525,7 +572,7 @@ def test_correct_login_reaches_the_dashboard_and_lists_existing_users(tmp_path, 
 
     login_resp = _login(client)
     assert login_resp.status_code == 302
-    assert "/admin/" in login_resp.headers["Location"]
+    assert login_resp.headers["Location"].endswith("/admin/acting-identity")
 
     dashboard = client.get("/admin/")
     assert dashboard.status_code == 200
@@ -811,7 +858,7 @@ def test_plain_refresh_after_a_failed_login_does_not_record_another_failure(tmp_
     assert b"Too many failed attempts" not in still_open.data  # 5 refreshes recorded nothing
     login_resp = _login(client)  # the correct password still works
     assert login_resp.status_code == 302
-    assert "/admin/" in login_resp.headers["Location"]
+    assert login_resp.headers["Location"].endswith("/admin/acting-identity")
 
 
 @pytest.mark.parametrize(
@@ -919,14 +966,6 @@ def test_successful_login_resets_the_failure_count(tmp_path, teardown_ctx, monke
 
 
 # -- CSRF -----------------------------------------------------------------
-
-
-def _extract_csrf(html_bytes: bytes) -> str:
-    html = html_bytes.decode()
-    marker = 'name="csrf_token" value="'
-    start = html.index(marker) + len(marker)
-    end = html.index('"', start)
-    return html[start:end]
 
 
 def test_write_user_without_csrf_token_is_rejected(tmp_path, teardown_ctx, _admin_env):

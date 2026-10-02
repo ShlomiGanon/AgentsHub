@@ -16,7 +16,7 @@ from config.base import TierModel
 from profiles import build_area_registry, build_event_type_registry
 from profiles.loader import load_profile
 from protocols.loader import ProtocolSet
-from tests.api_fakes import build_context, teardown_ctx
+from tests.api_fakes import COMMANDER_IDENTITY, build_context, teardown_ctx
 
 CORE_MODEL = TierModel(model="openai/test-core-model", api_key="test-key")
 SUB_MODEL = TierModel(model="openai/test-sub-model", api_key="test-key")
@@ -58,6 +58,13 @@ def _rt_ctx(tmp_path, teardown_ctx):
 
 def _login(client):
     client.post("/admin/login", data={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD}, follow_redirects=False)
+    setup = client.get("/admin/acting-identity")
+    match = re.search(r'name="csrf_token" value="([^"]+)"', setup.get_data(as_text=True))
+    client.post(
+        "/admin/acting-identity",
+        data={"csrf_token": match.group(1), "api_identity": COMMANDER_IDENTITY},
+        follow_redirects=False,
+    )
 
 
 def _csrf_token(client):

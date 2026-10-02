@@ -3,6 +3,7 @@ api/admin.py) -- list/edit/new/delete rendering and form validation, against a f
 built from plain dicts. No real profile store is involved; profiles/response_team.py's and
 profiles/firefighting.py's own real wirings are covered by their own test files."""
 
+import re
 import types
 
 import pytest
@@ -11,7 +12,7 @@ from agents import adapter
 from api.admin_tables import AdminFormError, parse_admin_table_form
 from api.app import build_app
 from profiles.admin_tables import AdminColumn, AdminTable
-from tests.api_fakes import build_context, teardown_ctx
+from tests.api_fakes import COMMANDER_IDENTITY, build_context, teardown_ctx
 from tests.crewai_fakes import install_crewai_stub
 
 ADMIN_USERNAME = "test-admin"
@@ -67,7 +68,14 @@ def _client(tmp_path, teardown_ctx, admin_tables):
 
 
 def _login(client):
-    return client.post("/admin/login", data={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD}, follow_redirects=False)
+    client.post("/admin/login", data={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD}, follow_redirects=False)
+    setup = client.get("/admin/acting-identity")
+    match = re.search(r'name="csrf_token" value="([^"]+)"', setup.get_data(as_text=True))
+    client.post(
+        "/admin/acting-identity",
+        data={"csrf_token": match.group(1), "api_identity": COMMANDER_IDENTITY},
+        follow_redirects=False,
+    )
 
 
 def _csrf_token(client):

@@ -117,30 +117,6 @@ API_CONSOLE_STYLE = """
 """
 
 
-IDENTITY_BAR = """
-<div class="block-console ls-identity-block">
-  <span class="block-label">{{ t('admin.api.identity_title') }}</span>
-  <form class="api-identity-bar" method="post" action="{{ url_for('admin.select_api_identity') }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="hidden" name="next_page" value="{{ current_page }}">
-    <div class="identity-field">
-      <label class="form-label-console" for="api-identity-select">{{ t('admin.api.identity_label') }}</label>
-      <select id="api-identity-select" name="api_identity" class="form-select form-select-console" {% if not api_users %}disabled{% endif %}>
-        {% for user in api_users %}
-          <option value="{{ user.telegram_identity }}" {% if user.telegram_identity == api_identity %}selected{% endif %}>
-            {{ user.full_name or t('admin.api.missing_name') }} — {{ user.telegram_identity }} ({{ user.permission_level }})
-          </option>
-        {% endfor %}
-      </select>
-    </div>
-    <button class="btn btn-console" {% if not api_users %}disabled{% endif %}>{{ t('admin.api.identity_save') }}</button>
-  </form>
-  {% if not api_users %}<p class="api-hint mt-2 mb-0">{{ t('admin.api.no_identity') }}</p>{% else %}
-  <p class="api-hint mt-2 mb-0">{{ t('admin.api.identity_help') }}</p>{% endif %}
-</div>
-"""
-
-
 FLASH_MESSAGES = """
 {% for category, message in get_flashed_messages(with_categories=true) %}
   <div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-3">{{ message }}</div>
@@ -244,10 +220,6 @@ PROFILES_BODY = """
     </div>
   </section>
   <section class="ls-section">
-    <h2 class="ls-section-title">{{ t('admin.api.identity_title') }}</h2>
-    """ + IDENTITY_BAR + """
-  </section>
-  <section class="ls-section">
     <h2 class="ls-section-title">{{ t('admin.profiles.operational_scope') }}</h2>
     <div class="block-console">
       <div class="mb-3"><strong>{{ t('admin.profiles.event_types') }}</strong><div class="mt-2">{% for item in event_types %}<span class="tag">{{ item }}</span> {% else %}—{% endfor %}</div></div>
@@ -305,7 +277,7 @@ PROTOCOLS_BODY = """
     </div>
     <button id="protocol-list" class="btn btn-console">{{ t('admin.api.refresh') }}</button>
   </div>
-  """ + IDENTITY_BAR + FLASH_MESSAGES + """
+  """ + FLASH_MESSAGES + """
   <datalist id="known-agents">{% for agent in agents %}<option value="{{ agent }}">{% endfor %}</datalist>
   <datalist id="known-tools">{% for tool in tools %}<option value="{{ tool }}">{% endfor %}</datalist>
   <div class="ls-table-toolbar">
@@ -417,7 +389,7 @@ EVENTS_BODY = """
       <p class="subtitle">{{ t('admin.events.subtitle') }}</p>
     </div>
   </div>
-  """ + IDENTITY_BAR + FLASH_MESSAGES + """
+  """ + FLASH_MESSAGES + """
   <div class="ls-tabs" data-ls-tabs data-initial="recent">
     <button type="button" class="ls-tab is-active" data-tab="recent">{{ t('admin.events.tab_recent') }}</button>
     <button type="button" class="ls-tab" data-tab="new">{{ t('admin.events.tab_new') }}</button>

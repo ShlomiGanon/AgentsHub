@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from api.admin_api_pages import API_CLIENT_SCRIPT, API_CONSOLE_STYLE, EVENTS_BODY, IDENTITY_BAR, PROFILES_BODY, PROTOCOLS_BODY
+from api.admin_api_pages import API_CLIENT_SCRIPT, API_CONSOLE_STYLE, EVENTS_BODY, PROFILES_BODY, PROTOCOLS_BODY
 from api.admin_simulator_assets import SIMULATOR_BODY, SIMULATOR_STYLE
 from api.admin_tables import ADMIN_TABLES_EDIT_BODY, ADMIN_TABLES_LIST_BODY
 
@@ -604,13 +604,23 @@ _LOGIN_STYLE = """
     padding: 12px 14px;
   }
   .form-control-console::placeholder { color: #94a3b8; }
-  .form-control-console:focus {
+  .form-control-console:focus, .form-select-console:focus {
     outline: none;
     border-color: var(--blue);
     box-shadow: 0 0 0 0.2rem rgba(37, 99, 235, 0.18);
     background: #fff;
   }
   .field-group { margin-bottom: 14px; }
+  .login-card .api-hint { font-size: 13px; color: var(--text-dim); line-height: 1.45; margin: 0 0 16px; }
+  .system-admin-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 4px 0 16px;
+    font-size: 14px;
+    color: var(--text);
+  }
+  .system-admin-row input { margin-top: 3px; flex: 0 0 auto; }
 
   .alert-console-error {
     background: var(--danger-dim);
@@ -717,6 +727,58 @@ _LOGIN_TEMPLATE = """<!DOCTYPE html>
     </form>
 
     <div class="status-pill"><span class="dot"></span>{{ t('admin.connected') }}</div>
+  </div>
+
+</body>
+</html>
+"""
+
+_ACTING_IDENTITY_TEMPLATE = """<!DOCTYPE html>
+<html lang="{{ lang }}" dir="{{ dir }}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ t('admin.api.identity_title') }}</title>
+""" + _BOOTSTRAP_CSS_LINK + _LOGIN_STYLE + """
+</head>
+<body class="ls-login">
+
+  <div class="login-brand">
+    <img class="ls-logo" src="{{ url_for('static', filename='leadspotting-logo.gif') }}" alt="LeadSpotting">
+  </div>
+  <div class="login-card">
+    <h1>{{ t('admin.api.identity_title') }}</h1>
+    <p class="subtitle">{{ t('admin.api.identity_subtitle') }}</p>
+
+    {% for category, message in get_flashed_messages(with_categories=true) %}
+      <div class="alert-console-error">{{ message }}</div>
+    {% endfor %}
+
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="field-group">
+        <label class="form-label-console" for="api-identity-select">{{ t('admin.api.identity_label') }}</label>
+        <select id="api-identity-select" name="api_identity" class="form-select form-select-console" {% if not api_users %}disabled{% endif %}>
+          {% for user in api_users %}
+            <option value="{{ user.telegram_identity }}">
+              {{ user.full_name or t('admin.api.missing_name') }} — {{ user.telegram_identity }} ({{ user.permission_level }})
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <label class="system-admin-row">
+        <input type="checkbox" name="use_system_admin" value="1" id="use-system-admin">
+        <span>{{ t('admin.api.use_system_admin') }}</span>
+      </label>
+      {% if not api_users %}
+        <p class="api-hint">{{ t('admin.api.no_identity') }}</p>
+      {% else %}
+        <p class="api-hint">{{ t('admin.api.identity_help') }}</p>
+      {% endif %}
+      <div class="login-actions">
+        <button type="submit" class="btn-console-primary">{{ t('admin.api.identity_save') }}</button>
+      </div>
+    </form>
   </div>
 
 </body>
@@ -1074,7 +1136,6 @@ _SERVER_TEMPLATE = """<!DOCTYPE html>
 <div class="ls-page ls-server"><div class="ls-page-header"><div><h1>{{ t('admin.server_title') }}</h1>
 <p class="subtitle">{{ t('admin.server_subtitle') }}</p></div></div>
 {% for category, message in get_flashed_messages(with_categories=true) %}<div class="alert-console{% if category == 'error' %}-error{% endif %} px-3 py-2 mb-4">{{ message }}</div>{% endfor %}
-""" + IDENTITY_BAR + """
 {% if status.get('last_error') %}<div class="alert-console-error px-3 py-2 mb-4">{{ status.get('last_error') }}</div>{% endif %}
 {% if not supervisor %}<div class="alert-console-error px-3 py-2 mb-4">{{ t('admin.server_unavailable') }}</div>{% endif %}
 <section class="ls-section">
