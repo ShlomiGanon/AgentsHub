@@ -32,6 +32,7 @@ from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
 from auth.permissions import InvalidFullNameError, normalize_full_name
 from agents import AgentInvocationError, authenticated_request_identity, set_invocation_deadline
 
+from orchestrator.attendance_schedule import attendance_dispatch
 from orchestrator.flows import (
     GroupNotRegisteredError,
     InvalidRoutingTargetError,
@@ -546,7 +547,29 @@ def _binding_to_dict(binding) -> dict:
         "agent_name": binding.agent_name,
         "label": binding.label,
         "auto_register": bool(getattr(binding, "auto_register", False)),
+        "attendance_check_enabled": bool(getattr(binding, "attendance_check_enabled", False)),
+        "attendance_check_hour": int(binding.attendance_check_hour),
     }
+
+
+def _optional_attendance_enabled(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    raise InvalidInputError("attendance_check_enabled must be a boolean", field="attendance_check_enabled")
+
+
+def _optional_attendance_hour(value):
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise InvalidInputError("attendance_check_hour must be an integer hour", field="attendance_check_hour")
+    if value < 0 or value > 23:
+        raise InvalidInputError("attendance_check_hour must be between 0 and 23", field="attendance_check_hour")
+    return value
 
 def _attendance_agent(ctx: "ApiContext"):
     """The registered specialist that owns attendance cycles (duck-typed on `open_scheduled_cycle`)."""
@@ -587,9 +610,17 @@ def build_groups_blueprint(ctx: "ApiContext") -> Blueprint:
             raise InvalidInputError(messages.text("api.field_required", field="agent_name"), field="agent_name")
         if not isinstance(label, str) or len(label) > 200:
             raise InvalidInputError(messages.text("api.field_required", field="label"), field="label")
+        attendance_check_enabled = _optional_attendance_enabled(request_payload.get("attendance_check_enabled"))
+        attendance_check_hour = _optional_attendance_hour(request_payload.get("attendance_check_hour"))
 
         try:
-            binding = ctx.group_routing.upsert(chat_id, agent_name, label)
+            binding = ctx.group_routing.upsert(
+                chat_id,
+                agent_name,
+                label,
+                attendance_check_enabled=attendance_check_enabled,
+                attendance_check_hour=attendance_check_hour,
+            )
         except InvalidRoutingTargetError as exc:
             raise InvalidInputError(
                 messages.text(
@@ -657,17 +688,17 @@ def build_groups_blueprint(ctx: "ApiContext") -> Blueprint:
         if agent is None:
             raise NotFoundError(messages.text("api.attendance_agent_unavailable"))
 
+        dispatch = attendance_dispatch(
+            ctx.group_routing.all(),
+            agent.name,
+            safe_mode=ctx.deps.settings_store.get_safe_mode(),
+        )
         try:
-            opened = agent.open_scheduled_cycle(now_iso, force=force)
+            opened = agent.open_scheduled_cycle(now_iso, force=force, check_hour=dispatch.check_hour)
         except ValueError as exc:
             raise InvalidInputError(str(exc), field="now_iso") from exc
 
-        target_chat_ids = [
-            binding.chat_id
-            for binding in ctx.group_routing.all()
-            if binding.agent_name == agent.name
-            and (not ctx.deps.settings_store.get_safe_mode() or not binding.auto_register)
-        ]
+        target_chat_ids = list(dispatch.target_chat_ids)
         if opened is None:
             return jsonify({"opened": False, "agent_name": agent.name, "target_chat_ids": target_chat_ids})
         logger.info(

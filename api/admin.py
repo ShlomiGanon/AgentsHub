@@ -771,6 +771,19 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         chat_id = request.form.get("chat_id", "").strip()
         agent_name = request.form.get("agent_name", "").strip()
         label = request.form.get("label", "").strip()
+        enabled_values = request.form.getlist("attendance_check_enabled")
+        attendance_check_enabled = enabled_values[-1] == "1" if enabled_values else None
+        hour_raw = request.form.get("attendance_check_hour", "").strip()
+        attendance_check_hour = None
+        if hour_raw:
+            try:
+                attendance_check_hour = int(hour_raw)
+            except ValueError:
+                flash(_t("admin.attendance_hour_invalid"), "error")
+                return redirect(url_for("admin.groups"))
+            if attendance_check_hour < 0 or attendance_check_hour > 23:
+                flash(_t("admin.attendance_hour_invalid"), "error")
+                return redirect(url_for("admin.groups"))
         if not chat_id:
             flash(_t("admin.chat_id_required"), "error")
             return redirect(url_for("admin.groups"))
@@ -779,7 +792,13 @@ def build_admin_blueprint(ctx: "ApiContext", config: AdminConfig) -> Blueprint:
         try:
             # The same write-through path PUT /Groups and cli.group_admin use — one
             # source of truth for the routing table either way.
-            ctx.group_routing.upsert(chat_id, agent_name, label)
+            ctx.group_routing.upsert(
+                chat_id,
+                agent_name,
+                label,
+                attendance_check_enabled=attendance_check_enabled,
+                attendance_check_hour=attendance_check_hour,
+            )
         except InvalidRoutingTargetError:
             flash(_t("admin.group_agent_invalid", agent=agent_name), "error")
             return redirect(url_for("admin.groups"))

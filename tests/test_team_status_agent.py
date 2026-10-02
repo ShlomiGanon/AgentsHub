@@ -198,14 +198,16 @@ def test_daily_check_becomes_due_only_at_configured_local_hour(tmp_path):
     at_check = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)  # 08:00 Israel time
     _prepare_roster(agent, before_check)
 
-    assert not agent.attendance_check_due(before_check.isoformat())
-    assert agent.attendance_check_due(at_check.isoformat())
+    assert not agent.attendance_check_due(before_check.isoformat(), 8)
+    assert agent.attendance_check_due(at_check.isoformat(), 8)
+    assert not agent.attendance_check_due(at_check.isoformat(), 10)
 
-    outbound_text = agent.run_scheduled_attendance_check(at_check.isoformat())
-    assert "Daily readiness-team attendance check" in outbound_text
-    assert not agent.attendance_check_due((at_check + timedelta(hours=12)).isoformat())
-    assert agent.run_scheduled_attendance_check((at_check + timedelta(hours=12)).isoformat()) is None
-    assert agent.attendance_check_due((at_check + timedelta(days=1)).isoformat())
+    opened = agent.open_scheduled_cycle(at_check.isoformat(), check_hour=8)
+    assert opened is not None
+    assert opened["cycle_key"] == "2026-09-03"
+    assert not agent.attendance_check_due((at_check + timedelta(hours=12)).isoformat(), 8)
+    assert agent.open_scheduled_cycle((at_check + timedelta(hours=12)).isoformat(), check_hour=8) is None
+    assert agent.attendance_check_due((at_check + timedelta(days=1)).isoformat(), 8)
 
 
 def test_scheduler_does_nothing_until_roster_is_approved(tmp_path):
@@ -213,8 +215,34 @@ def test_scheduler_does_nothing_until_roster_is_approved(tmp_path):
     at_check = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
     agent.register_member("101", "Alex Cohen", at_check.isoformat())
 
-    assert agent.run_scheduled_attendance_check(at_check.isoformat()) is None
+    assert agent.open_scheduled_cycle(at_check.isoformat(), check_hour=8) is None
+    assert agent.open_scheduled_cycle(at_check.isoformat(), force=True, check_hour=8) is None
     assert agent.status_store.latest_cycle() is None
+
+
+def test_force_reuses_todays_cycle_and_unforced_claim_is_one_shot(tmp_path):
+    agent = _agent(tmp_path)
+    at_check = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
+    _prepare_roster(agent, at_check)
+
+    first = agent.open_scheduled_cycle(at_check.isoformat(), force=True, check_hour=8)
+    assert first is not None
+    second = agent.open_scheduled_cycle(at_check.isoformat(), force=True, check_hour=8)
+    assert second["cycle_key"] == first["cycle_key"]
+    claimed = agent.open_scheduled_cycle(at_check.isoformat(), check_hour=8)
+    assert claimed["cycle_key"] == first["cycle_key"]
+    assert agent.open_scheduled_cycle(at_check.isoformat(), check_hour=8) is None
+
+
+def test_missing_check_hour_does_not_auto_open(tmp_path):
+    agent = _agent(tmp_path)
+    at_check = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
+    _prepare_roster(agent, at_check)
+
+    assert agent.open_scheduled_cycle(at_check.isoformat(), check_hour=None) is None
+    forced = agent.open_scheduled_cycle(at_check.isoformat(), force=True)
+    assert forced is not None
+    assert agent.status_store.latest_cycle()["cycle_key"] == "2026-09-03"
 
 
 def test_member_is_requested_again_when_multiday_unavailability_expires(tmp_path):

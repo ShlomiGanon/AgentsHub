@@ -1,7 +1,8 @@
 """Firefighting operational seed data and declared simulations."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from agents import Agent, InvocationPolicy, NeighboringForcesAgent, SurveillanceAgent, TeamStatusAgent, failed_tool_result, get_authenticated_request_identity, tool
 from messages import get_catalog
@@ -23,8 +24,15 @@ import profiles.firefighting as _facade
 globals().update({name: getattr(_facade, name) for name in dir(_facade) if not name.startswith("__")})
 
 def _ensure_operational_seed_data() -> None:
-    """Create-if-missing cameras/apparatus -- never overwrites an existing row, the same
-    "create if missing, never touch if present" idiom response_team.py's own seed hook uses.
+    """Create-if-missing cameras/apparatus; open yesterday's local attendance
+    cycle if none exists yet (otherwise FIRE_002's shift and absence reports
+    fail the daily-cycle rule, and today's due check would already be spent).
+    Mirrors `profiles/response_team_simulation.py`'s own seed hook. Never
+    overwrites an existing row -- the same "create if missing, never touch if
+    present" idiom
+    `profiles.simulation_provisioning.ensure_simulation_entities` already uses
+    for simulation users/groups.
+
     Called automatically, on every profile load (live or simulated), by
     `ensure_simulation_entities` via this module's `OPERATIONAL_SEED` attribute."""
 
@@ -39,6 +47,13 @@ def _ensure_operational_seed_data() -> None:
     apparatus_store = open_apparatus_store(FIREFIGHTING_APPARATUS_DB_PATH)
     for apparatus in APPARATUS:
         apparatus_store.ensure_apparatus(**apparatus)
+
+    crew = open_team_status_persistence(FIREFIGHTING_CREW_STATUS_DB_PATH)
+    if crew.roster_is_approved() and crew.latest_cycle() is None:
+        now = datetime.now(timezone.utc)
+        yesterday = (now.astimezone(ZoneInfo("Asia/Jerusalem")) - timedelta(days=1)).date().isoformat()
+        deadline = now + timedelta(hours=1)
+        crew.open_cycle(yesterday, now.isoformat(), deadline.isoformat())
 
 
 OPERATIONAL_SEED = _ensure_operational_seed_data

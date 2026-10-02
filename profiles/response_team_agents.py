@@ -42,7 +42,6 @@ class ResponseTeamRosterAgent(TeamStatusAgent):
     name = "roster_agent"
     status_db_path = DB_PATH
     timezone_name = TIMEZONE
-    attendance_check_hour = 8
     response_window_hours = 1
 
     def __init__(self, model: str, api_key: str | None = None):

@@ -45,7 +45,6 @@ class TeamStatusAgent(Agent):
 
     status_db_path = ""
     timezone_name = "Asia/Jerusalem"
-    attendance_check_hour = 8
     response_window_hours = 1
 
     def __init__(self, model: str, api_key: str | None = None):
@@ -81,44 +80,51 @@ class TeamStatusAgent(Agent):
             reviewed_at=reviewed_at,
         )
 
-    def attendance_check_due(self, now_iso: str | None = None) -> bool:
-        """True once after 08:00 Israel time for each local calendar day."""
+    def attendance_check_due(self, now_iso: str | None, check_hour: int) -> bool:
+        """True once the enabled group's local hour has arrived for this calendar day."""
 
         now = _aware_datetime(now_iso).astimezone(ZoneInfo(self.timezone_name))
-        if now.hour < self.attendance_check_hour:
+        if now.hour < check_hour:
             return False
         latest = self.status_store.latest_cycle()
         return latest is None or latest["cycle_key"] != now.date().isoformat()
 
-    def run_scheduled_attendance_check(self, now_iso: str | None = None) -> str | None:
-        """System scheduler hook: open one due cycle and return its outbound text."""
+    def open_scheduled_cycle(
+        self,
+        now_iso: str | None = None,
+        *,
+        force: bool = False,
+        check_hour: int | None = None,
+    ) -> dict | None:
+        """Open or reuse today's cycle and return its structured facts.
 
-        if not self.status_store.roster_is_approved() or not self.attendance_check_due(now_iso):
-            return None
-        return self.start_daily_attendance_check(now_iso or "")
-
-    def open_scheduled_cycle(self, now_iso: str | None = None, *, force: bool = False) -> dict | None:
-        """Open today's cycle if it is due (or `force`d) and return its structured facts.
-
-        Returns None when the roster is not yet approved, when the check is not
-        due yet, or when today's cycle is already open — so a caller polling this
-        on a timer opens each day's cycle exactly once. The returned dict
-        (`cycle_key`, `opened_at`, `deadline_at`, `members_required`) carries no
-        user-facing text: the transport renders the prompt from its own catalog."""
+        `check_hour` comes from the enabled attendance group row. None means no
+        eligible group: the automatic path does not open; a pending force
+        broadcast can still be claimed. Force reuses today's cycle if it
+        already exists and requests a one-shot broadcast for the bot."""
 
         if not self.status_store.roster_is_approved():
             return None
-        if not force and not self.attendance_check_due(now_iso):
-            return None
-        cycle, requested = self._open_cycle(now_iso or "")
-        if not cycle.created:
-            return None
-        return {
-            "cycle_key": cycle.cycle_key,
-            "opened_at": cycle.opened_at,
-            "deadline_at": cycle.deadline_at,
-            "members_required": requested,
-        }
+        if force:
+            cycle, requested = self._open_cycle(now_iso or "")
+            self.status_store.request_broadcast(cycle.cycle_key)
+            return {
+                "cycle_key": cycle.cycle_key,
+                "opened_at": cycle.opened_at,
+                "deadline_at": cycle.deadline_at,
+                "members_required": requested,
+            }
+        if check_hour is not None and self.attendance_check_due(now_iso, check_hour):
+            cycle, requested = self._open_cycle(now_iso or "")
+            if not cycle.created:
+                return None
+            return {
+                "cycle_key": cycle.cycle_key,
+                "opened_at": cycle.opened_at,
+                "deadline_at": cycle.deadline_at,
+                "members_required": requested,
+            }
+        return self.status_store.claim_broadcast()
 
     def _open_cycle(self, now_iso: str) -> tuple[AttendanceCycle, list[str]]:
         now = _aware_datetime(now_iso or None)

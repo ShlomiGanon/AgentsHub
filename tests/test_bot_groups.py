@@ -199,6 +199,17 @@ def test_attendance_loop_posts_the_prompt_with_buttons_to_every_bound_group():
     )
 
 
+def test_notification_poll_claims_a_pending_attendance_broadcast():
+    api = FakeBotApiClient(attendance_check_result=_opened_result(targets=(GROUP,)))
+    telegram = FakeTelegramClient()
+    deps = _deps(api, telegram, profile=SimpleNamespace(message_catalog=get_catalog("en"), timezone_name="Asia/Jerusalem"))
+
+    _run(background_services.run_notification_poll_once(deps))
+
+    assert ("run_attendance_check",) in api.calls
+    assert [m.chat_id for m in telegram.sent] == [GROUP]
+
+
 def test_attendance_loop_is_quiet_when_nothing_is_due():
     api = FakeBotApiClient(attendance_check_result=AttendanceCheckResult(opened=False, agent_name="team_status_agent"))
     telegram = FakeTelegramClient()

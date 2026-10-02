@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from agents import (
     Agent,
@@ -30,10 +31,11 @@ import profiles.response_team as _facade
 globals().update({name: getattr(_facade, name) for name in dir(_facade) if not name.startswith("__")})
 
 def _ensure_operational_seed_data() -> None:
-    """Create-if-missing cameras/drones; open today's attendance cycle if
-    none exists yet (otherwise SEC_001's absence reports fail the
-    daily-cycle rule). Never overwrites an existing row -- the same "create
-    if missing, never touch if present" idiom
+    """Create-if-missing cameras/drones; open yesterday's local attendance
+    cycle if none exists yet (otherwise SEC_001's absence reports fail the
+    daily-cycle rule, and today's due check would already be spent). Never
+    overwrites an existing row -- the same "create if missing, never touch
+    if present" idiom
     `profiles.simulation_provisioning.ensure_simulation_entities` already
     uses for simulation users/groups (item 3/4 of docs/responce_improve.md's
     provisioning list; items 1/2/5 are already covered by that routine's
@@ -53,8 +55,9 @@ def _ensure_operational_seed_data() -> None:
     roster = open_response_team_roster_store(DB_PATH)
     if roster.roster_is_approved() and roster.latest_cycle() is None:
         now = datetime.now(timezone.utc)
+        yesterday = (now.astimezone(ZoneInfo("Asia/Jerusalem")) - timedelta(days=1)).date().isoformat()
         deadline = now + timedelta(hours=1)
-        roster.open_cycle(now.date().isoformat(), now.isoformat(), deadline.isoformat())
+        roster.open_cycle(yesterday, now.isoformat(), deadline.isoformat())
 
 
 OPERATIONAL_SEED = _ensure_operational_seed_data

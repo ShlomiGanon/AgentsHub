@@ -167,6 +167,14 @@ def test_group_crud_round_trip(persistence):
     persistence.write_group("-1001", "main_agent")
     assert persistence.read_group("-1001")["agent_name"] == "main_agent"
     assert persistence.read_group("-1001")["label"] == ""
+    assert persistence.read_group("-1001")["attendance_check_enabled"] is True
+    assert persistence.read_group("-1001")["attendance_check_hour"] == 8
+    persistence.write_group("-1001", "main_agent", "ready", attendance_check_enabled=False, attendance_check_hour=11)
+    persistence.write_group("-1001", "team_status_agent", "ready")
+    stored = persistence.read_group("-1001")
+    assert stored["agent_name"] == "team_status_agent"
+    assert stored["attendance_check_enabled"] is False
+    assert stored["attendance_check_hour"] == 11
     assert [g["chat_id"] for g in persistence.list_groups()] == ["-1001"]
 
     persistence.delete_group("-1001")

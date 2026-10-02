@@ -36,11 +36,15 @@ def _build_parser() -> argparse.ArgumentParser:
     add_parser.add_argument("--chat-id", required=True, help="Telegram chat ID (negative for groups/supergroups)")
     add_parser.add_argument("--agent", required=True, help="specialist agent name from the profile, or 'main_agent'")
     add_parser.add_argument("--label", default="", help="free-text label shown in the admin panel")
+    add_parser.add_argument("--attendance-check", action=argparse.BooleanOptionalAction, default=None)
+    add_parser.add_argument("--attendance-hour", type=int, default=None)
 
     update_parser = subparsers.add_parser("update", help="change a group's agent or label")
     update_parser.add_argument("--chat-id", required=True)
     update_parser.add_argument("--agent", required=True)
     update_parser.add_argument("--label", default="")
+    update_parser.add_argument("--attendance-check", action=argparse.BooleanOptionalAction, default=None)
+    update_parser.add_argument("--attendance-hour", type=int, default=None)
 
     remove_parser = subparsers.add_parser("remove", help="remove a group binding")
     remove_parser.add_argument("--chat-id", required=True)
@@ -91,7 +95,17 @@ def _run_command(args: argparse.Namespace, store: PersistenceInterface, routable
         if args.agent not in routable:
             print(f"error: '{args.agent}' is not a routable agent; allowed: {', '.join(routable)}", file=sys.stderr)
             return 1
-        store.write_group(chat_id, args.agent, args.label)
+        hour = args.attendance_hour
+        if hour is not None and (hour < 0 or hour > 23):
+            print("error: --attendance-hour must be between 0 and 23", file=sys.stderr)
+            return 1
+        store.write_group(
+            chat_id,
+            args.agent,
+            args.label,
+            attendance_check_enabled=args.attendance_check,
+            attendance_check_hour=hour,
+        )
         print(f"{args.command}: group '{chat_id}' is now routed to '{args.agent}'")
         return 0
 
@@ -116,7 +130,9 @@ def _run_command(args: argparse.Namespace, store: PersistenceInterface, routable
     if args.command == "list":
         for group in store.list_groups():
             source = "automatic" if group.get("auto_register", False) else "approved"
-            print(f"{group['chat_id']}\t{group['agent_name']}\t{group['label']}\t{source}")
+            attendance = "on" if group.get("attendance_check_enabled", False) else "off"
+            hour = group.get("attendance_check_hour")
+            print(f"{group['chat_id']}\t{group['agent_name']}\t{group['label']}\t{source}\tattendance={attendance}@{hour}")
         return 0
 
     raise AssertionError(f"unreachable: unknown command '{args.command}'")

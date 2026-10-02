@@ -14,6 +14,28 @@ from tools import telemetry_span
 
 _STOP = object()
 
+_GROUP_COLUMNS = (
+    "chat_id, agent_name, label, created_at, auto_register, "
+    "attendance_check_enabled, attendance_check_hour"
+)
+
+
+def _group_record(row) -> dict:
+    result = dict(row)
+    result["auto_register"] = bool(result["auto_register"])
+    result["attendance_check_enabled"] = bool(result["attendance_check_enabled"])
+    result["attendance_check_hour"] = int(result["attendance_check_hour"])
+    return result
+
+
+def _normalized_attendance_hour(value: int | None) -> int | None:
+    if value is None:
+        return None
+    hour = int(value)
+    if hour < 0 or hour > 23:
+        raise PersistenceError("attendance_check_hour must be between 0 and 23")
+    return hour
+
 
 class _ReadConnectionLease:
     def __init__(self, connection: sqlite3.Connection):
@@ -715,8 +737,7 @@ class SQLitePersistence(PersistenceInterface):
                 group_row = None
                 if group_chat_id is not None:
                     group_row = connection.execute(
-                        "SELECT chat_id, agent_name, label, created_at, auto_register "
-                        "FROM telegram_groups WHERE chat_id = ?",
+                        f"SELECT {_GROUP_COLUMNS} FROM telegram_groups WHERE chat_id = ?",
                         (group_chat_id,),
                     ).fetchone()
                 connection.commit()
@@ -732,7 +753,7 @@ class SQLitePersistence(PersistenceInterface):
         if result["user"] is not None:
             result["user"]["auto_register"] = bool(result["user"]["auto_register"])
         if result["group"] is not None:
-            result["group"]["auto_register"] = bool(result["group"]["auto_register"])
+            result["group"] = _group_record(result["group"])
         return result
 
     def approve_user(self, telegram_identity: str) -> dict:
@@ -789,19 +810,26 @@ class SQLitePersistence(PersistenceInterface):
         connection = self._read_connection()
         try:
             group_row = connection.execute(
-                "SELECT chat_id, agent_name, label, created_at, auto_register FROM telegram_groups WHERE chat_id = ?",
+                f"SELECT {_GROUP_COLUMNS} FROM telegram_groups WHERE chat_id = ?",
                 (chat_id,),
             ).fetchone()
             if group_row is None:
                 return None
-            result = dict(group_row)
-            result["auto_register"] = bool(result["auto_register"])
-            return result
+            return _group_record(group_row)
         finally:
             connection.close()
 
-    def write_group(self, chat_id: str, agent_name: str, label: str = "") -> None:
+    def write_group(
+        self,
+        chat_id: str,
+        agent_name: str,
+        label: str = "",
+        *,
+        attendance_check_enabled: bool | None = None,
+        attendance_check_hour: int | None = None,
+    ) -> None:
         created_at = datetime.now(timezone.utc).isoformat()
+        hour = _normalized_attendance_hour(attendance_check_hour)
 
         def _do(connection: sqlite3.Connection) -> None:
             try:
@@ -810,6 +838,20 @@ class SQLitePersistence(PersistenceInterface):
                     "ON CONFLICT(chat_id) DO UPDATE SET agent_name = excluded.agent_name, label = excluded.label",
                     (chat_id, agent_name, label, created_at),
                 )
+                assignments = []
+                values: list = []
+                if attendance_check_enabled is not None:
+                    assignments.append("attendance_check_enabled = ?")
+                    values.append(1 if attendance_check_enabled else 0)
+                if hour is not None:
+                    assignments.append("attendance_check_hour = ?")
+                    values.append(hour)
+                if assignments:
+                    values.append(chat_id)
+                    connection.execute(
+                        f"UPDATE telegram_groups SET {', '.join(assignments)} WHERE chat_id = ?",
+                        values,
+                    )
                 connection.commit()
             except sqlite3.Error as exc:
                 connection.rollback()
@@ -904,12 +946,9 @@ class SQLitePersistence(PersistenceInterface):
         connection = self._read_connection()
         try:
             group_rows = connection.execute(
-                "SELECT chat_id, agent_name, label, created_at, auto_register FROM telegram_groups ORDER BY chat_id"
+                f"SELECT {_GROUP_COLUMNS} FROM telegram_groups ORDER BY chat_id"
             ).fetchall()
-            results = [dict(group_row) for group_row in group_rows]
-            for result in results:
-                result["auto_register"] = bool(result["auto_register"])
-            return results
+            return [_group_record(group_row) for group_row in group_rows]
         finally:
             connection.close()
 

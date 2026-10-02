@@ -21,7 +21,9 @@ CREATE TABLE IF NOT EXISTS telegram_groups (
     agent_name TEXT NOT NULL,
     label TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
-    auto_register INTEGER NOT NULL DEFAULT 0 CHECK (auto_register IN (0, 1))
+    auto_register INTEGER NOT NULL DEFAULT 0 CHECK (auto_register IN (0, 1)),
+    attendance_check_enabled INTEGER NOT NULL DEFAULT 1 CHECK (attendance_check_enabled IN (0, 1)),
+    attendance_check_hour INTEGER NOT NULL DEFAULT 8 CHECK (attendance_check_hour BETWEEN 0 AND 23)
 );
 """
 
@@ -331,6 +333,12 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "ALTER TABLE held_events ADD COLUMN escalated_at TEXT;"
         "ALTER TABLE events ADD COLUMN hold_escalation_alert_text TEXT;",
     ),
+    (
+        27,
+        "add attendance check settings to telegram_groups",
+        "ALTER TABLE telegram_groups ADD COLUMN attendance_check_enabled INTEGER NOT NULL DEFAULT 1 CHECK (attendance_check_enabled IN (0, 1));"
+        "ALTER TABLE telegram_groups ADD COLUMN attendance_check_hour INTEGER NOT NULL DEFAULT 8 CHECK (attendance_check_hour BETWEEN 0 AND 23);",
+    ),
 ]
 
 
@@ -422,6 +430,22 @@ def run_migrations(db_path: str) -> None:
                 event_columns = {row[1] for row in connection.execute("PRAGMA table_info(events)").fetchall()}
                 if event_columns and "hold_escalation_alert_text" not in event_columns:
                     connection.execute("ALTER TABLE events ADD COLUMN hold_escalation_alert_text TEXT")
+            elif version == 27:
+                connection.executescript(TELEGRAM_GROUPS_TABLE_DDL)
+                group_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(telegram_groups)").fetchall()
+                }
+                if group_columns:
+                    if "attendance_check_enabled" not in group_columns:
+                        connection.execute(
+                            "ALTER TABLE telegram_groups ADD COLUMN attendance_check_enabled "
+                            "INTEGER NOT NULL DEFAULT 1 CHECK (attendance_check_enabled IN (0, 1))"
+                        )
+                    if "attendance_check_hour" not in group_columns:
+                        connection.execute(
+                            "ALTER TABLE telegram_groups ADD COLUMN attendance_check_hour "
+                            "INTEGER NOT NULL DEFAULT 8 CHECK (attendance_check_hour BETWEEN 0 AND 23)"
+                        )
             else:
                 connection.executescript(sql)
 

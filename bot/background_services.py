@@ -141,6 +141,22 @@ async def run_notification_poll_once(deps: "BotDeps", since: int = 0, wait_secon
                 extra={"event": "notification_dispatch_failed", "kind": notification.kind},
             )
 
+    try:
+        await run_attendance_check_once(deps)
+    except ApiNotImplementedError:
+        pass
+    except ApiRequestError as exc:
+        if exc.status_code != 404:
+            logger.exception(
+                "attendance claim after notification poll failed",
+                extra={"event": "attendance_claim_failed", "status": exc.status_code},
+            )
+    except Exception:
+        logger.exception(
+            "attendance claim after notification poll failed",
+            extra={"event": "attendance_claim_failed"},
+        )
+
     return len(notifications), next_cursor
 
 
@@ -267,8 +283,9 @@ async def run_attendance_check_loop(
     """Repeatedly call `run_attendance_check_once`, forever by default, or a fixed number of times — for tests.
 
     The server decides whether a cycle is due (once per local day, after the
-    profile's attendance hour); this loop only asks and delivers, so restarting
-    the bot never opens a second cycle."""
+    hour on the enabled attendance group); this loop only asks and delivers, so
+    restarting the bot never opens a second cycle. Force-opens are also claimed
+    from the notification long-poll so they do not wait for this timer."""
 
     iterations = 0
     current_backoff = 1.0

@@ -73,6 +73,26 @@ def test_add_rejects_an_agent_the_profile_does_not_declare(profile_module, capsy
     assert "-1003" not in _groups(db_path)
 
 
+def test_add_can_set_attendance_schedule_without_resetting_it_on_label_update(profile_module, real_tier_env):
+    module_name, db_path = profile_module
+
+    assert main([
+        "--profile", module_name, "add", "--chat-id", "-1020", "--agent", "reference_agent",
+        "--no-attendance-check", "--attendance-hour", "11",
+    ]) == 0
+    stored = _groups(db_path)["-1020"]
+    assert stored["attendance_check_enabled"] is False
+    assert stored["attendance_check_hour"] == 11
+
+    assert main([
+        "--profile", module_name, "update", "--chat-id", "-1020", "--agent", "reference_agent", "--label", "later",
+    ]) == 0
+    stored = _groups(db_path)["-1020"]
+    assert stored["label"] == "later"
+    assert stored["attendance_check_enabled"] is False
+    assert stored["attendance_check_hour"] == 11
+
+
 def test_update_rebinds_an_existing_group(profile_module, real_tier_env):
     module_name, db_path = profile_module
 

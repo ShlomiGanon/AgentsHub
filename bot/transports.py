@@ -197,6 +197,8 @@ class HttpApiClient(BotApiClient):
                 agent_name=group_payload["agent_name"],
                 label=group_payload.get("label") or "",
                 auto_register=bool(group_payload.get("auto_register", False)),
+                attendance_check_enabled=bool(group_payload.get("attendance_check_enabled", False)),
+                attendance_check_hour=int(group_payload.get("attendance_check_hour") or 0),
             )
         return TelegramAdmissionResult(
             allowed=bool(response_payload.get("allowed")),
@@ -244,6 +246,8 @@ class HttpApiClient(BotApiClient):
                 agent_name=g["agent_name"],
                 label=g.get("label") or "",
                 auto_register=bool(g.get("auto_register", False)),
+                attendance_check_enabled=bool(g.get("attendance_check_enabled", False)),
+                attendance_check_hour=int(g.get("attendance_check_hour") or 0),
             )
             for g in response_payload["groups"]
         )

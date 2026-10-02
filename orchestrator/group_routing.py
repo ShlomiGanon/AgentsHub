@@ -56,6 +56,21 @@ class GroupBinding:
     agent_name: str
     label: str = ""
     auto_register: bool = False
+    attendance_check_enabled: bool = True
+    attendance_check_hour: int = 8
+
+
+def _binding_from_record(record: dict) -> GroupBinding:
+    hour = record.get("attendance_check_hour")
+    enabled = record.get("attendance_check_enabled")
+    return GroupBinding(
+        str(record["chat_id"]),
+        record["agent_name"],
+        record.get("label") or "",
+        bool(record.get("auto_register", False)),
+        True if enabled is None else bool(enabled),
+        int(hour) if hour is not None else 8,
+    )
 
 
 class GroupRoutingTable:
@@ -80,15 +95,7 @@ class GroupRoutingTable:
         """(Re)load every binding from persistence; called once at startup and on staleness."""
 
         rows = self._persistence.list_groups()
-        fresh = {
-            str(row["chat_id"]): GroupBinding(
-                str(row["chat_id"]),
-                row["agent_name"],
-                row.get("label") or "",
-                bool(row.get("auto_register", False)),
-            )
-            for row in rows
-        }
+        fresh = {str(row["chat_id"]): _binding_from_record(row) for row in rows}
         with self._lock:
             self._bindings = fresh
             self._loaded_at = self._clock()
@@ -128,19 +135,35 @@ class GroupRoutingTable:
                 f"'{agent_name}' is not a routable agent; allowed: {', '.join(self.routable_targets)}"
             )
 
-    def upsert(self, chat_id: str, agent_name: str, label: str = "") -> GroupBinding:
+    def upsert(
+        self,
+        chat_id: str,
+        agent_name: str,
+        label: str = "",
+        *,
+        attendance_check_enabled: bool | None = None,
+        attendance_check_hour: int | None = None,
+    ) -> GroupBinding:
         chat_id = str(chat_id).strip()
         if not chat_id:
             raise InvalidRoutingTargetError("chat_id must be a non-empty string")
         self.validate_target(agent_name)
-        self._persistence.write_group(chat_id, agent_name, label or "")
-        record = self._persistence.read_group(chat_id)
-        binding = GroupBinding(
+        if attendance_check_hour is not None:
+            hour = int(attendance_check_hour)
+            if hour < 0 or hour > 23:
+                raise InvalidRoutingTargetError("attendance_check_hour must be between 0 and 23")
+            attendance_check_hour = hour
+        self._persistence.write_group(
             chat_id,
             agent_name,
             label or "",
-            bool(record and record.get("auto_register", False)),
+            attendance_check_enabled=attendance_check_enabled,
+            attendance_check_hour=attendance_check_hour,
         )
+        record = self._persistence.read_group(chat_id)
+        if record is None:
+            raise InvalidRoutingTargetError(f"telegram group '{chat_id}' was not stored")
+        binding = _binding_from_record(record)
         with self._lock:
             self._bindings[chat_id] = binding
         return binding
@@ -150,24 +173,14 @@ class GroupRoutingTable:
         if not chat_id:
             raise InvalidRoutingTargetError("chat_id must be a non-empty string")
         record = self._persistence.register_telegram_group_if_missing(chat_id, label or "")
-        binding = GroupBinding(
-            str(record["chat_id"]),
-            record["agent_name"],
-            record.get("label") or "",
-            bool(record.get("auto_register", False)),
-        )
+        binding = _binding_from_record(record)
         with self._lock:
             self._bindings[chat_id] = binding
         return binding
 
     def approve(self, chat_id: str) -> GroupBinding:
         record = self._persistence.approve_group(str(chat_id))
-        binding = GroupBinding(
-            str(record["chat_id"]),
-            record["agent_name"],
-            record.get("label") or "",
-            False,
-        )
+        binding = _binding_from_record(record)
         with self._lock:
             self._bindings[str(chat_id)] = binding
         return binding
@@ -187,12 +200,7 @@ class GroupRoutingTable:
         old_chat_id = str(old_chat_id).strip()
         new_chat_id = str(new_chat_id).strip()
         record = self._persistence.rename_group(old_chat_id, new_chat_id)
-        binding = GroupBinding(
-            str(record["chat_id"]),
-            record["agent_name"],
-            record.get("label") or "",
-            bool(record.get("auto_register", False)),
-        )
+        binding = _binding_from_record(record)
         with self._lock:
             self._bindings.pop(old_chat_id, None)
             self._bindings[new_chat_id] = binding

@@ -32,8 +32,17 @@ class _MemoryGroups:
     def read_group(self, chat_id):
         return self.rows.get(chat_id)
 
-    def write_group(self, chat_id, agent_name, label=""):
-        self.rows[chat_id] = {"chat_id": chat_id, "agent_name": agent_name, "label": label, "created_at": "t"}
+    def write_group(self, chat_id, agent_name, label="", *, attendance_check_enabled=None, attendance_check_hour=None):
+        existing = self.rows.get(chat_id, {})
+        self.rows[chat_id] = {
+            "chat_id": chat_id,
+            "agent_name": agent_name,
+            "label": label,
+            "created_at": existing.get("created_at", "t"),
+            "auto_register": existing.get("auto_register", False),
+            "attendance_check_enabled": existing.get("attendance_check_enabled", True) if attendance_check_enabled is None else bool(attendance_check_enabled),
+            "attendance_check_hour": existing.get("attendance_check_hour", 8) if attendance_check_hour is None else int(attendance_check_hour),
+        }
 
     def delete_group(self, chat_id):
         if chat_id not in self.rows:

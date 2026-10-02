@@ -37,6 +37,12 @@ class TeamStatusPersistenceInterface(ABC):
     def latest_cycle(self) -> dict | None: ...
 
     @abstractmethod
+    def request_broadcast(self, cycle_key: str) -> None: ...
+
+    @abstractmethod
+    def claim_broadcast(self) -> dict | None: ...
+
+    @abstractmethod
     def record_response(
         self,
         *,

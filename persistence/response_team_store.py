@@ -106,6 +106,11 @@ ON attendance_responses(telegram_identity, received_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_rt_attendance_responses_cycle
 ON attendance_responses(cycle_id, telegram_identity, received_at DESC);
+
+CREATE TABLE IF NOT EXISTS attendance_broadcast (
+    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+    cycle_key TEXT NOT NULL
+);
 """
 
 
@@ -209,6 +214,42 @@ class ResponseTeamRosterStore(TeamStatusPersistenceInterface):
                 "SELECT cycle_id, cycle_key, opened_at, deadline_at FROM attendance_cycles ORDER BY opened_at DESC LIMIT 1"
             ).fetchone()
         return dict(row) if row is not None else None
+
+    def request_broadcast(self, cycle_key: str) -> None:
+        if not cycle_key:
+            raise TeamStatusPersistenceError("cycle_key is required")
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO attendance_broadcast(singleton_id, cycle_key)
+                VALUES (1, ?)
+                ON CONFLICT(singleton_id) DO UPDATE SET cycle_key = excluded.cycle_key
+                """,
+                (cycle_key,),
+            )
+
+    def claim_broadcast(self) -> dict | None:
+        with self._connect() as connection:
+            pending = connection.execute(
+                "SELECT cycle_key FROM attendance_broadcast WHERE singleton_id = 1"
+            ).fetchone()
+            if pending is None:
+                return None
+            connection.execute("DELETE FROM attendance_broadcast WHERE singleton_id = 1")
+            row = connection.execute(
+                "SELECT cycle_id, cycle_key, opened_at, deadline_at FROM attendance_cycles WHERE cycle_key = ?",
+                (pending["cycle_key"],),
+            ).fetchone()
+        if row is None:
+            return None
+        snapshot = self.availability_snapshot(_utc_now())
+        requested = [entry["full_name"] for entry in snapshot if entry["availability"] != "unavailable"]
+        return {
+            "cycle_key": row["cycle_key"],
+            "opened_at": row["opened_at"],
+            "deadline_at": row["deadline_at"],
+            "members_required": requested,
+        }
 
     def record_response(
         self,

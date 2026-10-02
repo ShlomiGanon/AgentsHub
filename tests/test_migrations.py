@@ -422,6 +422,37 @@ def test_migration_twenty_two_reruns_without_error_when_columns_already_exist(tm
     assert {"telegram_chat_id", "telegram_chat_type", "ack_message_id"} <= columns
 
 
+def test_migration_twenty_seven_adds_attendance_settings_to_existing_groups(tmp_path):
+    db_path = str(tmp_path / "version-twenty-six.db")
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "CREATE TABLE telegram_groups (chat_id TEXT PRIMARY KEY, agent_name TEXT NOT NULL, "
+            "label TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, "
+            "auto_register INTEGER NOT NULL DEFAULT 0 CHECK (auto_register IN (0, 1)))"
+        )
+        connection.execute(
+            "INSERT INTO telegram_groups VALUES ('-1001', 'team_status_agent', 'Ops', '2026-01-01', 0)"
+        )
+        connection.execute("PRAGMA user_version = 26")
+        connection.commit()
+    finally:
+        connection.close()
+
+    run_migrations(db_path)
+    connection = sqlite3.connect(db_path)
+    try:
+        group = connection.execute(
+            "SELECT attendance_check_enabled, attendance_check_hour FROM telegram_groups WHERE chat_id='-1001'"
+        ).fetchone()
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        connection.close()
+
+    assert group == (1, 8)
+    assert version == MIGRATIONS[-1][0]
+
+
 def test_rich_reports_enabled_defaults_to_true(tmp_path):
     db_path = str(tmp_path / "deployment.db")
 

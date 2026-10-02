@@ -2,6 +2,10 @@
 profiles/simulation_provisioning.py, and api/simulations.py
 (docs/profile_simulations_design.md)."""
 
+import gc
+import time
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from types import SimpleNamespace
 
 import pytest
@@ -633,3 +637,121 @@ def test_response_team_personas_become_approved_roster_members(
     # (e.g. a resident reporting in as a bystander) correctly stays off the roster.
     bystander = next(p for p in loaded.simulation_users if p.key == "resident_avraham")
     assert simulation_user_telegram_id(bystander.offset) not in approved_identities
+
+
+def _record_available(store, *, source_message_id: str) -> dict:
+    member = store.list_members(approved_only=True)[0]
+    return store.record_response(
+        telegram_identity=member["telegram_identity"],
+        source_message_id=source_message_id,
+        availability="available",
+        original_text="available",
+        received_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def _isolate_response_team_seed_paths(monkeypatch, tmp_path):
+    import profiles.response_team as rt
+    import profiles.response_team_simulation as rt_sim
+
+    root = tmp_path / "rt"
+    root.mkdir()
+    db_path = str(root / "response_team_history.db")
+    monkeypatch.setattr(rt, "DB_PATH", db_path)
+    monkeypatch.setattr(rt_sim, "DB_PATH", db_path)
+    monkeypatch.setattr(rt, "RESETTABLE_DATABASES", (db_path,))
+    return db_path
+
+
+def _isolate_firefighting_seed_paths(monkeypatch, tmp_path):
+    import profiles.firefighting as ff
+    import profiles.firefighting_simulation as ff_sim
+
+    root = tmp_path / "ff"
+    root.mkdir()
+    mapping = {
+        "DB_PATH": str(root / "firefighting_history.db"),
+        "FIREFIGHTING_SURVEILLANCE_DB_PATH": str(root / "firefighting_surveillance.db"),
+        "FIREFIGHTING_CREW_STATUS_DB_PATH": str(root / "firefighting_crew_status.db"),
+        "FIREFIGHTING_FORCES_DB_PATH": str(root / "firefighting_forces.db"),
+        "FIREFIGHTING_APPARATUS_DB_PATH": str(root / "firefighting_apparatus.db"),
+        "FIREFIGHTING_FIRES_DB_PATH": str(root / "firefighting_fires.db"),
+    }
+    for name, path in mapping.items():
+        monkeypatch.setattr(ff, name, path)
+        if hasattr(ff_sim, name):
+            monkeypatch.setattr(ff_sim, name, path)
+    monkeypatch.setattr(ff, "RESETTABLE_DATABASES", tuple(mapping.values()))
+    return mapping
+
+
+def test_both_profiles_open_an_attendance_cycle_on_provision_and_after_reset(
+    test_core_model, test_sub_model, monkeypatch, tmp_path
+):
+    """FIRE_002 shift/absence reports need the same daily-cycle seed SEC_001 already
+    has. After a reset (wipe declared DBs, then ensure_simulation_entities again)
+    both profiles must reopen a cycle so record_response never raises
+    'no attendance cycle is open'."""
+
+    from dataclasses import replace
+
+    from persistence import open_response_team_roster_store, open_team_status_persistence
+    from profiles.loader import load_profile
+    from run_stack import reset_profile_databases
+
+    monkeypatch.setenv("BOT_TOKEN", "fake-token")
+
+    rt_db = _isolate_response_team_seed_paths(monkeypatch, tmp_path)
+    ff_paths = _isolate_firefighting_seed_paths(monkeypatch, tmp_path)
+
+    cases = (
+        (
+            "profiles.response_team",
+            rt_db,
+            lambda: open_response_team_roster_store(rt_db),
+        ),
+        (
+            "profiles.firefighting",
+            ff_paths["FIREFIGHTING_CREW_STATUS_DB_PATH"],
+            lambda: open_team_status_persistence(ff_paths["FIREFIGHTING_CREW_STATUS_DB_PATH"]),
+        ),
+    )
+
+    for module_path, roster_db, open_store in cases:
+        loaded = load_profile(module_path, core_model=test_core_model, sub_model=test_sub_model)
+        roster = next(item for item in loaded.simulation_rosters if item.key == "team_status")
+        isolated = replace(loaded, simulation_rosters=(replace(roster, db_path=roster_db),))
+
+        persistence = SQLitePersistence(str(tmp_path / f"{module_path.split('.')[-1]}-prov.db"))
+        try:
+            ensure_simulation_entities(persistence, isolated)
+            store = open_store()
+            assert store.latest_cycle() is not None, f"{module_path} seed did not open a cycle"
+            today = datetime.now(ZoneInfo("Asia/Jerusalem")).date().isoformat()
+            assert store.latest_cycle()["cycle_key"] != today
+            first = _record_available(store, source_message_id=f"{module_path}-after-provision")
+            assert first["availability"] == "available"
+
+            persistence.close()
+            del store
+            gc.collect()
+            last_error = None
+            for _ in range(20):
+                try:
+                    reset_profile_databases(module_path)
+                    last_error = None
+                    break
+                except PermissionError as exc:
+                    last_error = exc
+                    time.sleep(0.05)
+            if last_error is not None:
+                raise last_error
+
+            persistence = SQLitePersistence(str(tmp_path / f"{module_path.split('.')[-1]}-prov-after-reset.db"))
+            ensure_simulation_entities(persistence, isolated)
+            store = open_store()
+            assert store.latest_cycle() is not None, f"{module_path} did not reopen a cycle after reset"
+            second = _record_available(store, source_message_id=f"{module_path}-after-reset")
+            assert second["availability"] == "available"
+        finally:
+            persistence.close()

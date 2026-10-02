@@ -633,11 +633,14 @@ group is already scoped.
 COMMANDER-level (`run_attendance_check`). Asks the deployment's attendance
 specialist (the registered agent exposing `open_scheduled_cycle` —
 `TeamStatusAgent`) to open today's readiness attendance cycle **if it is due**:
-roster approved, past the profile's attendance hour in the profile's timezone,
-and not yet opened today. The bot polls this once a minute as `bot-service`;
-because the server decides "due", restarting the bot never opens a second
-cycle. Request body is optional: `{ "now_iso": "...", "force": true }` —
-`force` skips the time-of-day check (still never re-opens today's cycle).
+roster approved, past the hour on an enabled attendance group in the
+deployment timezone, and not yet opened today. Targets are only groups bound
+to the attendance agent with `attendance_check_enabled`. The bot polls this
+once a minute as `bot-service` and also claims a pending force from the
+notification long-poll; because the server decides "due", restarting the bot
+never opens a second cycle. Request body is optional:
+`{ "now_iso": "...", "force": true }` — `force` skips the time-of-day check
+and reuses today's cycle if it already exists, then asks the bot to post.
 
 `200 OK` when a cycle was opened:
 ```json

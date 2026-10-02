@@ -33,8 +33,8 @@ class _FakeAttendanceAgent:
         self.opened = opened
         self.calls = []
 
-    def open_scheduled_cycle(self, now_iso=None, *, force=False):
-        self.calls.append((now_iso, force))
+    def open_scheduled_cycle(self, now_iso=None, *, force=False, check_hour=None):
+        self.calls.append((now_iso, force, check_hour))
         return self.opened
 
 
@@ -94,10 +94,16 @@ def test_group_bindings_are_created_listed_and_removed(tmp_path, teardown_ctx):
 
     put = client.put(f"/Groups/{GROUP}", headers=headers, json={"agent_name": "reference_agent", "label": "ops room"})
     assert put.status_code == 200
-    assert put.get_json() == {"chat_id": GROUP, "agent_name": "reference_agent", "label": "ops room", "auto_register": False}
+    assert put.get_json() == {
+        "chat_id": GROUP, "agent_name": "reference_agent", "label": "ops room", "auto_register": False,
+        "attendance_check_enabled": True, "attendance_check_hour": 8,
+    }
 
     listed = client.get("/Groups", headers=headers).get_json()["groups"]
-    assert listed == [{"chat_id": GROUP, "agent_name": "reference_agent", "label": "ops room", "auto_register": False}]
+    assert listed == [{
+        "chat_id": GROUP, "agent_name": "reference_agent", "label": "ops room", "auto_register": False,
+        "attendance_check_enabled": True, "attendance_check_hour": 8,
+    }]
     # Write-through: the in-memory table and the DB agree without a reload.
     assert ctx.group_routing.get(GROUP).agent_name == "reference_agent"
     assert ctx.deps.persistence.read_group(GROUP)["agent_name"] == "reference_agent"
@@ -268,7 +274,7 @@ def test_attendance_check_opens_a_due_cycle_and_names_the_bound_groups(tmp_path,
         "members_required": ["Alex Cohen"],
         "target_chat_ids": [GROUP],
     }
-    assert attendance_agent.calls == [("2026-09-10T05:00:00+00:00", False)]
+    assert attendance_agent.calls == [("2026-09-10T05:00:00+00:00", False, 8)]
 
 
 def test_attendance_check_reports_not_opened_when_nothing_is_due(tmp_path, teardown_ctx):
@@ -281,4 +287,103 @@ def test_attendance_check_reports_not_opened_when_nothing_is_due(tmp_path, teard
 
     assert resp.status_code == 200
     assert resp.get_json() == {"opened": False, "agent_name": "team_status_agent", "target_chat_ids": []}
-    assert attendance_agent.calls == [(None, True)]
+    assert attendance_agent.calls == [(None, True, None)]
+
+
+def test_attendance_check_omits_disabled_groups_from_targets(tmp_path, teardown_ctx):
+    opened = {"cycle_key": "2026-09-10", "opened_at": "o", "deadline_at": "d", "members_required": []}
+    attendance_agent = _FakeAttendanceAgent(opened)
+    ctx = _two_agent_ctx(tmp_path, happy_path_agent(), extra_agents=(attendance_agent,))
+    teardown_ctx.append(ctx)
+    ctx.group_routing.upsert(GROUP, "team_status_agent", "readiness", attendance_check_enabled=False)
+    ctx.group_routing.upsert("-8", "team_status_agent", "active", attendance_check_enabled=True, attendance_check_hour=10)
+    client = build_app(ctx).test_client()
+
+    resp = client.post("/TeamStatus/AttendanceCheck", headers=auth_headers(COMMANDER_IDENTITY), json={"force": True})
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["opened"] is True
+    assert body["target_chat_ids"] == ["-8"]
+    assert attendance_agent.calls == [(None, True, 10)]
+
+
+def test_group_put_updates_attendance_settings_without_resetting_on_label_edit(tmp_path, teardown_ctx):
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+    headers = auth_headers(COMMANDER_IDENTITY)
+
+    client.put(f"/Groups/{GROUP}", headers=headers, json={
+        "agent_name": "reference_agent", "label": "ops",
+        "attendance_check_enabled": False, "attendance_check_hour": 11,
+    })
+    again = client.put(f"/Groups/{GROUP}", headers=headers, json={"agent_name": "reference_agent", "label": "ops 2"})
+
+    assert again.get_json()["attendance_check_enabled"] is False
+    assert again.get_json()["attendance_check_hour"] == 11
+    stored = ctx.deps.persistence.read_group(GROUP)
+    assert stored["attendance_check_enabled"] is False
+    assert stored["attendance_check_hour"] == 11
+
+
+def test_real_attendance_agent_opens_claims_and_respects_group_hour(tmp_path, teardown_ctx):
+    from datetime import datetime, timezone
+
+    from agents.team_status_agent import TeamStatusAgent
+
+    class _LiveAttendanceAgent(TeamStatusAgent):
+        name = "team_status_agent"
+        status_db_path = str(tmp_path / "crew-status.db")
+
+    agent = _LiveAttendanceAgent(model="test-model")
+    opened_at = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
+    agent.register_member("101", "Alex Cohen", opened_at.isoformat())
+    agent.approve_roster("commander-1", opened_at.isoformat())
+    ctx = _two_agent_ctx(tmp_path, happy_path_agent(), extra_agents=(agent,))
+    teardown_ctx.append(ctx)
+    ctx.group_routing.upsert(GROUP, "team_status_agent", "readiness", attendance_check_hour=8)
+    client = build_app(ctx).test_client()
+    headers = auth_headers(COMMANDER_IDENTITY)
+    now = opened_at.isoformat()
+
+    first = client.post("/TeamStatus/AttendanceCheck", headers=headers, json={"now_iso": now})
+    assert first.get_json()["opened"] is True
+    assert first.get_json()["target_chat_ids"] == [GROUP]
+
+    again = client.post("/TeamStatus/AttendanceCheck", headers=headers, json={"now_iso": now})
+    assert again.get_json()["opened"] is False
+
+    forced = client.post("/TeamStatus/AttendanceCheck", headers=headers, json={"now_iso": now, "force": True})
+    assert forced.get_json()["opened"] is True
+    assert forced.get_json()["cycle_key"] == first.get_json()["cycle_key"]
+
+    claimed = client.post("/TeamStatus/AttendanceCheck", headers=headers, json={"now_iso": now})
+    assert claimed.get_json()["opened"] is True
+    spent = client.post("/TeamStatus/AttendanceCheck", headers=headers, json={"now_iso": now})
+    assert spent.get_json()["opened"] is False
+
+    later_hour = client.put(
+        f"/Groups/{GROUP}",
+        headers=headers,
+        json={"agent_name": "team_status_agent", "label": "readiness", "attendance_check_hour": 10},
+    )
+    assert later_hour.status_code == 200
+    too_early = datetime(2026, 9, 4, 5, 0, tzinfo=timezone.utc).isoformat()  # 08:00 next day, hour is now 10
+    not_due = client.post("/TeamStatus/AttendanceCheck", headers=headers, json={"now_iso": too_early})
+    assert not_due.get_json()["opened"] is False
+
+
+def test_group_put_rejects_an_invalid_attendance_hour(tmp_path, teardown_ctx):
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    resp = client.put(
+        f"/Groups/{GROUP}",
+        headers=auth_headers(COMMANDER_IDENTITY),
+        json={"agent_name": "reference_agent", "attendance_check_hour": 24},
+    )
+
+    assert resp.status_code == 400
+    assert ctx.group_routing.get(GROUP) is None

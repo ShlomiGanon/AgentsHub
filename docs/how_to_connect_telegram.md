@@ -169,9 +169,11 @@ chats.
    to that agent's protocols and tools (plus history questions). A change made
    from the command line is picked up by a running API within about a minute;
    admin-panel changes apply immediately.
-4. **Readiness-team attendance.** Bind the readiness team's group to
-   `team_status_agent`. Once the roster is approved, every day after the
-   profile's attendance hour the bot posts the attendance prompt to that group
+4. **Readiness-team attendance.** Bind the readiness team's group to the
+   attendance specialist (`team_status_agent` or `roster_agent`) and leave
+   the attendance check enabled on that group row (hour is stored there).
+   Once the roster is approved, every day after that hour the bot posts the
+   attendance prompt to that group
    with two buttons. Each member's press is recorded as *their own* response
    (the Telegram identity that pressed), so members must be registered users
    (Step 3) and on the approved roster; pressing *Unavailable* asks that member

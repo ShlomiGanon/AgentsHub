@@ -194,8 +194,21 @@ class PersistenceInterface(ABC):
         """Return the Telegram group's routing record, including auto_register, or None if unregistered."""
 
     @abstractmethod
-    def write_group(self, chat_id: str, agent_name: str, label: str = "") -> None:
-        """Create/update a manual Telegram group; edits preserve registration source."""
+    def write_group(
+        self,
+        chat_id: str,
+        agent_name: str,
+        label: str = "",
+        *,
+        attendance_check_enabled: bool | None = None,
+        attendance_check_hour: int | None = None,
+    ) -> None:
+        """Create/update a manual Telegram group; edits preserve registration source.
+
+        `attendance_check_enabled` / `attendance_check_hour` update only when the
+        caller supplies them, so a label or agent-only edit does not reset the
+        group-row attendance schedule.
+        """
 
     @abstractmethod
     def register_telegram_group_if_missing(self, chat_id: str, label: str = "") -> dict:
