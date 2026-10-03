@@ -1,4 +1,4 @@
-"""9.17 — Test profile editing and settings persistence (work_plan.md §9.17).
+"""9.17 — Test profile editing and settings persistence.
 
 Most bullets already covered: "running system unchanged" by
 `tests/test_api_protocols.py::test_post_protocol_does_not_change_the_running_loaded_set`,
@@ -29,6 +29,7 @@ MODEL_CRED_ENV = "TEST_INT_PROFILE_EDIT_MODEL_KEY"
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch, 'status nominal')
 
 
@@ -63,6 +64,7 @@ MODEL_CREDENTIAL_ENVS = []
 
 @pytest.fixture
 def writable_profile_module(tmp_path, monkeypatch):
+    """Writable profile module."""
     module_name = f"integration_profile_edit_{uuid.uuid4().hex}"
     monkeypatch.setenv(BOT_TOKEN_ENV, "token")
     content = _PROFILE_TEMPLATE.format(db_path=str(tmp_path / "test.db"), bot_token_env=BOT_TOKEN_ENV)
@@ -72,6 +74,7 @@ def writable_profile_module(tmp_path, monkeypatch):
 
 
 def test_a_protocol_added_through_the_api_is_loaded_and_selectable_after_a_real_restart(tmp_path, writable_profile_module, test_core_model, test_sub_model):
+    """A protocol added through the api is loaded and selectable after a real restart."""
     ctx = build_context(tmp_path, module_path=writable_profile_module)
     client = build_app(ctx).test_client()
 
@@ -102,6 +105,7 @@ def test_a_risk_threshold_change_takes_effect_on_the_very_next_event(tmp_path):
     # but above a lowered 0.4 threshold (holds for approval) — the
     # clearest possible proof the *new* value, not the starting one, is
     # what the very next event is judged against.
+    """A risk threshold change takes effect on the very next event."""
     agent = happy_path_agent(risk_score="0.6", selected="dispatch_response")
     ctx = build_context(tmp_path, main_agent=agent)
     ctx.deps.settings_store.risk_threshold = 0.7

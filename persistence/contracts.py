@@ -1,4 +1,4 @@
-"""The persistence interface (work_plan.md §2.7)."""
+"""The persistence interface every other package may import."""
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -26,16 +26,15 @@ class EventSearchCriteria:
     protocol_names: tuple[str, ...] = ()
     event_ids: tuple[str, ...] = ()
     risk_levels: tuple[str, ...] = ()
-    # Ownership scoping (docs/Next_Plan.md §5 decision record): when set, restricts
-    # the search to events submitted by exactly this identity. None (the default)
-    # applies no such restriction — existing callers are unaffected. No schema
-    # change: `sender_identity` is an existing `events` column (persistence/schema.py).
+    # When set, restrict the search to events submitted by this identity.
     sender_identity: str | None = None
     order: Literal["newest", "oldest"] = "newest"
     limit: int = 50
 
 
 class PersistenceInterface(ABC):
+    """Contract for the shared events, users, groups, holds, and jobs database."""
+
     def __init__(self, db_path: str):
         """Remember the database path this store will open."""
 
@@ -110,17 +109,17 @@ class PersistenceInterface(ABC):
 
     @abstractmethod
     def mark_held_event_reminded(self, kind: str, hold_id: str, reminded_at: str) -> None:
-        """Record that a still-unresolved hold's reminder has already fired once (item 8)."""
+        """Record that a still-unresolved hold's reminder has already fired once."""
 
     @abstractmethod
     def mark_held_event_escalated(self, kind: str, hold_id: str, escalated_at: str) -> None:
-        """Record that a still-unresolved hold's commander escalation has already fired once (item 8)."""
+        """Record that a still-unresolved hold's commander escalation has already fired once."""
 
-    # -- Notification log (work_plan.md §8.12) --------------------------
+    # --- notifications ---
 
     @abstractmethod
     def insert_notification(self, kind: str, event_id: str) -> None:
-        """Re-trigger an existing notification kind on demand (item 8's hold reminder)."""
+        """Re-trigger an existing notification kind on demand for a hold reminder."""
 
     @abstractmethod
     def fetch_notifications_since(self, since: int) -> list[dict]:
@@ -162,10 +161,7 @@ class PersistenceInterface(ABC):
 
     @abstractmethod
     def ensure_user_exists(self, telegram_identity: str, permission_level: str, full_name: str) -> bool:
-        """Create the user (auto_register=False) if absent; never touch it if present.
-        Returns True iff a new row was created — used for idempotent simulation-user
-        provisioning (docs/profile_simulations_design.md), distinct from
-        `register_telegram_user_if_missing`'s safe-mode-pending-approval semantics."""
+        """Create the user if absent and return True only when a new row was inserted."""
 
     @abstractmethod
     def admit_telegram_update(
@@ -220,10 +216,7 @@ class PersistenceInterface(ABC):
 
     @abstractmethod
     def ensure_group_exists(self, chat_id: str, agent_name: str, label: str) -> bool:
-        """Create the group (auto_register=False) if absent; never touch it if present.
-        Returns True iff a new row was created — used for idempotent simulation-group
-        provisioning (docs/profile_simulations_design.md), distinct from
-        `register_telegram_group_if_missing`'s safe-mode-pending-approval semantics."""
+        """Create the group if absent and return True only when a new row was inserted."""
 
     @abstractmethod
     def rename_group(self, old_chat_id: str, new_chat_id: str) -> dict:
@@ -246,7 +239,7 @@ class PersistenceInterface(ABC):
 
     @abstractmethod
     def write_log_entry(self, trace_id: str | None, details: dict) -> None:
-        """Persist one structured log record — the single write path `tools.logging_config`'s DB-backed handler funnels every `logger.*` call site through, so no call site ever talks to st..."""
+        """Persist one structured log record for this trace."""
 
     @abstractmethod
     def fetch_log_entries(self, trace_id: str) -> list[dict]:

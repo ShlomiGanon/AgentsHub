@@ -1,4 +1,4 @@
-"""End-to-end proof of docs/profile_simulations_design.md: a profile's declared
+"""End-to-end proof of: a profile's declared
 simulation users/groups are provisioned exactly like `api.app.build_context`
 provisions them, the resulting reserved Telegram IDs are never created by the
 test itself, and a materialized simulation (`api.simulations.materialize_simulation`)
@@ -102,6 +102,7 @@ def test_provisioning_is_the_only_source_of_a_simulation_users_registration(tmp_
 
 
 def test_materialized_private_simulation_runs_through_the_real_msg_endpoint(tmp_path, teardown_ctx):
+    """Materialized private simulation runs through the real msg endpoint."""
     persona = SimulationPersona(key="viewer", offset=0, permission_level="viewer", full_name="Sim Viewer")
     scenario = SimulationScenario(key="status_query", title="Status query", raw=_PRIVATE_SCENARIO_RAW)
     ctx = build_context(
@@ -126,6 +127,7 @@ def test_materialized_private_simulation_runs_through_the_real_msg_endpoint(tmp_
 
 
 def test_materialized_group_simulation_is_scoped_through_the_provisioned_group(tmp_path, teardown_ctx):
+    """Materialized group simulation is scoped through the provisioned group."""
     persona = SimulationPersona(key="commander", offset=0, permission_level="commander", full_name="Sim Commander")
     group = SimulationGroup(key="team", offset=0, agent_name="reference_agent", label="Sim team")
     scenario = SimulationScenario(key="group_status_query", title="Group status query", raw=_GROUP_SCENARIO_RAW)

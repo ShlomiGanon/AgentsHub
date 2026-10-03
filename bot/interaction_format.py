@@ -8,6 +8,8 @@ if TYPE_CHECKING:
     from bot.contracts import FailureNotice, JobResult
 
 
+# --- catalog ---
+
 TELEGRAM_MESSAGE_LIMIT = 4096
 
 
@@ -96,8 +98,10 @@ def _split_on(text: str, separator: str, limit: int) -> list[str] | None:
 
 
 
+# --- split ---
+
 def split_message(text: str, limit: int = TELEGRAM_MESSAGE_LIMIT) -> list[str]:
-    """Split `text` into chunks that each fit in one Telegram message, breaking at paragraph boundaries first, then sentence boundaries, then plain newlines, and only as a last resort..."""
+    """Split `text` into chunks that each fit in one Telegram message."""
 
     if len(text) <= limit:
         return [text] if text else [""]
@@ -111,11 +115,7 @@ def split_message(text: str, limit: int = TELEGRAM_MESSAGE_LIMIT) -> list[str]:
 
 
 
-# A `failure_reason` is meant to be a short explanation, but its actual source can be an entire
-# rejected model response (e.g. protocol selection's own raw chain-of-thought when the response
-# didn't parse) — cap what a Telegram message ever shows for it, regardless of how that text was
-# produced. Only the *displayed* copy is capped; the stored value (DB row, logs, DEEP_DEBUG) is
-# never touched here and stays full length (docs/IMPROVES/CRITICAL_FIXES_PLAN.MD item 3).
+# Cap displayed failure text only; stored DB/log/DEEP_DEBUG values stay full length.
 _FAILURE_REASON_DISPLAY_LIMIT = 240
 
 
@@ -131,12 +131,7 @@ def _short_failure_reason(failure_reason: str) -> str:
 
 
 def _outcome_word(outcome: str, catalog: MessageCatalog) -> str:
-    """`outcome` (history.event_pipeline.VALID_OUTCOMES) is a fixed, internal English identifier
-    — interpolating it directly into a translated message left it as a raw English word inside an
-    otherwise-Hebrew sentence (docs/IMPROVES/CRITICAL_FIXES_PLAN.MD item 4). Every valid outcome
-    has a matching `outcome.<value>` catalog key in both languages; the fallback to the raw value
-    is defensive only — it should never actually trigger while the catalog stays in sync with
-    VALID_OUTCOMES."""
+    """Translate a fixed English outcome id so it is not left raw inside a localized sentence."""
 
     try:
         return catalog.text(f"outcome.{outcome}")
@@ -146,12 +141,7 @@ def _outcome_word(outcome: str, catalog: MessageCatalog) -> str:
 
 
 def _risk_level_word(risk_level: str, catalog: MessageCatalog) -> str:
-    """`risk_level` (`orchestrator.reasoning.RiskAssessment.level`, `Literal["high",
-    "low"]`) is a fixed, internal English identifier — same class of bug as
-    `_outcome_word` above, found while building item #9's protocol suffix
-    (REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md HARD RULE: don't introduce a third
-    untranslated-value instance). Also applied to the two pre-existing call sites
-    that already interpolated `risk_level` raw (`approval.risk`, `notice.no_match`)."""
+    """Translate a fixed English risk-level id so it is not left raw inside a localized sentence."""
 
     try:
         return catalog.text(f"risk.{risk_level}")
@@ -159,6 +149,8 @@ def _risk_level_word(risk_level: str, catalog: MessageCatalog) -> str:
         return risk_level
 
 
+
+# --- results ---
 
 def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None) -> str:
     """Telegram body for a finished job, including the protocol suffix when one ran."""
@@ -185,15 +177,7 @@ def format_job_result(result: "JobResult", catalog: MessageCatalog | None = None
         lines += ["", messages.text("result.insight"), result.insight_text]
 
     if result.protocol_name:
-        # Always-on trailing protocol/reason line (REQUIRED_FIELDS_AND_CLOSED_
-        # DECISIONS.md Part 3 / item #9) — sourced entirely from data already
-        # computed during the run, no new model call. Omitted whenever no
-        # protocol was ever selected (e.g. a `no_match_protocol` outcome) —
-        # there is nothing to name in that case, same principle as the plain
-        # question/conversation replies this doesn't apply to at all (those
-        # never reach format_job_result). Uses the protocol *selection*
-        # reason, not the risk reason, as "the reason the protocol that ran
-        # was chosen."
+        # Trailing protocol/reason line from data already computed; omitted when none was selected.
         risk_word = _risk_level_word(result.risk_level, messages) if result.risk_level else messages.text("common.none")
         reason = result.protocol_reason or messages.text("common.no_reason")
         lines += [

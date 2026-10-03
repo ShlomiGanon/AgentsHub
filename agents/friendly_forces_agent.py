@@ -1,12 +1,11 @@
-"""The Friendly Forces dispatch-coordination agent -- shared, reusable infrastructure (unchanged
-across the Profile Split Plan, docs/Profile_Split_Plan.md decision 1), used by
-profiles/standby_squad.py's StandbySquadForcesAgent and profiles/firefighting.py's
-FirefightingExternalForcesAgent."""
+"""In-memory friendly-forces dispatch log; tools record requests, not live dispatches."""
 
 from agents.runtime import Agent, tool
 
 
 class FriendlyForcesAgent(Agent):
+    """Records ambulance, police, firefighter, and military dispatch requests in memory."""
+
     name = "friendly_forces_agent"
     role = (
         "A dispatch-coordination specialist agent that records requests to send ambulance, police, "
@@ -25,6 +24,8 @@ class FriendlyForcesAgent(Agent):
     )
 
     def __init__(self, model: str, api_key: str | None = None):
+        """Initialize the in-memory dispatch log, then finish Agent setup."""
+
         self.dispatches_recorded: list[str] = []
         super().__init__(model, api_key)
 
@@ -36,6 +37,8 @@ class FriendlyForcesAgent(Agent):
         idempotent=False,
     )
     def dispatch_ambulance(self, location: str, patient_count: int = 1, severity: str = "", note: str = "") -> str:
+        """Record an ambulance dispatch request for `location`."""
+
         record = (
             f"ambulance dispatch requested for '{location}': patient_count={patient_count}"
             f"{f', severity={severity}' if severity else ''}{f', note={note}' if note else ''}"
@@ -51,6 +54,8 @@ class FriendlyForcesAgent(Agent):
         idempotent=False,
     )
     def dispatch_police(self, location: str, unit_count: int = 1, incident_type: str = "", note: str = "") -> str:
+        """Record a police dispatch request for `location`."""
+
         record = (
             f"police dispatch requested for '{location}': unit_count={unit_count}"
             f"{f', incident_type={incident_type}' if incident_type else ''}{f', note={note}' if note else ''}"
@@ -66,6 +71,8 @@ class FriendlyForcesAgent(Agent):
         idempotent=False,
     )
     def dispatch_firefighters(self, location: str, truck_count: int = 1, incident_type: str = "", note: str = "") -> str:
+        """Record a firefighter dispatch request for `location`."""
+
         record = (
             f"firefighter dispatch requested for '{location}': truck_count={truck_count}"
             f"{f', incident_type={incident_type}' if incident_type else ''}{f', note={note}' if note else ''}"
@@ -81,6 +88,8 @@ class FriendlyForcesAgent(Agent):
         idempotent=False,
     )
     def dispatch_military(self, location: str, unit_type: str = "", force_size: int = 0, note: str = "") -> str:
+        """Record a military dispatch request for `location`."""
+
         record = (
             f"military dispatch requested for '{location}': force_size={force_size}"
             f"{f', unit_type={unit_type}' if unit_type else ''}{f', note={note}' if note else ''}"

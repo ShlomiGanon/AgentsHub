@@ -1,0 +1,616 @@
+"""Production HTTP client for BotApiClient against the local API server."""
+
+import asyncio
+import logging
+import random
+import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Literal
+from urllib.parse import quote
+
+import httpx
+
+from bot.contracts import (
+    ApiRequestError,
+    AttendanceCheckResult,
+    BOT_SERVICE_IDENTITY,
+    BotApiClient,
+    GroupBindingView,
+    BotNotification,
+    EventDataNeededNotice,
+    FailureNotice,
+    HeldApprovalNotice,
+    HeldClarificationNotice,
+    HoldAnswerOutcome,
+    JobResult,
+    MessageSubmissionResult,
+    NoMatchNotice,
+    HoldEscalationNotice,
+    PrecedentClosureNotice,
+    ProfileView,
+    ProtocolView,
+    ResourceUnavailableAlertNotice,
+    WriteResult,
+    SettingsView,
+    TracePollResult,
+    TelegramAdmissionResult,
+    UncertainVerdictNotice,
+    UncertainVerdictReporterNotice,
+    UserLookupResult,
+)
+from tools import get_trace_id, new_trace_id, stage_context
+
+logger = logging.getLogger(__name__)
+
+_TELEGRAM_REQUEST_CONTEXT: ContextVar[tuple[str, str] | None] = ContextVar(
+    "telegram_request_context", default=None
+)
+
+
+@contextmanager
+def telegram_request_context(chat_id: str, chat_type: str):
+    """Attach trusted Telegram chat metadata to every API call in one update task."""
+
+    token = _TELEGRAM_REQUEST_CONTEXT.set((str(chat_id), str(chat_type)))
+    try:
+        yield
+    finally:
+        _TELEGRAM_REQUEST_CONTEXT.reset(token)
+
+
+def _do_request(url: str, method: str, identity: str, request_payload: dict | None) -> tuple[int, dict]:
+    """Synchronous HTTP helper used by tests; returns status and JSON body."""
+
+    try:
+        response = httpx.request(
+            method,
+            url,
+            headers={"X-Identity": identity},
+            json=request_payload,
+            timeout=httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=75.0),
+        )
+        if not response.content:
+            return response.status_code, {}
+        try:
+            return response.status_code, response.json()
+        except ValueError:
+            return response.status_code, {"message": response.text}
+    except httpx.HTTPError as exc:
+        raise ApiRequestError(None, str(exc)) from exc
+
+
+# --- client ---
+
+class HttpApiClient(BotApiClient):
+    """Async HTTP implementation of BotApiClient against the local API server."""
+
+    def __init__(self, base_url: str, bot_service_key: str | None = None):
+        """Remember the API base URL and optional bot-service key."""
+
+        self._base_url = base_url.rstrip("/")
+        self._client: httpx.AsyncClient | None = None
+        self._bot_service_key = bot_service_key
+
+    async def start(self) -> None:
+        """Open the shared async HTTP client if it is not already open."""
+
+        if self._client is None:
+            self._client = self._build_client()
+
+    async def close(self) -> None:
+        """Close the shared async HTTP client."""
+
+        client, self._client = self._client, None
+        if client is not None:
+            await client.aclose()
+
+    def _build_client(self) -> httpx.AsyncClient:
+        """A new httpx client with the bot's timeout and connection limits."""
+
+        timeout = httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=75.0)
+        limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
+        return httpx.AsyncClient(base_url=self._base_url, timeout=timeout, limits=limits)
+
+    async def _call(
+        self,
+        method: str,
+        path: str,
+        identity: str,
+        request_payload: dict | None = None,
+        *,
+        read_timeout: float | None = None,
+        trace_id_override: str | None = None,
+    ) -> tuple[int, dict]:
+        """One authenticated JSON request, retrying GET on transport/5xx failures."""
+
+        persistent_client = self._client
+        client = persistent_client or self._build_client()
+        headers = {
+            "X-Identity": identity,
+            "X-Trace-ID": trace_id_override or get_trace_id() or new_trace_id(),
+            "X-Client-Request-ID": uuid.uuid4().hex,
+        }
+        # The proof is also sent for human identities so the API can distinguish
+        # trusted Telegram-origin traffic and re-check safe mode at its boundary.
+        if self._bot_service_key:
+            headers["X-Service-Key"] = self._bot_service_key
+        telegram_context = _TELEGRAM_REQUEST_CONTEXT.get()
+        if telegram_context is not None:
+            headers["X-Telegram-Chat-ID"], headers["X-Telegram-Chat-Type"] = telegram_context
+        attempts = 3 if method == "GET" else 1
+
+        try:
+            for attempt in range(attempts):
+                try:
+                    timeout = None if read_timeout is None else httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=read_timeout)
+                    with stage_context("bot_http"):
+                        response = await client.request(method, path, headers=headers, json=request_payload, timeout=timeout)
+                    try:
+                        payload = response.json() if response.content else {}
+                    except ValueError:
+                        payload = {"message": response.text}
+
+                    if method != "GET" or response.status_code < 500 or attempt == attempts - 1:
+                        return response.status_code, payload
+                except (httpx.TimeoutException, httpx.TransportError) as exc:
+                    if attempt == attempts - 1:
+                        raise ApiRequestError(None, str(exc)) from exc
+
+                await asyncio.sleep(random.uniform(0.0, 0.2 * (2 ** attempt)))
+        finally:
+            if persistent_client is None:
+                await client.aclose()
+
+        raise ApiRequestError(None, "request failed without a response")
+
+    def _raise_for_error(self, status: int, payload: dict) -> None:
+        """Turn an HTTP error payload into ApiRequestError."""
+
+        raise ApiRequestError(status, payload.get("message", ""), payload.get("error_class"), payload.get("field"))
+
+    async def admit_telegram_update(
+        self,
+        telegram_identity: str,
+        chat_id: str,
+        chat_type: str,
+        chat_label: str = "",
+    ) -> TelegramAdmissionResult:
+        """POST /Telegram/Admit for this user and chat."""
+
+        status, response_payload = await self._call(
+            "POST",
+            "/Telegram/Admission",
+            BOT_SERVICE_IDENTITY,
+            {
+                "telegram_identity": str(telegram_identity),
+                "chat_id": str(chat_id),
+                "chat_type": str(chat_type),
+                "chat_label": chat_label or "",
+            },
+        )
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+        user_payload = response_payload.get("user")
+        user = None
+        if user_payload is not None:
+            user = UserLookupResult(
+                registered=True,
+                permission_level=user_payload.get("permission_level"),
+                full_name=user_payload.get("full_name"),
+                auto_register=bool(user_payload.get("auto_register", False)),
+            )
+        group_payload = response_payload.get("group")
+        group = None
+        if group_payload is not None:
+            group = GroupBindingView(
+                chat_id=str(group_payload["chat_id"]),
+                agent_name=group_payload["agent_name"],
+                label=group_payload.get("label") or "",
+                auto_register=bool(group_payload.get("auto_register", False)),
+                attendance_check_enabled=bool(group_payload.get("attendance_check_enabled", False)),
+                attendance_check_hour=int(group_payload.get("attendance_check_hour") or 0),
+            )
+        return TelegramAdmissionResult(
+            allowed=bool(response_payload.get("allowed")),
+            reason=str(response_payload.get("reason") or "unknown"),
+            safe_mode=bool(response_payload.get("safe_mode")),
+            user=user,
+            group=group,
+        )
+
+    async def resolve_user(self, telegram_identity: str) -> UserLookupResult:
+        """GET /User/<identity> and map the payload to UserLookupResult."""
+
+        status, response_payload = await self._call("GET", f"/User/{quote(telegram_identity, safe='')}", BOT_SERVICE_IDENTITY)
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+        return UserLookupResult(
+            registered=response_payload["registered"],
+            permission_level=response_payload["permission_level"],
+            full_name=response_payload.get("full_name"),
+            auto_register=bool(response_payload.get("auto_register", False)),
+        )
+
+    async def update_own_full_name(self, telegram_identity: str, full_name: str) -> str:
+        """PUT /User/<identity>/name with the caller's supplied full name."""
+
+        status, response_payload = await self._call(
+            "PUT", f"/User/{quote(telegram_identity, safe='')}/name", telegram_identity,
+            {"full_name": full_name},
+        )
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+        return response_payload["full_name"]
+
+    async def list_commander_chat_ids(self) -> tuple[str, ...]:
+        """GET /Users/commanders and return their Telegram identities."""
+
+        status, response_payload = await self._call("GET", "/Commanders", BOT_SERVICE_IDENTITY)
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+        return tuple(c["telegram_identity"] for c in response_payload["commanders"])
+
+    async def list_groups(self) -> tuple[GroupBindingView, ...]:
+        """GET /Groups and map each row to GroupBindingView."""
+
+        status, response_payload = await self._call("GET", "/Groups", BOT_SERVICE_IDENTITY)
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+        return tuple(
+            GroupBindingView(
+                chat_id=str(g["chat_id"]),
+                agent_name=g["agent_name"],
+                label=g.get("label") or "",
+                auto_register=bool(g.get("auto_register", False)),
+                attendance_check_enabled=bool(g.get("attendance_check_enabled", False)),
+                attendance_check_hour=int(g.get("attendance_check_hour") or 0),
+            )
+            for g in response_payload["groups"]
+        )
+
+    async def run_attendance_check(self) -> AttendanceCheckResult:
+        """POST /TeamStatus/AttendanceCheck as bot-service."""
+
+        status, response_payload = await self._call("POST", "/TeamStatus/AttendanceCheck", BOT_SERVICE_IDENTITY, {})
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+        return AttendanceCheckResult(
+            opened=bool(response_payload.get("opened")),
+            agent_name=response_payload.get("agent_name", ""),
+            target_chat_ids=tuple(str(c) for c in response_payload.get("target_chat_ids", ())),
+            cycle_key=response_payload.get("cycle_key"),
+            deadline_at=response_payload.get("deadline_at"),
+            members_required=tuple(response_payload.get("members_required", ())),
+        )
+
+    async def submit_message(
+        self,
+        text: str,
+        sender_identity: str,
+        source_message_id: str,
+        conversation_id: str | None = None,
+        trace_id: str | None = None,
+        event_data_event_id: str | None = None,
+        protocol_hint: str | None = None,
+        telegram_chat_id: str | None = None,
+        telegram_chat_type: str | None = None,
+        ack_message_id: str | None = None,
+    ) -> MessageSubmissionResult:
+        """POST /Msg with the inbound Telegram text and routing metadata."""
+
+        body = {"text": text, "sender_identity": sender_identity, "source_message_id": source_message_id}
+        if conversation_id is not None:
+            body["conversation_id"] = conversation_id
+        if event_data_event_id is not None:
+            body["event_data_event_id"] = event_data_event_id
+        if protocol_hint is not None:
+            body["protocol_hint"] = protocol_hint
+        if telegram_chat_id is not None:
+            body["telegram_chat_id"] = telegram_chat_id
+        if telegram_chat_type is not None:
+            body["telegram_chat_type"] = telegram_chat_type
+        if ack_message_id is not None:
+            body["ack_message_id"] = ack_message_id
+        status, response_payload = await self._call(
+            "POST", "/Msg", sender_identity, body, trace_id_override=trace_id
+        )
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+
+        if response_payload["taken_as"] in {"question", "conversational", "clarification"}:
+            return MessageSubmissionResult(
+                kind=response_payload["taken_as"],
+                answer_text=response_payload.get("answer"),
+                provenance=response_payload.get("provenance"),
+            )
+
+        return MessageSubmissionResult(
+            kind=response_payload["taken_as"],
+            answer_text=response_payload.get("answer"),
+            job_id=response_payload.get("event_id"),
+        )
+
+    async def answer_clarification_hold(self, event_id: str, chosen_classification: str, answering_identity: str) -> HoldAnswerOutcome:
+        """POST /Holds/<id>/Clarify with the chosen classification."""
+
+        status, response_payload = await self._call("POST", f"/Clarify/{event_id}", answering_identity, {"classification": chosen_classification})
+        return self._hold_answer_outcome(status, response_payload, invalid_field_status="invalid_classification", resolved_status="resolved")
+
+    async def answer_approval_hold(self, event_id: str, decision: str, answering_identity: str) -> HoldAnswerOutcome:
+        """POST /Holds/<id>/Approve with the commander's decision."""
+
+        status, response_payload = await self._call("POST", f"/Approve/{event_id}", answering_identity, {"decision": decision})
+
+        if status == 200 and response_payload.get("status") == "declined":
+            return HoldAnswerOutcome(status="rejected")
+        if status == 202:
+            return HoldAnswerOutcome(status="approved")
+
+        return self._hold_answer_outcome(status, response_payload, invalid_field_status="invalid_candidate", resolved_status="approved")
+
+    async def fetch_pending_holds(self, caller_identity: str) -> dict:
+        """GET /Holds/Pending for this commander."""
+
+        status, response_payload = await self._call("GET", "/Holds/Pending", caller_identity)
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+        return response_payload
+
+    def _hold_answer_outcome(self, status: int, response_payload: dict, invalid_field_status: str, resolved_status: str) -> HoldAnswerOutcome:
+        """Map a hold-answer HTTP response onto HoldAnswerOutcome."""
+
+        if status in (401, 403):
+            return HoldAnswerOutcome(status="unauthorized", message=response_payload.get("message", ""))
+        if status == 404:
+            return HoldAnswerOutcome(status="not_found", message=response_payload.get("message", ""))
+        if status == 409:
+            resolved_by = response_payload.get("resolved_by")
+            message = response_payload.get("message", "")
+            if resolved_by is None:
+                resolved_by, message = self._parse_already_resolved_message(message)
+            return HoldAnswerOutcome(status="not_found", resolved_by=resolved_by, message=message)
+        if status == 400:
+            return HoldAnswerOutcome(status=invalid_field_status, message=response_payload.get("message", ""))
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+
+        return HoldAnswerOutcome(status=resolved_status)
+
+    @staticmethod
+    def _parse_already_resolved_message(message: str) -> tuple[str | None, str]:
+        """Who already answered, plus the remainder of the API message."""
+
+        marker = "already resolved by '"
+        lowered = message.lower()
+        if marker not in lowered:
+            return None, message
+        marker_index = lowered.index(marker)
+        after = message[marker_index + len(marker):]
+        resolved_by = after.split("'", 1)[0]
+        return resolved_by, message
+
+    async def _get_system(self, identity: str) -> dict:
+        """GET /SYSTEM for this identity."""
+
+        status, response_payload = await self._call("GET", "/SYSTEM", identity)
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+        return response_payload
+
+    async def get_profile_view(self, caller_identity: str) -> ProfileView:
+        """Build ProfileView from GET /SYSTEM."""
+
+        # `agents`/`protocols` are commander-only (view_system_internals) — GET
+        # /SYSTEM omits them entirely for a viewer rather than sending an empty
+        # hint, so they default to empty here rather than KeyError.
+        response_payload = await self._get_system(caller_identity)
+        protocols = tuple(
+            ProtocolView(name=protocol["name"], description=protocol["description"], criticality=protocol["criticality"], approval_flag=protocol["approval_flag"])
+            for protocol in response_payload.get("protocols", ())
+        )
+        return ProfileView(
+            profile_name=response_payload["profile"],
+            agent_names=tuple(response_payload.get("agents", ())),
+            protocols=protocols,
+            event_types=tuple(response_payload["event_types"]),
+            areas=tuple(response_payload["areas"]),
+        )
+
+    async def get_profile_diff_status(self) -> bool:
+        """Whether GET /SYSTEM reports a pending profile restart."""
+
+        response_payload = await self._get_system(BOT_SERVICE_IDENTITY)
+        return response_payload["profile_file_changed"]
+
+    async def write_protocol(self, action: Literal["add", "edit", "remove"], protocol_payload: dict, caller_identity: str) -> WriteResult:
+        """POST, PUT, or DELETE /Protocol for this commander."""
+
+        name = protocol_payload.get("name", "")
+        if action == "add":
+            status, response_payload = await self._call("POST", "/Protocol", caller_identity, protocol_payload)
+        elif action == "edit":
+            status, response_payload = await self._call("PUT", f"/Protocol/{quote(name, safe='')}", caller_identity, protocol_payload)
+        else:
+            status, response_payload = await self._call("DELETE", f"/Protocol/{quote(name, safe='')}", caller_identity, None)
+
+        if status in (401, 403):
+            self._raise_for_error(status, response_payload)
+        if status >= 400:
+            return WriteResult(accepted=False, message=response_payload.get("message", ""))
+        return WriteResult(accepted=True, message=response_payload.get("message", ""))
+
+    async def get_settings_view(self, caller_identity: str) -> SettingsView:
+        """Build SettingsView from GET /SYSTEM."""
+
+        response_payload = await self._get_system(caller_identity)
+        # `settings` is commander-only (view_settings) — absent for a viewer.
+        # bot.app already refuses this client-side before ever calling here;
+        # this is a defensive fallback for a direct caller of this interface.
+        if "settings" not in response_payload:
+            raise ApiRequestError(403, "settings are not available at your permission level", error_class="authorization_error")
+        settings = response_payload["settings"]
+        return SettingsView(
+            retry_count=settings["retry_count"],
+            risk_threshold=settings["risk_threshold"],
+            lookback_window_days=settings["lookback_window_days"],
+            safe_mode=bool(settings.get("safe_mode", False)),
+        )
+
+    async def write_setting(self, field: str, value: object, caller_identity: str) -> WriteResult:
+        """PUT /SYSTEM with one settings field."""
+
+        status, response_payload = await self._call("PUT", "/SYSTEM", caller_identity, {field: value})
+
+        if status in (401, 403):
+            self._raise_for_error(status, response_payload)
+        if status >= 400:
+            return WriteResult(accepted=False, message=response_payload.get("message", ""))
+        return WriteResult(accepted=True, message=f"'{field}' is now {response_payload[field]}.")
+
+    async def get_job_result(self, job_id: str, caller_identity: str) -> JobResult | None:
+        """GET /Jobs/<id> mapped onto JobResult, or None if missing."""
+
+        status, response_payload = await self._call("GET", f"/Job/{job_id}", caller_identity)
+        if status == 404:
+            return None
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+
+        outcome = response_payload["status"]
+        if outcome not in ("succeeded", "failed", "uncertain", "closed_on_precedent", "declined"):
+            return None
+
+        return JobResult(
+            job_id=job_id,
+            outcome=outcome,
+            insight_text=response_payload.get("insight_text", ""),
+            steps_completed=tuple(response_payload.get("steps_completed", ())),
+            failure_reason=response_payload.get("detail") if outcome == "failed" else None,
+            failed_step_agent_name=response_payload.get("failed_step_agent_name"),
+            report_text=response_payload.get("report_text"),
+        )
+
+    async def poll_pending_notifications(self, since: int, wait_seconds: int = 0) -> tuple[tuple[BotNotification, ...], int]:
+        """GET /Notifications since the given cursor."""
+
+        status, response_payload = await self._call(
+            "GET",
+            f"/Notifications?since={since}&wait_seconds={wait_seconds}",
+            BOT_SERVICE_IDENTITY,
+            read_timeout=max(5.0, wait_seconds + 5.0),
+        )
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+
+        notifications = tuple(
+            BotNotification(
+                kind=entry["kind"],
+                target_chat_ids=tuple(entry["target_chat_ids"]),
+                payload=self._parse_notification_payload(entry["kind"], entry["payload"]),
+                reply_to_message_id=entry.get("reply_to_message_id"),
+                ack_message_id=entry.get("ack_message_id"),
+                trace_id=entry.get("trace_id"),
+            )
+            for entry in response_payload["notifications"]
+        )
+        return notifications, response_payload["next_cursor"]
+
+    async def poll_trace(
+        self,
+        trace_id: str,
+        since: int,
+        wait_seconds: int,
+        caller_identity: str,
+    ) -> TracePollResult:
+        """GET /Trace/<id> for Deep Debug messages."""
+
+        status, response_payload = await self._call(
+            "GET",
+            f"/Trace/{quote(trace_id, safe='')}?since={since}&wait_seconds={wait_seconds}",
+            caller_identity,
+            read_timeout=max(5.0, wait_seconds + 5.0),
+            trace_id_override=new_trace_id(),
+        )
+        if status >= 400:
+            self._raise_for_error(status, response_payload)
+        return TracePollResult(
+            messages=tuple(entry["text"] for entry in response_payload["entries"]),
+            next_cursor=response_payload["next_cursor"],
+            terminal=bool(response_payload.get("terminal")),
+        )
+
+    @staticmethod
+    def _parse_notification_payload(kind: str, payload: dict):
+        """Turn one notification JSON object into its typed payload."""
+
+        if kind == "clarification_hold":
+            return HeldClarificationNotice(
+                hold_id=payload["hold_id"],
+                event_id=payload["event_id"],
+                raw_text=payload["raw_text"],
+                unresolved_field=payload["unresolved_field"],
+                available_classifications=tuple(payload["available_classifications"]),
+            )
+        if kind == "approval_hold":
+            return HeldApprovalNotice(
+                hold_id=payload["hold_id"],
+                event_id=payload["event_id"],
+                reason=payload["reason"],
+                risk_level=payload["risk_level"],
+                risk_reason=payload["risk_reason"],
+                selected_protocol_name=payload.get("selected_protocol_name"),
+                candidate_protocol_names=tuple(payload.get("candidate_protocol_names", ())),
+            )
+        if kind == "event_data_hold":
+            return EventDataNeededNotice(
+                hold_id=payload["hold_id"],
+                event_id=payload["event_id"],
+                question=payload["question"],
+                missing_fields=tuple(payload.get("missing_fields", ())),
+            )
+        if kind == "uncertain_verdict":
+            return UncertainVerdictNotice(event_id=payload["event_id"], insight_text=payload["insight_text"])
+        if kind == "uncertain_verdict_reporter":
+            return UncertainVerdictReporterNotice(event_id=payload["event_id"])
+        if kind == "resource_unavailable_alert":
+            return ResourceUnavailableAlertNotice(event_id=payload["event_id"], alert_text=payload["alert_text"])
+        if kind == "hold_escalation":
+            return HoldEscalationNotice(event_id=payload["event_id"], alert_text=payload["alert_text"])
+        if kind == "precedent_closure":
+            return PrecedentClosureNotice(
+                event_id=payload["event_id"],
+                raw_text=payload["raw_text"],
+                matched_precedent_event_id=payload["matched_precedent_event_id"],
+                precedent_ending=payload["precedent_ending"],
+            )
+        if kind == "no_match_notice":
+            return NoMatchNotice(
+                event_id=payload["event_id"],
+                raw_text=payload["raw_text"],
+                reason=payload["reason"],
+                risk_level=payload["risk_level"],
+                risk_reason=payload["risk_reason"],
+            )
+        if kind == "job_finished":
+            return JobResult(
+                job_id=payload["job_id"],
+                outcome=payload["outcome"],
+                insight_text=payload.get("insight_text", ""),
+                steps_completed=tuple(payload.get("steps_completed", ())),
+                failure_reason=payload.get("failure_reason"),
+                failed_step_agent_name=payload.get("failed_step_agent_name"),
+                protocol_name=payload.get("protocol_name"),
+                risk_level=payload.get("risk_level"),
+                protocol_reason=payload.get("protocol_reason"),
+                report_text=payload.get("report_text"),
+            )
+        if kind == "job_failed":
+            return FailureNotice(
+                event_id=payload["job_id"],
+                failed_step_agent_name=payload.get("failed_step_agent_name"),
+                failure_reason=payload.get("failure_reason") or "",
+                steps_completed_before_failure=tuple(payload.get("steps_completed", ())),
+                report_text=payload.get("report_text"),
+            )
+        raise ValueError(f"unknown notification kind: {kind!r}")

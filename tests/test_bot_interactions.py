@@ -12,6 +12,7 @@ from tests.bot_fakes import FakeBotApiClient
 
 
 def _run(coro):
+    """Run."""
     return asyncio.run(coro)
 
 
@@ -28,10 +29,12 @@ VIEW = ProfileView(
 
 
 def _deps(api):
+    """Deps."""
     return BotDeps(loaded_profile=None, telegram_client=None, api_client=api)
 
 
 def test_view_shows_agents_protocols_with_flags_event_types_and_areas():
+    """View shows agents protocols with flags event types and areas."""
     api = FakeBotApiClient(profile_view=VIEW)
 
     text = _run(view_profile(_deps(api), "v1"))
@@ -48,6 +51,7 @@ def test_view_forwards_the_real_callers_identity_to_the_api_client():
     # Problem 1's fix: the API client, not just bot/*'s own client-side
     # check, needs to see who's really asking, so its own server-side
     # permission check has something real to enforce against.
+    """View forwards the real callers identity to the api client."""
     api = FakeBotApiClient(profile_view=VIEW)
 
     _run(view_profile(_deps(api), "v1"))
@@ -56,18 +60,21 @@ def test_view_forwards_the_real_callers_identity_to_the_api_client():
 
 
 def test_diff_status_reports_a_pending_restart():
+    """Diff status reports a pending restart."""
     api = FakeBotApiClient(profile_diff_status=True)
     text = _run(profile_diff_status(_deps(api)))
     assert "pending" in text.lower()
 
 
 def test_diff_status_reports_no_pending_restart():
+    """Diff status reports no pending restart."""
     api = FakeBotApiClient(profile_diff_status=False)
     text = _run(profile_diff_status(_deps(api)))
     assert "no restart is pending" in text.lower()
 
 
 def test_viewer_cannot_write_a_protocol():
+    """Viewer cannot write a protocol."""
     api = FakeBotApiClient()
     text = _run(write_protocol(_deps(api), VIEWER, "add", {"approval_flag": False}))
     assert "create_protocol" in text
@@ -75,6 +82,7 @@ def test_viewer_cannot_write_a_protocol():
 
 
 def test_add_without_explicit_approval_flag_is_refused():
+    """Add without explicit approval flag is refused."""
     api = FakeBotApiClient()
     text = _run(write_protocol(_deps(api), COMMANDER, "add", {"name": "p"}))
     assert "approval_flag" in text
@@ -83,6 +91,7 @@ def test_add_without_explicit_approval_flag_is_refused():
 
 
 def test_remove_needs_no_approval_flag():
+    """Remove needs no approval flag."""
     api = FakeBotApiClient(protocol_write_result=WriteResult(accepted=True, message="removed"))
     text = _run(write_protocol(_deps(api), COMMANDER, "remove", {"name": "p"}))
     assert "removed" in text
@@ -90,12 +99,14 @@ def test_remove_needs_no_approval_flag():
 
 
 def test_successful_write_always_states_nothing_changed_until_restart():
+    """Successful write always states nothing changed until restart."""
     api = FakeBotApiClient(protocol_write_result=WriteResult(accepted=True, message="added protocol 'p'"))
     text = _run(write_protocol(_deps(api), COMMANDER, "add", {"approval_flag": True}))
     assert NOTHING_CHANGED_NOTICE in text
 
 
 def test_write_forwards_the_real_callers_identity_to_the_api_client():
+    """Write forwards the real callers identity to the api client."""
     api = FakeBotApiClient(protocol_write_result=WriteResult(accepted=True, message="added"))
 
     _run(write_protocol(_deps(api), COMMANDER, "add", {"approval_flag": True}))
@@ -104,6 +115,7 @@ def test_write_forwards_the_real_callers_identity_to_the_api_client():
 
 
 def test_rejected_write_is_reported_as_rejected():
+    """Rejected write is reported as rejected."""
     api = FakeBotApiClient(protocol_write_result=WriteResult(accepted=False, message="unknown agent 'x'"))
     text = _run(write_protocol(_deps(api), COMMANDER, "add", {"approval_flag": True}))
     assert "Rejected" in text
@@ -124,6 +136,7 @@ from tests.bot_fakes import FakeBotApiClient
 
 
 def _run(coro):
+    """Run."""
     return asyncio.run(coro)
 
 
@@ -132,16 +145,19 @@ COMMANDER = CallerContext(telegram_identity="c1", level=PermissionLevel.COMMANDE
 
 
 def _deps(api):
+    """Deps."""
     return BotDeps(loaded_profile=None, telegram_client=None, api_client=api)
 
 
 def test_view_shows_all_four_current_values():
+    """View shows all four current values."""
     api = FakeBotApiClient(settings_view=SettingsView(retry_count=3, risk_threshold=0.6, lookback_window_days=30))
     text = _run(view_settings(_deps(api), "v1"))
     assert "3" in text and "0.6" in text and "30" in text and "Safe mode: false" in text
 
 
 def test_settings_view_forwards_the_real_callers_identity_to_the_api_client():
+    """Settings view forwards the real callers identity to the api client."""
     api = FakeBotApiClient(settings_view=SettingsView(retry_count=3, risk_threshold=0.6, lookback_window_days=30))
 
     _run(view_settings(_deps(api), "v1"))
@@ -150,6 +166,7 @@ def test_settings_view_forwards_the_real_callers_identity_to_the_api_client():
 
 
 def test_viewer_cannot_change_a_setting():
+    """Viewer cannot change a setting."""
     api = FakeBotApiClient()
     text = _run(change_setting(_deps(api), VIEWER, "retry_count", "5"))
     assert "change_settings" in text
@@ -170,6 +187,7 @@ def test_viewer_cannot_change_a_setting():
     ],
 )
 def test_invalid_values_are_refused_before_reaching_the_api(field, raw_value, expected_fragment):
+    """Invalid values are refused before reaching the api."""
     api = FakeBotApiClient()
     text = _run(change_setting(_deps(api), COMMANDER, field, raw_value))
     assert expected_fragment in text
@@ -177,6 +195,7 @@ def test_invalid_values_are_refused_before_reaching_the_api(field, raw_value, ex
 
 
 def test_valid_change_confirms_immediate_effect_not_next_start():
+    """Valid change confirms immediate effect not next start."""
     api = FakeBotApiClient(settings_write_result=WriteResult(accepted=True, message="retry_count set to 5"))
     text = _run(change_setting(_deps(api), COMMANDER, "retry_count", "5"))
     assert "immediately" in text.lower()
@@ -184,18 +203,20 @@ def test_valid_change_confirms_immediate_effect_not_next_start():
 
 
 def test_valid_risk_threshold_is_parsed_as_float():
+    """Valid risk threshold is parsed as float."""
     api = FakeBotApiClient(settings_write_result=WriteResult(accepted=True, message="ok"))
     _run(change_setting(_deps(api), COMMANDER, "risk_threshold", "0.75"))
     assert api.calls[-1] == ("write_setting", "risk_threshold", 0.75, "c1")
 
 
 def test_rejected_write_is_reported():
+    """Rejected write is reported."""
     api = FakeBotApiClient(settings_write_result=WriteResult(accepted=False, message="store unavailable"))
     text = _run(change_setting(_deps(api), COMMANDER, "retry_count", "2"))
     assert "Rejected" in text
     assert "store unavailable" in text
 
-"""bot/startup.py (work_plan.md §8.1's "run one bot per deployment")."""
+"""bot/startup.py single-instance lock: one bot process per deployment."""
 
 import pytest
 
@@ -203,6 +224,7 @@ from bot.startup import AlreadyRunningError, SingleInstanceLock
 
 
 def test_acquire_creates_the_lock_file_with_the_pid(tmp_path):
+    """Acquire creates the lock file with the pid."""
     import os
 
     lock_path = tmp_path / "deployment.db.bot.lock"
@@ -216,6 +238,7 @@ def test_acquire_creates_the_lock_file_with_the_pid(tmp_path):
 
 
 def test_a_second_lock_on_the_same_path_is_refused(tmp_path):
+    """A second lock on the same path is refused."""
     lock_path = tmp_path / "deployment.db.bot.lock"
     first = SingleInstanceLock(lock_path)
     second = SingleInstanceLock(lock_path)
@@ -229,6 +252,7 @@ def test_a_second_lock_on_the_same_path_is_refused(tmp_path):
 
 
 def test_release_removes_the_lock_file_so_a_new_process_can_start(tmp_path):
+    """Release removes the lock file so a new process can start."""
     lock_path = tmp_path / "deployment.db.bot.lock"
     first = SingleInstanceLock(lock_path)
     first.acquire()
@@ -241,11 +265,13 @@ def test_release_removes_the_lock_file_so_a_new_process_can_start(tmp_path):
 
 
 def test_release_without_acquire_does_not_raise(tmp_path):
+    """Release without acquire does not raise."""
     lock = SingleInstanceLock(tmp_path / "never_acquired.lock")
     lock.release()  # must not raise
 
 
 def test_context_manager_releases_on_exit(tmp_path):
+    """Context manager releases on exit."""
     lock_path = tmp_path / "deployment.db.bot.lock"
 
     with SingleInstanceLock(lock_path):
@@ -255,6 +281,7 @@ def test_context_manager_releases_on_exit(tmp_path):
 
 
 def test_stale_lock_from_a_dead_pid_is_reclaimed(tmp_path, monkeypatch):
+    """Stale lock from a dead pid is reclaimed."""
     import os
 
     from bot import background_services
@@ -271,6 +298,7 @@ def test_stale_lock_from_a_dead_pid_is_reclaimed(tmp_path, monkeypatch):
 
 
 def test_lock_held_by_a_live_pid_is_still_refused(tmp_path, monkeypatch):
+    """Lock held by a live pid is still refused."""
     from bot import background_services
 
     lock_path = tmp_path / "deployment.db.bot.lock"
@@ -291,10 +319,12 @@ from tests.bot_fakes import FakeBotApiClient
 
 
 def _run(coro):
+    """Run."""
     return asyncio.run(coro)
 
 
 def test_unregistered_identity_is_refused_and_named_not_registered():
+    """Unregistered identity is refused and named not registered."""
     api = FakeBotApiClient(users={})
 
     result = _run(resolve_caller(api, "stranger"))
@@ -305,6 +335,7 @@ def test_unregistered_identity_is_refused_and_named_not_registered():
 
 
 def test_registered_viewer_resolves_with_viewer_level():
+    """Registered viewer resolves with viewer level."""
     api = FakeBotApiClient(users={"v1": "viewer"})
 
     result = _run(resolve_caller(api, "v1"))
@@ -314,6 +345,7 @@ def test_registered_viewer_resolves_with_viewer_level():
 
 
 def test_registered_commander_resolves_with_commander_level():
+    """Registered commander resolves with commander level."""
     api = FakeBotApiClient(users={"c1": "commander"})
 
     result = _run(resolve_caller(api, "c1"))
@@ -323,11 +355,13 @@ def test_registered_commander_resolves_with_commander_level():
 
 
 def test_check_permission_allows_when_the_operation_is_authorized():
+    """Check permission allows when the operation is authorized."""
     caller = CallerContext(telegram_identity="c1", level=PermissionLevel.COMMANDER)
     assert check_permission(caller, RequestedOperation.APPROVE_RUN) is None
 
 
 def test_check_permission_refuses_and_names_the_operation():
+    """Check permission refuses and names the operation."""
     caller = CallerContext(telegram_identity="v1", level=PermissionLevel.VIEWER)
 
     refusal = check_permission(caller, RequestedOperation.APPROVE_RUN)
@@ -339,9 +373,10 @@ def test_check_permission_refuses_and_names_the_operation():
 
 
 def test_check_permission_matches_is_permitted_for_every_operation_and_level():
-    # docs/Next_Plan.md §6 success criteria: bot permission checks must agree
+    # Success criteria: bot permission checks must agree
     # with the shared authorization function the API boundary also uses —
     # no separate policy is duplicated in the bot.
+    """Check permission matches is permitted for every operation and level."""
     for level in (PermissionLevel.VIEWER, PermissionLevel.COMMANDER):
         caller = CallerContext(telegram_identity="x", level=level)
         for operation in RequestedOperation:
@@ -350,12 +385,14 @@ def test_check_permission_matches_is_permitted_for_every_operation_and_level():
 
 
 def test_check_permission_never_refuses_a_commander():
+    """Check permission never refuses a commander."""
     caller = CallerContext(telegram_identity="c1", level=PermissionLevel.COMMANDER)
     for operation in RequestedOperation:
         assert check_permission(caller, operation) is None
 
 
 def test_no_user_management_capability_exists_in_users_module():
+    """No user management capability exists in users module."""
     forbidden_names = {"add_user", "write_user", "remove_user", "delete_user", "change_user", "list_users"}
     assert forbidden_names.isdisjoint(dir(users))
 
@@ -364,4 +401,5 @@ def test_no_user_management_command_is_registered_by_the_bot():
     # §8.2: "Provide no command that adds, changes, or removes a user, and
     # no command that reports the user list." bot.app registers exactly
     # /profile and /settings — neither manages users.
+    """No user management command is registered by the bot."""
     assert app.REGISTERED_COMMANDS == ("profile", "settings")

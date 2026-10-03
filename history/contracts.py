@@ -5,11 +5,15 @@ from typing import Literal
 
 
 class ExtractionExecutionError(Exception):
+    """The extraction model call failed before a payload could be stored."""
+
     pass
 
 
 @dataclass(frozen=True)
 class ExtractionResult:
+    """Normalized fields taken from one report, with unknowns left empty."""
+
     classification: str | None
     classification_status: str
     area: str | None
@@ -19,9 +23,7 @@ class ExtractionResult:
     occurred_at: str | None
     occurred_at_is_fallback: bool
     missing_fields: tuple[str, ...]
-    # Availability fields (Stage 3, docs/bar_improves.md) — nullable like
-    # every other extracted field; kept unknown rather than guessed when the
-    # reporter did not state them.
+    # Availability is nullable like every other extracted field; never guessed.
     availability_start: str | None = None
     availability_end: str | None = None
     absence_reason: str | None = None
@@ -29,6 +31,8 @@ class ExtractionResult:
 
 @dataclass(frozen=True)
 class InitialEventEnvelope:
+    """InitialEventEnvelope."""
+
     raw_text: str
     source: str
     received_at: str
@@ -55,6 +59,8 @@ class InitialEventEnvelope:
 
 @dataclass(frozen=True)
 class StepExecutionEnvelope:
+    """StepExecutionEnvelope."""
+
     step_index: int
     agent_name: str
     task_text: str
@@ -71,6 +77,8 @@ class StepExecutionEnvelope:
 
 @dataclass(frozen=True)
 class RetrievedSource:
+    """RetrievedSource."""
+
     level: str
     period_start: str
     period_end: str
@@ -81,6 +89,8 @@ class RetrievedSource:
 
 @dataclass(frozen=True)
 class PrecedentMatch:
+    """PrecedentMatch."""
+
     event_id: str
     classification: str
     area: str
@@ -95,6 +105,8 @@ class HistoryQueryError(Exception):
     """A history lookup could not be completed. Callers check `empty`, not the message text."""
 
     def __init__(self, message: str = "", *, empty: bool = False):
+        """Init."""
+
         super().__init__(message)
         self.empty = empty
 
@@ -135,6 +147,8 @@ class HistoryQuerySpec:
 
 @dataclass(frozen=True)
 class HistorySearchResult:
+    """HistorySearchResult."""
+
     events: tuple[dict, ...] = ()
     total_count: int = 0
     aggregates: tuple[dict, ...] = ()
@@ -143,6 +157,8 @@ class HistorySearchResult:
 
 @dataclass(frozen=True)
 class HistorySource:
+    """HistorySource."""
+
     level: str
     period_start: str
     period_end: str
@@ -151,6 +167,8 @@ class HistorySource:
 
 @dataclass(frozen=True)
 class HistoryAnswer:
+    """HistoryAnswer."""
+
     answer: str
     sources_used: tuple[HistorySource, ...]
     time_start: str | None
@@ -161,13 +179,14 @@ class HistoryAnswer:
 
 
 class SummaryGenerationError(Exception):
+    """SummaryGenerationError."""
+
     pass
 
 
 @dataclass(frozen=True)
 class EventFieldDefinition:
-    """English meaning of one persisted event field, for response generation only —
-    never persistence schema (docs/Next_Plan.md §4.6, §9)."""
+    """English meaning of one persisted event field, for response generation only."""
 
     key: str
     label: str

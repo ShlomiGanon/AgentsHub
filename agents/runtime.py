@@ -1,83 +1,83 @@
-"""The CrewAI adapter (work_plan.md §3.5, §3.6, §3.10)."""
+"""CrewAI adapter: agent instances, exact-result capture, and the registry.
 
-import hashlib
-import inspect
-import json
-import logging
+LLM cache and kickoff helpers live in runtime_llm / runtime_invoke and are
+re-exported here so `import agents.runtime` stays stable.
+"""
+
+from __future__ import annotations
+
 import threading
 import time
 import uuid
-from collections import OrderedDict
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
-from functools import lru_cache, wraps
+from functools import wraps
 from typing import Callable
 
 from agents.contracts import (
     AgentDescriptor,
-    AgentFrameworkNotReadyError,
     AgentInvocationError,
     InvocationPolicy,
-    provider_capabilities,
-    AgentModelError,
-    AgentOutputParseError,
     AgentResult,
-    AgentTimeoutError,
-    AgentToolConstructionError,
-    AgentWarmupError,
     ToolInfo,
     ToolResult,
-    UNCLEAR_TASK_PROMPT_INSTRUCTION,
     exposed_tools_for,
     parse_agent_output,
+    provider_capabilities,
     tool,
     tool_info_of,
 )
-from agents.provider_telemetry import track_provider_finish_reasons
 from agents.invocation_context import (
     current_invocation_id, current_invocation_agent, invocation_scope,
     record_finished_invocation_id, record_invocation_tool,
 )
-from tools import deep_debug_enabled, get_current_stage, get_trace_id, log_ai_interaction, stage_context, trace_context
+from agents.runtime_invoke import (
+    _build_crewai_tools,
+    _checkin_crewai_agent,
+    _checkout_crewai_agent,
+    _clear_agent_cache,
+    _run_crewai_kickoff,
+    configure_invocation_limits,
+    configure_provider_concurrency,
+    initialize_agent_runtime,
+    invoke,
+    set_invocation_deadline,
+)
+from agents.runtime_llm import (
+    _build_or_reuse_llm,
+    _clear_llm_cache,
+    _get_crewai,
+    _import_crewai,
+    _llm_cache,
+    _llm_cache_key,
+    _llm_options,
+    configure_structured_output_mode,
+)
+from tools import get_trace_id, trace_context
 from tools.log_events import (
     agent_invocation_finished,
     agent_invocation_started,
-    model_invocation_finished,
-    model_warmup_finished,
-    model_warmup_started,
     tool_blocked,
     tool_call,
 )
 
-logger = logging.getLogger(__name__)
-
 _REQUIRED_CLASS_ATTRS = ("name", "role", "system_prompt")
 _current_allowed_tools: ContextVar[frozenset | None] = ContextVar("current_allowed_tools", default=None)
-_invocation_deadline: ContextVar[float | None] = ContextVar("invocation_deadline", default=None)
 _authenticated_request_identity: ContextVar[str | None] = ContextVar(
     "authenticated_request_identity", default=None
 )
-_tool_class_cache: dict[tuple[type, str, str, int], type] = {}
-_tool_class_cache_lock = threading.Lock()
-_llm_cache: "OrderedDict[tuple[str, str, str], object]" = OrderedDict()
-_llm_cache_lock = threading.Lock()
-_LLM_CACHE_MAX_SIZE = 32
-_AGENT_CACHE_MAX_SIZE = 32
-_agent_pool: "OrderedDict[tuple, list]" = OrderedDict()
-_agent_pool_lock = threading.Lock()
-_AGENT_POOL_PER_KEY = 4
-_provider_semaphore = threading.BoundedSemaphore(8)
-_structured_output_mode = "off"
-_max_iter = 8
-_model_timeout_seconds = 30.0
 
 
 def get_authenticated_request_identity() -> str | None:
+    """Return the request identity bound for the current agent invocation, if any."""
+
     return _authenticated_request_identity.get()
 
 
 @contextmanager
 def authenticated_request_identity(identity: str):
+    """Bind the authenticated caller identity for the duration of one request."""
+
     token = _authenticated_request_identity.set(identity)
     try:
         yield
@@ -109,6 +109,8 @@ class ExactResultCapture:
     """
 
     def __init__(self, namespace: str):
+        """Create an isolated capture namespace identified in traces by `namespace`."""
+
         self._context_var: ContextVar[str | None] = ContextVar(f"exact_result_capture[{namespace}]", default=None)
         self._results: dict[str, tuple[str, bool]] = {}
         self._lock = threading.Lock()
@@ -129,9 +131,7 @@ class ExactResultCapture:
         *,
         invocation_policy: "InvocationPolicy | None" = None,
     ) -> "AgentResult":
-        """Call from a `process()` override in place of calling `base_process` (typically
-        `super().process`) directly — returns whatever a `.capture(...)` call recorded during
-        this invocation instead of `base_process`'s own result, when one was recorded."""
+        """Run `base_process` but return any `.capture(...)` text recorded during this call."""
 
         key = get_trace_id() or uuid.uuid4().hex
         token = self._context_var.set(key)
@@ -152,44 +152,14 @@ class ExactResultCapture:
 
 
 def make_exact_result_capture(namespace: str) -> ExactResultCapture:
-    """Build one `ExactResultCapture`, namespaced so its internal `ContextVar` name is unique
-    and identifiable in a debugger/traceback even though every instance's shape is identical."""
+    """Build one `ExactResultCapture` with a unique ContextVar name for debugging."""
 
     return ExactResultCapture(namespace)
 
 
-
-def configure_provider_concurrency(limit: int) -> None:
-    global _provider_semaphore
-    if not 1 <= limit <= 64:
-        raise ValueError("provider concurrency must be between 1 and 64")
-    _provider_semaphore = threading.BoundedSemaphore(limit)
-
-
-def configure_structured_output_mode(mode: str) -> None:
-    global _structured_output_mode
-    if mode not in {"off", "auto", "required"}:
-        raise ValueError("structured output mode must be off, auto, or required")
-    _structured_output_mode = mode
-
-
-def configure_invocation_limits(max_iter: int, model_timeout_seconds: float) -> None:
-    """Configure the profile-owned CrewAI iteration and provider timeout limits."""
-
-    global _max_iter, _model_timeout_seconds
-    if type(max_iter) is not int or not 1 <= max_iter <= 100:
-        raise ValueError("max_iter must be an integer between 1 and 100")
-    if not 0 < float(model_timeout_seconds) <= 600:
-        raise ValueError("model_timeout_seconds must be between 0 and 600")
-    _max_iter = max_iter
-    _model_timeout_seconds = float(model_timeout_seconds)
-
-
-def set_invocation_deadline(deadline_monotonic: float | None) -> None:
-    _invocation_deadline.set(deadline_monotonic)
-
-
 def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> Callable:
+    """Wrap a tool so disallowed calls are blocked and allowed calls are logged."""
+
     @wraps(bound_method)
     def _wrapped(*args, **kwargs):
         allowed = _current_allowed_tools.get()
@@ -228,12 +198,16 @@ def _wrap_tool(agent_name: str, bound_method: Callable, tool_info: ToolInfo) -> 
 
 
 class Agent:
+    """One specialist: class-level role/prompt plus wrapped tools and `process()`."""
+
     name: str = ""
     role: str = ""
     system_prompt: str = ""
     timeout_seconds: int = 60
 
     def __init__(self, model: str, api_key: str | None = None):
+        """Bind model credentials, wrap declared tools, and freeze the descriptor."""
+
         missing = [attribute for attribute in _REQUIRED_CLASS_ATTRS if not getattr(type(self), attribute, "")]
         if missing:
             raise TypeError(f"{type(self).__name__} must set class-level {', '.join(missing)}")
@@ -260,29 +234,21 @@ class Agent:
         )
 
     def exposed_tools(self) -> tuple[ToolInfo, ...]:
+        """Return the tools this agent advertised on its descriptor."""
+
         return self.descriptor.tools
 
     def signal_resource_unavailable(self, resource_kind: str, area: str, reason: str) -> None:
-        """Call from inside a resource-dispatch tool method, with the resource kind (e.g.
-        "drone", "camera", "police", "squad_member"), the area it was needed for, and why --
-        all three should already be plain facts the tool itself computed, not composed for a
-        reader.
+        """Record a dispatch shortage as instance state so a later tool thread can still see it.
 
-        Deliberately stored as plain instance state, not a `ContextVar` (unlike
-        `ExactResultCapture`, above): CrewAI's own tool-calling machinery does not guarantee it
-        runs a tool call in the same thread/task as the `Agent.process()` call that triggered
-        it, so a `ContextVar.set()` made inside the tool can silently fail to propagate back —
-        confirmed live (crewai 1.15.17, a real dispatch failure genuinely invoking the tool,
-        the resulting ContextVar read as unset after `process()` returned). `self` is the same
-        object regardless of which thread actually executed the tool call, so instance state
-        set here is always visible to `take_resource_unavailable_signal()`, called from the
-        same `self` right after `process()` returns."""
+        CrewAI may run the tool on a different thread than `process()`, so a
+        ContextVar set inside the tool would not reliably reach the caller.
+        """
 
         self._resource_unavailable_signal = (resource_kind, area, reason)
 
     def take_resource_unavailable_signal(self) -> "tuple[str, str, str] | None":
-        """Read-and-clear. Called once per step, right after that step's own tool-using call
-        finishes, so a later step's tool call can never leak into an earlier step's outcome."""
+        """Read and clear the shortage recorded by the latest tool call on this instance."""
 
         value = self._resource_unavailable_signal
         if value is not None:
@@ -290,6 +256,8 @@ class Agent:
         return value
 
     def process(self, text: str, allowed_tools: list[str], *, invocation_policy: InvocationPolicy | None = None) -> AgentResult:
+        """Run one invocation with only the allowed tools visible to the model."""
+
         allowed = frozenset(allowed_tools)
         exposed_by_name = {tool_info.name: tool_info for tool_info in self.descriptor.tools}
         unknown = sorted(allowed - exposed_by_name.keys())
@@ -375,495 +343,45 @@ class Agent:
             _current_allowed_tools.reset(token)
 
 
-@lru_cache(maxsize=1)
-def _import_crewai():
-    try:
-        import crewai
-        import crewai.tools
-    except ImportError as exc:
-        raise AgentFrameworkNotReadyError(
-            "framework",
-            "crewai is not installed in this environment yet — see requirements.txt",
-            trace_id=get_trace_id(),
-            cause=exc,
-        ) from exc
-
-    return crewai
-
-
-def _get_crewai():
-    crewai = _import_crewai()
-    from crewai.events.utils.console_formatter import set_suppress_console_output
-
-    set_suppress_console_output(True)
-    return crewai
-
-
-def _llm_options(
-    descriptor: AgentDescriptor,
-    *,
-    timeout_seconds: float,
-    invocation_policy: InvocationPolicy | None = None,
-) -> dict:
-    """Build request-safe CrewAI LLM options in one place."""
-
-    options = {
-        "model": descriptor.model,
-        "timeout": timeout_seconds,
-        # CrewAI's native OpenAI-compatible providers configure retries on the
-        # SDK client.  Putting this in ``additional_params`` would forward it
-        # to ``Completions.create`` as an invalid request parameter.
-        "max_retries": 0,
-    }
-    if descriptor.api_key:
-        options["api_key"] = descriptor.api_key
-    if invocation_policy is not None and invocation_policy.max_output_tokens is not None:
-        options["max_tokens"] = invocation_policy.max_output_tokens
-    if invocation_policy is not None and invocation_policy.reasoning_effort != "none":
-        options["reasoning_effort"] = invocation_policy.reasoning_effort
-    if invocation_policy is not None and invocation_policy.response_schema is not None and _structured_output_mode != "off":
-        capabilities = provider_capabilities(descriptor.model)
-        if capabilities.strict_json_schema:
-            schema_name = str(invocation_policy.response_schema.get("name", "agentshub_output"))
-            schema = invocation_policy.response_schema.get("schema", invocation_policy.response_schema)
-            options["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {"name": schema_name, "strict": True, "schema": schema},
-            }
-        elif _structured_output_mode == "required":
-            raise AgentModelError(
-                descriptor.name,
-                f"provider for {descriptor.model!r} does not support strict structured output",
-                trace_id=get_trace_id(),
-            )
-    return options
-
-
-def _llm_cache_key(descriptor: AgentDescriptor, options: dict) -> tuple[str, str, str]:
-    """Return a non-rendered key containing no reversible credential value."""
-
-    secret_identity = hashlib.sha256((descriptor.api_key or "").encode("utf-8")).hexdigest()
-    public_options = {key: value for key, value in options.items() if key != "api_key"}
-    option_identity = json.dumps(public_options, sort_keys=True, separators=(",", ":"), default=str)
-    return descriptor.model, secret_identity, option_identity
-
-
-def _build_or_reuse_llm(crewai_module, descriptor: AgentDescriptor, options: dict):
-    """Construct an isolated LLM unless its provider explicitly opts into reuse."""
-
-    if not provider_capabilities(descriptor.model).thread_safe_client:
-        return crewai_module.LLM(**options)
-
-    cache_key = _llm_cache_key(descriptor, options)
-    with _llm_cache_lock:
-        cached = _llm_cache.get(cache_key)
-        if cached is not None:
-            _llm_cache.move_to_end(cache_key)
-            return cached
-        llm = crewai_module.LLM(**options)
-        _llm_cache[cache_key] = llm
-        _llm_cache.move_to_end(cache_key)
-        while len(_llm_cache) > _LLM_CACHE_MAX_SIZE:
-            _llm_cache.popitem(last=False)
-        return llm
-
-
-def _clear_llm_cache() -> None:
-    """Test/process-lifecycle helper; normal process restart clears the cache."""
-
-    with _llm_cache_lock:
-        _llm_cache.clear()
-
-
-def _agent_cache_key(
-    descriptor: AgentDescriptor,
-    tool_names: tuple[str, ...],
-    crewai_timeout_seconds: int,
-    invocation_policy: InvocationPolicy | None,
-    llm: object,
-) -> tuple:
-    policy_key = ()
-    if invocation_policy is not None:
-        schema = invocation_policy.response_schema
-        policy_key = (
-            invocation_policy.max_output_tokens,
-            invocation_policy.timeout_seconds,
-            invocation_policy.reasoning_effort,
-            json.dumps(schema, sort_keys=True, default=str) if schema is not None else None,
-        )
-    return (
-        descriptor.name,
-        descriptor.model,
-        tool_names,
-        crewai_timeout_seconds,
-        policy_key,
-        id(llm),
-    )
-
-
-def _checkout_crewai_agent(cache_key: tuple, factory):
-    with _agent_pool_lock:
-        pool = _agent_pool.get(cache_key)
-        if pool:
-            agent = pool.pop()
-            _agent_pool.move_to_end(cache_key)
-            return agent, True
-    return factory(), False
-
-
-def _checkin_crewai_agent(cache_key: tuple, agent) -> None:
-    with _agent_pool_lock:
-        pool = _agent_pool.setdefault(cache_key, [])
-        if len(pool) < _AGENT_POOL_PER_KEY:
-            pool.append(agent)
-        _agent_pool.move_to_end(cache_key)
-        while len(_agent_pool) > _AGENT_CACHE_MAX_SIZE:
-            _agent_pool.popitem(last=False)
-
-
-def _clear_agent_cache() -> None:
-    """Test/process-lifecycle helper; normal process restart clears the cache."""
-
-    with _agent_pool_lock:
-        _agent_pool.clear()
-
-
-def initialize_agent_runtime(agents: tuple["Agent", ...] | list["Agent"]) -> tuple[str, ...]:
-    """Import CrewAI and verify each unique configured provider/model.
-
-    The verification is one real, deterministic, tool-free request per model.
-    It is called before queue workers and the HTTP listener start. Secrets are
-    never included in the returned identifiers, logs, or raised message.
-    """
-
-    crewai_module = _get_crewai()
-    unique_descriptors: dict[str, AgentDescriptor] = {}
-    for agent in agents:
-        unique_descriptors.setdefault(agent.descriptor.model, agent.descriptor)
-
-    warmed_models: list[str] = []
-    with trace_context() as startup_trace_id:
-        for model, descriptor in unique_descriptors.items():
-            provider = model.split("/", 1)[0]
-            started = time.monotonic()
-            model_warmup_started(provider=provider, model=model)
-            try:
-                with stage_context("warmup"):
-                    warmup_options = _llm_options(descriptor, timeout_seconds=_model_timeout_seconds)
-                    warmup_options.update({"max_tokens": 8, "temperature": 0})
-                    llm = _build_or_reuse_llm(crewai_module, descriptor, warmup_options)
-                    response = llm.call([{"role": "user", "content": "Reply with OK."}])
-                if not isinstance(response, str) or not response.strip():
-                    raise ValueError("provider returned an empty or non-text warmup response")
-            except Exception as exc:
-                model_warmup_finished(
-                    provider=provider,
-                    model=model,
-                    status="error",
-                    termination_reason=type(exc).__name__,
-                    latency_ms=round((time.monotonic() - started) * 1000, 3),
-                    level=logging.ERROR,
-                )
-                raise AgentWarmupError(
-                    "runtime",
-                    f"startup verification failed for configured model {model!r}",
-                    trace_id=startup_trace_id,
-                    cause=exc,
-                ) from exc
-            model_warmup_finished(
-                provider=provider,
-                model=model,
-                status="success",
-                termination_reason="completed",
-                latency_ms=round((time.monotonic() - started) * 1000, 3),
-            )
-            warmed_models.append(model)
-    return tuple(warmed_models)
-
-
-def _build_crewai_tools(crewai_module, agent_name: str, wrapped_tools: dict[str, Callable], tool_infos: tuple[ToolInfo, ...]) -> list:
-    base_tool_class = crewai_module.tools.BaseTool
-    built = []
-
-    for tool_info in tool_infos:
-        wrapped = wrapped_tools[tool_info.name]
-
-        def _run(self, *args, _wrapped=wrapped, **kwargs):
-            return _wrapped(*args, **kwargs)
-
-        # CrewAI derives tool schemas from this dynamic wrapper signature.
-        _run.__signature__ = inspect.Signature(
-            [inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD), *inspect.signature(wrapped).parameters.values()]
-        )
-
-        try:
-            cache_key = (base_tool_class, agent_name, tool_info.name, id(wrapped))
-            with _tool_class_cache_lock:
-                tool_class = _tool_class_cache.get(cache_key)
-                if tool_class is None:
-                    tool_class = type(
-                        f"_{agent_name}_{tool_info.name}_tool",
-                        (base_tool_class,),
-                        {
-                            "__annotations__": {"name": str, "description": str},
-                            "name": tool_info.name,
-                            "description": tool_info.description,
-                            "_run": _run,
-                        },
-                    )
-                    _tool_class_cache[cache_key] = tool_class
-            built.append(tool_class())
-        except Exception as exc:
-            raise AgentToolConstructionError(
-                agent_name, f"failed to build CrewAI tool '{tool_info.name}'", trace_id=get_trace_id(), cause=exc
-            ) from exc
-
-    return built
-
-
-def invoke(
-    descriptor: AgentDescriptor,
-    wrapped_tools: dict[str, Callable],
-    text: str,
-    timeout_seconds: int,
-    invocation_policy: InvocationPolicy | None = None,
-) -> str:
-    """Run one CrewAI kickoff for this descriptor and return the captured result text."""
-    setup_started = time.monotonic()
-    crewai_module = _get_crewai()
-    imported_at = time.monotonic()
-    crewai_tools = _build_crewai_tools(crewai_module, descriptor.name, wrapped_tools, descriptor.tools)
-    tools_built_at = time.monotonic()
-
-    backstory = f"{descriptor.system_prompt}\n\n{UNCLEAR_TASK_PROMPT_INSTRUCTION}"
-
-    effective_timeout = timeout_seconds
-    effective_timeout = min(effective_timeout, _model_timeout_seconds)
-    if invocation_policy is not None and invocation_policy.timeout_seconds is not None:
-        effective_timeout = min(effective_timeout, invocation_policy.timeout_seconds)
-    request_deadline = _invocation_deadline.get()
-    if request_deadline is not None:
-        remaining_seconds = request_deadline - time.monotonic()
-        if remaining_seconds <= 0:
-            raise AgentTimeoutError(
-                descriptor.name, "shared request deadline was exhausted before invocation", trace_id=get_trace_id()
-            )
-        effective_timeout = min(effective_timeout, remaining_seconds)
-
-    # CrewAI validates `max_execution_time` as an integer. Keep the precise
-    # floating-point timeout for deadline and semaphore accounting, but give
-    # CrewAI a whole number that never exceeds the remaining budget.
-    if effective_timeout < 1:
-        raise AgentTimeoutError(
-            descriptor.name,
-            "less than one second remains before the invocation deadline",
-            trace_id=get_trace_id(),
-        )
-    crewai_timeout_seconds = int(effective_timeout)
-
-    llm_options = _llm_options(
-        descriptor,
-        timeout_seconds=_model_timeout_seconds,
-        invocation_policy=invocation_policy,
-    )
-    llm = _build_or_reuse_llm(crewai_module, descriptor, llm_options)
-    llm_built_at = time.monotonic()
-
-    cache_key = _agent_cache_key(
-        descriptor,
-        tuple(sorted(wrapped_tools)),
-        crewai_timeout_seconds,
-        invocation_policy,
-        llm,
-    )
-
-    def _build_crewai_agent():
-        return crewai_module.Agent(
-            role=descriptor.role,
-            goal="Complete the task given, or state clearly what is missing if it cannot be completed.",
-            backstory=backstory,
-            llm=llm,
-            tools=crewai_tools,
-            max_iter=_max_iter,
-            max_retry_limit=0,
-            max_execution_time=crewai_timeout_seconds,
-            verbose=False,
-        )
-
-    crewai_agent, _cache_hit = _checkout_crewai_agent(cache_key, _build_crewai_agent)
-    agent_built_at = time.monotonic()
-
-    try:
-        return _run_crewai_kickoff(
-            descriptor,
-            wrapped_tools,
-            text,
-            crewai_agent,
-            backstory,
-            effective_timeout,
-            imported_at,
-            setup_started,
-            tools_built_at,
-            llm_built_at,
-            agent_built_at,
-        )
-    finally:
-        _checkin_crewai_agent(cache_key, crewai_agent)
-
-
-def _run_crewai_kickoff(
-    descriptor,
-    wrapped_tools,
-    text,
-    crewai_agent,
-    backstory,
-    effective_timeout,
-    imported_at,
-    setup_started,
-    tools_built_at,
-    llm_built_at,
-    agent_built_at,
-) -> str:
-    invocation_started_at = time.monotonic()
-    try:
-        acquired = _provider_semaphore.acquire(timeout=effective_timeout)
-        if not acquired:
-            raise TimeoutError("provider concurrency wait exceeded the invocation timeout")
-        try:
-            with track_provider_finish_reasons() as finish_reasons:
-                crewai_output = crewai_agent.kickoff(text)
-        finally:
-            _provider_semaphore.release()
-    except TimeoutError as exc:
-        model_invocation_finished(
-            agent=descriptor.name,
-            invocation_id=current_invocation_id(),
-            model=descriptor.model,
-            provider=descriptor.model.split("/", 1)[0],
-            status="error",
-            termination_reason="timeout",
-            timeout_seconds=effective_timeout,
-            latency_ms=round((time.monotonic() - invocation_started_at) * 1000, 3),
-        )
-        raise AgentTimeoutError(
-            descriptor.name, f"timed out after {effective_timeout}s", trace_id=get_trace_id(), cause=exc
-        ) from exc
-    except Exception as exc:
-        model_invocation_finished(
-            agent=descriptor.name,
-            invocation_id=current_invocation_id(),
-            model=descriptor.model,
-            provider=descriptor.model.split("/", 1)[0],
-            status="error",
-            termination_reason=type(exc).__name__,
-            timeout_seconds=effective_timeout,
-            latency_ms=round((time.monotonic() - invocation_started_at) * 1000, 3),
-        )
-        raise AgentModelError(descriptor.name, "the model call failed", trace_id=get_trace_id(), cause=exc) from exc
-
-    # A write-capable specialist may already have committed its tool result.
-    # Do not turn that verified write into an apparent failed action merely
-    # because CrewAI's final prose was cut short.  The read-only answer paths
-    # can safely reject incomplete text and use their existing fallback.
-    has_write_tool = any(info.side_effecting for info in descriptor.tools if info.name in wrapped_tools)
-    if finish_reasons and finish_reasons[-1] == "length" and not has_write_tool:
-        model_invocation_finished(
-            agent=descriptor.name,
-            invocation_id=current_invocation_id(),
-            model=descriptor.model,
-            provider=descriptor.model.split("/", 1)[0],
-            status="error",
-            termination_reason="length",
-            latency_ms=round((time.monotonic() - invocation_started_at) * 1000, 3),
-        )
-        raise AgentOutputParseError(
-            descriptor.name, "the model's final response was cut off at its output limit", trace_id=get_trace_id()
-        )
-
-    raw_text = getattr(crewai_output, "raw", None)
-    if raw_text is None:
-        raise AgentOutputParseError(
-            descriptor.name, f"could not extract text from CrewAI output: {crewai_output!r}", trace_id=get_trace_id()
-        )
-
-    if deep_debug_enabled():
-        interaction_payload = json.dumps(
-            {
-                "role": descriptor.role,
-                "goal": "Complete the task given, or state clearly what is missing if it cannot be completed.",
-                "backstory": backstory,
-                "model": descriptor.model,
-                "tools": [info.name for info in descriptor.tools],
-                "kickoff_text": text,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        )
-        log_ai_interaction(descriptor.name, interaction_payload, raw_text, stage=get_current_stage(), trace_id=get_trace_id())
-
-    usage = getattr(crewai_output, "token_usage", None)
-    def _usage_value(*names: str):
-        for name in names:
-            value = getattr(usage, name, None)
-            if value is not None:
-                return value
-            if isinstance(usage, dict) and name in usage:
-                return usage[name]
-        return None
-
-    model_invocation_finished(
-        agent=descriptor.name,
-        invocation_id=current_invocation_id(),
-        model=descriptor.model,
-        provider=descriptor.model.split("/", 1)[0],
-        status="success",
-        termination_reason="completed",
-        timeout_seconds=effective_timeout,
-        ttft_seconds=getattr(crewai_output, "ttft_seconds", None),
-        input_tokens=_usage_value("prompt_tokens", "input_tokens"),
-        output_tokens=_usage_value("completion_tokens", "output_tokens"),
-        cache_tokens=_usage_value("cached_tokens", "cache_read_tokens"),
-        total_tokens=_usage_value("total_tokens"),
-        latency_ms=round((time.monotonic() - invocation_started_at) * 1000, 3),
-        runtime_import_seconds=imported_at - setup_started,
-        runtime_tools_seconds=tools_built_at - imported_at,
-        runtime_llm_seconds=llm_built_at - tools_built_at,
-        runtime_agent_seconds=agent_built_at - llm_built_at,
-        runtime_kickoff_seconds=time.monotonic() - agent_built_at,
-    )
-    return raw_text
-
-
 class DuplicateAgentNameError(Exception):
     """Raised when two runtime agents share a registry name."""
 
 
 class AgentRegistry:
+    """Lookup table of named Agent instances for one loaded profile."""
+
     def __init__(self, agents: dict[str, Agent]):
+        """Store the mapping used by `get`, `all`, and `restricted_to`."""
+
         self._agents = agents
 
     def get(self, name: str) -> Agent:
+        """Return the registered agent or raise KeyError with a stable message."""
+
         try:
             return self._agents[name]
         except KeyError:
             raise KeyError(f"no agent registered under '{name}'") from None
 
     def all(self) -> tuple[Agent, ...]:
+        """Return every registered agent in insertion order."""
+
         return tuple(self._agents.values())
 
     def descriptor_for(self, name: str) -> AgentDescriptor:
+        """Return the frozen descriptor for one registered agent."""
+
         return self.get(name).descriptor
 
     def restricted_to(self, names: "set[str] | frozenset[str]") -> "AgentRegistry":
-        """A registry view over the subset of agents whose names are in `names`.
-
-        Unknown names are ignored; the underlying Agent instances are shared,
-        not copied, so tool state and provider clients stay the same."""
+        """Return a view over the named agents, sharing the same instances."""
 
         return AgentRegistry({name: agent for name, agent in self._agents.items() if name in names})
 
 
 def build_agent_registry(core_agents: dict[str, Agent], profile_agents: list[Agent]) -> AgentRegistry:
+    """Merge core and profile agents, rejecting a duplicate registry name."""
+
     agents: dict[str, Agent] = {}
 
     for agent in [*core_agents.values(), *profile_agents]:
@@ -872,3 +390,23 @@ def build_agent_registry(core_agents: dict[str, Agent], profile_agents: list[Age
         agents[agent.name] = agent
 
     return AgentRegistry(agents)
+
+
+__all__ = [
+    "Agent",
+    "AgentRegistry",
+    "DuplicateAgentNameError",
+    "ExactResultCapture",
+    "authenticated_request_identity",
+    "build_agent_registry",
+    "configure_invocation_limits",
+    "configure_provider_concurrency",
+    "configure_structured_output_mode",
+    "get_authenticated_request_identity",
+    "initialize_agent_runtime",
+    "invoke",
+    "make_exact_result_capture",
+    "provider_capabilities",
+    "set_invocation_deadline",
+    "tool",
+]

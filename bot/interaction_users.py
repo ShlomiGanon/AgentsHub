@@ -66,7 +66,7 @@ async def resolve_caller(
 def check_permission(
     caller: CallerContext, operation: RequestedOperation, catalog: MessageCatalog | None = None
 ) -> str | None:
-    """None when `caller` may perform `operation`; otherwise a message naming the refused operation — never a silent no-op (§8.2: "A silent no-op leaves a commander believing they approved s..."""
+    """None when `caller` may perform `operation`; otherwise a refusal message, never a silent no-op."""
 
     if is_permitted(caller.level, operation):
         return None

@@ -17,6 +17,8 @@ class SurveillancePersistenceError(Exception):
 
 @dataclass(frozen=True)
 class CameraInfo:
+    """One cameras row as a typed snapshot."""
+
     camera_id: str
     name: str
     area: str
@@ -28,6 +30,8 @@ class CameraInfo:
 
 @dataclass(frozen=True)
 class DroneInfo:
+    """One drones row as a typed snapshot."""
+
     drone_id: str
     callsign: str
     model: str
@@ -40,6 +44,8 @@ class DroneInfo:
 
 @dataclass(frozen=True)
 class DroneMission:
+    """One drone_missions row as a typed snapshot."""
+
     mission_id: str
     drone_id: str
     target_area: str
@@ -54,22 +60,29 @@ class DroneMission:
 
 
 class SurveillancePersistenceInterface(ABC):
-    @abstractmethod
-    def list_cameras(self, area: str | None = None, status: str | None = None) -> list[dict]: ...
+    """Contract for camera, drone, and mission rows on a dedicated surveillance database."""
 
     @abstractmethod
-    def get_camera(self, camera_id: str) -> dict | None: ...
+    def list_cameras(self, area: str | None = None, status: str | None = None) -> list[dict]:
+        """Return cameras rows, optionally filtered by area and status."""
+
+    @abstractmethod
+    def get_camera(self, camera_id: str) -> dict | None:
+        """Return one cameras row, or None."""
 
     @abstractmethod
     def update_camera_feed(
         self, camera_id: str, feed_summary: str, status: str | None = None, updated_at: str | None = None
-    ) -> dict: ...
+    ) -> dict:
+        """Write feed_summary and optional status on a cameras row."""
 
     @abstractmethod
-    def list_drones(self, status: str | None = None) -> list[dict]: ...
+    def list_drones(self, status: str | None = None) -> list[dict]:
+        """Return drones rows, optionally filtered by status."""
 
     @abstractmethod
-    def get_drone(self, drone_id: str) -> dict | None: ...
+    def get_drone(self, drone_id: str) -> dict | None:
+        """Return one drones row, or None."""
 
     @abstractmethod
     def dispatch_drone(
@@ -81,16 +94,20 @@ class SurveillancePersistenceInterface(ABC):
         dispatched_by: str = "commander",
         specific_drone_id: str | None = None,
         now_iso: str | None = None,
-    ) -> dict: ...
+    ) -> dict:
+        """Create a mission and mark the chosen ready drone in_flight."""
 
     @abstractmethod
-    def get_active_missions(self) -> list[dict]: ...
+    def get_active_missions(self) -> list[dict]:
+        """Return in-progress drone_missions rows joined with drone details."""
 
     @abstractmethod
-    def recall_drone(self, identifier: str | None = None, now_iso: str | None = None) -> dict: ...
+    def recall_drone(self, identifier: str | None = None, now_iso: str | None = None) -> dict:
+        """Abort exactly one active mission and return that drone to its home area."""
 
     @abstractmethod
-    def recall_all_drones(self, now_iso: str | None = None) -> dict: ...
+    def recall_all_drones(self, now_iso: str | None = None) -> dict:
+        """Abort every active mission and return those drones to the home area."""
 
     @abstractmethod
     def update_mission_status(
@@ -99,13 +116,17 @@ class SurveillancePersistenceInterface(ABC):
         status: MissionStatus,
         notes: str | None = None,
         updated_at: str | None = None,
-    ) -> dict: ...
+    ) -> dict:
+        """Write a drone_missions status and free the drone when the mission ends."""
 
     @abstractmethod
-    def surveillance_overview(self, area: str | None = None) -> dict: ...
+    def surveillance_overview(self, area: str | None = None) -> dict:
+        """Return cameras, drones, and active missions plus counts for one area or all."""
 
 
 def open_surveillance_persistence(db_path: str) -> SurveillancePersistenceInterface:
+    """Construct the dedicated surveillance store for this database path."""
+
     from persistence.surveillance_store import SQLiteSurveillancePersistence
 
     return SQLiteSurveillancePersistence(db_path)

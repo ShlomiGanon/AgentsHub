@@ -1,5 +1,5 @@
 """Server-side JSON adapter: profile-declared simulations -> the existing
-admin-simulator scenario JSON contract (docs/profile_simulations_design.md).
+admin-simulator scenario JSON contract the browser already loads.
 
 Pure logic, no Flask — the conversion is kept separate from the Flask routes
 that serve it. `api/routes.py`'s simulations blueprint (`GET /Simulations`,

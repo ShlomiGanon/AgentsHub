@@ -1,3 +1,5 @@
+"""System overview and settings HTTP routes."""
+
 import importlib
 import sys
 import types
@@ -33,11 +35,13 @@ MODEL_CREDENTIAL_ENVS = []
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch)
 
 
 @pytest.fixture
 def hashable_profile_module(tmp_path, monkeypatch):
+    """Hashable profile module."""
     module_name = f"api_system_test_profile_{uuid.uuid4().hex}"
     content = _PROFILE_TEMPLATE.format(db_path=str(tmp_path / "test.db"))
     path = tmp_path / f"{module_name}.py"
@@ -49,10 +53,11 @@ def hashable_profile_module(tmp_path, monkeypatch):
 
 
 def test_get_system_reports_profile_agents_protocols_types_areas(tmp_path, teardown_ctx):
-    # docs/Next_Plan.md §5 decision record: agents/protocols are part of
+    # Decision record: agents/protocols are part of
     # view_system_internals, commander-only — a viewer's GET /SYSTEM no
     # longer includes them (see test_get_system_viewer_response_omits_...
     # below for the viewer-side assertion).
+    """Get system reports profile agents protocols types areas."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -73,6 +78,7 @@ def test_get_system_protocol_summary_matches_get_protocols_full_shape(tmp_path, 
     # and criticality, not just name/approval_flag — confirm GET /SYSTEM's
     # protocol entries carry the same fields GET /Protocol's do, so a
     # caller never needs to compose both endpoints for one protocol view.
+    """Get system protocol summary matches get protocols full shape."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -91,6 +97,7 @@ def test_get_system_protocol_summary_matches_get_protocols_full_shape(tmp_path, 
 
 
 def test_get_system_reports_queued_and_held_counts(tmp_path, teardown_ctx):
+    """Get system reports queued and held counts."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -105,6 +112,7 @@ def test_get_system_reports_queued_and_held_counts(tmp_path, teardown_ctx):
 
 
 def test_get_system_reports_the_scheduler_status(tmp_path, teardown_ctx):
+    """Get system reports the scheduler status."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -115,6 +123,7 @@ def test_get_system_reports_the_scheduler_status(tmp_path, teardown_ctx):
 
 
 def test_get_system_reports_current_settings(tmp_path, teardown_ctx):
+    """Get system reports current settings."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -129,10 +138,11 @@ def test_get_system_reports_current_settings(tmp_path, teardown_ctx):
 
 
 def test_get_system_viewer_response_omits_internals_and_settings(tmp_path, teardown_ctx):
-    # docs/Next_Plan.md §5 decision record: view_profile_overview (viewer)
+    # Decision record: view_profile_overview (viewer)
     # gets identity/event_types/areas/profile_file_changed only — agents,
     # protocols, scheduler, queue/held counts, and settings are absent
     # entirely, not present as empty hints.
+    """Get system viewer response omits internals and settings."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -150,6 +160,7 @@ def test_get_system_viewer_response_omits_internals_and_settings(tmp_path, teard
 
 
 def test_get_system_reports_no_pending_profile_change_when_the_file_is_untouched(tmp_path, teardown_ctx, hashable_profile_module):
+    """Get system reports no pending profile change when the file is untouched."""
     module_name, _path = hashable_profile_module
     ctx = build_context(tmp_path, module_path=module_name)
     teardown_ctx.append(ctx)
@@ -161,6 +172,7 @@ def test_get_system_reports_no_pending_profile_change_when_the_file_is_untouched
 
 
 def test_get_system_reports_a_pending_profile_change_after_the_file_is_edited(tmp_path, teardown_ctx, hashable_profile_module):
+    """Get system reports a pending profile change after the file is edited."""
     module_name, path = hashable_profile_module
     ctx = build_context(tmp_path, module_path=module_name)
     teardown_ctx.append(ctx)
@@ -175,6 +187,7 @@ def test_get_system_reports_a_pending_profile_change_after_the_file_is_edited(tm
 
 
 def test_get_system_requires_authentication(tmp_path, teardown_ctx):
+    """Get system requires authentication."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -185,6 +198,7 @@ def test_get_system_requires_authentication(tmp_path, teardown_ctx):
 
 
 def test_put_system_accepts_a_partial_body_and_writes_before_responding(tmp_path, teardown_ctx):
+    """Put system accepts a partial body and writes before responding."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -199,6 +213,7 @@ def test_put_system_accepts_a_partial_body_and_writes_before_responding(tmp_path
 
 
 def test_put_system_rejects_a_profile_owned_field_by_name(tmp_path, teardown_ctx):
+    """Put system rejects a profile owned field by name."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -212,6 +227,7 @@ def test_put_system_rejects_a_profile_owned_field_by_name(tmp_path, teardown_ctx
 
 @pytest.mark.parametrize("field,value", [("retry_count", -1), ("risk_threshold", 1.5), ("risk_threshold", -0.1), ("lookback_window_days", 0)])
 def test_put_system_rejects_invalid_values(tmp_path, teardown_ctx, field, value):
+    """Put system rejects invalid values."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -223,6 +239,7 @@ def test_put_system_rejects_invalid_values(tmp_path, teardown_ctx, field, value)
 
 
 def test_put_system_toggles_rich_reports_enabled(tmp_path, teardown_ctx):
+    """Put system toggles rich reports enabled."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -235,6 +252,7 @@ def test_put_system_toggles_rich_reports_enabled(tmp_path, teardown_ctx):
 
 
 def test_put_system_rejects_a_non_boolean_rich_reports_enabled(tmp_path, teardown_ctx):
+    """Put system rejects a non boolean rich reports enabled."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -246,8 +264,9 @@ def test_put_system_rejects_a_non_boolean_rich_reports_enabled(tmp_path, teardow
 
 
 def test_put_system_accepts_a_zero_retry_count(tmp_path, teardown_ctx):
-    # Only negative is invalid per work_plan.md §7.8's own wording; zero
+    # Only negative is invalid per's own wording; zero
     # retries ("try once, never retry") is a legitimate operator choice.
+    """Put system accepts a zero retry count."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -259,6 +278,7 @@ def test_put_system_accepts_a_zero_retry_count(tmp_path, teardown_ctx):
 
 
 def test_put_system_requires_commander_level(tmp_path, teardown_ctx):
+    """Put system requires commander level."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()

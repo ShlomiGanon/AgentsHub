@@ -1,20 +1,11 @@
-"""Fire and Rescue (FIRE) specialist agents (docs/bar_improves.md Stage 4): station-crew
-dispatch, mutual-aid requests, and hazmat assessment requests.
-
-No external system integration in this task: every side-effecting tool here records what
-it did and returns a precise text result stating only the tool's own recorded effect —
-never an unobserved real-world outcome. That result is persisted by the existing
-step-execution recording, which is what makes the request durable and readable later.
-
-`DispatchAgent.MUTUAL_AID_RESOURCES` defaults to empty (nothing accepted) so this shared
-agent class carries no domain-specific resource names of its own — a profile binds it by
-subclassing and setting the class attribute to its own profile-level constant, the same
-pattern profiles/standby_squad.py already uses for e.g. `surveillance_db_path`."""
+"""Shared fire-station dispatch and hazmat agents; tools only record requested actions."""
 
 from agents.runtime import Agent, tool
 
 
 class DispatchAgent(Agent):
+    """Records station-crew and mutual-aid requests; a profile supplies recognized resources."""
+
     name = "dispatch_agent"
     role = (
         "The fire station's dispatch specialist: records requests to dispatch the station's "
@@ -32,11 +23,12 @@ class DispatchAgent(Agent):
         "deployed."
     )
 
-    # Overridden by a profile-specific subclass; empty here means this shared class accepts
-    # no resource name on its own (docs/bar_improves.md Stage 4b).
+    # Empty here so the shared class accepts no resource until a profile subclass fills this.
     MUTUAL_AID_RESOURCES: tuple[str, ...] = ()
 
     def __init__(self, model: str, api_key: str | None = None):
+        """Initialize in-memory request logs, then finish the shared Agent setup."""
+
         self.crew_dispatches: list[str] = []
         self.mutual_aid_requests: list[str] = []
         super().__init__(model, api_key)
@@ -49,6 +41,8 @@ class DispatchAgent(Agent):
         idempotent=False,
     )
     def dispatch_station_crew(self, area: str, note: str = "") -> str:
+        """Record a request to send this station's own crew to `area`."""
+
         record = f"{area}: {note}" if note else area
         self.crew_dispatches.append(record)
         return f"station crew dispatch request recorded for '{area}'"
@@ -63,6 +57,8 @@ class DispatchAgent(Agent):
         idempotent=False,
     )
     def request_mutual_aid(self, resource_name: str, area: str = "", note: str = "") -> str:
+        """Record a mutual-aid request only when `resource_name` is on the profile list."""
+
         recognized = type(self).MUTUAL_AID_RESOURCES
         normalized = resource_name.strip().upper()
         if normalized not in recognized:
@@ -81,6 +77,8 @@ class DispatchAgent(Agent):
 
 
 class HazmatAgent(Agent):
+    """Records hazmat-assessment requests; it never claims a real assessment ran."""
+
     name = "hazmat_agent"
     role = (
         "The fire station's hazardous-materials specialist: records requests for a hazmat "
@@ -95,6 +93,8 @@ class HazmatAgent(Agent):
     )
 
     def __init__(self, model: str, api_key: str | None = None):
+        """Initialize the in-memory assessment log, then finish Agent setup."""
+
         self.assessment_requests: list[str] = []
         super().__init__(model, api_key)
 
@@ -106,6 +106,8 @@ class HazmatAgent(Agent):
         idempotent=False,
     )
     def request_hazmat_assessment(self, area: str, note: str = "") -> str:
+        """Record that a hazmat assessment was requested at `area`."""
+
         record = f"{area}: {note}" if note else area
         self.assessment_requests.append(record)
         return f"hazmat assessment request recorded for '{area}'"

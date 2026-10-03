@@ -1,4 +1,4 @@
-"""Provisioning for a profile's declared simulation users/groups (docs/profile_simulations_design.md).
+"""Provisioning for a profile's declared simulation users and groups.
 
 `ensure_simulation_entities` is the one shared, idempotent routine covering
 both simulation users and simulation groups — the "unified provisioning
@@ -11,8 +11,8 @@ both, the same way `persistence.register_telegram_user_if_missing` and
 methods sharing one idiom rather than one merged method.
 
 Called once, from `api.app.build_context`, right after `persistence` opens —
-the one place a profile actually becomes a running server (work_plan.md's
-"profile load"). Never touches an entity that already exists, so an
+the one place a profile actually becomes a running server. Never touches
+an entity that already exists, so an
 operator's later edits (a simulation user's full name, a simulation group's
 label or promoted chat ID) survive every subsequent restart.
 """
@@ -30,6 +30,8 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ProvisioningResult:
+    """ProvisioningResult."""
+
     created_users: tuple[str, ...]
     created_groups: tuple[str, ...]
     registered_roster_members: tuple[tuple[str, str], ...] = ()
@@ -89,8 +91,7 @@ def ensure_simulation_entities(persistence: "PersistenceInterface", loaded_profi
 
 
 def _run_operational_seed(loaded_profile: "LoadedProfile") -> None:
-    """Optional extension point (docs/responce_improve.md's provisioning
-    stage): a profile module may declare a module-level `OPERATIONAL_SEED`
+    """Optional extension point: a profile module may declare a module-level `OPERATIONAL_SEED`
     callable (no arguments) doing its own "create if missing, never touch if
     present" seeding of profile-owned operational state that isn't a
     simulation user/group/roster -- e.g. `profiles.response_team`'s

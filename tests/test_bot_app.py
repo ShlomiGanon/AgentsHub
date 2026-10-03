@@ -21,16 +21,19 @@ def _fresh_bot_caches():
     # bot.app's caller/group caches are keyed by id(api_client); a freed fake
     # client's id can be reused by the next test's fake, so a stale cached
     # resolution from one test must never leak into another.
+    """Fresh bot caches."""
     app.clear_caller_cache()
     yield
     app.clear_caller_cache()
 
 
 def _run(coro):
+    """Run."""
     return asyncio.run(coro)
 
 
 def _write_and_load_test_profile(tmp_path, monkeypatch, module_name="test_app_profile"):
+    """Write and load test profile."""
     monkeypatch.setenv(BOT_TOKEN_ENV, "the-real-token")
     monkeypatch.setenv(MODEL_CRED_ENV, "cred")
     write_profile_module(tmp_path, monkeypatch, module_name, bot_token_env=BOT_TOKEN_ENV, model_cred_env=MODEL_CRED_ENV)
@@ -41,6 +44,7 @@ def _write_and_load_test_profile(tmp_path, monkeypatch, module_name="test_app_pr
 
 
 def test_build_deps_resolves_the_already_loaded_token_and_port(tmp_path, monkeypatch, test_core_model, test_sub_model):
+    """Build deps resolves the already loaded token and port."""
     module_name = _write_and_load_test_profile(tmp_path, monkeypatch)
 
     deps = app.build_deps(module_name, core_model=test_core_model, sub_model=test_sub_model)
@@ -52,6 +56,7 @@ def test_build_deps_resolves_the_already_loaded_token_and_port(tmp_path, monkeyp
 
 
 def test_build_deps_fails_loudly_naming_the_missing_env_var(tmp_path, monkeypatch, test_core_model, test_sub_model):
+    """Build deps fails loudly naming the missing env var."""
     from profiles.loader import ProfileLoadError
 
     monkeypatch.delenv(BOT_TOKEN_ENV, raising=False)
@@ -68,6 +73,7 @@ def test_resolve_bot_token_warns_and_returns_none_for_a_blank_token(tmp_path, mo
     # from a plain load_profile() — not through build_deps, which calls
     # configure_logging() and clears the root logger's handlers, which
     # would take pytest's own caplog handler down with it.
+    """Resolve bot token warns and returns none for a blank token."""
     from profiles.loader import load_profile
 
     monkeypatch.setenv(BOT_TOKEN_ENV, blank_token)
@@ -94,6 +100,7 @@ def test_resolve_bot_token_warns_and_returns_none_for_a_blank_token(tmp_path, mo
 
 
 def test_build_deps_returns_none_for_a_blank_token_without_raising(tmp_path, monkeypatch, test_core_model, test_sub_model):
+    """Build deps returns none for a blank token without raising."""
     monkeypatch.setenv(BOT_TOKEN_ENV, "   ")
     monkeypatch.setenv(MODEL_CRED_ENV, "cred")
     write_profile_module(tmp_path, monkeypatch, "test_app_profile_blank_token_deps", bot_token_env=BOT_TOKEN_ENV, model_cred_env=MODEL_CRED_ENV)
@@ -103,6 +110,7 @@ def test_build_deps_returns_none_for_a_blank_token_without_raising(tmp_path, mon
 
 
 def test_main_does_not_crash_or_exit_when_the_token_is_blank(tmp_path, monkeypatch):
+    """Main does not crash or exit when the token is blank."""
     monkeypatch.setenv(BOT_TOKEN_ENV, "  ")
     monkeypatch.setenv(MODEL_CRED_ENV, "cred")
     write_profile_module(tmp_path, monkeypatch, "test_app_profile_blank_token_main", bot_token_env=BOT_TOKEN_ENV, model_cred_env=MODEL_CRED_ENV)
@@ -125,6 +133,7 @@ def test_main_does_not_crash_or_exit_when_the_token_is_blank(tmp_path, monkeypat
 
 
 def test_main_fails_loudly_naming_the_missing_tier_env_var(monkeypatch):
+    """Main fails loudly naming the missing tier env var."""
     for name in ("CORE_MODEL_PROVIDER", "CORE_MODEL_NAME", "CORE_MODEL_API_KEY_ENV"):
         monkeypatch.delenv(name, raising=False)
 
@@ -133,6 +142,7 @@ def test_main_fails_loudly_naming_the_missing_tier_env_var(monkeypatch):
 
 
 def test_validate_bot_token_raises_when_telegram_rejects_it():
+    """Validate bot token raises when telegram rejects it."""
     deps = BotDeps(loaded_profile=None, telegram_client=FakeTelegramClient(token_is_valid=False), api_client=FakeBotApiClient())
 
     with pytest.raises(BotStartupError):
@@ -140,11 +150,13 @@ def test_validate_bot_token_raises_when_telegram_rejects_it():
 
 
 def test_validate_bot_token_passes_when_telegram_accepts_it():
+    """Validate bot token passes when telegram accepts it."""
     deps = BotDeps(loaded_profile=None, telegram_client=FakeTelegramClient(token_is_valid=True), api_client=FakeBotApiClient())
     _run(app._validate_bot_token(deps))  # must not raise
 
 
 def test_a_second_bot_for_the_same_deployment_cannot_start(tmp_path, monkeypatch):
+    """A second bot for the same deployment cannot start."""
     lock_path = tmp_path / "deployment.db.bot.lock"
     first = SingleInstanceLock(lock_path)
     first.acquire()
@@ -161,11 +173,13 @@ def test_a_second_bot_for_the_same_deployment_cannot_start(tmp_path, monkeypatch
 
 
 def test_registered_commands_contain_no_user_management():
+    """Registered commands contain no user management."""
     for command in app.REGISTERED_COMMANDS:
         assert "user" not in command
 
 
 def test_bot_commands_lists_start_profile_and_settings():
+    """Bot commands lists start profile and settings."""
     from messages import get_catalog
 
     names = [name for name, _description in app._bot_commands(get_catalog("en"))]
@@ -174,6 +188,7 @@ def test_bot_commands_lists_start_profile_and_settings():
 
 
 def test_on_start_command_greets_a_registered_caller_by_profile_name():
+    """On start command greets a registered caller by profile name."""
     api = FakeBotApiClient(users={"42": "viewer"})
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=SimpleNamespace(profile_name="Test Deployment"), telegram_client=telegram, api_client=api)
@@ -187,6 +202,7 @@ def test_on_start_command_greets_a_registered_caller_by_profile_name():
 
 
 def test_on_start_command_refuses_an_unregistered_caller():
+    """On start command refuses an unregistered caller."""
     api = FakeBotApiClient()  # no users registered
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=SimpleNamespace(profile_name="Test Deployment"), telegram_client=telegram, api_client=api)
@@ -208,11 +224,13 @@ def test_on_start_command_refuses_an_unregistered_caller():
     ],
 )
 def test_parse_protocol_write_command(rest, expect_error):
+    """Parse protocol write command."""
     result = app._parse_protocol_write_command(rest)
     assert isinstance(result, str) == expect_error
 
 
 def test_parse_protocol_write_command_builds_the_expected_payload():
+    """Parse protocol write command builds the expected payload."""
     rest = "status_check | checks status | reference_agent,other_agent | check_status | a status report | LOW | true"
     name, payload = app._parse_protocol_write_command(rest)
 
@@ -232,13 +250,16 @@ def test_parse_protocol_write_command_builds_the_expected_payload():
 
 
 class _FakeMessage:
+    """FakeMessage."""
     def __init__(self, text, message_id="777", message_thread_id=None):
+        """Initialize this test helper."""
         self.text = text
         self.message_id = message_id
         self.message_thread_id = message_thread_id
 
 
 def _fake_update(user_id="42", chat_id="99", text=None, callback_data=None, callback_query_id="cbq-1", message_id="777", message_thread_id=None, chat_type="private"):
+    """Fake update."""
     message = _FakeMessage(text, message_id, message_thread_id) if text is not None else None
     callback_query = None
     if callback_data is not None:
@@ -252,10 +273,12 @@ def _fake_update(user_id="42", chat_id="99", text=None, callback_data=None, call
 
 
 def _fake_context(deps, args=None):
+    """Fake context."""
     return SimpleNamespace(bot_data={"deps": deps}, args=args or [])
 
 
 def test_on_text_message_replies_in_the_same_chat():
+    """On text message replies in the same chat."""
     api = FakeBotApiClient(users={"42": "viewer"}, message_submission_result=MessageSubmissionResult(kind="question", answer_text="42 events"))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -270,6 +293,7 @@ def test_on_text_message_replies_in_the_same_chat():
 
 
 def test_missing_name_is_collected_then_original_message_resumes_once():
+    """Missing name is collected then original message resumes once."""
     api = FakeBotApiClient(
         users={"42": {"permission_level": "viewer", "full_name": ""}},
         message_submission_result=MessageSubmissionResult(kind="question", answer_text="done"),
@@ -294,6 +318,7 @@ def test_missing_name_is_collected_then_original_message_resumes_once():
 
 
 def test_open_mode_auto_registers_a_stranger_then_collects_name_and_resumes():
+    """Open mode auto registers a stranger then collects name and resumes."""
     api = FakeBotApiClient(
         message_submission_result=MessageSubmissionResult(kind="question", answer_text="done"),
         safe_mode=False,
@@ -314,6 +339,7 @@ def test_open_mode_auto_registers_a_stranger_then_collects_name_and_resumes():
 
 
 def test_safe_mode_blocks_an_unknown_private_caller_without_registering_them():
+    """Safe mode blocks an unknown private caller without registering them."""
     api = FakeBotApiClient(safe_mode=True)
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -329,6 +355,7 @@ def test_safe_mode_blocks_an_unknown_private_caller_without_registering_them():
 
 
 def test_pending_name_action_is_scoped_to_the_chat_where_it_started():
+    """Pending name action is scoped to the chat where it started."""
     api = FakeBotApiClient(
         users={"42": {"permission_level": "viewer", "full_name": ""}},
         message_submission_result=MessageSubmissionResult(kind="question", answer_text="done"),
@@ -345,6 +372,7 @@ def test_pending_name_action_is_scoped_to_the_chat_where_it_started():
 
 
 def test_missing_name_resumes_a_callback_after_the_name_reply():
+    """Missing name resumes a callback after the name reply."""
     from bot.api_client import HoldAnswerOutcome
 
     api = FakeBotApiClient(
@@ -366,6 +394,7 @@ def test_on_text_message_forwards_the_real_incoming_message_id():
     # Problem 2's fix: this is the one place the original Telegram
     # message's ID is available at all — lost here means lost for good,
     # long before any later async reply could reference it.
+    """On text message forwards the real incoming message id."""
     api = FakeBotApiClient(users={"42": "viewer"}, message_submission_result=MessageSubmissionResult(kind="report", job_id="j1"))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -377,10 +406,11 @@ def test_on_text_message_forwards_the_real_incoming_message_id():
 
 
 def test_on_text_message_uses_a_conversation_id_scoped_to_chat_and_thread():
-    # docs/Next_Plan.md §10 / Stage 5: distinct chats, and distinct threads
+    # / Stage 5: distinct chats, and distinct threads
     # within the same chat, must never share a conversation_id — otherwise
     # one conversation could resolve another conversation's event
     # reference (the follow-up mechanism's own isolation guarantee).
+    """On text message uses a conversation id scoped to chat and thread."""
     api = FakeBotApiClient(users={"42": "viewer"}, message_submission_result=MessageSubmissionResult(kind="question", answer_text="ok"))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -398,7 +428,7 @@ def test_run_failure_api_error_shows_a_generic_message_not_the_raw_internal_text
     """Regression test: RunFailureError (422) is the one ApiError class this codebase always
     raises from a raw internal/model-produced string (api/routes.py wraps OrchestrationParseError
     verbatim) rather than a deliberately-crafted, already-localized catalog message — a caller
-    must never see that raw text (docs/IMPROVES/CRITICAL_FIXES_PLAN.MD item 4)."""
+    must never see that raw text."""
 
     class _RunFailureApiClient(FakeBotApiClient):
         async def submit_message(self, *args, **kwargs):
@@ -419,6 +449,7 @@ def test_other_api_errors_still_show_their_specific_catalog_message():
     # deliberately-crafted, already-localized catalog text throughout this codebase (e.g.
     # api.queue_full, api.field_required) — that detail stays visible, unlike run_failure's raw
     # internal text.
+    """Other api errors still show their specific catalog message."""
     class _ConflictApiClient(FakeBotApiClient):
         async def submit_message(self, *args, **kwargs):
             raise ApiRequestError(409, "Already resolved by 'commander-1' at 2026-01-01T00:00:00", error_class="conflict")
@@ -432,6 +463,7 @@ def test_other_api_errors_still_show_their_specific_catalog_message():
 
 
 def test_deep_debug_commander_receives_separate_trace_messages(monkeypatch):
+    """Deep debug commander receives separate trace messages."""
     monkeypatch.setattr("bot.dispatch.deep_debug_enabled", lambda: True)
     api = FakeBotApiClient(
         users={"42": "commander"},
@@ -452,6 +484,7 @@ def test_deep_debug_commander_receives_separate_trace_messages(monkeypatch):
 
 
 def test_deep_debug_viewer_never_polls_trace(monkeypatch):
+    """Deep debug viewer never polls trace."""
     monkeypatch.setattr("bot.dispatch.deep_debug_enabled", lambda: True)
     api = FakeBotApiClient(
         users={"42": "viewer"},
@@ -467,6 +500,7 @@ def test_deep_debug_viewer_never_polls_trace(monkeypatch):
 
 
 def test_on_profile_command_view_replies_with_the_profile():
+    """On profile command view replies with the profile."""
     api = FakeBotApiClient(users={"42": "viewer"}, profile_view=ProfileView(profile_name="demo", agent_names=(), protocols=(), event_types=(), areas=()))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -478,6 +512,7 @@ def test_on_profile_command_view_replies_with_the_profile():
 
 
 def test_on_profile_command_diff_replies_with_diff_status():
+    """On profile command diff replies with diff status."""
     api = FakeBotApiClient(users={"42": "viewer"}, profile_diff_status=False)
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -489,6 +524,7 @@ def test_on_profile_command_diff_replies_with_diff_status():
 
 
 def test_on_callback_query_dispatches_to_clarification():
+    """On callback query dispatches to clarification."""
     from bot.api_client import HoldAnswerOutcome
 
     api = FakeBotApiClient(users={"42": "commander"}, clarification_answer_outcome=HoldAnswerOutcome(status="resolved"))
@@ -503,6 +539,7 @@ def test_on_callback_query_dispatches_to_clarification():
 
 
 def test_on_callback_query_dispatches_to_approval():
+    """On callback query dispatches to approval."""
     from bot.api_client import HoldAnswerOutcome
 
     api = FakeBotApiClient(users={"42": "commander"}, approval_answer_outcome=HoldAnswerOutcome(status="approved"))
@@ -524,6 +561,7 @@ def test_on_callback_query_dispatches_to_approval():
 
 
 def test_on_callback_query_refuses_a_viewer_answering_a_clarification():
+    """On callback query refuses a viewer answering a clarification."""
     api = FakeBotApiClient(users={"42": "viewer"})
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -536,6 +574,7 @@ def test_on_callback_query_refuses_a_viewer_answering_a_clarification():
 
 
 def test_on_callback_query_refuses_a_viewer_answering_an_approval():
+    """On callback query refuses a viewer answering an approval."""
     api = FakeBotApiClient(users={"42": "viewer"})
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -548,6 +587,7 @@ def test_on_callback_query_refuses_a_viewer_answering_an_approval():
 
 
 def test_on_callback_query_second_commander_answering_a_resolved_clarification_is_told_who_resolved_it():
+    """On callback query second commander answering a resolved clarification is told who resolved it."""
     from bot.api_client import HoldAnswerOutcome
 
     api = FakeBotApiClient(
@@ -564,6 +604,7 @@ def test_on_callback_query_second_commander_answering_a_resolved_clarification_i
 
 
 def test_on_callback_query_second_commander_answering_an_answered_approval_is_told_who_answered_it():
+    """On callback query second commander answering an answered approval is told who answered it."""
     from bot.api_client import HoldAnswerOutcome
 
     api = FakeBotApiClient(
@@ -580,6 +621,7 @@ def test_on_callback_query_second_commander_answering_an_answered_approval_is_to
 
 
 def test_on_callback_query_with_an_unrecognized_namespace_does_nothing_but_answer_the_query():
+    """On callback query with an unrecognized namespace does nothing but answer the query."""
     api = FakeBotApiClient()
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -597,6 +639,7 @@ def test_on_callback_query_with_malformed_data_in_a_known_namespace_is_reported_
     # unpack fails — going through the real _guarded(_on_callback_query)
     # composition (what register_handlers actually wires up) to confirm
     # the malformed input becomes a chat reply, not a crash.
+    """On callback query with malformed data in a known namespace is reported gracefully not crashed."""
     api = FakeBotApiClient(users={"42": "viewer"})
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -609,6 +652,7 @@ def test_on_callback_query_with_malformed_data_in_a_known_namespace_is_reported_
 
 
 def test_guarded_handler_reports_a_not_implemented_dependency_without_crashing():
+    """Guarded handler reports a not implemented dependency without crashing."""
     telegram = FakeTelegramClient()
     deps = BotDeps(
         loaded_profile=None,
@@ -627,6 +671,7 @@ def test_guarded_handler_reports_a_not_implemented_dependency_without_crashing()
 
 
 def test_guarded_handler_reports_an_unexpected_error_without_leaking_it():
+    """Guarded handler reports an unexpected error without leaking it."""
     telegram = FakeTelegramClient()
     deps = BotDeps(
         loaded_profile=None,
@@ -644,10 +689,9 @@ def test_guarded_handler_reports_an_unexpected_error_without_leaking_it():
     assert "went wrong" in telegram.sent[-1].text
 
 
-# -- §8.2's "every interaction" against the real command handlers, not the ---
-# internal view_profile/profile_diff_status/get_settings_view functions in
-# isolation (those can't see this bug by construction — see docs/work_plan.md
-# §8.2's note on this).
+# Exercise every interaction against the real command handlers, not the
+# isolated view_profile/profile_diff_status/get_settings_view helpers
+# (those cannot see this bug by construction).
 
 
 @pytest.mark.parametrize(
@@ -655,6 +699,7 @@ def test_guarded_handler_reports_an_unexpected_error_without_leaking_it():
     [["view"], ["diff"], []],
 )
 def test_an_unregistered_identity_cannot_read_the_profile_through_the_real_handler(command_args):
+    """An unregistered identity cannot read the profile through the real handler."""
     api = FakeBotApiClient()  # zero registered users
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -667,6 +712,7 @@ def test_an_unregistered_identity_cannot_read_the_profile_through_the_real_handl
 
 
 def test_an_unregistered_identity_cannot_read_settings_through_the_real_handler():
+    """An unregistered identity cannot read settings through the real handler."""
     api = FakeBotApiClient()  # zero registered users
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -677,6 +723,7 @@ def test_an_unregistered_identity_cannot_read_settings_through_the_real_handler(
     assert "not a registered user" in telegram.sent[-1].text
     assert api.calls == [("resolve_user", "42")]
 def test_a_registered_viewer_can_read_the_profile_through_the_real_handler():
+    """A registered viewer can read the profile through the real handler."""
     api = FakeBotApiClient(users={"42": "viewer"}, profile_view=ProfileView(profile_name="demo", agent_names=(), protocols=(), event_types=(), areas=()))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -688,7 +735,8 @@ def test_a_registered_viewer_can_read_the_profile_through_the_real_handler():
 
 
 def test_a_registered_commander_can_read_settings_through_the_real_handler():
-    # docs/Next_Plan.md §5 decision record: view_settings is commander-only.
+    # Decision record: view_settings is commander-only.
+    """A registered commander can read settings through the real handler."""
     api = FakeBotApiClient(users={"42": "commander"}, settings_view=SettingsView(retry_count=3, risk_threshold=0.5, lookback_window_days=30))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -700,8 +748,9 @@ def test_a_registered_commander_can_read_settings_through_the_real_handler():
 
 
 def test_a_registered_viewer_is_refused_reading_settings():
-    # docs/Next_Plan.md §5 decision record: view_settings is commander-only —
+    # Decision record: view_settings is commander-only
     # bot/app.py refuses client-side before ever calling the API.
+    """A registered viewer is refused reading settings."""
     api = FakeBotApiClient(users={"42": "viewer"}, settings_view=SettingsView(retry_count=3, risk_threshold=0.5, lookback_window_days=30))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -721,6 +770,7 @@ def test_a_registered_viewer_is_refused_reading_settings():
 
 
 def test_profile_view_through_the_real_handler_forwards_the_real_callers_identity():
+    """Profile view through the real handler forwards the real callers identity."""
     api = FakeBotApiClient(users={"42": "viewer"}, profile_view=ProfileView(profile_name="demo", agent_names=(), protocols=(), event_types=(), areas=()))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -732,6 +782,7 @@ def test_profile_view_through_the_real_handler_forwards_the_real_callers_identit
 
 
 def test_settings_view_through_the_real_handler_forwards_the_real_callers_identity():
+    """Settings view through the real handler forwards the real callers identity."""
     api = FakeBotApiClient(users={"42": "commander"}, settings_view=SettingsView(retry_count=3, risk_threshold=0.5, lookback_window_days=30))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -743,6 +794,7 @@ def test_settings_view_through_the_real_handler_forwards_the_real_callers_identi
 
 
 def test_settings_change_through_the_real_handler_forwards_the_real_callers_identity():
+    """Settings change through the real handler forwards the real callers identity."""
     api = FakeBotApiClient(users={"42": "commander"}, settings_write_result=WriteResult(accepted=True, message="ok"))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -754,6 +806,7 @@ def test_settings_change_through_the_real_handler_forwards_the_real_callers_iden
 
 
 def test_protocol_write_through_the_real_handler_forwards_the_real_callers_identity():
+    """Protocol write through the real handler forwards the real callers identity."""
     api = FakeBotApiClient(users={"42": "commander"}, protocol_write_result=WriteResult(accepted=True, message="ok"))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -767,6 +820,7 @@ def test_protocol_write_through_the_real_handler_forwards_the_real_callers_ident
 def test_write_branches_still_refuse_an_unregistered_identity_no_regression():
     # The write branches already had this check before this fix — confirm
     # it still works unchanged, through the same real handler.
+    """Write branches still refuse an unregistered identity no regression."""
     api = FakeBotApiClient()
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -786,10 +840,12 @@ from tests.bot_fakes import FakeBotApiClient
 
 
 def _run(coro):
+    """Run."""
     return asyncio.run(coro)
 
 
 def test_unregistered_sender_is_refused_before_anything_is_submitted():
+    """Unregistered sender is refused before anything is submitted."""
     api = FakeBotApiClient(users={})
 
     reply = _run(handle_incoming_message(_deps(api), "stranger", "there is a fire", "m1"))
@@ -799,6 +855,7 @@ def test_unregistered_sender_is_refused_before_anything_is_submitted():
 
 
 def test_question_returns_the_answer_directly():
+    """Question returns the answer directly."""
     api = FakeBotApiClient(
         users={"v1": "viewer"},
         message_submission_result=MessageSubmissionResult(kind="question", answer_text="12 events last week."),
@@ -810,6 +867,7 @@ def test_question_returns_the_answer_directly():
 
 
 def test_conversational_message_returns_the_api_answer_directly():
+    """Conversational message returns the api answer directly."""
     api = FakeBotApiClient(
         users={"v1": "viewer"},
         message_submission_result=MessageSubmissionResult(kind="conversational", answer_text="Hello! How can I help?"),
@@ -821,6 +879,7 @@ def test_conversational_message_returns_the_api_answer_directly():
 
 
 def test_intent_clarification_returns_the_question_without_creating_a_job_message():
+    """Intent clarification returns the question without creating a job message."""
     api = FakeBotApiClient(
         users={"v1": "viewer"},
         message_submission_result=MessageSubmissionResult(kind="clarification", answer_text="Which gate do you mean?"),
@@ -833,7 +892,7 @@ def test_intent_clarification_returns_the_question_without_creating_a_job_messag
 
 
 def test_report_reply_is_a_pure_relay_of_the_servers_own_answer():
-    """docs/work_process.md §17: /Msg now sends a ready-to-display `answer` for
+    """/Msg now sends a ready-to-display `answer` for
     every kind, including a queued report/request — the bot's job collapses to
     pure relay (the same shape question/conversational/clarification already
     had), matching the "bot only relays, server decides" principle. Which
@@ -855,7 +914,7 @@ def test_report_reply_is_a_pure_relay_of_the_servers_own_answer():
 
 
 def test_request_reply_is_also_a_pure_relay_of_the_servers_own_answer():
-    """docs/work_process.md §18: `MessageSubmissionResult.awaiting_approval` (and
+    """`MessageSubmissionResult.awaiting_approval` (and
     the dead `bot.waiting_approval` append it used to gate) is gone entirely —
     /Msg's synchronous response can never actually know a queued report/request
     will later be held for approval (that's discovered asynchronously, well
@@ -877,6 +936,7 @@ def test_request_reply_is_also_a_pure_relay_of_the_servers_own_answer():
 
 
 def test_the_real_message_id_is_forwarded_to_submit_message():
+    """The real message id is forwarded to submit message."""
     api = FakeBotApiClient(
         users={"v1": "viewer"},
         message_submission_result=MessageSubmissionResult(kind="report", job_id="job-42"),
@@ -888,6 +948,7 @@ def test_the_real_message_id_is_forwarded_to_submit_message():
 
 
 def test_get_open_approval_holds_returns_in_memory_holds_without_opening_sqlite():
+    """Get open approval holds returns in memory holds without opening sqlite."""
     from bot.interactions import get_open_approval_holds, register_open_approval_hold, unregister_open_approval_hold
 
     register_open_approval_hold("evt-keep")
@@ -899,6 +960,7 @@ def test_get_open_approval_holds_returns_in_memory_holds_without_opening_sqlite(
 
 
 def _deps(api):
+    """Deps."""
     from bot.deps import BotDeps
 
     return BotDeps(loaded_profile=None, telegram_client=None, api_client=api)

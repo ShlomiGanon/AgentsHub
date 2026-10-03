@@ -1,5 +1,4 @@
-"""`profiles/firefighting.py`'s real `ADMIN_TABLES` wiring (docs/Admin_Tables_Plan.md phases 4,
-5, 7, 8) -- drones (via the shared surveillance store, phase 3's code-sharing fix), crew-shift
+"""`profiles/firefighting.py`'s real `ADMIN_TABLES` wiring -- drones (via the shared surveillance store, phase 3's code-sharing fix), crew-shift
 attendance, and friendly forces (via the newly-extracted shared `NeighboringForcesAgent` base,
 phase 7's tool-unification), end to end through the Flask admin routes against firefighting's
 own real, separate stores. Mirrors tests/test_response_team_admin_tables.py's structure and its
@@ -32,6 +31,7 @@ ADMIN_PASSWORD = "test-admin-password"
 
 @pytest.fixture
 def _admin_env(monkeypatch):
+    """Admin env."""
     monkeypatch.setenv("ADMIN_USERNAME", ADMIN_USERNAME)
     monkeypatch.setenv("ADMIN_PASSWORD", ADMIN_PASSWORD)
     monkeypatch.setenv("ADMIN_SESSION_SECRET", "test-admin-session-secret")
@@ -39,6 +39,7 @@ def _admin_env(monkeypatch):
 
 
 def _fire_ctx(tmp_path, teardown_ctx):
+    """Fire ctx."""
     loaded = load_profile("profiles.firefighting", CORE_MODEL, SUB_MODEL)
     ctx = build_context(tmp_path, admin_tables=loaded.admin_tables)
     history_agent = ctx.deps.registry.get("history_agent")
@@ -56,6 +57,7 @@ def _fire_ctx(tmp_path, teardown_ctx):
 
 
 def _login(client):
+    """Login."""
     client.post("/admin/login", data={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD}, follow_redirects=False)
     setup = client.get("/admin/acting-identity")
     match = re.search(r'name="csrf_token" value="([^"]+)"', setup.get_data(as_text=True))
@@ -67,12 +69,14 @@ def _login(client):
 
 
 def _csrf_token(client):
+    """Csrf token."""
     resp = client.get("/admin/")
     match = re.search(r'name="csrf_token" value="([^"]+)"', resp.get_data(as_text=True))
     return match.group(1)
 
 
 def _insert_test_drone(store, *, status="ready"):
+    """Insert test drone."""
     drone_id = f"TEST-DRONE-{uuid.uuid4().hex[:8]}"
     conn = sqlite3.connect(store.db_path)
     conn.execute(
@@ -89,6 +93,7 @@ def _insert_test_drone(store, *, status="ready"):
 
 
 def test_firefighting_drone_edit_writes_through_the_same_shared_store(tmp_path, teardown_ctx, _admin_env):
+    """Firefighting drone edit writes through the same shared store."""
     ctx = _fire_ctx(tmp_path, teardown_ctx)
     surveillance = ctx.deps.registry.get("surveillance_agent")
     drone_id = _insert_test_drone(surveillance.surveillance_store)
@@ -133,6 +138,7 @@ def test_firefighting_drone_recall_now_works_via_the_shared_base_tool(tmp_path, 
 
 
 def test_firefighting_attendance_reason_edit_writes_through(tmp_path, teardown_ctx, _admin_env):
+    """Firefighting attendance reason edit writes through."""
     ctx = _fire_ctx(tmp_path, teardown_ctx)
     crew = ctx.deps.registry.get("team_status_agent")
     identity = f"fire-member-{uuid.uuid4().hex[:8]}"
@@ -197,6 +203,7 @@ def test_firefighting_dispatch_neighboring_force_replaces_the_four_old_named_too
 
 
 def test_firefighting_force_dispatch_status_edit_is_immediately_visible_to_the_list_tool(tmp_path, teardown_ctx, _admin_env):
+    """Firefighting force dispatch status edit is immediately visible to the list tool."""
     ctx = _fire_ctx(tmp_path, teardown_ctx)
     forces = ctx.deps.registry.get("neighboring_forces_agent")
     # Inserted directly via the store (bypassing dispatch_neighboring_force's own capacity
@@ -226,6 +233,7 @@ def test_firefighting_force_dispatch_status_edit_is_immediately_visible_to_the_l
 
 
 def test_firefighting_fire_status_edit_is_immediately_visible_to_the_list_tool(tmp_path, teardown_ctx, _admin_env):
+    """Firefighting fire status edit is immediately visible to the list tool."""
     ctx = _fire_ctx(tmp_path, teardown_ctx)
     crew = ctx.deps.registry.get("team_status_agent")
     fire = crew.fire_store.upsert_burning(area="pine_ridge", source_event_id="admin-test")
@@ -241,7 +249,7 @@ def test_firefighting_fire_status_edit_is_immediately_visible_to_the_list_tool(t
 
     updated = crew.fire_store.get_fire(fire["fire_id"])
     assert updated["status"] == "extinguished"
-    listing = crew.list_active_fires()
+    listing = crew.list_active_fires(area="pine_ridge")
     assert fire["fire_id"] not in listing
     assert "No burning fires" in listing
 

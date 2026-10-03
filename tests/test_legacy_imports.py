@@ -67,10 +67,12 @@ ALIASES = [
 
 @pytest.mark.parametrize(("legacy_path", "canonical_path"), ALIASES[:43])
 def test_legacy_module_alias_is_the_canonical_module(legacy_path: str, canonical_path: str):
+    """Legacy module alias is the canonical module."""
     assert importlib.import_module(legacy_path) is importlib.import_module(canonical_path)
 
 
 def test_special_package_facades_remain_importable():
+    """Special package facades remain importable."""
     for legacy_path, canonical_path in ALIASES[43:]:
         assert importlib.import_module(legacy_path) is importlib.import_module(canonical_path)
 

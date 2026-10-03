@@ -1,16 +1,7 @@
-"""Neighboring/external-force dispatch-log specialist -- shared, reusable infrastructure
-(docs/Admin_Tables_Plan.md sections 3/3.3), extracted from `profiles/response_team.py`'s
-original profile-only `NeighboringForcesAgent` so a second profile (`profiles/firefighting.py`)
-can get the exact same persisted dispatch-log + computed-remaining-capacity mechanism, not just
-an in-memory stand-in.
+"""Persisted neighboring-force dispatch log with a busy-window capacity check.
 
-A subclass supplies its own class-level `dispatch_db_path`, `force_bases` (kind -> home area),
-`force_pool_size`, and `force_busy_seconds`, and gets `dispatch_neighboring_force`/
-`list_neighboring_force_dispatches` for free. `_resolve_kind`/`_check_capacity` are the two
-override points: `response_team.py`'s own subclass extends both to add its own roster
-("squad") as a dispatchable kind that isn't a real external force at all and is checked against
-live roster availability instead of the busy-window pool -- every other subclass (e.g.
-firefighting's) uses the defaults below unchanged.
+A subclass supplies dispatch_db_path, force_bases, force_pool_size, and
+force_busy_seconds. Override _resolve_kind and _check_capacity together for extra kinds.
 """
 
 from __future__ import annotations
@@ -24,6 +15,8 @@ from persistence import open_neighboring_force_store
 
 
 class NeighboringForcesAgent(Agent):
+    """Logs neighboring-force dispatches and answers read-only questions about that log."""
+
     name = "neighboring_forces_agent"
     role = (
         "Records requests to dispatch a neighboring/external force into one of this site's "
@@ -56,12 +49,16 @@ class NeighboringForcesAgent(Agent):
     eta_fn: "Callable[[str, str], int] | None" = None
 
     def __init__(self, model: str, api_key: str | None = None):
+        """Open the dispatch store for this subclass's database path."""
+
         if not self.dispatch_db_path:
             raise TypeError("NeighboringForcesAgent requires a class-level dispatch_db_path")
         self.dispatch_store = open_neighboring_force_store(self.dispatch_db_path)
         super().__init__(model, api_key)
 
     def _eta_seconds(self, origin_area: str, target_area: str) -> int:
+        """Seconds from origin to target, using eta_fn when the subclass set one."""
+
         if origin_area == target_area:
             return 45
         if self.eta_fn is not None:
@@ -106,6 +103,8 @@ class NeighboringForcesAgent(Agent):
         return f"only {remaining} of {self.force_pool_size} {kind_norm} unit(s) currently available, {unit_count} requested"
 
     def _valid_kinds(self) -> "tuple[str, ...]":
+        """Sorted force-kind names this agent will accept."""
+
         return tuple(sorted(self.force_bases))
 
     @tool(
@@ -119,6 +118,8 @@ class NeighboringForcesAgent(Agent):
         idempotent=False,
     )
     def dispatch_neighboring_force(self, kind: str, target_area: str, unit_count: int = 1, note: str = "") -> str:
+        """Record one dispatch or return why capacity or arguments were refused."""
+
         kind_norm = kind.strip().lower()
         resolved = self._resolve_kind(kind_norm)
         if resolved is None:
@@ -162,6 +163,8 @@ class NeighboringForcesAgent(Agent):
         side_effecting=False,
     )
     def list_neighboring_force_dispatches(self, status: str = "") -> str:
+        """Return the current dispatch log, optionally filtered by status."""
+
         cleaned = status.strip().lower()
         rows = self.dispatch_store.list_dispatches(status=cleaned or None)
         if not rows:

@@ -36,16 +36,22 @@ class OrchestrationParseError(Exception):
     """A Main Agent response could not be parsed into the expected shape."""
 
     def __init__(self, message: str = "", *, duplicate_agent: bool = False):
+        """Record the parse failure and whether a duplicate agent caused it."""
+
         super().__init__(message)
         self.duplicate_agent = duplicate_agent
 
 @dataclass(frozen=True)
 class EventDataUpdateResult:
+    """Parsed extra-data reply: whether it answers the ask, and which fields changed."""
+
     addresses_request: bool
     updates: dict[str, object] = field(default_factory=dict)
     reply_text: str = ""
 
 class MainAgent(Agent):
+    """Core-tier orchestrator that scores risk, selects protocols, and judges success."""
+
     name = "main_agent"
     role = (
         "The orchestrator, and the only component that makes judgment calls: risk assessment, "
@@ -63,18 +69,24 @@ class MainAgent(Agent):
 
 @dataclass(frozen=True)
 class RiskAssessment:
+    """Scored risk level plus the model's reason."""
+
     score: float
     level: Literal["high", "low"]
     reason: str
 
 @dataclass(frozen=True)
 class IntentResult:
+    """Closed-set intent for one inbound message."""
+
     intent: Literal["question", "report", "request", "conversational", "needs_clarification"]
     reason: str
     clarification_question: str | None = None
 
 @dataclass(frozen=True)
 class IntentAnalysis:
+    """Structured intent flags used to validate a classification."""
+
     primary_intent: Literal["question", "report", "request", "conversational", "needs_clarification"]
     asks_for_information: bool
     reports_occurrence: bool
@@ -91,6 +103,8 @@ class IntentAnalysis:
 
 @dataclass(frozen=True)
 class ProtocolSelectionResult:
+    """Selected, ambiguous, or unmatched protocol for one event."""
+
     status: Literal["selected", "ambiguous", "no_match"]
     protocol_name: str | None = None
     candidate_names: tuple[str, ...] = ()
@@ -98,21 +112,24 @@ class ProtocolSelectionResult:
 
 @dataclass(frozen=True)
 class FormulationResult:
+    """Formulated steps, or the agent/reason that made formulation fail."""
+
     steps: tuple[Step, ...] = ()
     failed_agent_name: str | None = None
     failure_reason: str | None = None
-    # Correction/retraction linkage (docs memory-audit follow-up): set only when the model
-    # explicitly identifies this event's raw text as correcting/retracting one of the
-    # RESOLVED precedents it was shown (see _build_formulation_prompt) -- validated by the
-    # caller against that same candidate set, never trusted as an arbitrary model-supplied ID.
+    # Set only when the model names one of the resolved precedents it was shown.
     corrects_event_id: str | None = None
 
     @property
     def success(self) -> bool:
+        """True when formulation produced steps and no failure reason."""
+
         return self.failure_reason is None
 
 @dataclass(frozen=True)
 class SuccessVerdict:
+    """Final success, failure, or uncertain judgment for a protocol run."""
+
     verdict: Literal["success", "failure", "uncertain"]
     reasoning: str
 
@@ -126,7 +143,7 @@ _LEGACY_INTENT_PATTERN = re.compile(
 # (see _parse_selection_response): a real model response commonly reasons through the
 # candidates in prose before giving its decision, and requiring the *entire* response to be
 # exactly the two-line SELECTED:/REASON: block rejected that prose-then-answer shape outright —
-# confirmed live, 2 of 3 identical test runs (docs/IMPROVES/CRITICAL_FIXES_PLAN.MD item 3).
+# confirmed live when a model reasons in prose before the SELECTED:/REASON: block.
 # Leading reasoning is now tolerated; the matched block still must be the final content in the
 # response, so a stray, coincidental "SELECTED:"/"REASON:" pair embedded mid-reasoning (not as
 # the response's actual last lines) still won't match.
@@ -309,7 +326,11 @@ _MESSAGE_PLAN_SCHEMA = {
 }
 
 def _load_unique_json_object(raw_text: str, label: str) -> dict:
+    """Parse one JSON object and reject duplicate keys."""
+
     def _reject_duplicate_keys(pairs):
+        """Build a dict, raising if the same key appears twice."""
+
         result = {}
         for key, value in pairs:
             if key in result:
@@ -333,6 +354,8 @@ def _structured_call_with_one_repair(
     label: str,
     policy: InvocationPolicy,
 ) -> tuple[dict, str]:
+    """Call Main for structured JSON and retry once on a schema parse error."""
+
     last_error: OrchestrationParseError | None = None
     for attempt in range(2):
         attempt_prompt = prompt
@@ -362,10 +385,14 @@ _AGENT_TASK_PATTERN = re.compile(r"AGENT:\s*(\S+)\s*\n\s*TASK:\s*(.+?)(?=\nAGENT
 
 @dataclass(frozen=True)
 class OperationalDecision:
+    """Merged risk assessment and protocol selection from one model call."""
+
     risk: RiskAssessment
     selection: ProtocolSelectionResult
 
 @dataclass(frozen=True)
 class FinalAssessment:
+    """Merged insight text and success verdict from one model call."""
+
     insight: str
     verdict: SuccessVerdict

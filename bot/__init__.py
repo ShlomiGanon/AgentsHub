@@ -22,6 +22,7 @@ for legacy_name in ("commands", "formatting", "holds", "users"):
 from bot import transports
 from bot.transports import HttpApiClient, PTBTelegramClient, TelegramClient, _do_request
 
+# Implementation lives in http_api_client.py; the public name stays transports.
 http_api_client = transports
 telegram_client = transports
 client = transports

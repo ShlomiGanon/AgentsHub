@@ -1,26 +1,6 @@
-"""Telegram group -> agent routing table (in-memory, DB-backed, write-through).
+"""Telegram group-to-agent routing table, in-memory and write-through to persistence.
 
-A deployment may bind a Telegram group chat to one specialist agent (or to
-`main_agent` for full, unscoped routing). A bound group's agent is a context
-hint and priority for protocol selection only -- never a hard filter. Every
-protocol stays a selection candidate from every group; `scope_deps` carries
-the bound agent through as `FlowDeps.preferred_agent_hint`, which
-`orchestrator/reasoning.py`'s selection prompt builders surface as a
-preference the model may use to break a genuine tie, never as a restriction
-on what it may pick. This closes a real failure mode found in production: a
-security-relevant field report arriving in a channel not bound to
-`surveillance_agent` (e.g. an attendance or external-forces channel) must
-never become structurally unreachable from `report_security_incident` just
-because of which channel carried it. `Protocol.safety_critical`
-(protocols/contracts.py) is retained as a declarative marker of which
-protocols this matters most for, but no longer gates candidate inclusion
-here -- inclusion is now unconditional for every protocol, every group.
-
-The table is loaded from persistence once at API startup and updated
-write-through on every `upsert`/`remove` made through the running process.
-Writes that bypass the process (the offline `cli.group_admin` command) become
-visible after `refresh_interval_seconds`, when the next lookup re-reads the
-backing table.
+A bound agent is a protocol-selection hint only — never a filter that hides a protocol.
 """
 
 from __future__ import annotations
@@ -42,6 +22,8 @@ class GroupNotRegisteredError(Exception):
     """A message arrived from a Telegram group that has no routing binding."""
 
     def __init__(self, chat_id: str):
+        """Remember the unregistered chat_id for the caller to report."""
+
         self.chat_id = chat_id
         super().__init__(f"telegram group '{chat_id}' is not registered")
 
@@ -52,6 +34,8 @@ class InvalidRoutingTargetError(ValueError):
 
 @dataclass(frozen=True)
 class GroupBinding:
+    """One Telegram group's bound agent and attendance-check settings."""
+
     chat_id: str
     agent_name: str
     label: str = ""
@@ -61,6 +45,8 @@ class GroupBinding:
 
 
 def _binding_from_record(record: dict) -> GroupBinding:
+    """Build a GroupBinding from a persisted telegram_groups row."""
+
     hour = record.get("attendance_check_hour")
     enabled = record.get("attendance_check_enabled")
     return GroupBinding(
@@ -74,6 +60,8 @@ def _binding_from_record(record: dict) -> GroupBinding:
 
 
 class GroupRoutingTable:
+    """In-memory group bindings reloaded from persistence when stale."""
+
     def __init__(
         self,
         persistence: "PersistenceInterface",
@@ -81,6 +69,8 @@ class GroupRoutingTable:
         refresh_interval_seconds: float = 60.0,
         clock=time.monotonic,
     ):
+        """Remember persistence, allowed agent names, and the refresh clock."""
+
         self._persistence = persistence
         self._routable = frozenset(routable_agent_names)
         self._refresh_interval = refresh_interval_seconds
@@ -89,7 +79,7 @@ class GroupRoutingTable:
         self._bindings: dict[str, GroupBinding] = {}
         self._loaded_at: float | None = None
 
-    # -- loading ---------------------------------------------------------
+    # --- loading ---
 
     def load(self) -> None:
         """(Re)load every binding from persistence; called once at startup and on staleness."""
@@ -101,6 +91,8 @@ class GroupRoutingTable:
             self._loaded_at = self._clock()
 
     def _refresh_if_stale(self) -> None:
+        """Reload from persistence when the in-memory table has aged out."""
+
         with self._lock:
             stale = self._loaded_at is None or (self._clock() - self._loaded_at) >= self._refresh_interval
         if stale:
@@ -109,16 +101,22 @@ class GroupRoutingTable:
     # -- reads -----------------------------------------------------------
 
     def get(self, chat_id: str) -> GroupBinding | None:
+        """Return the binding for this chat, or None if unregistered."""
+
         self._refresh_if_stale()
         with self._lock:
             return self._bindings.get(str(chat_id))
 
     def all(self) -> tuple[GroupBinding, ...]:
+        """Every current binding, ordered by chat_id."""
+
         self._refresh_if_stale()
         with self._lock:
             return tuple(sorted(self._bindings.values(), key=lambda binding: binding.chat_id))
 
     def chat_ids_for(self, agent_name: str) -> tuple[str, ...]:
+        """Chat ids bound to this agent name."""
+
         return tuple(binding.chat_id for binding in self.all() if binding.agent_name == agent_name)
 
     @property
@@ -130,6 +128,8 @@ class GroupRoutingTable:
     # -- writes (write-through) -----------------------------------------
 
     def validate_target(self, agent_name: str) -> None:
+        """Raise if agent_name is neither main_agent nor a routable specialist."""
+
         if agent_name != MAIN_AGENT_TARGET and agent_name not in self._routable:
             raise InvalidRoutingTargetError(
                 f"'{agent_name}' is not a routable agent; allowed: {', '.join(self.routable_targets)}"
@@ -144,6 +144,8 @@ class GroupRoutingTable:
         attendance_check_enabled: bool | None = None,
         attendance_check_hour: int | None = None,
     ) -> GroupBinding:
+        """Create or update a group's binding and write it through to persistence."""
+
         chat_id = str(chat_id).strip()
         if not chat_id:
             raise InvalidRoutingTargetError("chat_id must be a non-empty string")
@@ -169,6 +171,8 @@ class GroupRoutingTable:
         return binding
 
     def register_telegram_group_if_missing(self, chat_id: str, label: str = "") -> GroupBinding:
+        """Insert a pending group row when this chat_id is not already stored."""
+
         chat_id = str(chat_id).strip()
         if not chat_id:
             raise InvalidRoutingTargetError("chat_id must be a non-empty string")
@@ -179,6 +183,8 @@ class GroupRoutingTable:
         return binding
 
     def approve(self, chat_id: str) -> GroupBinding:
+        """Mark a pending group binding as approved."""
+
         record = self._persistence.approve_group(str(chat_id))
         binding = _binding_from_record(record)
         with self._lock:
@@ -186,16 +192,15 @@ class GroupRoutingTable:
         return binding
 
     def remove(self, chat_id: str) -> None:
+        """Delete a group binding from persistence and the in-memory table."""
+
         chat_id = str(chat_id)
         self._persistence.delete_group(chat_id)  # NotFoundError propagates untouched
         with self._lock:
             self._bindings.pop(chat_id, None)
 
     def rename(self, old_chat_id: str, new_chat_id: str) -> GroupBinding:
-        """Change a group's chat_id in place — e.g. an operator replacing a simulation
-        group's reserved placeholder ID with a real Telegram group ID
-        (docs/profile_simulations_design.md). NotFoundError/PersistenceError propagate
-        untouched from `persistence.rename_group`."""
+        """Rename a group's chat_id in place; persistence errors propagate unchanged."""
 
         old_chat_id = str(old_chat_id).strip()
         new_chat_id = str(new_chat_id).strip()
@@ -228,6 +233,8 @@ def resolve_scope(table: GroupRoutingTable, chat_id: str | None, chat_type: str 
 
 
 def is_scoped_target(agent_name: str | None) -> bool:
+    """True when the message is bound to a specialist rather than main_agent."""
+
     return agent_name is not None and agent_name != MAIN_AGENT_TARGET
 
 

@@ -1,4 +1,4 @@
-"""User administration command (work_plan.md §1.10)."""
+"""Command-line user add/update/remove/approve/list for one deployment."""
 
 import argparse
 import os

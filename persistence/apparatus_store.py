@@ -1,10 +1,4 @@
-"""Dedicated SQLite persistence for a fire station's own apparatus (engines/vehicles) --
-minimal, deliberately narrow: a create-if-missing registry plus a status/area update, mirroring
-`persistence/surveillance_store.py`'s `ensure_camera`/`ensure_drone` idiom, added during this
-session's simulation-data-alignment audit (docs/Admin_Tables_Plan.md) once FIRE_002's own
-simulation text was found to name real apparatus (two named engines, "Ashed 3" and "Carmel 1")
-with no registry anywhere to back them. Connection-per-operation, matching every other store in
-this codebase."""
+"""Create-if-missing registry for a fire station's own apparatus rows."""
 
 from __future__ import annotations
 
@@ -28,17 +22,25 @@ class ApparatusStoreError(Exception):
 
 
 def _utc_now() -> str:
+    """Return the current UTC time as an ISO-8601 string."""
+
     return datetime.now(timezone.utc).isoformat()
 
 
 class ApparatusStore:
+    """Connection-per-operation store for apparatus id, callsign, status, and area."""
+
     def __init__(self, db_path: str):
+        """Open the DB file and create the apparatus table if it is missing."""
+
         self.db_path = str(db_path)
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
 
     def _connect(self) -> sqlite3.Connection:
+        """Open a row-factory connection for one operation."""
+
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
@@ -46,8 +48,7 @@ class ApparatusStore:
     def ensure_apparatus(
         self, *, apparatus_id: str, callsign: str, status: str = "operational", current_area: str | None = None,
     ) -> None:
-        """Create-if-missing only -- never overwrites an existing row, the same idiom
-        response_team.py's own OPERATIONAL_SEED uses for cameras/drones."""
+        """Insert an apparatus row only when apparatus_id is new."""
 
         with self._connect() as conn:
             existing = conn.execute(
@@ -61,13 +62,14 @@ class ApparatusStore:
                 )
 
     def list_apparatus(self) -> list[dict]:
+        """Return every apparatus row ordered by callsign."""
+
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM apparatus ORDER BY callsign").fetchall()
         return [dict(row) for row in rows]
 
     def get_apparatus(self, identifier: str) -> dict | None:
-        """Matches by apparatus_id or callsign, case-insensitively -- the same lookup shape
-        `persistence/surveillance_store.py::get_drone` and friends already use."""
+        """Return the apparatus row matching id or callsign, case-insensitively."""
 
         cleaned = identifier.strip().casefold()
         with self._connect() as conn:
@@ -78,6 +80,8 @@ class ApparatusStore:
         return dict(row) if row is not None else None
 
     def update_status(self, identifier: str, status: str, current_area: str | None = None) -> dict:
+        """Write status and optional current_area on the matched apparatus row."""
+
         valid = {"operational", "dispatched", "unavailable", "maintenance"}
         if status not in valid:
             raise ApparatusStoreError(f"status must be one of {sorted(valid)}, got {status!r}")
@@ -101,9 +105,7 @@ class ApparatusStore:
         return dict(updated)
 
     def admin_update_apparatus(self, apparatus_id: str, **fields) -> dict:
-        """Admin-panel edit of one apparatus row -- every column plain-editable, same
-        immediate-effect convention as docs/Admin_Tables_Plan.md's other admin_update_* methods.
-        Not yet wired into any profile's ADMIN_TABLES; left available for that follow-up."""
+        """Overwrite editable apparatus columns and stamp last_updated."""
 
         editable_columns = ("callsign", "status", "current_area")
         with self._connect() as conn:
@@ -126,4 +128,6 @@ class ApparatusStore:
 
 
 def open_apparatus_store(db_path: str) -> ApparatusStore:
+    """Construct the apparatus store for this database path."""
+
     return ApparatusStore(db_path)

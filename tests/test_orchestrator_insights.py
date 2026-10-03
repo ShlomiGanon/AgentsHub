@@ -1,3 +1,5 @@
+"""Insights-agent prompts and COP updates."""
+
 import types
 
 import pytest
@@ -11,12 +13,15 @@ from protocols.executor import StepOutcome
 
 
 class _ScriptedInsightsAgent:
+    """ScriptedInsightsAgent."""
     def __init__(self, response_text, status="success"):
+        """Initialize this test helper."""
         self._response_text = response_text
         self._status = status
         self.calls = []
 
     def process(self, text, allowed_tools):
+        """Process."""
         self.calls.append((text, allowed_tools))
 
         class _Result:
@@ -27,6 +32,7 @@ class _ScriptedInsightsAgent:
 
 
 def _protocol():
+    """Protocol."""
     return Protocol(
         name="status_check",
         description="d",
@@ -39,11 +45,13 @@ def _protocol():
 
 
 def _outcomes():
+    """Outcomes."""
     step = Step(agent_name="reference_agent", task_text="check gate 3", allowed_tools=())
     return (StepOutcome(step=step, result_text="gate 3 clear", attempt_count=1, succeeded=True),)
 
 
 def _precedent(event_id="evt-old"):
+    """Precedent."""
     return PrecedentMatch(
         event_id=event_id,
         classification="fire",
@@ -57,12 +65,14 @@ def _precedent(event_id="evt-old"):
 
 
 def test_insights_agent_has_no_tools():
+    """Insights agent has no tools."""
     agent = InsightsAgent(model="m")
 
     assert agent.exposed_tools() == ()
 
 
 def test_build_insight_returns_the_agents_free_text_response():
+    """Build insight returns the agents free text response."""
     agent = _ScriptedInsightsAgent("This run matches a resolved precedent; the location is confirmed clear.")
 
     insight = build_insight(agent, _protocol(), _outcomes())
@@ -71,6 +81,7 @@ def test_build_insight_returns_the_agents_free_text_response():
 
 
 def test_build_insight_includes_both_task_and_result_for_every_step():
+    """Build insight includes both task and result for every step."""
     agent = _ScriptedInsightsAgent("insight")
 
     build_insight(agent, _protocol(), _outcomes())
@@ -81,6 +92,7 @@ def test_build_insight_includes_both_task_and_result_for_every_step():
 
 
 def test_build_insight_includes_comparable_history_when_given():
+    """Build insight includes comparable history when given."""
     agent = _ScriptedInsightsAgent("insight")
 
     build_insight(agent, _protocol(), _outcomes(), comparable_history=(_precedent(),))
@@ -91,6 +103,7 @@ def test_build_insight_includes_comparable_history_when_given():
 
 
 def test_comparable_history_defaults_to_empty():
+    """Comparable history defaults to empty."""
     agent = _ScriptedInsightsAgent("insight")
 
     build_insight(agent, _protocol(), _outcomes())  # no comparable_history passed
@@ -99,6 +112,7 @@ def test_comparable_history_defaults_to_empty():
 
 
 def test_build_insight_passes_no_tools():
+    """Build insight passes no tools."""
     agent = _ScriptedInsightsAgent("insight")
 
     build_insight(agent, _protocol(), _outcomes())
@@ -107,6 +121,7 @@ def test_build_insight_passes_no_tools():
 
 
 def test_unclear_task_status_raises():
+    """Unclear task status raises."""
     agent = _ScriptedInsightsAgent("missing info", status="unclear_task")
 
     with pytest.raises(OrchestrationParseError):
@@ -114,6 +129,7 @@ def test_unclear_task_status_raises():
 
 
 def test_construct_core_agents_returns_the_insights_agent_with_the_configured_model():
+    """Construct core agents returns the insights agent with the configured model."""
     from config.base import BaseConfig, TierModel
 
     base_config = BaseConfig(core_model=TierModel(model="the-insights-model", api_key="the-core-key"))
@@ -126,6 +142,7 @@ def test_construct_core_agents_returns_the_insights_agent_with_the_configured_mo
 
 
 def test_end_to_end_through_the_mocked_adapter(monkeypatch):
+    """End to end through the mocked adapter."""
     class _FakeOutput:
         def __init__(self, raw):
             self.raw = raw

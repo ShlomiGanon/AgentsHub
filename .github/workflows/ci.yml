@@ -1,3 +1,4 @@
+# Offline CI: validate this workflow, then run every tests/test_*.py module in mission batches.
 name: CI
 
 on:
@@ -80,7 +81,6 @@ jobs:
           tests/test_architecture.py
           tests/test_cli_group_admin.py
           tests/test_environment_config.py
-          tests/test_file_catalog.py
           tests/test_legacy_imports.py
           tests/test_messages.py
           tests/test_hebrew_leakage.py

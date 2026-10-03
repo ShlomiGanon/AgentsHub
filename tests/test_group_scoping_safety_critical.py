@@ -23,18 +23,23 @@ from protocols.repository import ProtocolSet
 
 
 class _NamedAgent:
+    """NamedAgent."""
     def __init__(self, name):
+        """Initialize this test helper."""
         self.name = name
         self.descriptor = None
 
 
 class _ScriptedMainAgent:
+    """ScriptedMainAgent."""
     def __init__(self, response_text, status="success"):
+        """Initialize this test helper."""
         self._response_text = response_text
         self._status = status
         self.calls = []
 
     def process(self, text, allowed_tools):
+        """Process."""
         self.calls.append((text, allowed_tools))
 
         class _Result:
@@ -45,6 +50,7 @@ class _ScriptedMainAgent:
 
 
 def _deps_for(protocols):
+    """Deps for."""
     agent_names = {"main_agent", "insights_agent", "history_agent"}
     for protocol in protocols:
         agent_names.update(protocol.participating_agents)
@@ -57,6 +63,7 @@ def _deps_for(protocols):
 
 
 def _assert_every_protocol_selectable_from_every_group(profile_module):
+    """Assert every protocol selectable from every group."""
     protocols = profile_module.PROTOCOLS
     all_names = {p.name for p in protocols}
     deps = _deps_for(protocols)
@@ -77,10 +84,12 @@ def _assert_every_protocol_selectable_from_every_group(profile_module):
 
 
 def test_response_team_full_protocol_list_selectable_from_every_group():
+    """Response team full protocol list selectable from every group."""
     _assert_every_protocol_selectable_from_every_group(response_team)
 
 
 def test_firefighting_full_protocol_list_selectable_from_every_group():
+    """Firefighting full protocol list selectable from every group."""
     _assert_every_protocol_selectable_from_every_group(firefighting)
 
 
@@ -88,7 +97,7 @@ def test_firefighting_full_protocol_list_selectable_from_every_group():
 
 
 def test_response_team_camera_status_report_in_roster_group_reaches_update_camera_status():
-    """"כיתת כוננות" (the "response_team" simulation group) is bound to roster_agent, not
+    """(the "response_team" simulation group) is bound to roster_agent, not
     surveillance_agent -- a camera-status report arriving there must still be able to
     reach update_camera_status. Uses a scripted Main Agent (no real model call) to prove
     the mechanism: the full protocol list (including update_camera_status) and the

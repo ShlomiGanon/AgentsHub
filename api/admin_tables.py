@@ -1,4 +1,4 @@
-"""Generic admin-panel table rendering (docs/Admin_Tables_Plan.md) -- page bodies + form
+"""Generic admin-panel table rendering: page bodies and form
 validation for whatever `AdminTable`s the active profile declares (`profiles.admin_tables`).
 
 Follows the same split `api/admin_api_pages.py`/`api/admin_simulator.py` already use: this
@@ -25,6 +25,8 @@ class AdminFormError(Exception):
 
 
 def find_admin_table(loaded_profile: "LoadedProfile", table_key: str) -> "AdminTable | None":
+    """Return the declared admin table for ``table_key``, or None."""
+
     for table in loaded_profile.admin_tables:
         if table.key == table_key:
             return table

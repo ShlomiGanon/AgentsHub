@@ -9,22 +9,27 @@ from typing import Callable
 
 from tools import stage_context, trace_context
 from tools.log_events import queue_deadline_expired, queue_processing_failed, queue_started, queue_stop_timeout
+
 _STOP = object()
 STOP_JOIN_TIMEOUT_SECONDS = 2.0
 
 
 class EventQueueFullError(Exception):
-    pass
+    """Raised when a policy-aware queue has no remaining reservation capacity."""
 
 
 @dataclass(frozen=True)
 class QueueReservation:
+    """A claimed slot that must be released if the work is not submitted."""
+
     token: int
     continuation: bool = False
 
 
 @dataclass(frozen=True)
 class WorkItem:
+    """One queued payload plus scheduling metadata."""
+
     payload: object
     trace_id: str = ""
     priority: int = 10
@@ -34,7 +39,11 @@ class WorkItem:
 
 
 class SerialEventQueue:
+    """Single-worker FIFO queue used by the default API event path."""
+
     def __init__(self, process_fn: Callable[[object], None]):
+        """Remember the worker callback and create the backing thread."""
+
         self._process_fn = process_fn
         self._queue: queue.Queue = queue.Queue()
         self._worker = threading.Thread(target=self._run, daemon=True)
@@ -42,35 +51,53 @@ class SerialEventQueue:
         self._currently_processing = None
 
     def start(self) -> None:
+        """Start the worker thread once."""
+
         if not self._started:
             self._started = True
             self._worker.start()
 
     def reserve(self, continuation: bool = False) -> QueueReservation:
+        """Return a dummy reservation; the serial queue is unbounded."""
+
         return QueueReservation(0, continuation)
 
     def release_reservation(self, reservation: QueueReservation) -> None:
+        """No-op: the serial queue does not track reservations."""
+
         return None
 
     def submit(self, queued_item, reservation: QueueReservation | None = None) -> None:
+        """Enqueue a payload or WorkItem for the single worker."""
+
         self._queue.put(queued_item if isinstance(queued_item, WorkItem) else WorkItem(queued_item))
 
     def qsize(self) -> int:
+        """Number of items waiting, not including the one being processed."""
+
         return self._queue.qsize()
 
     def currently_processing(self) -> object | None:
+        """The payload the worker is handling right now, or None."""
+
         return self._currently_processing
 
     def wait_until_idle(self) -> None:
+        """Block until every submitted item has finished."""
+
         self._queue.join()
 
     def stop(self) -> None:
+        """Ask the worker to exit and join it."""
+
         self._queue.put(_STOP)
         self._worker.join(timeout=STOP_JOIN_TIMEOUT_SECONDS)
         if self._worker.is_alive():
             queue_stop_timeout(queue_name=type(self).__name__, timeout_seconds=STOP_JOIN_TIMEOUT_SECONDS)
 
     def _run(self) -> None:
+        """Pull items until a stop sentinel arrives."""
+
         while True:
             queued = self._queue.get()
             if queued is _STOP:
@@ -96,6 +123,8 @@ class SerialEventQueue:
 
 
 class PolicyAwareEventQueue:
+    """Priority queue with reserved continuation slots and per-key serialization."""
+
     def __init__(
         self,
         process_fn: Callable[[object], None],
@@ -104,6 +133,8 @@ class PolicyAwareEventQueue:
         max_size: int = 100,
         reserved_continuation_percent: int = 20,
     ):
+        """Remember the worker callback, pool size, and reservation budget."""
+
         self._process_fn = process_fn
         self._queue: queue.PriorityQueue = queue.PriorityQueue()
         self._workers = [threading.Thread(target=self._run, daemon=True) for _ in range(workers)]
@@ -122,6 +153,8 @@ class PolicyAwareEventQueue:
         self._key_sequences: dict[str, list[int]] = {}
 
     def start(self) -> None:
+        """Start the worker pool once."""
+
         if self._started:
             return
         self._started = True
@@ -129,6 +162,8 @@ class PolicyAwareEventQueue:
             worker.start()
 
     def reserve(self, continuation: bool = False) -> QueueReservation | None:
+        """Claim a slot, or return None when the queue is full."""
+
         with self._state_lock:
             normal_capacity = self._max_size - self._continuation_capacity
             if self._reserved_total >= self._max_size:
@@ -141,12 +176,16 @@ class PolicyAwareEventQueue:
             return QueueReservation(next(self._reservation_sequence), continuation)
 
     def release_reservation(self, reservation: QueueReservation) -> None:
+        """Free a claimed slot that will not be submitted."""
+
         with self._state_lock:
             self._reserved_total = max(0, self._reserved_total - 1)
             if not reservation.continuation:
                 self._reserved_normal = max(0, self._reserved_normal - 1)
 
     def submit(self, queued_item, reservation: QueueReservation | None = None) -> None:
+        """Enqueue work, reserving a slot if the caller did not already claim one."""
+
         active_reservation = reservation or self.reserve(False)
         if active_reservation is None:
             raise EventQueueFullError("event queue is full")
@@ -158,16 +197,24 @@ class PolicyAwareEventQueue:
         self._queue.put((work_item.priority, item_sequence, active_reservation, work_item))
 
     def qsize(self) -> int:
+        """Number of items waiting, not including those being processed."""
+
         return self._queue.qsize()
 
     def currently_processing(self) -> object | None:
+        """One in-flight payload, or None when all workers are idle."""
+
         with self._state_lock:
             return next(iter(self._currently_processing.values()), None)
 
     def wait_until_idle(self) -> None:
+        """Block until every submitted item has finished."""
+
         self._queue.join()
 
     def stop(self) -> None:
+        """Ask every worker to exit and join the pool."""
+
         for _worker in self._workers:
             self._queue.put((10**9, next(self._sequence), QueueReservation(0, True), _STOP))
         deadline = time.monotonic() + STOP_JOIN_TIMEOUT_SECONDS
@@ -178,10 +225,14 @@ class PolicyAwareEventQueue:
             queue_stop_timeout(queue_name=type(self).__name__, timeout_seconds=STOP_JOIN_TIMEOUT_SECONDS)
 
     def _locks_for(self, keys: tuple[str, ...]) -> list[threading.Lock]:
+        """Stable-ordered resource locks for this item's concurrency keys."""
+
         with self._resource_lock_guard:
             return [self._resource_locks.setdefault(key, threading.Lock()) for key in sorted(set(keys))]
 
     def _run(self) -> None:
+        """Pull priority items until a stop sentinel arrives."""
+
         worker_id = threading.get_ident()
         while True:
             _priority, item_sequence, reservation, queued = self._queue.get()

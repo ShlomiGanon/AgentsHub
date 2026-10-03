@@ -1,3 +1,5 @@
+"""Response-pipeline wording and routing improvements."""
+
 import threading
 import time
 
@@ -10,6 +12,7 @@ from tests.api_fakes import VIEWER_IDENTITY, auth_headers, build_context
 
 
 def _event(event_id: str, source_message_id: str | None = None) -> dict:
+    """Event."""
     return {
         "event_id": event_id,
         "received_at": "2026-08-28T10:00:00+00:00",
@@ -22,6 +25,7 @@ def _event(event_id: str, source_message_id: str | None = None) -> dict:
 
 
 def test_conversation_history_is_isolated_bounded_and_chronological(tmp_path):
+    """Conversation history is isolated bounded and chronological."""
     store = open_persistence(str(tmp_path / "conversation.db"))
     try:
         for index in range(5):
@@ -37,6 +41,7 @@ def test_conversation_history_is_isolated_bounded_and_chronological(tmp_path):
 
 
 def test_long_poll_wakes_after_notification_commit(tmp_path):
+    """Long poll wakes after notification commit."""
     store = open_persistence(str(tmp_path / "notifications.db"))
     try:
         event_id = store.append_event(_event("event-1"))
@@ -58,6 +63,7 @@ def test_long_poll_wakes_after_notification_commit(tmp_path):
 
 
 def test_duplicate_source_message_returns_the_existing_event(tmp_path):
+    """Duplicate source message returns the existing event."""
     store = open_persistence(str(tmp_path / "duplicates.db"))
     try:
         first = store.append_event(_event("first", "telegram-message-7"))
@@ -70,6 +76,7 @@ def test_duplicate_source_message_returns_the_existing_event(tmp_path):
 
 
 def test_policy_queue_shared_store_key_serializes_different_senders():
+    """Policy queue shared store key serializes different senders."""
     processed: list[str] = []
     event_queue = PolicyAwareEventQueue(processed.append, workers=2, max_size=10, reserved_continuation_percent=20)
     event_queue.start()
@@ -82,6 +89,7 @@ def test_policy_queue_shared_store_key_serializes_different_senders():
 
 
 def test_policy_queue_different_store_keys_run_together():
+    """Policy queue different store keys run together."""
     started: list[str] = []
     release = threading.Event()
 
@@ -106,6 +114,7 @@ def test_policy_queue_different_store_keys_run_together():
 
 
 def test_policy_queue_preserves_same_resource_order_and_runs_to_idle():
+    """Policy queue preserves same resource order and runs to idle."""
     processed: list[str] = []
     event_queue = PolicyAwareEventQueue(processed.append, workers=2, max_size=10, reserved_continuation_percent=20)
     event_queue.start()
@@ -118,6 +127,7 @@ def test_policy_queue_preserves_same_resource_order_and_runs_to_idle():
 
 
 def test_policy_queue_reserves_capacity_for_continuations():
+    """Policy queue reserves capacity for continuations."""
     event_queue = PolicyAwareEventQueue(lambda _item: None, workers=1, max_size=5, reserved_continuation_percent=20)
     normal = [event_queue.reserve(False) for _ in range(4)]
 
@@ -132,6 +142,7 @@ def test_policy_queue_reserves_capacity_for_continuations():
 
 
 def test_policy_queue_stop_returns_within_timeout_when_a_worker_is_blocked(monkeypatch):
+    """Policy queue stop returns within timeout when a worker is blocked."""
     from orchestrator import event_queue as event_queue_module
 
     monkeypatch.setattr(event_queue_module, "STOP_JOIN_TIMEOUT_SECONDS", 0.2)
@@ -155,6 +166,7 @@ def test_policy_queue_stop_returns_within_timeout_when_a_worker_is_blocked(monke
 
 
 def test_repeating_an_outcome_does_not_duplicate_the_notification(tmp_path):
+    """Repeating an outcome does not duplicate the notification."""
     store = open_persistence(str(tmp_path / "outcome-idempotency.db"))
     try:
         event_id = store.append_event(_event("event-1"))
@@ -168,6 +180,7 @@ def test_repeating_an_outcome_does_not_duplicate_the_notification(tmp_path):
 
 
 def test_failed_dag_step_blocks_its_dependents_without_reordering_results():
+    """Failed dag step blocks its dependents without reordering results."""
     class _Settings:
         @staticmethod
         def get_retry_count():
@@ -197,6 +210,7 @@ def test_failed_dag_step_blocks_its_dependents_without_reordering_results():
 
 
 def test_step_waits_for_required_event_data_and_resumes_without_an_attempt():
+    """Step waits for required event data and resumes without an attempt."""
     calls: list[str] = []
 
     class _Settings:
@@ -233,6 +247,7 @@ def test_step_waits_for_required_event_data_and_resumes_without_an_attempt():
 
 
 def test_wait_request_collects_all_missing_fields_from_the_remaining_plan():
+    """Wait request collects all missing fields from the remaining plan."""
     class _Settings:
         @staticmethod
         def get_retry_count():
@@ -266,6 +281,7 @@ def test_wait_request_collects_all_missing_fields_from_the_remaining_plan():
 
 
 def test_api_returns_and_accepts_trace_id(tmp_path):
+    """Api returns and accepts trace id."""
     ctx = build_context(tmp_path)
     try:
         client = build_app(ctx).test_client()
@@ -279,6 +295,7 @@ def test_api_returns_and_accepts_trace_id(tmp_path):
 
 
 def test_removed_streaming_endpoint_is_not_registered(tmp_path):
+    """Removed streaming endpoint is not registered."""
     ctx = build_context(tmp_path)
     try:
         response = build_app(ctx).test_client().post(

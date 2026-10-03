@@ -11,6 +11,8 @@ from persistence import AttendanceCycle, TeamStatusPersistenceError, open_team_s
 
 
 def _aware_datetime(value: str | None) -> datetime:
+    """Aware datetime."""
+
     if not value:
         return datetime.now(timezone.utc)
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -48,6 +50,8 @@ class TeamStatusAgent(Agent):
     response_window_hours = 1
 
     def __init__(self, model: str, api_key: str | None = None):
+        """Init."""
+
         if not self.status_db_path:
             raise TypeError("TeamStatusAgent requires a class-level status_db_path")
         self.status_store = open_team_status_persistence(self.status_db_path)
@@ -127,6 +131,8 @@ class TeamStatusAgent(Agent):
         return self.status_store.claim_broadcast()
 
     def _open_cycle(self, now_iso: str) -> tuple[AttendanceCycle, list[str]]:
+        """Open cycle."""
+
         now = _aware_datetime(now_iso or None)
         local_now = now.astimezone(ZoneInfo(self.timezone_name))
         deadline = now + timedelta(hours=self.response_window_hours)
@@ -146,6 +152,8 @@ class TeamStatusAgent(Agent):
         idempotent=True,
     )
     def start_daily_attendance_check(self, now_iso: str = "") -> str:
+        """Start daily attendance check."""
+
         cycle, requested = self._open_cycle(now_iso)
         if not cycle.created:
             return f"The attendance cycle for {cycle.cycle_key} is already open."
@@ -173,6 +181,8 @@ class TeamStatusAgent(Agent):
         unavailable_days: int = 0,
         received_at: str = "",
     ) -> str:
+        """Record attendance response."""
+
         telegram_identity = get_authenticated_request_identity()
         if not telegram_identity:
             return failed_tool_result("The attendance response was not stored: authenticated requester identity is unavailable.")
@@ -221,6 +231,8 @@ class TeamStatusAgent(Agent):
         side_effecting=False,
     )
     def report_team_availability(self, as_of_iso: str = "") -> str:
+        """Report team availability."""
+
         now = _aware_datetime(as_of_iso or None)
         snapshot = self.status_store.availability_snapshot(now.isoformat())
         if not snapshot:

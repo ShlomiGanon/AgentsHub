@@ -1,5 +1,5 @@
-"""agents/neighboring_forces_agent.py's shared, parameterized NeighboringForcesAgent base class
-(docs/Admin_Tables_Plan.md section 3) -- default dispatch/capacity/ETA behavior, independent of
+"""Agents/neighboring_forces_agent.py's shared, parameterized NeighboringForcesAgent base class
+ -- default dispatch/capacity/ETA behavior, independent of
 either profile that subclasses it. profiles/response_team.py's own "squad" override and
 profiles/firefighting.py's own force kinds are covered by their own test files, not duplicated
 here."""
@@ -9,6 +9,7 @@ from agents import runtime as agent_runtime
 
 
 class _TestNeighboringForcesAgent(NeighboringForcesAgent):
+    """TestNeighboringForcesAgent."""
     dispatch_db_path = ""
     force_bases = {"police": "station_a", "ambulance": "station_b"}
     force_pool_size = 2
@@ -16,11 +17,13 @@ class _TestNeighboringForcesAgent(NeighboringForcesAgent):
 
 
 def _agent(tmp_path):
+    """Agent."""
     _TestNeighboringForcesAgent.dispatch_db_path = str(tmp_path / "forces.db")
     return _TestNeighboringForcesAgent(model="test-model")
 
 
 def _call_tool(agent, name, **kwargs):
+    """Call tool."""
     token = agent_runtime._current_allowed_tools.set(frozenset({name}))
     try:
         return agent._wrapped_tools[name](**kwargs)
@@ -29,6 +32,7 @@ def _call_tool(agent, name, **kwargs):
 
 
 def test_constructor_requires_a_dispatch_db_path():
+    """Constructor requires a dispatch db path."""
     class _NoPathAgent(NeighboringForcesAgent):
         dispatch_db_path = ""
 
@@ -40,6 +44,7 @@ def test_constructor_requires_a_dispatch_db_path():
 
 
 def test_descriptor_and_tools_exposed(tmp_path):
+    """Descriptor and tools exposed."""
     agent = _agent(tmp_path)
 
     assert agent.name == "neighboring_forces_agent"
@@ -48,6 +53,7 @@ def test_descriptor_and_tools_exposed(tmp_path):
 
 
 def test_dispatch_succeeds_within_the_pool_and_records_a_real_row(tmp_path):
+    """Dispatch succeeds within the pool and records a real row."""
     agent = _agent(tmp_path)
 
     result = _call_tool(agent, "dispatch_neighboring_force", kind="police", target_area="downtown", unit_count=2)
@@ -60,6 +66,7 @@ def test_dispatch_succeeds_within_the_pool_and_records_a_real_row(tmp_path):
 
 
 def test_dispatch_signals_resource_unavailable_once_the_pool_is_exhausted(tmp_path):
+    """Dispatch signals resource unavailable once the pool is exhausted."""
     agent = _agent(tmp_path)
     _call_tool(agent, "dispatch_neighboring_force", kind="police", target_area="downtown", unit_count=2)
 
@@ -71,6 +78,7 @@ def test_dispatch_signals_resource_unavailable_once_the_pool_is_exhausted(tmp_pa
 
 
 def test_unknown_kind_asks_for_clarification_and_records_nothing(tmp_path):
+    """Unknown kind asks for clarification and records nothing."""
     agent = _agent(tmp_path)
 
     result = _call_tool(agent, "dispatch_neighboring_force", kind="bulldozer", target_area="downtown")
@@ -86,6 +94,7 @@ def test_missing_target_area_asks_for_clarification(tmp_path):
     # own `agent`/its held-open sqlite3 connection goes out of scope and releases its Windows
     # file lock, which raised a PermissionError on cleanup. tmp_path's own (later, pytest-owned)
     # cleanup doesn't race this way.
+    """Missing target area asks for clarification."""
     class _A(NeighboringForcesAgent):
         dispatch_db_path = ""
         force_bases = {"police": "station_a"}
@@ -97,6 +106,7 @@ def test_missing_target_area_asks_for_clarification(tmp_path):
 
 
 def test_list_neighboring_force_dispatches_reports_every_recorded_row(tmp_path):
+    """List neighboring force dispatches reports every recorded row."""
     agent = _agent(tmp_path)
     _call_tool(agent, "dispatch_neighboring_force", kind="ambulance", target_area="downtown", unit_count=1)
 
@@ -108,6 +118,7 @@ def test_list_neighboring_force_dispatches_reports_every_recorded_row(tmp_path):
 
 
 def test_default_eta_is_45_for_same_area_and_180_for_different_areas_with_no_eta_fn(tmp_path):
+    """Default eta is 45 for same area and 180 for different areas with no eta fn."""
     agent = _agent(tmp_path)
 
     same_area = _call_tool(agent, "dispatch_neighboring_force", kind="police", target_area="station_a", unit_count=1)
@@ -115,6 +126,7 @@ def test_default_eta_is_45_for_same_area_and_180_for_different_areas_with_no_eta
 
 
 def test_custom_eta_fn_is_used_when_provided(tmp_path):
+    """Custom eta fn is used when provided."""
     class _A(NeighboringForcesAgent):
         dispatch_db_path = ""
         force_bases = {"police": "station_a"}

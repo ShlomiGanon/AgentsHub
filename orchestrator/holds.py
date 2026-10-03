@@ -1,4 +1,4 @@
-"""Holds (work_plan.md §6.2, §6.7)."""
+"""Create and resolve clarification, approval, and event-data holds."""
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
@@ -19,6 +19,8 @@ UNRESOLVED_FIELD = "classification"
 
 @dataclass(frozen=True)
 class HoldAnswerResult:
+    """Outcome of answering a hold, including unauthorized and not-found cases."""
+
     status: Literal[
         "approved", "rejected", "resolved", "unauthorized", "not_found",
         "invalid_classification", "invalid_candidate",
@@ -28,14 +30,9 @@ class HoldAnswerResult:
 
 
 def protocol_requires_approval(protocol: Protocol, originated_from_commander: bool) -> bool:
-    """One policy for every ingestion path.
+    """True when this protocol must pause for commander approval before it runs."""
 
-    `commander_only` means execution is commander-controlled, not that a
-    viewer may not request it: a non-commander request is persisted as a hold
-    and only a commander can resolve that hold. `requires_confirmation`
-    additionally forces a hold for a commander's own request.
-    """
-
+    # commander_only still lets a viewer request it; the hold is what a commander then answers.
     return bool(
         getattr(protocol, "requires_confirmation", False)
         or (
@@ -95,7 +92,7 @@ def answer_approval_hold(
     answering_level: PermissionLevel,
     decision: Literal["approved", "rejected"] | str,
 ) -> HoldAnswerResult:
-    """Accept an answer only from a commander, validated *now* — at the moment they answer, not whatever level they held when the hold was created."""
+    """Accept an approval answer only from a commander at the moment they answer."""
 
     if not is_permitted(answering_level, RequestedOperation.APPROVE_RUN):
         return HoldAnswerResult(status="unauthorized", message=f"level {answering_level.name} may not approve a run")
@@ -129,7 +126,7 @@ def _answer_ambiguous_selection_hold(
     held: dict,
     decision: str,
 ) -> HoldAnswerResult:
-    """`"approved"`/`"rejected"` answer nothing here — an ambiguous hold asks which protocol to run, never a yes/no question (§6.7's own second bullet)."""
+    """Resolve an ambiguous hold by choosing one of the candidate protocol names."""
 
     candidates = held["candidate_protocol_names"]
     if decision not in candidates:
@@ -148,7 +145,7 @@ def _answer_ambiguous_selection_hold(
 
 
 def determine_clarification_hold(extraction_result: "ExtractionResult") -> bool:
-    """True when the event must be held — extraction couldn't resolve a classification, whether because the text didn't fit any registered type or because the source stated a type outs..."""
+    """True when extraction could not resolve a classification."""
 
     return extraction_result.classification is None
 
@@ -193,7 +190,7 @@ def answer_clarification_hold(
     chosen_classification: str,
     event_type_registry: "EventTypeRegistry",
 ) -> HoldAnswerResult:
-    """Accept a resolution only from a commander, and only a classification drawn from the loaded registry — free text is rejected outright, since the registry is fixed for the run and..."""
+    """Accept a classification from a commander only when it is in the loaded registry."""
 
     if not is_permitted(answering_level, RequestedOperation.RESOLVE_CLARIFICATION):
         return HoldAnswerResult(status="unauthorized", message=f"level {answering_level.name} may not resolve a hold")

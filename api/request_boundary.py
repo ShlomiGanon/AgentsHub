@@ -8,7 +8,13 @@ from typing import TYPE_CHECKING
 from flask import Flask, jsonify, request
 from werkzeug.exceptions import HTTPException
 
-from auth.permissions import PermissionLevel, RequestedOperation, is_permitted
+from auth.permissions import (
+    BOT_SERVICE_IDENTITY,
+    BOT_SERVICE_KEY_ENV_VAR,
+    PermissionLevel,
+    RequestedOperation,
+    is_permitted,
+)
 from messages import get_current_catalog
 from tools import get_trace_id, record_telegram_security_metric
 
@@ -94,13 +100,7 @@ class ServiceUnavailableError(ApiError):
 IDENTITY_HEADER = "X-Identity"
 SERVICE_KEY_HEADER = "X-Service-Key"
 
-# Duplicated rather than imported from bot.contracts.BOT_SERVICE_IDENTITY: api may not import
-# bot (tests/test_architecture.py enforces the package boundary — bot calls api over HTTP, not
-# api importing bot's Python code), the same reason IDENTITY_HEADER's "X-Identity" string is
-# already independently duplicated on the bot side rather than shared. Keep this in sync with
-# bot.contracts.BOT_SERVICE_IDENTITY and BOT_SERVICE_KEY_ENV_VAR if either ever changes.
-BOT_SERVICE_IDENTITY = "bot-service"
-BOT_SERVICE_KEY_ENV_VAR = "BOT_SERVICE_KEY"
+# Canonical values live in auth.permissions so api and bot never import each other.
 SYSTEM_ADMIN_IDENTITY = "Admin"
 SYSTEM_ADMIN_FULL_NAME = "Admin"
 

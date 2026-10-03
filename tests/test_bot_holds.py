@@ -22,6 +22,7 @@ from tests.bot_fakes import FakeBotApiClient, FakeTelegramClient
 
 
 def _run(coro):
+    """Run."""
     return asyncio.run(coro)
 
 
@@ -37,6 +38,7 @@ AMBIGUOUS_NOTICE = HeldApprovalNotice(
 
 
 def test_flagged_protocol_prompt_asks_yes_no():
+    """Flagged protocol prompt asks yes no."""
     text, buttons = format_approval_prompt(FLAGGED_NOTICE)
 
     assert "Should this run?" in text
@@ -45,6 +47,7 @@ def test_flagged_protocol_prompt_asks_yes_no():
 
 
 def test_ambiguous_selection_prompt_shows_candidates_as_buttons():
+    """Ambiguous selection prompt shows candidates as buttons."""
     text, buttons = format_approval_prompt(AMBIGUOUS_NOTICE)
 
     assert "minor_incident_review" in text
@@ -56,7 +59,7 @@ def test_approval_prompt_risk_level_is_translated_for_hebrew_not_left_as_raw_eng
     """Found while building item #9's protocol suffix — `risk_level` is a fixed
     internal English identifier (`Literal["high", "low"]`), the same class of bug
     as CRITICAL_FIXES_PLAN.MD item 4's outcome-word leak. Fixed here too, per
-    REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md's HARD RULE against a third instance."""
+     HARD RULE against a third instance."""
     from messages import get_catalog
 
     text, _buttons = format_approval_prompt(FLAGGED_NOTICE, get_catalog("he"))
@@ -74,6 +77,7 @@ def test_an_unrecognized_reason_raises_instead_of_rendering_as_ambiguous():
     # format_approval_prompt must now fail loudly on any reason value
     # that isn't one of the two it actually knows how to render, rather
     # than quietly mis-rendering it as the other one.
+    """An unrecognized reason raises instead of rendering as ambiguous."""
     stale_notice = HeldApprovalNotice(hold_id="hold-3", event_id="e3", reason="no_match", risk_level="low", risk_reason="r")
 
     with pytest.raises(ValueError):
@@ -81,6 +85,7 @@ def test_an_unrecognized_reason_raises_instead_of_rendering_as_ambiguous():
 
 
 def test_the_two_reasons_produce_different_prompt_text():
+    """The two reasons produce different prompt text."""
     flagged_text, _ = format_approval_prompt(FLAGGED_NOTICE)
     ambiguous_text, _ = format_approval_prompt(AMBIGUOUS_NOTICE)
     assert flagged_text != ambiguous_text
@@ -91,6 +96,7 @@ def test_prompt_buttons_encode_event_id_not_hold_id():
     # differ, so this fails loudly if the callback data ever regresses to
     # encoding the orchestrator's internal hold ID again — api/operations.py's
     # POST /Approve/<event_id> (§7.11) only ever accepts an event ID.
+    """Prompt buttons encode event id not hold id."""
     _text, flagged_buttons = format_approval_prompt(FLAGGED_NOTICE)
     for _label, callback_data in flagged_buttons:
         assert FLAGGED_NOTICE.event_id in callback_data
@@ -103,6 +109,7 @@ def test_prompt_buttons_encode_event_id_not_hold_id():
 
 
 def test_pushed_to_every_commander():
+    """Pushed to every commander."""
     api = FakeBotApiClient(commander_chat_ids=("c1", "c2"))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -113,6 +120,7 @@ def test_pushed_to_every_commander():
 
 
 def test_uncertain_verdict_is_not_phrased_as_a_question_and_has_no_buttons():
+    """Uncertain verdict is not phrased as a question and has no buttons."""
     api = FakeBotApiClient(commander_chat_ids=("c1",))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -125,7 +133,7 @@ def test_uncertain_verdict_is_not_phrased_as_a_question_and_has_no_buttons():
 
 
 def test_uncertain_verdict_reporter_notice_is_short_generic_and_carries_no_insight_text():
-    """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 2 (item #8): distinct from
+    """Part 2 (item #8): distinct from
     the commander-only detailed notice above — no insight text, no event ID,
     just a short fixed acknowledgement."""
     text = format_uncertain_verdict_reporter_notice()
@@ -140,6 +148,7 @@ def test_no_match_notice_is_not_phrased_as_a_question_and_has_no_buttons():
     # NO_MATCH is a real terminal outcome plus a one-way notification, not
     # a hold — same shape as notify_uncertain_verdict, never routed through
     # format_approval_prompt/push_approval_prompt at all.
+    """No match notice is not phrased as a question and has no buttons."""
     api = FakeBotApiClient(commander_chat_ids=("c1",))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -157,6 +166,7 @@ def test_no_match_notice_is_not_phrased_as_a_question_and_has_no_buttons():
 
 
 def test_no_match_notice_risk_level_is_translated_for_hebrew_not_left_as_raw_english():
+    """No match notice risk level is translated for hebrew not left as raw english."""
     from messages import get_catalog
 
     notice = NoMatchNotice(event_id="e1", raw_text="raw", reason="no match", risk_level="low", risk_reason="informational")
@@ -167,6 +177,7 @@ def test_no_match_notice_risk_level_is_translated_for_hebrew_not_left_as_raw_eng
 
 
 def test_no_match_notice_reaches_every_commander():
+    """No match notice reaches every commander."""
     api = FakeBotApiClient(commander_chat_ids=("c1", "c2"))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -178,10 +189,12 @@ def test_no_match_notice_reaches_every_commander():
 
 
 def test_callback_data_round_trips():
+    """Callback data round trips."""
     assert parse_callback_data(build_callback_data("e1", "approved")) == ("e1", "approved")
 
 
 def test_viewer_cannot_approve():
+    """Viewer cannot approve."""
     api = FakeBotApiClient(users={"v1": "viewer"})
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -193,6 +206,7 @@ def test_viewer_cannot_approve():
 
 
 def test_commander_approves_and_gets_confirmation():
+    """Commander approves and gets confirmation."""
     api = FakeBotApiClient(users={"c1": "commander"}, approval_answer_outcome=HoldAnswerOutcome(status="approved"))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -204,6 +218,7 @@ def test_commander_approves_and_gets_confirmation():
 
 
 def test_commander_rejects_and_gets_confirmation():
+    """Commander rejects and gets confirmation."""
     api = FakeBotApiClient(users={"c1": "commander"}, approval_answer_outcome=HoldAnswerOutcome(status="rejected"))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -218,6 +233,7 @@ def test_an_invalid_candidate_name_reports_the_apis_message():
     # protocol name outside an ambiguous-selection hold's own list — this
     # confirms the bot side has somewhere real to render it, not just a
     # type that accepts the value.
+    """An invalid candidate name reports the apis message."""
     api = FakeBotApiClient(
         users={"c1": "commander"},
         approval_answer_outcome=HoldAnswerOutcome(status="invalid_candidate", message="'bogus' is not one of this hold's candidates: ['a', 'b']"),
@@ -231,6 +247,7 @@ def test_an_invalid_candidate_name_reports_the_apis_message():
 
 
 def test_second_answer_to_an_already_answered_hold_names_who_answered_it():
+    """Second answer to an already answered hold names who answered it."""
     api = FakeBotApiClient(
         users={"c2": "commander"},
         approval_answer_outcome=HoldAnswerOutcome(status="not_found", resolved_by="c1", message="already answered"),
@@ -258,6 +275,7 @@ from tests.bot_fakes import FakeBotApiClient, FakeTelegramClient
 
 
 def _run(coro):
+    """Run."""
     return asyncio.run(coro)
 
 
@@ -271,11 +289,13 @@ NOTICE = HeldClarificationNotice(
 
 
 def test_clarification_callback_data_round_trips():
+    """Clarification callback data round trips."""
     data = build_clarification_callback_data("event-1", "fire")
     assert parse_clarification_callback_data(data) == ("event-1", "fire")
 
 
 def test_prompt_shows_raw_text_and_unresolved_field():
+    """Prompt shows raw text and unresolved field."""
     text = format_clarification_prompt(NOTICE)
     assert NOTICE.raw_text in text
     assert "classification" in text
@@ -283,6 +303,7 @@ def test_prompt_shows_raw_text_and_unresolved_field():
 
 
 def test_pushed_to_every_commander_with_buttons_not_free_text():
+    """Pushed to every commander with buttons not free text."""
     api = FakeBotApiClient(commander_chat_ids=("c1", "c2"))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -299,6 +320,7 @@ def test_pushed_buttons_encode_event_id_not_hold_id():
     # differ, so this fails loudly if the callback data ever regresses to
     # encoding the orchestrator's internal hold ID again — api/operations.py's
     # POST /Clarify/<event_id> (§7.11) only ever accepts an event ID.
+    """Pushed buttons encode event id not hold id."""
     api = FakeBotApiClient(commander_chat_ids=("c1",))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -311,6 +333,7 @@ def test_pushed_buttons_encode_event_id_not_hold_id():
 
 
 def test_unregistered_answerer_is_refused():
+    """Unregistered answerer is refused."""
     api = FakeBotApiClient(users={})
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -321,6 +344,7 @@ def test_unregistered_answerer_is_refused():
 
 
 def test_viewer_cannot_resolve_a_hold():
+    """Viewer cannot resolve a hold."""
     api = FakeBotApiClient(users={"v1": "viewer"})
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -332,6 +356,7 @@ def test_viewer_cannot_resolve_a_hold():
 
 
 def test_commander_answer_resumes_and_confirms():
+    """Commander answer resumes and confirms."""
     api = FakeBotApiClient(
         users={"c1": "commander"},
         clarification_answer_outcome=HoldAnswerOutcome(status="resolved"),
@@ -346,6 +371,7 @@ def test_commander_answer_resumes_and_confirms():
 
 
 def test_second_answer_to_an_already_resolved_hold_names_who_resolved_it():
+    """Second answer to an already resolved hold names who resolved it."""
     api = FakeBotApiClient(
         users={"c2": "commander"},
         clarification_answer_outcome=HoldAnswerOutcome(status="not_found", resolved_by="c1", message="already resolved"),

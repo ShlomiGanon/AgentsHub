@@ -1,32 +1,19 @@
 """Firefighting protocol declarations and direct-tool binders."""
 
 from dataclasses import replace
-from datetime import datetime, timezone
-from pathlib import Path
 
-from agents import Agent, InvocationPolicy, NeighboringForcesAgent, SurveillanceAgent, TeamStatusAgent, failed_tool_result, get_authenticated_request_identity, tool
-from messages import get_catalog
-from persistence import (
-    ApparatusStoreError,
-    open_apparatus_store,
-    open_incident_responder_store,
-    open_response_team_surveillance_store,
-    open_team_status_persistence,
-)
-from profiles.admin_tables import AdminColumn, AdminTable
-from profiles.contracts import AgentSpec, OptimizationPolicy
-from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
+from agents import InvocationPolicy
+from profiles.firefighting import FORCE_BASES
 from protocols import CriticalityLevel, Protocol, Step
 from protocols import as_aware_iso as _as_aware_iso
 from protocols import bind_record_attendance_response
-
-import profiles.firefighting as _facade
-globals().update({name: getattr(_facade, name) for name in dir(_facade) if not name.startswith("__")})
 
 _FAST_JUDGMENT_POLICY = InvocationPolicy(max_output_tokens=400, reasoning_effort="none")
 
 
 def _report_text(event: dict) -> str:
+    """Prefer the extracted description, then the original report text."""
+
     return (event.get("description") or event.get("raw_text") or "").strip()
 
 
@@ -130,6 +117,8 @@ def _bind_apparatus_movement(event: dict) -> tuple[Step, ...]:
 
 
 def _bind_update_camera_observation(event: dict) -> tuple[Step, ...]:
+    """One camera-observation step per named camera, or a missing-fields hold."""
+
     entities = event.get("entities") or []
     description = _report_text(event)
     if not entities:
@@ -164,6 +153,8 @@ def _bind_update_camera_observation(event: dict) -> tuple[Step, ...]:
 
 
 def _bind_dispatch_drone(event: dict) -> tuple[Step, ...]:
+    """Direct-tool recon dispatch when area is known; otherwise a missing-fields hold."""
+
     area = (event.get("area") or "").strip()
     description = _report_text(event)
     missing = tuple(name for name in ("area",) if not area)
@@ -242,6 +233,8 @@ def _bind_dispatch_drone_to_incident(event: dict) -> tuple[Step, ...]:
 
 
 def _bind_log_fire_observation(event: dict) -> tuple[Step, ...]:
+    """Record an already-resolved fire as extinguished; never dispatch."""
+
     area = (event.get("area") or "").strip()
     missing = tuple(name for name in ("area",) if not area)
     kwargs: dict = {}
@@ -262,6 +255,8 @@ def _bind_log_fire_observation(event: dict) -> tuple[Step, ...]:
 
 
 def _bind_report_active_fires(event: dict) -> tuple[Step, ...]:
+    """Read-only list of burning fires, optionally filtered to one area."""
+
     area = (event.get("area") or "").strip()
     kwargs = {"area": area} if area else {}
     return (
@@ -278,6 +273,8 @@ def _bind_report_active_fires(event: dict) -> tuple[Step, ...]:
 
 
 def _bind_dispatch_mutual_aid(event: dict) -> tuple[Step, ...]:
+    """Ask the mutual-aid specialist to pick a force kind, or hold if area is missing."""
+
     area = (event.get("area") or "").strip()
     description = _report_text(event)
     missing = tuple(name for name in ("area",) if not area)
@@ -480,17 +477,11 @@ PROTOCOLS = [
         commander_only=False,
         needs_insight=False,
         direct_tool_binder=_bind_report_fire_incident,
-        # A field/citizen fire report can arrive in any group, not only the
-        # camera-ops channel this protocol's own agent (surveillance_agent) is bound
-        # to -- keep it selectable everywhere (orchestrator/group_routing.py).
+        # A field report can arrive in any group, not only the camera-ops channel.
         safety_critical=True,
     ),
     Protocol(
-        # Split from report_fire_incident (over-dispatch fix, parity with response_team's
-        # report_security_incident split): an already-resolved report has no dispatch tool
-        # available at all here, structurally, not merely a prompt instruction the agent could
-        # still disregard. It does write the fires registry (extinguished) so the COP matches
-        # the report.
+        # Already-resolved reports have no dispatch tool at all, so the agent cannot over-send.
         name="log_fire_observation",
         description=(
             "Applies when a report describes a fire-related observation that is explicitly "
@@ -595,4 +586,19 @@ PROTOCOLS = [
         requires_confirmation=False,
         commander_only=False,
     ),
+]
+
+__all__ = [
+    "PROTOCOLS",
+    "_as_aware_iso",
+    "_bind_apparatus_movement",
+    "_bind_dispatch_drone",
+    "_bind_dispatch_drone_to_incident",
+    "_bind_dispatch_mutual_aid",
+    "_bind_log_fire_observation",
+    "_bind_record_crew_availability",
+    "_bind_record_crew_shift_status",
+    "_bind_report_active_fires",
+    "_bind_report_fire_incident",
+    "_bind_update_camera_observation",
 ]

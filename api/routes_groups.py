@@ -72,6 +72,8 @@ def build_groups_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/Groups", methods=["GET"])
     def list_groups():
+        """List Telegram group bindings and the agents they may target."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.LIST_GROUPS)
         return jsonify({
@@ -81,6 +83,8 @@ def build_groups_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/Groups/<chat_id>", methods=["PUT"])
     def put_group(chat_id):
+        """Create or replace one Telegram group -> agent binding."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.MANAGE_GROUPS)
 
@@ -119,6 +123,8 @@ def build_groups_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/Groups/<chat_id>", methods=["DELETE"])
     def delete_group(chat_id):
+        """Remove one Telegram group binding."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.MANAGE_GROUPS)
 
@@ -134,6 +140,8 @@ def build_groups_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/Groups/<chat_id>/approve", methods=["POST"])
     def approve_group(chat_id):
+        """Approve an auto-registered Telegram group so it may receive traffic."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.MANAGE_GROUPS)
         try:

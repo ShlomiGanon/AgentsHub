@@ -24,6 +24,8 @@ from auth.permissions import RequestedOperation
 
 logger = logging.getLogger(__name__)
 
+# --- event-data replies ---
+
 _EVENT_DATA_REPLY_TARGETS: dict[tuple[str, str], str] = {}
 
 
@@ -49,6 +51,8 @@ def unregister_event_data_reply_target(event_id: str) -> None:
     for key in stale:
         _EVENT_DATA_REPLY_TARGETS.pop(key, None)
 
+
+# --- approval ---
 
 CALLBACK_PREFIX = "approve"
 
@@ -166,6 +170,8 @@ async def push_approval_prompt(deps: "BotDeps", notice: "HeldApprovalNotice") ->
 
 
 
+# --- notices ---
+
 def format_uncertain_verdict_notice(
     notice: "UncertainVerdictNotice", catalog: MessageCatalog | None = None
 ) -> str:
@@ -212,9 +218,7 @@ def format_resource_unavailable_alert_notice(
 
 
 async def notify_resource_unavailable_alert(deps: "BotDeps", notice: "ResourceUnavailableAlertNotice") -> None:
-    """Commander-only, private-chat delivery — mirrors `notify_uncertain_verdict` exactly.
-    Never sent to the reporter's own chat: that chat only ever gets the plain job_finished
-    reply, built from `report_text`, which never carries this alert's alternatives."""
+    """Send the resource-unavailable alert to commander private chats, never the reporter."""
 
     text = format_resource_unavailable_alert_notice(notice, message_catalog_for(deps))
 
@@ -242,10 +246,7 @@ def format_hold_escalation_notice(notice: "HoldEscalationNotice", catalog: Messa
 
 
 async def notify_hold_escalation(deps: "BotDeps", notice: "HoldEscalationNotice") -> None:
-    """Commander-only, private-chat delivery — mirrors `notify_resource_unavailable_alert`
-    exactly (item 8: an unresolved hold that went past the configured escalation window with no
-    answer). Never sent to the original sender's own chat, which keeps getting only its own
-    reminder of the same original prompt."""
+    """Send the hold-escalation alert to commander private chats, never the original sender."""
 
     text = format_hold_escalation_notice(notice, message_catalog_for(deps))
 
@@ -260,9 +261,7 @@ async def notify_hold_escalation(deps: "BotDeps", notice: "HoldEscalationNotice"
 
 
 def format_uncertain_verdict_reporter_notice(catalog: MessageCatalog | None = None) -> str:
-    """The short, generic counterpart to `format_uncertain_verdict_notice` —
-    delivered to the original reporter (any role), carries no insight text by
-    design (REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 2 / item #8)."""
+    """Reporter-facing uncertain notice with no insight text."""
 
     messages = _catalog(catalog)
     return messages.text(
@@ -321,7 +320,7 @@ def _describe_outcome(outcome, catalog: MessageCatalog | None = None) -> str:
 
 
 async def handle_approval_answer(deps: "BotDeps", chat_id: str, answering_identity: str, event_id: str, choice: str) -> "HoldAnswerOutcome | None":
-    """`choice` is already "approved"/"rejected" for a flagged-protocol hold (the button's callback data), or the chosen candidate's protocol name for an ambiguous-selection hold — see..."""
+    """Authorize the answerer and resolve the approval hold via the API."""
 
     unregister_open_approval_hold(event_id)
     messages = message_catalog_for(deps)
@@ -339,6 +338,8 @@ async def handle_approval_answer(deps: "BotDeps", chat_id: str, answering_identi
     await deps.telegram_client.send_text(chat_id, _describe_outcome(outcome, messages))
     return outcome
 
+
+# --- clarification ---
 
 CLARIFICATION_CALLBACK_PREFIX = "clarify"
 
@@ -399,7 +400,7 @@ def _describe_clarification_outcome(outcome, catalog: MessageCatalog | None = No
         return outcome.message
 
     # "not_found": already resolved, by this same race or someone else —
-    # never silently re-accepted as if it were the first answer (§8.4).
+    # never silently re-accepted as if it were the first answer.
     who = messages.text("common.by_identity", identity=outcome.resolved_by) if outcome.resolved_by else ""
     return messages.text("clarification.already_resolved", who=who, message=outcome.message).strip()
 
@@ -462,6 +463,8 @@ def _friendly_action_type(protocol_name: str, messages: MessageCatalog) -> str:
         return messages.text("action.generic")
 
 
+
+# --- queue ---
 
 async def present_pending_approvals_queue(
     deps: "BotDeps", chat_id: str, answering_identity: str

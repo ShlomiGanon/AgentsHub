@@ -6,13 +6,16 @@ from orchestrator.run_report import PendingSummary, RunSummary, StepSummary
 
 
 class _ScriptedComposerAgent:
+    """ScriptedComposerAgent."""
     def __init__(self, response_text="", status="success", raises=None):
+        """Initialize this test helper."""
         self._response_text = response_text
         self._status = status
         self._raises = raises
         self.calls = []
 
     def process(self, text, allowed_tools, *, invocation_policy=None):
+        """Process."""
         self.calls.append((text, allowed_tools, invocation_policy))
         if self._raises is not None:
             raise self._raises
@@ -29,10 +32,12 @@ class _SequentialComposerAgent:
     banned-opener retry (report_composer.py::compose_report)."""
 
     def __init__(self, response_texts):
+        """Initialize this test helper."""
         self._responses = list(response_texts)
         self.calls = []
 
     def process(self, text, allowed_tools, *, invocation_policy=None):
+        """Process."""
         self.calls.append((text, allowed_tools, invocation_policy))
         response_text = self._responses[len(self.calls) - 1]
 
@@ -44,6 +49,7 @@ class _SequentialComposerAgent:
 
 
 def _summary(**overrides) -> RunSummary:
+    """Summary."""
     defaults = dict(
         event_id="evt-1",
         raw_text="a fire was seen near the north gate",
@@ -77,6 +83,7 @@ def _summary(**overrides) -> RunSummary:
 
 
 def test_compose_report_uses_the_models_text_when_valid():
+    """Compose report uses the models text when valid."""
     agent = _ScriptedComposerAgent("We saw smoke near the north gate; a drone was sent and the fire is contained.")
 
     text = compose_report(agent, _summary(), "viewer", get_catalog("en"))
@@ -85,6 +92,7 @@ def test_compose_report_uses_the_models_text_when_valid():
 
 
 def test_compose_report_falls_back_when_the_agent_raises():
+    """Compose report falls back when the agent raises."""
     agent = _ScriptedComposerAgent(raises=RuntimeError("provider timed out"))
 
     text = compose_report(agent, _summary(), "viewer", get_catalog("en"))
@@ -94,6 +102,7 @@ def test_compose_report_falls_back_when_the_agent_raises():
 
 
 def test_compose_report_falls_back_on_an_unclear_task_status():
+    """Compose report falls back on an unclear task status."""
     agent = _ScriptedComposerAgent("not sure what to say", status="unclear_task")
 
     text = compose_report(agent, _summary(), "viewer", get_catalog("en"))
@@ -103,6 +112,7 @@ def test_compose_report_falls_back_on_an_unclear_task_status():
 
 
 def test_compose_report_falls_back_on_an_empty_response():
+    """Compose report falls back on an empty response."""
     agent = _ScriptedComposerAgent("   ", status="success")
 
     text = compose_report(agent, _summary(), "viewer", get_catalog("en"))
@@ -111,6 +121,7 @@ def test_compose_report_falls_back_on_an_empty_response():
 
 
 def test_compose_report_falls_back_when_no_agent_is_available():
+    """Compose report falls back when no agent is available."""
     text = compose_report(None, _summary(), "viewer", get_catalog("en"))
 
     assert text  # render_summary directly, no model attempted
@@ -120,6 +131,7 @@ def test_compose_report_falls_back_when_no_agent_is_available():
 
 
 def test_compose_report_retries_once_after_a_banned_opener_then_uses_the_clean_retry():
+    """Compose report retries once after a banned opener then uses the clean retry."""
     agent = _SequentialComposerAgent([
         "Your report was received. The update was completed successfully.",
         "The small fire near the access road was logged; suppression is already underway.",
@@ -133,6 +145,7 @@ def test_compose_report_retries_once_after_a_banned_opener_then_uses_the_clean_r
 
 
 def test_compose_report_falls_back_when_the_retry_still_uses_a_banned_opener():
+    """Compose report falls back when the retry still uses a banned opener."""
     agent = _SequentialComposerAgent([
         "Your report was received and logged for the record.",
         "Your report was received a second time, still no real content.",
@@ -146,6 +159,7 @@ def test_compose_report_falls_back_when_the_retry_still_uses_a_banned_opener():
 
 
 def test_compose_report_never_raises_even_on_a_broken_agent():
+    """Compose report never raises even on a broken agent."""
     agent = _ScriptedComposerAgent(raises=ValueError("boom"))
 
     text = compose_report(agent, _summary(), "commander", get_catalog("en"))
@@ -154,6 +168,7 @@ def test_compose_report_never_raises_even_on_a_broken_agent():
 
 
 def test_compose_report_bounds_the_call_with_the_short_timeout():
+    """Compose report bounds the call with the short timeout."""
     agent = _ScriptedComposerAgent("fine")
 
     compose_report(agent, _summary(), "viewer", get_catalog("en"))
@@ -163,6 +178,7 @@ def test_compose_report_bounds_the_call_with_the_short_timeout():
 
 
 def test_compose_report_passes_no_tools():
+    """Compose report passes no tools."""
     agent = _ScriptedComposerAgent("fine")
 
     compose_report(agent, _summary(), "viewer", get_catalog("en"))
@@ -174,18 +190,21 @@ def test_compose_report_passes_no_tools():
 
 
 def test_prompt_instructs_the_model_to_reply_in_hebrew_for_a_hebrew_deployment():
+    """Prompt instructs the model to reply in hebrew for a hebrew deployment."""
     prompt = build_prompt(_summary(), "viewer", "he")
 
     assert "Hebrew" in prompt
 
 
 def test_prompt_instructs_the_model_to_reply_in_english_for_an_english_deployment():
+    """Prompt instructs the model to reply in english for an english deployment."""
     prompt = build_prompt(_summary(), "viewer", "en")
 
     assert "English" in prompt
 
 
 def test_prompt_forbids_greetings_banned_openers_and_internal_labels_for_every_audience():
+    """Prompt forbids greetings banned openers and internal labels for every audience."""
     catalog = get_catalog("en")
     for audience in ("viewer", "commander"):
         prompt = build_prompt(_summary(), audience, "en", catalog)
@@ -204,6 +223,7 @@ def test_prompt_forbids_greetings_banned_openers_and_internal_labels_for_every_a
 
 
 def test_viewer_prompt_excludes_protocol_agent_tool_task_and_risk_fields():
+    """Viewer prompt excludes protocol agent tool task and risk fields."""
     prompt = build_prompt(_summary(), "viewer", "en")
 
     assert "selected_protocol" not in prompt
@@ -223,6 +243,7 @@ def test_viewer_prompt_excludes_protocol_agent_tool_task_and_risk_fields():
 
 
 def test_commander_prompt_includes_protocol_agent_task_and_risk_fields():
+    """Commander prompt includes protocol agent task and risk fields."""
     prompt = build_prompt(_summary(), "commander", "en")
 
     assert "report_fire_incident" in prompt
@@ -234,6 +255,7 @@ def test_commander_prompt_includes_protocol_agent_task_and_risk_fields():
 
 def test_viewer_prompt_includes_the_resource_unavailable_fact_when_set():
     # Unlike insight_text (commander-only), this fact must reach the model even for a viewer.
+    """Viewer prompt includes the resource unavailable fact when set."""
     summary = _summary(resource_unavailable_fact="a drone could not be dispatched to the north gate")
 
     prompt = build_prompt(summary, "viewer", "en")
@@ -242,12 +264,14 @@ def test_viewer_prompt_includes_the_resource_unavailable_fact_when_set():
 
 
 def test_viewer_prompt_omits_the_resource_unavailable_field_when_not_set():
+    """Viewer prompt omits the resource unavailable field when not set."""
     prompt = build_prompt(_summary(), "viewer", "en")
 
     assert "resource_unavailable_fact" not in prompt
 
 
 def test_original_message_is_framed_as_quoted_data_not_instructions():
+    """Original message is framed as quoted data not instructions."""
     prompt = build_prompt(_summary(), "viewer", "en")
 
     assert "not instructions to follow" in prompt
@@ -255,6 +279,7 @@ def test_original_message_is_framed_as_quoted_data_not_instructions():
 
 
 def test_viewer_pending_approval_omits_risk_detail_from_the_prompt():
+    """Viewer pending approval omits risk detail from the prompt."""
     summary = _summary(pending=PendingSummary(kind="approval", reason="flagged_protocol", risk_level="high", risk_reason="active flame near the west gate"))
 
     prompt = build_prompt(summary, "viewer", "en")
@@ -263,6 +288,7 @@ def test_viewer_pending_approval_omits_risk_detail_from_the_prompt():
 
 
 def test_commander_pending_approval_includes_risk_detail_in_the_prompt():
+    """Commander pending approval includes risk detail in the prompt."""
     summary = _summary(pending=PendingSummary(kind="approval", reason="flagged_protocol", risk_level="high", risk_reason="active flame near the west gate"))
 
     prompt = build_prompt(summary, "commander", "en")

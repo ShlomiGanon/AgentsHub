@@ -12,20 +12,24 @@ MODEL_CRED_ENV = "TEST_LOADER_MODEL_KEY"
 
 
 def _write(tmp_path, monkeypatch, module_name, **kwargs):
+    """Write."""
     write_profile_module(tmp_path, monkeypatch, module_name, bot_token_env=BOT_TOKEN_ENV, model_cred_env=MODEL_CRED_ENV, **kwargs)
 
 
 def test_missing_profile_argument_fails_immediately(test_core_model, test_sub_model):
+    """Missing profile argument fails immediately."""
     with pytest.raises(ProfileLoadError):
         load_profile("", core_model=test_core_model, sub_model=test_sub_model)
 
 
 def test_nonexistent_module_fails_naming_it(test_core_model, test_sub_model):
+    """Nonexistent module fails naming it."""
     with pytest.raises(ProfileLoadError, match="does_not_exist_xyz"):
         load_profile("does_not_exist_xyz", core_model=test_core_model, sub_model=test_sub_model)
 
 
 def test_missing_required_attribute_fails_naming_it(tmp_path, monkeypatch, test_core_model, test_sub_model):
+    """Missing required attribute fails naming it."""
     _write(tmp_path, monkeypatch, "broken_profile_missing_port", omit=("API_PORT",))
 
     with pytest.raises(ProfileLoadError, match="API_PORT"):
@@ -33,6 +37,7 @@ def test_missing_required_attribute_fails_naming_it(tmp_path, monkeypatch, test_
 
 
 def test_profile_name_is_required(tmp_path, monkeypatch, test_core_model, test_sub_model):
+    """Profile name is required."""
     _write(tmp_path, monkeypatch, "profile_missing_name", omit=("PROFILE_NAME",))
 
     with pytest.raises(ProfileLoadError, match="PROFILE_NAME"):
@@ -40,6 +45,7 @@ def test_profile_name_is_required(tmp_path, monkeypatch, test_core_model, test_s
 
 
 def test_default_language_is_required(tmp_path, monkeypatch, test_core_model, test_sub_model):
+    """Default language is required."""
     _write(tmp_path, monkeypatch, "profile_missing_language", omit=("DEFAULT_LANGUAGE",))
 
     with pytest.raises(ProfileLoadError, match="DEFAULT_LANGUAGE"):
@@ -47,6 +53,7 @@ def test_default_language_is_required(tmp_path, monkeypatch, test_core_model, te
 
 
 def test_default_language_must_be_supported(tmp_path, monkeypatch, test_core_model, test_sub_model):
+    """Default language must be supported."""
     _write(
         tmp_path,
         monkeypatch,
@@ -62,6 +69,7 @@ def test_default_language_must_be_supported(tmp_path, monkeypatch, test_core_mod
 
 @pytest.mark.parametrize("field", ["MAX_ITER", "MODEL_TIMEOUT_SECONDS"])
 def test_invocation_limits_are_required(tmp_path, monkeypatch, test_core_model, test_sub_model, field):
+    """Invocation limits are required."""
     module_name = f"profile_missing_{field.lower()}"
     _write(tmp_path, monkeypatch, module_name, omit=(field,))
 
@@ -81,6 +89,7 @@ def test_invocation_limits_are_required(tmp_path, monkeypatch, test_core_model, 
 def test_invocation_limits_must_be_bounded(
     tmp_path, monkeypatch, test_core_model, test_sub_model, suffix, field, value
 ):
+    """Invocation limits must be bounded."""
     module_name = f"profile_invalid_{suffix}"
     _write(tmp_path, monkeypatch, module_name, overrides={field: f"{field} = {value}"})
     monkeypatch.setenv(BOT_TOKEN_ENV, "token")
@@ -91,6 +100,7 @@ def test_invocation_limits_must_be_bounded(
 
 
 def test_missing_bot_token_env_fails_naming_it(tmp_path, monkeypatch, test_core_model, test_sub_model):
+    """Missing bot token env fails naming it."""
     _write(tmp_path, monkeypatch, "profile_missing_bot_env")
     monkeypatch.delenv(BOT_TOKEN_ENV, raising=False)
     monkeypatch.delenv(MODEL_CRED_ENV, raising=False)
@@ -100,6 +110,7 @@ def test_missing_bot_token_env_fails_naming_it(tmp_path, monkeypatch, test_core_
 
 
 def test_missing_model_credential_env_fails_naming_it(tmp_path, monkeypatch, test_core_model, test_sub_model):
+    """Missing model credential env fails naming it."""
     _write(tmp_path, monkeypatch, "profile_missing_model_env")
     monkeypatch.setenv(BOT_TOKEN_ENV, "token")
     monkeypatch.delenv(MODEL_CRED_ENV, raising=False)
@@ -109,6 +120,7 @@ def test_missing_model_credential_env_fails_naming_it(tmp_path, monkeypatch, tes
 
 
 def test_valid_minimal_fixture_profile_loads_and_freezes(monkeypatch, test_core_model, test_sub_model):
+    """Valid minimal fixture profile loads and freezes."""
     monkeypatch.setenv("AGENTSHUB_FIXTURE_BOT_TOKEN", "token-value")
     monkeypatch.setenv("AGENTSHUB_FIXTURE_MODEL_KEY", "key-value")
 
@@ -123,6 +135,7 @@ def test_valid_minimal_fixture_profile_loads_and_freezes(monkeypatch, test_core_
 
 
 def test_loaded_profile_is_frozen(monkeypatch, test_core_model, test_sub_model):
+    """Loaded profile is frozen."""
     monkeypatch.setenv("AGENTSHUB_FIXTURE_BOT_TOKEN", "token-value")
     monkeypatch.setenv("AGENTSHUB_FIXTURE_MODEL_KEY", "key-value")
     loaded = load_profile("fixtures.profiles.minimal_profile", core_model=test_core_model, sub_model=test_sub_model)
@@ -132,6 +145,7 @@ def test_loaded_profile_is_frozen(monkeypatch, test_core_model, test_sub_model):
 
 
 def test_profile_file_hash_matches_a_direct_hash_of_the_same_file(monkeypatch, test_core_model, test_sub_model):
+    """Profile file hash matches a direct hash of the same file."""
     monkeypatch.setenv("AGENTSHUB_FIXTURE_BOT_TOKEN", "token-value")
     monkeypatch.setenv("AGENTSHUB_FIXTURE_MODEL_KEY", "key-value")
 
@@ -141,6 +155,7 @@ def test_profile_file_hash_matches_a_direct_hash_of_the_same_file(monkeypatch, t
 
 
 def test_profile_file_hash_changes_when_the_file_on_disk_changes(tmp_path, monkeypatch):
+    """Profile file hash changes when the file on disk changes."""
     _write(tmp_path, monkeypatch, "hash_check_profile")
 
     before = hash_profile_file("hash_check_profile")
@@ -161,6 +176,7 @@ def test_profile_agent_with_an_invalid_tier_fails_to_load_naming_it(tmp_path, mo
     # AGENTS declares a tier — "core"/"sub" are the only two that mean
     # anything; anything else must fail loudly, naming what's wrong,
     # rather than a raw KeyError deep inside the loader.
+    """Profile agent with an invalid tier fails to load naming it."""
     prelude = textwrap.dedent(
         """
         from agents.reference import ReferenceAgent
@@ -182,6 +198,7 @@ def test_agents_entries_that_are_not_agentspecs_fail_loudly_naming_the_index(tmp
     # alongside the new one" — an AGENTS entry that isn't an AgentSpec
     # (e.g. an already-constructed agent, the pre-refactor shape) must
     # fail loudly, not be silently accepted or crash unhelpfully.
+    """Agents entries that are not agentspecs fail loudly naming the index."""
     prelude = textwrap.dedent(
         """
         from agents.reference import ReferenceAgent
@@ -198,6 +215,7 @@ def test_agents_entries_that_are_not_agentspecs_fail_loudly_naming_the_index(tmp
 
 
 def test_profile_agents_on_different_tiers_resolve_to_the_matching_tier_model(tmp_path, monkeypatch, test_core_model, test_sub_model):
+    """Profile agents on different tiers resolve to the matching tier model."""
     from config.base import build_tier_model
 
     core_model = build_tier_model("anthropic", "claude-3-5-sonnet", "core-secret")
@@ -240,6 +258,7 @@ def test_profile_import_needs_zero_environment_variables_set(tmp_path, monkeypat
     # The whole point of AgentSpec: a profile module never touches
     # os.environ at all — importing it (and loading it, given already-
     # resolved TierModel values) must work with nothing set.
+    """Profile import needs zero environment variables set."""
     for name in (
         "CORE_MODEL_PROVIDER", "CORE_MODEL_NAME", "CORE_MODEL_API_KEY_ENV",
         "SUB_MODEL_PROVIDER", "SUB_MODEL_NAME", "SUB_MODEL_API_KEY_ENV",
@@ -264,6 +283,7 @@ def test_profile_import_needs_zero_environment_variables_set(tmp_path, monkeypat
 
 
 def test_profile_with_unresolvable_protocol_agent_fails_validation(tmp_path, monkeypatch, test_core_model, test_sub_model):
+    """Profile with unresolvable protocol agent fails validation."""
     prelude = textwrap.dedent(
         """
         from agents.reference import ReferenceAgent
@@ -295,6 +315,7 @@ def _loaded(
     agents=(), protocols=(), areas=("x",), profile_name="For Tests",
     event_type_required_fields=None, event_type_descriptions=None,
 ):
+    """Loaded."""
     return SimpleNamespace(
         profile_name=profile_name,
         default_language="en",
@@ -309,12 +330,14 @@ def _loaded(
 
 
 def test_profile_name_must_be_non_empty():
+    """Profile name must be non empty."""
     failures = validate_profile(_loaded(profile_name="   "), declared_event_types=["fire"])
 
     assert any("PROFILE_NAME" in failure for failure in failures)
 
 
 def test_reports_protocol_naming_an_unconstructed_agent():
+    """Reports protocol naming an unconstructed agent."""
     protocol = FakeProtocol(participating_agents=("nobody",))
     failures = validate_profile(_loaded(protocols=(protocol,)), declared_event_types=["fire"])
 
@@ -322,6 +345,7 @@ def test_reports_protocol_naming_an_unconstructed_agent():
 
 
 def test_reports_protocol_approving_a_tool_no_agent_exposes():
+    """Reports protocol approving a tool no agent exposes."""
     agent = FakeAgent(name="a1", tools=())
     protocol = FakeProtocol(participating_agents=("a1",), approved_tools=("phantom_tool",))
     failures = validate_profile(_loaded(agents=(agent,), protocols=(protocol,)), declared_event_types=["fire"])
@@ -330,6 +354,7 @@ def test_reports_protocol_approving_a_tool_no_agent_exposes():
 
 
 def test_protocol_may_approve_fewer_tools_than_its_agents_own():
+    """Protocol may approve fewer tools than its agents own."""
     agent = FakeAgent(name="a1", tools=("t1", "t2"))
     protocol = FakeProtocol(participating_agents=("a1",), approved_tools=("t1",))
     failures = validate_profile(_loaded(agents=(agent,), protocols=(protocol,)), declared_event_types=["fire"])
@@ -338,6 +363,7 @@ def test_protocol_may_approve_fewer_tools_than_its_agents_own():
 
 
 def test_reports_missing_description():
+    """Reports missing description."""
     protocol = FakeProtocol(description="")
     failures = validate_profile(_loaded(protocols=(protocol,)), declared_event_types=["fire"])
 
@@ -345,6 +371,7 @@ def test_reports_missing_description():
 
 
 def test_reports_missing_criticality():
+    """Reports missing criticality."""
     protocol = FakeProtocol(criticality=None)
     failures = validate_profile(_loaded(protocols=(protocol,)), declared_event_types=["fire"])
 
@@ -352,6 +379,7 @@ def test_reports_missing_criticality():
 
 
 def test_absent_approval_flag_is_a_failure_not_a_default():
+    """Absent approval flag is a failure not a default."""
     protocol = FakeProtocol(approval_flag=None)
     failures = validate_profile(_loaded(protocols=(protocol,)), declared_event_types=["fire"])
 
@@ -359,6 +387,7 @@ def test_absent_approval_flag_is_a_failure_not_a_default():
 
 
 def test_explicit_false_approval_flag_is_valid():
+    """Explicit false approval flag is valid."""
     protocol = FakeProtocol(approval_flag=False)
     failures = validate_profile(_loaded(protocols=(protocol,)), declared_event_types=["fire"])
 
@@ -366,25 +395,28 @@ def test_explicit_false_approval_flag_is_valid():
 
 
 def test_protocol_missing_required_attrs_entirely_is_reported():
+    """Protocol missing required attrs entirely is reported."""
     failures = validate_profile(_loaded(protocols=(ShapelessProtocol(),)), declared_event_types=["fire"])
 
     assert any("missing required attribute" in f for f in failures)
 
 
 def test_no_event_types_is_a_failure():
+    """No event types is a failure."""
     failures = validate_profile(_loaded(), declared_event_types=[])
 
     assert any("no event types" in f for f in failures)
 
 
 def test_declaring_human_activation_is_a_duplicate_failure():
+    """Declaring human activation is a duplicate failure."""
     failures = validate_profile(_loaded(), declared_event_types=["human_activation"])
 
     assert any("human_activation" in f for f in failures)
 
 
 def test_declaring_required_fields_for_unclassified_is_rejected():
-    """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 (item #6): unclassified's
+    """Part 1 (item #6): unclassified's
     required fields are fixed in core code, not profile-declarable."""
     failures = validate_profile(
         _loaded(event_type_required_fields={"unclassified": ["area"]}), declared_event_types=["fire"]
@@ -394,6 +426,7 @@ def test_declaring_required_fields_for_unclassified_is_rejected():
 
 
 def test_required_fields_for_an_undeclared_event_type_is_rejected():
+    """Required fields for an undeclared event type is rejected."""
     failures = validate_profile(
         _loaded(event_type_required_fields={"medical": ["area"]}), declared_event_types=["fire"]
     )
@@ -402,6 +435,7 @@ def test_required_fields_for_an_undeclared_event_type_is_rejected():
 
 
 def test_required_fields_naming_an_unknown_event_data_field_is_rejected():
+    """Required fields naming an unknown event data field is rejected."""
     failures = validate_profile(
         _loaded(event_type_required_fields={"fire": ["area", "not_a_real_field"]}), declared_event_types=["fire"]
     )
@@ -410,6 +444,7 @@ def test_required_fields_naming_an_unknown_event_data_field_is_rejected():
 
 
 def test_event_type_descriptions_for_an_undeclared_event_type_is_rejected():
+    """Event type descriptions for an undeclared event type is rejected."""
     failures = validate_profile(
         _loaded(event_type_descriptions={"medical": "A medical incident."}), declared_event_types=["fire"]
     )
@@ -418,6 +453,7 @@ def test_event_type_descriptions_for_an_undeclared_event_type_is_rejected():
 
 
 def test_event_type_descriptions_with_an_empty_string_is_rejected():
+    """Event type descriptions with an empty string is rejected."""
     failures = validate_profile(
         _loaded(event_type_descriptions={"fire": ""}), declared_event_types=["fire"]
     )
@@ -426,6 +462,7 @@ def test_event_type_descriptions_with_an_empty_string_is_rejected():
 
 
 def test_event_type_descriptions_with_a_whitespace_only_string_is_rejected():
+    """Event type descriptions with a whitespace only string is rejected."""
     failures = validate_profile(
         _loaded(event_type_descriptions={"fire": "   "}), declared_event_types=["fire"]
     )
@@ -434,6 +471,7 @@ def test_event_type_descriptions_with_a_whitespace_only_string_is_rejected():
 
 
 def test_declaring_a_description_for_unclassified_is_rejected():
+    """Declaring a description for unclassified is rejected."""
     failures = validate_profile(
         _loaded(event_type_descriptions={"unclassified": "The fallback type."}), declared_event_types=["fire"]
     )
@@ -442,6 +480,7 @@ def test_declaring_a_description_for_unclassified_is_rejected():
 
 
 def test_valid_event_type_descriptions_declaration_reports_no_failures():
+    """Valid event type descriptions declaration reports no failures."""
     failures = validate_profile(
         _loaded(event_type_descriptions={"fire": "A structure or vegetation fire."}),
         declared_event_types=["fire"],
@@ -451,6 +490,7 @@ def test_valid_event_type_descriptions_declaration_reports_no_failures():
 
 
 def test_valid_event_type_required_fields_declaration_reports_no_failures():
+    """Valid event type required fields declaration reports no failures."""
     agent = FakeAgent(name="a1", tools=("t1",))
     protocol = FakeProtocol(participating_agents=("a1",), approved_tools=("t1",))
     failures = validate_profile(
@@ -462,12 +502,14 @@ def test_valid_event_type_required_fields_declaration_reports_no_failures():
 
 
 def test_no_areas_is_a_failure():
+    """No areas is a failure."""
     failures = validate_profile(_loaded(areas=()), declared_event_types=["fire"])
 
     assert any("no areas" in f for f in failures)
 
 
 def test_a_valid_profile_reports_no_failures():
+    """A valid profile reports no failures."""
     agent = FakeAgent(name="a1", tools=("t1",))
     protocol = FakeProtocol(participating_agents=("a1",), approved_tools=("t1",))
     failures = validate_profile(_loaded(agents=(agent,), protocols=(protocol,), areas=("x",)), declared_event_types=["fire"])
@@ -476,6 +518,7 @@ def test_a_valid_profile_reports_no_failures():
 
 
 def test_every_failure_is_collected_not_only_the_first():
+    """Every failure is collected not only the first."""
     protocol = FakeProtocol(description="", criticality=None, approval_flag=None)
     failures = validate_profile(_loaded(protocols=(protocol,), areas=()), declared_event_types=[])
 
@@ -489,6 +532,7 @@ def test_every_failure_is_collected_not_only_the_first():
 
 
 def test_real_agent_and_real_protocol_validate_cleanly():
+    """Real agent and real protocol validate cleanly."""
     agent = ReferenceAgent(model="m")
     protocol = Protocol(
         name="status_check",
@@ -511,6 +555,7 @@ def test_a_plain_string_criticality_is_rejected():
     # like one ("low") is not accepted, since api/management.py,
     # protocols/editor.py, and orchestrator/main_agent.py all either crash
     # or silently miscompare on anything else.
+    """A plain string criticality is rejected."""
     protocol = FakeProtocol(criticality="low")
     failures = validate_profile(_loaded(protocols=(protocol,)), declared_event_types=["fire"])
 
@@ -518,6 +563,7 @@ def test_a_plain_string_criticality_is_rejected():
 
 
 def test_a_real_criticalitylevel_member_passes():
+    """A real criticalitylevel member passes."""
     protocol = FakeProtocol(criticality=CriticalityLevel.HIGH)
     failures = validate_profile(_loaded(protocols=(protocol,)), declared_event_types=["fire"])
 
@@ -525,6 +571,7 @@ def test_a_real_criticalitylevel_member_passes():
 
 
 def test_real_agent_still_rejects_a_genuinely_unapproved_tool():
+    """Real agent still rejects a genuinely unapproved tool."""
     agent = ReferenceAgent(model="m")
     protocol = Protocol(
         name="bad",
@@ -545,12 +592,14 @@ from profiles import AreaRegistry, build_area_registry
 
 
 def test_is_valid_for_declared_area():
+    """Is valid for declared area."""
     registry = AreaRegistry(areas=("north_sector", "south_sector"))
 
     assert registry.is_valid("north_sector")
 
 
 def test_is_not_valid_for_undeclared_area():
+    """Is not valid for undeclared area."""
     registry = AreaRegistry(areas=("north_sector", "south_sector"))
 
     assert not registry.is_valid("east_sector")
@@ -558,6 +607,7 @@ def test_is_not_valid_for_undeclared_area():
 
 
 def test_build_from_loaded_profile_carries_its_areas(monkeypatch, test_core_model, test_sub_model):
+    """Build from loaded profile carries its areas."""
     monkeypatch.setenv("AGENTSHUB_FIXTURE_BOT_TOKEN", "token")
     monkeypatch.setenv("AGENTSHUB_FIXTURE_MODEL_KEY", "key")
 
@@ -573,12 +623,14 @@ from profiles import EventTypeRegistry, build_event_type_registry
 
 
 def test_is_valid_for_declared_type():
+    """Is valid for declared type."""
     registry = EventTypeRegistry(types=("fire", "medical", "human_activation"))
 
     assert registry.is_valid("fire")
     assert registry.is_valid("human_activation")
 
 def test_is_not_valid_for_undeclared_type():
+    """Is not valid for undeclared type."""
     registry = EventTypeRegistry(types=("fire", "medical", "human_activation"))
 
     assert not registry.is_valid("earthquake")
@@ -586,6 +638,7 @@ def test_is_not_valid_for_undeclared_type():
 
 
 def test_build_from_loaded_profile_carries_its_event_types(monkeypatch, test_core_model, test_sub_model):
+    """Build from loaded profile carries its event types."""
     monkeypatch.setenv("AGENTSHUB_FIXTURE_BOT_TOKEN", "token")
     monkeypatch.setenv("AGENTSHUB_FIXTURE_MODEL_KEY", "key")
 
@@ -600,7 +653,7 @@ def test_build_from_loaded_profile_carries_its_event_types(monkeypatch, test_cor
 
 
 def test_build_from_loaded_profile_defaults_to_no_required_fields_and_injects_unclassified(monkeypatch, test_core_model, test_sub_model):
-    """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 (item #6): a profile
+    """Part 1 (item #6): a profile
     that declares no EVENT_TYPE_REQUIRED_FIELDS (like this fixture) is fully
     backward compatible — no required fields for any of its own types — while
     the built-in `unclassified` fallback always has its fixed required field,
@@ -625,7 +678,7 @@ def test_response_team_profile_declares_area_required_for_its_flagged_event_type
     SimpleNamespace, never a real profile module itself — so nothing asserted what
     the actually-deployed profile declares. Assert directly against the
     real, loaded profiles.response_team module (Profile Split Plan, Step 3 --
-    repointed from the now-deleted profiles.demo, then docs/responce_improve.md
+    repointed from the now-deleted profiles.demo, then
     -- repointed again from the now-deleted profiles.standby_squad), not a
     test double."""
     monkeypatch.setenv("BOT_TOKEN", "token")

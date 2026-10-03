@@ -1,3 +1,5 @@
+"""History question answering over stored events."""
+
 from datetime import datetime, timezone
 
 from agents.results import AgentResult
@@ -6,15 +8,19 @@ from persistence.interface import open_persistence
 
 
 class FakeHistoryAgent:
+    """FakeHistoryAgent."""
     def __init__(self):
+        """Initialize this test helper."""
         self.last_prompt = None
 
     def process(self, text, allowed_tools):
+        """Process."""
         self.last_prompt = text
         return AgentResult("success", "answer from stored context")
 
 
 def test_query_uses_summary_without_double_counting_and_applies_filters(tmp_path):
+    """Query uses summary without double counting and applies filters."""
     store = open_persistence(str(tmp_path / "query.db"))
     try:
         store.write_summary("daily", {
@@ -45,6 +51,7 @@ def test_query_uses_summary_without_double_counting_and_applies_filters(tmp_path
     finally:
         store.close()
 def test_partial_day_falls_back_to_raw_events(tmp_path):
+    """Partial day falls back to raw events."""
     store = open_persistence(str(tmp_path / "query-raw.db"))
     try:
         store.append_event({
@@ -204,6 +211,7 @@ def test_answer_most_recent_event_includes_an_unresolved_event_for_a_hebrew_phra
 
 
 def test_answer_most_recent_event_raises_a_clean_error_when_nothing_has_been_recorded(tmp_path):
+    """Answer most recent event raises a clean error when nothing has been recorded."""
     from history.query import HistoryQueryError
 
     store = open_persistence(str(tmp_path / "query-empty.db"))
@@ -221,6 +229,7 @@ def test_answer_most_recent_event_raises_a_clean_error_when_nothing_has_been_rec
 
 
 def test_query_spec_marks_empty_when_nothing_matches(tmp_path):
+    """Query spec marks empty when nothing matches."""
     from history.contracts import HistoryQueryError, HistoryQuerySpec
 
     store = open_persistence(str(tmp_path / "query-spec-empty.db"))
@@ -235,9 +244,8 @@ def test_query_spec_marks_empty_when_nothing_matches(tmp_path):
     finally:
         store.close()
 
-"""history/query.py and history/query.py — two related, real bugs
-found and fixed during Mission 9's integration testing (work_plan.md
-§9.19/§9.20).
+"""history/query.py — two related timestamp-boundary bugs
+found and fixed during Mission 9's integration testing.
 
 Bug 1 — format mismatch: `retrieve_range`'s raw-event fallback builds its
 query bounds via `history.time_utils.storage_timestamp` (whole-second
@@ -264,8 +272,7 @@ depends on and which was not shown to have the same problem).
 
 Both fixes verified empirically before being written up here: 15 repeated
 real-time runs failed ~80% of the time before Bug 2's fix and passed
-15/15 after it — see `docs/progress.md`'s §9.19/§9.20 entries for the
-full diagnosis. The tests below are the deterministic version of that
+15/15 after it. The tests below are the deterministic version of that
 same check, not dependent on real-time luck to reproduce.
 """
 
@@ -279,11 +286,14 @@ from persistence.interface import open_persistence
 
 
 class _FakeSettingsStore:
+    """FakeSettingsStore."""
     def get_lookback_window_days(self) -> int:
+        """Get lookback window days."""
         return 30
 
 
 def test_now_helpers_produce_storage_timestamp_compatible_format():
+    """Now helpers produce storage timestamp compatible format."""
     for now_fn in (events_now, messages_now):
         value = now_fn()
         assert "." not in value, f"{now_fn.__module__}._now() kept sub-second precision: {value!r}"
@@ -292,6 +302,7 @@ def test_now_helpers_produce_storage_timestamp_compatible_format():
 
 
 def test_a_same_second_event_is_found_as_a_precedent(tmp_path):
+    """A same second event is found as a precedent."""
     store = open_persistence(str(tmp_path / "retrieval.db"))
     try:
         # Two events sharing the exact same whole-second occurred_at —
@@ -310,6 +321,7 @@ def test_a_same_second_event_is_found_as_a_precedent(tmp_path):
 
 
 def test_the_widened_window_does_not_pull_in_a_genuinely_later_event(tmp_path):
+    """The widened window does not pull in a genuinely later event."""
     store = open_persistence(str(tmp_path / "retrieval2.db"))
     try:
         # One full second after the target — must never be treated as
@@ -328,6 +340,7 @@ def test_the_widened_window_does_not_pull_in_a_genuinely_later_event(tmp_path):
 
 
 def test_retrieve_range_uses_one_window_query_for_a_raw_30_day_gap(tmp_path):
+    """Retrieve range uses one window query for a raw 30 day gap."""
     store = open_persistence(str(tmp_path / "range-batch.db"))
     try:
         first = store.append_event({
@@ -362,6 +375,7 @@ def test_retrieve_range_uses_one_window_query_for_a_raw_30_day_gap(tmp_path):
 
 
 def test_find_precedents_uses_the_indexed_type_area_window(tmp_path):
+    """Find precedents uses the indexed type area window."""
     store = open_persistence(str(tmp_path / "precedent-window.db"))
     try:
         match_id = store.append_event({
@@ -399,6 +413,7 @@ def test_retrieve_range_itself_is_unaffected_by_the_precedent_specific_widening(
     # The fix is scoped to find_precedents; retrieve_range's own general
     # contract (used directly by history/query.py) keeps its ordinary
     # half-open [start, end) semantics.
+    """Retrieve range itself is unaffected by the precedent specific widening."""
     store = open_persistence(str(tmp_path / "retrieval3.db"))
     try:
         event_id = store.append_event({
@@ -421,6 +436,7 @@ def test_retrieve_range_itself_is_unaffected_by_the_precedent_specific_widening(
 
 
 def _history_event(event_id, occurred_at, classification="fire", area="north", outcome="succeeded", sender_identity="sensor-1"):
+    """History event."""
     return {
         "event_id": event_id,
         "received_at": occurred_at,
@@ -435,6 +451,7 @@ def _history_event(event_id, occurred_at, classification="fire", area="north", o
 
 
 def test_structured_count_is_computed_by_the_database_without_calling_the_history_agent(tmp_path):
+    """Structured count is computed by the database without calling the history agent."""
     from history.contracts import HistoryQuerySpec
 
     store = open_persistence(str(tmp_path / "structured-count.db"))
@@ -463,6 +480,7 @@ def test_structured_count_is_computed_by_the_database_without_calling_the_histor
 
 
 def test_structured_latest_uses_the_filtered_database_result(tmp_path):
+    """Structured latest uses the filtered database result."""
     from history.contracts import HistoryQuerySpec
 
     store = open_persistence(str(tmp_path / "structured-latest.db"))
@@ -488,6 +506,7 @@ def test_structured_latest_uses_the_filtered_database_result(tmp_path):
 
 
 def test_structured_aggregate_groups_counts_in_sql(tmp_path):
+    """Structured aggregate groups counts in sql."""
     from history.contracts import HistoryQuerySpec
 
     store = open_persistence(str(tmp_path / "structured-aggregate.db"))
@@ -509,6 +528,7 @@ def test_structured_aggregate_groups_counts_in_sql(tmp_path):
 
 
 def test_structured_query_rejects_unknown_registry_values_before_search(tmp_path):
+    """Structured query rejects unknown registry values before search."""
     import pytest
 
     from history.contracts import HistoryQueryError, HistoryQuerySpec
@@ -523,10 +543,11 @@ def test_structured_query_rejects_unknown_registry_values_before_search(tmp_path
         store.close()
 
 
-# --- Ownership scoping (docs/Next_Plan.md §5 decision record) --------------
+# Ownership scoping
 
 
 def test_query_spec_sender_identity_filter_restricts_count_and_search(tmp_path):
+    """Query spec sender identity filter restricts count and search."""
     from history.contracts import HistoryQuerySpec
 
     store = open_persistence(str(tmp_path / "ownership-count.db"))
@@ -546,6 +567,7 @@ def test_query_spec_sender_identity_filter_restricts_count_and_search(tmp_path):
 
 
 def test_query_spec_sender_identity_filter_excludes_someone_elses_event_from_list(tmp_path):
+    """Query spec sender identity filter excludes someone elses event from list."""
     from history.contracts import HistoryQuerySpec
 
     store = open_persistence(str(tmp_path / "ownership-list.db"))
@@ -567,6 +589,7 @@ def test_query_spec_sender_identity_filter_excludes_someone_elses_event_from_lis
 
 
 def test_query_spec_without_a_sender_identity_filter_sees_every_event(tmp_path):
+    """Query spec without a sender identity filter sees every event."""
     from history.contracts import HistoryQuerySpec
 
     store = open_persistence(str(tmp_path / "ownership-commander.db"))
@@ -585,6 +608,7 @@ def test_query_spec_without_a_sender_identity_filter_sees_every_event(tmp_path):
 
 
 def test_answer_most_recent_event_sender_identity_filter_restricts_lookup(tmp_path):
+    """Answer most recent event sender identity filter restricts lookup."""
     store = open_persistence(str(tmp_path / "ownership-most-recent.db"))
     try:
         store.append_event(_history_event("mine-1", "2026-08-01T10:00:00", sender_identity="viewer-1"))
@@ -600,10 +624,11 @@ def test_answer_most_recent_event_sender_identity_filter_restricts_lookup(tmp_pa
         store.close()
 
 
-# --- Semantic view field filtering (docs/Next_Plan.md §4.6, §9) ------------
+# Semantic view field filtering
 
 
 def test_internal_fields_never_reach_the_history_agent_prompt(tmp_path):
+    """Internal fields never reach the history agent prompt."""
     from history.contracts import HistoryQuerySpec
 
     store = open_persistence(str(tmp_path / "field-filtering.db"))
@@ -628,6 +653,7 @@ def test_internal_fields_never_reach_the_history_agent_prompt(tmp_path):
 
 
 def test_field_meanings_glossary_reaches_the_history_agent_prompt(tmp_path):
+    """Field meanings glossary reaches the history agent prompt."""
     from history.contracts import HistoryQuerySpec
 
     store = open_persistence(str(tmp_path / "field-glossary.db"))

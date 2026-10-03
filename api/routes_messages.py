@@ -1,6 +1,5 @@
 """Message ingestion routes (`POST /Msg`)."""
 
-import dataclasses
 from datetime import datetime, timedelta, timezone
 import logging
 import time
@@ -10,18 +9,23 @@ from flask import Blueprint, jsonify, request
 
 from api._route_deps import utc_now_storage, work_concurrency_keys
 from api.request_boundary import (
-    AuthorizationError,
     InvalidInputError,
     RunFailureError,
     ServiceUnavailableError,
     authenticate,
     require,
 )
+from api.routes_messages_support import (
+    KNOWN_BUTTON_PROTOCOLS,
+    SITUATIONAL_PICTURE_PROTOCOL,
+    apply_group_scope,
+    queued_answer_text,
+    validate_message_fields,
+)
 from agents import AgentInvocationError, authenticated_request_identity, set_invocation_deadline
 from auth.permissions import PermissionLevel, RequestedOperation
 from history import record_event_outcome, storage_timestamp
 from orchestrator.flows import (
-    GroupNotRegisteredError,
     OrchestrationParseError,
     WorkItem,
     answer_conversationally,
@@ -36,13 +40,10 @@ from orchestrator.flows import (
     build_situational_picture,
     classify_intent,
     continue_from_risk_assessment,
-    is_scoped_target,
     plan_message,
     protocol_requires_approval,
-    resolve_scope,
     resume_after_event_data,
     run_report_extraction,
-    scope_deps,
 )
 from profiles import HUMAN_ACTIVATION_TYPE, OptimizationPolicy
 from tools import deep_debug_enabled, get_trace_id, new_trace_id, set_trace_id, trace_context
@@ -52,37 +53,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-KNOWN_BUTTON_PROTOCOLS: dict[str, str] = {
-    "📊 \u05ea\u05de\u05d5\u05e0\u05ea \u05de\u05e6\u05d1 \u05db\u05dc\u05dc\u05d9\u05ea": "overall_situational_picture",
-    "📹 \u05de\u05e6\u05d1 \u05de\u05e6\u05dc\u05de\u05d5\u05ea": "query_camera_status",
-    "🛸 \u05de\u05e6\u05d1 \u05e6\u05d9 \u05e8\u05d7\u05e4\u05e0\u05d9\u05dd": "query_drone_fleet_status",
-    "🚀 \u05d4\u05d6\u05e0\u05e7\u05ea \u05e8\u05d7\u05e4\u05df": "dispatch_drone_to_incident",
-    "🔄 \u05d4\u05d7\u05d6\u05e8\u05ea \u05e8\u05d7\u05e4\u05df \u05dc\u05d1\u05e1\u05d9\u05e1": "recall_drone_to_base",
-    "👥 \u05e1\u05d8\u05d8\u05d5\u05e1 \u05db\u05d9\u05ea\u05ea \u05db\u05d5\u05e0\u05e0\u05d5\u05ea": "report_team_availability",
-    "🚨 \u05d4\u05d6\u05e0\u05e7\u05ea \u05db\u05d5\u05d7\u05d5\u05ea": "dispatch_emergency_forces",
-    "📜 \u05d4\u05d9\u05e1\u05d8\u05d5\u05e8\u05d9\u05d9\u05ea \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd": "query_historical_incidents",
-    "✅ \u05d0\u05e0\u05d9 \u05d6\u05de\u05d9\u05df \u05dc\u05db\u05d5\u05e0\u05e0\u05d5\u05ea": "record_attendance_response",
-    "❌ \u05d0\u05d9\u05e0\u05d9 \u05d6\u05de\u05d9\u05df": "record_attendance_response",
-}
-
-SITUATIONAL_PICTURE_PROTOCOL = "overall_situational_picture"
-
-def _queued_answer_text(messages, kind: str, task_id: str) -> str:
-    """The user-facing `answer` for a report/request that was just queued
-    (docs/work_process.md §17) — this server, not the bot, is the single source
-    of truth for this text now, exactly as it already was for question/
-    conversational/clarification/event_update's own `answer` field. The raw
-    task ID has no user-facing purpose without a bot command to look a job up
-    by it, so it's included only under this process's own `DEEP_DEBUG`
-    (`tools.deep_debug_enabled()`) — the same flag, read here instead of by
-    whichever bot process happens to relay the reply, so every caller sees
-    identical text regardless of its own environment."""
-
-    if deep_debug_enabled():
-        return messages.text(f"api.queued_{kind}_debug", task_id=task_id)
-    return messages.text(f"api.queued_{kind}")
+_queued_answer_text = queued_answer_text
 
 def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
+    """JSON route that classifies and runs one inbound `/Msg`."""
+
     blueprint = Blueprint("messages", __name__)
     messages = app_ctx.loaded_profile.message_catalog
     non_human_activation_event_types = tuple(
@@ -94,6 +69,8 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/Msg", methods=["POST"])
     def post_msg():
+        """Classify one inbound message and answer, queue, or continue a hold."""
+
         # `ctx` is request-local: for a message from a Telegram group bound to a
         # specialist it becomes a copy of `app_ctx` whose `deps` only expose that
         # agent (+ history). Every `ctx.deps.*` read below is therefore scoped
@@ -104,8 +81,6 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
         require(level, RequestedOperation.SUBMIT_MESSAGE)
 
         request_payload = request.get_json(silent=True) or {}
-        text = request_payload.get("text")
-        sender_identity = request_payload.get("sender_identity")
         source_message_id = request_payload.get("source_message_id")
         conversation_id = request_payload.get("conversation_id")
         event_data_event_id = request_payload.get("event_data_event_id")
@@ -113,25 +88,17 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
         telegram_chat_type = request_payload.get("telegram_chat_type")
         ack_message_id = request_payload.get("ack_message_id")
 
-        try:
-            scoped_agent = resolve_scope(
-                app_ctx.group_routing,
-                str(telegram_chat_id) if telegram_chat_id is not None else None,
-                str(telegram_chat_type) if telegram_chat_type is not None else None,
-            )
-        except GroupNotRegisteredError as exc:
-            raise AuthorizationError(messages.text("api.group_not_registered", chat_id=exc.chat_id)) from exc
-        if is_scoped_target(scoped_agent):
-            ctx = dataclasses.replace(app_ctx, deps=scope_deps(app_ctx.deps, scoped_agent))
+        ctx, scoped_agent = apply_group_scope(
+            app_ctx, telegram_chat_id, telegram_chat_type, messages
+        )
+        if ctx is not app_ctx:
             logger.info(
                 "message scoped to group agent",
                 extra={"event": "group_scope_applied", "chat_id": str(telegram_chat_id), "agent": scoped_agent, "trace_id": get_trace_id()},
             )
 
-        # Built fresh, per authenticated request — never once at blueprint
-        # creation, before a caller is known (docs/Next_Plan.md §4.5/Stage 3).
-        # A viewer's context has protected arrays absent entirely, not just
-        # filtered out of the final answer.
+        # Built fresh per authenticated request so a viewer's context omits
+        # protected arrays entirely, rather than filtering them later.
         system_context = build_role_aware_system_context(
             level,
             ctx.loaded_profile.profile_name,
@@ -141,20 +108,7 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             areas,
         )
 
-        if not text:
-            raise InvalidInputError(messages.text("api.field_required", field="text"), field="text")
-        if not sender_identity:
-            raise InvalidInputError(
-                messages.text("api.field_required", field="sender_identity"), field="sender_identity"
-            )
-        if sender_identity != caller_identity:
-            raise AuthorizationError(messages.text("api.sender_identity_mismatch"))
-        if conversation_id is not None and (not isinstance(conversation_id, str) or not conversation_id.strip() or len(conversation_id) > 200):
-            raise InvalidInputError(messages.text("api.conversation_id_invalid"), field="conversation_id")
-        if event_data_event_id is not None and (
-            not isinstance(event_data_event_id, str) or not event_data_event_id.strip()
-        ):
-            raise InvalidInputError(messages.text("api.event_data_event_id_invalid"), field="event_data_event_id")
+        text, sender_identity = validate_message_fields(request_payload, caller_identity, messages)
 
         trace_id = get_trace_id() or new_trace_id()
         set_trace_id(trace_id)
@@ -165,6 +119,8 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
         history_ttl = getattr(ctx.loaded_profile, "conversation_history_ttl_hours", 24)
 
         def _remember(role: str, content: str, event_id: str | None = None) -> None:
+            """Append one conversation turn when this request carries a conversation id."""
+
             if conversation_id is not None and history_turns > 0:
                 ctx.deps.persistence.append_conversation_message(
                     conversation_id,
@@ -302,6 +258,8 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     )
 
                 def _resume_waiting_work() -> None:
+                    """Continue the held event after the reporter supplied missing fields."""
+
                     with trace_context(trace_id):
                         resume_after_event_data(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent)
 
@@ -360,6 +318,8 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     raise
 
                 def _work_fast_path() -> None:
+                    """Continue a button/hint-selected protocol after its risk check."""
+
                     with trace_context(trace_id):
                         continue_from_risk_assessment(
                             ctx.deps,
@@ -520,10 +480,8 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
 
         if intent.intent == "question":
             require(level, RequestedOperation.ASK_QUESTION)
-            # Ownership scoping (docs/Next_Plan.md §5 decision record): a viewer's
-            # ask_question is restricted to events they themselves submitted,
-            # matched by their own authenticated identity. A commander is
-            # unrestricted (filter stays None).
+            # A viewer's question may only see events they submitted; a commander
+            # is unrestricted (filter stays None).
             caller_sender_identity_filter = None if level is PermissionLevel.COMMANDER else caller_identity
             try:
                 if planner_mode == "merged" and message_plan is not None and message_plan.question_selection is not None:
@@ -591,6 +549,8 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 })
 
             def _work() -> None:
+                """Run report extraction for a newly queued report."""
+
                 with trace_context(trace_id):
                     run_report_extraction(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent)
 
@@ -631,6 +591,8 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             raise
 
         def _work() -> None:
+            """Continue a queued request from risk assessment."""
+
             with trace_context(trace_id):
                 continue_from_risk_assessment(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent)
 

@@ -1,6 +1,6 @@
-"""profiles/simulation.py, profiles/loader.py's simulation validation,
+"""Profiles/simulation.py, profiles/loader.py's simulation validation,
 profiles/simulation_provisioning.py, and api/simulations.py
-(docs/profile_simulations_design.md)."""
+."""
 
 import gc
 import time
@@ -30,6 +30,7 @@ from profiles.simulation_provisioning import ensure_simulation_entities
 
 
 def test_simulation_ids_are_deterministic_and_offset_based():
+    """Simulation ids are deterministic and offset based."""
     assert simulation_user_telegram_id(0) == str(SIMULATION_USER_ID_BASE)
     assert simulation_user_telegram_id(5) == str(SIMULATION_USER_ID_BASE + 5)
     assert simulation_group_chat_id(0) == str(SIMULATION_GROUP_ID_BASE)
@@ -46,6 +47,7 @@ def test_simulation_user_ids_are_positive_digit_strings():
 
 
 def test_simulation_group_ids_are_negative_digit_strings():
+    """Simulation group ids are negative digit strings."""
     chat_id = simulation_group_chat_id(0)
     assert chat_id.startswith("-") and chat_id[1:].isdigit() and int(chat_id) < 0
 
@@ -67,6 +69,7 @@ def test_simulation_ids_cannot_collide_with_a_real_telegram_id():
 
 
 def test_negative_offset_is_rejected():
+    """Negative offset is rejected."""
     with pytest.raises(ValueError):
         simulation_user_telegram_id(-1)
     with pytest.raises(ValueError):
@@ -77,6 +80,7 @@ def test_negative_offset_is_rejected():
 
 
 def _loaded(**overrides):
+    """Loaded."""
     base = dict(
         profile_name="For Tests", default_language="en", max_iter=8, model_timeout_seconds=30.0,
         agents=(), protocols=(), areas=("x",), simulation_users=(), simulation_groups=(), simulations=(),
@@ -87,6 +91,7 @@ def _loaded(**overrides):
 
 
 def test_a_profile_declaring_no_simulations_is_unaffected():
+    """A profile declaring no simulations is unaffected."""
     assert validate_profile(_loaded(), declared_event_types=["fire"]) == []
 
 
@@ -102,21 +107,25 @@ def test_missing_simulation_fields_default_to_empty_like_every_other_optional_fi
 
 
 def test_wrong_type_in_simulation_users_is_rejected():
+    """Wrong type in simulation users is rejected."""
     failures = validate_profile(_loaded(simulation_users=("not-a-persona",)), declared_event_types=["fire"])
     assert any("SIMULATION_USERS[0]" in f for f in failures)
 
 
 def test_wrong_type_in_simulation_groups_is_rejected():
+    """Wrong type in simulation groups is rejected."""
     failures = validate_profile(_loaded(simulation_groups=("not-a-group",)), declared_event_types=["fire"])
     assert any("SIMULATION_GROUPS[0]" in f for f in failures)
 
 
 def test_wrong_type_in_simulations_is_rejected():
+    """Wrong type in simulations is rejected."""
     failures = validate_profile(_loaded(simulations=("not-a-scenario",)), declared_event_types=["fire"])
     assert any("SIMULATIONS[0]" in f for f in failures)
 
 
 def test_duplicate_persona_key_is_rejected():
+    """Duplicate persona key is rejected."""
     users = (
         SimulationPersona(key="a", offset=0),
         SimulationPersona(key="a", offset=1),
@@ -126,6 +135,7 @@ def test_duplicate_persona_key_is_rejected():
 
 
 def test_duplicate_persona_offset_is_rejected():
+    """Duplicate persona offset is rejected."""
     users = (
         SimulationPersona(key="a", offset=0),
         SimulationPersona(key="b", offset=0),
@@ -135,6 +145,7 @@ def test_duplicate_persona_offset_is_rejected():
 
 
 def test_duplicate_group_key_and_offset_are_rejected():
+    """Duplicate group key and offset are rejected."""
     groups = (
         SimulationGroup(key="g", offset=0),
         SimulationGroup(key="g", offset=1),
@@ -144,6 +155,7 @@ def test_duplicate_group_key_and_offset_are_rejected():
 
 
 def test_duplicate_scenario_key_is_rejected():
+    """Duplicate scenario key is rejected."""
     raw = {"scenario": {}, "chats": [], "steps": []}
     scenarios = (
         SimulationScenario(key="s", title="t1", raw=raw),
@@ -154,12 +166,14 @@ def test_duplicate_scenario_key_is_rejected():
 
 
 def test_scenario_raw_must_have_chats_and_steps_lists():
+    """Scenario raw must have chats and steps lists."""
     scenario = SimulationScenario(key="s", title="t", raw={"scenario": {}})
     failures = validate_profile(_loaded(simulations=(scenario,)), declared_event_types=["fire"])
     assert any("raw must be a dict with 'chats' and 'steps' lists" in f for f in failures)
 
 
 def test_message_step_sender_identity_must_resolve_to_a_declared_persona():
+    """Message step sender identity must resolve to a declared persona."""
     raw = {
         "scenario": {},
         "chats": [{"key": "dm", "kind": "message", "telegram_chat_type": "private"}],
@@ -171,6 +185,7 @@ def test_message_step_sender_identity_must_resolve_to_a_declared_persona():
 
 
 def test_event_step_sender_identity_is_exempt_a_sensor_is_not_a_persona():
+    """Event step sender identity is exempt a sensor is not a persona."""
     raw = {
         "scenario": {},
         "chats": [{"key": "sensors", "kind": "event"}],
@@ -181,6 +196,7 @@ def test_event_step_sender_identity_is_exempt_a_sensor_is_not_a_persona():
 
 
 def test_group_chat_telegram_chat_id_must_resolve_to_a_declared_group():
+    """Group chat telegram chat id must resolve to a declared group."""
     raw = {
         "scenario": {},
         "chats": [
@@ -194,11 +210,13 @@ def test_group_chat_telegram_chat_id_must_resolve_to_a_declared_group():
 
 
 def test_wrong_type_in_simulation_rosters_is_rejected():
+    """Wrong type in simulation rosters is rejected."""
     failures = validate_profile(_loaded(simulation_rosters=("not-a-roster",)), declared_event_types=["fire"])
     assert any("SIMULATION_ROSTERS[0]" in f for f in failures)
 
 
 def test_duplicate_roster_key_is_rejected():
+    """Duplicate roster key is rejected."""
     rosters = (
         SimulationRoster(key="r", open=lambda path: None, db_path="a"),
         SimulationRoster(key="r", open=lambda path: None, db_path="b"),
@@ -208,12 +226,14 @@ def test_duplicate_roster_key_is_rejected():
 
 
 def test_persona_pre_approved_roster_must_resolve_to_a_declared_roster():
+    """Persona pre approved roster must resolve to a declared roster."""
     users = (SimulationPersona(key="a", offset=0, pre_approved_rosters=("unknown_roster",)),)
     failures = validate_profile(_loaded(simulation_users=users), declared_event_types=["fire"])
     assert any("unknown_roster" in f and "SIMULATION_ROSTERS" in f for f in failures)
 
 
 def test_a_fully_valid_simulation_declaration_reports_no_failures():
+    """A fully valid simulation declaration reports no failures."""
     users = (SimulationPersona(key="viewer", offset=0, permission_level="viewer"),)
     groups = (SimulationGroup(key="team", offset=0, agent_name="reference_agent"),)
     raw = {
@@ -235,6 +255,7 @@ def test_a_fully_valid_simulation_declaration_reports_no_failures():
 
 
 def test_a_persona_pre_approved_on_a_declared_roster_reports_no_failures():
+    """A persona pre approved on a declared roster reports no failures."""
     roster = SimulationRoster(key="team_status", open=lambda path: None, db_path="db")
     users = (SimulationPersona(key="a", offset=0, pre_approved_rosters=("team_status",)),)
     failures = validate_profile(
@@ -247,6 +268,7 @@ def test_a_persona_pre_approved_on_a_declared_roster_reports_no_failures():
 
 
 def _fake_loaded_profile(simulation_users=(), simulation_groups=(), simulation_rosters=()):
+    """Fake loaded profile."""
     return SimpleNamespace(
         simulation_users=simulation_users,
         simulation_groups=simulation_groups,
@@ -258,29 +280,35 @@ class _FakeRosterStore:
     """Minimal object matching only the shape `SimulationRoster.open` documents
     (`register_member`/`approve_roster`/`roster_is_approved`/`list_members`) — used
     to prove `ensure_simulation_entities` never assumes anything beyond that shape,
-    i.e. never imports or names a specific agent (docs/profile_simulations_design.md)."""
+    i.e. never imports or names a specific agent."""
 
     def __init__(self, already_approved=False):
+        """Initialize this test helper."""
         self.members: dict[str, str] = {}
         self._approved = already_approved
         self.approve_calls: list[str] = []
 
     def register_member(self, telegram_identity, full_name, registered_at=None):
+        """Register member."""
         self.members[telegram_identity] = full_name
 
     def approve_roster(self, approved_by, approved_at=None):
+        """Approve roster."""
         self.approve_calls.append(approved_by)
         self._approved = True
         return len(self.members)
 
     def roster_is_approved(self):
+        """Roster is approved."""
         return self._approved
 
     def list_members(self, *, approved_only=True):
+        """List members."""
         return [{"telegram_identity": telegram_id} for telegram_id in self.members]
 
 
 def test_ensure_simulation_entities_creates_declared_users_and_groups(tmp_path):
+    """Ensure simulation entities creates declared users and groups."""
     persistence = SQLitePersistence(str(tmp_path / "prov.db"))
     try:
         loaded = _fake_loaded_profile(
@@ -308,6 +336,7 @@ def test_ensure_simulation_entities_creates_declared_users_and_groups(tmp_path):
 
 
 def test_ensure_simulation_entities_is_idempotent_and_never_overwrites(tmp_path):
+    """Ensure simulation entities is idempotent and never overwrites."""
     persistence = SQLitePersistence(str(tmp_path / "prov.db"))
     try:
         loaded = _fake_loaded_profile(
@@ -337,6 +366,7 @@ def test_ensure_simulation_entities_defaults_to_nothing():
 
 
 def test_ensure_simulation_entities_registers_and_approves_a_fresh_roster(tmp_path):
+    """Ensure simulation entities registers and approves a fresh roster."""
     persistence = SQLitePersistence(str(tmp_path / "prov.db"))
     try:
         store = _FakeRosterStore(already_approved=False)
@@ -386,6 +416,7 @@ def test_ensure_simulation_entities_never_re_approves_an_already_approved_roster
 
 
 def test_ensure_simulation_entities_roster_registration_reports_only_newly_registered_members(tmp_path):
+    """Ensure simulation entities roster registration reports only newly registered members."""
     persistence = SQLitePersistence(str(tmp_path / "prov.db"))
     try:
         store = _FakeRosterStore(already_approved=False)
@@ -405,6 +436,7 @@ def test_ensure_simulation_entities_roster_registration_reports_only_newly_regis
 
 
 def test_ensure_simulation_entities_never_opens_a_roster_nothing_references(tmp_path):
+    """Ensure simulation entities never opens a roster nothing references."""
     persistence = SQLitePersistence(str(tmp_path / "prov.db"))
     try:
         open_calls = []
@@ -440,10 +472,12 @@ _RAW_SCENARIO = {
 
 
 def _scenario():
+    """Scenario."""
     return SimulationScenario(key="demo", title="Demo", description="d", tags=("t",), raw=_RAW_SCENARIO)
 
 
 def test_materialize_simulation_substitutes_only_the_declared_ids():
+    """Materialize simulation substitutes only the declared ids."""
     users = (SimulationPersona(key="viewer", offset=3),)
     groups = (SimulationGroup(key="team", offset=7),)
 
@@ -459,6 +493,7 @@ def test_materialize_simulation_substitutes_only_the_declared_ids():
 
 
 def test_materialize_simulation_does_not_mutate_the_declared_raw_template():
+    """Materialize simulation does not mutate the declared raw template."""
     users = (SimulationPersona(key="viewer", offset=0),)
     materialize_simulation(_scenario(), users, ())
     assert _RAW_SCENARIO["steps"][0]["sender_identity"] == "viewer"
@@ -466,6 +501,7 @@ def test_materialize_simulation_does_not_mutate_the_declared_raw_template():
 
 
 def test_simulation_catalog_payload_is_metadata_only():
+    """Simulation catalog payload is metadata only."""
     loaded = SimpleNamespace(simulations=(_scenario(),))
     assert simulation_catalog_payload(loaded) == [
         {"key": "demo", "title": "Demo", "description": "d", "tags": ["t"]}
@@ -473,6 +509,7 @@ def test_simulation_catalog_payload_is_metadata_only():
 
 
 def test_find_simulation_scenario_returns_none_for_an_unknown_key():
+    """Find simulation scenario returns none for an unknown key."""
     loaded = SimpleNamespace(simulations=(_scenario(),))
     assert find_simulation_scenario(loaded, "does-not-exist") is None
     assert find_simulation_scenario(loaded, "demo") is not None
@@ -480,17 +517,17 @@ def test_find_simulation_scenario_returns_none_for_an_unknown_key():
 
 # -- the SEC_001 migration (profiles/response_team.py), against the real profile ------------
 #
-# Profile Split Plan (docs/Profile_Split_Plan.md), Step 1: repointed from profiles.unified_test
+# Profile Split Plan, Step 1: repointed from profiles.unified_test
 # (which declared this alongside the pilot scenario and the FIRE_002 series) to
 # profiles.standby_squad (which declared SEC_001 only, offsets renumbered from 0), and then
-# (docs/responce_improve.md) into profiles.response_team, once standby_squad was deleted and
+# Into profiles.response_team, once standby_squad was deleted and
 # response_team became SEC_001's one, unified, operational-state profile. The FIRE_002-series
 # test below this one is unaffected -- it targets profiles/firefighting.py, left untouched.
 
 
 def test_response_team_declares_the_migrated_sec001_series(test_core_model, test_sub_model, monkeypatch):
-    """docs/profile_simulations_design.md: the SEC_001 series
-    (fixtures/admin_scenarios/'כיתת כוננת - חלק 1/2/3.json') was migrated into real
+    """The SEC_001 series
+    (fixtures/admin_scenarios/) was migrated into real
     SIMULATIONS declarations, with recurring characters sharing one reserved ID
     across the phases they appear in — not re-declared per phase."""
 
@@ -532,7 +569,7 @@ def test_response_team_declares_the_migrated_sec001_series(test_core_model, test
 
 def test_firefighting_declares_the_migrated_fire002_series(test_core_model, test_sub_model, monkeypatch):
     """Same migration pattern as SEC_001 (profiles/standby_squad.py), applied to the firefighting
-    series. Profile Split Plan (docs/Profile_Split_Plan.md), Step 2: repointed from
+    series. Profile Split Plan, Step 2: repointed from
     profiles.unified_test to profiles.firefighting (its own dedicated file/process, offsets
     renumbered from 0) -- despite the raw fixture reusing identical channel names
     ('TELEGRAM_GROUP_RESPONSE_TEAM' etc.) across both series."""
@@ -640,6 +677,7 @@ def test_response_team_personas_become_approved_roster_members(
 
 
 def _record_available(store, *, source_message_id: str) -> dict:
+    """Record available."""
     member = store.list_members(approved_only=True)[0]
     return store.record_response(
         telegram_identity=member["telegram_identity"],
@@ -651,6 +689,7 @@ def _record_available(store, *, source_message_id: str) -> dict:
 
 
 def _isolate_response_team_seed_paths(monkeypatch, tmp_path):
+    """Isolate response team seed paths."""
     import profiles.response_team as rt
     import profiles.response_team_simulation as rt_sim
 
@@ -664,6 +703,7 @@ def _isolate_response_team_seed_paths(monkeypatch, tmp_path):
 
 
 def _isolate_firefighting_seed_paths(monkeypatch, tmp_path):
+    """Isolate firefighting seed paths."""
     import profiles.firefighting as ff
     import profiles.firefighting_simulation as ff_sim
 

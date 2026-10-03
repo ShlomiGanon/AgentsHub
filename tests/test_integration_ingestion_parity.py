@@ -1,6 +1,6 @@
-"""9.6 — Test ingestion parity (work_plan.md §9.6).
+"""9.6 — Test ingestion parity.
 
-`tests/test_api_unified_ingestion.py` (§7.5's own convergence proof)
+`tests/test_api_unified_ingestion.py` ('s own convergence proof)
 already confirms `POST /Event` and `POST /Msg` converge at the API layer.
 This file's own, non-redundant scope per this subtask's refined text:
 proving the bot's own real code path converges too — through
@@ -25,24 +25,30 @@ from tests.crewai_fakes import install_crewai_stub
 
 
 def _run(coro):
+    """Run."""
     return asyncio.run(coro)
 
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch)
 
 
 class _FakeTelegramClient:
+    """FakeTelegramClient."""
     async def send_text(self, chat_id, text):
+        """Send text."""
         pass
 
 
 def _agent():
+    """Agent."""
     return happy_path_agent(risk_score="0.1", selected="status_check", intent="report")
 
 
 def test_the_real_bot_path_converges_with_a_sensor_submission(tmp_path):
+    """The real bot path converges with a sensor submission."""
     (tmp_path / "sensor").mkdir()
     (tmp_path / "bot").mkdir()
 
@@ -66,7 +72,7 @@ def test_the_real_bot_path_converges_with_a_sensor_submission(tmp_path):
         bot_deps = BotDeps(loaded_profile=None, telegram_client=_FakeTelegramClient(), api_client=HttpApiClient(bot_server.base_url))
         reply = _run(handle_incoming_message(bot_deps, VIEWER_IDENTITY, same_text, "12345"))
         # The friendly, default (non-DEEP_DEBUG) queued-report ack — messages/en.py's
-        # "api.queued_report" (server-side, docs/work_process.md §17) — confirms this
+        # "Api.queued_report" (server-side,) — confirms this
         # became a queued job, same as before; the raw task ID is no longer in the
         # default reply — the bot now purely relays whatever /Msg's own "answer" says.
         assert "Handling it" in reply

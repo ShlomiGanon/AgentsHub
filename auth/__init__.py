@@ -1,14 +1,23 @@
-"""Permission model — public re-export surface (work_plan.md §1.9; docs/Next_Plan.md §6).
+"""Permission model — public re-export surface.
 
 `auth.permissions` remains directly importable for existing call sites; this
 module re-exports the same objects as the package's forward-looking public
 contract.
 """
 
-from auth.permissions import PermissionLevel, RequestedOperation, ViewerAllowedAction, is_permitted
+from auth.permissions import (
+    BOT_SERVICE_IDENTITY,
+    BOT_SERVICE_KEY_ENV_VAR,
+    PermissionLevel,
+    RequestedOperation,
+    ViewerAllowedAction,
+    is_permitted,
+)
 from auth.user_names import InvalidFullNameError, MAX_FULL_NAME_LENGTH, normalize_full_name
 
 __all__ = [
+    "BOT_SERVICE_IDENTITY",
+    "BOT_SERVICE_KEY_ENV_VAR",
     "InvalidFullNameError",
     "MAX_FULL_NAME_LENGTH",
     "PermissionLevel",

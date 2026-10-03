@@ -1,11 +1,11 @@
-"""9.21 — Set up deployment (work_plan.md §9.21).
+"""9.21 — Set up deployment.
 
 Uses the *real* `api.app.build_context`/`build_app`/`main` — not
 `tests/api_fakes.py`'s test-only fixture — since this subtask is about
 proving the actual startup wiring works, not the test double that stands
 in for it everywhere else. Scope stays localhost-demo packaging only, per
 this subtask's own refined text: production process supervision, TLS,
-and everything else `docs/NEXT_STAGE.md` covers is explicitly out of
+and everything else covers is explicitly out of
 scope here.
 """
 
@@ -55,6 +55,7 @@ MODEL_CREDENTIAL_ENVS = []
 
 
 def _write_deployment(tmp_path, monkeypatch, api_port: int):
+    """Write deployment."""
     module_name = f"integration_deployment_{uuid.uuid4().hex}"
     bot_token_env = f"DEPLOY_TEST_TOKEN_{uuid.uuid4().hex}"
     monkeypatch.setenv(bot_token_env, "token")
@@ -67,6 +68,7 @@ def _write_deployment(tmp_path, monkeypatch, api_port: int):
 
 def test_the_package_starts_from_nothing_and_serves(tmp_path, monkeypatch, real_tier_env, test_core_model, test_sub_model):
     # A genuinely empty directory — pytest's own tmp_path guarantees this.
+    """The package starts from nothing and serves."""
     assert list(tmp_path.iterdir()) == []
 
     module_name, db_path = _write_deployment(tmp_path, monkeypatch, api_port=19001)
@@ -96,6 +98,7 @@ def test_the_package_starts_from_nothing_and_serves(tmp_path, monkeypatch, real_
 
 
 def test_two_deployments_start_side_by_side_from_the_same_build(tmp_path, monkeypatch, real_tier_env, test_core_model, test_sub_model):
+    """Two deployments start side by side from the same build."""
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
 

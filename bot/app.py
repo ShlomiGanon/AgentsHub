@@ -1,4 +1,4 @@
-"""Telegram Frontend entry point (work_plan.md §8, chiefly §8.1)."""
+"""Telegram bot process facade: dispatch, handlers, and wiring re-exports."""
 
 from bot.dispatch import (
     handle_incoming_message,

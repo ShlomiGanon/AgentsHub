@@ -1,40 +1,27 @@
-"""Firefighting operational seed data and declared simulations."""
+"""Firefighting operational seed data and declared FIRE_002 simulations."""
 
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from agents import Agent, InvocationPolicy, NeighboringForcesAgent, SurveillanceAgent, TeamStatusAgent, failed_tool_result, get_authenticated_request_identity, tool
-from messages import get_catalog
 from persistence import (
-    ApparatusStoreError,
-    FireStoreError,
     open_apparatus_store,
-    open_fire_store,
-    open_incident_responder_store,
     open_response_team_surveillance_store,
     open_team_status_persistence,
 )
-from profiles.admin_tables import AdminColumn, AdminTable
-from profiles.contracts import AgentSpec, OptimizationPolicy
+from profiles.firefighting import (
+    APPARATUS,
+    CAMERAS,
+    DRONES,
+    FIREFIGHTING_APPARATUS_DB_PATH,
+    FIREFIGHTING_CREW_STATUS_DB_PATH,
+    FIREFIGHTING_DRONE_HOME,
+    FIREFIGHTING_SURVEILLANCE_DB_PATH,
+    _catalog_text,
+)
 from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
-from protocols import CriticalityLevel, Protocol, Step
-
-import profiles.firefighting as _facade
-globals().update({name: getattr(_facade, name) for name in dir(_facade) if not name.startswith("__")})
 
 def _ensure_operational_seed_data() -> None:
-    """Create-if-missing cameras/apparatus; open yesterday's local attendance
-    cycle if none exists yet (otherwise FIRE_002's shift and absence reports
-    fail the daily-cycle rule, and today's due check would already be spent).
-    Mirrors `profiles/response_team_simulation.py`'s own seed hook. Never
-    overwrites an existing row -- the same "create if missing, never touch if
-    present" idiom
-    `profiles.simulation_provisioning.ensure_simulation_entities` already uses
-    for simulation users/groups.
-
-    Called automatically, on every profile load (live or simulated), by
-    `ensure_simulation_entities` via this module's `OPERATIONAL_SEED` attribute."""
+    """Create missing cameras/apparatus and open yesterday's cycle if the roster has none."""
 
     surveillance = open_response_team_surveillance_store(
         FIREFIGHTING_SURVEILLANCE_DB_PATH, home_area=FIREFIGHTING_DRONE_HOME
@@ -262,11 +249,11 @@ SIMULATIONS = [
 ]
 
 
-# == Admin-panel tables (docs/Admin_Tables_Plan.md) ==========================
-#
-# Every write_fn is a thin wrapper around a store method on the same already-shared store
-# classes response_team.py uses (persistence/response_team_store.py's
-# ResponseTeamSurveillanceStore/NeighboringForceStore, persistence/team_status_store.py's
-# SQLiteTeamStatusPersistence) -- proof this mechanism is genuinely shared, not just the same
-# shape reimplemented per profile.
+__all__ = [
+    "OPERATIONAL_SEED",
+    "SIMULATION_GROUPS",
+    "SIMULATION_ROSTERS",
+    "SIMULATION_USERS",
+    "SIMULATIONS",
+]
 

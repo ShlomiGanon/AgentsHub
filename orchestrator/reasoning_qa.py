@@ -61,11 +61,15 @@ from orchestrator.reasoning_schemas import (
 )
 from orchestrator.reasoning_report import _parse_structured_intent_response
 
+# --- question routing ---
+
 _DIRECT_LOOKUP_PATTERN = re.compile(r"\A\s*DIRECT_LOOKUP:\s*most_recent\s*\Z", re.IGNORECASE)
 _NONE_PATTERN = re.compile(r"NONE:\s*(.+)", re.IGNORECASE | re.DOTALL)
 
 
 def _build_direct_lookup_prompt(question: str, conversation_messages: tuple[dict, ...] = ()) -> str:
+    """Ask whether this question is a most-recent-event lookup."""
+
     return (
         "Decide whether this question can be answered by directly looking up the single most recent "
         "event in the historical record — questions like \"what is the last event\", \"what just "
@@ -84,6 +88,8 @@ def _build_direct_lookup_prompt(question: str, conversation_messages: tuple[dict
     )
 
 def _is_direct_most_recent_lookup(raw_text: str) -> bool:
+    """True when the model answered with the DIRECT_LOOKUP: most_recent line."""
+
     return _DIRECT_LOOKUP_PATTERN.fullmatch(raw_text) is not None
 
 @dataclass(frozen=True)
@@ -116,6 +122,8 @@ def _build_agent_selection_prompt(
     history_context: dict | None = None,
     conversation_messages: tuple[dict, ...] = (),
 ) -> str:
+    """Prompt asking which specialists, if any, should answer this question."""
+
     agents_data = []
     for descriptor in descriptors:
         read_only_tools = [
@@ -158,6 +166,8 @@ def _build_agent_selection_prompt(
     )
 
 def _history_query_spec_from_payload(payload: object) -> HistoryQuerySpec:
+    """Build a HistoryQuerySpec from a model JSON object, validating closed-set fields."""
+
     if not isinstance(payload, dict):
         raise OrchestrationParseError("history_query must be a JSON object")
 
@@ -175,6 +185,8 @@ def _history_query_spec_from_payload(payload: object) -> HistoryQuerySpec:
         raise OrchestrationParseError(f"invalid history group_by: {group_by!r}")
 
     def _strings(field_name: str) -> tuple[str, ...]:
+        """Read a list-of-strings field, rejecting any other shape."""
+
         value = payload.get(field_name, [])
         if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
             raise OrchestrationParseError(f"history field {field_name!r} must be a list of strings")
@@ -204,6 +216,8 @@ def _history_query_spec_from_payload(payload: object) -> HistoryQuerySpec:
     )
 
 def _parse_agent_selection_response(raw_text: str) -> AgentSelectionResult:
+    """Parse a specialist-routing answer into an AgentSelectionResult."""
+
     raw_text = _unwrap_json_code_fence(raw_text)
     if raw_text.lstrip().startswith("{"):
         payload = _load_unique_json_object(raw_text, "question routing")
@@ -269,6 +283,8 @@ def _build_message_plan_prompt(
     conversation_messages: tuple[dict, ...],
     system_context: dict | None = None,
 ) -> str:
+    """Prompt that classifies intent and, for a question, picks specialists in one call."""
+
     protocol_data = [{"name": protocol.name, "description": protocol.description} for protocol in protocols]
     agents_data = [
         {
@@ -410,7 +426,11 @@ def run_parallel_specialists(
         return results
 
     def _logged_runner(agent_name: str, runner_fn: Callable[[], SpecialistResult]) -> Callable[[], SpecialistResult]:
+        """Wrap a specialist runner with start/finish telemetry."""
+
         def _wrapped() -> SpecialistResult:
+            """Run one specialist and record success or failure telemetry."""
+
             record_finished_invocation_id(None)
             specialist_started(agent=agent_name)
             t0 = time.monotonic()
@@ -477,12 +497,18 @@ def _question_reference_context(conversation_messages: tuple[dict, ...]) -> str:
     )
 
 def _usable_specialist_result(result: SpecialistResult) -> bool:
+    """True when the specialist returned an answer without a recorded failure."""
+
     return result.failure is None
 
 def _failed_specialist_names(sub_answers: dict[str, SpecialistResult]) -> list[str]:
+    """Names of specialists that failed or timed out."""
+
     return [name for name, result in sub_answers.items() if result.failed]
 
 def _append_partial_failure_note(composed_text: str, failed_agents: list[str]) -> str:
+    """Append a catalog note naming the specialists that did not answer."""
+
     note = get_current_catalog().text(
         "orchestrator.specialist.partial_failure", agents=", ".join(failed_agents)
     )
@@ -499,9 +525,7 @@ def answer_question_from_plan(
     caller_sender_identity_filter: str | None = None,
     conversation_messages: tuple[dict, ...] = (),
 ) -> QuestionAnswer:
-    """`caller_sender_identity_filter` restricts every history lookup this call performs to events the caller
-    themselves submitted — the ownership scoping a viewer's `ask_question` operation requires
-    (docs/Next_Plan.md §5 decision record). `None` (a commander) applies no restriction."""
+    """Answer from a prepared plan; a viewer filter limits history to that caller's own events."""
 
     is_hebrew = any('\u0590' <= c <= '\u05ea' for c in question)
     reference_context = _question_reference_context(conversation_messages)
@@ -550,6 +574,8 @@ def answer_question_from_plan(
         return QuestionAnswer(_cant_answer_reply(f"The selected agent is not available: {', '.join(unknown_names)}.", is_hebrew=is_hebrew))
 
     def _run_task(agent_name: str, task_text: str) -> SpecialistResult:
+        """Run one specialist or history lookup for this planned task."""
+
         agent = registry.get(agent_name)
         task_text += reference_context
         if is_hebrew:
@@ -601,6 +627,8 @@ def answer_question_from_plan(
     return QuestionAnswer(composed.text)
 
 def _build_compose_prompt(question: str, sub_answers: dict[str, SpecialistResult]) -> str:
+    """Prompt asking Main to fuse specialist answers into one reply."""
+
     answers_block = "\n".join(
         f"- {name}: {result.answer}"
         for name, result in sub_answers.items()
@@ -614,10 +642,14 @@ def _build_compose_prompt(question: str, sub_answers: dict[str, SpecialistResult
     )
 
 def _specialist_from_history_error(exc: HistoryQueryError) -> SpecialistResult:
+    """Map a history query failure onto a SpecialistResult."""
+
     failure = SpecialistFailure.EMPTY_HISTORY if exc.empty else SpecialistFailure.NO_ANSWER
     return SpecialistResult(answer=str(exc), failure=failure)
 
 def _reply_for_history_query_error(exc: HistoryQueryError, is_hebrew: bool, *, query_spec_empty: bool = False) -> str:
+    """User-facing text when a history query cannot be answered."""
+
     if is_hebrew and exc.empty and query_spec_empty:
         return "\u05dc\u05d0 \u05e0\u05de\u05e6\u05d0\u05d5 \u05d0\u05d9\u05e8\u05d5\u05e2\u05d9\u05dd \u05e7\u05d5\u05d3\u05de\u05d9\u05dd \u05d1\u05d9\u05d5\u05de\u05df \u05d4\u05de\u05d1\u05e6\u05e2\u05d9."
     if is_hebrew and not exc.empty and query_spec_empty:
@@ -625,6 +657,8 @@ def _reply_for_history_query_error(exc: HistoryQueryError, is_hebrew: bool, *, q
     return _cant_answer_reply(str(exc), is_hebrew=is_hebrew, empty_history=exc.empty)
 
 def _cant_answer_reply(reason: str, is_hebrew: bool = False, *, empty_history: bool = False) -> str:
+    """Catalog-safe refusal when no specialist or history path can answer."""
+
     reason = reason.strip()
     if is_hebrew or any('\u0590' <= c <= '\u05ea' for c in reason):
         if empty_history:
@@ -641,11 +675,7 @@ def answer_question(
     caller_sender_identity_filter: str | None = None,
     conversation_messages: tuple[dict, ...] = (),
 ) -> str:
-    """`caller_sender_identity_filter` — see `answer_question_from_plan`'s docstring; the same ownership
-    scoping applies to this legacy routing path. `conversation_messages` lets this path resolve a
-    reference ("that event", "the first one") to a stable Event ID the same way the merged planner
-    already does (docs/Next_Plan.md §10) — conversation facts are references only, re-fetched fresh from
-    history once resolved, never trusted as the current record."""
+    """Route a question to history or specialists; conversation is a reference only, never a fact source."""
 
     with stage_context("question_direct_lookup_classification"):
         lookup_result = main_agent.process(_build_direct_lookup_prompt(question, conversation_messages), [])
@@ -725,8 +755,12 @@ def answer_question(
             return _cant_answer_reply(f"The selected agent is not available: {agent_name}.")
 
         def _make_runner(ag, txt):
+            """Bind one specialist or history runner for this planned task."""
+
             if isinstance(ag, HistoryAgent):
                 def _hist_runner():
+                    """Query history for this specialist task."""
+
                     try:
                         with stage_context("question_history_query"):
                             return SpecialistResult(answer=history_query_service.query(
@@ -737,6 +771,8 @@ def answer_question(
                 return _hist_runner
             else:
                 def _agent_runner():
+                    """Ask this specialist using only its read-only tools."""
+
                     read_only_tools = [tool.name for tool in ag.exposed_tools() if not tool.side_effecting]
                     with stage_context("question_subagent"):
                         agent_result = ag.process(txt, read_only_tools)

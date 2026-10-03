@@ -10,6 +10,7 @@ from persistence.sqlite_support import _GROUP_COLUMNS, _group_record
 
 
 class SqliteUsersMixin:
+    """User reads/writes for SQLitePersistence."""
     def read_user(self, telegram_identity: str) -> dict | None:
         """Return the users row for this Telegram identity, or None."""
 
@@ -31,6 +32,8 @@ class SqliteUsersMixin:
         """Insert or update a users row's permission level and optional full name."""
 
         def _do(connection: sqlite3.Connection) -> None:
+            """Insert or update this users row's permission level and optional full name."""
+
             try:
                 connection.execute(
                     "INSERT INTO users (telegram_identity, permission_level, full_name, auto_register) "
@@ -51,6 +54,8 @@ class SqliteUsersMixin:
         """Insert an auto-registered viewer users row when the identity is new."""
 
         def _do(connection: sqlite3.Connection) -> None:
+            """Insert an auto-registered viewer row when this identity is new."""
+
             connection.execute(
                 "INSERT INTO users (telegram_identity, permission_level, full_name, auto_register) "
                 "VALUES (?, 'viewer', '', 1) ON CONFLICT(telegram_identity) DO NOTHING",
@@ -68,6 +73,8 @@ class SqliteUsersMixin:
         """True if this users row was just inserted; False if it already existed."""
 
         def _do(connection: sqlite3.Connection) -> bool:
+            """Insert this users row only when the identity is new."""
+
             try:
                 cursor = connection.execute(
                     "INSERT INTO users (telegram_identity, permission_level, full_name, auto_register) "
@@ -94,6 +101,8 @@ class SqliteUsersMixin:
         created_at = datetime.now(timezone.utc).isoformat()
 
         def _do(connection: sqlite3.Connection) -> dict:
+            """Read, and when allowed create, the user and optional group for one Telegram update."""
+
             try:
                 if allow_registration:
                     connection.execute(
@@ -138,6 +147,8 @@ class SqliteUsersMixin:
         """Clear auto_register on this users row."""
 
         def _do(connection: sqlite3.Connection) -> None:
+            """Clear auto_register on this users row."""
+
             cursor = connection.execute(
                 "UPDATE users SET auto_register = 0 WHERE telegram_identity = ?",
                 (telegram_identity,),
@@ -156,6 +167,8 @@ class SqliteUsersMixin:
         """Set full_name on this users row."""
 
         def _do(connection: sqlite3.Connection) -> None:
+            """Set full_name on this users row."""
+
             cursor = connection.execute(
                 "UPDATE users SET full_name = ? WHERE telegram_identity = ?",
                 (full_name, telegram_identity),
@@ -170,6 +183,8 @@ class SqliteUsersMixin:
         """Delete this users row."""
 
         def _do(connection: sqlite3.Connection) -> None:
+            """Delete this users row."""
+
             cursor = connection.execute("DELETE FROM users WHERE telegram_identity = ?", (telegram_identity,))
             connection.commit()
             if cursor.rowcount == 0:

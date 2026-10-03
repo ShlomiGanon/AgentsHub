@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# --- cache ---
+
 async def _group_binding_cached(api_client, chat_id: str) -> GroupBindingView | None:
     """The binding for `chat_id`, from a TTL-cached copy of the server's routing table."""
 
@@ -76,6 +78,8 @@ async def _resolve_caller_cached(
     ttl = _USER_ROLE_CACHE_TTL_SECONDS if resolution.status == "ok" else 5.0
     _USER_ROLE_CACHE[key] = (resolution, now + ttl)
     return resolution
+
+# --- submit ---
 
 async def handle_incoming_message(
     deps: BotDeps,
@@ -138,22 +142,8 @@ async def _submit_and_format_message(
     if event_data_event_id is not None:
         interactions.unregister_event_data_reply_target(event_data_event_id)
 
-    # Pure relay for every kind (docs/work_process.md §17): /Msg now sends a
-    # ready-to-display `answer` for every kind, including a queued report/request
-    # (server-side `api.queued_report`/`api.queued_request`, DEEP_DEBUG-gated
-    # there — api/routes.py's `_queued_answer_text`) — the same shape
-    # question/conversational/clarification/event_update's `answer` already had.
-    # `bot.no_answer` is only a safety net for the (never expected) case of a
-    # missing answer, not a real formatting branch. There used to be an
-    # `awaiting_approval`-gated append + a `register_open_approval_hold` call
-    # here — removed (docs/work_process.md §18): /Msg's synchronous response can
-    # never actually know a queued report/request will later be held for
-    # approval (that's discovered asynchronously, well after this reply is
-    # sent), so both were dead code, never reachable via the real
-    # `HttpApiClient`. The real, working path is the `approval_hold`
-    # notification (`bot/interactions.py`'s `push_approval_prompt`, which
-    # already calls `register_open_approval_hold` correctly, on its own,
-    # untouched by this).
+    # /Msg already returns a ready-to-display answer for every kind; bot.no_answer
+    # is only a safety net. Approval holds arrive later via notification, not here.
     return submission_result.answer_text or messages.text("bot.no_answer"), submission_result
 
 async def _poll_live_trace(
@@ -197,6 +187,8 @@ def _keep_trace_task(task: asyncio.Task) -> None:
             )
 
     task.add_done_callback(_finished)
+
+# --- present ---
 
 async def present_incoming_message(
     deps: BotDeps,
@@ -257,13 +249,7 @@ async def present_incoming_message(
         )
         reply = messages.text("bot.not_available", reason=exc)
     except ApiRequestError as exc:
-        # "run_failure" (RunFailureError, 422) is the one API error class this codebase always
-        # raises from a raw internal/model-produced string (api/routes.py wraps
-        # OrchestrationParseError verbatim) rather than a deliberately-crafted, already-localized
-        # catalog message — the only class genuinely unsafe to show a caller directly. Every other
-        # ApiError subclass (InvalidInputError, NotFoundError, ConflictError,
-        # ServiceUnavailableError, ...) is raised with real catalog text throughout this codebase
-        # and stays exactly as informative as before (docs/IMPROVES/CRITICAL_FIXES_PLAN.MD item 4).
+        # run_failure wraps a raw model string; never show it. Other API errors already use catalog text.
         if exc.error_class == "run_failure":
             reply = messages.text("error.run_failure_generic")
         else:

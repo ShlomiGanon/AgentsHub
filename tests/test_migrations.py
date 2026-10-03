@@ -1,9 +1,12 @@
+"""SQLite schema migrations and compatibility."""
+
 import sqlite3
 
 from persistence.schema import MIGRATIONS, run_migrations
 
 
 def _table_names(db_path):
+    """Table names."""
     connection = sqlite3.connect(db_path)
     try:
         rows = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
@@ -13,6 +16,7 @@ def _table_names(db_path):
 
 
 def test_fresh_file_gets_the_full_schema(tmp_path):
+    """Fresh file gets the full schema."""
     db_path = str(tmp_path / "fresh.db")
 
     run_migrations(db_path)
@@ -26,6 +30,7 @@ def test_fresh_file_gets_the_full_schema(tmp_path):
 
 
 def test_user_version_reflects_the_latest_migration(tmp_path):
+    """User version reflects the latest migration."""
     db_path = str(tmp_path / "fresh.db")
 
     run_migrations(db_path)
@@ -40,6 +45,7 @@ def test_user_version_reflects_the_latest_migration(tmp_path):
 
 
 def test_event_steps_include_resumable_event_data_wait_columns(tmp_path):
+    """Event steps include resumable event data wait columns."""
     db_path = str(tmp_path / "event-data-waits.db")
     run_migrations(db_path)
 
@@ -53,6 +59,7 @@ def test_event_steps_include_resumable_event_data_wait_columns(tmp_path):
 
 
 def test_migration_seventeen_adds_safe_sender_permission_snapshot_to_legacy_events(tmp_path):
+    """Migration seventeen adds safe sender permission snapshot to legacy events."""
     db_path = str(tmp_path / "version-sixteen.db")
     connection = sqlite3.connect(db_path)
     try:
@@ -86,6 +93,7 @@ def test_migration_seventeen_adds_safe_sender_permission_snapshot_to_legacy_even
 
 
 def test_migration_eighteen_adds_empty_full_name_without_losing_users(tmp_path):
+    """Migration eighteen adds empty full name without losing users."""
     db_path = str(tmp_path / "version-seventeen.db")
     connection = sqlite3.connect(db_path)
     try:
@@ -106,6 +114,7 @@ def test_migration_eighteen_adds_empty_full_name_without_losing_users(tmp_path):
 
 
 def test_migration_nineteen_marks_existing_users_and_groups_as_manually_approved(tmp_path):
+    """Migration nineteen marks existing users and groups as manually approved."""
     db_path = str(tmp_path / "version-eighteen.db")
     connection = sqlite3.connect(db_path)
     try:
@@ -136,8 +145,9 @@ def test_migration_nineteen_marks_existing_users_and_groups_as_manually_approved
 
 
 def test_migration_twenty_adds_availability_fields_to_an_existing_database(tmp_path):
-    # Stage 3, docs/bar_improves.md: an existing database created before
+    # Stage 3,: an existing database created before
     # migration 20 gets the three new nullable columns without losing data.
+    """Migration twenty adds availability fields to an existing database."""
     db_path = str(tmp_path / "version-nineteen.db")
     connection = sqlite3.connect(db_path)
     try:
@@ -171,6 +181,7 @@ def test_migration_twenty_adds_availability_fields_to_an_existing_database(tmp_p
 
 
 def test_migration_twenty_is_present_on_a_fresh_database(tmp_path):
+    """Migration twenty is present on a fresh database."""
     db_path = str(tmp_path / "fresh-availability.db")
     run_migrations(db_path)
 
@@ -184,6 +195,7 @@ def test_migration_twenty_is_present_on_a_fresh_database(tmp_path):
 
 
 def test_migration_twenty_reruns_without_error_when_columns_already_exist(tmp_path):
+    """Migration twenty reruns without error when columns already exist."""
     db_path = str(tmp_path / "rerun-availability.db")
     run_migrations(db_path)
 
@@ -200,6 +212,7 @@ def test_migration_twenty_reruns_without_error_when_columns_already_exist(tmp_pa
 def test_migration_twenty_one_adds_report_text_to_an_existing_database(tmp_path):
     # An existing database created before migration 21 gets the new nullable
     # column without losing data.
+    """Migration twenty one adds report text to an existing database."""
     db_path = str(tmp_path / "version-twenty.db")
     connection = sqlite3.connect(db_path)
     try:
@@ -231,6 +244,7 @@ def test_migration_twenty_one_adds_report_text_to_an_existing_database(tmp_path)
 
 
 def test_migration_twenty_one_is_present_on_a_fresh_database(tmp_path):
+    """Migration twenty one is present on a fresh database."""
     db_path = str(tmp_path / "fresh-report-text.db")
     run_migrations(db_path)
 
@@ -246,6 +260,7 @@ def test_migration_twenty_one_is_present_on_a_fresh_database(tmp_path):
 
 
 def test_migration_twenty_one_reruns_without_error_when_column_already_exists(tmp_path):
+    """Migration twenty one reruns without error when column already exists."""
     db_path = str(tmp_path / "rerun-report-text.db")
     run_migrations(db_path)
 
@@ -260,6 +275,7 @@ def test_migration_twenty_one_reruns_without_error_when_column_already_exists(tm
 
 
 def test_history_query_indexes_are_present_on_a_fresh_database(tmp_path):
+    """History query indexes are present on a fresh database."""
     import sqlite3
 
     db_path = str(tmp_path / "history-indexes.db")
@@ -281,6 +297,7 @@ def test_history_query_indexes_are_present_on_a_fresh_database(tmp_path):
 
 
 def test_running_again_on_an_up_to_date_database_applies_nothing(tmp_path):
+    """Running again on an up to date database applies nothing."""
     db_path = str(tmp_path / "fresh.db")
 
     run_migrations(db_path)
@@ -293,6 +310,7 @@ def test_running_again_on_an_up_to_date_database_applies_nothing(tmp_path):
 
 
 def test_migration_six_adds_event_index_to_an_existing_version_five_database(tmp_path):
+    """Migration six adds event index to an existing version five database."""
     db_path = str(tmp_path / "version-five.db")
     connection = sqlite3.connect(db_path)
     try:
@@ -319,6 +337,7 @@ from config.live_settings import SettingsStore
 
 
 def test_first_run_takes_starting_values_from_profile_and_writes_file(tmp_path):
+    """First run takes starting values from profile and writes file."""
     db_path = str(tmp_path / "deployment.db")
 
     store = SettingsStore(db_path, starting_retry_count=3, starting_risk_threshold=0.5, starting_lookback_window_days=30)
@@ -330,6 +349,7 @@ def test_first_run_takes_starting_values_from_profile_and_writes_file(tmp_path):
 
 
 def test_later_run_prefers_the_settings_file_over_profile_starting_values(tmp_path):
+    """Later run prefers the settings file over profile starting values."""
     db_path = str(tmp_path / "deployment.db")
 
     first = SettingsStore(db_path, starting_retry_count=3, starting_risk_threshold=0.5, starting_lookback_window_days=30)
@@ -341,6 +361,7 @@ def test_later_run_prefers_the_settings_file_over_profile_starting_values(tmp_pa
 
 
 def test_change_is_written_before_it_is_considered_confirmed(tmp_path):
+    """Change is written before it is considered confirmed."""
     db_path = str(tmp_path / "deployment.db")
     settings_path = tmp_path / "deployment.db.settings.json"
 
@@ -352,6 +373,7 @@ def test_change_is_written_before_it_is_considered_confirmed(tmp_path):
 
 
 def test_settings_file_lives_beside_the_database_not_the_profile(tmp_path):
+    """Settings file lives beside the database not the profile."""
     db_path = str(tmp_path / "sub" / "deployment.db")
     (tmp_path / "sub").mkdir()
 
@@ -361,6 +383,7 @@ def test_settings_file_lives_beside_the_database_not_the_profile(tmp_path):
 
 
 def test_migration_twenty_two_adds_telegram_delivery_columns_to_an_existing_database(tmp_path):
+    """Migration twenty two adds telegram delivery columns to an existing database."""
     db_path = str(tmp_path / "version-twenty-one.db")
     connection = sqlite3.connect(db_path)
     try:
@@ -394,6 +417,7 @@ def test_migration_twenty_two_adds_telegram_delivery_columns_to_an_existing_data
 
 
 def test_migration_twenty_two_is_present_on_a_fresh_database(tmp_path):
+    """Migration twenty two is present on a fresh database."""
     db_path = str(tmp_path / "fresh-telegram-delivery.db")
     run_migrations(db_path)
 
@@ -409,6 +433,7 @@ def test_migration_twenty_two_is_present_on_a_fresh_database(tmp_path):
 
 
 def test_migration_twenty_two_reruns_without_error_when_columns_already_exist(tmp_path):
+    """Migration twenty two reruns without error when columns already exist."""
     db_path = str(tmp_path / "rerun-telegram-delivery.db")
     run_migrations(db_path)
 
@@ -423,6 +448,7 @@ def test_migration_twenty_two_reruns_without_error_when_columns_already_exist(tm
 
 
 def test_migration_twenty_seven_adds_attendance_settings_to_existing_groups(tmp_path):
+    """Migration twenty seven adds attendance settings to existing groups."""
     db_path = str(tmp_path / "version-twenty-six.db")
     connection = sqlite3.connect(db_path)
     try:
@@ -454,6 +480,7 @@ def test_migration_twenty_seven_adds_attendance_settings_to_existing_groups(tmp_
 
 
 def test_migration_twenty_eight_disables_attendance_on_existing_groups(tmp_path):
+    """Migration twenty eight disables attendance on existing groups."""
     db_path = str(tmp_path / "version-twenty-seven.db")
     connection = sqlite3.connect(db_path)
     try:
@@ -490,6 +517,7 @@ def test_migration_twenty_eight_disables_attendance_on_existing_groups(tmp_path)
 
 
 def test_rich_reports_enabled_defaults_to_true(tmp_path):
+    """Rich reports enabled defaults to true."""
     db_path = str(tmp_path / "deployment.db")
 
     store = SettingsStore(db_path, starting_retry_count=3, starting_risk_threshold=0.5, starting_lookback_window_days=30)
@@ -498,6 +526,7 @@ def test_rich_reports_enabled_defaults_to_true(tmp_path):
 
 
 def test_rich_reports_enabled_can_be_turned_off_and_persists(tmp_path):
+    """Rich reports enabled can be turned off and persists."""
     db_path = str(tmp_path / "deployment.db")
 
     first = SettingsStore(db_path, starting_retry_count=3, starting_risk_threshold=0.5, starting_lookback_window_days=30)
@@ -509,6 +538,7 @@ def test_rich_reports_enabled_can_be_turned_off_and_persists(tmp_path):
 
 
 def test_rich_reports_enabled_is_backfilled_for_a_settings_file_from_before_this_feature(tmp_path):
+    """Rich reports enabled is backfilled for a settings file from before this feature."""
     db_path = str(tmp_path / "deployment.db")
     settings_path = tmp_path / "deployment.db.settings.json"
     settings_path.write_text(

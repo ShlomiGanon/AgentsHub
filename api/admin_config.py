@@ -13,6 +13,8 @@ class AdminConfigError(Exception):
 
 @dataclass(frozen=True)
 class AdminConfig:
+    """Resolved admin-panel credentials and lockout settings from the process environment."""
+
     username: str
     password: str
     session_secret: str
@@ -22,6 +24,8 @@ class AdminConfig:
 
 
 def _positive_int_env(name: str, default: int) -> int:
+    """Read a positive integer environment variable, or return the default when unset."""
+
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
         return default
@@ -73,13 +77,11 @@ class LoginRateLimiter:
     """In-memory, GLOBAL login lockout for the whole `/admin/login` endpoint — one shared failure
     count and one shared lockout state, deliberately not scoped per-IP or per-session.
 
-    Per-IP scoping was tried first and diagnosed
-    (docs/IMPROVES/ADMIN_LOGIN_LOCKOUT_DIAGNOSIS.MD): for this deployment's single shared
-    credential, it behaved identically to one global lock in every situation that actually
-    mattered — any two visitors sharing an observed source address (the common case behind a
-    reverse proxy, a NAT'd office network, or just testing from localhost) already shared one
-    lockout bucket. Global is now the intended design, not a bug to route around — do not
-    reintroduce IP (or session) scoping here, even as a fallback.
+    Per-IP scoping was tried first: for this deployment's single shared
+    credential it behaved identically to one global lock — any two visitors sharing an
+    observed source address (reverse proxy, NAT, or localhost) already shared one
+    lockout bucket. Global is the intended design; do not reintroduce IP or session
+    scoping here, even as a fallback.
 
     Reset on process restart, no shared store — fine for the single-process deployment this whole
     panel already assumes (SingleInstanceLock elsewhere in this codebase makes the same
@@ -95,6 +97,8 @@ class LoginRateLimiter:
     """
 
     def __init__(self, max_attempts: int, lockout_minutes: int):
+        """Store lockout thresholds and start with a clean failure count."""
+
         self._max_attempts = max_attempts
         self._lockout_minutes = lockout_minutes
         self._lock = threading.Lock()
@@ -143,6 +147,8 @@ class LoginRateLimiter:
             return 0.0
 
     def record_success(self) -> None:
+        """Clear the failure count and any active lockout after a successful login."""
+
         with self._lock:
             self._failure_count = 0
             self._locked_at_monotonic = None

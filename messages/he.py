@@ -651,7 +651,7 @@ MESSAGES = {
     "admin.simulator.profile_simulations_commander_required": "יש לבחור זהות מפקד כדי לטעון סימולציות.",
     "admin.simulator.profile_simulation_load_failed": "לא ניתן לטעון סימולציה זו: {message}",
     "admin.simulator.select_identity_first": "התחבר ובחר זהות פעילה כדי להציג את סימולציות הפרופיל.",
-    "admin.simulator.bot_mode_unconfigured": "פרופיל זה לא הגדיר SIMULATOR_PORT, ולכן לא ניתן לנתב שלבי הודעה דרך תהליך הבוט במצב סימולציה (docs/bot_simulation_mode_design.md).",
+    "admin.simulator.bot_mode_unconfigured": "פרופיל זה לא הגדיר SIMULATOR_PORT, ולכן לא ניתן לנתב שלבי הודעה דרך תהליך הבוט במצב סימולציה.",
     "admin.simulator.bot_mode_unreachable": "לא ניתן היה להתחבר לתהליך הבוט במצב סימולציה. האם `python -m bot.simulator_app` פועל עבור פרופיל זה?",
     "admin.simulator.bot_no_reply": "(הבוט לא שלח תגובה)",
     "admin.simulator.bts.title": "מאחורי הקלעים",
@@ -1168,11 +1168,7 @@ MESSAGES = {
     "firefighting.simulation.fire002.persona.firefighter_team_a_6": "כבאי צוות א׳ 6 - נתוני סימולציה",
     "firefighting.simulation.fire002.persona.fire_police_patrol": "סיור משטרתי",
     "firefighting.simulation.fire002.persona.kkl_mountains_sector": "מוקד קק\"ל - גזרת הרים",
-    # Simplified to the exact short first-name form the FIRE_002 roll-call text itself uses
-    # ("אבי, עמרי, יובל", phase1.step1.text) -- record_crew_shift_status matches member tokens
-    # against this full_name by exact casefold equality, and the roll call is spoken informally,
-    # not by rank/role (docs/Admin_Tables_Plan.md's simulation-data-alignment audit; this is the
-    # actual root cause of the "reason unknown" crew-status failure investigated this session).
+    # Short first names match the FIRE_002 roll-call tokens; rank titles would not match.
     "firefighting.simulation.fire002.persona.lahav_avi_shift_commander": "אבי",
     "firefighting.simulation.fire002.persona.omri_firefighter": "עמרי",
     "firefighting.simulation.fire002.persona.police_hub_agam": "מוקד משטרה - אגמ",

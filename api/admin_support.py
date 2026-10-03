@@ -80,6 +80,8 @@ class AdminPanel:
     """Per-blueprint helpers shared by every admin route module."""
 
     def __init__(self, ctx: "ApiContext", config: AdminConfig) -> None:
+        """Bind this panel to one API context, config, and a fresh login lockout tracker."""
+
         self.ctx = ctx
         self.config = config
         self.rate_limiter = LoginRateLimiter(config.login_max_attempts, config.login_lockout_minutes)

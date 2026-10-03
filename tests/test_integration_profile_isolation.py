@@ -1,4 +1,4 @@
-"""9.4 — Test profile isolation (work_plan.md §9.4).
+"""9.4 — Test profile isolation.
 
 Two full deployments — two real running API servers, two real SQLite
 files, two real settings stores — run at once and must never leak state
@@ -18,10 +18,12 @@ from tests.crewai_fakes import install_crewai_stub
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch, 'status nominal')
 
 
 def test_two_profiles_at_once_on_separate_ports_and_databases(tmp_path):
+    """Two profiles at once on separate ports and databases."""
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
     ctx_a = build_context(tmp_path / "a")
@@ -33,6 +35,7 @@ def test_two_profiles_at_once_on_separate_ports_and_databases(tmp_path):
 
 
 def test_events_written_under_one_profile_never_appear_in_the_others_history_or_precedent_search(tmp_path):
+    """Events written under one profile never appear in the others history or precedent search."""
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
     ctx_a = build_context(tmp_path / "a")
@@ -72,6 +75,7 @@ def test_events_written_under_one_profile_never_appear_in_the_others_history_or_
 
 
 def test_a_user_added_to_one_profile_is_refused_by_the_other(tmp_path):
+    """A user added to one profile is refused by the other."""
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
     ctx_a = build_context(tmp_path / "a")
@@ -90,6 +94,7 @@ def test_a_user_added_to_one_profile_is_refused_by_the_other(tmp_path):
 
 
 def test_the_two_settings_stores_are_independent(tmp_path):
+    """The two settings stores are independent."""
     store_a = SettingsStore(str(tmp_path / "a.db"), starting_retry_count=3, starting_risk_threshold=0.5, starting_lookback_window_days=30)
     store_b = SettingsStore(str(tmp_path / "b.db"), starting_retry_count=3, starting_risk_threshold=0.5, starting_lookback_window_days=30)
 
@@ -100,6 +105,7 @@ def test_the_two_settings_stores_are_independent(tmp_path):
 
 
 def test_two_real_servers_process_writes_through_their_own_api_independently(tmp_path):
+    """Two real servers process writes through their own api independently."""
     agent_a = happy_path_agent(risk_score="0.1", selected="status_check")
     agent_b = happy_path_agent(risk_score="0.1", selected="status_check")
 

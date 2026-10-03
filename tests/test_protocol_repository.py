@@ -44,6 +44,7 @@ MODEL_CREDENTIAL_ENVS = []
 
 @pytest.fixture
 def profile_module(tmp_path, monkeypatch):
+    """Profile module."""
     module_name = f"editor_test_profile_{uuid.uuid4().hex}"
     content = _PROFILE_TEMPLATE.format(db_path=str(tmp_path / "test.db"))
     (tmp_path / f"{module_name}.py").write_text(content, encoding="utf-8")
@@ -52,11 +53,13 @@ def profile_module(tmp_path, monkeypatch):
 
 
 def _reimport(module_name):
+    """Reimport."""
     sys.modules.pop(module_name, None)
     return importlib.import_module(module_name)
 
 
 def _protocol(**overrides):
+    """Protocol."""
     fields = dict(
         name="new_one",
         description="applies to Y",
@@ -71,6 +74,7 @@ def _protocol(**overrides):
 
 
 def test_read_protocols_is_a_pass_through():
+    """Read protocols is a pass through."""
     protocol = _protocol()
     protocol_set = ProtocolSet(protocols=(protocol,))
 
@@ -78,6 +82,7 @@ def test_read_protocols_is_a_pass_through():
 
 
 def test_add_protocol_reports_the_running_system_is_unchanged(profile_module):
+    """Add protocol reports the running system is unchanged."""
     module = importlib.import_module(profile_module)
 
     result = add_protocol(profile_module, tuple(module.PROTOCOLS), {}, _protocol())
@@ -87,6 +92,7 @@ def test_add_protocol_reports_the_running_system_is_unchanged(profile_module):
 
 
 def test_add_protocol_does_not_touch_the_already_loaded_set(profile_module):
+    """Add protocol does not touch the already loaded set."""
     module = importlib.import_module(profile_module)
 
     add_protocol(profile_module, tuple(module.PROTOCOLS), {}, _protocol())
@@ -95,6 +101,7 @@ def test_add_protocol_does_not_touch_the_already_loaded_set(profile_module):
 
 
 def test_add_protocol_is_visible_only_after_reimport(profile_module):
+    """Add protocol is visible only after reimport."""
     module = importlib.import_module(profile_module)
 
     add_protocol(profile_module, tuple(module.PROTOCOLS), {}, _protocol())
@@ -104,6 +111,7 @@ def test_add_protocol_is_visible_only_after_reimport(profile_module):
 
 
 def test_add_protocol_rejects_a_name_that_already_exists(profile_module):
+    """Add protocol rejects a name that already exists."""
     module = importlib.import_module(profile_module)
     dup = _protocol(name="existing")
 
@@ -112,6 +120,7 @@ def test_add_protocol_rejects_a_name_that_already_exists(profile_module):
 
 
 def test_add_protocol_rejects_an_unresolvable_agent_reference(profile_module):
+    """Add protocol rejects an unresolvable agent reference."""
     module = importlib.import_module(profile_module)
     bad = _protocol(participating_agents=("ghost",))
 
@@ -120,6 +129,7 @@ def test_add_protocol_rejects_an_unresolvable_agent_reference(profile_module):
 
 
 def test_add_protocol_rejects_a_tool_the_named_agent_does_not_expose(profile_module):
+    """Add protocol rejects a tool the named agent does not expose."""
     module = importlib.import_module(profile_module)
     agent = ReferenceAgent(model="m")
     bad = _protocol(participating_agents=("reference_agent",), approved_tools=("not_real",))
@@ -129,6 +139,7 @@ def test_add_protocol_rejects_a_tool_the_named_agent_does_not_expose(profile_mod
 
 
 def test_replace_protocol_updates_the_named_entry(profile_module):
+    """Replace protocol updates the named entry."""
     module = importlib.import_module(profile_module)
     updated = _protocol(name="existing", description="applies to Z now", criticality=CriticalityLevel.MEDIUM)
 
@@ -141,6 +152,7 @@ def test_replace_protocol_updates_the_named_entry(profile_module):
 
 
 def test_replace_protocol_rejects_an_unknown_name(profile_module):
+    """Replace protocol rejects an unknown name."""
     module = importlib.import_module(profile_module)
     ghost = _protocol(name="ghost")
 
@@ -149,6 +161,7 @@ def test_replace_protocol_rejects_an_unknown_name(profile_module):
 
 
 def test_remove_protocol_deletes_the_named_entry(profile_module):
+    """Remove protocol deletes the named entry."""
     module = importlib.import_module(profile_module)
 
     remove_protocol(profile_module, tuple(module.PROTOCOLS), "existing")
@@ -158,6 +171,7 @@ def test_remove_protocol_deletes_the_named_entry(profile_module):
 
 
 def test_remove_protocol_rejects_an_unknown_name(profile_module):
+    """Remove protocol rejects an unknown name."""
     module = importlib.import_module(profile_module)
 
     with pytest.raises(ProtocolEditError):
@@ -165,6 +179,7 @@ def test_remove_protocol_rejects_an_unknown_name(profile_module):
 
 
 def test_file_remains_importable_after_a_write(profile_module):
+    """File remains importable after a write."""
     module = importlib.import_module(profile_module)
 
     add_protocol(profile_module, tuple(module.PROTOCOLS), {}, _protocol())
@@ -174,6 +189,7 @@ def test_file_remains_importable_after_a_write(profile_module):
 
 
 def test_write_leaves_no_tmp_file_behind(profile_module, tmp_path):
+    """Write leaves no tmp file behind."""
     module = importlib.import_module(profile_module)
 
     add_protocol(profile_module, tuple(module.PROTOCOLS), {}, _protocol())
@@ -182,6 +198,7 @@ def test_write_leaves_no_tmp_file_behind(profile_module, tmp_path):
 
 
 def test_a_write_touches_only_the_protocols_assignment(profile_module):
+    """A write touches only the protocols assignment."""
     module = importlib.import_module(profile_module)
 
     add_protocol(profile_module, tuple(module.PROTOCOLS), {}, _protocol())
@@ -202,15 +219,19 @@ READ_ONLY_TOOL = (ToolInfo(name="check_status", description="d", side_effecting=
 
 
 class _ScriptedAgent:
+    """ScriptedAgent."""
     def __init__(self, name, responses):
+        """Initialize this test helper."""
         self.name = name
         self._responses = list(responses)
         self.calls = []
 
     def exposed_tools(self):
+        """Exposed tools."""
         return READ_ONLY_TOOL
 
     def process(self, text, allowed_tools):
+        """Process."""
         self.calls.append((text, tuple(allowed_tools)))
         response = self._responses.pop(0)
         if isinstance(response, Exception):
@@ -219,19 +240,24 @@ class _ScriptedAgent:
 
 
 class _FakeSettings:
+    """FakeSettings."""
     def get_retry_count(self):
+        """Get retry count."""
         return 3
 
 
 def _no_sleep(seconds):
+    """No sleep."""
     pass
 
 
 def _step(agent_name, task_text, allowed_tools=("check_status",)):
+    """Step."""
     return Step(agent_name=agent_name, task_text=task_text, allowed_tools=allowed_tools)
 
 
 def test_a_single_successful_step():
+    """A single successful step."""
     agent = _ScriptedAgent("a1", [AgentResult(status="success", text="ok")])
     steps = [_step("a1", "check gate 3")]
 
@@ -243,6 +269,7 @@ def test_a_single_successful_step():
 
 
 def test_task_text_reaches_the_agent_unmodified():
+    """Task text reaches the agent unmodified."""
     agent = _ScriptedAgent("a1", [AgentResult(status="success", text="ok")])
     steps = [_step("a1", "exactly this text, nothing added")]
 
@@ -252,6 +279,7 @@ def test_task_text_reaches_the_agent_unmodified():
 
 
 def test_approved_tools_are_passed_through_exactly():
+    """Approved tools are passed through exactly."""
     agent = _ScriptedAgent("a1", [AgentResult(status="success", text="ok")])
     steps = [_step("a1", "x", allowed_tools=("check_status", "some_other_tool"))]
 
@@ -261,6 +289,7 @@ def test_approved_tools_are_passed_through_exactly():
 
 
 def test_multi_step_run_executes_every_step_in_order_when_all_succeed():
+    """Multi step run executes every step in order when all succeed."""
     agent_a = _ScriptedAgent("a1", [AgentResult(status="success", text="first")])
     agent_b = _ScriptedAgent("a2", [AgentResult(status="success", text="second")])
     steps = [_step("a1", "do first"), _step("a2", "do second")]
@@ -272,6 +301,7 @@ def test_multi_step_run_executes_every_step_in_order_when_all_succeed():
 
 
 def test_run_stops_at_the_first_permanent_failure_and_keeps_prior_results():
+    """Run stops at the first permanent failure and keeps prior results."""
     agent_a = _ScriptedAgent("a1", [AgentResult(status="success", text="first")])
     agent_b = _ScriptedAgent("a2", [AgentModelError("a2", "boom")] * 3)  # exhausts the limit of 3
     agent_c = _ScriptedAgent("a3", [AgentResult(status="success", text="never reached")])
@@ -293,6 +323,7 @@ def test_run_stops_at_the_first_permanent_failure_and_keeps_prior_results():
 
 
 def test_steps_are_independent_one_failing_does_not_touch_anothers_call_log():
+    """Steps are independent one failing does not touch anothers call log."""
     agent_a = _ScriptedAgent("a1", [AgentModelError("a1", "boom")] * 3)
     agent_b = _ScriptedAgent("a2", [AgentResult(status="success", text="second")])
     steps = [_step("a1", "first"), _step("a2", "second")]
@@ -309,6 +340,7 @@ from protocols.model import CriticalityLevel, Protocol
 
 
 def _loaded_protocol(name):
+    """Loaded protocol."""
     return Protocol(
         name=name,
         description="d",
@@ -321,6 +353,7 @@ def _loaded_protocol(name):
 
 
 def test_load_protocols_wraps_the_loaded_profiles_protocols():
+    """Load protocols wraps the loaded profiles protocols."""
     loaded_profile = SimpleNamespace(protocols=(_loaded_protocol("a"), _loaded_protocol("b")))
 
     protocol_set = load_protocols(loaded_profile)
@@ -329,6 +362,7 @@ def test_load_protocols_wraps_the_loaded_profiles_protocols():
 
 
 def test_get_by_name():
+    """Get by name."""
     loaded_profile = SimpleNamespace(protocols=(_loaded_protocol("a"),))
     protocol_set = load_protocols(loaded_profile)
 
@@ -337,6 +371,7 @@ def test_get_by_name():
 
 
 def test_protocol_set_holds_nothing_beyond_what_it_was_given():
+    """Protocol set holds nothing beyond what it was given."""
     loaded_profile = SimpleNamespace(protocols=())
     protocol_set = load_protocols(loaded_profile)
 
@@ -346,6 +381,7 @@ from protocols.model import CriticalityLevel, Protocol, Step
 
 
 def test_protocol_holds_all_declared_fields():
+    """Protocol holds all declared fields."""
     protocol = Protocol(
         name="p1",
         description="applies when X, not when Y",
@@ -362,11 +398,13 @@ def test_protocol_holds_all_declared_fields():
 
 
 def test_criticality_is_ordered_for_tie_breaking():
+    """Criticality is ordered for tie breaking."""
     assert CriticalityLevel.HIGH > CriticalityLevel.MEDIUM > CriticalityLevel.LOW
     assert max(CriticalityLevel.LOW, CriticalityLevel.HIGH, CriticalityLevel.MEDIUM) == CriticalityLevel.HIGH
 
 
 def test_step_fields_include_dependencies_and_required_event_data():
+    """Step fields include dependencies and required event data."""
     step = Step(agent_name="reference_agent", task_text="check gate 3", allowed_tools=("check_status",))
 
     assert step.agent_name == "reference_agent"

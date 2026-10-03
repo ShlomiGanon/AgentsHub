@@ -14,26 +14,23 @@ if TYPE_CHECKING:
     from api.app import ApiContext
 
 def build_simulations_blueprint(ctx: "ApiContext") -> Blueprint:
-    """Discovery and materialization for a profile's declared simulations
-    (docs/profile_simulations_design.md) — the server-side JSON adapter the admin
-    panel's simulator page queries instead of maintaining its own knowledge of
-    simulation user/group IDs. `GET /Simulations/<key>` returns the exact
-    existing admin-simulator scenario JSON shape, ready to feed straight into
-    the same `loadScenario()` a manually pasted/uploaded scenario already uses —
-    execution from there goes through `POST /Msg`/`POST /Event` exactly as today,
-    unchanged."""
+    """Serve the profile's declared simulations as the admin simulator's existing scenario JSON."""
 
     blueprint = Blueprint("simulations", __name__)
     messages = ctx.loaded_profile.message_catalog
 
     @blueprint.route("/Simulations", methods=["GET"])
     def list_simulations():
+        """List declared simulation metadata for the loaded profile."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.VIEW_SIMULATIONS)
         return jsonify({"simulations": simulation_catalog_payload(ctx.loaded_profile)})
 
     @blueprint.route("/Simulations/<key>", methods=["GET"])
     def get_simulation(key):
+        """Return one declared simulation as ready-to-load scenario JSON."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.VIEW_SIMULATIONS)
         scenario = find_simulation_scenario(ctx.loaded_profile, key)

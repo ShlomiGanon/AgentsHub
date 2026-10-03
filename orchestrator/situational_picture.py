@@ -52,6 +52,8 @@ _PLAN_POLICY = InvocationPolicy(max_output_tokens=400, timeout_seconds=30.0, rea
 _COMPOSE_POLICY = InvocationPolicy(max_output_tokens=450, timeout_seconds=45.0, reasoning_effort="none")
 
 
+# --- picture types ---
+
 @dataclass(frozen=True)
 class DomainBriefing:
     """One question the Main Agent decided to put to one specialist."""
@@ -87,6 +89,8 @@ class SituationalPicture:
     plan: PicturePlan
 
     def provenance(self) -> dict:
+        """Stable metadata about when and from which domains this picture was built."""
+
         return {
             "generated_at": self.generated_at,
             "recent_events_hours": self.plan.recent_events_hours,
@@ -99,6 +103,8 @@ class SituationalPicture:
 
 
 def _current_time_label(history_query_service: "HistoryQueryService | None", now: datetime) -> str:
+    """Local clock label from history planning context, or a UTC fallback."""
+
     context_factory = getattr(history_query_service, "planning_context", None)
     if callable(context_factory):
         try:
@@ -113,6 +119,8 @@ def _current_time_label(history_query_service: "HistoryQueryService | None", now
 
 
 def _readable_tools(agent, protocol: "Protocol") -> list[str]:
+    """Read-only tools this specialist may use for a picture query."""
+
     approved = set(protocol.approved_tools)
     exposed = list(agent.exposed_tools())
     tools = [tool.name for tool in exposed if tool.name in approved and not tool.side_effecting]
@@ -122,6 +130,8 @@ def _readable_tools(agent, protocol: "Protocol") -> list[str]:
 
 
 def _specialists_json(protocol: "Protocol", registry: "AgentRegistry") -> str:
+    """JSON describing each participating specialist and its readable tools."""
+
     specialists = []
     for agent_name in protocol.participating_agents:
         agent = registry.get(agent_name)
@@ -141,6 +151,8 @@ def _specialists_json(protocol: "Protocol", registry: "AgentRegistry") -> str:
 
 
 def _default_plan(protocol: "Protocol") -> PicturePlan:
+    """Fallback plan: the catalog default question for every participating agent."""
+
     default_query = get_current_catalog().text("orchestrator.picture.default_domain_query")
     return PicturePlan(
         briefings=tuple(DomainBriefing(agent_name, default_query) for agent_name in protocol.participating_agents),
@@ -150,6 +162,8 @@ def _default_plan(protocol: "Protocol") -> PicturePlan:
 
 
 def _extract_json_object(raw_text: str) -> dict:
+    """Pull the first JSON object out of a planning reply."""
+
     match = re.search(r"\{.*\}", raw_text, flags=re.DOTALL)
     if match is None:
         raise ValueError("no JSON object in plan response")
@@ -295,7 +309,11 @@ def collect_domain_reports(
     outcomes: dict[str, tuple[str, bool]] = {}
 
     def _specialist_runner(briefing: DomainBriefing) -> Callable[[], SpecialistResult]:
+        """Build a runner that asks one specialist the planned domain question."""
+
         def _run() -> SpecialistResult:
+            """Ask this specialist and record whether it answered."""
+
             agent = registry.get(briefing.agent_name)
             tools = _readable_tools(agent, protocol)
             try:
@@ -311,6 +329,8 @@ def collect_domain_reports(
         return _run
 
     def _history_runner() -> SpecialistResult:
+        """Fetch recent events as one concurrent picture domain."""
+
         report = collect_recent_events(
             history_query_service, hours=plan.recent_events_hours, now=now, sender_identity_filter=sender_identity_filter
         )
@@ -340,6 +360,8 @@ def collect_domain_reports(
 
 
 def _reports_json(reports: tuple[DomainReport, ...]) -> str:
+    """JSON of specialist reports, excluding the recent-events domain."""
+
     return json.dumps(
         [
             {
@@ -356,6 +378,8 @@ def _reports_json(reports: tuple[DomainReport, ...]) -> str:
 
 
 def _recent_events_block(reports: tuple[DomainReport, ...]) -> str:
+    """Recent-events text for the compose prompt, or an unavailable marker."""
+
     for report in reports:
         if report.domain == RECENT_EVENTS_DOMAIN:
             return report.text if report.succeeded else "(unavailable right now)"
@@ -363,6 +387,8 @@ def _recent_events_block(reports: tuple[DomainReport, ...]) -> str:
 
 
 def _fallback_text(reports: tuple[DomainReport, ...], current_time: str, hours: int) -> str:
+    """Deterministic picture built from collected findings when the model cannot compose."""
+
     catalog = get_current_catalog()
     lines = [catalog.text("orchestrator.picture.fallback_header", time=current_time)]
     for report in reports:

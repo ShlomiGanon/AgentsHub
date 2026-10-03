@@ -1,50 +1,17 @@
-"""Response Team operational seed data and declared simulations."""
+"""Response Team operational seed data and declared SEC_001 simulations."""
 
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from agents import (
-    Agent,
-    InvocationPolicy,
-    NeighboringForcesAgent as _NeighboringForcesAgentBase,
-    SurveillanceAgent,
-    TeamStatusAgent,
-    failed_tool_result,
-    get_authenticated_request_identity,
-    tool,
-)
-from messages import get_catalog
 from persistence import (
-    SurveillancePersistenceError,
-    TeamStatusPersistenceError,
-    open_incident_responder_store,
     open_response_team_roster_store,
     open_response_team_surveillance_store,
 )
-from profiles.admin_tables import AdminColumn, AdminTable
-from profiles.contracts import AgentSpec, OptimizationPolicy
+from profiles.response_team import CAMERAS, DB_PATH, DRONES, DRONES_WAREHOUSE, _catalog_text, eta_seconds
 from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
-from protocols import CriticalityLevel, Protocol, Step
-
-import profiles.response_team as _facade
-globals().update({name: getattr(_facade, name) for name in dir(_facade) if not name.startswith("__")})
 
 def _ensure_operational_seed_data() -> None:
-    """Create-if-missing cameras/drones; open yesterday's local attendance
-    cycle if none exists yet (otherwise SEC_001's absence reports fail the
-    daily-cycle rule, and today's due check would already be spent). Never
-    overwrites an existing row -- the same "create if missing, never touch
-    if present" idiom
-    `profiles.simulation_provisioning.ensure_simulation_entities` already
-    uses for simulation users/groups (item 3/4 of docs/responce_improve.md's
-    provisioning list; items 1/2/5 are already covered by that routine's
-    existing simulation-user/roster handling once this profile declares
-    `SIMULATION_ROSTERS`/personas with `pre_approved_rosters`, below).
-
-    Called automatically, on every profile load (live or simulated), by
-    `ensure_simulation_entities` via this module's `OPERATIONAL_SEED`
-    attribute -- see that function's own docstring."""
+    """Create missing cameras/drones and open yesterday's cycle if the roster has none."""
 
     surveillance = open_response_team_surveillance_store(DB_PATH, eta_fn=eta_seconds, home_area=DRONES_WAREHOUSE)
     for camera in CAMERAS:
@@ -63,17 +30,9 @@ def _ensure_operational_seed_data() -> None:
 OPERATIONAL_SEED = _ensure_operational_seed_data
 
 
-# -- Simulations (docs/responce_improve.md) -----------------------------------
-#
-# SEC_001 series only, moved here unchanged in content from the deleted
-# `profiles/standby_squad.py` (migrated in turn from `profiles/unified_test.py`,
-# which had itself migrated it from the legacy `fixtures/admin_scenarios/*.json`
-# bundled fixtures) -- offsets stay exactly as they were (unique per profile,
-# not globally -- profiles/simulation.py). `pre_approved_rosters` stays only
-# on the six response-team fighters. Camera numbers in the step text below
-# were rewritten to this profile's CAM-01/CAM-02/CAM-03 IDs in
-# `messages/he.py` / `messages/en.py`. No `response_team_sim` twin (a
-# simulation is just another deployment of this same profile module).
+# -- Simulations --------------------------------------------------------------
+# SEC_001 only. Offsets are unique per profile. pre_approved_rosters stays on
+# the six fighters. Step text uses this profile's CAM-01/CAM-02/CAM-03 IDs.
 
 SIMULATION_USERS = [
     SimulationPersona(key="eli_response_team", offset=0, permission_level="viewer", full_name=_catalog_text("response_team.simulation.sec001.persona.eli_response_team"), pre_approved_rosters=("team_status",)),
@@ -307,13 +266,11 @@ SIMULATIONS = [
 ]
 
 
-# == Admin-panel tables (docs/Admin_Tables_Plan.md) ==========================
-#
-# Every write_fn is a thin wrapper around a store method on this profile's own already-shared
-# store classes (persistence/response_team_store.py's ResponseTeamSurveillanceStore/
-# NeighboringForceStore, persistence/team_status_store.py's SQLiteTeamStatusPersistence) --
-# never a direct SQL statement in this module. Every cascade an edit implies (a drone leaving
-# an active mission, an attendance approval stamp) happens inside those store methods, so it's
-# identical whether the edit came from the admin panel or (where a live tool exists) a real
-# report.
+__all__ = [
+    "OPERATIONAL_SEED",
+    "SIMULATION_GROUPS",
+    "SIMULATION_ROSTERS",
+    "SIMULATION_USERS",
+    "SIMULATIONS",
+]
 

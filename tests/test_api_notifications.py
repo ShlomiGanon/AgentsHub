@@ -1,5 +1,4 @@
-"""GET /Notifications (work_plan.md §8.12)."""
-
+"""GET /Notifications."""
 import pytest
 
 from api.app import build_app
@@ -12,6 +11,7 @@ from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, auth_headers, b
 
 
 def _minimal_event(persistence, **overrides):
+    """Minimal event."""
     event = {
         "received_at": "2026-08-24T10:00:00",
         "source": "sensor",
@@ -24,6 +24,7 @@ def _minimal_event(persistence, **overrides):
 
 
 def test_requires_authentication(tmp_path, teardown_ctx):
+    """Requires authentication."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -34,6 +35,7 @@ def test_requires_authentication(tmp_path, teardown_ctx):
 
 
 def test_viewer_is_refused(tmp_path, teardown_ctx):
+    """Viewer is refused."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -44,6 +46,7 @@ def test_viewer_is_refused(tmp_path, teardown_ctx):
 
 
 def test_commander_sees_hold_notifications(tmp_path, teardown_ctx):
+    """Commander sees hold notifications."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -62,12 +65,13 @@ def test_commander_sees_hold_notifications(tmp_path, teardown_ctx):
 
 # §8.12's own design settled the viewer/commander question differently
 # than an earlier draft: there is exactly one real caller (the bot's own
-# service identity, COMMANDER level — docs/api_spec.md's "Service
+# Service identity, COMMANDER level — "Service
 # identity" section), so a viewer is refused outright
 # (test_viewer_is_refused above), never given a filtered view.
 
 
 def test_job_finished_and_job_failed_are_delivered_to_the_original_submitter(tmp_path, teardown_ctx):
+    """Job finished and job failed are delivered to the original submitter."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -91,6 +95,7 @@ def test_job_finished_and_job_failed_are_delivered_to_the_original_submitter(tmp
 def test_job_finished_targets_the_original_chat_not_the_senders_private_chat(tmp_path, teardown_ctx):
     # The bug this fixes: a report submitted in a group used to be answered in the
     # sender's own private chat. It must now go back to the group it came from.
+    """Job finished targets the original chat not the senders private chat."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -112,6 +117,7 @@ def test_job_finished_targets_the_original_chat_not_the_senders_private_chat(tmp
 
 
 def test_resource_unavailable_outcome_produces_a_job_finished_and_a_separate_commander_alert(tmp_path, teardown_ctx):
+    """Resource unavailable outcome produces a job finished and a separate commander alert."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -146,6 +152,7 @@ def test_resource_unavailable_outcome_produces_a_job_finished_and_a_separate_com
 def test_resource_unavailable_alert_payload_is_empty_when_no_alert_text_was_recorded(tmp_path, teardown_ctx):
     # Defensive: a "handled_resource_unavailable" outcome always sets commander_alert_text in
     # practice (orchestrator/flows.py), but the payload builder itself must never crash if not.
+    """Resource unavailable alert payload is empty when no alert text was recorded."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -160,6 +167,7 @@ def test_resource_unavailable_alert_payload_is_empty_when_no_alert_text_was_reco
 
 
 def test_job_finished_targets_only_the_submitter_for_an_ordinary_succeeded_outcome(tmp_path, teardown_ctx):
+    """Job finished targets only the submitter for an ordinary succeeded outcome."""
     ctx = build_context(
         tmp_path,
         users=((VIEWER_IDENTITY, "viewer"), (COMMANDER_IDENTITY, "commander"), ("commander-2", "commander")),
@@ -179,6 +187,7 @@ def test_job_finished_targets_only_the_submitter_for_an_ordinary_succeeded_outco
 def test_job_finished_falls_back_to_the_sender_when_no_chat_id_was_recorded(tmp_path, teardown_ctx):
     # A sensor-sourced event (or one from before this column existed) has no
     # telegram_chat_id at all — falls back to the sender's own identity, unchanged.
+    """Job finished falls back to the sender when no chat id was recorded."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -193,6 +202,7 @@ def test_job_finished_falls_back_to_the_sender_when_no_chat_id_was_recorded(tmp_
 
 
 def test_job_finished_carries_the_ack_message_id_when_one_was_recorded(tmp_path, teardown_ctx):
+    """Job finished carries the ack message id when one was recorded."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -207,6 +217,7 @@ def test_job_finished_carries_the_ack_message_id_when_one_was_recorded(tmp_path,
 
 
 def test_ack_message_id_is_absent_for_kinds_other_than_job_finished_or_job_failed(tmp_path, teardown_ctx):
+    """Ack message id is absent for kinds other than job finished or job failed."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -222,7 +233,7 @@ def test_ack_message_id_is_absent_for_kinds_other_than_job_finished_or_job_faile
 
 
 def test_job_finished_payload_carries_the_protocol_and_reason_already_computed_during_the_run(tmp_path, teardown_ctx):
-    """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 3 (item #9): sourced from
+    """Part 3 (item #9): sourced from
     data already written during the run, no new model call."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
@@ -243,6 +254,7 @@ def test_job_finished_payload_carries_the_protocol_and_reason_already_computed_d
 
 
 def test_event_data_question_is_delivered_to_the_original_reporter(tmp_path, teardown_ctx):
+    """Event data question is delivered to the original reporter."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -268,6 +280,7 @@ def test_job_finished_and_job_failed_carry_the_real_originating_message_id(tmp_p
     # distinctive fixture values, not a coincidental match (e.g. both
     # events sharing one hardcoded ID, or a null that happens to compare
     # equal to a missing key).
+    """Job finished and job failed carry the real originating message id."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -295,6 +308,7 @@ def test_a_sensor_sourced_event_has_no_reply_to_message_id(tmp_path, teardown_ct
     # A sensor report has no Telegram message to reference at all —
     # source_message_id is never set for it, and the notification must
     # say so honestly (null), not fabricate or omit misleadingly.
+    """A sensor sourced event has no reply to message id."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -309,6 +323,7 @@ def test_a_sensor_sourced_event_has_no_reply_to_message_id(tmp_path, teardown_ct
 
 
 def test_uncertain_produces_both_a_job_finished_and_an_uncertain_verdict_entry(tmp_path, teardown_ctx):
+    """Uncertain produces both a job finished and an uncertain verdict entry."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -319,14 +334,14 @@ def test_uncertain_produces_both_a_job_finished_and_an_uncertain_verdict_entry(t
     resp = client.get("/Notifications", headers=auth_headers(COMMANDER_IDENTITY))
     kinds = {n["kind"] for n in resp.get_json()["notifications"]}
 
-    # REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 2 (item #8): a third,
+    # Part 2 (item #8): a third
     # reporter-facing notification now also fires alongside the two that
     # already existed.
     assert kinds == {"job_finished", "uncertain_verdict", "uncertain_verdict_reporter"}
 
 
 def test_uncertain_verdict_reporter_targets_the_original_sender_with_no_insight_text(tmp_path, teardown_ctx):
-    """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 2 (item #8): the original
+    """Part 2 (item #8): the original
     reporter (any role) now gets a short, generic notice — distinct from the
     commander-only detailed `uncertain_verdict` notice, which is unaffected."""
     ctx = build_context(tmp_path)
@@ -350,6 +365,7 @@ def test_uncertain_verdict_reporter_targets_the_original_sender_with_no_insight_
 
 
 def test_closed_on_precedent_produces_both_a_job_finished_and_a_precedent_closure_entry(tmp_path, teardown_ctx):
+    """Closed on precedent produces both a job finished and a precedent closure entry."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -372,6 +388,7 @@ def test_closed_on_precedent_produces_both_a_job_finished_and_a_precedent_closur
 def test_no_match_produces_both_a_job_finished_and_a_no_match_notice_entry(tmp_path, teardown_ctx):
     # NO_MATCH is a real terminal outcome plus a one-way notification now
     # (never a held_events row) — same shape as uncertain/closed_on_precedent.
+    """No match produces both a job finished and a no match notice entry."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -394,6 +411,7 @@ def test_no_match_produces_both_a_job_finished_and_a_no_match_notice_entry(tmp_p
 
 
 def test_polling_twice_at_the_same_cursor_returns_nothing_new(tmp_path, teardown_ctx):
+    """Polling twice at the same cursor returns nothing new."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -412,6 +430,7 @@ def test_polling_twice_at_the_same_cursor_returns_nothing_new(tmp_path, teardown
 
 
 def test_a_new_hold_since_the_last_cursor_returns_exactly_that_one_item(tmp_path, teardown_ctx):
+    """A new hold since the last cursor returns exactly that one item."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -431,6 +450,7 @@ def test_a_new_hold_since_the_last_cursor_returns_exactly_that_one_item(tmp_path
 
 
 def test_a_malformed_cursor_is_rejected(tmp_path, teardown_ctx):
+    """A malformed cursor is rejected."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -442,6 +462,7 @@ def test_a_malformed_cursor_is_rejected(tmp_path, teardown_ctx):
 
 
 def test_approval_hold_notification_carries_the_hold_detail(tmp_path, teardown_ctx):
+    """Approval hold notification carries the hold detail."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()

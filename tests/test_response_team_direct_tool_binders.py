@@ -16,6 +16,7 @@ from profiles.response_team import (
 
 
 def test_record_attendance_available_needs_no_dates():
+    """Record attendance available needs no dates."""
     event = {"absence_reason": None, "source_message_id": "m1", "raw_text": "available", "received_at": "2026-08-20T10:00:00Z"}
 
     (step,) = _bind_record_attendance(event)
@@ -28,6 +29,7 @@ def test_record_attendance_available_needs_no_dates():
 
 
 def test_record_attendance_unavailable_computes_day_count_from_the_interval():
+    """Record attendance unavailable computes day count from the interval."""
     event = {
         "absence_reason": "מילואים",
         "availability_start": "2026-09-27T00:00:00+00:00",
@@ -46,6 +48,7 @@ def test_record_attendance_unavailable_computes_day_count_from_the_interval():
 
 
 def test_record_attendance_unavailable_without_dates_requires_them():
+    """Record attendance unavailable without dates requires them."""
     event = {"absence_reason": "sick", "source_message_id": "m1", "raw_text": "x", "received_at": "2026-08-20T10:00:00Z"}
 
     (step,) = _bind_record_attendance(event)
@@ -58,6 +61,7 @@ def test_record_attendance_normalizes_a_naive_received_at_to_utc():
     # A persisted event's received_at is stored without an explicit offset
     # (agents/team_status_agent.py's own _aware_datetime rejects a naive string outright) --
     # the binder must make it explicit before handing it to the tool.
+    """Record attendance normalizes a naive received at to utc."""
     event = {"absence_reason": None, "source_message_id": "m1", "raw_text": "x", "received_at": "2026-08-20T10:00:00"}
 
     (step,) = _bind_record_attendance(event)
@@ -66,6 +70,7 @@ def test_record_attendance_normalizes_a_naive_received_at_to_utc():
 
 
 def test_as_aware_iso_leaves_an_already_aware_timestamp_untouched():
+    """As aware iso leaves an already aware timestamp untouched."""
     assert _as_aware_iso("2026-08-20T10:00:00+00:00") == "2026-08-20T10:00:00+00:00"
     assert _as_aware_iso("2026-08-20T10:00:00Z") == "2026-08-20T10:00:00+00:00"
 
@@ -79,6 +84,7 @@ def test_as_aware_iso_leaves_an_already_aware_timestamp_untouched():
 
 
 def test_update_camera_status_single_camera_binds_a_model_driven_step():
+    """Update camera status single camera binds a model driven step."""
     event = {"entities": ["CAM-03"], "description": "intermittent reception", "raw_text": "CAM-03 is flaky"}
 
     (step,) = _bind_update_camera_status(event)
@@ -92,6 +98,7 @@ def test_update_camera_status_single_camera_binds_a_model_driven_step():
 
 
 def test_update_camera_status_multi_camera_produces_one_step_per_camera():
+    """Update camera status multi camera produces one step per camera."""
     event = {"entities": ["CAM-01", "CAM-02"], "description": "both down", "raw_text": "both cameras are down"}
 
     steps = _bind_update_camera_status(event)
@@ -103,6 +110,7 @@ def test_update_camera_status_multi_camera_produces_one_step_per_camera():
 
 
 def test_update_camera_status_missing_fields_raises_no_camera_calls():
+    """Update camera status missing fields raises no camera calls."""
     event = {"entities": None, "description": None, "raw_text": "something's wrong with a camera"}
 
     steps = _bind_update_camera_status(event)
@@ -120,6 +128,7 @@ def test_report_team_movement_with_area():
     # should be linked via join_incident_response) is a judgment call from the free-text report,
     # not something a direct_tool binder can decide -- so this is an "agent" step, not
     # direct_tool, once area is known (see profiles/response_team.py's own comment there).
+    """Report team movement with area."""
     event = {"area": "east_fence", "description": "heading to east fence"}
 
     (step,) = _bind_report_team_movement(event)
@@ -131,6 +140,7 @@ def test_report_team_movement_with_area():
 
 
 def test_report_team_movement_without_area_requires_it():
+    """Report team movement without area requires it."""
     event = {"area": None}
 
     (step,) = _bind_report_team_movement(event)
@@ -140,6 +150,7 @@ def test_report_team_movement_without_area_requires_it():
 
 
 def test_dispatch_drone_binds_area_and_description():
+    """Dispatch drone binds area and description."""
     event = {"area": "east_gate", "description": "suspicious person", "raw_text": "person at east gate"}
 
     (step,) = _bind_dispatch_drone(event)
@@ -152,6 +163,7 @@ def test_dispatch_drone_binds_area_and_description():
 
 
 def test_dispatch_drone_without_area_requires_it():
+    """Dispatch drone without area requires it."""
     event = {"area": None, "raw_text": "something hostile"}
 
     (step,) = _bind_dispatch_drone(event)
@@ -161,6 +173,7 @@ def test_dispatch_drone_without_area_requires_it():
 
 
 def test_dispatch_own_squad_binds_unit_count_one():
+    """Dispatch own squad binds unit count one."""
     event = {"area": "east_orchards", "description": "send our people", "raw_text": "send our squad"}
 
     (step,) = _bind_dispatch_own_squad(event)

@@ -1,8 +1,8 @@
-"""9.20 — Review cost and latency (work_plan.md §9.20).
+"""9.20 — Review cost and latency.
 
 This subtask is a review, not a correctness test — its own bullets ask
 for measurement and analysis, not a pass/fail claim. This file is the
-real instrumentation that produces the numbers `docs/cost_latency_review.md`
+real instrumentation that produces the numbers
 reports; it exists so those numbers are reproducible and re-checkable,
 not hand-typed guesses. It fails only if the instrumentation itself
 breaks (e.g. a stage's call count regresses to zero) — it is not a
@@ -29,12 +29,15 @@ _STAGE_MARKERS = {
 
 
 class _CountingAgent:
+    """CountingAgent."""
     def __init__(self, inner):
+        """Initialize this test helper."""
         self._inner = inner
         self.calls_by_stage: dict[str, int] = {name: 0 for name in _STAGE_MARKERS}
         self.uncategorized_calls = 0
 
     def process(self, text, allowed_tools):
+        """Process."""
         for stage, marker in _STAGE_MARKERS.items():
             if marker in text:
                 self.calls_by_stage[stage] += 1
@@ -45,14 +48,18 @@ class _CountingAgent:
 
     @property
     def total_calls(self) -> int:
+        """Total calls."""
         return sum(self.calls_by_stage.values()) + self.uncategorized_calls
 
 
 class _CountingInsightsAgent:
+    """CountingInsightsAgent."""
     def __init__(self):
+        """Initialize this test helper."""
         self.call_count = 0
 
     def process(self, text, allowed_tools):
+        """Process."""
         from agents.results import AgentResult
 
         self.call_count += 1
@@ -61,10 +68,12 @@ class _CountingInsightsAgent:
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch, 'status nominal')
 
 
 def test_model_calls_per_event_and_precedent_savings_are_measured(tmp_path):
+    """Model calls per event and precedent savings are measured."""
     inner = happy_path_agent(risk_score="0.1", selected="status_check")
     main_agent = _CountingAgent(inner)
     insights_agent = _CountingInsightsAgent()
@@ -108,7 +117,7 @@ def test_model_calls_per_event_and_precedent_savings_are_measured(tmp_path):
         assert sum(precedent_run_calls.values()) < sum(full_run_calls.values())
 
         # Findings from these measurements are written up in
-        # docs/cost_latency_review.md — this test is the reproducible
+        # This test is the reproducible
         # instrumentation behind that document's numbers, re-run whenever
         # the decision chain's shape changes rather than trusted as fixed.
         print(f"\nfull run calls: {full_run_calls}, insights: {full_run_insights_calls}, latency: {first_latency * 1000:.1f}ms")

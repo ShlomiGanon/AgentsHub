@@ -1,3 +1,5 @@
+"""Protocol and agent selection."""
+
 import types
 
 import pytest
@@ -8,6 +10,7 @@ from protocols.model import CriticalityLevel, Protocol
 
 
 def _protocol(name, criticality=CriticalityLevel.LOW):
+    """Protocol."""
     return Protocol(
         name=name,
         description=f"description for {name}",
@@ -20,12 +23,15 @@ def _protocol(name, criticality=CriticalityLevel.LOW):
 
 
 class _ScriptedMainAgent:
+    """ScriptedMainAgent."""
     def __init__(self, response_text, status="success"):
+        """Initialize this test helper."""
         self._response_text = response_text
         self._status = status
         self.calls = []
 
     def process(self, text, allowed_tools):
+        """Process."""
         self.calls.append((text, allowed_tools))
 
         class _Result:
@@ -39,12 +45,14 @@ class _ScriptedMainAgent:
 
 
 def test_parse_selected_response():
+    """Parse selected response."""
     result = _parse_selection_response("SELECTED: status_check\nREASON: clear match")
 
     assert result == ProtocolSelectionResult(status="selected", protocol_name="status_check", reason="clear match")
 
 
 def test_parse_ambiguous_response_splits_candidate_names():
+    """Parse ambiguous response splits candidate names."""
     result = _parse_selection_response("AMBIGUOUS: a, b, c\nREASON: all fit equally")
 
     assert result.status == "ambiguous"
@@ -52,6 +60,7 @@ def test_parse_ambiguous_response_splits_candidate_names():
 
 
 def test_parse_rejects_unrecognized_response():
+    """Parse rejects unrecognized response."""
     with pytest.raises(OrchestrationParseError):
         _parse_selection_response("I'm not sure what to pick")
 
@@ -60,8 +69,7 @@ def test_parse_selected_response_tolerates_leading_reasoning_prose():
     """Regression test: real model output commonly reasons through each candidate protocol in
     prose before giving its final SELECTED:/REASON: answer — this shape was previously rejected
     outright because the old pattern required the *entire* response to be exactly those two
-    lines (docs/IMPROVES/CRITICAL_FIXES_PLAN.MD item 3; reproduced live in 2 of 3 identical test
-    runs during investigation)."""
+    lines; reproduced live in 2 of 3 identical test runs during investigation)."""
 
     response = (
         "The report describes smoke observed near gate 3 — this is a fire classification.\n\n"
@@ -81,6 +89,7 @@ def test_parse_selected_response_tolerates_leading_reasoning_prose():
 
 
 def test_parse_ambiguous_response_tolerates_leading_reasoning_prose():
+    """Parse ambiguous response tolerates leading reasoning prose."""
     response = (
         "Both status_check and routine_check plausibly fit this report.\n\n"
         "AMBIGUOUS: status_check, routine_check\n"
@@ -94,6 +103,7 @@ def test_parse_ambiguous_response_tolerates_leading_reasoning_prose():
 
 
 def test_parse_no_match_response_tolerates_leading_reasoning_prose():
+    """Parse no match response tolerates leading reasoning prose."""
     response = (
         "None of the available protocols describe relaying a message between two people.\n\n"
         "NO_MATCH: no protocol covers passing a message along without an operational event."
@@ -109,6 +119,7 @@ def test_parse_no_match_response_tolerates_leading_reasoning_prose():
 
 
 def test_clear_selection_passes_through():
+    """Clear selection passes through."""
     agent = _ScriptedMainAgent("SELECTED: status_check\nREASON: fits")
     protocols = (_protocol("status_check"),)
 
@@ -119,6 +130,7 @@ def test_clear_selection_passes_through():
 
 
 def test_low_risk_ambiguous_passes_through_unresolved():
+    """Low risk ambiguous passes through unresolved."""
     agent = _ScriptedMainAgent("AMBIGUOUS: a, b\nREASON: tied")
     protocols = (_protocol("a"), _protocol("b"))
 
@@ -129,6 +141,7 @@ def test_low_risk_ambiguous_passes_through_unresolved():
 
 
 def test_high_risk_ambiguous_resolves_to_most_critical_candidate():
+    """High risk ambiguous resolves to most critical candidate."""
     agent = _ScriptedMainAgent("AMBIGUOUS: a, b\nREASON: tied")
     protocols = (_protocol("a", CriticalityLevel.MEDIUM), _protocol("b", CriticalityLevel.HIGH))
 
@@ -145,6 +158,7 @@ def test_high_risk_tie_break_uses_numeric_severity_not_alphabetical_order():
     # the *least* critical candidate — with no error at all.
     # CriticalityLevel is a real IntEnum (LOW=1 < HIGH=3), so max() compares
     # by severity instead, and HIGH correctly wins.
+    """High risk tie break uses numeric severity not alphabetical order."""
     agent = _ScriptedMainAgent("AMBIGUOUS: low_one, high_one\nREASON: tied")
     protocols = (_protocol("low_one", CriticalityLevel.LOW), _protocol("high_one", CriticalityLevel.HIGH))
 
@@ -155,6 +169,7 @@ def test_high_risk_tie_break_uses_numeric_severity_not_alphabetical_order():
 
 
 def test_select_protocol_passes_no_tools():
+    """Select protocol passes no tools."""
     agent = _ScriptedMainAgent("SELECTED: a\nREASON: r")
 
     select_protocol(agent, "raw", "fire", "north", "d", (_protocol("a"),), risk_level="low")
@@ -163,6 +178,7 @@ def test_select_protocol_passes_no_tools():
 
 
 def test_unclear_task_status_raises():
+    """Unclear task status raises."""
     agent = _ScriptedMainAgent("missing info", status="unclear_task")
 
     with pytest.raises(OrchestrationParseError):
@@ -170,6 +186,7 @@ def test_unclear_task_status_raises():
 
 
 def test_selection_rejects_a_protocol_name_that_is_not_loaded():
+    """Selection rejects a protocol name that is not loaded."""
     agent = _ScriptedMainAgent("SELECTED: invented_protocol\nREASON: guessed")
 
     with pytest.raises(OrchestrationParseError, match="unavailable protocol"):
@@ -177,6 +194,7 @@ def test_selection_rejects_a_protocol_name_that_is_not_loaded():
 
 
 def test_end_to_end_through_the_mocked_adapter(monkeypatch):
+    """End to end through the mocked adapter."""
     from agents.reference import ReferenceAgent
 
     class _FakeOutput:

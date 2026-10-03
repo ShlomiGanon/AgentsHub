@@ -13,15 +13,15 @@ from persistence import (
 
 
 def _utc_now() -> str:
+    """Utc now."""
+
     return datetime.now(timezone.utc).isoformat()
 
 
 # `ContextVar` + lock + capture function + `process()`-override helper for
 # forcing `return_drone_to_base`'s exact tool output back to the caller
 # instead of the model's own paraphrase of it — see `agents.runtime.
-# ExactResultCapture`. `profiles.standby_squad.StandbySquadSurveillanceAgent`
-# (and its team-status/friendly-forces siblings) build their own instances
-# of the same shared helper for the same reason.
+# ExactResultCapture`. Profile subclasses build their own instances for the same reason.
 _recall_capture = make_exact_result_capture("surveillance_recall")
 _capture_recall_result = _recall_capture.capture
 
@@ -71,6 +71,8 @@ class SurveillanceAgent(Agent):
     surveillance_db_path = ""
 
     def __init__(self, model: str, api_key: str | None = None):
+        """Init."""
+
         if not self.surveillance_db_path:
             raise TypeError("SurveillanceAgent requires a class-level surveillance_db_path")
         self.surveillance_store = open_surveillance_persistence(self.surveillance_db_path)
@@ -79,6 +81,8 @@ class SurveillanceAgent(Agent):
     def process(
         self, text: str, allowed_tools: list[str], *, invocation_policy: InvocationPolicy | None = None
     ) -> AgentResult:
+        """Process."""
+
         if invocation_policy is None:
             # A tool turn and its final operational summary must both fit; 220 tokens
             # truncated a live read-only answer before the Main Agent composed it.
@@ -88,16 +92,14 @@ class SurveillanceAgent(Agent):
         return _recall_capture.run(super().process, text, allowed_tools, invocation_policy=invocation_policy)
 
     def _recall(self, drone_or_mission_id: str) -> dict:
-        """Resolve one named-or-empty recall against the store — the state-machine step behind
-        `return_drone_to_base`. A subclass that needs to localize the returned text (see
-        `profiles.standby_squad.StandbySquadSurveillanceAgent`) calls this instead of
-        duplicating the branching against `self.surveillance_store`. An empty identifier
-        means no drone was named; recalling every active drone is a different tool."""
+        """Resolve one named-or-empty recall against the store for return_drone_to_base."""
 
         requested = drone_or_mission_id.strip()
         return self.surveillance_store.recall_drone(requested or None)
 
     def _render_recall(self, result: dict) -> str | ToolResult:
+        """Format a recall console line."""
+
         status = result["status"]
         if status == "no_active":
             output = "No active drone missions; no drone was returned."
@@ -147,6 +149,8 @@ class SurveillanceAgent(Agent):
         side_effecting=False,
     )
     def get_camera_feeds(self, area: str = "", camera_id: str = "") -> str:
+        """Return the camera feeds."""
+
         if camera_id.strip():
             camera = self.surveillance_store.get_camera(camera_id.strip())
             if not camera:
@@ -178,6 +182,8 @@ class SurveillanceAgent(Agent):
         side_effecting=False,
     )
     def get_drone_fleet_status(self, status_filter: str = "", drone_id_or_callsign: str = "") -> str:
+        """Return the drone fleet status."""
+
         requested = drone_id_or_callsign.strip()
         if requested:
             normalized = requested.casefold()
@@ -234,6 +240,8 @@ class SurveillanceAgent(Agent):
         specific_drone_id: str = "",
         dispatched_by: str = "commander",
     ) -> str:
+        """Dispatch drone to area."""
+
         if not target_area.strip():
             return failed_tool_result("Clarification required: target_area must be specified to dispatch a drone.")
         if not incident_description.strip():
@@ -278,6 +286,8 @@ class SurveillanceAgent(Agent):
         side_effecting=False,
     )
     def get_active_missions(self) -> str:
+        """Return the active missions."""
+
         missions = self.surveillance_store.get_active_missions()
         if not missions:
             return "No active drone missions currently in flight."
@@ -301,6 +311,8 @@ class SurveillanceAgent(Agent):
         idempotent=True,
     )
     def return_drone_to_base(self, drone_or_mission_id: str = "") -> str:
+        """Return drone to base."""
+
         return self._render_recall(self._recall(drone_or_mission_id))
 
     @tool(
@@ -311,6 +323,8 @@ class SurveillanceAgent(Agent):
         idempotent=True,
     )
     def return_all_drones_to_base(self) -> str:
+        """Return all drones to base."""
+
         return self._render_recall(self.surveillance_store.recall_all_drones())
 
     @tool(
@@ -319,6 +333,8 @@ class SurveillanceAgent(Agent):
         side_effecting=False,
     )
     def get_surveillance_overview(self, area: str = "") -> str:
+        """Return the surveillance overview."""
+
         overview = self.surveillance_store.surveillance_overview(area=area.strip() or None)
         target = f"Sector '{area}'" if area.strip() else "All Sectors"
 
@@ -364,6 +380,8 @@ class SurveillanceAgent(Agent):
         idempotent=True,
     )
     def update_camera_observation(self, camera_id: str, new_observation: str, status: str = "") -> str:
+        """Update camera observation."""
+
         if not camera_id.strip():
             return failed_tool_result("Clarification required: camera_id is required.")
         if not new_observation.strip():

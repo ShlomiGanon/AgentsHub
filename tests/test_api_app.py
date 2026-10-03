@@ -1,4 +1,4 @@
-"""api/app.py's own wiring (work_plan.md §7, `build_context`/`create_app`).
+"""Api/app.py's own wiring.
 
 Every other `test_api_*.py` file builds its `ApiContext` through
 `tests/api_fakes.py`'s hand-rolled `build_context` — a parallel
@@ -10,10 +10,9 @@ coverage audit found: nothing had ever called these functions for real,
 and the first real call crashed (`api/management.py::protocol_to_dict`
 assumed `criticality` was always a real `CriticalityLevel` enum; the
 fixture profile it was tried against used a plain string). Fixed at the
-validation boundary (§1.6) rather than at the consumer — see
+validation boundary rather than at the consumer — see
 `profiles/loader.py`'s and `fixtures/profiles/minimal_profile.py`'s own
-notes on that decision.
-"""
+notes on that decision."""
 
 import os
 from pathlib import Path
@@ -31,6 +30,7 @@ MODEL_CRED_ENV = "AGENTSHUB_FIXTURE_MODEL_KEY"
 
 
 def test_module_entry_point_does_not_preimport_api_app():
+    """Module entry point does not preimport api app."""
     result = subprocess.run(
         [sys.executable, "-W", "error::RuntimeWarning", "-m", "api.app", "--help"],
         cwd=Path(__file__).resolve().parents[1],
@@ -51,12 +51,14 @@ def _mock_crewai(monkeypatch):
     # agents/base.py) — kept anyway for consistency with every other api/
     # test file, and so this file stays safe if a future test here does
     # end up invoking an agent.
+    """Mock crewai."""
     install_crewai_stub(monkeypatch)
     monkeypatch.setattr(api_app, "initialize_agent_runtime", lambda agents: tuple(agent.model for agent in agents))
 
 
 @pytest.fixture(autouse=True)
 def _fixture_profile_env(monkeypatch):
+    """Fixture profile env."""
     monkeypatch.setenv(BOT_TOKEN_ENV, "token")
     monkeypatch.setenv(MODEL_CRED_ENV, "key")
 
@@ -64,6 +66,7 @@ def _fixture_profile_env(monkeypatch):
 def test_build_context_succeeds_against_a_real_profile(test_core_model, test_sub_model):
     # This is the exact call that crashed during the Mission 8 coverage
     # audit, before the criticality fix — confirming it no longer does.
+    """Build context succeeds against a real profile."""
     ctx = build_context("fixtures.profiles.minimal_profile", core_model=test_core_model, sub_model=test_sub_model)
     try:
         assert ctx.loaded_profile.module_path == "fixtures.profiles.minimal_profile"
@@ -86,6 +89,7 @@ def test_build_context_succeeds_against_a_real_profile(test_core_model, test_sub
 
 
 def test_ensure_bot_service_registers_a_missing_identity_and_is_idempotent(tmp_path):
+    """Ensure bot service registers a missing identity and is idempotent."""
     from persistence.sqlite_store import SQLitePersistence
 
     store = SQLitePersistence(str(tmp_path / "bot_service.db"))
@@ -109,6 +113,7 @@ def test_ensure_bot_service_registers_a_missing_identity_and_is_idempotent(tmp_p
 
 
 def test_ensure_system_admin_registers_a_missing_identity_and_is_idempotent(tmp_path):
+    """Ensure system admin registers a missing identity and is idempotent."""
     from persistence.sqlite_store import SQLitePersistence
 
     store = SQLitePersistence(str(tmp_path / "system_admin.db"))
@@ -134,6 +139,7 @@ def test_ensure_system_admin_registers_a_missing_identity_and_is_idempotent(tmp_
 
 
 def test_model_warmup_finishes_before_queue_and_scheduler_start(monkeypatch, test_core_model, test_sub_model):
+    """Model warmup finishes before queue and scheduler start."""
     order = []
     monkeypatch.setattr(api_app, "initialize_agent_runtime", lambda agents: order.append("warmup"))
 
@@ -156,6 +162,7 @@ def test_model_warmup_finishes_before_queue_and_scheduler_start(monkeypatch, tes
 
 
 def test_model_warmup_failure_prevents_queue_start(monkeypatch, test_core_model, test_sub_model):
+    """Model warmup failure prevents queue start."""
     monkeypatch.setattr(api_app, "initialize_agent_runtime", lambda agents: (_ for _ in ()).throw(RuntimeError("bad model")))
     queue_started = []
     monkeypatch.setattr(api_app.SerialEventQueue, "start", lambda self: queue_started.append(True))
@@ -169,6 +176,7 @@ def test_model_warmup_failure_prevents_queue_start(monkeypatch, test_core_model,
 def test_get_system_succeeds_against_the_real_wiring(test_core_model, test_sub_model):
     # protocols are commander-only (view_system_internals) — "u1" must be a
     # commander to see them in the GET /SYSTEM payload.
+    """Get system succeeds against the real wiring."""
     ctx = build_context("fixtures.profiles.minimal_profile", core_model=test_core_model, sub_model=test_sub_model)
     try:
         ctx.deps.persistence.write_user("u1", "commander")
@@ -189,6 +197,7 @@ def test_get_system_succeeds_against_the_real_wiring(test_core_model, test_sub_m
 
 def test_get_protocol_succeeds_against_the_real_wiring(test_core_model, test_sub_model):
     # list_protocols is commander-only — "u1" must be a commander.
+    """Get protocol succeeds against the real wiring."""
     ctx = build_context("fixtures.profiles.minimal_profile", core_model=test_core_model, sub_model=test_sub_model)
     try:
         ctx.deps.persistence.write_user("u1", "commander")
@@ -207,6 +216,7 @@ def test_get_protocol_succeeds_against_the_real_wiring(test_core_model, test_sub
 
 
 def test_get_system_requires_authentication_against_the_real_wiring(test_core_model, test_sub_model):
+    """Get system requires authentication against the real wiring."""
     ctx = build_context("fixtures.profiles.minimal_profile", core_model=test_core_model, sub_model=test_sub_model)
     try:
         client = build_app(ctx).test_client()
@@ -223,6 +233,7 @@ def test_get_system_requires_authentication_against_the_real_wiring(test_core_mo
 
 
 def test_main_fails_loudly_naming_the_missing_tier_env_var(monkeypatch):
+    """Main fails loudly naming the missing tier env var."""
     for name in ("CORE_MODEL_PROVIDER", "CORE_MODEL_NAME", "CORE_MODEL_API_KEY_ENV"):
         monkeypatch.delenv(name, raising=False)
 
@@ -231,6 +242,7 @@ def test_main_fails_loudly_naming_the_missing_tier_env_var(monkeypatch):
 
 
 def test_main_translates_runtime_warmup_failure_before_starting_http(monkeypatch):
+    """Main translates runtime warmup failure before starting http."""
     from agents import AgentWarmupError
     from config import TierModel
 
@@ -255,6 +267,7 @@ from persistence.sqlite_store import SQLitePersistence
 
 @pytest.fixture
 def store(tmp_path):
+    """Store."""
     backend = SQLitePersistence(str(tmp_path / "auth_test.db"))
     backend.write_user("viewer-1", "viewer")
     backend.write_user("commander-1", "commander")
@@ -263,16 +276,19 @@ def store(tmp_path):
 
 
 def test_authenticate_returns_the_registered_level(store):
+    """Authenticate returns the registered level."""
     assert authenticate(store, "viewer-1") == PermissionLevel.VIEWER
     assert authenticate(store, "commander-1") == PermissionLevel.COMMANDER
 
 
 def test_authenticate_rejects_an_unregistered_identity(store):
+    """Authenticate rejects an unregistered identity."""
     with pytest.raises(AuthenticationError):
         authenticate(store, "nobody")
 
 
 def test_authenticate_rejects_a_missing_identity(store):
+    """Authenticate rejects a missing identity."""
     with pytest.raises(AuthenticationError):
         authenticate(store, None)
 
@@ -281,33 +297,38 @@ def test_authenticate_rejects_a_missing_identity(store):
 
 
 def test_require_permits_an_operation_the_caller_is_authorized_for():
+    """Require permits an operation the caller is authorized for."""
     require(PermissionLevel.COMMANDER, RequestedOperation.APPROVE_RUN)  # does not raise
     require(PermissionLevel.VIEWER, RequestedOperation.SUBMIT_MESSAGE)  # does not raise
 
 
 def test_require_rejects_an_operation_the_caller_is_not_authorized_for():
+    """Require rejects an operation the caller is not authorized for."""
     with pytest.raises(AuthorizationError):
         require(PermissionLevel.VIEWER, RequestedOperation.APPROVE_RUN)
 
 
 def test_require_permits_every_requested_operation_for_a_commander():
+    """Require permits every requested operation for a commander."""
     for operation in RequestedOperation:
         require(PermissionLevel.COMMANDER, operation)  # does not raise
 
 
 def test_commander_never_denied_for_any_defined_operation_via_the_api_boundary():
-    # docs/Next_Plan.md §6 success criteria: exhaustive proof a commander is
+    # Success criteria: exhaustive proof a commander is
     # allowed for every RequestedOperation, exercised through require() itself
     # rather than is_permitted() directly.
+    """Commander never denied for any defined operation via the api boundary."""
     for operation in RequestedOperation:
         try:
             require(PermissionLevel.COMMANDER, operation)
         except AuthorizationError:
-            pytest.fail(f"commander was denied {operation.value!r}, which docs/Next_Plan.md §2.1 forbids")
+            pytest.fail(f"commander was denied {operation.value!r}, which the permission model forbids")
 
 
 def test_require_rejects_a_legacy_action_string():
-    # docs/Next_Plan.md Stage 2: every api/routes.py call site now passes
+    # Stage 2: every api/routes.py call site now passes
     # RequestedOperation; the transitional string path from Stage 1 is gone.
+    """Require rejects a legacy action string."""
     with pytest.raises(TypeError):
         require(PermissionLevel.COMMANDER, "approve_run")

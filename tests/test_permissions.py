@@ -1,3 +1,5 @@
+"""Commander versus viewer permission checks."""
+
 import pytest
 
 from auth.permissions import (
@@ -9,15 +11,18 @@ from auth.permissions import (
 
 
 def test_commander_is_greater_than_viewer():
+    """Commander is greater than viewer."""
     assert PermissionLevel.COMMANDER > PermissionLevel.VIEWER
 
 
 def test_commander_permitted_every_requested_operation():
+    """Commander permitted every requested operation."""
     for operation in RequestedOperation:
         assert is_permitted(PermissionLevel.COMMANDER, operation)
 
 
 def test_viewer_permitted_exactly_the_viewer_allowed_action_members():
+    """Viewer permitted exactly the viewer allowed action members."""
     viewer_allowed_values = {member.value for member in ViewerAllowedAction}
 
     for operation in RequestedOperation:
@@ -26,6 +31,7 @@ def test_viewer_permitted_exactly_the_viewer_allowed_action_members():
 
 
 def test_viewer_allowed_action_members_all_map_to_a_requested_operation():
+    """Viewer allowed action members all map to a requested operation."""
     known_operation_values = {operation.value for operation in RequestedOperation}
     for member in ViewerAllowedAction:
         assert member.value in known_operation_values
@@ -33,13 +39,15 @@ def test_viewer_allowed_action_members_all_map_to_a_requested_operation():
 
 def test_operation_absent_from_viewer_allowed_action_is_commander_only():
     # RequestedOperation.LIST_PROTOCOLS is deliberately absent from the
-    # approved initial ViewerAllowedAction member list (docs/Next_Plan.md §5).
+    # Approved initial ViewerAllowedAction member list.
+    """Operation absent from viewer allowed action is commander only."""
     assert RequestedOperation.LIST_PROTOCOLS.value not in {member.value for member in ViewerAllowedAction}
     assert not is_permitted(PermissionLevel.VIEWER, RequestedOperation.LIST_PROTOCOLS)
     assert is_permitted(PermissionLevel.COMMANDER, RequestedOperation.LIST_PROTOCOLS)
 
 
 def test_unsupported_operation_type_raises():
+    """Unsupported operation type raises."""
     with pytest.raises(TypeError):
         is_permitted(PermissionLevel.COMMANDER, 42)
 

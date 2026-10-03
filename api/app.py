@@ -134,7 +134,7 @@ def _dispatch_queue_item(item: object) -> None:
 
 
 def build_context(module_path: str, core_model: TierModel, sub_model: TierModel) -> ApiContext:
-    """`core_model`/`sub_model` are the two already-resolved `TierModel`s — required, no default, no environment access anywhere in this function (`config.base` never reaches into `os...."""
+    """Wire persistence, agents, queue, and routing from already-resolved core/sub models — no environment access here."""
 
     loaded_profile = load_profile(module_path, core_model=core_model, sub_model=sub_model)
     configure_provider_concurrency(loaded_profile.optimization_policy.provider_concurrency)
@@ -155,10 +155,8 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
             extra={"event": "system_admin_provisioned"},
         )
 
-    # On every profile load, ensure this profile's declared simulation users/groups
-    # exist (docs/profile_simulations_design.md) — before group_routing below does its
-    # own first load(), so a freshly-provisioned group is already in the routing table
-    # at startup rather than needing a second reload.
+    # Provision this profile's declared simulation users/groups before the first
+    # group_routing load, so a freshly created group is already in the table.
     provisioning_result = ensure_simulation_entities(persistence, loaded_profile)
     if provisioning_result.created_users or provisioning_result.created_groups:
         logger.info(
@@ -347,17 +345,17 @@ def create_app(module_path: str, core_model: TierModel, sub_model: TierModel) ->
 
 
 def _tier_model_from_environ(prefix: str) -> TierModel:
-    """Read one tier's provider/model name/API key straight from the real process environment — `main`'s own job, the one place in this module `os.environ` is read for model-tier confi..."""
+    """Read one tier's provider, model name, and API key from the process environment."""
 
     return resolve_tier_model_from_env(prefix, error_type=ModelTierError)
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Run the API layer for one deployment (work_plan.md §9.21)."""
+    """Run the API process for one loaded profile."""
 
     import argparse
 
-    parser = argparse.ArgumentParser(description="Run the API layer for one deployment (work_plan.md §7, §9.21).")
+    parser = argparse.ArgumentParser(description="Run the API process for one loaded profile.")
     parser.add_argument("profile_module", help="dotted module path of the profile to run, e.g. profiles.response_team")
     parser.add_argument("--host", default="127.0.0.1", help="network interface to bind (default: 127.0.0.1, localhost only)")
     parser.add_argument("--server", choices=("flask", "waitress"), default="flask", help="HTTP server (default: flask for local development)")

@@ -6,50 +6,67 @@ import profiles.firefighting as ff
 
 
 class _FakeSurveillanceStore:
+    """FakeSurveillanceStore."""
     def __init__(self, cameras, drones):
+        """Initialize this test helper."""
         self._cameras = cameras
         self._drones = drones
 
     def list_cameras(self, area=None):
+        """List cameras."""
         return [c for c in self._cameras if area is None or c["area"] == area]
 
     def list_drones(self, status=None):
+        """List drones."""
         return [d for d in self._drones if status is None or d["status"] == status]
 
 
 class _FakeCrewStore:
+    """FakeCrewStore."""
     def __init__(self, snapshot):
+        """Initialize this test helper."""
         self._snapshot = snapshot
 
     def availability_snapshot(self, as_of):
+        """Availability snapshot."""
         return self._snapshot
 
 
 class _FakeApparatusStore:
+    """FakeApparatusStore."""
     def __init__(self, rows):
+        """Initialize this test helper."""
         self._rows = rows
 
     def list_apparatus(self):
+        """List apparatus."""
         return self._rows
 
 
 class _FakeDispatchStore:
+    """FakeDispatchStore."""
     def __init__(self, dispatches):
+        """Initialize this test helper."""
         self._dispatches = dispatches
 
     def list_dispatches(self, status=None):
+        """List dispatches."""
         return [d for d in self._dispatches if status is None or d.get("status") == status]
 
 
 class _FakeRegistry:
+    """FakeRegistry."""
     def __init__(self, agents):
+        """Initialize this test helper."""
         self._agents = agents
 
     def get(self, name):
+        """Get."""
         return self._agents[name]
 
 
 def _fake_registry(cameras=(), drones=(), roster_snapshot=(), dispatches=(), apparatus=()):
+    """Fake registry."""
     surveillance_agent = type("S", (), {"surveillance_store": _FakeSurveillanceStore(cameras, drones)})()
     crew_agent = type(
         "C",
@@ -68,6 +85,7 @@ def _fake_registry(cameras=(), drones=(), roster_snapshot=(), dispatches=(), app
 
 
 def test_describe_resource_unavailable_localizes_english_drone_reason():
+    """Describe resource unavailable localizes english drone reason."""
     registry = _fake_registry(
         cameras=[{"camera_id": "CAM-03", "area": "pine_ridge", "status": "active"}],
         apparatus=[{"callsign": "Ashed 3", "status": "operational"}],
@@ -89,6 +107,7 @@ def test_describe_resource_unavailable_localizes_english_drone_reason():
 
 
 def test_find_resource_alternatives_reports_mutual_aid_capacity():
+    """Find resource alternatives reports mutual aid capacity."""
     now = datetime.now(timezone.utc).isoformat()
     registry = _fake_registry(
         dispatches=[{"force_kind": "water_tankers", "unit_count": 2, "status": "en_route", "dispatched_at": now}],
@@ -101,6 +120,7 @@ def test_find_resource_alternatives_reports_mutual_aid_capacity():
 
 
 def test_force_shortage_text_is_hebrew(tmp_path, monkeypatch):
+    """Force shortage text is hebrew."""
     monkeypatch.setattr(ff.FirefightingExternalForcesAgent, "dispatch_db_path", str(tmp_path / "forces.db"))
     agent = ff.FirefightingExternalForcesAgent(model="test-model")
     agent.dispatch_neighboring_force(kind="police", target_area="ornim_street", unit_count=2)

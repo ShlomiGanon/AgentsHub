@@ -29,6 +29,7 @@ from persistence.sqlite_support import (
 
 
 class SqliteEventsMixin:
+    """Event, step, and summary reads/writes for SQLitePersistence."""
     def _attach_steps(self, connection: sqlite3.Connection, event: dict) -> dict:
         """Load event_steps rows onto this event dict."""
 
@@ -75,6 +76,8 @@ class SqliteEventsMixin:
         steps = event.get("steps") or []
 
         def _do(connection: sqlite3.Connection) -> str:
+            """Insert the event and steps, or return the existing id for this ingestion key."""
+
             try:
                 if event_row.get("ingestion_key"):
                     existing = connection.execute(
@@ -106,6 +109,8 @@ class SqliteEventsMixin:
             raise PersistenceError(f"cannot update event column(s): {', '.join(sorted(unknown_columns))}")
 
         def _do(connection: sqlite3.Connection) -> None:
+            """Merge allowed columns, replace steps when given, and emit outcome notifications."""
+
             existing = connection.execute("SELECT outcome FROM events WHERE event_id = ?", (event_id,)).fetchone()
             if existing is None:
                 raise NotFoundError(f"no such event: '{event_id}'")
@@ -151,13 +156,8 @@ class SqliteEventsMixin:
             connection.close()
 
     def fetch_events_range(self, start, end) -> list[dict]:
-        # Same fix as `fetch_events_by_type_area_window` (DIAGNOSTIC_FINDINGS.MD
-        # A.2): this is `history.query.retrieve_range`'s raw-event fallback for
-        # a day/month/year with no rolled-up summary — used by both precedent
-        # lookback and the legacy narrative `query()` path, and by
-        # `history/summaries.py`'s own summary generation. An event with an
-        # unresolved occurred_at used to be silently excluded from all three.
         """Events whose occurred_at or received_at falls in [start, end)."""
+        # COALESCE so events with an unresolved occurred_at still appear.
 
         connection = self._read_connection()
         try:
@@ -172,12 +172,8 @@ class SqliteEventsMixin:
             connection.close()
 
     def fetch_events_by_type_area_window(self, event_type: str, area: str, window_start, window_end) -> list[dict]:
-        # Precedent-lookback fix, same root cause as the recency fix
-        # (DIAGNOSTIC_FINDINGS.MD A.2): a candidate event whose occurred_at is
-        # unresolved used to be silently excluded by the old
-        # `occurred_at IS NOT NULL` filter. COALESCE falls back to
-        # received_at (never null) instead of dropping such events.
         """Events matching classification and area inside a time window."""
+        # COALESCE so events with an unresolved occurred_at still match.
 
         connection = self._read_connection()
         try:
@@ -284,6 +280,8 @@ class SqliteEventsMixin:
         }
 
         def _do(connection: sqlite3.Connection) -> None:
+            """Upsert this summary row on the chosen summary table."""
+
             try:
                 connection.execute(
                     f"""

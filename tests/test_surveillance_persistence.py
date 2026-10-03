@@ -1,3 +1,5 @@
+"""Surveillance store reads and writes."""
+
 import pytest
 
 from persistence import (
@@ -7,6 +9,7 @@ from persistence import (
 
 
 def test_surveillance_persistence_initialization_and_seeding(tmp_path):
+    """Surveillance persistence initialization and seeding."""
     db_file = str(tmp_path / "surveillance.db")
     store = open_surveillance_persistence(db_file)
 
@@ -29,6 +32,7 @@ def test_surveillance_persistence_initialization_and_seeding(tmp_path):
 
 
 def test_camera_listing_and_feed_update(tmp_path):
+    """Camera listing and feed update."""
     db_file = str(tmp_path / "surveillance.db")
     store = open_surveillance_persistence(db_file)
 
@@ -49,6 +53,7 @@ def test_camera_listing_and_feed_update(tmp_path):
 
 
 def test_drone_dispatch_lifecycle_and_state_transitions(tmp_path):
+    """Drone dispatch lifecycle and state transitions."""
     db_file = str(tmp_path / "surveillance.db")
     store = open_surveillance_persistence(db_file)
 
@@ -98,6 +103,7 @@ def test_drone_dispatch_lifecycle_and_state_transitions(tmp_path):
 
 
 def test_drone_dispatch_exhaustion_raises_error(tmp_path):
+    """Drone dispatch exhaustion raises error."""
     db_file = str(tmp_path / "surveillance.db")
     store = open_surveillance_persistence(db_file)
 
@@ -120,6 +126,7 @@ def test_drone_dispatch_exhaustion_raises_error(tmp_path):
 
 
 def test_surveillance_overview(tmp_path):
+    """Surveillance overview."""
     db_file = str(tmp_path / "surveillance.db")
     store = open_surveillance_persistence(db_file)
 

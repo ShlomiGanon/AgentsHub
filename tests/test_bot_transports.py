@@ -12,6 +12,7 @@ unimplemented_client = UnimplementedApiClient()
 
 
 def _run(coro):
+    """Run."""
     return asyncio.run(coro)
 
 
@@ -38,12 +39,14 @@ _DUMMY_ARGS = {
 
 
 def test_every_abstract_method_has_a_dummy_args_entry():
+    """Every abstract method has a dummy args entry."""
     abstract_names = {name for name in dir(BotApiClient) if getattr(getattr(BotApiClient, name), "__isabstractmethod__", False)}
     assert abstract_names == set(_DUMMY_ARGS)
 
 
 @pytest.mark.parametrize("method_name", sorted(_DUMMY_ARGS))
 def test_unimplemented_client_raises_naming_the_blocked_subtask(method_name):
+    """Unimplemented client raises naming the blocked subtask."""
     method = getattr(unimplemented_client, method_name)
     args = _DUMMY_ARGS[method_name]
 
@@ -56,11 +59,13 @@ def test_unimplemented_client_raises_naming_the_blocked_subtask(method_name):
 
 
 def test_error_is_also_a_not_implemented_error():
+    """Error is also a not implemented error."""
     with pytest.raises(NotImplementedError):
         _run(unimplemented_client.resolve_user("anyone"))
 
 
 def test_cannot_construct_bot_api_client_directly():
+    """Cannot construct bot api client directly."""
     with pytest.raises(TypeError):
         BotApiClient()
 
@@ -116,11 +121,13 @@ MODEL_CREDENTIAL_ENVS = []
 
 
 def _run(coro):
+    """Run."""
     return asyncio.run(coro)
 
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch, 'status nominal')
 
 
@@ -143,6 +150,7 @@ def server(tmp_path, monkeypatch):
 
 @pytest.fixture
 def writable_profile_module(tmp_path, monkeypatch):
+    """Writable profile module."""
     module_name = f"http_client_test_profile_{uuid.uuid4().hex}"
     (tmp_path / f"{module_name}.py").write_text(_PROFILE_TEMPLATE.format(db_path=str(tmp_path / "test.db")), encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -151,6 +159,7 @@ def writable_profile_module(tmp_path, monkeypatch):
 
 
 def _minimal_event(persistence, **overrides):
+    """Minimal event."""
     event = {
         "received_at": "2026-08-24T10:00:00",
         "source": "sensor",
@@ -166,6 +175,7 @@ def _minimal_event(persistence, **overrides):
 
 
 def test_admit_telegram_update_registers_a_real_unknown_caller_in_open_mode(server):
+    """Admit telegram update registers a real unknown caller in open mode."""
     client = HttpApiClient(server.base_url, bot_service_key=_TEST_BOT_SERVICE_KEY)
 
     result = _run(client.admit_telegram_update("7009", "7009", "private"))
@@ -179,6 +189,7 @@ def test_admit_telegram_update_registers_a_real_unknown_caller_in_open_mode(serv
 
 
 def test_resolve_user_known_and_unknown(server):
+    """Resolve user known and unknown."""
     client = HttpApiClient(server.base_url, bot_service_key=_TEST_BOT_SERVICE_KEY)
 
     known = _run(client.resolve_user(COMMANDER_IDENTITY))
@@ -190,6 +201,7 @@ def test_resolve_user_known_and_unknown(server):
 
 
 def test_an_unregistered_service_identity_raises(tmp_path):
+    """An unregistered service identity raises."""
     ctx = build_context(tmp_path)  # bot-service deliberately not registered
     with RunningApiServer(ctx) as running:
         client = HttpApiClient(running.base_url)
@@ -204,6 +216,7 @@ def test_an_unregistered_service_identity_raises(tmp_path):
 
 
 def test_list_commander_chat_ids_includes_every_registered_commander(server):
+    """List commander chat ids includes every registered commander."""
     client = HttpApiClient(server.base_url, bot_service_key=_TEST_BOT_SERVICE_KEY)
 
     identities = _run(client.list_commander_chat_ids())
@@ -215,6 +228,7 @@ def test_list_commander_chat_ids_includes_every_registered_commander(server):
 
 
 def test_submit_message_question(tmp_path):
+    """Submit message question."""
     agent = happy_path_agent(intent="question")
     agent._dispatch["Decide which of the following agents"] = "AGENT: reference_agent\nTASK: status?"
     ctx = build_context(tmp_path, main_agent=agent)
@@ -229,6 +243,7 @@ def test_submit_message_question(tmp_path):
 
 
 def test_submit_message_conversational_preserves_the_direct_answer(tmp_path):
+    """Submit message conversational preserves the direct answer."""
     agent = happy_path_agent(intent="conversational")
     agent._dispatch["Reply naturally and directly"] = "Hello!"
     ctx = build_context(tmp_path, main_agent=agent)
@@ -244,6 +259,7 @@ def test_submit_message_conversational_preserves_the_direct_answer(tmp_path):
 
 
 def test_submit_message_report_returns_a_job_id(tmp_path):
+    """Submit message report returns a job id."""
     ctx = build_context(tmp_path, main_agent=happy_path_agent(intent="report"))
     ctx.deps.persistence.write_user(BOT_SERVICE_IDENTITY, "commander")
     with RunningApiServer(ctx) as running:
@@ -259,6 +275,7 @@ def test_submit_message_report_returns_a_job_id(tmp_path):
 
 
 def test_answer_clarification_hold_resolved_then_conflict(server):
+    """Answer clarification hold resolved then conflict."""
     client = HttpApiClient(server.base_url)
     event_id = _minimal_event(server.ctx.deps.persistence)
     create_clarification_hold(server.ctx.deps.persistence, event_id, "raw text")
@@ -272,6 +289,7 @@ def test_answer_clarification_hold_resolved_then_conflict(server):
 
 
 def test_poll_trace_returns_server_rendered_messages_for_commander(server, monkeypatch):
+    """Poll trace returns server rendered messages for commander."""
     import config.base as base_config
 
     monkeypatch.setattr(base_config, "DEEP_DEBUG", True)
@@ -288,6 +306,7 @@ def test_poll_trace_returns_server_rendered_messages_for_commander(server, monke
 
 
 def test_poll_trace_is_forbidden_to_viewer(server, monkeypatch):
+    """Poll trace is forbidden to viewer."""
     import config.base as base_config
 
     monkeypatch.setattr(base_config, "DEEP_DEBUG", True)
@@ -300,6 +319,7 @@ def test_poll_trace_is_forbidden_to_viewer(server, monkeypatch):
 
 
 def test_answer_clarification_hold_unauthorized(server):
+    """Answer clarification hold unauthorized."""
     client = HttpApiClient(server.base_url)
     event_id = _minimal_event(server.ctx.deps.persistence)
     create_clarification_hold(server.ctx.deps.persistence, event_id, "raw text")
@@ -313,6 +333,7 @@ def test_answer_approval_hold_unauthorized(server):
     # §9.18's own permission matrix — the one action-cell no existing
     # HttpApiClient test covered: a viewer, over real HTTP, may not
     # approve_run.
+    """Answer approval hold unauthorized."""
     client = HttpApiClient(server.base_url)
     selection = ProtocolSelectionResult(status="selected", protocol_name="dispatch_response", reason="matched")
     risk = RiskAssessment(level="high", score=0.9, reason="r")
@@ -329,11 +350,12 @@ def test_an_unregistered_identity_is_refused_across_the_matrix(server):
     # regardless of which real HTTP status this method's own mapping
     # translates it into — HoldAnswerOutcome.status="unauthorized" for
     # answer_approval_hold (HoldAnswerStatus already has a slot for it,
-    # per docs/api_spec.md's own mapping table — no raise here,
+    # Per own mapping table — no raise here
     # deliberately), a raised ApiRequestError for get_profile_view (no
     # DTO slot exists for an auth failure there). Both real HTTP calls
     # return 401 underneath either way — confirmed distinctly from a
     # registered-but-insufficient (viewer) identity in the tests above.
+    """An unregistered identity is refused across the matrix."""
     client = HttpApiClient(server.base_url)
     selection = ProtocolSelectionResult(status="selected", protocol_name="dispatch_response", reason="matched")
     risk = RiskAssessment(level="high", score=0.9, reason="r")
@@ -349,6 +371,7 @@ def test_an_unregistered_identity_is_refused_across_the_matrix(server):
 
 
 def test_answer_approval_hold_approved_and_rejected(server):
+    """Answer approval hold approved and rejected."""
     client = HttpApiClient(server.base_url)
     selection = ProtocolSelectionResult(status="selected", protocol_name="dispatch_response", reason="matched")
     risk = RiskAssessment(level="high", score=0.9, reason="r")
@@ -370,6 +393,7 @@ def test_answer_approval_hold_approved_and_rejected(server):
 def test_get_profile_view_matches_the_loaded_profile(server):
     # protocols are commander-only (view_system_internals) — a commander
     # caller is required to see them via the profile view.
+    """Get profile view matches the loaded profile."""
     client = HttpApiClient(server.base_url)
 
     view = _run(client.get_profile_view(COMMANDER_IDENTITY))
@@ -380,8 +404,9 @@ def test_get_profile_view_matches_the_loaded_profile(server):
 
 
 def test_get_profile_view_omits_protocols_for_a_viewer(server):
-    # docs/Next_Plan.md §5 decision record: view_system_internals is
+    # Decision record: view_system_internals is
     # commander-only — a viewer's ProfileView carries no protocols/agents.
+    """Get profile view omits protocols for a viewer."""
     client = HttpApiClient(server.base_url)
 
     view = _run(client.get_profile_view(VIEWER_IDENTITY))
@@ -392,6 +417,7 @@ def test_get_profile_view_omits_protocols_for_a_viewer(server):
 
 
 def test_get_profile_diff_status_reports_false_when_unchanged(server):
+    """Get profile diff status reports false when unchanged."""
     client = HttpApiClient(server.base_url, bot_service_key=_TEST_BOT_SERVICE_KEY)
 
     status = _run(client.get_profile_diff_status())
@@ -401,6 +427,7 @@ def test_get_profile_diff_status_reports_false_when_unchanged(server):
 
 def test_get_and_write_settings_round_trip(server):
     # settings are commander-only (view_settings) — use a commander caller.
+    """Get and write settings round trip."""
     client = HttpApiClient(server.base_url)
 
     before = _run(client.get_settings_view(COMMANDER_IDENTITY))
@@ -414,6 +441,7 @@ def test_get_and_write_settings_round_trip(server):
 
 
 def test_write_setting_rejects_an_invalid_value(server):
+    """Write setting rejects an invalid value."""
     client = HttpApiClient(server.base_url)
 
     result = _run(client.write_setting("retry_count", -1, COMMANDER_IDENTITY))
@@ -423,6 +451,7 @@ def test_write_setting_rejects_an_invalid_value(server):
 
 
 def test_write_protocol_add_and_reject(tmp_path, writable_profile_module):
+    """Write protocol add and reject."""
     ctx = build_context(tmp_path, module_path=writable_profile_module)
     ctx.deps.persistence.write_user(BOT_SERVICE_IDENTITY, "commander")
     with RunningApiServer(ctx) as running:
@@ -456,6 +485,7 @@ def test_get_profile_view_still_works_for_a_viewer_server_side(server):
     # Confirms the fix didn't accidentally make reads commander-only —
     # §8.7's own "allow viewers to read" still holds, enforced server-side
     # against the real caller now, not just client-side.
+    """Get profile view still works for a viewer server side."""
     client = HttpApiClient(server.base_url)
 
     view = _run(client.get_profile_view(VIEWER_IDENTITY))
@@ -464,7 +494,8 @@ def test_get_profile_view_still_works_for_a_viewer_server_side(server):
 
 
 def test_get_settings_view_denied_for_a_viewer_server_side(server):
-    # docs/Next_Plan.md §5 decision record: view_settings is commander-only.
+    # Decision record: view_settings is commander-only.
+    """Get settings view denied for a viewer server side."""
     client = HttpApiClient(server.base_url)
 
     with pytest.raises(ApiRequestError) as excinfo:
@@ -474,6 +505,7 @@ def test_get_settings_view_denied_for_a_viewer_server_side(server):
 
 
 def test_get_settings_view_still_works_for_a_commander_server_side(server):
+    """Get settings view still works for a commander server side."""
     client = HttpApiClient(server.base_url)
 
     view = _run(client.get_settings_view(COMMANDER_IDENTITY))
@@ -482,6 +514,7 @@ def test_get_settings_view_still_works_for_a_commander_server_side(server):
 
 
 def test_get_job_result_still_works_for_a_viewer_server_side(server):
+    """Get job result still works for a viewer server side."""
     client = HttpApiClient(server.base_url)
     event_id = _minimal_event(server.ctx.deps.persistence)
 
@@ -491,6 +524,7 @@ def test_get_job_result_still_works_for_a_viewer_server_side(server):
 
 
 def test_write_protocol_is_refused_server_side_for_a_viewer(tmp_path, writable_profile_module):
+    """Write protocol is refused server side for a viewer."""
     ctx = build_context(tmp_path, module_path=writable_profile_module)
     ctx.deps.persistence.write_user(BOT_SERVICE_IDENTITY, "commander")
     with RunningApiServer(ctx) as running:
@@ -503,6 +537,7 @@ def test_write_protocol_is_refused_server_side_for_a_viewer(tmp_path, writable_p
 
 
 def test_write_setting_is_refused_server_side_for_a_viewer(server):
+    """Write setting is refused server side for a viewer."""
     client = HttpApiClient(server.base_url)
 
     with pytest.raises(ApiRequestError) as excinfo:
@@ -515,6 +550,7 @@ def test_write_setting_is_refused_server_side_for_a_viewer(server):
 
 
 def test_get_job_result_unknown_pending_and_finished(server):
+    """Get job result unknown pending and finished."""
     client = HttpApiClient(server.base_url)
 
     assert _run(client.get_job_result("does-not-exist", COMMANDER_IDENTITY)) is None
@@ -532,6 +568,7 @@ def test_get_job_result_unknown_pending_and_finished(server):
 
 
 def test_poll_pending_notifications_full_round_trip(server):
+    """Poll pending notifications full round trip."""
     client = HttpApiClient(server.base_url, bot_service_key=_TEST_BOT_SERVICE_KEY)
 
     empty, cursor0 = _run(client.poll_pending_notifications(0))
@@ -559,6 +596,7 @@ def test_reply_to_message_id_survives_the_full_real_path_from_submit_message_to_
     # poll_pending_notifications (the one place it must reappear) — a
     # deliberately distinctive value, not a coincidental match, and
     # asserted on the exact value, not just "some ID was present."
+    """Reply to message id survives the full real path from submit message to the notification."""
     monkeypatch.setenv("BOT_SERVICE_KEY", _TEST_BOT_SERVICE_KEY)
     ctx = build_context(tmp_path, main_agent=happy_path_agent(intent="report"))
     ctx.deps.persistence.write_user(BOT_SERVICE_IDENTITY, "commander")
@@ -587,25 +625,30 @@ from bot.telegram_client import PTBTelegramClient
 
 
 def _run(coro):
+    """Run."""
     return asyncio.run(coro)
 
 
 @pytest.fixture
 def client():
+    """Client."""
     return PTBTelegramClient("123456:fake-token-for-testing")
 
 
 def test_validate_token_true_when_telegram_accepts_it(client, monkeypatch):
+    """Validate token true when telegram accepts it."""
     monkeypatch.setattr(type(client._application.bot), "get_me", AsyncMock(return_value=object()))
     assert _run(client.validate_token()) is True
 
 
 def test_validate_token_false_when_telegram_rejects_it(client, monkeypatch):
+    """Validate token false when telegram rejects it."""
     monkeypatch.setattr(type(client._application.bot), "get_me", AsyncMock(side_effect=telegram.error.InvalidToken()))
     assert _run(client.validate_token()) is False
 
 
 def test_send_text_sends_one_message_when_short(client, monkeypatch):
+    """Send text sends one message when short."""
     send = AsyncMock()
     monkeypatch.setattr(type(client._application.bot), "send_message", send)
 
@@ -615,6 +658,7 @@ def test_send_text_sends_one_message_when_short(client, monkeypatch):
 
 
 def test_send_text_splits_long_text_into_multiple_messages(client, monkeypatch):
+    """Send text splits long text into multiple messages."""
     send = AsyncMock()
     monkeypatch.setattr(type(client._application.bot), "send_message", send)
 
@@ -625,6 +669,7 @@ def test_send_text_splits_long_text_into_multiple_messages(client, monkeypatch):
 
 
 def test_status_message_can_be_sent_edited_and_deleted(client, monkeypatch):
+    """Status message can be sent edited and deleted."""
     sent_message = type("Sent", (), {"message_id": 73})()
     send = AsyncMock(return_value=sent_message)
     edit = AsyncMock()
@@ -644,6 +689,7 @@ def test_status_message_can_be_sent_edited_and_deleted(client, monkeypatch):
 
 
 def test_status_message_can_be_sent_as_a_reply_to_the_original_message(client, monkeypatch):
+    """Status message can be sent as a reply to the original message."""
     sent_message = type("Sent", (), {"message_id": 73})()
     send = AsyncMock(return_value=sent_message)
     monkeypatch.setattr(type(client._application.bot), "send_message", send)
@@ -654,6 +700,7 @@ def test_status_message_can_be_sent_as_a_reply_to_the_original_message(client, m
 
 
 def test_send_with_buttons_attaches_an_inline_keyboard(client, monkeypatch):
+    """Send with buttons attaches an inline keyboard."""
     send = AsyncMock()
     monkeypatch.setattr(type(client._application.bot), "send_message", send)
 
@@ -669,6 +716,7 @@ def test_send_with_buttons_attaches_an_inline_keyboard(client, monkeypatch):
 
 
 def test_send_reply_references_the_original_message(client, monkeypatch):
+    """Send reply references the original message."""
     send = AsyncMock()
     monkeypatch.setattr(type(client._application.bot), "send_message", send)
 
@@ -678,6 +726,7 @@ def test_send_reply_references_the_original_message(client, monkeypatch):
 
 
 def test_send_reply_logs_and_retries_without_reference_when_reply_to_fails(client, monkeypatch, caplog):
+    """Send reply logs and retries without reference when reply to fails."""
     sent_message = type("Sent", (), {"message_id": 91})()
     send = AsyncMock(side_effect=[RuntimeError("message to reply to not found"), sent_message])
     monkeypatch.setattr(type(client._application.bot), "send_message", send)
@@ -693,6 +742,7 @@ def test_send_reply_logs_and_retries_without_reference_when_reply_to_fails(clien
 
 
 def test_answer_callback_query_acknowledges_the_button_press(client, monkeypatch):
+    """Answer callback query acknowledges the button press."""
     answer = AsyncMock()
     monkeypatch.setattr(type(client._application.bot), "answer_callback_query", answer)
 
@@ -702,6 +752,7 @@ def test_answer_callback_query_acknowledges_the_button_press(client, monkeypatch
 
 
 def test_run_polling_registers_handlers_then_polls(client, monkeypatch):
+    """Run polling registers handlers then polls."""
     calls = []
     monkeypatch.setattr(type(client._application), "run_polling", lambda self: calls.append("polled"))
 

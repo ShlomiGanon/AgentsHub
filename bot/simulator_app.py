@@ -1,16 +1,4 @@
-"""Simulation-mode bot process entry point (docs/bot_simulation_mode_design.md).
-
-A second, dedicated process from the real `bot/app.py` — started separately
-(`python -m bot.simulator_app <profile_module>`), never as part of it. It
-reuses `register_handlers()` (`bot/app.py`) and both background loops
-(`bot/background_services.py`) completely unmodified, with only the two
-Telegram network legs stubbed (`bot/simulator_transport.py`), so the admin
-simulator's message-kind scenario steps — proxied here from
-`api/admin.py`'s `POST /admin/simulator/bot-msg` — are fed through the
-bot's *real* decision-making code, not a reimplementation of it. See the
-design doc for the full architecture and the isolation guarantees this
-relies on.
-"""
+"""Simulation-mode bot process: real handlers and loops, stubbed Telegram network."""
 
 import argparse
 import asyncio
@@ -39,6 +27,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# --- runtime ---
+
 # Matches the literal `bot/transports.py`'s `HttpApiClient` already sends this same header
 # as (no shared named constant crosses the api/bot package boundary today — see
 # api/request_boundary.py's own SERVICE_KEY_HEADER for the API-side half of this pair).
@@ -46,8 +36,7 @@ SERVICE_KEY_HEADER = "X-Service-Key"
 
 
 class SimulatorRequestRefused(Exception):
-    """A `POST /Simulator-msg` request failed the identity-allowlist gate or basic
-    shape validation — refused before any handler code ever runs (§4.3/§5)."""
+    """A simulated inbound message failed the identity allowlist or shape check."""
 
 
 def _unix_from_iso_timestamp(value: str) -> float:
@@ -69,19 +58,10 @@ def _tier_model_from_environ(prefix: str) -> TierModel:
 
 
 class SimulatorRuntime:
-    """One running simulation-mode process's state: the real PTB `Application` (real
-    handlers, real background loops — `register_handlers()` reused unmodified), the
-    two Telegram-network stubs, and the *real* `HttpApiClient` talking to the real
-    API server, so every downstream effect (persistence writes, `/TeamStatus/
-    AttendanceCheck`, ...) is genuinely real. Owns the asyncio loop's lifecycle;
-    `bot.simulator_app`'s Flask thread reaches back into it via
-    `asyncio.run_coroutine_threadsafe` for every request (§4.2 point 3)."""
+    """One simulator process: real handlers and HTTP API client, stubbed Telegram I/O."""
 
     def __init__(self, loaded_profile: "LoadedProfile", loop: asyncio.AbstractEventLoop, api_client=None):
-        """`api_client` defaults to the real `HttpApiClient` pointed at this profile's own
-        API server — always the case in production (`run_simulator` never passes one).
-        Tests inject a `FakeBotApiClient` here instead, so the dispatch-through-real-handlers
-        path can be exercised without a live API server (§8's test plan)."""
+        """Use a real HttpApiClient unless tests inject a fake."""
 
         self.loaded_profile = loaded_profile
         self.loop = loop
@@ -103,10 +83,7 @@ class SimulatorRuntime:
         }
 
     async def startup(self) -> None:
-        """`initialize -> post_init -> start`, in that order — the same order
-        `Application.run_polling()` documents and follows internally, just invoked by
-        hand since we never call `run_polling()` itself (§1.2/§4.2). `post_init`
-        (`bot/app.py`'s `_post_init`, unmodified) is what starts both background loops."""
+        """Initialize, run post_init (background loops), then start the PTB application."""
 
         await self.application.initialize()
         if self.application.post_init is not None:
@@ -114,9 +91,7 @@ class SimulatorRuntime:
         await self.application.start()
 
     async def shutdown(self) -> None:
-        """The mirror image of `startup()` — `stop -> post_stop -> shutdown ->
-        post_shutdown`. `post_shutdown` (`bot/app.py`'s `_post_shutdown`, unmodified)
-        cancels both background loops and closes the API client."""
+        """Stop the application and run post_shutdown to cancel loops and close the API client."""
 
         await self.application.stop()
         if self.application.post_stop is not None:
@@ -132,10 +107,7 @@ class SimulatorRuntime:
         return self._next_update_id
 
     async def handle_message(self, payload: dict) -> dict:
-        """Validate, gate, dispatch, and read back one simulated text message
-        (§4.3). Raises `SimulatorRequestRefused` for anything not exactly a
-        currently-declared simulation persona/group — the core "never touches real
-        traffic" guarantee (§5); every other failure propagates as-is."""
+        """Validate, gate, dispatch, and read back one simulated text message."""
 
         sender_identity = str(payload.get("sender_identity") or "")
         chat_id = str(payload.get("chat_id") or "")
@@ -202,14 +174,7 @@ class SimulatorRuntime:
         }
 
     def poll_chat(self, chat_id: str, since: tuple[int, int]) -> dict:
-        """Anything sent to `chat_id` since `since` (a watermark from `handle_message`
-        or a previous `poll_chat`) — surfaces `run_notification_poll_loop`'s own,
-        real, unmodified background deliveries (job results, held-approval/
-        clarification prompts, ...) once they actually arrive, the same way a real
-        Telegram user would see a second message appear in their chat (§10's
-        "admin page has no way to observe an async reply" gap). Gated by the same
-        identity allowlist as `handle_message` — a poll can only ever watch a
-        currently-declared simulation chat, never an arbitrary string."""
+        """Return outbound simulator traffic to `chat_id` since the given watermark."""
 
         if chat_id not in self._allowed_users and chat_id not in self._allowed_groups:
             raise SimulatorRequestRefused(f"{chat_id!r} is not a currently-declared simulation chat_id for this profile")
@@ -237,12 +202,10 @@ def _mark_from_dict(payload: dict) -> tuple[int, int]:
         raise SimulatorRequestRefused("watermark must be two integers (status_len, sent_len)") from None
 
 
+# --- flask ---
+
 def build_flask_app(runtime: SimulatorRuntime, bot_service_key: str) -> Flask:
-    """The one endpoint this process serves — `POST /Simulator-msg`
-    (§4.3). Runs on its own thread (`run_simulator`); every request bridges into
-    `runtime.loop` via `asyncio.run_coroutine_threadsafe` and blocks for the result,
-    so the HTTP response only returns once the real handler has fully finished —
-    exactly the synchronous request/response shape `/Msg` itself already has."""
+    """Flask app that bridges simulator HTTP into the bot event loop and waits for the handler."""
 
     app = Flask(__name__)
 
@@ -284,11 +247,7 @@ def build_flask_app(runtime: SimulatorRuntime, bot_service_key: str) -> Flask:
 
     @app.route("/Simulator-msg/poll", methods=["GET"])
     def simulator_msg_poll():
-        """Priority 3 (docs/work_process.md §16): lets the admin page ask "has
-        anything new arrived in this chat" after the fact, so a
-        `run_notification_poll_loop`-delivered async follow-up (a real, unmodified
-        background delivery — job result, held-approval/clarification prompt, ...)
-        actually reaches the operator instead of a dead-end promise."""
+        """Poll one simulation chat for background deliveries since a watermark."""
 
         refused = _check_service_key()
         if refused is not None:
@@ -334,13 +293,13 @@ def run_simulator(loaded_profile: "LoadedProfile") -> None:
     if not loaded_profile.simulator_port:
         raise SystemExit(
             f"profile {loaded_profile.module_path!r} does not declare SIMULATOR_PORT — "
-            "there is nothing for bot.simulator_app to serve (docs/bot_simulation_mode_design.md)"
+            "there is nothing for bot.simulator_app to serve"
         )
     bot_service_key = resolve_bot_service_key()
     if not bot_service_key:
         raise SystemExit(
             "BOT_SERVICE_KEY is not set — bot.simulator_app refuses to start without it, since it is "
-            "the only thing authenticating a POST /Simulator-msg caller (docs/bot_simulation_mode_design.md §4.3)"
+            "the only thing authenticating a POST /Simulator-msg caller"
         )
 
     loop = asyncio.new_event_loop()
@@ -373,7 +332,7 @@ def main(argv: list[str] | None = None) -> None:
     """CLI entry: load the named profile and run the simulator."""
 
     parser = argparse.ArgumentParser(
-        description="Run the simulation-mode bot process for one deployment (docs/bot_simulation_mode_design.md)."
+        description="Run the simulation-mode bot process for one deployment."
     )
     parser.add_argument("profile_module", help="dotted module path of the profile to run, e.g. profiles.response_team")
     args = parser.parse_args(argv)
@@ -391,10 +350,8 @@ def main(argv: list[str] | None = None) -> None:
 
     configure_logging(loaded_profile.module_path)
 
-    # A separate lock path from the real bot's `.bot.lock` (docs/bot_simulation_mode_design.md
-    # §4.2) — a simulation-mode process and a real bot process for the same profile answer
-    # fundamentally different traffic and may run concurrently; two simulator processes for the
-    # same profile still may not.
+    # Separate lock from the real bot: one simulator and one live bot may share a profile,
+    # but two simulator processes for the same profile may not.
     lock = SingleInstanceLock(Path(f"{loaded_profile.db_path}.bot-simulator.lock"))
     try:
         lock.acquire()

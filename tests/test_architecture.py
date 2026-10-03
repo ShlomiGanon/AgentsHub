@@ -36,6 +36,7 @@ GOVERNED_PACKAGES = set(ENTRY_POINTS)
 
 
 def _iter_governed_python_files():
+    """Iter governed python files."""
     for package in GOVERNED_PACKAGES:
         package_dir = REPO_ROOT / package
         if package_dir.is_dir():
@@ -43,6 +44,7 @@ def _iter_governed_python_files():
 
 
 def _is_type_checking_guard(node: ast.If) -> bool:
+    """Is type checking guard."""
     test = node.test
     return (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or (
         isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
@@ -55,6 +57,7 @@ def _imported_module_names(tree: ast.Module) -> list[str]:
     # cross-package coupling, so they're pruned from the walk entirely
     # rather than flagged (see profiles/loader.py, protocols/executor.py,
     # protocols/executor.py for the pattern this exempts).
+    """Imported module names."""
     names = []
 
     def _visit(node: ast.AST) -> None:
@@ -76,6 +79,7 @@ def _imported_module_names(tree: ast.Module) -> list[str]:
 
 
 def _violations_for_file(file_path: Path) -> list[str]:
+    """Violations for file."""
     owning_package = file_path.relative_to(REPO_ROOT).parts[0]
     tree = ast.parse(file_path.read_text(encoding="utf-8"), filename=str(file_path))
 
@@ -105,6 +109,7 @@ def _violations_for_file(file_path: Path) -> list[str]:
 
 
 def test_no_cross_package_imports_outside_entry_points():
+    """No cross package imports outside entry points."""
     assert not (REPO_ROOT / "registries").exists()
 
     all_violations = []

@@ -1,3 +1,5 @@
+"""Protocol step retry and idempotency."""
+
 import pytest
 
 from agents.errors import AgentModelError
@@ -16,15 +18,18 @@ class _ScriptedAgent:
     name = "scripted_agent"
 
     def __init__(self, tool_infos=(), responses=()):
+        """Initialize this test helper."""
         self._tool_infos = tool_infos
         self._responses = list(responses)
         self.calls = []
         self._resource_unavailable_signal = None
 
     def exposed_tools(self):
+        """Exposed tools."""
         return self._tool_infos
 
     def process(self, text, allowed_tools):
+        """Process."""
         self.calls.append((text, tuple(allowed_tools)))
         response = self._responses.pop(0)
         if isinstance(response, Exception):
@@ -32,25 +37,31 @@ class _ScriptedAgent:
         return response
 
     def signal_resource_unavailable(self, resource_kind, area, reason):
+        """Signal resource unavailable."""
         self._resource_unavailable_signal = (resource_kind, area, reason)
 
     def take_resource_unavailable_signal(self):
+        """Take resource unavailable signal."""
         value = self._resource_unavailable_signal
         self._resource_unavailable_signal = None
         return value
 
 
 class _FakeSettings:
+    """FakeSettings."""
     def __init__(self, retry_count):
+        """Initialize this test helper."""
         self.retry_count = retry_count
         self.call_count = 0
 
     def get_retry_count(self):
+        """Get retry count."""
         self.call_count += 1
         return self.retry_count
 
 
 def _step(allowed_tools=("check_status",)):
+    """Step."""
     return Step(agent_name="scripted_agent", task_text="check gate 3", allowed_tools=allowed_tools)
 
 
@@ -59,11 +70,13 @@ SIDE_EFFECTING_TOOL = (ToolInfo(name="record_action", description="d", side_effe
 
 
 def _sleeps():
+    """Sleeps."""
     calls = []
     return calls, calls.append
 
 
 def test_successful_first_attempt_returns_immediately():
+    """Successful first attempt returns immediately."""
     agent = _ScriptedAgent(tool_infos=READ_ONLY_TOOL, responses=[AgentResult(status="success", text="ok")])
     sleeps, sleep_fn = _sleeps()
 
@@ -76,6 +89,7 @@ def test_successful_first_attempt_returns_immediately():
 
 
 def test_execution_failure_is_retried_with_unchanged_task_text():
+    """Execution failure is retried with unchanged task text."""
     agent = _ScriptedAgent(
         tool_infos=READ_ONLY_TOOL,
         responses=[AgentModelError("scripted_agent", "boom"), AgentModelError("scripted_agent", "boom again"), AgentResult(status="success", text="ok")],
@@ -91,6 +105,7 @@ def test_execution_failure_is_retried_with_unchanged_task_text():
 
 
 def test_unclear_task_is_rewritten_and_resent():
+    """Unclear task is rewritten and resent."""
     agent = _ScriptedAgent(
         tool_infos=READ_ONLY_TOOL,
         responses=[AgentResult(status="unclear_task", text="which gate?"), AgentResult(status="success", text="ok")],
@@ -109,6 +124,7 @@ def test_unclear_task_is_rewritten_and_resent():
 
 
 def test_no_rewriter_fails_immediately_on_unclear_task():
+    """No rewriter fails immediately on unclear task."""
     agent = _ScriptedAgent(tool_infos=READ_ONLY_TOOL, responses=[AgentResult(status="unclear_task", text="which gate?")])
 
     outcome = execute_step_with_retry(agent, _step(), _FakeSettings(5), task_rewriter=None, sleep_fn=lambda s: None)
@@ -119,6 +135,7 @@ def test_no_rewriter_fails_immediately_on_unclear_task():
 
 
 def test_side_effecting_nonidempotent_tool_blocks_retry_after_first_failure():
+    """Side effecting nonidempotent tool blocks retry after first failure."""
     agent = _ScriptedAgent(
         tool_infos=SIDE_EFFECTING_TOOL,
         responses=[AgentModelError("scripted_agent", "boom")] * 5,
@@ -132,6 +149,7 @@ def test_side_effecting_nonidempotent_tool_blocks_retry_after_first_failure():
 
 
 def test_idempotent_side_effecting_tool_may_retry():
+    """Idempotent side effecting tool may retry."""
     idempotent_tool = (ToolInfo(name="set_status", description="d", side_effecting=True, idempotent=True),)
     agent = _ScriptedAgent(
         tool_infos=idempotent_tool,
@@ -145,6 +163,7 @@ def test_idempotent_side_effecting_tool_may_retry():
 
 
 def test_read_only_step_retries_up_to_the_limit_then_fails():
+    """Read only step retries up to the limit then fails."""
     agent = _ScriptedAgent(tool_infos=READ_ONLY_TOOL, responses=[AgentModelError("scripted_agent", "boom")] * 3)
 
     outcome = execute_step_with_retry(agent, _step(), _FakeSettings(3), sleep_fn=lambda s: None)
@@ -155,6 +174,7 @@ def test_read_only_step_retries_up_to_the_limit_then_fails():
 
 
 def test_execution_failures_and_unclear_task_share_one_attempt_limit():
+    """Execution failures and unclear task share one attempt limit."""
     agent = _ScriptedAgent(
         tool_infos=READ_ONLY_TOOL,
         responses=[AgentModelError("scripted_agent", "boom"), AgentResult(status="unclear_task", text="x")],
@@ -169,6 +189,7 @@ def test_execution_failures_and_unclear_task_share_one_attempt_limit():
 
 
 def test_attempt_limit_is_read_live_not_cached():
+    """Attempt limit is read live not cached."""
     settings = _FakeSettings(3)
     agent = _ScriptedAgent(tool_infos=READ_ONLY_TOOL, responses=[AgentModelError("scripted_agent", "boom")] * 3)
 
@@ -178,6 +199,7 @@ def test_attempt_limit_is_read_live_not_cached():
 
 
 def test_backoff_is_applied_between_attempts_via_injectable_sleep_fn():
+    """Backoff is applied between attempts via injectable sleep fn."""
     agent = _ScriptedAgent(tool_infos=READ_ONLY_TOOL, responses=[AgentModelError("scripted_agent", "boom")] * 3)
     sleeps, sleep_fn = _sleeps()
 
@@ -197,11 +219,13 @@ class _SignalingAgent(_ScriptedAgent):
     call in a thread/context the caller's ContextVar reads never saw."""
 
     def __init__(self, *args, signal_on_calls=frozenset({1}), **kwargs):
+        """Initialize this test helper."""
         super().__init__(*args, **kwargs)
         self._signal_on_calls = signal_on_calls
         self._call_number = 0
 
     def process(self, text, allowed_tools):
+        """Process."""
         self._call_number += 1
         if self._call_number in self._signal_on_calls:
             self.signal_resource_unavailable("drone", "east_gate", "no ready drones available")
@@ -209,6 +233,7 @@ class _SignalingAgent(_ScriptedAgent):
 
 
 def test_resource_unavailable_signal_is_attached_to_a_successful_agent_step_outcome():
+    """Resource unavailable signal is attached to a successful agent step outcome."""
     agent = _SignalingAgent(
         tool_infos=READ_ONLY_TOOL,
         responses=[AgentResult(status="success", text="Drone dispatch failed: no ready drones available")],
@@ -224,6 +249,7 @@ def test_resource_unavailable_signal_is_attached_to_a_successful_agent_step_outc
 
 
 def test_resource_unavailable_signal_is_absent_when_no_tool_signaled_it():
+    """Resource unavailable signal is absent when no tool signaled it."""
     agent = _ScriptedAgent(tool_infos=READ_ONLY_TOOL, responses=[AgentResult(status="success", text="ok")])
 
     outcome = execute_step_with_retry(agent, _step(), _FakeSettings(3), sleep_fn=lambda s: None)
@@ -235,6 +261,7 @@ def test_resource_unavailable_signal_does_not_leak_into_a_later_step_on_the_same
     # The same agent instance is reused across a multi-step protocol -- a signal from an
     # earlier step, once read by the executor, must not still be set for a later step whose
     # own tool call never signals anything.
+    """Resource unavailable signal does not leak into a later step on the same agent."""
     agent = _SignalingAgent(
         tool_infos=READ_ONLY_TOOL,
         responses=[
@@ -254,6 +281,7 @@ def test_resource_unavailable_signal_from_a_call_outside_any_step_never_leaks_in
     # Fix (c): a viewer's read-only lookup (e.g. camera status) never goes through
     # execute_step_with_retry at all, so nothing ever consumes a signal it sets. The NEXT real
     # protocol step on that same agent instance must still start clean.
+    """Resource unavailable signal from a call outside any step never leaks into the next step."""
     agent = _ScriptedAgent(tool_infos=READ_ONLY_TOOL, responses=[AgentResult(status="success", text="ok")])
     agent.signal_resource_unavailable("camera", "east_gate", "no camera covers this area")  # never consumed by anything
 
@@ -272,33 +300,40 @@ class _DirectToolAgent:
     name = "scripted_agent"
 
     def __init__(self, tool_result=None, raises=None):
+        """Initialize this test helper."""
         self._tool_result = tool_result
         self._raises = raises
         self.calls = []
         self._resource_unavailable_signal = None
 
     def signal_resource_unavailable(self, resource_kind, area, reason):
+        """Signal resource unavailable."""
         self._resource_unavailable_signal = (resource_kind, area, reason)
 
     def take_resource_unavailable_signal(self):
+        """Take resource unavailable signal."""
         value = self._resource_unavailable_signal
         self._resource_unavailable_signal = None
         return value
 
     def record_attendance_response(self, **kwargs):
+        """Record attendance response."""
         self.calls.append(kwargs)
         if self._raises is not None:
             raise self._raises
         return self._tool_result
 
     def exposed_tools(self):
+        """Exposed tools."""
         return READ_ONLY_TOOL
 
     def process(self, text, allowed_tools):
+        """Process."""
         raise AssertionError("a direct_tool step must never call .process() (no LLM call)")
 
 
 def _direct_tool_step(kwargs, allowed_tools=("record_attendance_response",)):
+    """Direct tool step."""
     return Step(
         agent_name="scripted_agent", task_text="record attendance", allowed_tools=allowed_tools,
         kind="direct_tool", direct_tool_name="record_attendance_response", direct_tool_kwargs=kwargs,
@@ -306,6 +341,7 @@ def _direct_tool_step(kwargs, allowed_tools=("record_attendance_response",)):
 
 
 def test_direct_tool_step_calls_the_tool_method_directly_with_the_bound_kwargs():
+    """Direct tool step calls the tool method directly with the bound kwargs."""
     agent = _DirectToolAgent(tool_result="The attendance response was stored.")
 
     outcome = execute_step_with_retry(agent, _direct_tool_step({"availability": "available"}), _FakeSettings(2))
@@ -316,6 +352,7 @@ def test_direct_tool_step_calls_the_tool_method_directly_with_the_bound_kwargs()
 
 
 def test_direct_tool_step_never_calls_process_even_when_it_would_raise():
+    """Direct tool step never calls process even when it would raise."""
     agent = _DirectToolAgent(tool_result="The attendance response was stored.")
 
     outcome = execute_step_with_retry(agent, _direct_tool_step({}), _FakeSettings(2))
@@ -324,6 +361,7 @@ def test_direct_tool_step_never_calls_process_even_when_it_would_raise():
 
 
 def test_direct_tool_step_fails_when_the_tool_returns_a_failed_result():
+    """Direct tool step fails when the tool returns a failed result."""
     agent = _DirectToolAgent(tool_result=ToolResult(text="specify whether available or unavailable.", ok=False))
 
     outcome = execute_step_with_retry(agent, _direct_tool_step({}), _FakeSettings(2))
@@ -334,6 +372,7 @@ def test_direct_tool_step_fails_when_the_tool_returns_a_failed_result():
 
 
 def test_direct_tool_step_does_not_fail_by_inspecting_successful_tool_wording():
+    """Direct tool step does not fail by inspecting successful tool wording."""
     agent = _DirectToolAgent(tool_result="Clarification required: this is just the recorded message.")
 
     outcome = execute_step_with_retry(agent, _direct_tool_step({}), _FakeSettings(2))
@@ -343,6 +382,7 @@ def test_direct_tool_step_does_not_fail_by_inspecting_successful_tool_wording():
 
 
 def test_direct_tool_step_fails_when_the_tool_method_raises():
+    """Direct tool step fails when the tool method raises."""
     agent = _DirectToolAgent(raises=RuntimeError("persistence unavailable"))
 
     outcome = execute_step_with_retry(agent, _direct_tool_step({}), _FakeSettings(2))
@@ -354,6 +394,7 @@ def test_direct_tool_step_fails_when_the_tool_method_raises():
 def test_direct_tool_step_has_no_retry_loop():
     # A single call, attempt_count=1, regardless of the configured retry limit -- there is no
     # crewai loop here to retry within.
+    """Direct tool step has no retry loop."""
     agent = _DirectToolAgent(tool_result=ToolResult(text="area is required.", ok=False))
 
     outcome = execute_step_with_retry(agent, _direct_tool_step({}), _FakeSettings(5))
@@ -363,12 +404,15 @@ def test_direct_tool_step_has_no_retry_loop():
 
 
 class _SignalingDirectToolAgent(_DirectToolAgent):
+    """SignalingDirectToolAgent."""
     def record_attendance_response(self, **kwargs):
+        """Record attendance response."""
         self.signal_resource_unavailable("squad_member", "west_gate", "no roster members available")
         return super().record_attendance_response(**kwargs)
 
 
 def test_direct_tool_step_also_attaches_a_resource_unavailable_signal():
+    """Direct tool step also attaches a resource unavailable signal."""
     agent = _SignalingDirectToolAgent(tool_result="The attendance response was stored.")
 
     outcome = execute_step_with_retry(agent, _direct_tool_step({}), _FakeSettings(2))

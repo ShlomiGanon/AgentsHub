@@ -1,3 +1,5 @@
+"""Event append, search, and step persistence."""
+
 import pytest
 
 from persistence.exceptions import NotFoundError, PersistenceError
@@ -6,12 +8,14 @@ from persistence.sqlite_store import SQLitePersistence
 
 @pytest.fixture
 def store(tmp_path):
+    """Store."""
     backend = SQLitePersistence(str(tmp_path / "test.db"))
     yield backend
     backend.close()
 
 
 def _minimal_event(**overrides):
+    """Minimal event."""
     event = {
         "received_at": "2026-08-01T10:00:00",
         "source": "sensor",
@@ -27,12 +31,14 @@ def _minimal_event(**overrides):
 
 
 def test_append_event_returns_a_generated_id_when_none_given(store):
+    """Append event returns a generated id when none given."""
     event_id = store.append_event(_minimal_event())
 
     assert event_id
 
 
 def test_append_event_respects_a_supplied_id(store):
+    """Append event respects a supplied id."""
     event_id = store.append_event(_minimal_event(event_id="fixed-id-1"))
 
     assert event_id == "fixed-id-1"
@@ -45,6 +51,7 @@ def test_telegram_event_may_be_appended_with_no_occurrence_timestamp_yet(store):
     # DIAGNOSTIC_FINDINGS.MD A.2): an event no longer has to wait for a
     # resolved occurred_at, and never again silently vanishes from a range
     # query just because one hasn't been resolved (or never will be).
+    """Telegram event may be appended with no occurrence timestamp yet."""
     event_id = store.append_event(_minimal_event(source="telegram", occurred_at=None))
 
     events = store.fetch_events_range("0000-01-01", "9999-01-01")
@@ -52,6 +59,7 @@ def test_telegram_event_may_be_appended_with_no_occurrence_timestamp_yet(store):
 
 
 def test_raw_text_is_preserved_exactly(store):
+    """Raw text is preserved exactly."""
     raw = "Fire!! near gate 3 -- 2 ppl seen, smoke heavy"
     event_id = store.append_event(_minimal_event(raw_text=raw))
 
@@ -60,6 +68,7 @@ def test_raw_text_is_preserved_exactly(store):
 
 
 def test_fetch_events_range_orders_by_occurred_at(store):
+    """Fetch events range orders by occurred at."""
     store.append_event(_minimal_event(event_id="e2", occurred_at="2026-08-02T00:00:00"))
     store.append_event(_minimal_event(event_id="e1", occurred_at="2026-08-01T00:00:00"))
 
@@ -68,6 +77,7 @@ def test_fetch_events_range_orders_by_occurred_at(store):
 
 
 def test_fetch_events_range_excludes_the_half_open_end_boundary(store):
+    """Fetch events range excludes the half open end boundary."""
     store.append_event(_minimal_event(event_id="inside", occurred_at="2026-08-01T23:59:59"))
     store.append_event(_minimal_event(event_id="at-end", occurred_at="2026-08-02T00:00:00"))
 
@@ -77,6 +87,7 @@ def test_fetch_events_range_excludes_the_half_open_end_boundary(store):
 
 
 def test_fetch_events_by_type_area_window_matches_both_fields_exactly(store):
+    """Fetch events by type area window matches both fields exactly."""
     store.append_event(_minimal_event(event_id="match", classification="fire", area="north", occurred_at="2026-08-01T00:00:00"))
     store.append_event(_minimal_event(event_id="wrong_area", classification="fire", area="south", occurred_at="2026-08-01T00:00:00"))
     store.append_event(_minimal_event(event_id="wrong_type", classification="medical", area="north", occurred_at="2026-08-01T00:00:00"))
@@ -88,6 +99,7 @@ def test_fetch_events_by_type_area_window_matches_both_fields_exactly(store):
 
 
 def test_entities_and_precedent_ids_round_trip_as_lists(store):
+    """Entities and precedent ids round trip as lists."""
     event_id = store.append_event(_minimal_event(entities=["gate-3", "watchtower-2"], precedent_matched_event_ids=["prior-1"]))
 
     [event] = store.fetch_events_range("2026-01-01", "2026-12-31")
@@ -96,6 +108,7 @@ def test_entities_and_precedent_ids_round_trip_as_lists(store):
 
 
 def test_boolean_hold_flags_round_trip_as_booleans(store):
+    """Boolean hold flags round trip as booleans."""
     event_id = store.append_event(_minimal_event(clarification_held=True, approval_held=False))
 
     [event] = store.fetch_events_range("2026-01-01", "2026-12-31")
@@ -107,6 +120,7 @@ def test_boolean_hold_flags_round_trip_as_booleans(store):
 
 
 def test_update_event_merges_onto_the_existing_row(store):
+    """Update event merges onto the existing row."""
     event_id = store.append_event(_minimal_event())
 
     store.update_event(event_id, {"risk_level": "high", "risk_reason": "multiple prior incidents"})
@@ -117,6 +131,7 @@ def test_update_event_merges_onto_the_existing_row(store):
 
 
 def test_update_event_can_set_occurred_at_after_extraction(store):
+    """Update event can set occurred at after extraction."""
     event_id = store.append_event(_minimal_event(source="telegram", occurred_at=None))
 
     store.update_event(event_id, {"occurred_at": "2026-08-01T09:00:00", "occurred_at_is_fallback": False})
@@ -127,11 +142,13 @@ def test_update_event_can_set_occurred_at_after_extraction(store):
 
 
 def test_update_unknown_event_raises_not_found(store):
+    """Update unknown event raises not found."""
     with pytest.raises(NotFoundError):
         store.update_event("does-not-exist", {"risk_level": "low"})
 
 
 def test_update_event_rejects_raw_text(store):
+    """Update event rejects raw text."""
     event_id = store.append_event(_minimal_event())
 
     with pytest.raises(PersistenceError, match="raw_text"):
@@ -139,6 +156,7 @@ def test_update_event_rejects_raw_text(store):
 
 
 def test_update_event_rejects_envelope_fields(store):
+    """Update event rejects envelope fields."""
     event_id = store.append_event(_minimal_event())
 
     with pytest.raises(PersistenceError):
@@ -146,6 +164,7 @@ def test_update_event_rejects_envelope_fields(store):
 
 
 def test_update_event_upserts_a_single_step_without_touching_others(store):
+    """Update event upserts a single step without touching others."""
     event_id = store.append_event(_minimal_event())
 
     store.update_event(event_id, {"steps": [{"step_index": 0, "agent_name": "reference_agent", "task_text": "check status", "allowed_tools": ["check_status"], "result_text": "ok", "attempt_count": 1}]})
@@ -157,6 +176,7 @@ def test_update_event_upserts_a_single_step_without_touching_others(store):
 
 
 def test_update_event_step_upsert_overwrites_the_same_index(store):
+    """Update event step upsert overwrites the same index."""
     event_id = store.append_event(_minimal_event())
 
     store.update_event(event_id, {"steps": [{"step_index": 0, "agent_name": "a1", "task_text": "first try", "allowed_tools": [], "attempt_count": 1}]})
@@ -172,6 +192,7 @@ def test_update_event_step_upsert_overwrites_the_same_index(store):
 
 
 def test_write_and_fetch_a_summary(store):
+    """Write and fetch a summary."""
     store.write_summary("daily", {
         "summary_text": "3 fire reports, all resolved",
         "period_start": "2026-08-01T00:00:00",
@@ -186,6 +207,7 @@ def test_write_and_fetch_a_summary(store):
 
 
 def test_writing_a_summary_for_an_already_summarized_period_overwrites(store):
+    """Writing a summary for an already summarized period overwrites."""
     period = {"period_start": "2026-08-01T00:00:00", "period_end": "2026-08-01T23:59:59"}
 
     store.write_summary("daily", {**period, "summary_text": "first pass", "generated_at": "2026-08-02T00:00:00"})
@@ -197,6 +219,7 @@ def test_writing_a_summary_for_an_already_summarized_period_overwrites(store):
 
 
 def test_fetch_summaries_range_returns_periods_overlapping_the_range(store):
+    """Fetch summaries range returns periods overlapping the range."""
     store.write_summary("monthly", {
         "summary_text": "august",
         "period_start": "2026-08-01T00:00:00",
@@ -215,5 +238,6 @@ def test_fetch_summaries_range_returns_periods_overlapping_the_range(store):
 
 
 def test_write_summary_rejects_an_unknown_level(store):
+    """Write summary rejects an unknown level."""
     with pytest.raises(PersistenceError):
         store.write_summary("weekly", {"summary_text": "x", "period_start": "a", "period_end": "b", "generated_at": "c"})

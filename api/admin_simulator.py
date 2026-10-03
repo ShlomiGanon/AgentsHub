@@ -5,14 +5,13 @@ sensor the scenario declares, and lets the operator release the steps one at a t
 
 `kind: "event"` (sensor) steps are sent by the **browser** directly to the real `POST /Event`
 on the same origin, under that step's own `X-Identity` — a sensor has no Telegram identity and
-was never bot/Telegram traffic to begin with (docs/bot_simulation_mode_design.md §2 decision 3),
-so this path is unchanged. `kind: "message"` (persona chat) steps instead go through
+was never bot/Telegram traffic to begin with, so this path stays on POST /Event.
+`kind: "message"` (persona chat) steps instead go through
 `POST /admin/simulator/bot-msg` (`api/admin.py`) — a same-origin proxy to a dedicated
 simulation-mode bot process (`bot/simulator_app.py`) that feeds the step through the real bot's
 own handler/dispatch code (`bot/app.py`, unmodified), so the same registration, permission,
 group-scoping *and* real bot behavior (its own derivation of conversation_id/protocol_hint, its
-background loops) apply exactly as they would for a real Telegram message — see
-docs/bot_simulation_mode_design.md for the full design. If the loaded profile hasn't declared
+background loops) apply exactly as they would for a real Telegram message. If the loaded profile hasn't declared
 `SIMULATOR_PORT`, or the simulator process isn't running, the proxy route reports that clearly
 rather than silently falling back to a shortcut.
 
@@ -23,7 +22,7 @@ All user-visible text comes from the `admin.simulator.*` catalog keys (`messages
 `messages/he.py`) — the server-rendered parts through the usual `t()` helper, the script's parts
 as raw templates embedded in the page and formatted client-side with the same `{name}` syntax.
 
-Scenario JSON shape (documented in docs/unified_command_guide.md):
+Scenario JSON shape:
 
     {
       "scenario": {"id": "...", "title": "...", "description": "...", "tags": ["..."]},
@@ -45,7 +44,7 @@ Scenario JSON shape (documented in docs/unified_command_guide.md):
 `kind: "message"` steps are proxied with `telegram_chat_id`/`telegram_chat_type` exactly as
 declared on the chat — `conversation_id`/`protocol_hint` are no longer caller-supplied for this
 path, since the real bot handler now derives them itself, exactly as it would for a real Telegram
-message (docs/bot_simulation_mode_design.md §10); `kind: "event"` steps still go straight to
+message; `kind: "event"` steps still go straight to
 `POST /Event`. An edited pending step updates the in-memory queue and the
 payload that is actually sent: `text` and `sender_identity` always, and
 `timestamp` when the operator fills the optional datetime field (message-kind

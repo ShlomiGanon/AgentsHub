@@ -18,14 +18,20 @@ _logger = logging.getLogger("agentshub.events")
 
 
 def _drop_nones(fields: dict[str, Any]) -> dict[str, Any]:
+    """Drop nones."""
+
     return {key: value for key, value in fields.items() if value is not None}
 
 
 def _present(value: str | None) -> str | None:
+    """Present."""
+
     return value or None
 
 
 def _tools(value: Iterable[str] | None) -> list[str] | None:
+    """Tools."""
+
     if value is None:
         return None
     return list(value)
@@ -57,6 +63,8 @@ def emit(event: str, *, level: int = logging.INFO, telemetry_only: bool = False,
 
 
 def specialist_started(*, agent: str, parent_agent: str = "main_agent", allowed_tools: Iterable[str] | None = None) -> None:
+    """Emit a structured specialist_started log event."""
+
     if not agent:
         raise ValueError("agent is required")
     emit("specialist_started", agent=agent, parent_agent=parent_agent, allowed_tools=_tools(allowed_tools))
@@ -71,6 +79,8 @@ def specialist_finished(
     invocation_id: str | None = None,
     allowed_tools: Iterable[str] | None = None,
 ) -> None:
+    """Emit a structured specialist_finished log event."""
+
     if not agent:
         raise ValueError("agent is required")
     emit(
@@ -85,12 +95,16 @@ def specialist_finished(
 
 
 def specialist_failed(*, agent: str, cause: str | None = None) -> None:
+    """Emit a structured specialist_failed log event."""
+
     if not agent:
         raise ValueError("agent is required")
     emit("specialist_failed", level=logging.WARNING, agent=agent, cause=cause)
 
 
 def specialist_timeout(*, agent: str, timeout_seconds: float) -> None:
+    """Emit a structured specialist_timeout log event."""
+
     if not agent:
         raise ValueError("agent is required")
     emit("specialist_timeout", level=logging.WARNING, agent=agent, timeout_seconds=timeout_seconds)
@@ -103,6 +117,8 @@ def queue_started(
     concurrency_keys: Iterable[str] = (),
     payload: object = None,
 ) -> None:
+    """Emit a structured queue_started log event."""
+
     resolved = event_id if event_id is not None else event_id_from_queue_payload(payload)
     keys = list(concurrency_keys) or None
     emit(
@@ -115,6 +131,8 @@ def queue_started(
 
 
 def queue_processing_failed(*, payload: object) -> None:
+    """Emit a structured queue_processing_failed log event."""
+
     emit(
         "queue_processing_failed",
         level=logging.ERROR,
@@ -124,6 +142,8 @@ def queue_processing_failed(*, payload: object) -> None:
 
 
 def queue_deadline_expired(*, payload: object) -> None:
+    """Emit a structured queue_deadline_expired log event."""
+
     emit(
         "queue_deadline_expired",
         level=logging.WARNING,
@@ -132,6 +152,8 @@ def queue_deadline_expired(*, payload: object) -> None:
 
 
 def queue_stop_timeout(*, queue_name: str, timeout_seconds: float) -> None:
+    """Emit a structured queue_stop_timeout log event."""
+
     emit(
         "queue_stop_timeout",
         level=logging.WARNING,
@@ -141,6 +163,8 @@ def queue_stop_timeout(*, queue_name: str, timeout_seconds: float) -> None:
 
 
 def _emit_safely(event: str, **fields: Any) -> None:
+    """Emit safely."""
+
     try:
         emit(event, **fields)
     except Exception:
@@ -159,6 +183,8 @@ def agent_invocation_started(
     parent_agent: str | None = None,
     parent_invocation_id: str | None = None,
 ) -> None:
+    """Emit a structured agent_invocation_started log event."""
+
     _emit_safely(
         "agent_invocation_started",
         agent=agent,
@@ -183,6 +209,8 @@ def agent_invocation_finished(
     parent_agent: str | None = None,
     parent_invocation_id: str | None = None,
 ) -> None:
+    """Emit a structured agent_invocation_finished log event."""
+
     _emit_safely(
         "agent_invocation_finished",
         agent=agent,
@@ -220,6 +248,8 @@ def model_invocation_finished(
     runtime_agent_seconds: float | None = None,
     runtime_kickoff_seconds: float | None = None,
 ) -> None:
+    """Emit a structured model_invocation_finished log event."""
+
     emit(
         "model_invocation_finished",
         agent=agent,
@@ -247,6 +277,8 @@ def model_invocation_finished(
 
 
 def model_warmup_started(*, provider: str, model: str) -> None:
+    """Emit a structured model_warmup_started log event."""
+
     emit("model_warmup_started", provider=provider, model=model, telemetry_only=True)
 
 
@@ -259,6 +291,8 @@ def model_warmup_finished(
     latency_ms: float,
     level: int = logging.INFO,
 ) -> None:
+    """Emit a structured model_warmup_finished log event."""
+
     emit(
         "model_warmup_finished",
         level=level,
@@ -272,6 +306,8 @@ def model_warmup_finished(
 
 
 def tool_blocked(*, agent: str, tool: str, invocation_id: str | None = None) -> None:
+    """Emit a structured tool_blocked log event."""
+
     emit("tool_blocked", agent=agent, tool=tool, invocation_id=invocation_id)
 
 
@@ -286,6 +322,8 @@ def tool_call(
     result_summary: str | None = None,
     exc_info: bool = False,
 ) -> None:
+    """Emit a structured tool_call log event."""
+
     level = logging.ERROR if exc_info else logging.INFO
     emit(
         "tool_call",
@@ -302,6 +340,8 @@ def tool_call(
 
 
 def provider_request_finished(**fields: Any) -> None:
+    """Emit a structured provider_request_finished log event."""
+
     failed = fields.get("status") == "error" or fields.get("event") == "provider_request_failed"
     event = "provider_request_failed" if failed else "provider_request_finished"
     fields.pop("event", None)
@@ -317,6 +357,8 @@ def step_started(
     event_id: str | None = None,
     allowed_tools: Iterable[str] = (),
 ) -> None:
+    """Emit a structured step_started log event."""
+
     emit(
         "step_start",
         agent=agent,
@@ -339,6 +381,8 @@ def step_result(
     step_id: str | None = None,
     event_id: str | None = None,
 ) -> None:
+    """Emit a structured step_result log event."""
+
     emit(
         "step_result",
         agent=agent,
@@ -353,22 +397,32 @@ def step_result(
 
 
 def step_failed(*, agent: str, attempt: int, cause: str) -> None:
+    """Emit a structured step_failed log event."""
+
     emit("step_failed", agent=agent, attempt=attempt, cause=cause)
 
 
 def step_retry(*, agent: str, attempt: int, cause: str) -> None:
+    """Emit a structured step_retry log event."""
+
     emit("step_retry", agent=agent, attempt=attempt, cause=cause)
 
 
 def step_unclear(*, agent: str, attempt: int, missing: str) -> None:
+    """Emit a structured step_unclear log event."""
+
     emit("step_unclear", agent=agent, attempt=attempt, missing=missing)
 
 
 def direct_tool_step_error(*, agent: str, tool: str, cause: str) -> None:
+    """Emit a structured direct_tool_step_error log event."""
+
     emit("direct_tool_step_error", agent=agent, tool=tool, cause=cause)
 
 
 def stage_finished(*, stage: str, status: str, termination_reason: str, duration_seconds: float) -> None:
+    """Emit a structured stage_finished log event."""
+
     emit(
         "stage_finished",
         stage=stage,
@@ -380,10 +434,14 @@ def stage_finished(*, stage: str, status: str, termination_reason: str, duration
 
 
 def report_received(*, event_id: str, source: str, sender_identity: str, raw_text: str) -> None:
+    """Emit a structured report_received log event."""
+
     emit("report_received", event_id=event_id, source=source, sender_identity=sender_identity, raw_text=raw_text)
 
 
 def request_received(*, event_id: str, sender_identity: str, raw_text: str) -> None:
+    """Emit a structured request_received log event."""
+
     emit("request_received", event_id=event_id, sender_identity=sender_identity, raw_text=raw_text)
 
 
@@ -395,6 +453,8 @@ def extraction_result(
     missing_fields: Iterable[str],
     occurred_at_is_fallback: bool,
 ) -> None:
+    """Emit a structured extraction_result log event."""
+
     emit(
         "extraction_result",
         event_id=event_id,
@@ -406,6 +466,8 @@ def extraction_result(
 
 
 def extraction_retry(*, cause: str) -> None:
+    """Emit a structured extraction_retry log event."""
+
     emit("extraction_retry", cause=cause)
 
 
@@ -418,6 +480,8 @@ def hold_created(
     classification: str | None = None,
     reason: str | None = None,
 ) -> None:
+    """Emit a structured hold_created log event."""
+
     emit(
         "hold_created",
         hold_kind=hold_kind,
@@ -439,6 +503,8 @@ def hold_resolved(
     status: str | None = None,
     selected_protocol: str | None = None,
 ) -> None:
+    """Emit a structured hold_resolved log event."""
+
     emit(
         "hold_resolved",
         hold_kind=hold_kind,
@@ -452,18 +518,26 @@ def hold_resolved(
 
 
 def hold_reminder_sent(*, hold_kind: str, event_id: str, hold_id: str) -> None:
+    """Emit a structured hold_reminder_sent log event."""
+
     emit("hold_reminder_sent", hold_kind=hold_kind, event_id=event_id, hold_id=hold_id)
 
 
 def hold_escalated(*, hold_kind: str, event_id: str, hold_id: str) -> None:
+    """Emit a structured hold_escalated log event."""
+
     emit("hold_escalated", hold_kind=hold_kind, event_id=event_id, hold_id=hold_id)
 
 
 def hold_sweep_failed() -> None:
+    """Emit a structured hold_sweep_failed log event."""
+
     emit("hold_sweep_failed", level=logging.ERROR, exc_info=True)
 
 
 def risk_assessed(*, event_id: str, risk_level: str, risk_score: float, risk_reason: str) -> None:
+    """Emit a structured risk_assessed log event."""
+
     emit("risk_assessed", event_id=event_id, risk_level=risk_level, risk_score=risk_score, risk_reason=risk_reason)
 
 
@@ -475,6 +549,8 @@ def protocol_selection(
     candidate_names: Iterable[str],
     reason: str | None,
 ) -> None:
+    """Emit a structured protocol_selection log event."""
+
     emit(
         "protocol_selection",
         event_id=event_id,
@@ -492,6 +568,8 @@ def precedent_closure(
     closed: bool,
     closing_event_id: str | None,
 ) -> None:
+    """Emit a structured precedent_closure log event."""
+
     emit(
         "precedent_closure",
         event_id=event_id,
@@ -502,56 +580,84 @@ def precedent_closure(
 
 
 def event_outcome(*, event_id: str, outcome: str, **detail: Any) -> None:
+    """Emit a structured event_outcome log event."""
+
     emit("event_outcome", event_id=event_id, outcome=outcome, **detail)
 
 
 def reply_latency(*, event_id: str, elapsed_seconds: float) -> None:
+    """Emit a structured reply_latency log event."""
+
     emit("reply_latency", event_id=event_id, elapsed_seconds=elapsed_seconds, telemetry_only=True)
 
 
 def insight_generated(*, event_id: str, protocol: str, insight_text: str) -> None:
+    """Emit a structured insight_generated log event."""
+
     emit("insight_generated", event_id=event_id, protocol=protocol, insight_text=insight_text)
 
 
 def final_verdict(*, event_id: str, verdict: str, reasoning: str) -> None:
+    """Emit a structured final_verdict log event."""
+
     emit("final_verdict", event_id=event_id, verdict=verdict, reasoning=reasoning)
 
 
 def event_correction_recorded(*, event_id: str, corrects_event_id: str) -> None:
+    """Emit a structured event_correction_recorded log event."""
+
     emit("event_correction_recorded", event_id=event_id, corrects_event_id=corrects_event_id)
 
 
 def protocol_waiting_for_event_data(*, event_id: str, missing_event_fields: Iterable[str]) -> None:
+    """Emit a structured protocol_waiting_for_event_data log event."""
+
     emit("protocol_waiting_for_event_data", event_id=event_id, missing_event_fields=list(missing_event_fields))
 
 
 def direct_lane_declined(*, event_id: str, reason: str) -> None:
+    """Emit a structured direct_lane_declined log event."""
+
     emit("direct_lane_declined", event_id=event_id, reason=reason)
 
 
 def direct_lane_accepted(*, event_id: str, actions: Iterable[str]) -> None:
+    """Emit a structured direct_lane_accepted log event."""
+
     emit("direct_lane_accepted", event_id=event_id, actions=list(actions))
 
 
 def operational_decision_invalid(*, mode: str, reason: str) -> None:
+    """Emit a structured operational_decision_invalid log event."""
+
     emit("operational_decision_invalid", level=logging.WARNING, mode=mode, reason=reason)
 
 
 def final_assessment_invalid(*, reason: str) -> None:
+    """Emit a structured final_assessment_invalid log event."""
+
     emit("final_assessment_invalid", level=logging.WARNING, reason=reason)
 
 
 def synthesis_failed(*, cause: str) -> None:
+    """Emit a structured synthesis_failed log event."""
+
     emit("synthesis_failed", level=logging.WARNING, cause=cause)
 
 
 def resource_unavailable_description_failed(*, resource_kind: str, reason: str) -> None:
+    """Emit a structured resource_unavailable_description_failed log event."""
+
     emit("resource_unavailable_description_failed", level=logging.WARNING, resource_kind=resource_kind, reason=reason)
 
 
 def resource_unavailable_alert(*, event_id: str, resource_kind: str, area: str, reason: str) -> None:
+    """Emit a structured resource_unavailable_alert log event."""
+
     emit("resource_unavailable_alert", event_id=event_id, resource_kind=resource_kind, area=area, reason=reason)
 
 
 def agent_selection(*, status: str, chosen_agents: Iterable[str], reason: str | None) -> None:
+    """Emit a structured agent_selection log event."""
+
     emit("agent_selection", status=status, chosen_agents=list(chosen_agents), reason=reason)

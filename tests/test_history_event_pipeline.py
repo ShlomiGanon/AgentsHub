@@ -10,6 +10,7 @@ from profiles import EventTypeRegistry
 
 
 def _response(**overrides):
+    """Response."""
     payload = {
         "classification": "fire",
         "area": "north",
@@ -23,6 +24,7 @@ def _response(**overrides):
 
 
 def test_sensor_uses_received_time_but_model_extracts_other_fields():
+    """Sensor uses received time but model extracts other fields."""
     result = extract_event(
         "smoke now",
         "sensor",
@@ -36,10 +38,11 @@ def test_sensor_uses_received_time_but_model_extracts_other_fields():
     assert result.classification_status == "resolved"
 
 
-# -- Event type descriptions in the extraction prompt (follow-up to Stage 4, docs/bar_improves.md)
+# Event type descriptions in the extraction prompt (follow-up to Stage 4, )
 
 
 def _capture_prompt(response_text):
+    """Capture prompt."""
     captured = []
 
     def _invoker(prompt):
@@ -50,6 +53,7 @@ def _capture_prompt(response_text):
 
 
 def test_extraction_prompt_includes_each_declared_event_type_description():
+    """Extraction prompt includes each declared event type description."""
     registry = EventTypeRegistry(
         types=("fire", "medical"),
         descriptions={"fire": "A structure or vegetation fire.", "medical": "A medical incident with a casualty."},
@@ -64,6 +68,7 @@ def test_extraction_prompt_includes_each_declared_event_type_description():
 
 
 def test_extraction_prompt_omits_description_text_for_a_type_that_has_none():
+    """Extraction prompt omits description text for a type that has none."""
     registry = EventTypeRegistry(
         types=("fire", "medical"), descriptions={"fire": "A structure or vegetation fire."}
     )
@@ -100,7 +105,7 @@ def test_extraction_prompt_is_unchanged_when_the_profile_declares_no_event_type_
 
 
 def test_extraction_prompt_carries_a_real_response_team_profiles_declared_descriptions(monkeypatch):
-    """Against a real operational profile (docs/bar_improves.md), not just a
+    """Against a real operational profile, not just a
     synthetic registry."""
     from config.base import TierModel
     from profiles import build_event_type_registry
@@ -135,6 +140,7 @@ def test_extraction_prompt_carries_a_real_response_team_profiles_declared_descri
 
 
 def test_invalid_closed_set_values_are_left_unresolved():
+    """Invalid closed set values are left unresolved."""
     result = extract_event(
         "unknown",
         "telegram",
@@ -151,8 +157,9 @@ def test_invalid_closed_set_values_are_left_unresolved():
 
 
 def test_malformed_optional_field_is_dropped_not_the_whole_report(caplog):
-    # Stage 1 (docs/bar_improves.md): a non-scalar value for an optional
+    # Stage 1: a non-scalar value for an optional
     # field (severity here) must not reject an otherwise-usable report.
+    """Malformed optional field is dropped not the whole report."""
     with caplog.at_level("INFO"):
         result = extract_event(
             "smoke at gate",
@@ -173,6 +180,7 @@ def test_malformed_optional_field_is_dropped_not_the_whole_report(caplog):
 
 
 def test_malformed_optional_entities_field_is_dropped_not_the_whole_report(caplog):
+    """Malformed optional entities field is dropped not the whole report."""
     with caplog.at_level("INFO"):
         result = extract_event(
             "smoke at gate",
@@ -192,6 +200,7 @@ def test_malformed_optional_entities_field_is_dropped_not_the_whole_report(caplo
 
 
 def test_valid_optional_fields_are_unaffected_by_the_malformed_field_tolerance():
+    """Valid optional fields are unaffected by the malformed field tolerance."""
     result = extract_event(
         "smoke at gate",
         "telegram",
@@ -208,6 +217,7 @@ def test_valid_optional_fields_are_unaffected_by_the_malformed_field_tolerance()
 
 
 def test_code_fence_is_the_only_cleanup_and_bad_json_is_an_execution_error():
+    """Code fence is the only cleanup and bad json is an execution error."""
     valid = extract_event(
         "x",
         "telegram",
@@ -248,12 +258,14 @@ from persistence.interface import open_persistence
 
 @pytest.fixture
 def store(tmp_path):
+    """Store."""
     persistence = open_persistence(str(tmp_path / "history-write.db"))
     yield persistence
     persistence.close()
 
 
 def _initial(store):
+    """Initial."""
     return record_initial_event(
         store,
         InitialEventEnvelope(
@@ -266,6 +278,7 @@ def _initial(store):
 
 
 def test_initial_event_rejects_an_unknown_sender_permission_level(store):
+    """Initial event rejects an unknown sender permission level."""
     with pytest.raises(ValueError, match="sender_permission_level"):
         record_initial_event(
             store,
@@ -280,6 +293,7 @@ def test_initial_event_rejects_an_unknown_sender_permission_level(store):
 
 
 def test_record_step_executions_writes_every_step_in_one_update(store):
+    """Record step executions writes every step in one update."""
     event_id = _initial(store)
     writes = []
     original = store.update_event
@@ -305,6 +319,7 @@ def test_record_step_executions_writes_every_step_in_one_update(store):
 
 
 def test_history_write_path_is_incremental(store):
+    """History write path is incremental."""
     event_id = _initial(store)
     result = ExtractionResult(
         classification="fire",
@@ -330,6 +345,7 @@ def test_history_write_path_is_incremental(store):
 
 
 def test_state_allowlist_cannot_bypass_outcome_writer(store):
+    """State allowlist cannot bypass outcome writer."""
     event_id = _initial(store)
 
     record_event_state(store, event_id, {"risk_level": "high"})
@@ -343,6 +359,7 @@ def test_state_update_can_set_classification_after_a_clarification_hold(store):
     # commander's chosen classification via this same allowlisted path,
     # without re-running extraction and discarding already-resolved
     # area/description/severity.
+    """State update can set classification after a clarification hold."""
     event_id = _initial(store)
 
     record_event_state(store, event_id, {"classification": "fire"})
@@ -351,6 +368,7 @@ def test_state_update_can_set_classification_after_a_clarification_hold(store):
 
 
 def test_scheduler_notification_requires_event_envelope_data(store):
+    """Scheduler notification requires event envelope data."""
     event_id = _initial(store)
     result = ExtractionResult("fire", "resolved", "north", (), None, None, "2026-08-19T22:00:00", False, ())
     scheduler = SimpleNamespace(notify_event_written=lambda *args: None)
@@ -380,12 +398,14 @@ from history.time_utils import (
 
 
 def test_parse_timestamp_accepts_a_z_suffix_as_utc():
+    """Parse timestamp accepts a z suffix as utc."""
     parsed = parse_timestamp("2026-08-24T09:00:00Z")
 
     assert parsed == datetime(2026, 8, 24, 9, 0, 0, tzinfo=UTC)
 
 
 def test_parse_timestamp_treats_a_naive_timestamp_as_already_utc():
+    """Parse timestamp treats a naive timestamp as already utc."""
     parsed = parse_timestamp("2026-08-24T09:00:00")
 
     assert parsed == datetime(2026, 8, 24, 9, 0, 0, tzinfo=UTC)
@@ -394,12 +414,14 @@ def test_parse_timestamp_treats_a_naive_timestamp_as_already_utc():
 def test_parse_timestamp_converts_a_non_utc_offset_to_utc():
     # 02:00 at +05:00 is 21:00 UTC the *previous* day — the exact
     # near-midnight-crossing-a-day case worth being explicit about.
+    """Parse timestamp converts a non utc offset to utc."""
     parsed = parse_timestamp("2026-03-15T02:00:00+05:00")
 
     assert parsed == datetime(2026, 3, 14, 21, 0, 0, tzinfo=UTC)
 
 
 def test_parse_timestamp_strips_surrounding_whitespace():
+    """Parse timestamp strips surrounding whitespace."""
     assert parse_timestamp("  2026-08-24T09:00:00Z  ") == datetime(2026, 8, 24, 9, 0, 0, tzinfo=UTC)
 
 
@@ -407,11 +429,13 @@ def test_parse_timestamp_rejects_unparseable_input_with_value_error():
     # history/extraction.py's own call site catches exactly ValueError
     # (wrapping it as ExtractionExecutionError) — confirming the existing
     # contract, not inventing a new one.
+    """Parse timestamp rejects unparseable input with value error."""
     with pytest.raises(ValueError):
         parse_timestamp("not a timestamp at all")
 
 
 def test_parse_timestamp_rejects_an_empty_string():
+    """Parse timestamp rejects an empty string."""
     with pytest.raises(ValueError):
         parse_timestamp("")
 
@@ -420,17 +444,20 @@ def test_parse_timestamp_rejects_an_empty_string():
 
 
 def test_storage_timestamp_round_trips_through_parse_timestamp():
+    """Storage timestamp round trips through parse timestamp."""
     original = "2026-08-24T09:00:00Z"
     assert storage_timestamp(parse_timestamp(original)) == "2026-08-24T09:00:00"
 
 
 def test_storage_timestamp_strips_timezone_and_truncates_to_seconds():
+    """Storage timestamp strips timezone and truncates to seconds."""
     value = datetime(2026, 8, 24, 9, 30, 15, 123456, tzinfo=UTC)
 
     assert storage_timestamp(value) == "2026-08-24T09:30:15"
 
 
 def test_storage_timestamp_converts_a_non_utc_aware_value_to_utc_first():
+    """Storage timestamp converts a non utc aware value to utc first."""
     value = datetime(2026, 3, 15, 2, 0, 0, tzinfo=timezone(timedelta(hours=5)))
 
     assert storage_timestamp(value) == "2026-03-14T21:00:00"
@@ -440,6 +467,7 @@ def test_storage_timestamp_converts_a_non_utc_aware_value_to_utc_first():
 
 
 def test_day_bounds_is_midnight_to_midnight_utc():
+    """Day bounds is midnight to midnight utc."""
     start, end = day_bounds(datetime(2026, 8, 24, 15, 30, tzinfo=UTC))
 
     assert start == datetime(2026, 8, 24, 0, 0, tzinfo=UTC)
@@ -447,6 +475,7 @@ def test_day_bounds_is_midnight_to_midnight_utc():
 
 
 def test_day_bounds_crosses_a_month_end():
+    """Day bounds crosses a month end."""
     start, end = day_bounds(datetime(2026, 1, 31, 12, 0, tzinfo=UTC))
 
     assert start == datetime(2026, 1, 31, 0, 0, tzinfo=UTC)
@@ -454,6 +483,7 @@ def test_day_bounds_crosses_a_month_end():
 
 
 def test_day_bounds_crosses_a_year_end():
+    """Day bounds crosses a year end."""
     start, end = day_bounds(datetime(2026, 12, 31, 23, 59, tzinfo=UTC))
 
     assert start == datetime(2026, 12, 31, 0, 0, tzinfo=UTC)
@@ -467,6 +497,7 @@ def test_day_bounds_uses_the_given_datetimes_own_date_not_a_utc_renormalization(
     # not a bug: a caller that skips parse_timestamp and passes a
     # non-UTC-aware value gets bounds for *that* value's own calendar
     # date, not the UTC-equivalent one.
+    """Day bounds uses the given datetimes own date not a utc renormalization."""
     non_utc = datetime(2026, 3, 15, 2, 0, 0, tzinfo=timezone(timedelta(hours=5)))  # 21:00 UTC on the 14th
 
     start, _end = day_bounds(non_utc)
@@ -478,6 +509,7 @@ def test_day_bounds_uses_the_given_datetimes_own_date_not_a_utc_renormalization(
 
 
 def test_month_bounds_within_a_year():
+    """Month bounds within a year."""
     start, end = month_bounds(datetime(2026, 3, 15, tzinfo=UTC))
 
     assert start == datetime(2026, 3, 1, tzinfo=UTC)
@@ -485,6 +517,7 @@ def test_month_bounds_within_a_year():
 
 
 def test_month_bounds_rolls_december_into_next_january():
+    """Month bounds rolls december into next january."""
     start, end = month_bounds(datetime(2026, 12, 15, tzinfo=UTC))
 
     assert start == datetime(2026, 12, 1, tzinfo=UTC)
@@ -492,10 +525,12 @@ def test_month_bounds_rolls_december_into_next_january():
 
 
 def test_add_month_rolls_the_year_over():
+    """Add month rolls the year over."""
     assert add_month(datetime(2026, 12, 1, tzinfo=UTC)) == datetime(2027, 1, 1, tzinfo=UTC)
 
 
 def test_add_month_within_a_year():
+    """Add month within a year."""
     assert add_month(datetime(2026, 3, 1, tzinfo=UTC)) == datetime(2026, 4, 1, tzinfo=UTC)
 
 
@@ -503,6 +538,7 @@ def test_add_month_within_a_year():
 
 
 def test_year_bounds():
+    """Year bounds."""
     start, end = year_bounds(datetime(2026, 6, 15, tzinfo=UTC))
 
     assert start == datetime(2026, 1, 1, tzinfo=UTC)
@@ -510,6 +546,7 @@ def test_year_bounds():
 
 
 def test_year_bounds_at_the_very_edge_of_the_year():
+    """Year bounds at the very edge of the year."""
     start, end = year_bounds(datetime(2026, 12, 31, 23, 59, 59, tzinfo=UTC))
 
     assert start == datetime(2026, 1, 1, tzinfo=UTC)
@@ -522,6 +559,7 @@ def test_year_bounds_at_the_very_edge_of_the_year():
 
 def test_iter_days_counts_29_days_in_a_leap_year_february():
     # 2028 is a leap year.
+    """Iter days counts 29 days in a leap year february."""
     days = list(iter_days(datetime(2028, 2, 1, tzinfo=UTC), datetime(2028, 3, 1, tzinfo=UTC)))
 
     assert len(days) == 29
@@ -530,6 +568,7 @@ def test_iter_days_counts_29_days_in_a_leap_year_february():
 
 def test_iter_days_counts_28_days_in_a_non_leap_year_february():
     # 2026 is not a leap year.
+    """Iter days counts 28 days in a non leap year february."""
     days = list(iter_days(datetime(2026, 2, 1, tzinfo=UTC), datetime(2026, 3, 1, tzinfo=UTC)))
 
     assert len(days) == 28
@@ -537,6 +576,7 @@ def test_iter_days_counts_28_days_in_a_non_leap_year_february():
 
 
 def test_iter_days_each_pair_is_exactly_one_day_apart_and_contiguous():
+    """Iter days each pair is exactly one day apart and contiguous."""
     days = list(iter_days(datetime(2026, 1, 30, tzinfo=UTC), datetime(2026, 2, 2, tzinfo=UTC)))
 
     assert days == [
@@ -547,6 +587,7 @@ def test_iter_days_each_pair_is_exactly_one_day_apart_and_contiguous():
 
 
 def test_iter_months_crosses_a_year_boundary():
+    """Iter months crosses a year boundary."""
     months = list(iter_months(datetime(2026, 11, 1, tzinfo=UTC), datetime(2027, 2, 1, tzinfo=UTC)))
 
     assert months == [
@@ -557,6 +598,7 @@ def test_iter_months_crosses_a_year_boundary():
 
 
 def test_iter_years_across_multiple_years():
+    """Iter years across multiple years."""
     years = list(iter_years(datetime(2024, 6, 1, tzinfo=UTC), datetime(2027, 1, 1, tzinfo=UTC)))
 
     assert years == [
@@ -567,4 +609,5 @@ def test_iter_years_across_multiple_years():
 
 
 def test_iter_days_with_start_equal_to_end_yields_nothing():
+    """Iter days with start equal to end yields nothing."""
     assert list(iter_days(datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 1, tzinfo=UTC))) == []

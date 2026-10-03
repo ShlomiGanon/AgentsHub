@@ -166,12 +166,13 @@ class StackSupervisor:
     """Owns the API, bot, and optional simulator child processes for one profile."""
 
     def __init__(self, profile_module: str, *, python_executable: str | None = None):
+        """Remember the profile module and the Python used to spawn children."""
+
         self.profile_module = profile_module
         self.python_executable = python_executable or sys.executable
         self.api_proc: subprocess.Popen | None = None
         self.bot_proc: subprocess.Popen | None = None
-        # None for a profile that hasn't declared SIMULATOR_PORT (docs/bot_simulation_mode_design.md) —
-        # the third, simulation-mode bot subprocess is then never started at all.
+        # None when the profile has no SIMULATOR_PORT, so that subprocess is never started.
         self.bot_sim_proc: subprocess.Popen | None = None
         self._logs: list[object] = []
         self._relays: list[threading.Thread] = []
@@ -179,6 +180,8 @@ class StackSupervisor:
         self.last_error = ""
 
     def _status(self, state: str) -> None:
+        """Write supervisor status; a locked file must not take the process down."""
+
         info = available_profile(self.profile_module)
         try:
             write_status(
@@ -198,11 +201,15 @@ class StackSupervisor:
             logger.warning("Could not write stack status (%s): %s", state, exc)
 
     def _open_log(self, path: str):
+        """Open one child log file and keep the handle for later close."""
+
         handle = open(path, "a", encoding="utf-8")
         self._logs.append(handle)
         return handle
 
     def _attach_supervisor_log(self) -> None:
+        """Send supervisor logger output to this profile's supervisor log file."""
+
         self._detach_supervisor_log()
         path = supervisor_log_path(self.profile_module)
         handler = logging.FileHandler(path, encoding="utf-8")
@@ -211,6 +218,8 @@ class StackSupervisor:
         self._supervisor_log_handler = handler
 
     def _detach_supervisor_log(self) -> None:
+        """Remove and close the supervisor file handler, if one is attached."""
+
         handler = self._supervisor_log_handler
         if handler is None:
             return
@@ -219,6 +228,8 @@ class StackSupervisor:
         self._supervisor_log_handler = None
 
     def _unexpected_child_exit(self) -> str | None:
+        """Return a message if api, bot, or bot-sim exited while it should stay up."""
+
         for label, process in (
             ("api", self.api_proc),
             ("bot", self.bot_proc),
@@ -229,6 +240,8 @@ class StackSupervisor:
         return None
 
     def _spawn(self, label: str, args: list[str], env: dict[str, str], slug: str) -> subprocess.Popen:
+        """Start one child and relay its stdout/stderr to the console and log files."""
+
         stdout_path, stderr_path = child_log_paths(self.profile_module, label)
         stdout_log = self._open_log(str(stdout_path))
         stderr_log = self._open_log(str(stderr_path))
@@ -261,6 +274,8 @@ class StackSupervisor:
         return process
 
     def start(self) -> None:
+        """Start API, bot, and optional simulator children for the selected profile."""
+
         info = available_profile(self.profile_module)
         if info is None:
             raise ValueError(f"unknown profile: {self.profile_module}")
@@ -359,6 +374,8 @@ class StackSupervisor:
             raise
 
     def stop(self) -> None:
+        """Terminate children, drop this profile's lock files, and close log handles."""
+
         self._status("stopping")
         for process in (self.bot_sim_proc, self.bot_proc, self.api_proc):
             if process is not None and process.poll() is None:
@@ -385,6 +402,8 @@ class StackSupervisor:
         self._logs.clear()
 
     def switch(self, requested_profile: str) -> None:
+        """Stop the current profile and start another, rolling back on failure."""
+
         if available_profile(requested_profile) is None:
             self.last_error = f"Unknown profile requested: {requested_profile}"
             self._status("running")
@@ -405,6 +424,8 @@ class StackSupervisor:
             self._status("running")
 
     def reset(self) -> None:
+        """Stop, delete declared profile databases, and start the same profile again."""
+
         active = self.profile_module
         self.stop()
         removed = reset_profile_databases(active)
@@ -412,6 +433,8 @@ class StackSupervisor:
         self.start()
 
     def run(self) -> None:
+        """Start the stack and apply switch/reset commands until interrupted."""
+
         try:
             self.start()
             while True:

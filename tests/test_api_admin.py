@@ -22,11 +22,13 @@ ADMIN_SESSION_SECRET = "test-admin-session-secret"
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Install the shared CrewAI stub so these tests never call a real model."""
     install_crewai_stub(monkeypatch, 'status nominal')
 
 
 @pytest.fixture
 def _admin_env(monkeypatch):
+    """Set admin-panel credentials and clear optional lockout overrides."""
     monkeypatch.setenv("ADMIN_USERNAME", ADMIN_USERNAME)
     monkeypatch.setenv("ADMIN_PASSWORD", ADMIN_PASSWORD)
     monkeypatch.setenv("ADMIN_SESSION_SECRET", ADMIN_SESSION_SECRET)
@@ -36,12 +38,14 @@ def _admin_env(monkeypatch):
 
 
 def _client(tmp_path, teardown_ctx, **kwargs):
+    """Build a Flask test client against a temporary API context."""
     ctx = build_context(tmp_path, **kwargs)
     teardown_ctx.append(ctx)
     return build_app(ctx).test_client()
 
 
 def _extract_csrf(html_bytes: bytes) -> str:
+    """Read the CSRF token value from an admin HTML page."""
     html = html_bytes.decode()
     marker = 'name="csrf_token" value="'
     start = html.index(marker) + len(marker)
@@ -50,6 +54,7 @@ def _extract_csrf(html_bytes: bytes) -> str:
 
 
 def _complete_acting_identity(client, identity=COMMANDER_IDENTITY, *, use_system_admin=False):
+    """Finish the post-login acting-identity step for the admin console."""
     setup = client.get("/admin/acting-identity")
     data = {"csrf_token": _extract_csrf(setup.data), "api_identity": identity}
     if use_system_admin:
@@ -71,6 +76,7 @@ def _login(client, username=ADMIN_USERNAME, password=ADMIN_PASSWORD, *, identity
 
 
 def test_admin_routes_do_not_exist_when_unconfigured(tmp_path, teardown_ctx, monkeypatch):
+    """Admin routes do not exist when unconfigured."""
     monkeypatch.delenv("ADMIN_USERNAME", raising=False)
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
     client = _client(tmp_path, teardown_ctx)
@@ -82,6 +88,7 @@ def test_admin_routes_do_not_exist_when_unconfigured(tmp_path, teardown_ctx, mon
 
 @pytest.mark.parametrize("missing", ["ADMIN_USERNAME", "ADMIN_PASSWORD"])
 def test_admin_stays_disabled_if_only_one_credential_is_set(tmp_path, teardown_ctx, monkeypatch, missing):
+    """Admin stays disabled if only one credential is set."""
     monkeypatch.setenv("ADMIN_USERNAME", ADMIN_USERNAME)
     monkeypatch.setenv("ADMIN_PASSWORD", ADMIN_PASSWORD)
     monkeypatch.delenv(missing, raising=False)
@@ -91,6 +98,7 @@ def test_admin_stays_disabled_if_only_one_credential_is_set(tmp_path, teardown_c
 
 
 def test_resolve_admin_config_requires_session_secret_when_enabled(monkeypatch):
+    """Resolve admin config requires session secret when enabled."""
     monkeypatch.setenv("ADMIN_USERNAME", ADMIN_USERNAME)
     monkeypatch.setenv("ADMIN_PASSWORD", ADMIN_PASSWORD)
     monkeypatch.delenv("ADMIN_SESSION_SECRET", raising=False)
@@ -100,6 +108,7 @@ def test_resolve_admin_config_requires_session_secret_when_enabled(monkeypatch):
 
 
 def test_resolve_admin_config_returns_none_when_fully_unset(monkeypatch):
+    """Resolve admin config returns none when fully unset."""
     monkeypatch.delenv("ADMIN_USERNAME", raising=False)
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
 
@@ -110,6 +119,7 @@ def test_resolve_admin_config_returns_none_when_fully_unset(monkeypatch):
 
 
 def test_login_page_renders_when_configured(tmp_path, teardown_ctx, _admin_env):
+    """Login page renders when configured."""
     client = _client(tmp_path, teardown_ctx)
 
     resp = client.get("/admin/login")
@@ -119,6 +129,7 @@ def test_login_page_renders_when_configured(tmp_path, teardown_ctx, _admin_env):
 
 
 def test_admin_chrome_uses_leadspotting_logo_instead_of_wordmark_text(tmp_path, teardown_ctx, _admin_env):
+    """Admin chrome uses leadspotting logo instead of wordmark text."""
     client = _client(tmp_path, teardown_ctx)
 
     logo = client.get("/static/leadspotting-logo.gif")
@@ -138,6 +149,7 @@ def test_admin_chrome_uses_leadspotting_logo_instead_of_wordmark_text(tmp_path, 
 
 
 def test_dashboard_redirects_to_login_when_not_authenticated(tmp_path, teardown_ctx, _admin_env):
+    """Dashboard redirects to login when not authenticated."""
     client = _client(tmp_path, teardown_ctx)
 
     resp = client.get("/admin/", follow_redirects=False)
@@ -147,6 +159,7 @@ def test_dashboard_redirects_to_login_when_not_authenticated(tmp_path, teardown_
 
 
 def test_admin_menu_links_to_all_seven_management_pages(tmp_path, teardown_ctx, _admin_env):
+    """Admin menu links to all seven management pages."""
     client = _client(tmp_path, teardown_ctx)
     _login(client)
     page = client.get("/admin/").data
@@ -158,6 +171,7 @@ def test_admin_menu_links_to_all_seven_management_pages(tmp_path, teardown_ctx, 
 
 
 def test_admin_design_system_uses_heebo_and_card_hover_motion(tmp_path, teardown_ctx, _admin_env):
+    """Admin design system uses heebo and card hover motion."""
     client = _client(tmp_path, teardown_ctx)
     _login(client)
     page = client.get("/admin/").data.decode("utf-8")
@@ -176,6 +190,7 @@ def test_admin_design_system_uses_heebo_and_card_hover_motion(tmp_path, teardown
 
 
 def test_dashboard_service_cards_use_one_color_per_category(tmp_path, teardown_ctx, _admin_env):
+    """Dashboard service cards use one color per category."""
     table = AdminTable(
         key="widgets",
         label="Widgets",
@@ -211,6 +226,7 @@ def test_dashboard_service_cards_use_one_color_per_category(tmp_path, teardown_c
     ["/admin/profiles", "/admin/protocols", "/admin/events", "/admin/server"],
 )
 def test_new_api_management_pages_require_an_admin_session(path, tmp_path, teardown_ctx, _admin_env):
+    """New api management pages require an admin session."""
     client = _client(tmp_path, teardown_ctx)
 
     response = client.get(path, follow_redirects=False)
@@ -220,6 +236,7 @@ def test_new_api_management_pages_require_an_admin_session(path, tmp_path, teard
 
 
 def test_profiles_page_exposes_both_system_methods_through_the_live_api(tmp_path, teardown_ctx, _admin_env):
+    """Profiles page exposes both system methods through the live api."""
     client = _client(tmp_path, teardown_ctx)
     _login(client)
 
@@ -236,6 +253,7 @@ def test_profiles_page_exposes_both_system_methods_through_the_live_api(tmp_path
 
 
 def test_protocols_page_exposes_every_protocol_method_through_the_live_api(tmp_path, teardown_ctx, _admin_env):
+    """Protocols page exposes every protocol method through the live api."""
     client = _client(tmp_path, teardown_ctx)
     _login(client)
 
@@ -252,6 +270,7 @@ def test_protocols_page_exposes_every_protocol_method_through_the_live_api(tmp_p
 
 
 def test_events_page_exposes_every_operational_endpoint_through_the_live_api(tmp_path, teardown_ctx, _admin_env):
+    """Events page exposes every operational endpoint through the live api."""
     client = _client(tmp_path, teardown_ctx)
     ctx = teardown_ctx[0]
     ctx.deps.persistence.append_event({
@@ -287,6 +306,7 @@ def test_events_page_exposes_every_operational_endpoint_through_the_live_api(tmp
     ],
 )
 def test_admin_pages_do_not_show_http_methods_or_endpoint_paths(path, tmp_path, teardown_ctx, _admin_env):
+    """Admin pages do not show http methods or endpoint paths."""
     from html import unescape
 
     client = _client(tmp_path, teardown_ctx)
@@ -301,6 +321,7 @@ def test_admin_pages_do_not_show_http_methods_or_endpoint_paths(path, tmp_path, 
 
 
 def test_login_redirects_to_acting_identity_setup(tmp_path, teardown_ctx, _admin_env):
+    """Login redirects to acting identity setup."""
     client = _client(tmp_path, teardown_ctx)
 
     login_resp = _login(client, identity=None)
@@ -321,6 +342,7 @@ def test_login_redirects_to_acting_identity_setup(tmp_path, teardown_ctx, _admin
 
 
 def test_topbar_shows_acting_identity_on_every_shell_page(tmp_path, teardown_ctx, _admin_env):
+    """Topbar shows acting identity on every shell page."""
     client = _client(tmp_path, teardown_ctx)
     ctx = teardown_ctx[0]
     ctx.deps.persistence.write_user(COMMANDER_IDENTITY, "commander", "Dana Cohen")
@@ -335,6 +357,7 @@ def test_topbar_shows_acting_identity_on_every_shell_page(tmp_path, teardown_ctx
 
 
 def test_acting_identity_is_registered_session_scoped_and_shared_between_pages(tmp_path, teardown_ctx, _admin_env):
+    """Acting identity is registered session scoped and shared between pages."""
     client = _client(tmp_path, teardown_ctx)
     _login(client, identity=None)
 
@@ -350,6 +373,7 @@ def test_acting_identity_is_registered_session_scoped_and_shared_between_pages(t
 
 
 def test_acting_identity_rejects_unregistered_identities(tmp_path, teardown_ctx, _admin_env):
+    """Acting identity rejects unregistered identities."""
     client = _client(tmp_path, teardown_ctx)
     _login(client, identity=None)
     setup = client.get("/admin/acting-identity")
@@ -370,6 +394,7 @@ def test_acting_identity_rejects_unregistered_identities(tmp_path, teardown_ctx,
 
 
 def test_acting_identity_system_admin_checkbox_stores_admin_user(tmp_path, teardown_ctx, _admin_env):
+    """Acting identity system admin checkbox stores admin user."""
     from api.app import ensure_bot_service, ensure_system_admin
 
     client = _client(tmp_path, teardown_ctx)
@@ -393,6 +418,7 @@ def test_acting_identity_system_admin_checkbox_stores_admin_user(tmp_path, teard
 
 
 def test_acting_identity_setup_requires_csrf(tmp_path, teardown_ctx, _admin_env):
+    """Acting identity setup requires csrf."""
     client = _client(tmp_path, teardown_ctx)
     _login(client, identity=None)
 
@@ -412,6 +438,7 @@ def test_acting_identity_setup_requires_csrf(tmp_path, teardown_ctx, _admin_env)
     ["/admin/profiles", "/admin/protocols", "/admin/events"],
 )
 def test_api_management_page_javascript_is_syntactically_valid(path, tmp_path, teardown_ctx, _admin_env):
+    """Api management page javascript is syntactically valid."""
     import shutil
     import subprocess
 
@@ -431,6 +458,7 @@ def test_api_management_page_javascript_is_syntactically_valid(path, tmp_path, t
 
 
 def test_server_page_requires_session_and_disables_controls_without_supervisor(tmp_path, teardown_ctx, _admin_env):
+    """Server page requires session and disables controls without supervisor."""
     client = _client(tmp_path, teardown_ctx)
     assert client.get("/admin/server", follow_redirects=False).status_code == 302
     _login(client)
@@ -442,10 +470,10 @@ def test_server_page_requires_session_and_disables_controls_without_supervisor(t
 
 
 def _make_supervisor_available(tmp_path, monkeypatch):
-    """docs/Admin_Profile_Switch_Investigation.md §7: nothing previously made the real
+    """Nothing previously made the real
     `AGENTSHUB_SUPERVISOR`/`AGENTSHUB_CONTROL_DIR` control channel available in a test, so
-    `switch_profile()`/`reset_server()` always short-circuited on `submit_server_command`'s
-    RuntimeError before ever reaching `_restart_page()` -- exactly the untested layer the bug
+    `switch_profile`/`reset_server` always short-circuited on `submit_server_command`'s
+    RuntimeError before ever reaching `_restart_page` -- exactly the untested layer the bug
     lived in. Mirrors tests/test_server_control.py's own setup for the file-based channel."""
 
     from config import server_control
@@ -457,7 +485,7 @@ def _make_supervisor_available(tmp_path, monkeypatch):
 
 
 def test_switch_profile_restart_page_targets_only_the_new_profiles_port(tmp_path, teardown_ctx, _admin_env, monkeypatch):
-    """docs/Admin_Profile_Switch_Investigation.md §1/§4.1: the rendered wait page must carry the
+    """The rendered wait page must carry the
     new profile's port as the only navigation target, the old (about-to-die) port only as a
     manual timeout link -- never raced against each other as equally-valid redirect candidates."""
 
@@ -484,6 +512,7 @@ def test_switch_profile_restart_page_targets_only_the_new_profiles_port(tmp_path
 
 
 def test_switch_profile_keeps_the_environment_configured_port(tmp_path, teardown_ctx, _admin_env, monkeypatch):
+    """Switch profile keeps the environment configured port."""
     monkeypatch.setenv("API_PORT", "8899")
     monkeypatch.setenv("SIMULATOR_PORT", "8999")
     _make_supervisor_available(tmp_path, monkeypatch)
@@ -536,7 +565,7 @@ def test_switch_profile_restart_page_never_races_old_and_new_ports(tmp_path, tea
 
 
 def test_switch_profile_restart_page_shows_a_timeout_with_both_manual_links(tmp_path, teardown_ctx, _admin_env, monkeypatch):
-    """docs/Admin_Profile_Switch_Investigation.md §4.2: a hard deadline must show both URLs as
+    """A hard deadline must show both URLs as
     manual links instead of spinning or retrying forever."""
 
     _make_supervisor_available(tmp_path, monkeypatch)
@@ -580,6 +609,7 @@ def test_reset_restart_page_also_waits_for_the_same_port_to_go_down_then_up(tmp_
 
 
 def test_server_safe_mode_control_reflects_the_live_system_setting(tmp_path, teardown_ctx, _admin_env):
+    """Server safe mode control reflects the live system setting."""
     client = _client(tmp_path, teardown_ctx)
     ctx = teardown_ctx[0]
     _login(client)
@@ -597,6 +627,7 @@ def test_server_safe_mode_control_reflects_the_live_system_setting(tmp_path, tea
 
 
 def test_correct_login_reaches_the_dashboard_and_lists_existing_users(tmp_path, teardown_ctx, _admin_env):
+    """Correct login reaches the dashboard and lists existing users."""
     client = _client(tmp_path, teardown_ctx)
 
     login_resp = _login(client)
@@ -612,6 +643,7 @@ def test_correct_login_reaches_the_dashboard_and_lists_existing_users(tmp_path, 
 
 
 def test_users_page_is_a_complete_crud_ui(tmp_path, teardown_ctx, _admin_env):
+    """Users page is a complete crud ui."""
     client = _client(tmp_path, teardown_ctx)
     _login(client)
 
@@ -625,6 +657,7 @@ def test_users_page_is_a_complete_crud_ui(tmp_path, teardown_ctx, _admin_env):
 
 
 def test_groups_page_is_a_complete_inline_crud_ui(tmp_path, teardown_ctx, _admin_env):
+    """Groups page is a complete inline crud ui."""
     client = _client(tmp_path, teardown_ctx)
     ctx = teardown_ctx[0]
     ctx.group_routing.upsert("-10055", "reference_agent", "Operations room")
@@ -640,6 +673,7 @@ def test_groups_page_is_a_complete_inline_crud_ui(tmp_path, teardown_ctx, _admin
 
 
 def test_wrong_password_does_not_authenticate_and_gives_a_generic_message(tmp_path, teardown_ctx, _admin_env):
+    """Wrong password does not authenticate and gives a generic message."""
     client = _client(tmp_path, teardown_ctx)
 
     resp = _login(client, password="wrong")
@@ -652,6 +686,7 @@ def test_wrong_password_does_not_authenticate_and_gives_a_generic_message(tmp_pa
 
 
 def test_logout_clears_the_session(tmp_path, teardown_ctx, _admin_env):
+    """Logout clears the session."""
     client = _client(tmp_path, teardown_ctx)
     _login(client)
     dashboard = client.get("/admin/")
@@ -663,6 +698,7 @@ def test_logout_clears_the_session(tmp_path, teardown_ctx, _admin_env):
 
 
 def test_session_expires_after_the_configured_inactivity_window(tmp_path, teardown_ctx, monkeypatch, _admin_env):
+    """Session expires after the configured inactivity window."""
     monkeypatch.setenv("ADMIN_SESSION_TIMEOUT_MINUTES", "1")
     client = _client(tmp_path, teardown_ctx)
     _login(client)
@@ -682,6 +718,7 @@ def test_session_expires_after_the_configured_inactivity_window(tmp_path, teardo
 
 
 def test_repeated_failed_logins_lock_out_further_attempts(tmp_path, teardown_ctx, monkeypatch, _admin_env):
+    """Repeated failed logins lock out further attempts."""
     monkeypatch.setenv("ADMIN_LOGIN_MAX_ATTEMPTS", "3")
     monkeypatch.setenv("ADMIN_LOGIN_LOCKOUT_MINUTES", "15")
     client = _client(tmp_path, teardown_ctx)
@@ -699,7 +736,7 @@ def test_repeated_failed_logins_lock_out_further_attempts(tmp_path, teardown_ctx
 
 # -- LoginRateLimiter: global lockout mechanism (deep coverage) -----------
 #
-# docs/IMPROVES/ADMIN_LOGIN_LOCKOUT_DIAGNOSIS.MD's per-IP lockout is gone, deliberately, in
+# Docs/IMPROVES/ADMIN_LOGIN_LOCKOUT_DIAGNOSIS.MD's per-IP lockout is gone, deliberately, in
 # favor of one global failure count and one global lockout timestamp for the whole endpoint.
 # These tests cover: (1) the threshold read from actual config, not hardcoded; (2) storage stays
 # minimal (timestamp only, no redundant "remaining"/"locked" fields); (3) remaining-time is a
@@ -745,10 +782,11 @@ def test_remaining_time_is_computed_live_at_several_points_in_the_window(monkeyp
     """Requirement 3: freeze/mock time at several points across the 15-minute window and check
     both the remaining time and the lockout status at each point -- not just one snapshot."""
 
-    import api.admin as admin_module
+    import api.admin_config as admin_config
 
     clock = {"now": 0.0}
-    monkeypatch.setattr(admin_module.time, "monotonic", lambda: clock["now"])
+    # LoginRateLimiter lives in api.admin_config and reads time from that module.
+    monkeypatch.setattr(admin_config.time, "monotonic", lambda: clock["now"])
     limiter = LoginRateLimiter(max_attempts=3, lockout_minutes=15)
 
     for _ in range(2):
@@ -779,10 +817,10 @@ def test_remaining_time_is_computed_live_at_several_points_in_the_window(monkeyp
 def test_lockout_lifts_exactly_at_the_boundary_not_early_or_late(monkeypatch):
     """Requirement 4: an explicit off-by-one check at exactly 15:00."""
 
-    import api.admin as admin_module
+    import api.admin_config as admin_config
 
     clock = {"now": 0.0}
-    monkeypatch.setattr(admin_module.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(admin_config.time, "monotonic", lambda: clock["now"])
     limiter = LoginRateLimiter(max_attempts=1, lockout_minutes=15)
     limiter.record_failure()  # single-attempt threshold -> immediate lockout at now=0.0
 
@@ -853,10 +891,10 @@ def test_remaining_time_on_a_later_get_is_recomputed_not_stale(tmp_path, teardow
     monkeypatch.setenv("ADMIN_LOGIN_LOCKOUT_MINUTES", "15")
     client = _client(tmp_path, teardown_ctx)
 
-    import api.admin as admin_module
+    import api.admin_config as admin_config
 
     clock = {"now": 0.0}
-    monkeypatch.setattr(admin_module.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(admin_config.time, "monotonic", lambda: clock["now"])
 
     _login(client, password="wrong")  # single-attempt threshold -> immediate lockout
     first = client.get("/admin/login")
@@ -936,6 +974,7 @@ def test_duration_phrase_in_hebrew_also_avoids_seconds():
 
 
 def _extract_lockout_progress_percent(html_bytes: bytes) -> int:
+    """Extract lockout progress percent."""
     html = html_bytes.decode()
     marker = 'lockout-progress-fill" style="width: '
     start = html.index(marker) + len(marker)
@@ -951,10 +990,10 @@ def test_lockout_progress_indicator_reflects_the_elapsed_fraction(tmp_path, tear
     monkeypatch.setenv("ADMIN_LOGIN_LOCKOUT_MINUTES", "15")
     client = _client(tmp_path, teardown_ctx)
 
-    import api.admin as admin_module
+    import api.admin_config as admin_config
 
     clock = {"now": 0.0}
-    monkeypatch.setattr(admin_module.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(admin_config.time, "monotonic", lambda: clock["now"])
 
     _login(client, password="wrong")  # locks out immediately (max_attempts=1)
 
@@ -998,6 +1037,7 @@ def test_successful_login_resets_the_failure_count(tmp_path, teardown_ctx, monke
 
 
 def test_write_user_without_csrf_token_is_rejected(tmp_path, teardown_ctx, _admin_env):
+    """Write user without csrf token is rejected."""
     client = _client(tmp_path, teardown_ctx)
     _login(client)
 
@@ -1008,6 +1048,7 @@ def test_write_user_without_csrf_token_is_rejected(tmp_path, teardown_ctx, _admi
 
 
 def test_write_user_with_a_stale_or_wrong_csrf_token_is_rejected(tmp_path, teardown_ctx, _admin_env):
+    """Write user with a stale or wrong csrf token is rejected."""
     client = _client(tmp_path, teardown_ctx)
     _login(client)
 
@@ -1024,6 +1065,7 @@ def test_write_user_with_a_stale_or_wrong_csrf_token_is_rejected(tmp_path, teard
 
 
 def test_add_user_via_the_dashboard_form(tmp_path, teardown_ctx, _admin_env):
+    """Add user via the dashboard form."""
     client = _client(tmp_path, teardown_ctx)
     _login(client)
     csrf_token = _extract_csrf(client.get("/admin/").data)
@@ -1043,6 +1085,7 @@ def test_add_user_via_the_dashboard_form(tmp_path, teardown_ctx, _admin_env):
 
 
 def test_editing_an_existing_users_level_upserts_via_write_user(tmp_path, teardown_ctx, _admin_env):
+    """Editing an existing users level upserts via write user."""
     client = _client(tmp_path, teardown_ctx)
     _login(client)
     csrf_token = _extract_csrf(client.get("/admin/").data)
@@ -1059,6 +1102,7 @@ def test_editing_an_existing_users_level_upserts_via_write_user(tmp_path, teardo
 
 
 def test_admin_can_set_a_single_full_name_and_level_only_edits_preserve_it(tmp_path, teardown_ctx, _admin_env):
+    """Admin can set a single full name and level only edits preserve it."""
     client = _client(tmp_path, teardown_ctx)
     _login(client)
     csrf_token = _extract_csrf(client.get("/admin/").data)
@@ -1068,6 +1112,7 @@ def test_admin_can_set_a_single_full_name_and_level_only_edits_preserve_it(tmp_p
 
 
 def test_admin_lists_and_explicitly_approves_an_automatic_user(tmp_path, teardown_ctx, _admin_env):
+    """Admin lists and explicitly approves an automatic user."""
     client = _client(tmp_path, teardown_ctx)
     teardown_ctx[0].deps.persistence.register_telegram_user_if_missing("auto-1")
     _login(client)
@@ -1086,6 +1131,7 @@ def test_admin_lists_and_explicitly_approves_an_automatic_user(tmp_path, teardow
 
 
 def test_remove_user(tmp_path, teardown_ctx, _admin_env):
+    """Remove user."""
     ctx_list = teardown_ctx
     client = _client(tmp_path, ctx_list)
     _login(client)
@@ -1104,6 +1150,7 @@ def test_remove_user(tmp_path, teardown_ctx, _admin_env):
 
 
 def test_remove_unknown_user_flashes_an_error_without_crashing(tmp_path, teardown_ctx, _admin_env):
+    """Remove unknown user flashes an error without crashing."""
     client = _client(tmp_path, teardown_ctx)
     _login(client)
     csrf_token = _extract_csrf(client.get("/admin/").data)
@@ -1119,6 +1166,7 @@ def test_remove_unknown_user_flashes_an_error_without_crashing(tmp_path, teardow
 
 
 def test_provision_bot_service_registers_it_at_commander_level(tmp_path, teardown_ctx, _admin_env):
+    """Provision bot service registers it at commander level."""
     client = _client(tmp_path, teardown_ctx)
     _login(client)
     csrf_token = _extract_csrf(client.get("/admin/").data)
@@ -1138,6 +1186,7 @@ def test_provision_bot_service_registers_it_at_commander_level(tmp_path, teardow
 
 
 def test_dashboard_lists_groups_and_routable_agents(tmp_path, teardown_ctx, _admin_env):
+    """Dashboard lists groups and routable agents."""
     client = _client(tmp_path, teardown_ctx)
     teardown_ctx[0].group_routing.upsert("-1001", "reference_agent", "ops room")
     _login(client)
@@ -1154,6 +1203,7 @@ def test_dashboard_lists_groups_and_routable_agents(tmp_path, teardown_ctx, _adm
 
 
 def test_admin_adds_updates_and_removes_a_group_binding(tmp_path, teardown_ctx, _admin_env):
+    """Admin adds updates and removes a group binding."""
     client = _client(tmp_path, teardown_ctx)
     ctx = teardown_ctx[0]
     _login(client)
@@ -1186,7 +1236,7 @@ def test_admin_adds_updates_and_removes_a_group_binding(tmp_path, teardown_ctx, 
 
 
 def test_admin_renames_a_groups_chat_id(tmp_path, teardown_ctx, _admin_env):
-    """The generic "change chat ID" action (docs/profile_simulations_design.md) —
+    """The generic "change chat ID" action —
     e.g. replacing a simulation group's reserved placeholder with a real Telegram
     group ID once one exists. Not simulation-specific: works for any group."""
 
@@ -1210,6 +1260,7 @@ def test_admin_renames_a_groups_chat_id(tmp_path, teardown_ctx, _admin_env):
 
 
 def test_admin_rename_group_rejects_bad_input_and_conflicts(tmp_path, teardown_ctx, _admin_env):
+    """Admin rename group rejects bad input and conflicts."""
     client = _client(tmp_path, teardown_ctx)
     ctx = teardown_ctx[0]
     ctx.deps.persistence.write_group("-1005", "reference_agent", "existing")
@@ -1240,6 +1291,7 @@ def test_admin_rename_group_rejects_bad_input_and_conflicts(tmp_path, teardown_c
 
 
 def test_admin_lists_and_explicitly_approves_an_automatic_group(tmp_path, teardown_ctx, _admin_env):
+    """Admin lists and explicitly approves an automatic group."""
     client = _client(tmp_path, teardown_ctx)
     ctx = teardown_ctx[0]
     ctx.group_routing.register_telegram_group_if_missing("-1004", "Visitors")
@@ -1260,6 +1312,7 @@ def test_admin_lists_and_explicitly_approves_an_automatic_group(tmp_path, teardo
 
 
 def test_server_page_has_a_friendly_safe_mode_control(tmp_path, teardown_ctx, _admin_env):
+    """Server page has a friendly safe mode control."""
     client = _client(tmp_path, teardown_ctx)
     _login(client)
     page = client.get("/admin/server").data
@@ -1270,6 +1323,7 @@ def test_server_page_has_a_friendly_safe_mode_control(tmp_path, teardown_ctx, _a
 
 
 def test_admin_group_writes_flash_errors_for_bad_input(tmp_path, teardown_ctx, _admin_env):
+    """Admin group writes flash errors for bad input."""
     client = _client(tmp_path, teardown_ctx)
     _login(client)
     csrf_token = _extract_csrf(client.get("/admin/").data)
@@ -1290,6 +1344,7 @@ def test_admin_group_writes_flash_errors_for_bad_input(tmp_path, teardown_ctx, _
 
 
 def test_admin_group_routes_require_a_session_and_csrf(tmp_path, teardown_ctx, _admin_env):
+    """Admin group routes require a session and csrf."""
     client = _client(tmp_path, teardown_ctx)
 
     anonymous = client.post("/admin/groups", data={"chat_id": "-1", "agent_name": "reference_agent"}, follow_redirects=False)
@@ -1305,6 +1360,7 @@ def test_admin_group_routes_require_a_session_and_csrf(tmp_path, teardown_ctx, _
 
 
 def test_admin_pages_render_ltr_english_for_an_english_profile(tmp_path, teardown_ctx, _admin_env):
+    """Admin pages render ltr english for an english profile."""
     client = _client(tmp_path, teardown_ctx)
 
     login_page = client.get("/admin/login").data
@@ -1366,6 +1422,7 @@ def test_admin_pages_render_rtl_hebrew_for_a_hebrew_profile(tmp_path, teardown_c
 
 
 def test_simulator_requires_a_session(tmp_path, teardown_ctx, _admin_env):
+    """Simulator requires a session."""
     client = _client(tmp_path, teardown_ctx)
 
     anonymous = client.get("/admin/simulator", follow_redirects=False)
@@ -1374,6 +1431,7 @@ def test_simulator_requires_a_session(tmp_path, teardown_ctx, _admin_env):
 
 
 def test_dashboard_links_to_the_simulator_and_back(tmp_path, teardown_ctx, _admin_env):
+    """Dashboard links to the simulator and back."""
     client = _client(tmp_path, teardown_ctx)
     _login(client)
 
@@ -1387,6 +1445,7 @@ def test_dashboard_links_to_the_simulator_and_back(tmp_path, teardown_ctx, _admi
 
 
 def _embedded_simulator_data(page: bytes) -> dict:
+    """Embedded simulator data."""
     import json
     from html import unescape
 
@@ -1396,6 +1455,7 @@ def _embedded_simulator_data(page: bytes) -> dict:
 
 
 def test_simulator_embeds_live_groups_users_and_catalog_strings(tmp_path, teardown_ctx, _admin_env):
+    """Simulator embeds live groups users and catalog strings."""
     client = _client(tmp_path, teardown_ctx)
     ctx = teardown_ctx[0]
     ctx.group_routing.upsert("-1001", "reference_agent", "ops room")
@@ -1422,9 +1482,9 @@ def test_simulator_embeds_live_groups_users_and_catalog_strings(tmp_path, teardo
 
 def test_simulator_page_talks_to_the_real_endpoints_only(tmp_path, teardown_ctx, _admin_env):
     """Event-kind steps still go straight to /Event and poll /Job — the bot's own
-    endpoints, unchanged (docs/bot_simulation_mode_design.md §2 decision 3).
+    endpoints, unchanged.
     Message-kind steps are proxied through /admin/simulator/bot-msg instead of
-    calling /Msg directly (§4.4/§7) — no client-side dispatch shortcut, and the
+    calling /Msg directly — no client-side dispatch shortcut, and the
     legacy bundled-fixture route stays gone."""
 
     client = _client(tmp_path, teardown_ctx)
@@ -1457,6 +1517,7 @@ def test_simulator_page_talks_to_the_real_endpoints_only(tmp_path, teardown_ctx,
 
 
 def test_simulator_script_is_syntactically_valid_javascript(tmp_path, teardown_ctx, _admin_env):
+    """Simulator script is syntactically valid javascript."""
     import shutil
     import subprocess
 
@@ -1477,13 +1538,14 @@ def test_simulator_script_is_syntactically_valid_javascript(tmp_path, teardown_c
 
 
 def _extract_between(script: str, start_marker: str, end_marker: str) -> str:
+    """Extract between."""
     start = script.index(start_marker)
     end = script.index(end_marker, start)
     return script[start:end]
 
 
 def test_generic_missing_id_collection_and_substitution_are_functionally_correct(tmp_path, teardown_ctx, _admin_env):
-    """docs/profile_simulations_design.md (c): collectMissingIdentifiers()/applyManualMapping()
+    """(C): collectMissingIdentifiers/applyManualMapping
     are pure functions (no DOM) — extracted straight from the rendered page and executed for
     real under node, not just syntax-checked, since this is genuinely new logic."""
 
@@ -1573,11 +1635,13 @@ console.log(JSON.stringify(results));
     assert outcomes[2]["missing"] == {"groupsNeedingId": [], "personaValues": []}
 
 
-# -- POST /admin/simulator/bot-msg: proxy to bot.simulator_app (docs/bot_simulation_mode_design.md §4.4) --
+# POST /admin/simulator/bot-msg: proxy to bot.simulator_app
 
 
 class _FakeSimulatorHandler(http.server.BaseHTTPRequestHandler):
+    """FakeSimulatorHandler."""
     def do_POST(self):
+        """Do POST."""
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
         self.server.received.append({
@@ -1588,10 +1652,12 @@ class _FakeSimulatorHandler(http.server.BaseHTTPRequestHandler):
         self._respond()
 
     def do_GET(self):
+        """Do GET."""
         self.server.received.append({"path": self.path, "headers": dict(self.headers), "body": None})
         self._respond()
 
     def _respond(self):
+        """Respond."""
         payload = json.dumps(self.server.response_body).encode("utf-8")
         self.send_response(self.server.response_status)
         self.send_header("Content-Type", "application/json")
@@ -1600,11 +1666,13 @@ class _FakeSimulatorHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def log_message(self, format, *args):  # keep test output quiet
+        """Log message."""
         pass
 
 
 @contextlib.contextmanager
 def _fake_simulator_server(status=200, body=None):
+    """Fake simulator server."""
     server = http.server.HTTPServer(("127.0.0.1", 0), _FakeSimulatorHandler)
     server.received = []
     server.response_status = status
@@ -1619,6 +1687,7 @@ def _fake_simulator_server(status=200, body=None):
 
 
 def test_simulator_bot_msg_requires_an_admin_session(tmp_path, teardown_ctx, _admin_env):
+    """Simulator bot msg requires an admin session."""
     client = _client(tmp_path, teardown_ctx, simulator_port=9999)
 
     response = client.post("/admin/simulator/bot-msg", json={}, follow_redirects=False)
@@ -1628,6 +1697,7 @@ def test_simulator_bot_msg_requires_an_admin_session(tmp_path, teardown_ctx, _ad
 
 
 def test_simulator_bot_msg_reports_a_clear_error_when_the_profile_has_no_simulator_port(tmp_path, teardown_ctx, _admin_env):
+    """Simulator bot msg reports a clear error when the profile has no simulator port."""
     client = _client(tmp_path, teardown_ctx)  # simulator_port defaults to None
     _login(client)
 
@@ -1639,6 +1709,7 @@ def test_simulator_bot_msg_reports_a_clear_error_when_the_profile_has_no_simulat
 
 def test_simulator_bot_msg_reports_a_clear_error_when_the_process_is_unreachable(tmp_path, teardown_ctx, _admin_env):
     # Port 1 is a privileged, essentially-always-refused port — nothing is listening.
+    """Simulator bot msg reports a clear error when the process is unreachable."""
     client = _client(tmp_path, teardown_ctx, simulator_port=1)
     _login(client)
 
@@ -1648,6 +1719,7 @@ def test_simulator_bot_msg_reports_a_clear_error_when_the_process_is_unreachable
 
 
 def test_simulator_bot_msg_forwards_the_request_and_relays_the_response(tmp_path, teardown_ctx, _admin_env, monkeypatch):
+    """Simulator bot msg forwards the request and relays the response."""
     monkeypatch.setenv("BOT_SERVICE_KEY", "test-service-key")
     with _fake_simulator_server(status=200, body={"reply_text": "42 events"}) as server:
         port = server.server_address[1]
@@ -1690,6 +1762,7 @@ def test_simulator_bot_msg_relays_a_refusal_status_and_body_unchanged(tmp_path, 
 
 
 def test_simulator_bot_msg_never_leaks_the_service_key_to_the_browser(tmp_path, teardown_ctx, _admin_env, monkeypatch):
+    """Simulator bot msg never leaks the service key to the browser."""
     monkeypatch.setenv("BOT_SERVICE_KEY", "test-service-key")
     with _fake_simulator_server(status=200, body={"reply_text": "ok"}) as server:
         port = server.server_address[1]
@@ -1703,10 +1776,11 @@ def test_simulator_bot_msg_never_leaks_the_service_key_to_the_browser(tmp_path, 
             assert "test-service-key" not in header_value
 
 
-# -- GET /admin/simulator/bot-poll: Priority 3's polling proxy (docs/work_process.md §16) --
+# GET /admin/simulator/bot-poll: Priority 3's polling proxy
 
 
 def test_simulator_bot_poll_requires_an_admin_session(tmp_path, teardown_ctx, _admin_env):
+    """Simulator bot poll requires an admin session."""
     client = _client(tmp_path, teardown_ctx, simulator_port=9999)
 
     response = client.get("/admin/simulator/bot-poll?chat_id=1&status_len=0&sent_len=0", follow_redirects=False)
@@ -1716,6 +1790,7 @@ def test_simulator_bot_poll_requires_an_admin_session(tmp_path, teardown_ctx, _a
 
 
 def test_simulator_bot_poll_reports_a_clear_error_when_unconfigured(tmp_path, teardown_ctx, _admin_env):
+    """Simulator bot poll reports a clear error when unconfigured."""
     client = _client(tmp_path, teardown_ctx)  # simulator_port defaults to None
     _login(client)
 
@@ -1725,6 +1800,7 @@ def test_simulator_bot_poll_reports_a_clear_error_when_unconfigured(tmp_path, te
 
 
 def test_simulator_bot_poll_forwards_query_params_and_relays_the_response(tmp_path, teardown_ctx, _admin_env, monkeypatch):
+    """Simulator bot poll forwards query params and relays the response."""
     monkeypatch.setenv("BOT_SERVICE_KEY", "test-service-key")
     with _fake_simulator_server(status=200, body={"reply_text": "job finished", "watermark": {"status_len": 3, "sent_len": 0}}) as server:
         port = server.server_address[1]
@@ -1740,12 +1816,13 @@ def test_simulator_bot_poll_forwards_query_params_and_relays_the_response(tmp_pa
         assert server.received[0]["headers"]["X-Service-Key"] == "test-service-key"
 
 
-# -- pollSimulatorChat()'s per-chat generation guard: docs/work_process.md §19/§20 --
+# PollSimulatorChat's per-chat generation guard
 # (the duplicate-ack / stray "model thinking" bubble fix — a second step sent to the
 # same chat must make an earlier, still-running poll loop for that chat stand down.)
 
 
 def _extract_claim_and_poll_fns(page: str) -> tuple[str, str]:
+    """Extract claim and poll fns."""
     claim_fn = _extract_between(page, "function claimPollGeneration(chatId) {", "const registeredIdentities")
     poll_fn = _extract_between(
         page,
@@ -1850,17 +1927,17 @@ function makeHarness() {{
 
 
 def test_send_next_claims_the_poll_generation_before_its_own_post(tmp_path, teardown_ctx, _admin_env):
-    """docs/work_process.md §20: a live run showed the duplicate-ack/stray-"thinking"
-    bubble bug recurring even with §19's generation guard in place, whenever two real
+    """A live run showed the duplicate-ack/stray-"thinking"
+    bubble bug recurring even with's generation guard in place, whenever two real
     steps landed closer together (~8-18s, observed live) than one step's own /Msg round
     trip (status.thinking send -> LLM classification -> edit to a final ack, ~10s
-    observed live). Root cause: claimPollGeneration() was only ever reached from inside
-    pollSimulatorChat() itself, which sendNext() didn't call until *after* that whole
+    observed live). Root cause: claimPollGeneration was only ever reached from inside
+    pollSimulatorChat itself, which sendNext didn't call until *after* that whole
     round trip had already returned — leaving an older generation "current", and free to
     poll, for the newer step's entire in-flight send/edit window.
 
-    The fix moves the claim to the moment sendNext() *starts* sending — before the POST,
-    not after. This is a plain textual ordering check on the shipped sendNext() source
+    The fix moves the claim to the moment sendNext *starts* sending — before the POST,
+    not after. This is a plain textual ordering check on the shipped sendNext source
     (not an executed one): the ordering is the whole contract here, and
     test_an_early_claim_prevents_a_stale_loop_from_rendering_a_step_still_in_flight below
     proves, dynamically, why getting it wrong reproduces exactly this race."""
@@ -1878,21 +1955,21 @@ def test_send_next_claims_the_poll_generation_before_its_own_post(tmp_path, tear
     post_index = send_next_fn.index("apiCall('POST'")
     assert claim_index < post_index, (
         "claimPollGeneration() must run before the POST that starts a step's own send/edit "
-        "cycle, not only once that POST has returned — see docs/work_process.md §20"
+        "cycle, not only once that POST has returned"
     )
 
 
 def test_an_early_claim_prevents_a_stale_loop_from_rendering_a_step_still_in_flight(tmp_path, teardown_ctx, _admin_env):
-    """docs/work_process.md §20: reproduces the tighter-spacing race traced from a live
-    run, using the real, extracted claimPollGeneration()/pollSimulatorChat() — not a
+    """Reproduces the tighter-spacing race traced from a live
+    run, using the real, extracted claimPollGeneration/pollSimulatorChat — not a
     reimplementation — at a timing ratio matched to what was actually observed (a poll
     interval much shorter than a step's own request round trip, ~2s vs. ~10s live, kept
     here as a 6:1 ratio so a still-current loop gets several chances to poll during it).
 
     Compares claiming a second step's generation *before* a round-trip-shaped delay (the
     fix, matching what test_send_next_claims_the_poll_generation_before_its_own_post
-    confirms sendNext() now does) against claiming it only *after* (the old bug's shape,
-    from when pollSimulatorChat() claimed its own generation internally and sendNext()
+    confirms sendNext now does) against claiming it only *after* (the old bug's shape,
+    from when pollSimulatorChat claimed its own generation internally and sendNext
     only ever called it post-POST): an early claim must leave the older generation's loop
     with zero further appends during that delay; a late claim reproduces the bug — the
     older generation, still "current" for the whole delay, keeps polling and rendering

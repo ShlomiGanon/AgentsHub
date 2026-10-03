@@ -1,4 +1,4 @@
-"""Seed dataset (work_plan.md §2.12).
+"""Seed dataset.
 
 Fixture events spanning several months as **completed historical
 records** — each already classified, risk-assessed, protocol-assigned,

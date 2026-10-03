@@ -23,7 +23,7 @@ _INVALID_TOKEN_MESSAGE = (
 )
 
 def _resolve_bot_token(module_path: str, loaded_profile: LoadedProfile) -> str | None:
-    """The token named by the profile's `BOT_TOKEN_ENV`, already read into `loaded_profile.resolved_secrets` at load time (§1.5) — this re-imports the (already-cached, per `importlib`)..."""
+    """The bot token named by the profile's BOT_TOKEN_ENV, already resolved at profile load."""
 
     profile_module = importlib.import_module(module_path)
     token_env_name = profile_module.BOT_TOKEN_ENV
@@ -40,7 +40,7 @@ def _resolve_bot_token(module_path: str, loaded_profile: LoadedProfile) -> str |
     return token
 
 def build_deps(module_path: str, core_model: TierModel, sub_model: TierModel) -> BotDeps | None:
-    """Returns `None` (never raises for this specific reason) when the configured bot token is missing/blank — see `_resolve_bot_token`."""
+    """Build BotDeps, or None when the configured bot token is missing."""
 
     loaded_profile = load_profile(module_path, core_model=core_model, sub_model=sub_model)
     configure_logging(loaded_profile.module_path)
@@ -64,16 +64,7 @@ def build_deps(module_path: str, core_model: TierModel, sub_model: TierModel) ->
     return BotDeps(loaded_profile=loaded_profile, telegram_client=telegram_client, api_client=api_client)
 
 async def _validate_bot_token(deps: BotDeps) -> None:
-    """Kept as a standalone check (and directly unit-tested) — no longer called from `main()`.
-
-    `main()` used to run this via its own `asyncio.run(...)` before `run_bot()`. That pre-check
-    built/used the Telegram client's async HTTP client on a loop `asyncio.run()` then closes;
-    `run_polling()` afterwards starts a *different* event loop, leaving that HTTP client bound to
-    an already-closed one — `RuntimeError: Event loop is closed` / `NetworkError`. `run_polling()`'s
-    own bootstrap (`Application.initialize()`) already calls `Bot.get_me()` and raises
-    `telegram.error.InvalidToken` immediately (never retried, regardless of `bootstrap_retries`) if
-    the token is bad, so `main()` now relies on that single event loop instead — see there.
-    """
+    """True when Telegram accepts the token; unused by main because a second event loop would close the PTB client."""
     if not await deps.telegram_client.validate_token():
         raise BotStartupError(_INVALID_TOKEN_MESSAGE)
 
@@ -83,14 +74,14 @@ def run_bot(deps: BotDeps) -> None:
     deps.telegram_client.run_polling(lambda application: register_handlers(application, deps))
 
 def _tier_model_from_environ(prefix: str) -> TierModel:
-    """Read one tier's provider/model name/API key straight from the real process environment — `main`'s own job, the one place in this module `os.environ` is read for model-tier confi..."""
+    """Read one model tier from the process environment."""
 
     return resolve_tier_model_from_env(prefix, error_type=ModelTierError)
 
 def main(argv: list[str] | None = None) -> None:
-    """One of the three real entry points (with `api.app.main`, `cli.user_admin.main`) that reads `os.environ` for model-tier config — everything below it takes already-resolved `TierM..."""
+    """Load the named profile, take the single-instance lock, and start Telegram polling."""
 
-    parser = argparse.ArgumentParser(description="Run the Telegram bot frontend for one deployment (work_plan.md §8).")
+    parser = argparse.ArgumentParser(description="Run the Telegram bot frontend for one deployment.")
     parser.add_argument("profile_module", help="dotted module path of the profile to run, e.g. profiles.response_team")
     args = parser.parse_args(argv)
 

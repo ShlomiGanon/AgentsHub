@@ -1,4 +1,4 @@
-"""The protocol executor (work_plan.md §4.4, §4.6, §4.8)."""
+"""Execute protocol steps, including retries and direct-tool binds."""
 
 from __future__ import annotations
 
@@ -22,6 +22,8 @@ _side_effect_locks_guard = threading.Lock()
 
 
 def _locks_for_step(agent: Agent, step: Step) -> list[threading.Lock]:
+    """Locks for step."""
+
     exposed = {tool.name: tool for tool in agent.exposed_tools()}
     keys = sorted(
         f"{agent.name}:{tool_name}"
@@ -33,6 +35,8 @@ def _locks_for_step(agent: Agent, step: Step) -> list[threading.Lock]:
 
 
 def _can_retry(step: Step, agent: Agent) -> bool:
+    """Can retry."""
+
     exposed = {tool.name: tool for tool in agent.exposed_tools()}
     for tool_name in step.allowed_tools:
         tool_info = exposed.get(tool_name)
@@ -43,6 +47,8 @@ def _can_retry(step: Step, agent: Agent) -> bool:
 
 
 def _as_tool_result(raw: object) -> ToolResult:
+    """As tool result."""
+
     if isinstance(raw, ToolResult):
         return raw
     return ToolResult(text="" if raw is None else str(raw))
@@ -107,6 +113,8 @@ def execute_step_with_retry(
     sleep_fn: Callable[[float], None] = time.sleep,
     backoff_seconds: float = 1.0,
 ) -> StepOutcome:
+    """Execute step with retry."""
+
     if step.kind == "direct_tool":
         return _execute_direct_tool_step(agent, step)
 
@@ -184,6 +192,8 @@ def execute_step_with_retry(
 
 
 def _missing_event_fields(step: Step, event_data: dict | None) -> tuple[str, ...]:
+    """Missing event fields."""
+
     if not step.required_event_fields:
         return ()
     values = event_data or {}
@@ -194,6 +204,8 @@ def _missing_event_fields(step: Step, event_data: dict | None) -> tuple[str, ...
 
 
 def _waiting_outcome(step: Step, missing_fields: tuple[str, ...]) -> StepOutcome:
+    """Waiting outcome."""
+
     return StepOutcome(
         step=step,
         result_text=None,
@@ -213,6 +225,8 @@ def execute_steps(
     event_data: dict | None = None,
     prior_outcomes: tuple[StepOutcome, ...] = (),
 ) -> ProtocolRunResult:
+    """Execute steps."""
+
     if any(step.step_id or step.depends_on for step in steps):
         return _execute_dependency_steps(
             steps, agents_by_name, settings_store, task_rewriter=task_rewriter, sleep_fn=sleep_fn,
@@ -292,6 +306,8 @@ def _execute_dependency_steps(
     event_data: dict | None,
     prior_outcomes: tuple[StepOutcome, ...],
 ) -> ProtocolRunResult:
+    """Execute dependency steps."""
+
     step_ids = [step.step_id or str(index) for index, step in enumerate(steps)]
     if len(set(step_ids)) != len(step_ids):
         return ProtocolRunResult(step_outcomes=(), completed=False, failure_cause="duplicate protocol step_id")

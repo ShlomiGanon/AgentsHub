@@ -1,16 +1,11 @@
-"""RosterAgent — records a team or crew member's own reported availability.
-
-Shared, reusable infrastructure (docs/bar_improves.md Stage 4): used unchanged by both
-profiles/response_team.py and profiles/fire_station.py, the same way
-agents/friendly_forces_agent.py is already shared across profiles/standby_squad.py and
-profiles/firefighting.py. No external system integration — the tool only records what was
-reported and returns a precise text result describing that recorded effect, never an
-unobserved real-world outcome."""
+"""In-memory roster agent that records one member's own reported availability."""
 
 from agents.runtime import Agent, tool
 
 
 class RosterAgent(Agent):
+    """Records one member's available/unavailable report; does not project roster state."""
+
     name = "roster_agent"
     role = (
         "Records a team or crew member's own reported availability status — available, or "
@@ -25,6 +20,8 @@ class RosterAgent(Agent):
     )
 
     def __init__(self, model: str, api_key: str | None = None):
+        """Initialize the in-memory availability log, then finish Agent setup."""
+
         self.availability_records: list[str] = []
         super().__init__(model, api_key)
 
@@ -44,6 +41,8 @@ class RosterAgent(Agent):
         availability_start: str = "",
         availability_end: str = "",
     ) -> str:
+        """Record one member's availability, reason, and optional interval."""
+
         entry = f"{member}: {status}"
         if reason:
             entry += f" ({reason})"

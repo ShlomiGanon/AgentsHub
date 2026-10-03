@@ -4,6 +4,8 @@ from agents.runtime import Agent, tool
 
 
 class ReferenceAgent(Agent):
+    """ReferenceAgent."""
+
     name = "reference_agent"
     role = (
         "A minimal specialist agent that checks the status of a named location and can record that "
@@ -18,11 +20,15 @@ class ReferenceAgent(Agent):
     )
 
     def __init__(self, model: str, api_key: str | None = None):
+        """Init."""
+
         self.actions_taken: list[str] = []
         super().__init__(model, api_key)
 
     @tool("check_status", "Returns the current status of a named location. Read-only — never changes anything.", side_effecting=False)
     def check_status(self, location: str) -> str:
+        """Check status."""
+
         return f"status for '{location}': nominal, no anomalies detected"
 
     @tool(
@@ -33,11 +39,15 @@ class ReferenceAgent(Agent):
         idempotent=False,
     )
     def record_action(self, location: str, note: str = "") -> str:
+        """Record action."""
+
         self.actions_taken.append(f"{location}: {note}" if note else location)
         return f"recorded action at '{location}'"
 
 
 class HistoryAgent(Agent):
+    """HistoryAgent."""
+
     name = "history_agent"
     role = (
         "Summarize supplied historical records and answer historical questions only from "
@@ -70,4 +80,6 @@ class HistoryAgent(Agent):
     )
 
     def __init__(self, model: str, api_key: str | None = None):
+        """Init."""
+
         super().__init__(model, api_key)

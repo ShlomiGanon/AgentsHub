@@ -1,5 +1,5 @@
-"""Verifies profiles/response_team.py (docs/responce_improve.md) and profiles/fire_station.py
-(docs/bar_improves.md Stage 4): each profile loads and validates through
+"""Verifies profiles/response_team.py and profiles/fire_station.py
+: each profile loads and validates through
 profiles.loader.load_profile, exposes exactly its declared content, has no cross-organization
 leakage, and every side-effecting tool declares idempotency as specified."""
 
@@ -15,20 +15,24 @@ SUB_MODEL = TierModel(model="openai/test-sub-model", api_key="test-key")
 
 @pytest.fixture(autouse=True)
 def _bot_tokens(monkeypatch):
+    """Bot tokens."""
     monkeypatch.setenv("BOT_TOKEN", "operational-test-token")
 
 
 @pytest.fixture
 def sec_profile():
+    """Sec profile."""
     return load_profile("profiles.response_team", CORE_MODEL, SUB_MODEL)
 
 
 @pytest.fixture
 def fire_profile():
+    """Fire profile."""
     return load_profile("profiles.fire_station", CORE_MODEL, SUB_MODEL)
 
 
 def _tools_by_name(loaded_profile):
+    """Tools by name."""
     tools = {}
     for agent in loaded_profile.agents:
         for tool_info in agent.exposed_tools():
@@ -40,12 +44,14 @@ def _tools_by_name(loaded_profile):
 
 
 def test_response_team_profile_loads_and_validates(sec_profile):
+    """Response team profile loads and validates."""
     assert sec_profile.profile_name == "Response Team"
     assert sec_profile.db_path
     assert sec_profile.api_port == 8907
 
 
 def test_fire_station_profile_loads_and_validates(fire_profile):
+    """Fire station profile loads and validates."""
     assert fire_profile.profile_name == "Fire and Rescue Station"
     assert fire_profile.db_path
     assert fire_profile.api_port == 8908
@@ -55,6 +61,7 @@ def test_fire_station_profile_loads_and_validates(fire_profile):
 
 
 def test_response_team_exposes_exactly_its_declared_event_types(sec_profile):
+    """Response team exposes exactly its declared event types."""
     assert set(sec_profile.event_types) == {
         "attendance",
         "camera_status",
@@ -69,6 +76,7 @@ def test_response_team_exposes_exactly_its_declared_event_types(sec_profile):
 
 
 def test_response_team_exposes_exactly_its_declared_areas(sec_profile):
+    """Response team exposes exactly its declared areas."""
     assert set(sec_profile.areas) == {
         "west_gate", "east_gate", "east_fence", "east_orchards", "expansion_neighborhood",
         "old_public_building", "south_corner", "access_road", "drones_warehouse",
@@ -76,12 +84,14 @@ def test_response_team_exposes_exactly_its_declared_areas(sec_profile):
 
 
 def test_response_team_exposes_exactly_its_declared_agents(sec_profile):
+    """Response team exposes exactly its declared agents."""
     assert {agent.name for agent in sec_profile.agents} == {
         "roster_agent", "surveillance_agent", "neighboring_forces_agent",
     }
 
 
 def test_response_team_exposes_exactly_its_declared_protocols(sec_profile):
+    """Response team exposes exactly its declared protocols."""
     assert {protocol.name for protocol in sec_profile.protocols} == {
         "record_attendance", "update_camera_status", "report_security_incident",
         "log_security_observation", "dispatch_neighboring_force", "dispatch_own_squad",
@@ -90,22 +100,26 @@ def test_response_team_exposes_exactly_its_declared_protocols(sec_profile):
 
 
 def test_fire_station_exposes_exactly_its_declared_event_types(fire_profile):
+    """Fire station exposes exactly its declared event types."""
     assert set(fire_profile.event_types) == {
         "structure_fire", "hazmat_fire", "rescue", "attendance", "human_activation",
     }
 
 
 def test_fire_station_exposes_exactly_its_declared_areas(fire_profile):
+    """Fire station exposes exactly its declared areas."""
     assert set(fire_profile.areas) == {
         "district_north", "district_south", "district_center", "industrial_zone",
     }
 
 
 def test_fire_station_exposes_exactly_its_declared_agents(fire_profile):
+    """Fire station exposes exactly its declared agents."""
     assert {agent.name for agent in fire_profile.agents} == {"dispatch_agent", "hazmat_agent", "roster_agent"}
 
 
 def test_fire_station_exposes_exactly_its_declared_protocols(fire_profile):
+    """Fire station exposes exactly its declared protocols."""
     assert {protocol.name for protocol in fire_profile.protocols} == {
         "structure_fire_response", "hazmat_response", "mutual_aid_request", "rescue_response", "attendance_update",
     }
@@ -115,12 +129,13 @@ def test_fire_station_exposes_exactly_its_declared_protocols(fire_profile):
 
 
 def test_no_fire_protocol_or_tool_name_exists_in_the_sec_profile(sec_profile, fire_profile):
+    """No fire protocol or tool name exists in the sec profile."""
     sec_protocol_names = {protocol.name for protocol in sec_profile.protocols}
     sec_tool_names = set(_tools_by_name(sec_profile))
     fire_protocol_names = {protocol.name for protocol in fire_profile.protocols}
     fire_tool_names = set(_tools_by_name(fire_profile))
 
-    # docs/responce_improve.md: profiles/response_team.py's roster agent is now its own
+    # Profiles/response_team.py's roster agent is now its own
     # profile-owned ResponseTeamRosterAgent, not the shared agents.RosterAgent
     # profiles/fire_station.py still uses -- the two profiles no longer share any
     # protocol or tool name at all (only the agent *name* "roster_agent" coincides;
@@ -132,10 +147,12 @@ def test_no_fire_protocol_or_tool_name_exists_in_the_sec_profile(sec_profile, fi
 def test_no_sec_protocol_or_tool_name_exists_in_the_fire_profile(sec_profile, fire_profile):
     # Same check, the other direction — kept as a separate test so a future asymmetric
     # regression (added only on one side) is caught either way.
+    """No sec protocol or tool name exists in the fire profile."""
     test_no_fire_protocol_or_tool_name_exists_in_the_sec_profile(sec_profile, fire_profile)
 
 
 def test_sec_and_fire_agent_names_do_not_collide_outside_the_shared_roster_agent(sec_profile, fire_profile):
+    """Sec and fire agent names do not collide outside the shared roster agent."""
     sec_agent_names = {agent.name for agent in sec_profile.agents}
     fire_agent_names = {agent.name for agent in fire_profile.agents}
 
@@ -163,6 +180,7 @@ _EXPECTED_IDEMPOTENCY = {
 
 
 def test_every_side_effecting_tool_declares_idempotent_as_specified(sec_profile, fire_profile):
+    """Every side effecting tool declares idempotent as specified."""
     all_tools = {**_tools_by_name(sec_profile), **_tools_by_name(fire_profile)}
     assert set(_EXPECTED_IDEMPOTENCY) <= set(all_tools)
     for tool_name, expected_idempotent in _EXPECTED_IDEMPOTENCY.items():
@@ -175,6 +193,7 @@ def test_every_side_effecting_tool_declares_idempotent_as_specified(sec_profile,
 
 
 def test_request_mutual_aid_refuses_a_name_not_in_mutual_aid_resources(fire_profile):
+    """Request mutual aid refuses a name not in mutual aid resources."""
     from profiles.fire_station import MUTUAL_AID_RESOURCES
 
     dispatch_agent = next(agent for agent in fire_profile.agents if agent.name == "dispatch_agent")
@@ -197,6 +216,7 @@ def test_request_mutual_aid_refuses_a_name_not_in_mutual_aid_resources(fire_prof
 def test_the_two_profiles_run_side_by_side_as_two_deployments_with_separate_databases_and_ports(
     sec_profile, fire_profile, tmp_path,
 ):
+    """The two profiles run side by side as two deployments with separate databases and ports."""
     assert sec_profile.db_path != fire_profile.db_path
     assert sec_profile.api_port != fire_profile.api_port
 
@@ -222,9 +242,9 @@ def test_the_two_profiles_run_side_by_side_as_two_deployments_with_separate_data
         fire_store.close()
 
 
-# -- Simulation as a separate deployment (Stage 5, docs/bar_improves.md) --------
+# Simulation as a separate deployment (Stage 5, )
 #
-# profiles.response_team has no separate `..._sim` twin (docs/responce_improve.md):
+# Profiles.response_team has no separate `..._sim` twin
 # a simulation of it is just another deployment of the very same profile module,
 # with different DB_PATH/API_PORT/BOT_TOKEN_ENV values supplied at the process
 # level -- there is no second profile module to load and compare here the way
@@ -232,6 +252,7 @@ def test_the_two_profiles_run_side_by_side_as_two_deployments_with_separate_data
 
 
 def test_fire_station_sim_loads_and_validates_with_the_same_declared_content(fire_profile):
+    """Fire station sim loads and validates with the same declared content."""
     sim = load_profile("profiles.fire_station_sim", CORE_MODEL, SUB_MODEL)
 
     assert sim.profile_name == "Fire and Rescue Station (Simulation)"
@@ -243,6 +264,7 @@ def test_fire_station_sim_loads_and_validates_with_the_same_declared_content(fir
 
 
 def test_live_and_simulation_deployments_share_no_events_precedents_notifications_or_users(tmp_path):
+    """Live and simulation deployments share no events precedents notifications or users."""
     live_store = SQLitePersistence(str(tmp_path / "live.db"))
     sim_store = SQLitePersistence(str(tmp_path / "sim.db"))
     try:
@@ -293,7 +315,7 @@ def test_live_and_simulation_deployments_share_no_events_precedents_notification
         sim_store.close()
 
 
-# -- Stage 7, docs/bar_improves.md: a tool result proves only its own effect ----
+# Stage 7,: a tool result proves only its own effect
 
 
 _FORBIDDEN_UNOBSERVED_OUTCOME_WORDS = (
@@ -303,10 +325,12 @@ _FORBIDDEN_UNOBSERVED_OUTCOME_WORDS = (
 
 
 def _agent_by_name(loaded_profile, name):
+    """Agent by name."""
     return next(agent for agent in loaded_profile.agents if agent.name == name)
 
 
 def test_every_side_effecting_sec_tool_states_only_its_own_recorded_effect(sec_profile, tmp_path):
+    """Every side effecting sec tool states only its own recorded effect."""
     from agents import authenticated_request_identity
     from persistence import (
         open_neighboring_force_store,
@@ -350,6 +374,7 @@ def test_every_side_effecting_sec_tool_states_only_its_own_recorded_effect(sec_p
 
 
 def test_every_side_effecting_fire_tool_states_only_its_own_recorded_effect(fire_profile):
+    """Every side effecting fire tool states only its own recorded effect."""
     dispatch = _agent_by_name(fire_profile, "dispatch_agent")
     hazmat = _agent_by_name(fire_profile, "hazmat_agent")
 

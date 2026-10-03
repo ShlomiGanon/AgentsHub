@@ -79,6 +79,8 @@ def resolve_tier_model_from_env(
     environ: Mapping[str, str] | None = None,
     error_type: type[Exception] = ModelTierError,
 ) -> TierModel:
+    """Resolve tier model from env."""
+
     environment_values = os.environ if environ is None else environ
 
     def required(name: str) -> str:

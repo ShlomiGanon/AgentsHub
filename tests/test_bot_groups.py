@@ -17,17 +17,20 @@ BOUND = (GroupBindingView(chat_id=GROUP, agent_name="team_status_agent", label="
 
 
 def _run(coro):
+    """Run."""
     return asyncio.run(coro)
 
 
 @pytest.fixture(autouse=True)
 def _fresh_caches():
+    """Fresh caches."""
     app.clear_caller_cache()
     yield
     app.clear_caller_cache()
 
 
 def _deps(api, telegram=None, profile=None):
+    """Deps."""
     return BotDeps(loaded_profile=profile, telegram_client=telegram or FakeTelegramClient(), api_client=api)
 
 
@@ -35,6 +38,7 @@ def _deps(api, telegram=None, profile=None):
 
 
 def test_text_from_an_unbound_group_is_ignored_without_any_api_or_telegram_traffic():
+    """Text from an unbound group is ignored without any api or telegram traffic."""
     api = FakeBotApiClient(users={"42": "viewer"}, message_submission_result=MessageSubmissionResult(kind="question", answer_text="x"))
     telegram = FakeTelegramClient()
     deps = _deps(api, telegram)
@@ -46,6 +50,7 @@ def test_text_from_an_unbound_group_is_ignored_without_any_api_or_telegram_traff
 
 
 def test_commands_and_callbacks_from_an_unbound_group_are_ignored():
+    """Commands and callbacks from an unbound group are ignored."""
     api = FakeBotApiClient(users={"42": "commander"})
     telegram = FakeTelegramClient()
     deps = _deps(api, telegram)
@@ -62,6 +67,7 @@ def test_commands_and_callbacks_from_an_unbound_group_are_ignored():
 
 
 def test_group_bindings_are_fetched_once_per_ttl_not_per_message():
+    """Group bindings are fetched once per ttl not per message."""
     api = FakeBotApiClient(users={"42": "viewer"}, groups=BOUND, message_submission_result=MessageSubmissionResult(kind="question", answer_text="x"))
     deps = _deps(api)
 
@@ -73,6 +79,7 @@ def test_group_bindings_are_fetched_once_per_ttl_not_per_message():
 
 
 def test_private_chats_never_consult_the_group_table():
+    """Private chats never consult the group table."""
     api = FakeBotApiClient(users={"42": "viewer"}, message_submission_result=MessageSubmissionResult(kind="question", answer_text="x"))
     deps = _deps(api)
 
@@ -85,6 +92,7 @@ def test_private_chats_never_consult_the_group_table():
 
 
 def test_bound_group_message_carries_chat_id_and_type_to_the_api():
+    """Bound group message carries chat id and type to the api."""
     api = FakeBotApiClient(users={"42": "viewer"}, groups=BOUND, message_submission_result=MessageSubmissionResult(kind="question", answer_text="ok"))
     telegram = FakeTelegramClient()
     deps = _deps(api, telegram)
@@ -98,6 +106,7 @@ def test_bound_group_message_carries_chat_id_and_type_to_the_api():
 
 
 def test_private_chat_message_carries_private_chat_type():
+    """Private chat message carries private chat type."""
     api = FakeBotApiClient(users={"42": "viewer"}, message_submission_result=MessageSubmissionResult(kind="question", answer_text="ok"))
     deps = _deps(api)
 
@@ -107,6 +116,7 @@ def test_private_chat_message_carries_private_chat_type():
 
 
 def test_server_refusal_for_a_group_is_shown_as_a_refusal():
+    """Server refusal for a group is shown as a refusal."""
     class _RefusingApi(FakeBotApiClient):
         async def submit_message(self, *args, **kwargs):
             raise ApiRequestError(403, "group not registered")
@@ -124,6 +134,7 @@ def test_server_refusal_for_a_group_is_shown_as_a_refusal():
 
 
 def _member_update(chat_id, chat_type, old_status, new_status):
+    """Member update."""
     return SimpleNamespace(
         my_chat_member=SimpleNamespace(
             chat=SimpleNamespace(id=chat_id, type=chat_type),
@@ -136,6 +147,7 @@ def _member_update(chat_id, chat_type, old_status, new_status):
 
 
 def test_bot_added_to_an_unbound_group_posts_the_chat_id_hint_once():
+    """Bot added to an unbound group posts the chat id hint once."""
     api = FakeBotApiClient()
     telegram = FakeTelegramClient()
     deps = _deps(api, telegram)
@@ -149,6 +161,7 @@ def test_bot_added_to_an_unbound_group_posts_the_chat_id_hint_once():
 
 
 def test_bot_added_to_an_already_bound_group_stays_silent():
+    """Bot added to an already bound group stays silent."""
     api = FakeBotApiClient(groups=BOUND)
     telegram = FakeTelegramClient()
     deps = _deps(api, telegram)
@@ -159,6 +172,7 @@ def test_bot_added_to_an_already_bound_group_stays_silent():
 
 
 def test_leaving_a_group_or_private_chat_changes_post_nothing():
+    """Leaving a group or private chat changes post nothing."""
     api = FakeBotApiClient()
     telegram = FakeTelegramClient()
     deps = _deps(api, telegram)
@@ -175,6 +189,7 @@ def test_leaving_a_group_or_private_chat_changes_post_nothing():
 
 
 def _opened_result(targets=(GROUP,), members=("Alex Cohen", "Dana Levi")):
+    """Opened result."""
     return AttendanceCheckResult(
         opened=True, agent_name="team_status_agent", target_chat_ids=tuple(targets),
         cycle_key="2026-09-10", deadline_at="2026-09-10T06:00:00+00:00", members_required=tuple(members),
@@ -182,6 +197,7 @@ def _opened_result(targets=(GROUP,), members=("Alex Cohen", "Dana Levi")):
 
 
 def test_attendance_loop_posts_the_prompt_with_buttons_to_every_bound_group():
+    """Attendance loop posts the prompt with buttons to every bound group."""
     api = FakeBotApiClient(attendance_check_result=_opened_result(targets=(GROUP, "-2")))
     telegram = FakeTelegramClient()
     deps = _deps(api, telegram, profile=SimpleNamespace(message_catalog=get_catalog("en"), timezone_name="Asia/Jerusalem"))
@@ -200,6 +216,7 @@ def test_attendance_loop_posts_the_prompt_with_buttons_to_every_bound_group():
 
 
 def test_notification_poll_claims_a_pending_attendance_broadcast():
+    """Notification poll claims a pending attendance broadcast."""
     api = FakeBotApiClient(attendance_check_result=_opened_result(targets=(GROUP,)))
     telegram = FakeTelegramClient()
     deps = _deps(api, telegram, profile=SimpleNamespace(message_catalog=get_catalog("en"), timezone_name="Asia/Jerusalem"))
@@ -211,6 +228,7 @@ def test_notification_poll_claims_a_pending_attendance_broadcast():
 
 
 def test_attendance_loop_is_quiet_when_nothing_is_due():
+    """Attendance loop is quiet when nothing is due."""
     api = FakeBotApiClient(attendance_check_result=AttendanceCheckResult(opened=False, agent_name="team_status_agent"))
     telegram = FakeTelegramClient()
     deps = _deps(api, telegram)
@@ -222,6 +240,7 @@ def test_attendance_loop_is_quiet_when_nothing_is_due():
 
 
 def test_attendance_loop_stops_when_the_deployment_has_no_attendance_agent():
+    """Attendance loop stops when the deployment has no attendance agent."""
     class _NoAgentApi(FakeBotApiClient):
         async def run_attendance_check(self):
             self.calls.append(("run_attendance_check",))
@@ -236,6 +255,7 @@ def test_attendance_loop_stops_when_the_deployment_has_no_attendance_agent():
 
 
 def test_attendance_prompt_without_members_uses_the_nobody_text():
+    """Attendance prompt without members uses the nobody text."""
     deps = _deps(FakeBotApiClient(), profile=SimpleNamespace(message_catalog=get_catalog("en")))
 
     text = background_services.format_attendance_prompt(deps, _opened_result(members=()))
@@ -247,6 +267,7 @@ def test_attendance_prompt_without_members_uses_the_nobody_text():
 
 
 def test_available_button_submits_the_attendance_report_for_the_pressing_member():
+    """Available button submits the attendance report for the pressing member."""
     api = FakeBotApiClient(users={"42": "viewer"}, groups=BOUND, message_submission_result=MessageSubmissionResult(kind="event_update", answer_text="stored"))
     telegram = FakeTelegramClient()
     deps = _deps(api, telegram)
@@ -265,6 +286,7 @@ def test_available_button_submits_the_attendance_report_for_the_pressing_member(
 
 
 def test_unavailable_button_starts_a_per_member_follow_up_that_the_next_text_completes():
+    """Unavailable button starts a per member follow up that the next text completes."""
     api = FakeBotApiClient(users={"42": "viewer", "43": "viewer"}, groups=BOUND, message_submission_result=MessageSubmissionResult(kind="event_update", answer_text="stored"))
     telegram = FakeTelegramClient()
     deps = _deps(api, telegram)
@@ -288,6 +310,7 @@ def test_unavailable_button_starts_a_per_member_follow_up_that_the_next_text_com
 
 
 def test_unregistered_member_pressing_a_button_is_refused():
+    """Unregistered member pressing a button is refused."""
     api = FakeBotApiClient(users={}, groups=BOUND)
     telegram = FakeTelegramClient()
     deps = _deps(api, telegram)

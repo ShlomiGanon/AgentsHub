@@ -22,15 +22,14 @@ def build_jobs_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/Job/<event_id>", methods=["GET"])
     def get_job(event_id):
+        """Return public job status for one event, optionally waiting for a change."""
+
         caller_identity = request.headers.get("X-Identity")
         level = authenticate(ctx.deps.persistence, caller_identity)
         require(level, RequestedOperation.VIEW_JOB_STATUS)
 
-        # Ownership scoping (docs/Next_Plan.md §5 decision record): a viewer may
-        # only check the status of an event they themselves submitted. A 404
-        # (not 403) is returned for someone else's job, matching the "no such
-        # job" response for a genuinely unknown ID — it does not confirm that a
-        # job belonging to another sender exists. A commander is unrestricted.
+        # A viewer may only check jobs they submitted; 404 (not 403) so another
+        # sender's job is indistinguishable from an unknown id.
         if level is PermissionLevel.VIEWER:
             event = ctx.deps.persistence.fetch_event(event_id)
             if event is None or event.get("sender_identity") != caller_identity:

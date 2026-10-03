@@ -22,16 +22,20 @@ from agents.runtime import ToolInfo
 
 
 class _FakeOutput:
+    """FakeOutput."""
     def __init__(self, raw):
+        """Initialize this test helper."""
         self.raw = raw
 
 
 class _FakeBaseTool:
+    """FakeBaseTool."""
     pass
 
 
 @pytest.fixture(autouse=True)
 def _empty_llm_cache():
+    """Empty llm cache."""
     adapter._clear_llm_cache()
     adapter._clear_agent_cache()
     yield
@@ -60,30 +64,36 @@ def _make_fake_crewai(kickoff_behavior):
 
 
 def _descriptor(**overrides):
+    """Descriptor."""
     fields = {"name": "a1", "role": "role", "system_prompt": "prompt", "tools": (), "model": "some-model"}
     fields.update(overrides)
     return AgentDescriptor(**fields)
 
 
 def _runtime_agent(**descriptor_overrides):
+    """Runtime agent."""
     return types.SimpleNamespace(descriptor=_descriptor(**descriptor_overrides))
 
 
 class _ScopedToolAgent(Agent):
+    """ScopedToolAgent."""
     name = "scoped"
     role = "scoped test agent"
     system_prompt = "Use only the tools provided for this invocation."
 
     @tool("first", "First test tool.", side_effecting=False)
     def first(self):
+        """First."""
         return "first"
 
     @tool("second", "Second test tool.", side_effecting=False)
     def second(self):
+        """Second."""
         return "second"
 
 
 def test_process_exposes_only_tools_allowed_for_this_invocation(monkeypatch):
+    """Process exposes only tools allowed for this invocation."""
     captured = {}
 
     def fake_invoke(descriptor, wrapped_tools, text, timeout_seconds, invocation_policy=None):
@@ -99,6 +109,7 @@ def test_process_exposes_only_tools_allowed_for_this_invocation(monkeypatch):
 
 
 def test_process_tool_wrapper_uses_the_current_agent_name(monkeypatch):
+    """Process tool wrapper uses the current agent name."""
     def fake_invoke(descriptor, wrapped_tools, text, timeout_seconds, invocation_policy=None):
         return wrapped_tools["first"]()
 
@@ -110,6 +121,7 @@ def test_process_tool_wrapper_uses_the_current_agent_name(monkeypatch):
 
 
 def test_process_rejects_unknown_allowed_tool_before_model_call(monkeypatch):
+    """Process rejects unknown allowed tool before model call."""
     monkeypatch.setattr(adapter, "invoke", lambda *args, **kwargs: pytest.fail("model must not be called"))
 
     with pytest.raises(AgentInvocationError, match="not exposed"):
@@ -126,6 +138,7 @@ def test_process_rejects_unknown_allowed_tool_before_model_call(monkeypatch):
 
 
 def test_crewai_not_installed_raises_clearly(monkeypatch):
+    """Crewai not installed raises clearly."""
     monkeypatch.setitem(sys.modules, "crewai", None)
 
     with pytest.raises(AgentFrameworkNotReadyError):
@@ -136,6 +149,7 @@ def test_invoke_without_crewai_installed_raises_the_same_error(monkeypatch):
     # invoke() calls _get_crewai() before anything else — this proves that
     # absence propagates through invoke() as the same AgentFrameworkNotReadyError,
     # not translated into AgentModelError or some other outcome along the way.
+    """Invoke without crewai installed raises the same error."""
     monkeypatch.setitem(sys.modules, "crewai", None)
 
     with pytest.raises(AgentFrameworkNotReadyError):
@@ -146,6 +160,7 @@ def test_invoke_without_crewai_installed_raises_the_same_error(monkeypatch):
 
 
 def test_invoke_reuses_a_cached_crewai_agent_on_the_same_name_tools_and_policy(monkeypatch):
+    """Invoke reuses a cached crewai agent on the same name tools and policy."""
     constructions = []
 
     class _CountingAgent:
@@ -175,6 +190,7 @@ def test_invoke_reuses_a_cached_crewai_agent_on_the_same_name_tools_and_policy(m
 
 
 def test_invoke_returns_raw_text_on_success(monkeypatch):
+    """Invoke returns raw text on success."""
     fake_module, captured = _make_fake_crewai(lambda text: _FakeOutput(f"handled: {text}"))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
@@ -192,6 +208,7 @@ def test_invoke_returns_raw_text_on_success(monkeypatch):
 
 
 def test_invoke_converts_a_fractional_remaining_deadline_for_crewai(monkeypatch):
+    """Invoke converts a fractional remaining deadline for crewai."""
     fake_module, captured = _make_fake_crewai(lambda text: _FakeOutput("ok"))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
     monkeypatch.setattr(adapter.time, "monotonic", lambda: 100.0)
@@ -207,6 +224,7 @@ def test_invoke_converts_a_fractional_remaining_deadline_for_crewai(monkeypatch)
 
 
 def test_invoke_refuses_to_start_crewai_with_less_than_one_second_remaining(monkeypatch):
+    """Invoke refuses to start crewai with less than one second remaining."""
     fake_module, captured = _make_fake_crewai(lambda text: _FakeOutput("should not run"))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
     monkeypatch.setattr(adapter.time, "monotonic", lambda: 100.0)
@@ -222,6 +240,7 @@ def test_invoke_refuses_to_start_crewai_with_less_than_one_second_remaining(monk
 
 
 def test_invoke_routes_to_the_descriptors_own_model(monkeypatch):
+    """Invoke routes to the descriptors own model."""
     fake_module, captured = _make_fake_crewai(lambda text: _FakeOutput("ok"))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
@@ -239,6 +258,7 @@ def test_invoke_routes_to_the_descriptors_own_model(monkeypatch):
 
 
 def test_runtime_warmup_calls_each_unique_model_once(monkeypatch):
+    """Runtime warmup calls each unique model once."""
     calls = []
     options = []
 
@@ -276,6 +296,7 @@ def test_runtime_warmup_calls_each_unique_model_once(monkeypatch):
 
 @pytest.mark.parametrize("bad_response", ["", None, {"content": "OK"}])
 def test_runtime_warmup_fails_fast_on_malformed_response_without_exposing_secret(monkeypatch, bad_response):
+    """Runtime warmup fails fast on malformed response without exposing secret."""
     class _FakeLLM:
         def __init__(self, **kwargs):
             pass
@@ -293,6 +314,7 @@ def test_runtime_warmup_fails_fast_on_malformed_response_without_exposing_secret
 
 
 def test_runtime_warmup_stops_after_first_provider_failure(monkeypatch):
+    """Runtime warmup stops after first provider failure."""
     constructed = []
 
     class _FakeLLM:
@@ -316,6 +338,7 @@ def test_runtime_warmup_stops_after_first_provider_failure(monkeypatch):
 
 
 def _cache_test_crewai():
+    """Cache test crewai."""
     created_llms = []
     agent_llms = []
 
@@ -337,6 +360,7 @@ def _cache_test_crewai():
 
 
 def test_unknown_provider_never_reuses_llm(monkeypatch):
+    """Unknown provider never reuses llm."""
     fake_module, created_llms, _ = _cache_test_crewai()
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
@@ -348,6 +372,7 @@ def test_unknown_provider_never_reuses_llm(monkeypatch):
 
 
 def test_explicitly_thread_safe_provider_reuses_identical_llm_configuration(monkeypatch):
+    """Explicitly thread safe provider reuses identical llm configuration."""
     fake_module, created_llms, agent_llms = _cache_test_crewai()
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
     monkeypatch.setattr(
@@ -365,6 +390,7 @@ def test_explicitly_thread_safe_provider_reuses_identical_llm_configuration(monk
 
 
 def test_llm_cache_isolates_credentials_and_invocation_options(monkeypatch):
+    """Llm cache isolates credentials and invocation options."""
     fake_module, created_llms, _ = _cache_test_crewai()
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
     monkeypatch.setattr(
@@ -388,6 +414,7 @@ def test_llm_cache_isolates_credentials_and_invocation_options(monkeypatch):
 
 
 def test_thread_safe_llm_cache_constructs_once_under_concurrent_calls(monkeypatch):
+    """Thread safe llm cache constructs once under concurrent calls."""
     fake_module, created_llms, _ = _cache_test_crewai()
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
     monkeypatch.setattr(
@@ -405,12 +432,13 @@ def test_thread_safe_llm_cache_constructs_once_under_concurrent_calls(monkeypatc
 
 
 # -- Explicit api_key -> crewai.LLM(model=..., api_key=...) -----------------
-# (config.base.build_tier_model's normal output; docs/profile_spec.md
+# (config.base.build_tier_model's normal output;
 # "Model tiers" — this is the mechanism that gives two agents on the same
 # provider two genuinely independent API keys.)
 
 
 def test_invoke_builds_an_explicit_crewai_llm_when_api_key_is_set(monkeypatch):
+    """Invoke builds an explicit crewai llm when api key is set."""
     captured = {}
 
     class _FakeLLM:
@@ -442,6 +470,7 @@ def test_invoke_builds_a_timed_llm_when_there_is_no_api_key(monkeypatch):
     # Legacy construction path (no api_key at all) — unchanged behavior,
     # relies on litellm's own implicit env-var lookup, same as before
     # api_key existed.
+    """Invoke builds a timed llm when there is no api key."""
     fake_module, captured = _make_fake_crewai(lambda text: _FakeOutput("ok"))
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
@@ -459,6 +488,7 @@ def test_invoke_gives_two_agents_on_the_same_provider_genuinely_independent_keys
     # exists for: same provider, two distinct keys — litellm's implicit
     # provider-named env lookup (e.g. OPENROUTER_API_KEY) cannot express
     # this. Nothing here branches on provider name to make it work.
+    """Invoke gives two agents on the same provider genuinely independent keys."""
     captured_llms = []
 
     class _FakeLLM:
@@ -490,6 +520,7 @@ def test_invoke_gives_two_agents_on_the_same_provider_genuinely_independent_keys
 
 
 def test_invoke_translates_timeout(monkeypatch):
+    """Invoke translates timeout."""
     def _raise(text):
         raise TimeoutError("too slow")
 
@@ -501,6 +532,7 @@ def test_invoke_translates_timeout(monkeypatch):
 
 
 def test_invoke_translates_a_generic_model_failure(monkeypatch):
+    """Invoke translates a generic model failure."""
     def _raise(text):
         raise RuntimeError("api unreachable")
 
@@ -512,6 +544,7 @@ def test_invoke_translates_a_generic_model_failure(monkeypatch):
 
 
 def test_invoke_raises_on_output_with_no_raw_text(monkeypatch):
+    """Invoke raises on output with no raw text."""
     fake_module, _ = _make_fake_crewai(lambda text: "a plain string with no .raw attribute")
     monkeypatch.setattr(adapter, "_get_crewai", lambda: fake_module)
 
@@ -522,6 +555,7 @@ def test_invoke_raises_on_output_with_no_raw_text(monkeypatch):
 def test_a_successful_call_is_never_retried_by_this_layer(monkeypatch):
     # invoke() itself does not retry — that's the retry policy's job (§4.5,
     # later); a call here either returns text once or raises once.
+    """A successful call is never retried by this layer."""
     calls = []
 
     def _behavior(text):
@@ -539,6 +573,7 @@ def test_a_successful_call_is_never_retried_by_this_layer(monkeypatch):
 
 
 def test_build_crewai_tools_wires_name_description_and_delegates_to_the_wrapper():
+    """Build crewai tools wires name description and delegates to the wrapper."""
     fake_module, _ = _make_fake_crewai(lambda text: _FakeOutput("ok"))
     seen = []
 
@@ -562,6 +597,7 @@ def test_a_tool_that_fails_to_construct_raises_a_typed_error_naming_it(monkeypat
     # Simulates pydantic (or anything else) rejecting the dynamic
     # type()-created BaseTool subclass — the specific, currently-
     # unverified-against-real-crewai risk this test closes the gap on.
+    """A tool that fails to construct raises a typed error naming it."""
     class _RejectingBaseTool:
         def __init__(self, *args, **kwargs):
             raise TypeError("simulated: dynamic subclass construction rejected")
@@ -586,6 +622,7 @@ def test_tool_construction_failure_names_the_offending_tool_when_others_are_fine
     # Only the tool whose dynamic class name contains "risky_tool" fails
     # to construct — proves the error names the actual offending tool,
     # not just "something failed somewhere in the loop."
+    """Tool construction failure names the offending tool when others are fine."""
     class _SometimesRejectingBaseTool:
         def __init__(self, *args, **kwargs):
             if "risky_tool" in type(self).__name__:
@@ -620,8 +657,7 @@ actually being a Pydantic v2 model. It was exactly that gap that let
 with a bare, unannotated `{"name": ..., "description": ...}` class dict —
 which `crewai.tools.BaseTool` rejects at class-creation time with
 `PydanticUserError`, for every tool on every agent, universally (found via
-a real end-to-end manual run, not by the automated suite — see
-docs/server_report.md's account of that failure).
+a real end-to-end manual run, not by the automated suite).
 
 This file closes that gap: it imports the real, installed `crewai` package
 (no monkeypatching of `_get_crewai()` at all) and drives
@@ -658,10 +694,12 @@ def _real_crewai_module():
     # The one call in this whole file that must not be monkeypatched —
     # the real, installed crewai package, exactly as agents/adapter.py
     # imports it in production.
+    """Real crewai module."""
     return adapter._get_crewai()
 
 
 def test_build_crewai_tools_against_real_base_tool_succeeds_for_every_reference_agent_tool():
+    """Build crewai tools against real base tool succeeds for every reference agent tool."""
     crewai_module = _real_crewai_module()
     agent = ReferenceAgent(model="openrouter/test-provider/test-model")
 
@@ -694,6 +732,7 @@ def test_a_real_built_tool_still_delegates_to_the_wrapped_agent_method():
     # Not just "construction didn't raise" — the resulting tool object must
     # still actually call through to the wrapped agent method, the same
     # behavior tests/test_agent_adapter.py's mocked equivalent checks.
+    """A real built tool still delegates to the wrapped agent method."""
     crewai_module = _real_crewai_module()
     agent = ReferenceAgent(model="openrouter/test-provider/test-model")
 
@@ -727,6 +766,7 @@ def test_a_real_built_tool_still_delegates_to_the_wrapped_agent_method():
 
 
 def test_check_status_tool_exposes_its_real_parameter_in_the_generated_schema():
+    """Check status tool exposes its real parameter in the generated schema."""
     crewai_module = _real_crewai_module()
     agent = ReferenceAgent(model="openrouter/test-provider/test-model")
 
@@ -743,6 +783,7 @@ def test_record_action_tool_exposes_its_required_and_optional_parameters():
     # A second real tool with a different shape — one required parameter
     # plus one with a default — so the fix is checked against more than a
     # single-parameter coincidence.
+    """Record action tool exposes its required and optional parameters."""
     crewai_module = _real_crewai_module()
     agent = ReferenceAgent(model="openrouter/test-provider/test-model")
 
@@ -762,6 +803,7 @@ def test_calling_the_real_tool_through_run_with_a_real_argument_reaches_the_wrap
     # not `_run` directly — proving the fix works through crewai's real
     # argument-passing mechanism, the same path a live model call uses,
     # not just that a schema object with the right shape now exists.
+    """Calling the real tool through run with a real argument reaches the wrapped method."""
     from agents.base import _current_allowed_tools
 
     crewai_module = _real_crewai_module()
@@ -790,6 +832,7 @@ def test_calling_without_the_required_argument_is_rejected_by_schema_validation_
     # argument`. With the schema fixed, crewai's own validation now catches
     # this first, as a clean, named error — the tool method is never even
     # reached with a call it can't satisfy.
+    """Calling without the required argument is rejected by schema validation not a bare typeerror."""
     crewai_module = _real_crewai_module()
     agent = ReferenceAgent(model="openrouter/test-provider/test-model")
 
@@ -810,6 +853,7 @@ def test_real_crewai_llm_constructs_with_the_exact_kwargs_invoke_uses():
     # — config.base.build_tier_model's normal output. Construction only, no
     # network call — crewai/litellm validate the presence of a key at
     # construction time (confirmed directly), not its validity.
+    """Real crewai llm constructs with the exact kwargs invoke uses."""
     crewai_module = _real_crewai_module()
 
     llm = crewai_module.LLM(model="openrouter/anthropic/claude-3.5-sonnet", api_key="sk-or-test-key")
@@ -839,6 +883,7 @@ def test_real_crewai_agent_constructs_with_an_explicit_llm_object_and_the_exact_
     # Mirrors invoke()'s crewai_module.Agent(...) call exactly, with a real
     # crewai.LLM object as `llm` (the explicit-api_key branch) and real
     # built tools — everything invoke() actually passes, construction only.
+    """Real crewai agent constructs with an explicit llm object and the exact kwargs invoke uses."""
     from agents.results import UNCLEAR_TASK_PROMPT_INSTRUCTION
 
     crewai_module = _real_crewai_module()
@@ -871,6 +916,7 @@ def test_real_crewai_agent_constructs_with_a_bare_model_string_when_there_is_no_
     # the provider's env var must be present (any value; never called over
     # the network here) for construction to succeed at all, exactly as it
     # would need to be in a real legacy-path deployment.
+    """Real crewai agent constructs with a bare model string when there is no api key."""
     from agents.results import UNCLEAR_TASK_PROMPT_INSTRUCTION
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key-for-construction-only")

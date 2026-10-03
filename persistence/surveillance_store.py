@@ -69,10 +69,14 @@ _SECTOR_BASE_ETA = {
 
 
 def _utc_now() -> str:
+    """Return the current UTC time as an ISO-8601 string."""
+
     return datetime.now(timezone.utc).isoformat()
 
 
 def _calculate_eta(origin_area: str, target_area: str) -> int:
+    """Return demo travel seconds between two named sectors."""
+
     if origin_area == target_area:
         return 45
     target_eta = _SECTOR_BASE_ETA.get(target_area.lower(), 180)
@@ -101,23 +105,33 @@ _DRONE_STATUS_SYNONYMS = {
 
 
 class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
+    """Dedicated camera/drone store that seeds demo rows when the tables are empty."""
+
     def __init__(self, db_path: str):
+        """Open the dedicated surveillance DB and seed demo rows when empty."""
+
         self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
+        """Open a row-factory connection with foreign keys enabled."""
+
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON;")
         return conn
 
     def _init_db(self) -> None:
+        """Create tables and seed demo cameras/drones when those tables are empty."""
+
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
             self._seed_demo_data_if_empty(conn)
 
     def _seed_demo_data_if_empty(self, conn: sqlite3.Connection) -> None:
+        """Insert the hardcoded demo camera and drone catalog once."""
+
         cursor = conn.execute("SELECT COUNT(*) FROM cameras")
         if cursor.fetchone()[0] == 0:
             now = _utc_now()
@@ -153,6 +167,8 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
             )
 
     def list_cameras(self, area: str | None = None, status: str | None = None) -> list[dict]:
+        """Return cameras rows, optionally filtered by area and status."""
+
         query = "SELECT * FROM cameras WHERE 1=1"
         params: list[object] = []
         if area:
@@ -168,6 +184,8 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
             return [dict(row) for row in rows]
 
     def get_camera(self, camera_id: str) -> dict | None:
+        """Return one cameras row, or None."""
+
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM cameras WHERE camera_id = ?", (camera_id.strip(),)).fetchone()
             return dict(row) if row is not None else None
@@ -175,6 +193,8 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
     def update_camera_feed(
         self, camera_id: str, feed_summary: str, status: str | None = None, updated_at: str | None = None
     ) -> dict:
+        """Write feed_summary and optional status on a cameras row."""
+
         now = updated_at or _utc_now()
         with self._connect() as conn:
             camera = conn.execute("SELECT * FROM cameras WHERE camera_id = ?", (camera_id.strip(),)).fetchone()
@@ -194,6 +214,8 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
             return dict(updated)
 
     def list_drones(self, status: str | None = None) -> list[dict]:
+        """Return drones rows, mapping informal status words onto stored values."""
+
         query = "SELECT * FROM drones WHERE 1=1"
         params: list[object] = []
         if status:
@@ -209,6 +231,8 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
             return [dict(row) for row in rows]
 
     def get_drone(self, drone_id: str) -> dict | None:
+        """Return one drones row, or None."""
+
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM drones WHERE drone_id = ?", (drone_id.strip(),)).fetchone()
             return dict(row) if row is not None else None
@@ -223,6 +247,8 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
         specific_drone_id: str | None = None,
         now_iso: str | None = None,
     ) -> dict:
+        """Create a drone_missions row and mark the chosen ready drone in_flight."""
+
         now = now_iso or _utc_now()
         with self._connect() as conn:
             if specific_drone_id:
@@ -235,20 +261,17 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
                         f"Requested drone '{specific_drone_id}' is not currently available for dispatch."
                     )
             else:
-                # Pick the ready drone with highest battery, prioritizing any already stationed at target area
                 drones = conn.execute(
                     "SELECT * FROM drones WHERE status = 'ready' ORDER BY battery_percent DESC"
                 ).fetchall()
                 if not drones:
                     raise SurveillancePersistenceError("No ready drones available in fleet for immediate dispatch.")
-                # If one is already at the target area, prioritize it
                 same_area = [d for d in drones if d["current_area"].lower() == target_area.lower()]
                 drone = same_area[0] if same_area else drones[0]
 
             mission_id = f"MSN-{uuid.uuid4().hex[:8].upper()}"
             eta_seconds = _calculate_eta(drone["current_area"], target_area)
 
-            # Insert mission
             conn.execute(
                 """
                 INSERT INTO drone_missions (
@@ -270,7 +293,6 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
                 ),
             )
 
-            # Update drone state: in_flight, target area, assigned mission
             conn.execute(
                 """
                 UPDATE drones
@@ -287,6 +309,8 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
             return result
 
     def get_active_missions(self) -> list[dict]:
+        """Return in-progress drone_missions rows joined with drone details."""
+
         query = """
             SELECT m.*, d.callsign, d.model, d.battery_percent
             FROM drone_missions m
@@ -399,6 +423,8 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
         notes: str | None = None,
         updated_at: str | None = None,
     ) -> dict:
+        """Write a drone_missions status and free the drone when the mission ends."""
+
         now = updated_at or _utc_now()
         with self._connect() as conn:
             mission = conn.execute("SELECT * FROM drone_missions WHERE mission_id = ?", (mission_id,)).fetchone()
@@ -414,7 +440,6 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
                 (status, notes, now, mission_id),
             )
 
-            # If completed or aborted, return drone to ready status and clear assigned mission
             if status in ("completed", "aborted"):
                 conn.execute(
                     """
@@ -429,6 +454,8 @@ class SQLiteSurveillancePersistence(SurveillancePersistenceInterface):
             return dict(updated)
 
     def surveillance_overview(self, area: str | None = None) -> dict:
+        """Return cameras, drones, and active missions plus counts for one area or all."""
+
         cameras = self.list_cameras(area=area)
         drones = self.list_drones()
         active_missions = self.get_active_missions()

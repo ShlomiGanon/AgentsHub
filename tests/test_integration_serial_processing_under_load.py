@@ -1,4 +1,4 @@
-"""9.19 — Test serial processing under load (work_plan.md §9.19).
+"""9.19 — Test serial processing under load.
 
 Distinct from `tests/test_persistence_sqlite_backend.py`'s own
 concurrency suite, which proves the serialized-writer design holds under
@@ -24,6 +24,7 @@ from tests.crewai_fakes import install_crewai_stub
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch, 'status nominal')
 
 
@@ -35,12 +36,14 @@ class _OverlapDetectingAgent:
     """
 
     def __init__(self, inner):
+        """Initialize this test helper."""
         self._inner = inner
         self._lock = threading.Lock()
         self.overlap_detected = False
         self.call_count = 0
 
     def process(self, text, allowed_tools):
+        """Process."""
         if not self._lock.acquire(blocking=False):
             self.overlap_detected = True
             self._lock.acquire()  # don't deadlock the rest of the test
@@ -52,6 +55,7 @@ class _OverlapDetectingAgent:
 
 
 def test_a_burst_is_processed_one_at_a_time_with_no_lost_writes_and_no_lock_errors(tmp_path):
+    """A burst is processed one at a time with no lost writes and no lock errors."""
     inner_agent = happy_path_agent(risk_score="0.1", selected="status_check")
     agent = _OverlapDetectingAgent(inner_agent)
 

@@ -28,19 +28,24 @@ from tools.log_events import (
     request_received,
 )
 
-from orchestrator.flows import (
+from orchestrator.flows_execution import (
     FlowDeps,
     FlowResult,
-    _apply_required_fields_gate,
-    _continue_after_required_fields,
     _deadline_failure,
     _log_event_outcome,
     _record_outcome_with_report,
+)
+from orchestrator.flows_protocol import (
+    _apply_required_fields_gate,
+    _continue_after_required_fields,
     continue_from_risk_assessment,
 )
 
 if TYPE_CHECKING:
     from orchestrator.reasoning import InsightsAgent, MainAgent, OperationalDecision
+
+
+# --- persist and extract ---
 
 
 def _model_invoker_for(main_agent: "MainAgent"):
@@ -54,14 +59,7 @@ def _model_invoker_for(main_agent: "MainAgent"):
         except (AgentTimeoutError, AgentModelError) as exc:
             if not is_retryable_invocation_error(exc):
                 raise
-            # Stage 2 (docs/bar_improves.md): the raw report text is already
-            # persisted before extraction ever runs (`begin_report`), so a
-            # single transient provider timeout/error should not lose the
-            # report — retry the extraction call exactly once, mirroring the
-            # existing retry-once pattern used elsewhere in this module for
-            # task formulation and success judgment. MODEL_TIMEOUT_SECONDS and
-            # the zero provider-retry configuration are untouched; this is one
-            # additional application-level attempt, not a provider retry.
+            # Raw text is already persisted by begin_report, so one retry covers a transient timeout.
             extraction_retry(cause=type(exc).__name__)
             agent_result = main_agent.process(prompt, [])
         if agent_result.status != "success":
@@ -156,13 +154,7 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
 
     record_extracted_fields(deps.persistence, event_id, extraction_result)
 
-    # A report that doesn't match any event type the active profile declares
-    # resolves to the built-in UNCLASSIFIED_TYPE fallback rather than staying
-    # `None` — a real, storable classification with its own (core-declared)
-    # required fields, distinct from `HUMAN_ACTIVATION_TYPE` (a source label,
-    # not an event type) (REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 /
-    # item #6). `determine_clarification_hold` still keys off the *original*
-    # extraction result, unchanged — this only affects what gets persisted.
+    # Persist UNCLASSIFIED_TYPE so the event has a real type; clarification still uses the original result.
     if determine_clarification_hold(extraction_result):
         record_event_state(deps.persistence, event_id, {"classification": UNCLASSIFIED_TYPE})
     resolved_classification = extraction_result.classification or UNCLASSIFIED_TYPE

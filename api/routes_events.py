@@ -27,6 +27,8 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/Event", methods=["POST"])
     def post_event():
+        """Accept a sensor-style report and queue extraction."""
+
         optimization_policy = getattr(ctx.loaded_profile, "optimization_policy", OptimizationPolicy())
         caller_identity = request.headers.get("X-Identity")
         level = authenticate(ctx.deps.persistence, caller_identity)
@@ -80,6 +82,8 @@ def build_events_blueprint(ctx: "ApiContext") -> Blueprint:
             raise
 
         def _work() -> None:
+            """Run report extraction under this request's trace id."""
+
             with trace_context(trace_id):
                 run_report_extraction(ctx.deps, event_id, ctx.main_agent, ctx.insights_agent)
 

@@ -60,7 +60,11 @@ from orchestrator.reasoning_schemas import (
     _unwrap_json_code_fence,
 )
 
+# --- risk, intent, and protocol selection ---
+
 def _build_risk_assessment_prompt(classification: str | None, area: str | None, description: str | None, severity: str | None) -> str:
+    """Prompt asking Main to score this event from 0.0 to 1.0."""
+
     return (
         "Assess the risk of the following event on a scale from 0.0 (no risk) to 1.0 (extreme risk).\n"
         f"Classification: {classification or '(unresolved)'}\n"
@@ -73,6 +77,8 @@ def _build_risk_assessment_prompt(classification: str | None, area: str | None, 
     )
 
 def _parse_risk_assessment_response(raw_text: str) -> tuple[float, str]:
+    """Parse RISK_SCORE and REASON from a risk-assessment reply."""
+
     score_match = _RISK_SCORE_PATTERN.search(raw_text)
     reason_match = _RISK_REASON_PATTERN.search(raw_text)
     if score_match is None or reason_match is None:
@@ -98,6 +104,8 @@ def _build_intent_prompt(
     protocols: tuple[Protocol, ...],
     conversation_messages: tuple[dict, ...] = (),
 ) -> str:
+    """Prompt asking Main to classify one inbound message."""
+
     # Distinguishing question/report/request/conversational never needs a protocol's full
     # description -- only `matched_protocol_names`' own validation (it must name a real
     # protocol) needs the names at all. Sending every protocol's full description here was
@@ -141,15 +149,21 @@ def _build_intent_prompt(
     )
 
 def _required_bool(payload: dict, field_name: str) -> bool:
+    """Read a required boolean field, rejecting any other type."""
+
     value = payload.get(field_name)
     if type(value) is not bool:
         raise OrchestrationParseError(f"intent field {field_name!r} must be a boolean")
     return value
 
 def _normalize_evidence(text: str) -> str:
+    """Collapse whitespace so evidence quotes can be compared."""
+
     return " ".join(text.split()).casefold()
 
 def _parse_structured_intent_response(raw_text: str, message_text: str, protocols: tuple[Protocol, ...]) -> IntentResult:
+    """Parse a JSON intent object into an IntentResult."""
+
     payload = _load_unique_json_object(raw_text, "message intent")
     valid_intents = {"question", "report", "request", "conversational", "needs_clarification"}
     primary_intent = payload.get("primary_intent")
@@ -233,6 +247,8 @@ def _parse_structured_intent_response(raw_text: str, message_text: str, protocol
     return IntentResult(analysis.primary_intent, analysis.reason)
 
 def _parse_intent_response(raw_text: str, message_text: str | None = None, protocols: tuple[Protocol, ...] = ()) -> IntentResult:
+    """Parse a JSON or legacy INTENT:/REASON: intent reply."""
+
     unwrapped = _unwrap_json_code_fence(raw_text)
     if unwrapped.startswith("{"):
         if message_text is None:
@@ -278,6 +294,8 @@ def _build_conversational_prompt(
     system_context: dict | None = None,
     conversation_messages: tuple[dict, ...] = (),
 ) -> str:
+    """Prompt asking Main for a social or self-description reply."""
+
     context_payload = system_context or {}
 
     return CONVERSATIONAL_REPLY_INSTRUCTION.format(
@@ -292,6 +310,8 @@ def answer_conversationally(
     system_context: dict | None = None,
     conversation_messages: tuple[dict, ...] = (),
 ) -> str:
+    """Reply to a conversational message without starting a protocol run."""
+
     with stage_context("conversational_reply"):
         agent_result = main_agent.process(
             _build_conversational_prompt(message_text, system_context, conversation_messages), []
@@ -301,6 +321,8 @@ def answer_conversationally(
     return agent_result.text.strip()
 
 def _preferred_agent_hint_block(preferred_agent_hint: str | None) -> str:
+    """Optional prompt paragraph treating the bound group agent as a mild tie-break."""
+
     if not preferred_agent_hint:
         return ""
     return (
@@ -312,6 +334,8 @@ def _preferred_agent_hint_block(preferred_agent_hint: str | None) -> str:
     )
 
 def _build_selection_prompt(raw_text: str, classification: str | None, area: str | None, description: str | None, protocols: tuple[Protocol, ...], preferred_agent_hint: str | None = None) -> str:
+    """Prompt asking Main to pick the best-fitting protocol by description."""
+
     protocol_lines = "\n".join(f"- {protocol.name}: {protocol.description}" for protocol in protocols)
     return (
         "Choose the protocol whose description best fits the following event. Selection is by "
@@ -336,6 +360,8 @@ def _build_selection_prompt(raw_text: str, classification: str | None, area: str
     )
 
 def _parse_selection_response(raw_text: str) -> ProtocolSelectionResult:
+    """Parse SELECTED, AMBIGUOUS, or NO_MATCH from a protocol-selection reply."""
+
     selected_match = _SELECTED_PATTERN.search(raw_text)
     if selected_match:
         return ProtocolSelectionResult(
@@ -390,6 +416,8 @@ def make_operational_decision(
     risk_threshold: float,
     preferred_agent_hint: str | None = None,
 ) -> OperationalDecision:
+    """Ask Main for risk and protocol selection in one structured call."""
+
     protocol_data = [
         {"name": protocol.name, "description": protocol.description, "criticality": int(protocol.criticality)}
         for protocol in protocols
@@ -421,6 +449,8 @@ def make_operational_decision(
 def _operational_decision_from_payload(
     payload: dict, protocols: tuple[Protocol, ...], risk_threshold: float,
 ) -> OperationalDecision:
+    """Validate a merged risk-and-selection JSON payload."""
+
     score = payload.get("risk_score")
     if type(score) not in {int, float} or not 0 <= float(score) <= 1:
         raise OrchestrationParseError("operational risk_score must be between 0 and 1")
@@ -560,6 +590,8 @@ def _build_formulation_prompt(
     event_data: dict | None = None,
     conversation_messages: tuple = (),
 ) -> str:
+    """Prompt asking Main to write one task per participating agent."""
+
     agents_block = "\n".join(f"- {descriptor.name}: {descriptor.role}" for descriptor in descriptors)
     precedent_block = ""
     correction_instruction = ""
@@ -593,6 +625,8 @@ def _build_formulation_prompt(
     )
 
 def _parse_formulation_response(raw_text: str) -> dict[str, str]:
+    """Parse legacy AGENT:/TASK: pairs into agent_name -> task_text."""
+
     return {match.group(1): match.group(2).strip() for match in _AGENT_TASK_PATTERN.finditer(raw_text)}
 
 def _formulation_json_candidate(raw_text: str) -> str | None:
@@ -607,6 +641,8 @@ def _formulation_json_candidate(raw_text: str) -> str | None:
     """
     unwrapped = _unwrap_json_code_fence(raw_text)
     return unwrapped if unwrapped.startswith("{") else None
+
+# --- formulation and judgment ---
 
 def formulate_tasks(
     main_agent: MainAgent,
@@ -644,6 +680,8 @@ def formulate_tasks(
     )
 
     def _parse_attempt(agent_result) -> FormulationResult:
+        """Parse one formulation reply as JSON steps or legacy AGENT:/TASK: pairs."""
+
         if agent_result.status != "success":
             return FormulationResult(
                 failure_reason=f"formulation did not produce a usable response: {agent_result.text}"
@@ -871,12 +909,16 @@ def extract_event_data_update(
     return EventDataUpdateResult(True, validated, reply_text.strip())
 
 def _build_rewrite_prompt(step: Step, missing: str) -> str:
+    """Prompt asking Main to rewrite a task that the specialist called unclear."""
+
     return (
         f"The task below was given to agent '{step.agent_name}', who reported it unclear or unactionable, stating what was missing: {missing}\n\n"
         f"Original task: {step.task_text}\n\nRewrite the task to address exactly what's missing. Respond with only the rewritten task text, nothing else."
     )
 
 def rewrite_task(main_agent: MainAgent, step: Step, missing: str) -> str:
+    """Rewrite a blocked step so the specialist can act on the missing information."""
+
     with stage_context("task_rewrite"):
         agent_result = main_agent.process(_build_rewrite_prompt(step, missing), [])
     if agent_result.status != "success":
@@ -884,6 +926,8 @@ def rewrite_task(main_agent: MainAgent, step: Step, missing: str) -> str:
     return agent_result.text.strip()
 
 def _build_judgment_prompt(protocol: Protocol, step_outcomes: tuple[StepOutcome, ...], insight_text: str) -> str:
+    """Prompt asking Main to judge the protocol run as success, failure, or uncertain."""
+
     steps_block = "\n".join(
         f"- {outcome.step.agent_name} was asked: {outcome.step.task_text!r}\n  and {'succeeded' if outcome.succeeded else 'failed'}, returning: {outcome.result_text!r}"
         for outcome in step_outcomes
@@ -900,6 +944,8 @@ def _build_judgment_prompt(protocol: Protocol, step_outcomes: tuple[StepOutcome,
     )
 
 def _parse_judgment_response(raw_text: str) -> SuccessVerdict:
+    """Parse VERDICT and REASONING from a success-judgment reply."""
+
     verdict_match = _VERDICT_PATTERN.search(raw_text)
     reasoning_match = _REASONING_PATTERN.search(raw_text)
     if verdict_match is None or reasoning_match is None:
@@ -907,6 +953,8 @@ def _parse_judgment_response(raw_text: str) -> SuccessVerdict:
     return SuccessVerdict(verdict=verdict_match.group(1).lower(), reasoning=reasoning_match.group(1).strip())
 
 def judge_success(main_agent: MainAgent, protocol: Protocol, step_outcomes: tuple[StepOutcome, ...], insight_text: str = "") -> SuccessVerdict:
+    """Ask Main whether this protocol run succeeded, failed, or is uncertain."""
+
     with stage_context("success_judgment"):
         agent_result = main_agent.process(_build_judgment_prompt(protocol, step_outcomes, insight_text), [])
     if agent_result.status != "success":
@@ -919,6 +967,8 @@ def assess_final_once(
     step_outcomes: tuple[StepOutcome, ...],
     comparable_history: tuple["PrecedentMatch", ...] = (),
 ) -> FinalAssessment:
+    """Ask Main for insight and verdict together after a low-risk run."""
+
     outcomes = [
         {
             "step_id": outcome.step.step_id,
@@ -964,9 +1014,13 @@ def look_up_precedent(
     area: str,
     occurred_at: str,
 ) -> tuple["PrecedentMatch", ...]:
+    """Comparable prior events for this classification, area, and time window."""
+
     return tuple(history_query_service.search_precedents(event_id, classification, area, occurred_at))
 
 def determine_closure(risk_level: str, classification: str, precedents: tuple["PrecedentMatch", ...]) -> str | None:
+    """Return a resolved precedent id that can close this low-risk report, or None."""
+
     if risk_level != "low" or classification == "human_activation":
         return None
     for precedent in precedents:

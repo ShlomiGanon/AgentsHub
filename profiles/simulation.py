@@ -1,4 +1,4 @@
-"""Profile-declared simulation users, groups, and scenarios (docs/profile_simulations_design.md).
+"""Profile-declared simulation users, groups, and scenarios.
 
 A profile that wants simulations declares three optional module-level lists —
 `SIMULATION_USERS`, `SIMULATION_GROUPS`, `SIMULATIONS` — using the dataclasses

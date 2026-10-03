@@ -1,3 +1,5 @@
+"""Hold create, resume, and approval HTTP routes."""
+
 import types
 
 import pytest
@@ -12,15 +14,18 @@ from tests.crewai_fakes import install_crewai_stub
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch)
 
 
 def _agent(dispatch):
+    """Agent."""
     return ScriptedAgent(dispatch)
 
 
 
 def _submit_report(client, text="report text"):
+    """Submit report."""
     resp = client.post("/Event", headers=auth_headers(VIEWER_IDENTITY), json={"text": text, "sender_identity": VIEWER_IDENTITY})
     assert resp.status_code == 202
     return resp.get_json()["event_id"]
@@ -30,6 +35,7 @@ def _submit_report(client, text="report text"):
 
 
 def _clarification_agent():
+    """Clarification agent."""
     return _agent(
         {
             "Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}',
@@ -41,11 +47,12 @@ def _clarification_agent():
 def _make_clarification_hold(tmp_path, teardown_ctx):
     # An unresolved classification now resolves to the built-in "unclassified"
     # event type, which requires `area` — the required-fields gate
-    # (REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 / item #6) asks for it
+    # Asks for it
     # before the clarification hold these tests actually exercise exists.
     # Resolved directly against persistence/orchestrator rather than another
     # HTTP round trip — `/Event` submissions carry no conversation_id, so
     # there's no conversational reply path to drive this through `/Msg`.
+    """Make clarification hold."""
     ctx = build_context(tmp_path, main_agent=_clarification_agent())
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -61,6 +68,7 @@ def _make_clarification_hold(tmp_path, teardown_ctx):
 
 
 def test_clarify_with_a_valid_type_returns_202_and_resumes(tmp_path, teardown_ctx):
+    """Clarify with a valid type returns 202 and resumes."""
     ctx, client, event_id = _make_clarification_hold(tmp_path, teardown_ctx)
     # Continuing past extraction needs the full happy-path prompts too.
     ctx.main_agent._dispatch.update({
@@ -83,6 +91,7 @@ def test_clarify_with_a_valid_type_returns_202_and_resumes(tmp_path, teardown_ct
 
 
 def test_clarify_with_a_value_outside_the_registry_is_rejected(tmp_path, teardown_ctx):
+    """Clarify with a value outside the registry is rejected."""
     ctx, client, event_id = _make_clarification_hold(tmp_path, teardown_ctx)
 
     resp = client.post(f"/Clarify/{event_id}", headers=auth_headers(COMMANDER_IDENTITY), json={"classification": "not_a_real_type"})
@@ -92,6 +101,7 @@ def test_clarify_with_a_value_outside_the_registry_is_rejected(tmp_path, teardow
 
 
 def test_clarify_rejects_a_missing_classification_field(tmp_path, teardown_ctx):
+    """Clarify rejects a missing classification field."""
     ctx, client, event_id = _make_clarification_hold(tmp_path, teardown_ctx)
 
     resp = client.post(f"/Clarify/{event_id}", headers=auth_headers(COMMANDER_IDENTITY), json={})
@@ -101,6 +111,7 @@ def test_clarify_rejects_a_missing_classification_field(tmp_path, teardown_ctx):
 
 
 def test_clarify_requires_commander_level(tmp_path, teardown_ctx):
+    """Clarify requires commander level."""
     ctx, client, event_id = _make_clarification_hold(tmp_path, teardown_ctx)
 
     resp = client.post(f"/Clarify/{event_id}", headers=auth_headers(VIEWER_IDENTITY), json={"classification": "fire"})
@@ -109,6 +120,7 @@ def test_clarify_requires_commander_level(tmp_path, teardown_ctx):
 
 
 def test_clarify_on_an_event_with_no_hold_is_not_found(tmp_path, teardown_ctx):
+    """Clarify on an event with no hold is not found."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -119,6 +131,7 @@ def test_clarify_on_an_event_with_no_hold_is_not_found(tmp_path, teardown_ctx):
 
 
 def test_a_second_commander_answering_an_already_resolved_clarification_gets_a_named_conflict(tmp_path, teardown_ctx):
+    """A second commander answering an already resolved clarification gets a named conflict."""
     ctx, client, event_id = _make_clarification_hold(tmp_path, teardown_ctx)
     ctx.main_agent._dispatch.update({
         "RISK_SCORE": "RISK_SCORE: 0.1\nREASON: low",
@@ -141,6 +154,7 @@ def test_a_second_commander_answering_an_already_resolved_clarification_gets_a_n
 
 
 def _flagged_approval_agent():
+    """Flagged approval agent."""
     return _agent(
         {
             "Extract this operational event": '{"classification": "fire", "area": "north_sector", "entities": [], "description": "d", "severity": "high", "occurred_at": "2026-08-24T09:00:00"}',
@@ -153,6 +167,7 @@ def _flagged_approval_agent():
 
 
 def _make_flagged_approval_hold(tmp_path, teardown_ctx):
+    """Make flagged approval hold."""
     ctx = build_context(tmp_path, main_agent=_flagged_approval_agent())
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -163,6 +178,7 @@ def _make_flagged_approval_hold(tmp_path, teardown_ctx):
 
 
 def test_approve_returns_202_and_resumes_to_success(tmp_path, teardown_ctx):
+    """Approve returns 202 and resumes to success."""
     ctx, client, event_id = _make_flagged_approval_hold(tmp_path, teardown_ctx)
 
     resp = client.post(f"/Approve/{event_id}", headers=auth_headers(COMMANDER_IDENTITY), json={"decision": "approved"})
@@ -175,6 +191,7 @@ def test_approve_returns_202_and_resumes_to_success(tmp_path, teardown_ctx):
 
 
 def test_reject_returns_declined_synchronously_with_no_job_left_running(tmp_path, teardown_ctx):
+    """Reject returns declined synchronously with no job left running."""
     ctx, client, event_id = _make_flagged_approval_hold(tmp_path, teardown_ctx)
 
     resp = client.post(f"/Approve/{event_id}", headers=auth_headers(COMMANDER_IDENTITY), json={"decision": "rejected"})
@@ -187,6 +204,7 @@ def test_reject_returns_declined_synchronously_with_no_job_left_running(tmp_path
 
 
 def test_approve_requires_commander_level(tmp_path, teardown_ctx):
+    """Approve requires commander level."""
     ctx, client, event_id = _make_flagged_approval_hold(tmp_path, teardown_ctx)
 
     resp = client.post(f"/Approve/{event_id}", headers=auth_headers(VIEWER_IDENTITY), json={"decision": "approved"})
@@ -195,6 +213,7 @@ def test_approve_requires_commander_level(tmp_path, teardown_ctx):
 
 
 def test_approve_on_an_event_with_no_hold_is_not_found(tmp_path, teardown_ctx):
+    """Approve on an event with no hold is not found."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -205,6 +224,7 @@ def test_approve_on_an_event_with_no_hold_is_not_found(tmp_path, teardown_ctx):
 
 
 def test_approve_rejects_a_missing_decision_field(tmp_path, teardown_ctx):
+    """Approve rejects a missing decision field."""
     ctx, client, event_id = _make_flagged_approval_hold(tmp_path, teardown_ctx)
 
     resp = client.post(f"/Approve/{event_id}", headers=auth_headers(COMMANDER_IDENTITY), json={})
@@ -214,6 +234,7 @@ def test_approve_rejects_a_missing_decision_field(tmp_path, teardown_ctx):
 
 
 def test_a_second_commander_answering_an_already_resolved_approval_gets_a_named_conflict(tmp_path, teardown_ctx):
+    """A second commander answering an already resolved approval gets a named conflict."""
     ctx, client, event_id = _make_flagged_approval_hold(tmp_path, teardown_ctx)
     ctx.deps.persistence.write_user("commander-2", "commander")
     first = client.post(f"/Approve/{event_id}", headers=auth_headers(COMMANDER_IDENTITY), json={"decision": "rejected"})
@@ -230,6 +251,7 @@ def test_a_second_commander_answering_an_already_resolved_approval_gets_a_named_
 
 
 def _ambiguous_approval_agent():
+    """Ambiguous approval agent."""
     return _agent(
         {
             "Extract this operational event": '{"classification": "fire", "area": "north_sector", "entities": [], "description": "d", "severity": "low", "occurred_at": "2026-08-24T09:00:00"}',
@@ -242,6 +264,7 @@ def _ambiguous_approval_agent():
 
 
 def _make_ambiguous_approval_hold(tmp_path, teardown_ctx):
+    """Make ambiguous approval hold."""
     ctx = build_context(tmp_path, main_agent=_ambiguous_approval_agent())
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -253,6 +276,7 @@ def _make_ambiguous_approval_hold(tmp_path, teardown_ctx):
 
 
 def test_a_valid_candidate_name_returns_202_and_resumes_with_that_protocol(tmp_path, teardown_ctx):
+    """A valid candidate name returns 202 and resumes with that protocol."""
     ctx, client, event_id = _make_ambiguous_approval_hold(tmp_path, teardown_ctx)
 
     resp = client.post(f"/Approve/{event_id}", headers=auth_headers(COMMANDER_IDENTITY), json={"decision": "status_check"})
@@ -267,6 +291,7 @@ def test_a_valid_candidate_name_returns_202_and_resumes_with_that_protocol(tmp_p
 
 
 def test_a_name_outside_the_holds_candidates_is_rejected(tmp_path, teardown_ctx):
+    """A name outside the holds candidates is rejected."""
     ctx, client, event_id = _make_ambiguous_approval_hold(tmp_path, teardown_ctx)
 
     resp = client.post(f"/Approve/{event_id}", headers=auth_headers(COMMANDER_IDENTITY), json={"decision": "not_a_real_protocol"})
@@ -282,6 +307,7 @@ def test_a_name_outside_the_holds_candidates_is_rejected(tmp_path, teardown_ctx)
 
 
 def test_approved_and_rejected_are_not_valid_answers_to_an_ambiguous_hold(tmp_path, teardown_ctx):
+    """Approved and rejected are not valid answers to an ambiguous hold."""
     ctx, client, event_id = _make_ambiguous_approval_hold(tmp_path, teardown_ctx)
 
     approved = client.post(f"/Approve/{event_id}", headers=auth_headers(COMMANDER_IDENTITY), json={"decision": "approved"})

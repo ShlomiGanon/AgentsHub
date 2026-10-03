@@ -13,6 +13,8 @@ if TYPE_CHECKING:
     from api.app import ApiContext
 
 def _clarification_hold_payload(ctx: "ApiContext", event_id: str, event: dict | None = None) -> dict:
+    """Bot payload for a pending classification clarification."""
+
     hold = ctx.deps.persistence.fetch_held_event("clarification", event_id)
     return {
         "hold_id": hold["hold_id"],
@@ -23,6 +25,8 @@ def _clarification_hold_payload(ctx: "ApiContext", event_id: str, event: dict | 
     }
 
 def _approval_hold_payload(ctx: "ApiContext", event_id: str, event: dict | None = None) -> dict:
+    """Bot payload for a pending high-risk protocol approval."""
+
     hold = ctx.deps.persistence.fetch_held_event("approval", event_id)
     return {
         "hold_id": hold["hold_id"],
@@ -35,6 +39,8 @@ def _approval_hold_payload(ctx: "ApiContext", event_id: str, event: dict | None 
     }
 
 def _event_data_hold_payload(ctx: "ApiContext", event_id: str, event: dict | None = None) -> dict:
+    """Bot payload asking the reporter for missing event fields."""
+
     hold = ctx.deps.persistence.fetch_held_event("event_data", event_id)
     return {
         "hold_id": hold["hold_id"],
@@ -44,16 +50,22 @@ def _event_data_hold_payload(ctx: "ApiContext", event_id: str, event: dict | Non
     }
 
 def _uncertain_verdict_payload(ctx: "ApiContext", event_id: str, event: dict | None = None) -> dict:
+    """Commander payload for an uncertain-verdict insight."""
+
     if event is None:
         event = ctx.deps.persistence.fetch_event(event_id)
     return {"event_id": event_id, "insight_text": event.get("insight_text") or ""}
 
 def _uncertain_verdict_reporter_payload(ctx: "ApiContext", event_id: str, event: dict | None = None) -> dict:
+    """Reporter notice for an uncertain verdict; omits commander-level insight text."""
+
     # Deliberately carries no insight text — item #8's decision is a short,
     # generic notice for the original reporter, not the commander-level detail.
     return {"event_id": event_id}
 
 def _resource_unavailable_alert_payload(ctx: "ApiContext", event_id: str, event: dict | None = None) -> dict:
+    """Commander-only alert with alternatives when a requested resource is unavailable."""
+
     # Commander-only detail (fact + concrete alternatives), persisted on its own column by
     # orchestrator/flows.py::_finish_with_resource_unavailable -- never insight_text or
     # report_text, so it can never reach the reporter's own job_finished notification.
@@ -62,6 +74,8 @@ def _resource_unavailable_alert_payload(ctx: "ApiContext", event_id: str, event:
     return {"event_id": event_id, "alert_text": event.get("commander_alert_text") or ""}
 
 def _hold_escalation_payload(ctx: "ApiContext", event_id: str, event: dict | None = None) -> dict:
+    """Commander alert after an unresolved hold exceeds the escalation window."""
+
     # Item 8: an unresolved hold escalated to commanders after get_hold_escalation_minutes with
     # no answer -- the alert text is composed once, at escalation time (orchestrator.flows'
     # _escalate_unresolved_hold), and persisted the same way commander_alert_text already is.
@@ -70,6 +84,8 @@ def _hold_escalation_payload(ctx: "ApiContext", event_id: str, event: dict | Non
     return {"event_id": event_id, "alert_text": event.get("hold_escalation_alert_text") or ""}
 
 def _precedent_closure_payload(ctx: "ApiContext", event_id: str, event: dict | None = None) -> dict:
+    """Payload naming the earlier event that closed this one as a precedent."""
+
     if event is None:
         event = ctx.deps.persistence.fetch_event(event_id)
     matched_id = event["precedent_closed_by_event_id"]
@@ -82,6 +98,8 @@ def _precedent_closure_payload(ctx: "ApiContext", event_id: str, event: dict | N
     }
 
 def _no_match_payload(ctx: "ApiContext", event_id: str, event: dict | None = None) -> dict:
+    """Payload for a run that found no matching protocol."""
+
     if event is None:
         event = ctx.deps.persistence.fetch_event(event_id)
     return {
@@ -93,6 +111,8 @@ def _no_match_payload(ctx: "ApiContext", event_id: str, event: dict | None = Non
     }
 
 def _job_payload(ctx: "ApiContext", event_id: str, event: dict | None = None) -> dict:
+    """Finished-or-failed job fields the bot already knows how to render."""
+
     if event is None:
         event = ctx.deps.persistence.fetch_event(event_id)
     return {
@@ -185,6 +205,8 @@ def _ack_message_id(ctx: "ApiContext", kind: str, event_id: str, event: dict | N
     return event.get("ack_message_id") if event is not None else None
 
 def _format_notification(ctx: "ApiContext", notification_row: dict) -> dict:
+    """Assemble one pollable notification with payload, targets, and reply ids."""
+
     builder = _PAYLOAD_BUILDERS[notification_row["kind"]]
     event_id = notification_row["event_id"]
     event = ctx.deps.persistence.fetch_event(event_id)
@@ -199,11 +221,15 @@ def _format_notification(ctx: "ApiContext", notification_row: dict) -> dict:
     }
 
 def build_notifications_blueprint(ctx: "ApiContext") -> Blueprint:
+    """JSON route the bot polls for outbound notifications."""
+
     blueprint = Blueprint("notifications", __name__)
     messages = ctx.loaded_profile.message_catalog
 
     @blueprint.route("/Notifications", methods=["GET"])
     def get_notifications():
+        """Return notifications newer than ``since``, optionally waiting for one."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.POLL_NOTIFICATIONS)
 

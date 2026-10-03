@@ -1,10 +1,8 @@
-"""Firefighting specialist agents."""
+"""Firefighting specialist agents and resource-unavailable copy."""
 
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-from agents import Agent, InvocationPolicy, NeighboringForcesAgent, SurveillanceAgent, TeamStatusAgent, failed_tool_result, get_authenticated_request_identity, tool
-from messages import get_catalog
+from agents import Agent, NeighboringForcesAgent, SurveillanceAgent, TeamStatusAgent, failed_tool_result, get_authenticated_request_identity, tool
 from persistence import (
     ApparatusStoreError,
     FireStoreError,
@@ -12,57 +10,50 @@ from persistence import (
     open_fire_store,
     open_incident_responder_store,
     open_surveillance_store,
-    open_team_status_persistence,
 )
-from profiles.admin_tables import AdminColumn, AdminTable
-from profiles.contracts import AgentSpec, OptimizationPolicy
-from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
-from protocols import CriticalityLevel, Protocol, Step
-
-import profiles.firefighting as _facade
-globals().update({name: getattr(_facade, name) for name in dir(_facade) if not name.startswith("__")})
+from profiles.contracts import AgentSpec
+from profiles.firefighting import (
+    FIREFIGHTING_CREW_STATUS_DB_PATH,
+    FIREFIGHTING_FORCES_DB_PATH,
+    FIREFIGHTING_SURVEILLANCE_DB_PATH,
+    FORCE_BASES,
+    FORCE_BUSY_SECONDS,
+    FORCE_POOL_SIZE,
+    _catalog_text,
+)
 
 class FirefightingSurveillanceAgent(SurveillanceAgent):
-    """Binds the reusable visual-surveillance specialist to this profile's own DB --
-    fire cameras and thermal sensors (docs/Profile_Split_Plan.md section 4.2).
-
-    Opens the same already-generic `ResponseTeamSurveillanceStore`
-    (`open_response_team_surveillance_store`, despite the module name -- see
-    docs/Admin_Tables_Plan.md section 1) `profiles/response_team.py` uses, with this profile's
-    own DB path and home area, instead of the shared base's default hardcoded-`'central_hub'`
-    store -- so `return_drone_to_base` (recall, already declared on the shared
-    `SurveillanceAgent` base) works for this profile exactly like it does for response_team,
-    with no per-profile recall tool needed."""
+    """Surveillance specialist bound to this profile's camera/drone store and fire-station home."""
 
     surveillance_db_path = FIREFIGHTING_SURVEILLANCE_DB_PATH
 
     def __init__(self, model: str, api_key: str | None = None):
+        """Open this profile's surveillance store, then finish the shared Agent setup."""
+
+        from profiles import firefighting as profile
         self.surveillance_store = open_surveillance_store(
-            self.surveillance_db_path, home_area=FIREFIGHTING_DRONE_HOME
+            self.surveillance_db_path, home_area=profile.FIREFIGHTING_DRONE_HOME
         )
         Agent.__init__(self, model, api_key)
 
 
 class FirefightingCrewStatusAgent(TeamStatusAgent):
-    """Binds the reusable readiness-status specialist to this profile's own DB -- the
-    firefighting crew's shift roster and attendance (docs/Profile_Split_Plan.md section 4.2).
-
-    Also owns station apparatus (engine/vehicle) status -- FIRE_002's own simulation text
-    reports apparatus readiness in the exact same "station opening" messages as crew
-    availability (docs/Admin_Tables_Plan.md's simulation-data-alignment audit), so it belongs
-    on this same "station readiness" specialist rather than a new agent."""
+    """Crew-shift, apparatus, and fire-registry specialist for this station's own stores."""
 
     status_db_path = FIREFIGHTING_CREW_STATUS_DB_PATH
     timezone_name = "Asia/Jerusalem"
     response_window_hours = 1
 
     def __init__(self, model: str, api_key: str | None = None):
+        """Open apparatus, fire, and incident stores after the shared team-status setup."""
+
         super().__init__(model, api_key)
-        self.apparatus_store = open_apparatus_store(_facade.FIREFIGHTING_APPARATUS_DB_PATH)
-        self.fire_store = open_fire_store(_facade.FIREFIGHTING_FIRES_DB_PATH)
-        # Incident linkage is keyed against core `events`, which live in this profile's
-        # `DB_PATH` -- a different file from the apparatus/crew-status stores above.
-        self.incident_store = open_incident_responder_store(_facade.DB_PATH)
+        from profiles import firefighting as profile
+        # Read paths from the profile module so test monkeypatches on that facade apply.
+        self.apparatus_store = open_apparatus_store(profile.FIREFIGHTING_APPARATUS_DB_PATH)
+        self.fire_store = open_fire_store(profile.FIREFIGHTING_FIRES_DB_PATH)
+        # Incident links key off core events in DB_PATH, not the apparatus/crew files.
+        self.incident_store = open_incident_responder_store(profile.DB_PATH)
 
     @tool(
         "record_fire_status",
@@ -76,6 +67,8 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         idempotent=True,
     )
     def record_fire_status(self, area: str = "", status: str = "", source_event_id: str = "") -> str:
+        """Write one fire as burning or extinguished in this profile's fire registry."""
+
         cleaned_area = area.strip()
         cleaned_status = status.strip().lower()
         if not cleaned_area:
@@ -107,6 +100,8 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         idempotent=True,
     )
     def touch_active_fire(self, area: str = "") -> str:
+        """Refresh last_updated on the burning fire for `area`, if one exists."""
+
         cleaned_area = area.strip()
         if not cleaned_area:
             return failed_tool_result("Clarification required: area is required.")
@@ -127,6 +122,8 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         side_effecting=False,
     )
     def list_active_fires(self, area: str = "") -> str:
+        """Return currently burning fires after the two-day stale-expiry."""
+
         rows = self.fire_store.list_active(area=area.strip() or None)
         if not rows:
             scope = f" in '{area.strip()}'" if area.strip() else ""
@@ -143,6 +140,8 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         side_effecting=False,
     )
     def get_apparatus_status(self) -> str:
+        """Return the station apparatus roster with each engine's current status."""
+
         rows = self.apparatus_store.list_apparatus()
         if not rows:
             return "No apparatus is registered."
@@ -164,6 +163,8 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         idempotent=True,
     )
     def update_apparatus_status(self, identifier: str, status: str, current_area: str = "") -> str:
+        """Record one apparatus status and optional area; does not link it to an incident."""
+
         try:
             updated = self.apparatus_store.update_status(identifier, status.strip().lower(), current_area.strip() or None)
         except ApparatusStoreError as exc:
@@ -184,6 +185,8 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         idempotent=True,
     )
     def join_incident_response(self, identifier: str = "", area: str = "") -> str:
+        """Link one named apparatus to the single incident currently on record for `area`."""
+
         apparatus = self.apparatus_store.get_apparatus(identifier)
         if apparatus is None:
             return f"Not linked: apparatus '{identifier}' not found."
@@ -206,6 +209,8 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         idempotent=True,
     )
     def leave_incident_response(self, identifier: str = "") -> str:
+        """Close one named apparatus's current incident link, if it has one."""
+
         apparatus = self.apparatus_store.get_apparatus(identifier)
         if apparatus is None:
             return f"Not updated: apparatus '{identifier}' not found."
@@ -224,6 +229,8 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         side_effecting=False,
     )
     def list_incident_responders(self, area: str = "") -> str:
+        """List personnel and apparatus linked to the single incident on record for `area`."""
+
         if not area.strip():
             return failed_tool_result("Clarification required: area is required.")
 
@@ -258,6 +265,8 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         original_text: str = "",
         received_at: str = "",
     ) -> str:
+        """Record a commander-declared available shift for the named approved crew members."""
+
         if not get_authenticated_request_identity():
             return failed_tool_result("The crew shift status was not stored: authenticated requester identity is unavailable.")
 
@@ -312,18 +321,7 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
 
 
 class FirefightingExternalForcesAgent(NeighboringForcesAgent):
-    """Mutual-aid dispatch specialist -- a thin subclass of the shared
-    `agents.neighboring_forces_agent.NeighboringForcesAgent` (docs/Admin_Tables_Plan.md sections
-    3/3.2), giving this profile the exact same persisted dispatch-log + computed-remaining-
-    capacity mechanism `response_team.py` has, instead of the previous in-memory
-    `agents.friendly_forces_agent.FriendlyForcesAgent`-based stand-in. `dispatch_police`,
-    `dispatch_ambulance`, `dispatch_water_tankers`, and `dispatch_aircraft` no longer exist as
-    separate tools -- every kind now goes through the shared base's single
-    `dispatch_neighboring_force(kind, target_area, unit_count, note)` tool, with `kind` selecting
-    among `police|ambulance|water_tankers|aircraft`. No override of `_resolve_kind`/
-    `_check_capacity` is needed -- this profile has no non-force kind like response_team's own
-    "squad", so the shared base's defaults, driven by `FORCE_BASES`/`FORCE_POOL_SIZE` below, are
-    exactly right as-is."""
+    """Mutual-aid dispatch specialist using this profile's force kinds and pool."""
 
     dispatch_db_path = FIREFIGHTING_FORCES_DB_PATH
     force_bases = FORCE_BASES
@@ -331,6 +329,8 @@ class FirefightingExternalForcesAgent(NeighboringForcesAgent):
     force_busy_seconds = FORCE_BUSY_SECONDS
 
     def _capacity_shortage_text(self, kind_norm: str, remaining: int, unit_count: int) -> str:
+        """Localized reason when the requested mutual-aid kind has too few units left."""
+
         return _catalog_text(
             "firefighting.resource_unavailable.force_reason",
             remaining=remaining,
@@ -367,6 +367,8 @@ _ENGLISH_REASON_KEYS = {
 
 
 def _localize_unavailable_reason(reason: str) -> str:
+    """Map known English tool reasons onto this profile's catalog copy."""
+
     cleaned = (reason or "").strip()
     key = _ENGLISH_REASON_KEYS.get(cleaned)
     if key:
@@ -375,6 +377,8 @@ def _localize_unavailable_reason(reason: str) -> str:
 
 
 def _force_remaining_capacity(neighboring_forces_agent) -> dict[str, int]:
+    """Remaining units per force kind inside the same busy window the dispatch tool uses."""
+
     busy_since = (datetime.now(timezone.utc) - timedelta(seconds=FORCE_BUSY_SECONDS)).isoformat()
     busy_by_kind: dict[str, int] = {}
     for dispatch in neighboring_forces_agent.dispatch_store.list_dispatches():
@@ -384,6 +388,8 @@ def _force_remaining_capacity(neighboring_forces_agent) -> dict[str, int]:
 
 
 def _find_resource_alternatives(area: str, registry) -> str:
+    """Commander-facing list of cameras, drones, crew, forces, and apparatus that can cover `area`."""
+
     parts: list[str] = []
     area_label = _AREA_LABELS.get(area, area)
 
@@ -427,6 +433,8 @@ def _find_resource_alternatives(area: str, registry) -> str:
 
 
 def _describe_resource_unavailable(resource_kind: str, area: str, reason: str, registry) -> tuple[str, str]:
+    """Return the reporter-facing fact sentence and commander-facing alternatives."""
+
     resource_label = _RESOURCE_KIND_LABELS.get(resource_kind, resource_kind)
     area_label = _AREA_LABELS.get(area, area)
     fact = _catalog_text(
@@ -446,4 +454,16 @@ AGENTS = [
     AgentSpec(cls=FirefightingSurveillanceAgent, tier="sub"),
     AgentSpec(cls=FirefightingCrewStatusAgent, tier="sub"),
     AgentSpec(cls=FirefightingExternalForcesAgent, tier="sub"),
+]
+
+__all__ = [
+    "AGENTS",
+    "FirefightingCrewStatusAgent",
+    "FirefightingExternalForcesAgent",
+    "FirefightingSurveillanceAgent",
+    "RESOURCE_UNAVAILABLE_DESCRIPTION",
+    "_AREA_LABELS",
+    "_RESOURCE_KIND_LABELS",
+    "_describe_resource_unavailable",
+    "_find_resource_alternatives",
 ]

@@ -1,4 +1,4 @@
-"""The protocol model (work_plan.md §4.1) and the Step contract (§1.2/§4.4)."""
+"""Protocol and Step contracts used by profile declarations and the executor."""
 
 from dataclasses import dataclass, field
 from enum import IntEnum
@@ -14,10 +14,7 @@ EVENT_DATA_FIELDS = (
     "description",
     "severity",
     "occurred_at",
-    # Availability fields (Stage 3, docs/bar_improves.md): a team member's own
-    # reported absence interval and reason. Nullable/optional like every other
-    # field here — the required-fields gate is what makes them mandatory for a
-    # specific event type (e.g. "attendance"), never this tuple itself.
+    # Optional absence interval and reason; a type's required-fields gate may demand them.
     "availability_start",
     "availability_end",
     "absence_reason",
@@ -34,6 +31,8 @@ class CriticalityLevel(IntEnum):
 
 @dataclass(frozen=True)
 class Protocol:
+    """Protocol."""
+
     name: str
     description: str
     participating_agents: tuple[str, ...]
@@ -119,6 +118,8 @@ class ResourceUnavailable:
 
 @dataclass(frozen=True)
 class StepOutcome:
+    """StepOutcome."""
+
     step: Step
     result_text: str | None
     attempt_count: int
@@ -132,6 +133,8 @@ class StepOutcome:
 
 @dataclass(frozen=True)
 class ProtocolRunResult:
+    """ProtocolRunResult."""
+
     step_outcomes: tuple[StepOutcome, ...]
     completed: bool
     failed_step_index: int | None = None

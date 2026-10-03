@@ -1,4 +1,4 @@
-"""Fire and Rescue (FIRE) deployment profile (docs/bar_improves.md Stage 4b).
+"""Fire and Rescue deployment profile: fires, rescues, mutual aid, and attendance.
 
 A Fire and Rescue station: structure fires, hazmat fires, rescues (a person trapped or in
 danger without fire), mutual-aid dispatch, and attendance. One deployment = this one
@@ -45,12 +45,8 @@ OPTIMIZATION_POLICY = OptimizationPolicy()
 
 # Named mutual-aid resources this deployment recognizes. These names are identifiers
 # only -- no capability is invented for them; the mutual-aid tool accepts only a name
-# from this tuple and returns a refusal text for anything else (docs/bar_improves.md
-# Stage 4b). Declared here, at profile level, and bound onto the shared DispatchAgent
-# class below via a profile-specific subclass -- the same pattern
-# profiles/standby_squad.py already uses to bind e.g. `surveillance_db_path` onto a
-# shared agent class, since the reusable agents/fire_station_agents.py module must not
-# hardcode any profile-specific resource name itself.
+# from this tuple and returns a refusal text for anything else. Declared here
+# so the shared DispatchAgent class does not hardcode profile resource names.
 MUTUAL_AID_RESOURCES = ("ASHED", "CARMEL")
 
 
@@ -143,7 +139,7 @@ PROTOCOLS = [
 
 # Event types. As in profiles/response_team.py, what belongs in each type and what does
 # not is declared below in EVENT_TYPE_DESCRIPTIONS, fed into the extraction prompt next
-# to each type's own name (docs/bar_improves.md's follow-up to Stage 4).
+# to each type's own name so extraction knows what belongs in which type.
 EVENT_TYPES = [
     "structure_fire",
     "hazmat_fire",

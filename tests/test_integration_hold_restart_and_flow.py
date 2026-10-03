@@ -1,7 +1,7 @@
 """9.7 / 9.9 — restart-mid-hold and continued-processing-behind-a-hold
-(work_plan.md §9.7, §9.9).
+.
 
-Most of §9.7/§9.8/§9.9/§9.10/§9.11/§9.12/§9.13's own bullets are already
+Most of's own bullets are already
 covered, bullet for bullet, by extensive pre-existing test suites:
 `tests/test_orchestrator_holds.py`, `tests/test_orchestrator_precedent.py`,
 `tests/test_orchestrator_formulation.py`, `tests/test_orchestrator_judgment.py`
@@ -33,10 +33,12 @@ from tests.crewai_fakes import install_crewai_stub
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch, 'status nominal')
 
 
 def test_a_clarification_hold_survives_a_real_restart_and_is_resolvable_through_the_real_api(tmp_path):
+    """A clarification hold survives a real restart and is resolvable through the real api."""
     ctx1 = build_context(tmp_path)
     event_id = ctx1.deps.persistence.append_event({
         "received_at": "2026-08-24T10:00:00", "source": "telegram", "sender_identity": "viewer-1", "raw_text": "unclear report",
@@ -59,6 +61,7 @@ def test_a_clarification_hold_survives_a_real_restart_and_is_resolvable_through_
 
 
 def test_an_approval_hold_survives_a_real_restart_and_is_resolvable_through_the_real_api(tmp_path):
+    """An approval hold survives a real restart and is resolvable through the real api."""
     ctx1 = build_context(tmp_path)
     event_id = ctx1.deps.persistence.append_event({
         "received_at": "2026-08-24T10:00:00", "source": "telegram", "sender_identity": "viewer-1",
@@ -85,13 +88,14 @@ def test_events_behind_a_held_event_continue_processing_while_it_waits(tmp_path)
     # An event that will hold (unclassifiable text) submitted first, then
     # an event that won't (a clear match) submitted right after — the
     # second must complete even though the first is still pending.
+    """Events behind a held event continue processing while it waits."""
     agent = happy_path_agent(risk_score="0.1", selected="status_check")
     agent._dispatch["Extract this operational event"] = (
         '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}'
     )
     # An unresolved classification now resolves to the built-in "unclassified"
     # event type, which requires `area` — asked (via the event-data gate,
-    # REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 / item #6) before this
+    # Part 1 / item #6) before this
     # event would ever reach a clarification hold.
     agent._dispatch["Write one concise question"] = "Which area is this in?"
 
@@ -126,6 +130,7 @@ def test_events_behind_a_held_event_continue_processing_while_it_waits(tmp_path)
 
 
 def _post_json(base_url: str, path: str, identity: str, body: dict) -> dict:
+    """Post json."""
     import json
     import urllib.error
     import urllib.request

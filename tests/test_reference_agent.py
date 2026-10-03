@@ -1,8 +1,11 @@
+"""ReferenceAgent tools and seed-data coverage."""
+
 from agents import base
 from agents.reference import ReferenceAgent
 
 
 def test_constructed_with_a_model_like_any_other_agent():
+    """Constructed with a model like any other agent."""
     agent = ReferenceAgent(model="some-model")
 
     assert agent.model == "some-model"
@@ -10,6 +13,7 @@ def test_constructed_with_a_model_like_any_other_agent():
 
 
 def test_role_and_system_prompt_are_real_text_not_placeholders():
+    """Role and system prompt are real text not placeholders."""
     agent = ReferenceAgent(model="m")
 
     assert len(agent.role) > 40
@@ -19,6 +23,7 @@ def test_role_and_system_prompt_are_real_text_not_placeholders():
 
 
 def test_exposes_exactly_the_two_stub_tools_with_the_right_marks():
+    """Exposes exactly the two stub tools with the right marks."""
     agent = ReferenceAgent(model="m")
     tools = {t.name: t for t in agent.exposed_tools()}
 
@@ -32,6 +37,7 @@ def test_exposes_exactly_the_two_stub_tools_with_the_right_marks():
 
 
 def test_check_status_is_read_only_and_returns_a_canned_status():
+    """Check status is read only and returns a canned status."""
     agent = ReferenceAgent(model="m")
 
     token = base._current_allowed_tools.set(frozenset({"check_status"}))
@@ -49,6 +55,7 @@ def test_record_action_genuinely_records_each_call_it_receives():
     # later (§4.5) — the tool has to actually accumulate state, not just
     # return a canned string, so a second call is observably different
     # from stopping after one.
+    """Record action genuinely records each call it receives."""
     agent = ReferenceAgent(model="m")
 
     token = base._current_allowed_tools.set(frozenset({"record_action"}))
@@ -62,6 +69,7 @@ def test_record_action_genuinely_records_each_call_it_receives():
 
 
 def test_record_action_is_blocked_when_not_allowed():
+    """Record action is blocked when not allowed."""
     agent = ReferenceAgent(model="m")
 
     token = base._current_allowed_tools.set(frozenset({"check_status"}))  # record_action not allowed
@@ -85,6 +93,7 @@ from persistence.sqlite_store import SQLitePersistence
 
 @pytest.fixture
 def store(tmp_path):
+    """Store."""
     backend = SQLitePersistence(str(tmp_path / "seed.db"))
     load_seed_dataset(backend)
     yield backend
@@ -92,15 +101,18 @@ def store(tmp_path):
 
 
 def test_every_record_loads_without_error(store):
+    """Every record loads without error."""
     events = store.fetch_events_range("2000-01-01", "2100-01-01")
     assert len(events) == len(SEED_EVENTS)
 
 
 def test_contains_partial_reports_with_empty_fields():
+    """Contains partial reports with empty fields."""
     assert any(e.get("area") is None or e.get("severity") is None for e in SEED_EVENTS)
 
 
 def test_contains_a_contradictory_pair_about_the_same_occurrence():
+    """Contains a contradictory pair about the same occurrence."""
     by_classification_area_time = {}
     for event in SEED_EVENTS:
         key = (event.get("classification"), event.get("area"), event.get("occurred_at"))
@@ -114,6 +126,7 @@ def test_contains_a_contradictory_pair_about_the_same_occurrence():
 
 
 def test_contains_a_report_whose_occurrence_precedes_its_receipt():
+    """Contains a report whose occurrence precedes its receipt."""
     assert any(
         event.get("occurred_at") and event["occurred_at"] < event["received_at"]
         for event in SEED_EVENTS
@@ -121,12 +134,14 @@ def test_contains_a_report_whose_occurrence_precedes_its_receipt():
 
 
 def test_contains_both_high_and_low_risk_records():
+    """Contains both high and low risk records."""
     risk_levels = {event.get("risk_level") for event in SEED_EVENTS}
     assert "high" in risk_levels
     assert "low" in risk_levels
 
 
 def test_repeated_fire_north_sector_events_span_inside_and_outside_a_typical_window(store):
+    """Repeated fire north sector events span inside and outside a typical window."""
     window_start = "2026-07-21T12:00:00"  # 30 days before REFERENCE_NOW
 
     matches = store.fetch_events_by_type_area_window("fire", "north_sector", window_start, REFERENCE_NOW)
@@ -137,10 +152,12 @@ def test_repeated_fire_north_sector_events_span_inside_and_outside_a_typical_win
 
 
 def test_contains_at_least_one_unresolved_prior_event():
+    """Contains at least one unresolved prior event."""
     assert any(event.get("outcome") is None for event in SEED_EVENTS)
 
 
 def test_contains_a_resolved_clarification_hold_from_unclassifiable_text():
+    """Contains a resolved clarification hold from unclassifiable text."""
     resolved_holds = [event for event in SEED_EVENTS if event.get("clarification_held")]
 
     assert resolved_holds
@@ -148,6 +165,7 @@ def test_contains_a_resolved_clarification_hold_from_unclassifiable_text():
 
 
 def test_contains_human_activation_records():
+    """Contains human activation records."""
     human_activation_events = [event for event in SEED_EVENTS if event["classification"] == "human_activation"]
 
     assert len(human_activation_events) >= 2

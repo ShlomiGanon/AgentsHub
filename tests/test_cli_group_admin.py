@@ -1,3 +1,5 @@
+"""CLI helpers for Telegram group administration."""
+
 import uuid
 
 import pytest
@@ -12,6 +14,7 @@ MODEL_CRED_ENV = "TEST_GROUP_ADMIN_MODEL_KEY"
 
 @pytest.fixture
 def profile_module(tmp_path, monkeypatch):
+    """Profile module."""
     module_name = f"group_admin_test_profile_{uuid.uuid4().hex}"
 
     db_path = tmp_path / "deployment.db"
@@ -34,6 +37,7 @@ def profile_module(tmp_path, monkeypatch):
 
 
 def _groups(db_path):
+    """Groups."""
     store = SQLitePersistence(str(db_path))
     try:
         return {group["chat_id"]: group for group in store.list_groups()}
@@ -42,6 +46,7 @@ def _groups(db_path):
 
 
 def test_add_binds_a_group_to_main_agent(profile_module, capsys, real_tier_env):
+    """Add binds a group to main agent."""
     module_name, db_path = profile_module
 
     exit_code = main(["--profile", module_name, "add", "--chat-id", "-1001", "--agent", "main_agent", "--label", "ops"])
@@ -54,6 +59,7 @@ def test_add_binds_a_group_to_main_agent(profile_module, capsys, real_tier_env):
 
 
 def test_add_accepts_a_profile_specialist_by_name(profile_module, real_tier_env):
+    """Add accepts a profile specialist by name."""
     module_name, db_path = profile_module
 
     exit_code = main(["--profile", module_name, "add", "--chat-id", "-1002", "--agent", "reference_agent"])
@@ -63,6 +69,7 @@ def test_add_accepts_a_profile_specialist_by_name(profile_module, real_tier_env)
 
 
 def test_add_rejects_an_agent_the_profile_does_not_declare(profile_module, capsys, real_tier_env):
+    """Add rejects an agent the profile does not declare."""
     module_name, db_path = profile_module
 
     exit_code = main(["--profile", module_name, "add", "--chat-id", "-1003", "--agent", "no_such_agent"])
@@ -74,6 +81,7 @@ def test_add_rejects_an_agent_the_profile_does_not_declare(profile_module, capsy
 
 
 def test_add_can_set_attendance_schedule_without_resetting_it_on_label_update(profile_module, real_tier_env):
+    """Add can set attendance schedule without resetting it on label update."""
     module_name, db_path = profile_module
 
     assert main([
@@ -94,6 +102,7 @@ def test_add_can_set_attendance_schedule_without_resetting_it_on_label_update(pr
 
 
 def test_update_rebinds_an_existing_group(profile_module, real_tier_env):
+    """Update rebinds an existing group."""
     module_name, db_path = profile_module
 
     main(["--profile", module_name, "add", "--chat-id", "-1004", "--agent", "reference_agent"])
@@ -105,6 +114,7 @@ def test_update_rebinds_an_existing_group(profile_module, real_tier_env):
 
 
 def test_remove_deletes_a_binding_and_unknown_fails(profile_module, capsys, real_tier_env):
+    """Remove deletes a binding and unknown fails."""
     module_name, db_path = profile_module
 
     main(["--profile", module_name, "add", "--chat-id", "-1005", "--agent", "main_agent"])
@@ -116,6 +126,7 @@ def test_remove_deletes_a_binding_and_unknown_fails(profile_module, capsys, real
 
 
 def test_approve_preserves_the_group_route(profile_module, real_tier_env):
+    """Approve preserves the group route."""
     module_name, db_path = profile_module
     store = SQLitePersistence(str(db_path))
     try:
@@ -130,6 +141,7 @@ def test_approve_preserves_the_group_route(profile_module, real_tier_env):
 
 
 def test_list_reports_every_binding(profile_module, capsys, real_tier_env):
+    """List reports every binding."""
     module_name, _ = profile_module
 
     main(["--profile", module_name, "add", "--chat-id", "-1006", "--agent", "main_agent", "--label", "one"])
@@ -144,6 +156,7 @@ def test_list_reports_every_binding(profile_module, capsys, real_tier_env):
 
 
 def test_unknown_profile_fails_before_touching_any_database(capsys, real_tier_env):
+    """Unknown profile fails before touching any database."""
     exit_code = main(["--profile", "no_such_profile_module", "list"])
 
     assert exit_code == 1

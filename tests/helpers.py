@@ -16,15 +16,18 @@ from protocols.model import CriticalityLevel
 
 @dataclass(frozen=True)
 class FakeAgent:
+    """FakeAgent."""
     name: str
     tools: tuple = ()
 
     def exposed_tools(self):
+        """Exposed tools."""
         return self.tools
 
 
 @dataclass(frozen=True)
 class FakeProtocol:
+    """FakeProtocol."""
     name: str = "fake_protocol"
     description: str = "a description"
     participating_agents: tuple = ()

@@ -1,3 +1,5 @@
+"""Surveillance specialist agent tools."""
+
 from agents import SurveillanceAgent
 from agents import runtime as agent_runtime
 from agents.surveillance_agent import READ_ONLY_DEFAULT_MAX_OUTPUT_TOKENS
@@ -6,15 +8,18 @@ from concurrent.futures import ThreadPoolExecutor
 
 
 class _TestSurveillanceAgent(SurveillanceAgent):
+    """TestSurveillanceAgent."""
     surveillance_db_path = ""
 
 
 def _agent(tmp_path):
+    """Agent."""
     _TestSurveillanceAgent.surveillance_db_path = str(tmp_path / "surveillance.db")
     return _TestSurveillanceAgent(model="test-model")
 
 
 def _call_tool(agent, name, **kwargs):
+    """Call tool."""
     token = agent_runtime._current_allowed_tools.set(frozenset({name}))
     try:
         return agent._wrapped_tools[name](**kwargs)
@@ -23,6 +28,7 @@ def _call_tool(agent, name, **kwargs):
 
 
 def test_surveillance_agent_descriptor_and_tools_exposed(tmp_path):
+    """Surveillance agent descriptor and tools exposed."""
     agent = _agent(tmp_path)
     assert agent.name == "surveillance_agent"
     assert "visual surveillance" in agent.role.lower()
@@ -48,6 +54,7 @@ def test_surveillance_agent_descriptor_and_tools_exposed(tmp_path):
 
 
 def test_get_camera_feeds_tool(tmp_path):
+    """Get camera feeds tool."""
     agent = _agent(tmp_path)
 
     # All cameras
@@ -71,6 +78,7 @@ def test_get_camera_feeds_tool(tmp_path):
 
 
 def test_get_drone_fleet_status_tool(tmp_path):
+    """Get drone fleet status tool."""
     agent = _agent(tmp_path)
 
     output = _call_tool(agent, "get_drone_fleet_status")
@@ -94,6 +102,7 @@ def test_get_drone_fleet_status_tool(tmp_path):
 
 
 def test_dispatch_drone_to_area_tool_and_active_missions(tmp_path):
+    """Dispatch drone to area tool and active missions."""
     agent = _agent(tmp_path)
 
     # Missing target area or incident description requires clarification
@@ -125,6 +134,7 @@ def test_dispatch_drone_to_area_tool_and_active_missions(tmp_path):
 
 
 def test_dispatch_drone_to_area_signals_resource_unavailable_when_the_fleet_is_exhausted(tmp_path):
+    """Dispatch drone to area signals resource unavailable when the fleet is exhausted."""
     agent = _agent(tmp_path)
     _call_tool(agent, "dispatch_drone_to_area", target_area="north_gate", incident_description="first")
     _call_tool(agent, "dispatch_drone_to_area", target_area="north_gate", incident_description="second")
@@ -140,6 +150,7 @@ def test_dispatch_drone_to_area_signals_resource_unavailable_when_the_fleet_is_e
 
 
 def test_dispatch_drone_to_area_does_not_signal_on_a_successful_dispatch(tmp_path):
+    """Dispatch drone to area does not signal on a successful dispatch."""
     agent = _agent(tmp_path)
 
     _call_tool(agent, "dispatch_drone_to_area", target_area="north_gate", incident_description="ok")
@@ -148,6 +159,7 @@ def test_dispatch_drone_to_area_does_not_signal_on_a_successful_dispatch(tmp_pat
 
 
 def test_get_camera_feeds_signals_resource_unavailable_when_an_area_has_no_cameras(tmp_path):
+    """Get camera feeds signals resource unavailable when an area has no cameras."""
     agent = _agent(tmp_path)
 
     output = _call_tool(agent, "get_camera_feeds", area="nonexistent_area")
@@ -158,6 +170,7 @@ def test_get_camera_feeds_signals_resource_unavailable_when_an_area_has_no_camer
 
 
 def test_get_camera_feeds_does_not_signal_when_cameras_cover_the_area(tmp_path):
+    """Get camera feeds does not signal when cameras cover the area."""
     agent = _agent(tmp_path)
 
     _call_tool(agent, "get_camera_feeds", area="north_gate")
@@ -167,6 +180,7 @@ def test_get_camera_feeds_does_not_signal_when_cameras_cover_the_area(tmp_path):
 
 def test_get_camera_feeds_does_not_signal_for_an_unscoped_general_query(tmp_path):
     # No area given -- nothing to call "unavailable for", this is a general status query.
+    """Get camera feeds does not signal for an unscoped general query."""
     agent = _agent(tmp_path)
 
     _call_tool(agent, "get_camera_feeds")
@@ -175,6 +189,7 @@ def test_get_camera_feeds_does_not_signal_for_an_unscoped_general_query(tmp_path
 
 
 def test_update_camera_observation_and_overview(tmp_path):
+    """Update camera observation and overview."""
     agent = _agent(tmp_path)
 
     update_result = _call_tool(
@@ -191,6 +206,7 @@ def test_update_camera_observation_and_overview(tmp_path):
 
 
 def test_return_single_active_drone_without_identifier(tmp_path):
+    """Return single active drone without identifier."""
     agent = _agent(tmp_path)
     _call_tool(
         agent,
@@ -209,6 +225,7 @@ def test_return_single_active_drone_without_identifier(tmp_path):
 
 
 def test_return_requires_selection_when_multiple_drones_are_active(tmp_path):
+    """Return requires selection when multiple drones are active."""
     agent = _agent(tmp_path)
     first = _call_tool(
         agent,
@@ -243,6 +260,7 @@ def test_return_requires_selection_when_multiple_drones_are_active(tmp_path):
 
 
 def test_return_all_recalls_every_active_drone_atomically(tmp_path):
+    """Return all recalls every active drone atomically."""
     agent = _agent(tmp_path)
     _call_tool(agent, "dispatch_drone_to_area", target_area="north_gate", incident_description="First mission")
     _call_tool(agent, "dispatch_drone_to_area", target_area="south_sector", incident_description="Second mission")
@@ -259,6 +277,7 @@ def test_return_all_recalls_every_active_drone_atomically(tmp_path):
 
 
 def test_return_drone_to_base_does_not_treat_wording_as_recall_all(tmp_path):
+    """Return drone to base does not treat wording as recall all."""
     agent = _agent(tmp_path)
     _call_tool(agent, "dispatch_drone_to_area", target_area="north_gate", incident_description="First mission")
     _call_tool(agent, "dispatch_drone_to_area", target_area="south_sector", incident_description="Second mission")
@@ -271,6 +290,7 @@ def test_return_drone_to_base_does_not_treat_wording_as_recall_all(tmp_path):
 
 
 def test_return_drone_to_base_does_not_treat_filler_words_as_an_empty_identifier(tmp_path):
+    """Return drone to base does not treat filler words as an empty identifier."""
     agent = _agent(tmp_path)
     _call_tool(agent, "dispatch_drone_to_area", target_area="north_gate", incident_description="Only mission")
 
@@ -282,6 +302,7 @@ def test_return_drone_to_base_does_not_treat_filler_words_as_an_empty_identifier
 
 
 def test_process_preserves_exact_recall_selection_across_tool_thread(tmp_path, monkeypatch):
+    """Process preserves exact recall selection across tool thread."""
     agent = _agent(tmp_path)
     _call_tool(agent, "dispatch_drone_to_area", target_area="north_gate", incident_description="First")
     _call_tool(agent, "dispatch_drone_to_area", target_area="south_sector", incident_description="Second")
@@ -302,6 +323,7 @@ def test_process_preserves_exact_recall_selection_across_tool_thread(tmp_path, m
 
 
 def test_process_applies_the_default_read_only_output_budget(tmp_path, monkeypatch):
+    """Process applies the default read only output budget."""
     agent = _agent(tmp_path)
     captured = {}
 

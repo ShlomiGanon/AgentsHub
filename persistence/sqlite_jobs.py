@@ -17,6 +17,7 @@ from persistence.sqlite_support import (
 
 
 class SqliteJobsMixin:
+    """Holds, notifications, logs, and conversation writes for SQLitePersistence."""
     def write_log_entry(self, trace_id: str | None, details: dict) -> None:
         """Insert one log_entries row for this trace."""
 
@@ -24,6 +25,8 @@ class SqliteJobsMixin:
         payload = json.dumps(details, default=str, ensure_ascii=False)
 
         def _do(connection: sqlite3.Connection) -> None:
+            """Insert one log_entries row and wake log waiters."""
+
             try:
                 connection.execute(
                     "INSERT INTO log_entries (trace_id, timestamp, details) VALUES (?, ?, ?)",
@@ -100,6 +103,8 @@ class SqliteJobsMixin:
         }
 
         def _do(connection: sqlite3.Connection) -> str:
+            """Insert a held_events row and emit the matching hold notification."""
+
             try:
                 connection.execute(
                     "INSERT INTO held_events (hold_id, kind, event_id, payload, created_at) "
@@ -152,6 +157,8 @@ class SqliteJobsMixin:
         resolution_payload = {key: value for key, value in resolution.items() if key not in _HELD_EVENT_RESOLUTION_RESERVED_KEYS}
 
         def _do(connection: sqlite3.Connection) -> None:
+            """Mark this held_events row resolved and store the resolution payload."""
+
             existing_hold = connection.execute(
                 "SELECT resolved FROM held_events WHERE hold_id = ? AND kind = ?", (hold_id, kind)
             ).fetchone()
@@ -184,6 +191,8 @@ class SqliteJobsMixin:
         """Set reminded_at on this held_events row."""
 
         def _do(connection: sqlite3.Connection) -> None:
+            """Set reminded_at on this unresolved held_events row."""
+
             connection.execute(
                 "UPDATE held_events SET reminded_at = ? WHERE hold_id = ? AND kind = ? AND resolved = 0",
                 (reminded_at, hold_id, kind),
@@ -196,6 +205,8 @@ class SqliteJobsMixin:
         """Set escalated_at on this held_events row."""
 
         def _do(connection: sqlite3.Connection) -> None:
+            """Set escalated_at on this unresolved held_events row."""
+
             connection.execute(
                 "UPDATE held_events SET escalated_at = ? WHERE hold_id = ? AND kind = ? AND resolved = 0",
                 (escalated_at, hold_id, kind),
@@ -205,11 +216,11 @@ class SqliteJobsMixin:
         self._submit_write(_do)
 
     def insert_notification(self, kind: str, event_id: str) -> None:
-        """Public wrapper for re-triggering an existing notification kind on demand -- item 8's
-        hold reminder re-sends the same `{kind}_hold` prompt this way, reusing the existing
-        payload builder/renderer entirely (it re-reads the still-unresolved hold fresh)."""
+        """Re-insert a notification_log row so a hold reminder can be sent again."""
 
         def _do(connection: sqlite3.Connection) -> None:
+            """Insert one notification_log row and wake notification waiters."""
+
             _insert_notification(connection, kind, event_id)
             connection.commit()
             self._wake_notification_waiters()
@@ -269,6 +280,8 @@ class SqliteJobsMixin:
         keep_messages = max_turns * 2
 
         def _do(connection: sqlite3.Connection) -> None:
+            """Insert one conversation message and prune expired or excess turns."""
+
             try:
                 connection.execute(
                     "DELETE FROM conversation_messages WHERE conversation_id = ? AND created_at < ?",

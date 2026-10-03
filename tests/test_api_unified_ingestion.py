@@ -18,15 +18,18 @@ from tests.crewai_fakes import install_crewai_stub
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch)
 
 
 
 def _agent():
+    """Agent."""
     return happy_path_agent(risk_score="0.1", selected="status_check", intent="report")
 
 
 def test_event_and_msg_report_converge_on_identical_downstream_fields(tmp_path, teardown_ctx):
+    """Event and msg report converge on identical downstream fields."""
     event_ctx = build_context(tmp_path, main_agent=_agent())
     teardown_ctx.append(event_ctx)
     event_client = build_app(event_ctx).test_client()
@@ -67,6 +70,7 @@ def test_event_and_msg_report_call_the_same_orchestrator_functions(tmp_path, tea
     # Not just same-shaped output — the same code path. Both endpoints
     # must call orchestrator.flows.begin_report/run_report_extraction;
     # neither may implement a second, parallel sequence.
+    """Event and msg report call the same orchestrator functions."""
     calls = []
 
     import api.routes_events as events_module

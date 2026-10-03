@@ -7,6 +7,8 @@ from typing import Any, Callable, Literal
 
 @dataclass(frozen=True)
 class InvocationPolicy:
+    """Optional token, timeout, reasoning, and schema limits for one invocation."""
+
     max_output_tokens: int | None = None
     timeout_seconds: float | None = None
     reasoning_effort: Literal["none", "low", "medium", "high"] = "none"
@@ -15,6 +17,8 @@ class InvocationPolicy:
 
 @dataclass(frozen=True)
 class ProviderCapabilities:
+    """What a named provider can do: schema, usage, streaming, reuse."""
+
     strict_json_schema: bool = False
     usage_metrics: bool = False
     streaming: bool = False
@@ -23,6 +27,8 @@ class ProviderCapabilities:
 
 
 def provider_capabilities(model: str) -> ProviderCapabilities:
+    """Return known capabilities for the provider prefix of `model`."""
+
     provider = model.split("/", 1)[0].lower()
     if provider == "openai":
         return ProviderCapabilities(
@@ -37,6 +43,8 @@ def provider_capabilities(model: str) -> ProviderCapabilities:
 
 @dataclass(frozen=True)
 class ToolInfo:
+    """Declared name, description, and side-effect flags for one agent tool."""
+
     name: str
     description: str
     side_effecting: bool
@@ -47,6 +55,8 @@ _TOOL_META_ATTR = "_agent_tool_info"
 
 
 def tool(name: str, description: str, *, side_effecting: bool, idempotent: bool | None = None):
+    """Mark a method as an exposed tool; write tools must declare idempotency."""
+
     if side_effecting and idempotent is None:
         raise ValueError(f"tool '{name}': side_effecting=True requires idempotent to be explicitly True or False")
 
@@ -63,10 +73,14 @@ def tool(name: str, description: str, *, side_effecting: bool, idempotent: bool 
 
 
 def tool_info_of(method: Callable) -> ToolInfo | None:
+    """Return the ToolInfo attached by `@tool`, or None."""
+
     return getattr(method, _TOOL_META_ATTR, None)
 
 
 def exposed_tools_for(agent_instance) -> tuple[ToolInfo, ...]:
+    """Collect ToolInfo from every `@tool` method on the agent's class."""
+
     tools = []
     for attr_name in dir(type(agent_instance)):
         method = getattr(type(agent_instance), attr_name, None)
@@ -79,6 +93,8 @@ def exposed_tools_for(agent_instance) -> tuple[ToolInfo, ...]:
 
 @dataclass(frozen=True)
 class AgentDescriptor:
+    """Frozen snapshot of one agent's role, prompt, tools, and model credentials."""
+
     name: str
     role: str
     system_prompt: str
@@ -98,6 +114,8 @@ UNCLEAR_TASK_PROMPT_INSTRUCTION = (
 
 @dataclass(frozen=True)
 class AgentResult:
+    """Parsed specialist output: success or unclear_task, plus the text."""
+
     status: Literal["success", "unclear_task"]
     text: str
     selection_required: bool = False
@@ -112,14 +130,20 @@ class ToolResult:
     selection_required: bool = False
 
     def __str__(self) -> str:
+        """Return the tool's text so string contexts stay compatible."""
+
         return self.text
 
 
 def failed_tool_result(text: str) -> ToolResult:
+    """Wrap a clarification or failure string as an unsuccessful ToolResult."""
+
     return ToolResult(text=text, ok=False)
 
 
 def parse_agent_output(raw_text: str) -> AgentResult:
+    """Accept a status JSON object or treat the raw text as a successful answer."""
+
     stripped = raw_text.strip()
     try:
         payload = json.loads(stripped)
@@ -134,7 +158,11 @@ def parse_agent_output(raw_text: str) -> AgentResult:
 
 
 class AgentInvocationError(Exception):
+    """A specialist invocation failed; subclasses name the failure kind."""
+
     def __init__(self, agent_name: str, message: str, *, trace_id: str = "", cause: Exception | None = None):
+        """Store agent name, optional trace id, and the underlying cause."""
+
         self.agent_name = agent_name
         self.trace_id = trace_id
         self.cause = cause
@@ -142,23 +170,23 @@ class AgentInvocationError(Exception):
 
 
 class AgentTimeoutError(AgentInvocationError):
-    pass
+    """The provider or shared request deadline expired before a result."""
 
 
 class AgentModelError(AgentInvocationError):
-    pass
+    """The provider call failed for a reason other than timeout."""
 
 
 class AgentOutputParseError(AgentInvocationError):
-    pass
+    """The provider returned text that could not be used as a result."""
 
 
 class AgentToolConstructionError(AgentInvocationError):
-    pass
+    """A CrewAI tool wrapper could not be built for this agent."""
 
 
 class AgentFrameworkNotReadyError(AgentInvocationError):
-    pass
+    """CrewAI is not installed or could not be imported."""
 
 
 def is_retryable_invocation_error(error: AgentInvocationError) -> bool:

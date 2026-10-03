@@ -1,8 +1,11 @@
+"""History specialist agent tools."""
+
 from agents import adapter
 from agents.history import HistoryAgent
 
 
 def test_history_agent_has_no_tools_and_uses_standard_process(monkeypatch):
+    """History agent has no tools and uses standard process."""
     captured = {}
 
     def fake_invoke(descriptor, wrapped_tools, text, timeout_seconds):
@@ -30,11 +33,14 @@ from persistence.interface import open_persistence
 
 
 class FidelityAgent:
+    """FidelityAgent."""
     def process(self, text, allowed_tools):
+        """Process."""
         return AgentResult("success", text)
 
 
 def test_seed_dataset_survives_three_summary_levels_with_contradictions(tmp_path):
+    """Seed dataset survives three summary levels with contradictions."""
     store = open_persistence(str(tmp_path / "fidelity.db"))
     try:
         load_seed_dataset(store)

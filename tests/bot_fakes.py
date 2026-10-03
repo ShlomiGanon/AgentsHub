@@ -1,13 +1,13 @@
 """Fakes for testing `bot/` without a real Telegram connection or a real
-API Layer (work_plan.md §8). Mirrors `tests/helpers.py`'s role for
+API Layer. Mirrors `tests/helpers.py`'s role for
 Missions 1/4, kept in its own file since Mission 8 is the first to need
 this many fakes for one package.
 
 `FakeBotApiClient` implements the full `BotApiClient` interface with
 canned, test-controlled responses — used to test every `bot/` module's
 own logic in isolation from `bot.api_client.UnimplementedApiClient`,
-which exists to fail loudly, not to be a test double.
-"""
+which exists to fail loudly, not to be a test double."""
+
 
 from dataclasses import dataclass, field
 from typing import Sequence
@@ -33,6 +33,7 @@ from bot.telegram_client import TelegramClient
 
 @dataclass
 class SentMessage:
+    """SentMessage."""
     chat_id: str
     text: str
     buttons: tuple[tuple[str, str], ...] | None = None
@@ -41,7 +42,9 @@ class SentMessage:
 
 
 class FakeTelegramClient(TelegramClient):
+    """FakeTelegramClient."""
     def __init__(self, token_is_valid: bool = True):
+        """Initialize this test helper."""
         self.token_is_valid = token_is_valid
         self.sent: list[SentMessage] = []
         self.answered_callback_query_ids: list[str] = []
@@ -49,41 +52,51 @@ class FakeTelegramClient(TelegramClient):
         self._next_status_id = 1
 
     async def validate_token(self) -> bool:
+        """Validate token."""
         return self.token_is_valid
 
     async def send_text(self, chat_id: str, text: str, keyboard: Sequence[Sequence[str]] | None = None) -> None:
+        """Send text."""
         self.sent.append(SentMessage(chat_id=chat_id, text=text, keyboard=tuple(tuple(row) for row in keyboard) if keyboard else None))
 
     async def send_status(self, chat_id: str, text: str, reply_to_message_id: str | None = None) -> str:
+        """Send status."""
         message_id = str(self._next_status_id)
         self._next_status_id += 1
         self.status_events.append(("send", chat_id, message_id, text, reply_to_message_id))
         return message_id
 
     async def edit_status(self, chat_id: str, message_id: str, text: str) -> None:
+        """Edit status."""
         self.status_events.append(("edit", chat_id, message_id, text))
 
     async def delete_status(self, chat_id: str, message_id: str) -> None:
+        """Delete status."""
         self.status_events.append(("delete", chat_id, message_id))
 
     async def send_with_buttons(self, chat_id: str, text: str, buttons: Sequence[tuple[str, str]]) -> None:
+        """Send with buttons."""
         self.sent.append(SentMessage(chat_id=chat_id, text=text, buttons=tuple(buttons)))
 
     async def send_reply(self, chat_id: str, text: str, reply_to_message_id: str | None) -> str:
+        """Send reply."""
         self.sent.append(SentMessage(chat_id=chat_id, text=text, reply_to_message_id=reply_to_message_id))
         message_id = str(self._next_status_id)
         self._next_status_id += 1
         return message_id
 
     async def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> None:
+        """Answer callback query."""
         self.answered_callback_query_ids.append(callback_query_id)
 
     def run_polling(self, register_handlers) -> None:
+        """Run polling."""
         raise NotImplementedError("FakeTelegramClient never actually polls")
 
 
 @dataclass
 class FakeBotApiClient(BotApiClient):
+    """FakeBotApiClient."""
     users: dict = field(default_factory=dict)  # identity -> level or {permission_level, full_name}
     commander_chat_ids: tuple[str, ...] = ()
     message_submission_result: MessageSubmissionResult | None = None
@@ -111,6 +124,7 @@ class FakeBotApiClient(BotApiClient):
         chat_type: str,
         chat_label: str = "",
     ) -> TelegramAdmissionResult:
+        """Admit telegram update."""
         self.calls.append(("admit_telegram_update", telegram_identity, chat_id, chat_type, chat_label))
         record = self.users.get(telegram_identity)
         user_created = False
@@ -154,6 +168,7 @@ class FakeBotApiClient(BotApiClient):
         return TelegramAdmissionResult(allowed, reason, self.safe_mode, user, group)
 
     async def resolve_user(self, telegram_identity: str) -> UserLookupResult:
+        """Resolve user."""
         self.calls.append(("resolve_user", telegram_identity))
         record = self.users.get(telegram_identity)
         if record is None:
@@ -168,6 +183,7 @@ class FakeBotApiClient(BotApiClient):
         return UserLookupResult(registered=True, permission_level=record, full_name="Test User")
 
     async def update_own_full_name(self, telegram_identity: str, full_name: str) -> str:
+        """Update own full name."""
         self.calls.append(("update_own_full_name", telegram_identity, full_name))
         record = self.users.get(telegram_identity)
         if record is None:
@@ -182,14 +198,17 @@ class FakeBotApiClient(BotApiClient):
         return full_name
 
     async def list_commander_chat_ids(self) -> tuple[str, ...]:
+        """List commander chat ids."""
         self.calls.append(("list_commander_chat_ids",))
         return self.commander_chat_ids
 
     async def list_groups(self) -> tuple[GroupBindingView, ...]:
+        """List groups."""
         self.calls.append(("list_groups",))
         return self.groups
 
     async def run_attendance_check(self) -> AttendanceCheckResult:
+        """Run attendance check."""
         self.calls.append(("run_attendance_check",))
         if self.attendance_check_result is None:
             return AttendanceCheckResult(opened=False, agent_name="team_status_agent")
@@ -204,6 +223,7 @@ class FakeBotApiClient(BotApiClient):
         telegram_chat_type: str | None = None,
         ack_message_id: str | None = None,
     ) -> MessageSubmissionResult:
+        """Submit message."""
         if sender_identity not in self.users:
             raise ApiRequestError(401, f"'{sender_identity}' is not a registered identity")
         call = ("submit_message", text, sender_identity, source_message_id)
@@ -224,16 +244,19 @@ class FakeBotApiClient(BotApiClient):
         return self.message_submission_result
 
     async def answer_clarification_hold(self, event_id: str, chosen_classification: str, answering_identity: str) -> HoldAnswerOutcome:
+        """Answer clarification hold."""
         self.calls.append(("answer_clarification_hold", event_id, chosen_classification, answering_identity))
         assert self.clarification_answer_outcome is not None
         return self.clarification_answer_outcome
 
     async def answer_approval_hold(self, event_id: str, decision: str, answering_identity: str) -> HoldAnswerOutcome:
+        """Answer approval hold."""
         self.calls.append(("answer_approval_hold", event_id, decision, answering_identity))
         assert self.approval_answer_outcome is not None
         return self.approval_answer_outcome
 
     async def fetch_pending_holds(self, caller_identity: str) -> dict:
+        """Fetch pending holds."""
         self.calls.append(("fetch_pending_holds", caller_identity))
         if caller_identity not in self.users:
             raise ApiRequestError(401, f"'{caller_identity}' is not a registered identity")
@@ -244,40 +267,48 @@ class FakeBotApiClient(BotApiClient):
         return self.pending_holds
 
     async def get_profile_view(self, caller_identity: str) -> ProfileView:
+        """Get profile view."""
         self.calls.append(("get_profile_view", caller_identity))
         assert self.profile_view is not None
         return self.profile_view
 
     async def get_profile_diff_status(self) -> bool:
+        """Get profile diff status."""
         assert self.profile_diff_status is not None
         return self.profile_diff_status
 
     async def write_protocol(self, action, protocol_payload: dict, caller_identity: str) -> WriteResult:
+        """Write protocol."""
         self.calls.append(("write_protocol", action, protocol_payload, caller_identity))
         assert self.protocol_write_result is not None
         return self.protocol_write_result
 
     async def get_settings_view(self, caller_identity: str) -> SettingsView:
+        """Get settings view."""
         self.calls.append(("get_settings_view", caller_identity))
         assert self.settings_view is not None
         return self.settings_view
 
     async def write_setting(self, field: str, value: object, caller_identity: str) -> WriteResult:
+        """Write setting."""
         self.calls.append(("write_setting", field, value, caller_identity))
         assert self.settings_write_result is not None
         return self.settings_write_result
 
     async def get_job_result(self, job_id: str, caller_identity: str) -> JobResult | None:
+        """Get job result."""
         self.calls.append(("get_job_result", job_id, caller_identity))
         return self.job_result
 
     async def poll_pending_notifications(self, since: int, wait_seconds: int = 0) -> tuple[tuple[BotNotification, ...], int]:
+        """Poll pending notifications."""
         self.calls.append(("poll_pending_notifications", since))
         return self.pending_notifications, since + len(self.pending_notifications)
 
     async def poll_trace(
         self, trace_id: str, since: int, wait_seconds: int, caller_identity: str
     ) -> TracePollResult:
+        """Poll trace."""
         self.calls.append(("poll_trace", trace_id, since, wait_seconds, caller_identity))
         if self.trace_results:
             return self.trace_results.pop(0)

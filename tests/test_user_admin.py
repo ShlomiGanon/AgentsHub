@@ -1,3 +1,5 @@
+"""CLI user-administration commands."""
+
 import uuid
 
 import pytest
@@ -16,6 +18,7 @@ def profile_module(tmp_path, monkeypatch):
     # would silently resolve to whichever test imported it first, pointing
     # every later test at that first test's database. One unique name per
     # test avoids that.
+    """Profile module."""
     module_name = f"user_admin_test_profile_{uuid.uuid4().hex}"
 
     db_path = tmp_path / "deployment.db"
@@ -33,6 +36,7 @@ def profile_module(tmp_path, monkeypatch):
 
 
 def test_add_first_commander_against_an_empty_database(profile_module, capsys, real_tier_env):
+    """Add first commander against an empty database."""
     module_name, db_path = profile_module
 
     exit_code = main(["--profile", module_name, "add", "--telegram-id", "1001", "--level", "commander"])
@@ -48,6 +52,7 @@ def test_add_first_commander_against_an_empty_database(profile_module, capsys, r
 
 
 def test_update_changes_an_existing_users_level(profile_module, real_tier_env):
+    """Update changes an existing users level."""
     module_name, db_path = profile_module
 
     main(["--profile", module_name, "add", "--telegram-id", "2002", "--level", "viewer"])
@@ -61,6 +66,7 @@ def test_update_changes_an_existing_users_level(profile_module, real_tier_env):
 
 
 def test_cli_accepts_one_full_name_field_and_preserves_it_on_level_change(profile_module, real_tier_env):
+    """Cli accepts one full name field and preserves it on level change."""
     module_name, db_path = profile_module
     main(["--profile", module_name, "add", "--telegram-id", "2003", "--level", "viewer", "--full-name", "Dana Levi"])
     main(["--profile", module_name, "update", "--telegram-id", "2003", "--level", "commander"])
@@ -72,6 +78,7 @@ def test_cli_accepts_one_full_name_field_and_preserves_it_on_level_change(profil
 
 
 def test_remove_deletes_a_user(profile_module, real_tier_env):
+    """Remove deletes a user."""
     module_name, db_path = profile_module
 
     main(["--profile", module_name, "add", "--telegram-id", "3003", "--level", "viewer"])
@@ -86,6 +93,7 @@ def test_remove_deletes_a_user(profile_module, real_tier_env):
 
 
 def test_approve_clears_only_the_automatic_registration_flag(profile_module, real_tier_env):
+    """Approve clears only the automatic registration flag."""
     module_name, db_path = profile_module
     store = SQLitePersistence(str(db_path))
     try:
@@ -104,6 +112,7 @@ def test_approve_clears_only_the_automatic_registration_flag(profile_module, rea
 
 
 def test_remove_unknown_user_fails_with_nonzero_exit(profile_module, capsys, real_tier_env):
+    """Remove unknown user fails with nonzero exit."""
     module_name, _ = profile_module
 
     exit_code = main(["--profile", module_name, "remove", "--telegram-id", "does-not-exist"])
@@ -113,6 +122,7 @@ def test_remove_unknown_user_fails_with_nonzero_exit(profile_module, capsys, rea
 
 
 def test_list_reports_every_registered_user(profile_module, capsys, real_tier_env):
+    """List reports every registered user."""
     module_name, _ = profile_module
 
     main(["--profile", module_name, "add", "--telegram-id", "4004", "--level", "viewer"])
@@ -127,6 +137,7 @@ def test_list_reports_every_registered_user(profile_module, capsys, real_tier_en
 
 
 def test_level_outside_the_enum_is_rejected(profile_module, real_tier_env):
+    """Level outside the enum is rejected."""
     module_name, _ = profile_module
 
     with pytest.raises(SystemExit):
@@ -134,6 +145,7 @@ def test_level_outside_the_enum_is_rejected(profile_module, real_tier_env):
 
 
 def test_unknown_profile_fails_before_touching_any_database(capsys, real_tier_env):
+    """Unknown profile fails before touching any database."""
     exit_code = main(["--profile", "no_such_profile_module", "add", "--telegram-id", "1", "--level", "viewer"])
 
     assert exit_code == 1
@@ -141,6 +153,7 @@ def test_unknown_profile_fails_before_touching_any_database(capsys, real_tier_en
 
 
 def test_main_fails_loudly_naming_the_missing_tier_env_var(monkeypatch, capsys):
+    """Main fails loudly naming the missing tier env var."""
     for name in ("CORE_MODEL_PROVIDER", "CORE_MODEL_NAME", "CORE_MODEL_API_KEY_ENV"):
         monkeypatch.delenv(name, raising=False)
 

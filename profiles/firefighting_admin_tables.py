@@ -1,74 +1,80 @@
-"""Firefighting admin-table adapters."""
+"""Firefighting admin-panel table adapters for drones, attendance, forces, and fires."""
 
-from datetime import datetime, timezone
-from pathlib import Path
-
-from agents import Agent, InvocationPolicy, NeighboringForcesAgent, SurveillanceAgent, TeamStatusAgent, failed_tool_result, get_authenticated_request_identity, tool
-from messages import get_catalog
-from persistence import (
-    ApparatusStoreError,
-    FireStoreError,
-    open_apparatus_store,
-    open_incident_responder_store,
-    open_response_team_surveillance_store,
-    open_team_status_persistence,
-)
 from profiles.admin_tables import AdminColumn, AdminTable
-from profiles.contracts import AgentSpec, OptimizationPolicy
-from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
-from protocols import CriticalityLevel, Protocol, Step
 
-import profiles.firefighting as _facade
-globals().update({name: getattr(_facade, name) for name in dir(_facade) if not name.startswith("__")})
 
 def _drones_list(deps) -> list:
+    """List every drone row from this profile's surveillance store."""
+
     return deps.registry.get("surveillance_agent").surveillance_store.list_drones()
 
 
 def _drones_get(deps, drone_id: str):
+    """Return one drone row by id, or None if it is missing."""
+
     return deps.registry.get("surveillance_agent").surveillance_store.get_drone(drone_id)
 
 
 def _drones_write(deps, row: dict) -> None:
+    """Apply an admin edit to one drone, leaving store-side cascades intact."""
+
     store = deps.registry.get("surveillance_agent").surveillance_store
     store.admin_update_drone(row["drone_id"], **{k: v for k, v in row.items() if k != "drone_id"})
 
 
 def _attendance_list(deps) -> list:
+    """List crew-shift attendance responses from the team-status store."""
+
     return deps.registry.get("team_status_agent").status_store.list_responses()
 
 
 def _attendance_get(deps, response_id: str):
+    """Return one attendance response by id, or None if it is missing."""
+
     return deps.registry.get("team_status_agent").status_store.get_response(response_id)
 
 
 def _attendance_write(deps, row: dict) -> None:
+    """Apply an admin edit to one attendance response."""
+
     store = deps.registry.get("team_status_agent").status_store
     store.admin_update_attendance_fields(row["response_id"], **{k: v for k, v in row.items() if k != "response_id"})
 
 
 def _forces_list(deps) -> list:
+    """List mutual-aid dispatch rows from the neighboring-force store."""
+
     return deps.registry.get("neighboring_forces_agent").dispatch_store.list_dispatches()
 
 
 def _forces_get(deps, request_id: str):
+    """Return one dispatch row by request id, or None if it is missing."""
+
     return deps.registry.get("neighboring_forces_agent").dispatch_store.get_dispatch(request_id)
 
 
 def _forces_write(deps, row: dict) -> None:
+    """Apply an admin edit to one mutual-aid dispatch."""
+
     store = deps.registry.get("neighboring_forces_agent").dispatch_store
     store.admin_update_dispatch(row["request_id"], **{k: v for k, v in row.items() if k != "request_id"})
 
 
 def _fires_list(deps) -> list:
+    """List fire-registry rows from the crew-status agent's fire store."""
+
     return deps.registry.get("team_status_agent").fire_store.list_fires()
 
 
 def _fires_get(deps, fire_id: str):
+    """Return one fire row by id, or None if it is missing."""
+
     return deps.registry.get("team_status_agent").fire_store.get_fire(fire_id)
 
 
 def _fires_write(deps, row: dict) -> None:
+    """Apply an admin edit to one fire-registry row."""
+
     store = deps.registry.get("team_status_agent").fire_store
     store.admin_update_fire(row["fire_id"], **{k: v for k, v in row.items() if k != "fire_id"})
 
@@ -152,4 +158,6 @@ ADMIN_TABLES = (
         list_fn=_fires_list, get_fn=_fires_get, write_fn=_fires_write,
     ),
 )
+
+__all__ = ["ADMIN_TABLES"]
 

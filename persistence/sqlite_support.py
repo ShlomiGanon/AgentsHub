@@ -17,6 +17,8 @@ _GROUP_COLUMNS = (
 )
 
 def _group_record(row) -> dict:
+    """Decode a telegram_groups row into a dict with typed bools and hour."""
+
     result = dict(row)
     result["auto_register"] = bool(result["auto_register"])
     result["attendance_check_enabled"] = bool(result["attendance_check_enabled"])
@@ -24,6 +26,8 @@ def _group_record(row) -> dict:
     return result
 
 def _normalized_attendance_hour(value: int | None) -> int | None:
+    """Validate an attendance hour is 0-23, or return None."""
+
     if value is None:
         return None
     hour = int(value)
@@ -116,6 +120,8 @@ _OUTCOME_TO_NOTIFICATION_KINDS: dict[str, tuple[str, ...]] = {
 }
 
 def _encode_event_value(column: str, value):
+    """Encode JSON and bool event columns for INSERT/UPDATE."""
+
     if column in _EVENT_JSON_COLUMNS and value is not None:
         return json.dumps(value)
     if column in _EVENT_BOOL_COLUMNS:
@@ -123,6 +129,8 @@ def _encode_event_value(column: str, value):
     return value
 
 def _decode_event_row(event_row: sqlite3.Row) -> dict:
+    """Decode JSON and bool columns on an events row."""
+
     decoded = dict(event_row)
     for column in _EVENT_JSON_COLUMNS:
         if decoded.get(column) is not None:
@@ -132,6 +140,8 @@ def _decode_event_row(event_row: sqlite3.Row) -> dict:
     return decoded
 
 def _decode_step_row(step_row: sqlite3.Row) -> dict:
+    """Decode JSON columns on an event_steps row."""
+
     decoded = dict(step_row)
     if decoded.get("allowed_tools") is not None:
         decoded["allowed_tools"] = json.loads(decoded["allowed_tools"])
@@ -143,6 +153,8 @@ def _decode_step_row(step_row: sqlite3.Row) -> dict:
     return decoded
 
 def _decode_summary_row(summary_row: sqlite3.Row) -> dict:
+    """Decode the event_index JSON on a summary row."""
+
     decoded = dict(summary_row)
     if decoded.get("event_index") is not None:
         decoded["event_index"] = json.loads(decoded["event_index"])
@@ -172,6 +184,8 @@ _UPSERT_STEPS_SQL = """
             """
 
 def _upsert_steps(connection: sqlite3.Connection, event_id: str, steps: list[dict]) -> None:
+    """Replace or insert event_steps rows for this event_id."""
+
     payloads = []
     for step in steps:
         requested_status = step.get("status", "auto")
@@ -197,12 +211,16 @@ def _upsert_steps(connection: sqlite3.Connection, event_id: str, steps: list[dic
         connection.executemany(_UPSERT_STEPS_SQL, payloads)
 
 def _insert_notification(connection: sqlite3.Connection, kind: str, event_id: str) -> None:
+    """Insert one notification_log row for this event."""
+
     connection.execute(
         "INSERT INTO notification_log (kind, event_id, created_at) VALUES (?, ?, ?)",
         (kind, event_id, datetime.now(timezone.utc).isoformat()),
     )
 
 def _decode_held_event_row(hold_row: sqlite3.Row) -> dict:
+    """Flatten a held_events row with its JSON payload and resolution."""
+
     decoded = dict(hold_row)
     payload = json.loads(decoded.pop("payload"))
     resolution_raw = decoded.pop("resolution")
@@ -212,6 +230,8 @@ def _decode_held_event_row(hold_row: sqlite3.Row) -> dict:
     return decoded
 
 def _summary_table_name(level: str) -> str:
+    """Return the summary table name for daily/monthly/yearly, or raise."""
+
     table_name = SUMMARY_TABLE_NAMES.get(level)
     if table_name is None:
         raise PersistenceError(f"unknown summary level: '{level}' (expected one of {sorted(SUMMARY_TABLE_NAMES)})")
@@ -236,6 +256,8 @@ _AGGREGATE_EXPRESSIONS = {
 }
 
 def _search_where(criteria: EventSearchCriteria) -> tuple[str, list[object], str]:
+    """Build the allowlisted WHERE clause, parameters, and time column for a search."""
+
     if criteria.time_basis not in {"occurred_at", "received_at"}:
         raise PersistenceError(f"unsupported event time basis: {criteria.time_basis!r}")
 

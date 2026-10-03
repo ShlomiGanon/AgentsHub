@@ -22,18 +22,21 @@ ADMIN_SESSION_SECRET = "test-admin-session-secret"
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch, 'status nominal')
 
 
 
 @pytest.fixture
 def _admin_env(monkeypatch):
+    """Admin env."""
     monkeypatch.setenv("ADMIN_USERNAME", ADMIN_USERNAME)
     monkeypatch.setenv("ADMIN_PASSWORD", ADMIN_PASSWORD)
     monkeypatch.setenv("ADMIN_SESSION_SECRET", ADMIN_SESSION_SECRET)
 
 
 def _fake_table(rows, *, delete_fn=None, allow_create=False):
+    """Fake table."""
     def list_fn(deps):
         return list(rows)
 
@@ -62,12 +65,14 @@ def _fake_table(rows, *, delete_fn=None, allow_create=False):
 
 
 def _client(tmp_path, teardown_ctx, admin_tables):
+    """Client."""
     ctx = build_context(tmp_path, admin_tables=admin_tables)
     teardown_ctx.append(ctx)
     return build_app(ctx).test_client()
 
 
 def _login(client):
+    """Login."""
     client.post("/admin/login", data={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD}, follow_redirects=False)
     setup = client.get("/admin/acting-identity")
     match = re.search(r'name="csrf_token" value="([^"]+)"', setup.get_data(as_text=True))
@@ -79,6 +84,7 @@ def _login(client):
 
 
 def _csrf_token(client):
+    """Csrf token."""
     resp = client.get("/admin/")
     import re
     match = re.search(r'name="csrf_token" value="([^"]+)"', resp.get_data(as_text=True))
@@ -89,6 +95,7 @@ def _csrf_token(client):
 
 
 def test_parse_admin_table_form_accepts_a_valid_select_value():
+    """Parse admin table form accepts a valid select value."""
     rows = []
     table = _fake_table(rows)
 
@@ -98,6 +105,7 @@ def test_parse_admin_table_form_accepts_a_valid_select_value():
 
 
 def test_parse_admin_table_form_rejects_a_select_value_not_in_choices():
+    """Parse admin table form rejects a select value not in choices."""
     table = _fake_table([])
 
     with pytest.raises(AdminFormError):
@@ -105,6 +113,7 @@ def test_parse_admin_table_form_rejects_a_select_value_not_in_choices():
 
 
 def test_parse_admin_table_form_rejects_a_missing_required_field():
+    """Parse admin table form rejects a missing required field."""
     table = _fake_table([])
 
     with pytest.raises(AdminFormError):
@@ -112,6 +121,7 @@ def test_parse_admin_table_form_rejects_a_missing_required_field():
 
 
 def test_parse_admin_table_form_never_accepts_a_readonly_column():
+    """Parse admin table form never accepts a readonly column."""
     table = _fake_table([])
 
     values = parse_admin_table_form(table, {"id": "999", "name": "Widget A"})
@@ -123,6 +133,7 @@ def test_parse_admin_table_form_never_accepts_a_readonly_column():
 
 
 def test_list_page_requires_a_session(tmp_path, teardown_ctx, _admin_env):
+    """List page requires a session."""
     client = _client(tmp_path, teardown_ctx, admin_tables=(_fake_table([]),))
 
     resp = client.get("/admin/tables/widgets")
@@ -131,6 +142,7 @@ def test_list_page_requires_a_session(tmp_path, teardown_ctx, _admin_env):
 
 
 def test_unknown_table_key_redirects_to_dashboard(tmp_path, teardown_ctx, _admin_env):
+    """Unknown table key redirects to dashboard."""
     client = _client(tmp_path, teardown_ctx, admin_tables=(_fake_table([]),))
     _login(client)
 
@@ -141,6 +153,7 @@ def test_unknown_table_key_redirects_to_dashboard(tmp_path, teardown_ctx, _admin
 
 
 def test_list_page_renders_every_declared_row(tmp_path, teardown_ctx, _admin_env):
+    """List page renders every declared row."""
     rows = [{"id": "1", "name": "Widget A", "status": "on"}, {"id": "2", "name": "Widget B", "status": "off"}]
     client = _client(tmp_path, teardown_ctx, admin_tables=(_fake_table(rows),))
     _login(client)
@@ -154,6 +167,7 @@ def test_list_page_renders_every_declared_row(tmp_path, teardown_ctx, _admin_env
 
 
 def test_dashboard_menu_links_to_every_declared_table(tmp_path, teardown_ctx, _admin_env):
+    """Dashboard menu links to every declared table."""
     client = _client(tmp_path, teardown_ctx, admin_tables=(_fake_table([]),))
     _login(client)
 
@@ -163,6 +177,7 @@ def test_dashboard_menu_links_to_every_declared_table(tmp_path, teardown_ctx, _a
 
 
 def test_edit_page_prefills_the_current_row(tmp_path, teardown_ctx, _admin_env):
+    """Edit page prefills the current row."""
     rows = [{"id": "1", "name": "Widget A", "status": "on"}]
     client = _client(tmp_path, teardown_ctx, admin_tables=(_fake_table(rows),))
     _login(client)
@@ -173,6 +188,7 @@ def test_edit_page_prefills_the_current_row(tmp_path, teardown_ctx, _admin_env):
 
 
 def test_edit_page_for_a_missing_row_redirects_to_the_list(tmp_path, teardown_ctx, _admin_env):
+    """Edit page for a missing row redirects to the list."""
     client = _client(tmp_path, teardown_ctx, admin_tables=(_fake_table([]),))
     _login(client)
 
@@ -182,6 +198,7 @@ def test_edit_page_for_a_missing_row_redirects_to_the_list(tmp_path, teardown_ct
 
 
 def test_edit_submission_writes_through_and_takes_effect_immediately(tmp_path, teardown_ctx, _admin_env):
+    """Edit submission writes through and takes effect immediately."""
     rows = [{"id": "1", "name": "Widget A", "status": "on"}]
     client = _client(tmp_path, teardown_ctx, admin_tables=(_fake_table(rows),))
     _login(client)
@@ -199,6 +216,7 @@ def test_edit_submission_writes_through_and_takes_effect_immediately(tmp_path, t
 
 
 def test_edit_submission_without_a_csrf_token_is_rejected_and_does_not_write(tmp_path, teardown_ctx, _admin_env):
+    """Edit submission without a csrf token is rejected and does not write."""
     rows = [{"id": "1", "name": "Widget A", "status": "on"}]
     client = _client(tmp_path, teardown_ctx, admin_tables=(_fake_table(rows),))
     _login(client)
@@ -209,6 +227,7 @@ def test_edit_submission_without_a_csrf_token_is_rejected_and_does_not_write(tmp
 
 
 def test_edit_submission_with_an_invalid_select_value_flashes_and_does_not_write(tmp_path, teardown_ctx, _admin_env):
+    """Edit submission with an invalid select value flashes and does not write."""
     rows = [{"id": "1", "name": "Widget A", "status": "on"}]
     client = _client(tmp_path, teardown_ctx, admin_tables=(_fake_table(rows),))
     _login(client)
@@ -224,6 +243,7 @@ def test_edit_submission_with_an_invalid_select_value_flashes_and_does_not_write
 
 
 def test_delete_button_is_absent_when_the_table_declares_no_delete_fn(tmp_path, teardown_ctx, _admin_env):
+    """Delete button is absent when the table declares no delete fn."""
     rows = [{"id": "1", "name": "Widget A", "status": "on"}]
     client = _client(tmp_path, teardown_ctx, admin_tables=(_fake_table(rows),))
     _login(client)
@@ -234,6 +254,7 @@ def test_delete_button_is_absent_when_the_table_declares_no_delete_fn(tmp_path, 
 
 
 def test_delete_route_removes_the_row_when_delete_fn_is_declared(tmp_path, teardown_ctx, _admin_env):
+    """Delete route removes the row when delete fn is declared."""
     rows = [{"id": "1", "name": "Widget A", "status": "on"}]
 
     def delete_fn(deps, row_id):
@@ -250,6 +271,7 @@ def test_delete_route_removes_the_row_when_delete_fn_is_declared(tmp_path, teard
 
 
 def test_delete_route_404_equivalent_when_no_delete_fn_declared(tmp_path, teardown_ctx, _admin_env):
+    """Delete route 404 equivalent when no delete fn declared."""
     rows = [{"id": "1", "name": "Widget A", "status": "on"}]
     client = _client(tmp_path, teardown_ctx, admin_tables=(_fake_table(rows),))
     _login(client)

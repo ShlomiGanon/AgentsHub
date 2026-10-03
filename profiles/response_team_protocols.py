@@ -1,53 +1,17 @@
 """Response Team protocol declarations and direct-tool binders."""
 
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-
-from agents import (
-    Agent,
-    InvocationPolicy,
-    NeighboringForcesAgent as _NeighboringForcesAgentBase,
-    SurveillanceAgent,
-    TeamStatusAgent,
-    failed_tool_result,
-    get_authenticated_request_identity,
-    tool,
-)
-from messages import get_catalog
-from persistence import (
-    SurveillancePersistenceError,
-    TeamStatusPersistenceError,
-    open_incident_responder_store,
-    open_response_team_roster_store,
-    open_response_team_surveillance_store,
-)
-from profiles.admin_tables import AdminColumn, AdminTable
-from profiles.contracts import AgentSpec, OptimizationPolicy
-from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
+from agents import InvocationPolicy
 from protocols import CriticalityLevel, Protocol, Step
 from protocols import as_aware_iso as _as_aware_iso
 from protocols import bind_record_attendance_response
 
-import profiles.response_team as _facade
-globals().update({name: getattr(_facade, name) for name in dir(_facade) if not name.startswith("__")})
-
-# == Direct-tool step binders =================================================
-#
-# Each skips formulate_tasks/task_rewrite by binding a protocol's step(s) straight from the
-# event's own extracted fields, which are always already model-produced (classify_intent's
-# extraction), never re-derived from raw text by a local heuristic. A binder that cannot
-# confidently produce every parameter leaves the corresponding EVENT_DATA_FIELDS name(s) in
-# `required_event_fields` instead of guessing -- the ordinary missing-fields check
-# (protocols/executor.py::_missing_event_fields) then raises the same event_data hold any
-# other protocol would, before this step ever executes.
-#
-# Most of these bind a `kind="direct_tool"` step (protocols/executor.py::_execute_direct_tool_step):
-# no specialist-agent LLM turn for the tool call itself, since every parameter is already known.
-# Camera status and team-movement incident-linking still bind a normal `kind="agent"` step once
-# identifiers/area are present: those remaining fields are genuine judgment calls from free text.
+# Binders skip formulate_tasks by using extracted event fields only.
+# Unknown parameters stay in required_event_fields so the usual hold fires.
 
 
 def _bind_record_attendance(event: dict) -> tuple[Step, ...]:
+    """Same shared attendance binder as firefighting, with this profile's roster agent."""
+
     return bind_record_attendance_response(
         event,
         agent_name="roster_agent",
@@ -56,10 +20,14 @@ def _bind_record_attendance(event: dict) -> tuple[Step, ...]:
 
 
 def _report_text(event: dict) -> str:
+    """Prefer the extracted description, then the original report text."""
+
     return (event.get("description") or event.get("raw_text") or "").strip()
 
 
 def _bind_update_camera_status(event: dict) -> tuple[Step, ...]:
+    """One camera-status step per named camera, or a missing-fields hold."""
+
     entities = event.get("entities") or []
     description = _report_text(event)
     if not entities:
@@ -94,6 +62,8 @@ def _bind_update_camera_status(event: dict) -> tuple[Step, ...]:
 
 
 def _bind_dispatch_drone(event: dict) -> tuple[Step, ...]:
+    """Direct-tool recon dispatch when area is known; otherwise a missing-fields hold."""
+
     area = (event.get("area") or "").strip()
     description = _report_text(event)
     missing = tuple(name for name in ("area",) if not area)
@@ -119,6 +89,8 @@ def _bind_dispatch_drone(event: dict) -> tuple[Step, ...]:
 
 
 def _bind_dispatch_own_squad(event: dict) -> tuple[Step, ...]:
+    """Direct-tool squad dispatch when area is known; otherwise a missing-fields hold."""
+
     area = (event.get("area") or "").strip()
     description = _report_text(event)
     missing = tuple(name for name in ("area",) if not area)
@@ -150,6 +122,8 @@ _FAST_JUDGMENT_POLICY = InvocationPolicy(max_output_tokens=400, reasoning_effort
 
 
 def _bind_report_team_movement(event: dict) -> tuple[Step, ...]:
+    """Record the reporter's area, then let the specialist judge incident linkage."""
+
     area = (event.get("area") or "").strip()
     description = _report_text(event)
     missing = tuple(name for name in ("area",) if not area)
@@ -189,11 +163,8 @@ def _bind_report_team_movement(event: dict) -> tuple[Step, ...]:
     )
 
 
-# == Protocols (authored for SEC_001; docs/responce_improve.md) ==============
-#
-# All eight: approval_flag=False, commander_only=False, requires_confirmation=False.
-# Descriptions are exclusive: each names what it is for and which sibling protocol to use
-# instead. Do not copy these descriptions into profiles.firefighting.
+# -- Protocols ----------------------------------------------------------------
+# Each description names what it covers and which sibling to use instead.
 
 PROTOCOLS = [
     Protocol(
@@ -269,16 +240,11 @@ PROTOCOLS = [
         needs_insight=False,
         direct_tool_binder=_bind_dispatch_drone,
         direct_lane_eligible=True,
-        # A field/civilian security report can arrive in any group, not only the
-        # camera-ops channel this protocol's own agent (surveillance_agent) is bound
-        # to -- keep it selectable everywhere (orchestrator/group_routing.py).
+        # A field report can arrive in any group, not only the camera-ops channel.
         safety_critical=True,
     ),
     Protocol(
-        # Split from report_security_incident (over-dispatch fix): an already-handled report has
-        # no dispatch tool available at all here, structurally, not merely a prompt instruction
-        # the agent could still disregard -- e.g. a small fire that is already out, with no
-        # firefighter kind involved, or a suspicious situation already resolved/cleared.
+        # Already-handled reports have no dispatch tool at all, so the agent cannot over-send.
         name="log_security_observation",
         description=(
             "Applies when a report describes a security-relevant observation that is explicitly "
@@ -398,4 +364,14 @@ PROTOCOLS = [
         requires_confirmation=False,
         commander_only=False,
     ),
+]
+
+__all__ = [
+    "PROTOCOLS",
+    "_as_aware_iso",
+    "_bind_dispatch_drone",
+    "_bind_dispatch_own_squad",
+    "_bind_record_attendance",
+    "_bind_report_team_movement",
+    "_bind_update_camera_status",
 ]

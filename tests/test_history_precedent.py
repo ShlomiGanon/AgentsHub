@@ -1,14 +1,19 @@
+"""Precedent search over past events."""
+
 from config.live_settings import SettingsStore
 from history.query import HistoryQueryService
 from persistence.interface import open_persistence
 
 
 class UnusedAgent:
+    """UnusedAgent."""
     def process(self, text, allowed_tools):
+        """Process."""
         raise AssertionError("precedent lookup must not call the model")
 
 
 def test_precedent_search_uses_summary_candidates_and_raw_gaps(tmp_path):
+    """Precedent search uses summary candidates and raw gaps."""
     db_path = str(tmp_path / "precedent.db")
     store = open_persistence(db_path)
     try:
@@ -69,6 +74,7 @@ def test_precedent_search_includes_a_candidate_with_unresolved_occurred_at(tmp_p
 
 
 def test_precedent_search_logs_the_window_and_the_matches(tmp_path, caplog):
+    """Precedent search logs the window and the matches."""
     db_path = str(tmp_path / "precedent_log.db")
     store = open_persistence(db_path)
     try:
@@ -108,11 +114,14 @@ from persistence.interface import open_persistence
 
 
 class FakeHistoryAgent:
+    """FakeHistoryAgent."""
     def process(self, text, allowed_tools):
+        """Process."""
         return AgentResult("success", text)
 
 
 def test_reconciliation_builds_bottom_up_and_is_idempotent(tmp_path):
+    """Reconciliation builds bottom up and is idempotent."""
     store = open_persistence(str(tmp_path / "scheduler.db"))
     try:
         store.append_event({
@@ -170,6 +179,7 @@ def test_reconciliation_does_not_crash_on_an_event_with_unresolved_occurred_at(t
 
 
 def test_late_telegram_notification_wakes_only_for_existing_stale_day(tmp_path):
+    """Late telegram notification wakes only for existing stale day."""
     store = open_persistence(str(tmp_path / "late.db"))
     try:
         store.write_summary("daily", {
@@ -188,6 +198,7 @@ def test_late_telegram_notification_wakes_only_for_existing_stale_day(tmp_path):
 
 
 def _wait_for_a_background_pass(scheduler, attempts=200):
+    """Wait for a background pass."""
     for _ in range(attempts):
         if scheduler.last_run_status()["last_run_at"] is not None:
             return
@@ -196,6 +207,7 @@ def _wait_for_a_background_pass(scheduler, attempts=200):
 
 
 def test_last_run_status_is_unset_before_the_background_thread_ever_runs(tmp_path):
+    """Last run status is unset before the background thread ever runs."""
     store = open_persistence(str(tmp_path / "unset.db"))
     try:
         scheduler = SummaryScheduler(store, FakeHistoryAgent())
@@ -206,6 +218,7 @@ def test_last_run_status_is_unset_before_the_background_thread_ever_runs(tmp_pat
 
 
 def test_last_run_status_reports_success_after_a_background_pass(tmp_path):
+    """Last run status reports success after a background pass."""
     store = open_persistence(str(tmp_path / "last_run_ok.db"))
     try:
         scheduler = SummaryScheduler(
@@ -228,6 +241,7 @@ def test_last_run_status_reports_success_after_a_background_pass(tmp_path):
 
 
 def test_last_run_status_reports_failure_without_stopping_the_scheduler(tmp_path):
+    """Last run status reports failure without stopping the scheduler."""
     store = open_persistence(str(tmp_path / "last_run_fail.db"))
     try:
         scheduler = SummaryScheduler(store, FakeHistoryAgent(), poll_interval_seconds=0.01)

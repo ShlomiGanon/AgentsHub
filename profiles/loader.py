@@ -1,4 +1,4 @@
-"""Profile loading and selection (work_plan.md §1.5)."""
+"""Load, validate, and hash a profile module into a LoadedProfile."""
 
 import hashlib
 import importlib
@@ -38,7 +38,7 @@ def build_area_registry(loaded_profile: "LoadedProfile") -> AreaRegistry:
 def build_event_type_registry(loaded_profile: "LoadedProfile") -> EventTypeRegistry:
     """Closed event-type set, required fields, and descriptions from this loaded profile."""
     # UNCLASSIFIED_TYPE's required fields (and its lack of a description) are
-    # fixed in EventTypeRegistry itself (item #6 / docs/bar_improves.md) —
+    # fixed in EventTypeRegistry itself —
     # not read from the profile.
     return EventTypeRegistry(
         types=loaded_profile.event_types,
@@ -184,8 +184,8 @@ def validate_profile(loaded: "LoadedProfile", declared_event_types: list) -> lis
 
 
 def _validate_simulation_declarations(loaded: "LoadedProfile") -> list[str]:
-    """SIMULATION_USERS/SIMULATION_GROUPS/SIMULATIONS/SIMULATION_ROSTERS
-    (docs/profile_simulations_design.md): unique keys/offsets, and every
+    """SIMULATION_USERS/SIMULATION_GROUPS/SIMULATIONS/SIMULATION_ROSTERS:
+    unique keys/offsets, and every
     persona/group/roster key referenced elsewhere actually resolves to a
     declared one. Defaults are empty tuples, so a profile declaring none of
     this is unaffected (every failure below is vacuous on empty input).
@@ -304,6 +304,8 @@ def _validate_simulation_declarations(loaded: "LoadedProfile") -> list[str]:
 
 
 def _validate_protocol(protocol, agents_by_name: dict) -> list[str]:
+    """Validate protocol."""
+
     failures: list[str] = []
     missing_attrs = protocol_missing_attrs(protocol)
     if missing_attrs:
@@ -370,6 +372,8 @@ def hash_profile_file(module_path: str) -> str:
 
 
 def _import_profile_module(module_path: str) -> ModuleType:
+    """Import profile module."""
+
     if not module_path:
         raise ProfileLoadError(
             "no profile specified — launch with a module path, e.g. "
@@ -385,6 +389,8 @@ def _import_profile_module(module_path: str) -> ModuleType:
 
 
 def _check_required_attrs(module: ModuleType, module_path: str) -> None:
+    """Check required attrs."""
+
     missing = [name for name in REQUIRED_PROFILE_ATTRS if not hasattr(module, name)]
 
     if missing:
@@ -394,6 +400,8 @@ def _check_required_attrs(module: ModuleType, module_path: str) -> None:
 
 
 def _resolve_secrets(module: ModuleType, module_path: str) -> dict[str, str]:
+    """Resolve secrets."""
+
     var_names = [module.BOT_TOKEN_ENV, *module.MODEL_CREDENTIAL_ENVS]
     resolved: dict[str, str] = {}
 

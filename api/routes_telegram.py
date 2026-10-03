@@ -23,6 +23,8 @@ def build_telegram_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/Telegram/Admission", methods=["POST"])
     def admit_telegram_update():
+        """Admit or auto-register a Telegram user/group, or refuse it in safe mode."""
+
         caller_identity = request.headers.get("X-Identity")
         level = authenticate(ctx.deps.persistence, caller_identity)
         if caller_identity != BOT_SERVICE_IDENTITY:
@@ -108,6 +110,8 @@ def build_telegram_blueprint(ctx: "ApiContext") -> Blueprint:
             )
 
         def _user_payload(record):
+            """Public admission fields for one user record, or None."""
+
             if record is None:
                 return None
             return {

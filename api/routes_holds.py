@@ -79,6 +79,8 @@ def _submit_hold_work(
     """Queue the continuation work and return 202 queued."""
 
     def _work() -> None:
+        """Run the reserved hold continuation under this request's trace id."""
+
         with trace_context(trace_id):
             work()
 
@@ -102,6 +104,8 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/Holds/Pending", methods=["GET"])
     def get_pending_holds():
+        """List unresolved approval and clarification holds."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.APPROVE_RUN)
 
@@ -144,6 +148,8 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/Clarify/<event_id>", methods=["POST"])
     def post_clarify(event_id):
+        """Resolve a clarification hold and queue the continuation."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.RESOLVE_CLARIFICATION)
         identity = request.headers.get("X-Identity")
@@ -181,6 +187,8 @@ def build_holds_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/Approve/<event_id>", methods=["POST"])
     def post_approve(event_id):
+        """Approve or decline a held run and queue the continuation when approved."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.APPROVE_RUN)
         identity = request.headers.get("X-Identity")

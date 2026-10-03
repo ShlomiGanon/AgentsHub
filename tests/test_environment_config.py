@@ -7,6 +7,7 @@ from config.environment import RuntimePortError, resolve_runtime_port
 
 
 def test_runtime_port_uses_environment_override_and_profile_fallback():
+    """Runtime port uses environment override and profile fallback."""
     assert resolve_runtime_port("API_PORT", 8906, {"API_PORT": "8905"}) == 8905
     assert resolve_runtime_port("API_PORT", 8906, {}) == 8906
     assert resolve_runtime_port("SIMULATOR_PORT", None, {}) is None
@@ -14,17 +15,19 @@ def test_runtime_port_uses_environment_override_and_profile_fallback():
 
 @pytest.mark.parametrize("value", ["not-a-port", "0", "65536"])
 def test_runtime_port_rejects_invalid_environment_values(value):
+    """Runtime port rejects invalid environment values."""
     with pytest.raises(RuntimePortError, match="API_PORT"):
         resolve_runtime_port("API_PORT", 8905, {"API_PORT": value})
 
 
 def test_debug_flag_parsing_is_strict_not_any_non_empty_string():
     # Absent or unset — never an error, never on by default.
+    """Debug flag parsing is strict not any non empty string."""
     assert _parse_debug_flag(None) is False
     assert _parse_debug_flag("") is False
 
     # Explicitly falsy values must mean off, not "any non-empty string is
-    # truthy" — this is the exact case docs/server_report.md's follow-up
+    # Truthy" — this is the exact case follow-up
     # asked to be tested directly.
     assert _parse_debug_flag("false") is False
     assert _parse_debug_flag("False") is False
@@ -43,6 +46,7 @@ def test_debug_flag_parsing_is_strict_not_any_non_empty_string():
 
 
 def test_deep_debug_defaults_off_and_is_read_once_at_import(monkeypatch):
+    """Deep debug defaults off and is read once at import."""
     import importlib
     import config.base as base_config
 
@@ -58,6 +62,7 @@ def test_deep_debug_defaults_off_and_is_read_once_at_import(monkeypatch):
 
 
 def test_debug_flag_is_read_from_the_environment_variable_once_at_import(monkeypatch):
+    """Debug flag is read from the environment variable once at import."""
     import importlib
 
     import config.base as base_config
@@ -80,6 +85,7 @@ def test_console_json_flag_defaults_on_and_only_an_explicit_falsy_value_turns_it
     # default from _parse_debug_flag, and deliberately so: this flag
     # exists to opt *out* of behavior every existing caller already
     # depends on, so "unset" must reproduce that existing behavior.
+    """Console json flag defaults on and only an explicit falsy value turns it off."""
     assert _parse_console_json_flag(None) is True
     assert _parse_console_json_flag("") is True
     assert _parse_console_json_flag("garbage") is True
@@ -95,6 +101,7 @@ def test_console_json_flag_defaults_on_and_only_an_explicit_falsy_value_turns_it
 
 
 def test_console_json_flag_is_read_from_the_environment_variable_once_at_import(monkeypatch):
+    """Console json flag is read from the environment variable once at import."""
     import importlib
 
     import config.base as base_config
@@ -109,8 +116,7 @@ def test_console_json_flag_is_read_from_the_environment_variable_once_at_import(
 
     assert base_config.LOG_CONSOLE_JSON_ENABLED is True
 
-"""config.base.build_tier_model / load_base_config (docs/profile_spec.md
-"Model tiers").
+"""config.base.build_tier_model / load_base_config model-tier construction.
 
 Both are pure now — no environment access, no `Mapping`, no knowledge
 that their inputs might have come from an environment variable at all.
@@ -136,6 +142,7 @@ import config.base as base_config
 
 
 def test_build_tier_model_joins_provider_and_model_name():
+    """Build tier model joins provider and model name."""
     result = base_config.build_tier_model("openrouter", "anthropic/claude-3.5-sonnet", "sk-or-v1-secret")
 
     assert result == base_config.TierModel(model="openrouter/anthropic/claude-3.5-sonnet", api_key="sk-or-v1-secret")
@@ -144,6 +151,7 @@ def test_build_tier_model_joins_provider_and_model_name():
 def test_build_tier_model_never_touches_the_real_environment(monkeypatch):
     # A conflicting real env var must have zero effect — the function
     # takes plain strings and only ever uses exactly what it's given.
+    """Build tier model never touches the real environment."""
     monkeypatch.setenv("CORE_MODEL_PROVIDER", "SHOULD_NEVER_BE_USED")
 
     result = base_config.build_tier_model("openrouter", "some-model", "secret")
@@ -154,6 +162,7 @@ def test_build_tier_model_never_touches_the_real_environment(monkeypatch):
 
 def test_two_calls_with_different_arguments_are_genuinely_independent():
     # No caching/memoization — same provider, two different models/keys.
+    """Two calls with different arguments are genuinely independent."""
     first = base_config.build_tier_model("openrouter", "model-a", "key-one")
     second = base_config.build_tier_model("openrouter", "model-b", "key-two")
 
@@ -162,6 +171,7 @@ def test_two_calls_with_different_arguments_are_genuinely_independent():
 
 
 def test_two_agents_built_from_different_tier_models_get_different_configs():
+    """Two agents built from different tier models get different configs."""
     from agents.reference import ReferenceAgent
 
     core_tier = base_config.build_tier_model("anthropic", "claude-3-5-sonnet", "sk-ant-core")
@@ -176,6 +186,7 @@ def test_two_agents_built_from_different_tier_models_get_different_configs():
 
 
 def test_load_base_config_wraps_the_given_core_model():
+    """Load base config wraps the given core model."""
     core_model = base_config.build_tier_model("openrouter", "anthropic/claude-3.5-sonnet", "sk-or-v1-secret")
 
     config = base_config.load_base_config(core_model=core_model)
@@ -186,6 +197,7 @@ def test_load_base_config_wraps_the_given_core_model():
 
 
 def test_base_config_is_frozen():
+    """Base config is frozen."""
     core_model = base_config.build_tier_model("openrouter", "m", "k")
     config = base_config.load_base_config(core_model=core_model)
 

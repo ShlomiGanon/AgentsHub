@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 
 def _prompt(raw_text: str, source: str, received_at: str, event_types, areas, event_type_descriptions=None) -> str:
+    """Prompt."""
+
     timestamp_rule = (
         "Set occurred_at to null; the caller supplies the sensor occurrence time."
         if source == "sensor"
@@ -20,9 +22,8 @@ def _prompt(raw_text: str, source: str, received_at: str, event_types, areas, ev
     )
 
     # Optional, profile-declared English descriptions next to the event type
-    # names they belong to (docs/bar_improves.md's follow-up to Stage 4:
-    # event-type descriptions previously had no structural home, so
-    # classification only ever saw the bare type-name list). A type with no
+    # names they belong to, so classification sees more than the bare type list.
+    # A type with no
     # declared description still appears in the list above, name only,
     # exactly as before — this block is additive and empty when the active
     # profile declares no EVENT_TYPE_DESCRIPTIONS at all, which is what
@@ -60,6 +61,8 @@ def _prompt(raw_text: str, source: str, received_at: str, event_types, areas, ev
 
 
 def _strip_code_fence(raw_response: str) -> str:
+    """Strip code fence."""
+
     stripped = raw_response.strip()
     if not stripped.startswith("```"):
         return stripped
@@ -72,10 +75,7 @@ def _strip_code_fence(raw_response: str) -> str:
 
 
 def _log_optional_field_dropped(key: str, received_value: object) -> None:
-    """Stage 1 (docs/bar_improves.md): a malformed OPTIONAL extracted field is
-    dropped, never the whole report. Log only the field name and the received
-    Python type — never the value itself, which may carry the reporter's raw
-    text."""
+    """Drop one malformed optional field and log its name, never the raw value."""
 
     logger.info(
         "extraction optional field dropped",
@@ -91,20 +91,8 @@ def _log_optional_field_dropped(key: str, received_value: object) -> None:
 def _optional_string(payload: dict, key: str) -> str | None:
     """Return `payload[key]` as a string, or `None`.
 
-    Every field this is called for (classification, area, description,
-    severity, occurred_at) is optional in the domain vocabulary
-    (docs/vocabulary.md) — required-ness for a *specific* event type is
-    enforced later, downstream, by the event-type-required-fields gate
-    (`profiles.contracts.EventTypeRegistry.required_fields_for`), not here.
-    A `None` value is a normal, expected "not extracted" result and is
-    returned as-is. A non-null value of the wrong type (the model returned an
-    object or a list where a string was expected) used to reject the entire
-    report; it is now normalized to `None` and logged instead (Stage 1,
-    docs/bar_improves.md) — we never invent a value the source did not
-    establish, so dropping is the only alternative to full rejection. This
-    does not change how an out-of-registry classification/area value (a
-    correctly-typed string just not in the profile's own list) is handled —
-    that check runs afterward, unchanged, in `extract_event`."""
+    Every field this is called for is optional here; a type's required-fields
+    gate runs later. A wrong-type value is dropped and logged, never invented."""
 
     extracted_value = payload.get(key)
     if extracted_value is None:
@@ -123,6 +111,8 @@ def extract_event(
     area_registry,
     model_invoker: Callable[[str], str] | None = None,
 ) -> ExtractionResult:
+    """Extract event."""
+
     if source not in {"sensor", "telegram"}:
         raise ValueError("source must be 'sensor' or 'telegram'")
 
@@ -162,6 +152,8 @@ def extraction_result_from_payload(
     event_type_registry,
     area_registry,
 ) -> ExtractionResult:
+    """Extraction result from payload."""
+
     if not isinstance(payload, dict):
         raise ExtractionExecutionError("model response must be one JSON object")
 
@@ -180,9 +172,7 @@ def extraction_result_from_payload(
     elif isinstance(entities_value, list) and all(isinstance(item, str) for item in entities_value):
         entities = tuple(entities_value)
     else:
-        # Stage 1 (docs/bar_improves.md): entities is also an OPTIONAL field —
-        # a malformed value (not a list of strings) is dropped, not treated as
-        # a reason to reject the whole report.
+        # A malformed entities value is dropped; it must not reject the whole report.
         _log_optional_field_dropped("entities", entities_value)
         entities = ()
 
@@ -200,8 +190,7 @@ def extraction_result_from_payload(
         except (TypeError, ValueError) as exc:
             raise ExtractionExecutionError("extraction field 'occurred_at' must be an ISO-8601 timestamp or null") from exc
 
-    # Stage 3 (docs/bar_improves.md): availability_start/availability_end are
-    # OPTIONAL timestamp fields, same as the other fields above — unlike
+    # availability_start/availability_end are optional timestamps — unlike
     # occurred_at (which has a sensor fallback and pre-existing behavior we
     # must not change), an unparseable value here is treated the same way
     # Stage 1 treats any other malformed optional field: dropped and logged,
@@ -257,6 +246,8 @@ UTC = timezone.utc
 
 
 def parse_timestamp(value: str) -> datetime:
+    """Parse timestamp."""
+
     normalized = value.strip()
     if normalized.endswith("Z"):
         normalized = f"{normalized[:-1]}+00:00"
@@ -268,15 +259,21 @@ def parse_timestamp(value: str) -> datetime:
 
 
 def storage_timestamp(value: datetime) -> str:
+    """Storage timestamp."""
+
     return value.astimezone(UTC).replace(tzinfo=None).isoformat(timespec="seconds")
 
 
 def day_bounds(value: datetime) -> tuple[datetime, datetime]:
+    """Day bounds."""
+
     start = datetime.combine(value.date(), time.min, tzinfo=UTC)
     return start, start + timedelta(days=1)
 
 
 def month_bounds(value: datetime) -> tuple[datetime, datetime]:
+    """Month bounds."""
+
     start = datetime(value.year, value.month, 1, tzinfo=UTC)
     if value.month == 12:
         end = datetime(value.year + 1, 1, 1, tzinfo=UTC)
@@ -286,14 +283,20 @@ def month_bounds(value: datetime) -> tuple[datetime, datetime]:
 
 
 def year_bounds(value: datetime) -> tuple[datetime, datetime]:
+    """Year bounds."""
+
     return datetime(value.year, 1, 1, tzinfo=UTC), datetime(value.year + 1, 1, 1, tzinfo=UTC)
 
 
 def add_month(value: datetime) -> datetime:
+    """Add month."""
+
     return month_bounds(value)[1]
 
 
 def iter_days(start: datetime, end: datetime):
+    """Iter days."""
+
     cursor = day_bounds(start)[0]
     while cursor < end:
         yield cursor, cursor + timedelta(days=1)
@@ -301,6 +304,8 @@ def iter_days(start: datetime, end: datetime):
 
 
 def iter_months(start: datetime, end: datetime):
+    """Iter months."""
+
     cursor = month_bounds(start)[0]
     while cursor < end:
         next_cursor = add_month(cursor)
@@ -309,6 +314,8 @@ def iter_months(start: datetime, end: datetime):
 
 
 def iter_years(start: datetime, end: datetime):
+    """Iter years."""
+
     cursor = year_bounds(start)[0]
     while cursor < end:
         next_cursor = datetime(cursor.year + 1, 1, 1, tzinfo=UTC)
@@ -357,14 +364,15 @@ STATE_UPDATE_FIELDS = frozenset(
 EVENT_DATA_UPDATE_FIELDS = frozenset(
     {
         "classification", "area", "entities", "description", "severity", "occurred_at", "occurred_at_is_fallback",
-        # Stage 3, docs/bar_improves.md: lets a reporter's follow-up reply
-        # fill these in through the same existing event_data reply path.
+        # A reporter's follow-up can fill these through the event_data reply path.
         "availability_start", "availability_end", "absence_reason",
     }
 )
 
 
 def record_initial_event(persistence, envelope: InitialEventEnvelope) -> str:
+    """Record initial event."""
+
     if envelope.source not in {"sensor", "telegram"}:
         raise ValueError("source must be 'sensor' or 'telegram'")
     if not envelope.raw_text:
@@ -387,6 +395,8 @@ def record_extracted_fields(
     source: str | None = None,
     received_at: str | None = None,
 ) -> None:
+    """Record extracted fields."""
+
     if scheduler is not None and (source is None or received_at is None):
         raise ValueError("source and received_at are required when scheduler is provided")
 
@@ -411,10 +421,14 @@ def record_extracted_fields(
 
 
 def record_step_execution(persistence, event_id: str, step: StepExecutionEnvelope) -> None:
+    """Record step execution."""
+
     record_step_executions(persistence, event_id, (step,))
 
 
 def record_step_executions(persistence, event_id: str, steps: tuple[StepExecutionEnvelope, ...] | list[StepExecutionEnvelope]) -> None:
+    """Record step executions."""
+
     if not steps:
         return
     payloads = []
@@ -436,6 +450,8 @@ def record_event_outcome(
     report_text: str | None = None,
     commander_alert_text: str | None = None,
 ) -> None:
+    """Record event outcome."""
+
     if outcome not in VALID_OUTCOMES:
         raise ValueError(f"invalid event outcome: '{outcome}'")
     persistence.update_event(
@@ -451,6 +467,8 @@ def record_event_outcome(
 
 
 def record_event_state(persistence, event_id: str, updates: dict) -> None:
+    """Record event state."""
+
     rejected = set(updates) - STATE_UPDATE_FIELDS
     if rejected:
         raise ValueError(f"event state update contains forbidden field(s): {', '.join(sorted(rejected))}")

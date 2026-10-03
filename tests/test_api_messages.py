@@ -1,3 +1,5 @@
+"""POST /Msg ingestion, answers, and ownership scoping."""
+
 import dataclasses
 import types
 
@@ -15,10 +17,12 @@ from tests.crewai_fakes import install_crewai_stub
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch)
 
 
 def _ctx_with(tmp_path, main_agent):
+    """Ctx with."""
     return build_context(tmp_path, main_agent=main_agent)
 
 
@@ -49,6 +53,7 @@ def _ctx_with_protocol_flags(
 
 
 def test_a_question_is_answered_directly_with_no_job(tmp_path, teardown_ctx):
+    """A question is answered directly with no job."""
     agent = happy_path_agent(intent="question")
     agent._dispatch["Decide which of the following agents"] = "AGENT: reference_agent\nTASK: what's the status?"
     ctx = _ctx_with(tmp_path, agent)
@@ -65,6 +70,7 @@ def test_a_question_is_answered_directly_with_no_job(tmp_path, teardown_ctx):
 
 
 def test_a_conversational_message_is_answered_directly_with_no_job(tmp_path, teardown_ctx):
+    """A conversational message is answered directly with no job."""
     agent = happy_path_agent(intent="conversational")
     agent._dispatch["Reply naturally and directly"] = "Doing well, thanks for asking!"
     ctx = _ctx_with(tmp_path, agent)
@@ -79,7 +85,7 @@ def test_a_conversational_message_is_answered_directly_with_no_job(tmp_path, tea
     assert body["answer"] == "Doing well, thanks for asking!"
     conversational_prompt = next(call for call in agent.calls if "Reply naturally and directly" in call)
     assert '"profile_name": "For Tests"' in conversational_prompt
-    # docs/Next_Plan.md §5 decision record: sub_agents/protocols are
+    # Decision record: sub_agents/protocols are
     # view_system_internals, commander-only — absent entirely from a
     # viewer's conversational prompt (see the commander-role test below).
     assert '"name": "reference_agent"' not in conversational_prompt
@@ -90,6 +96,7 @@ def test_a_conversational_message_is_answered_directly_with_no_job(tmp_path, tea
 
 
 def test_a_conversational_message_from_a_commander_includes_protocols_and_sub_agents(tmp_path, teardown_ctx):
+    """A conversational message from a commander includes protocols and sub agents."""
     agent = happy_path_agent(intent="conversational")
     agent._dispatch["Reply naturally and directly"] = "Doing well, thanks for asking!"
     ctx = _ctx_with(tmp_path, agent)
@@ -106,6 +113,7 @@ def test_a_conversational_message_from_a_commander_includes_protocols_and_sub_ag
 
 
 def test_a_report_returns_202_with_a_job_id(tmp_path, teardown_ctx):
+    """A report returns 202 with a job id."""
     agent = happy_path_agent(risk_score="0.1", selected="status_check", intent="report")
     ctx = _ctx_with(tmp_path, agent)
     teardown_ctx.append(ctx)
@@ -117,7 +125,7 @@ def test_a_report_returns_202_with_a_job_id(tmp_path, teardown_ctx):
     body = resp.get_json()
     assert body["taken_as"] == "report"
     assert body["status"] == "queued"
-    # docs/work_process.md §17: /Msg itself is the single source of truth for this
+    # /Msg itself is the single source of truth for this
     # reply text now — the bot purely relays it — so the friendly, default
     # (non-DEEP_DEBUG) wording is asserted here, not reconstructed bot-side.
     assert "Handling it" in body["answer"]
@@ -147,6 +155,7 @@ def test_a_report_includes_the_task_id_under_deep_debug(tmp_path, teardown_ctx, 
 
 
 def test_authenticated_identity_cannot_submit_as_another_sender(tmp_path, teardown_ctx):
+    """Authenticated identity cannot submit as another sender."""
     ctx = _ctx_with(tmp_path, happy_path_agent(intent="conversational"))
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -162,6 +171,7 @@ def test_authenticated_identity_cannot_submit_as_another_sender(tmp_path, teardo
 
 
 def test_unrelated_message_does_not_answer_an_old_event_data_hold(tmp_path, teardown_ctx):
+    """Unrelated message does not answer an old event data hold."""
     agent = happy_path_agent(intent="conversational")
     agent._dispatch["Reply naturally and directly"] = "This is a new conversation turn."
     ctx = _ctx_with(tmp_path, agent)
@@ -190,6 +200,7 @@ def test_unrelated_message_does_not_answer_an_old_event_data_hold(tmp_path, tear
 
 
 def test_explicit_event_data_reply_resolves_only_its_target_hold(tmp_path, teardown_ctx):
+    """Explicit event data reply resolves only its target hold."""
     agent = happy_path_agent(intent="conversational")
     agent._dispatch["pending request for missing event details"] = (
         '{"addresses_request": true, "updates": {"area": "north_sector"}, "reply_text": "Recorded."}'
@@ -221,6 +232,7 @@ def test_explicit_event_data_reply_resolves_only_its_target_hold(tmp_path, teard
     assert ctx.deps.persistence.fetch_event(event_id)["area"] == "north_sector"
 
 def test_a_request_returns_202_and_is_classified_human_activation(tmp_path, teardown_ctx):
+    """A request returns 202 and is classified human activation."""
     agent = happy_path_agent(risk_score="0.1", selected="status_check", intent="request")
     ctx = _ctx_with(tmp_path, agent)
     teardown_ctx.append(ctx)
@@ -239,6 +251,7 @@ def test_a_request_returns_202_and_is_classified_human_activation(tmp_path, tear
 
 
 def test_a_commanders_own_request_bypasses_the_approval_flag(tmp_path, teardown_ctx):
+    """A commanders own request bypasses the approval flag."""
     agent = happy_path_agent(risk_score="0.9", selected="dispatch_response", intent="request")
     ctx = _ctx_with(tmp_path, agent)
     teardown_ctx.append(ctx)
@@ -254,6 +267,7 @@ def test_a_commanders_own_request_bypasses_the_approval_flag(tmp_path, teardown_
 
 
 def test_a_viewers_request_for_a_flagged_protocol_still_holds(tmp_path, teardown_ctx):
+    """A viewers request for a flagged protocol still holds."""
     agent = happy_path_agent(risk_score="0.9", selected="dispatch_response", intent="request")
     ctx = _ctx_with(tmp_path, agent)
     teardown_ctx.append(ctx)
@@ -269,6 +283,7 @@ def test_a_viewers_request_for_a_flagged_protocol_still_holds(tmp_path, teardown
 def test_viewer_protocol_hint_for_commander_only_protocol_queues_approval_not_403(
     tmp_path, teardown_ctx
 ):
+    """Viewer protocol hint for commander only protocol queues approval not 403."""
     ctx = _ctx_with_protocol_flags(tmp_path, commander_only=True)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -293,6 +308,7 @@ def test_viewer_protocol_hint_for_commander_only_protocol_queues_approval_not_40
 def test_commander_protocol_hint_still_holds_when_confirmation_is_required(
     tmp_path, teardown_ctx
 ):
+    """Commander protocol hint still holds when confirmation is required."""
     ctx = _ctx_with_protocol_flags(
         tmp_path,
         approval_flag=True,
@@ -320,6 +336,7 @@ def test_commander_protocol_hint_still_holds_when_confirmation_is_required(
 
 
 def test_post_msg_rejects_missing_text(tmp_path, teardown_ctx):
+    """Post msg rejects missing text."""
     ctx = _ctx_with(tmp_path, happy_path_agent())
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -331,6 +348,7 @@ def test_post_msg_rejects_missing_text(tmp_path, teardown_ctx):
 
 
 def test_post_msg_requires_authentication(tmp_path, teardown_ctx):
+    """Post msg requires authentication."""
     ctx = _ctx_with(tmp_path, happy_path_agent())
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -344,6 +362,7 @@ def test_a_question_matching_no_agent_gets_a_clean_reply_not_a_forced_dispatch(t
     # The repro-1 shape: "do I have any tasks?" matches nothing any loaded
     # agent's role covers. The NONE: line lets the Main Agent say so
     # cleanly instead of being forced onto reference_agent.
+    """A question matching no agent gets a clean reply not a forced dispatch."""
     agent = happy_path_agent(intent="question")
     agent._dispatch["Decide which of the following agents"] = "NONE: no loaded agent tracks individual user tasks"
     ctx = _ctx_with(tmp_path, agent)
@@ -364,6 +383,7 @@ def test_a_direct_lookup_question_bypasses_agent_selection_and_answers_from_hist
     # HistoryQueryService.answer_most_recent_event directly, never through
     # the AGENT:/TASK: agent-selection call that used to crash on this
     # question shape with a 422.
+    """A direct lookup question bypasses agent selection and answers from history."""
     agent = happy_path_agent(risk_score="0.1", selected="status_check", intent="report")
     ctx = _ctx_with(tmp_path, agent)
     teardown_ctx.append(ctx)
@@ -391,6 +411,7 @@ def test_a_direct_lookup_question_bypasses_agent_selection_and_answers_from_hist
 
 
 def test_a_question_the_main_agent_cannot_route_becomes_a_run_failure_error(tmp_path, teardown_ctx):
+    """A question the main agent cannot route becomes a run failure error."""
     agent = ScriptedAgent(
         {
             "kind of message": "INTENT: question\nREASON: asks about status",
@@ -411,6 +432,7 @@ def test_a_question_the_main_agent_cannot_route_becomes_a_run_failure_error(tmp_
 
 
 def test_ambiguous_intent_returns_clarification_without_writing_an_event(tmp_path, teardown_ctx):
+    """Ambiguous intent returns clarification without writing an event."""
     import json
 
     agent = happy_path_agent()
@@ -445,10 +467,11 @@ def test_ambiguous_intent_returns_clarification_without_writing_an_event(tmp_pat
 
 
 def test_history_count_question_uses_the_structured_database_route(tmp_path, teardown_ctx):
-    # Uses a commander caller: ask_question ownership scoping (docs/Next_Plan.md
+    # Uses a commander caller: ask_question ownership scoping (
     # §5 decision record) would otherwise restrict this count to the caller's
     # own events, and these fixture events belong to a sensor, not the caller —
     # that scoping has its own dedicated coverage elsewhere.
+    """History count question uses the structured database route."""
     import json
 
     agent = happy_path_agent(intent="question")
@@ -499,10 +522,11 @@ def test_history_count_question_uses_the_structured_database_route(tmp_path, tea
 
 
 def test_ask_question_end_to_end_ownership_scoping(tmp_path, teardown_ctx):
-    # docs/Next_Plan.md §5 decision record, end to end through POST /Msg: a
+    # Decision record, end to end through POST /Msg: a
     # viewer's structured count only ever covers events they themselves
     # submitted, even though two matching events exist in the database — a
     # commander asking the identical question sees both.
+    """Ask question end to end ownership scoping."""
     import json
 
     def _count_history_query():
@@ -549,12 +573,13 @@ def test_ask_question_end_to_end_ownership_scoping(tmp_path, teardown_ctx):
 
 
 def test_question_follow_up_carries_conversation_context_into_the_routing_prompt(tmp_path, teardown_ctx):
-    # docs/Next_Plan.md §10, end to end: a follow-up question reusing the
+    # End to end: a follow-up question reusing the
     # same conversation_id must reach orchestrator routing with the prior
     # turn's content available, so a reference like "and that one?" can be
     # resolved to a stable Event ID. Conversation memory is off by default
     # in this test harness (matching every other test here); this is the
     # one test that turns it on.
+    """Question follow up carries conversation context into the routing prompt."""
     agent = happy_path_agent(intent="question")
     agent._dispatch["Decide whether this question can be answered by directly looking up"] = "ROUTE: normal"
     agent._dispatch["Decide which of the following agents"] = "AGENT: reference_agent\nTASK: describe status"
@@ -583,10 +608,11 @@ def test_question_follow_up_carries_conversation_context_into_the_routing_prompt
     assert "gate 3" in routing_prompts[-1]  # the prior turn reached the second call's prompt
 
 
-# --- Stage 6 adversarial disclosure corpus (docs/Next_Plan.md §11) ---------
+# Stage 6 adversarial disclosure corpus
 
 
 def _load_adversarial_corpus():
+    """Load adversarial corpus."""
     import json
     from pathlib import Path
 
@@ -595,6 +621,7 @@ def _load_adversarial_corpus():
 
 
 def test_adversarial_corpus_loads_every_mandatory_category():
+    """Adversarial corpus loads every mandatory category."""
     corpus = _load_adversarial_corpus()
     categories = {case["category"] for case in corpus}
     assert categories == {
@@ -605,10 +632,11 @@ def test_adversarial_corpus_loads_every_mandatory_category():
 
 
 def test_adversarial_corpus_viewer_prompt_never_leaks_protected_names(tmp_path, teardown_ctx):
-    # docs/Next_Plan.md §11: every mandatory disclosure scenario, direct,
+    # Every mandatory disclosure scenario, direct
     # indirect, injected, or quoted, and in both corpus languages — none of
     # them may cause a protocol, sub-agent, or tool name to reach the
     # prompt actually sent to the model for a viewer caller.
+    """Adversarial corpus viewer prompt never leaks protected names."""
     agent = happy_path_agent(intent="conversational")
     agent._dispatch["Reply naturally and directly"] = "I can help with reports, requests, and questions."
     ctx = _ctx_with(tmp_path, agent)
@@ -637,6 +665,7 @@ def test_adversarial_corpus_commander_prompt_retains_protected_names(tmp_path, t
     # actually exercise disclosure (protocol/agent names reach a
     # commander's prompt), rather than every case vacuously passing
     # because nothing is ever disclosed to anyone.
+    """Adversarial corpus commander prompt retains protected names."""
     agent = happy_path_agent(intent="conversational")
     agent._dispatch["Reply naturally and directly"] = "Here is what you asked for."
     ctx = _ctx_with(tmp_path, agent)
@@ -660,11 +689,12 @@ def test_adversarial_corpus_commander_prompt_retains_protected_names(tmp_path, t
 
 
 def test_permission_downgrade_mid_conversation_is_enforced_on_the_very_next_turn(tmp_path, teardown_ctx):
-    # docs/Next_Plan.md §11: "a previously visible conversation turn is
+    # "A previously visible conversation turn is
     # followed by a permission downgrade" — authorization and context
     # filtering must be recomputed from the caller's *current* level on
     # every turn; a turn answered while still a commander must not leave
     # any residual access for the same conversation_id after a downgrade.
+    """Permission downgrade mid conversation is enforced on the very next turn."""
     agent = happy_path_agent(intent="conversational")
     agent._dispatch["Reply naturally and directly"] = "Sure, here you go."
     ctx = build_context(tmp_path, main_agent=agent, conversation_history_turns=6)

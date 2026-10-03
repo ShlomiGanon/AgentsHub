@@ -1,3 +1,5 @@
+"""Single-instance lock and server control helpers."""
+
 import importlib
 import json
 
@@ -10,6 +12,7 @@ from profiles.loader import load_profile
 
 
 def test_only_the_two_operational_profiles_are_selectable(monkeypatch):
+    """Only the two operational profiles are selectable."""
     monkeypatch.setenv("BOT_TOKEN", "operational-test-token")
 
     profiles = server_control.discover_profiles()
@@ -21,6 +24,7 @@ def test_only_the_two_operational_profiles_are_selectable(monkeypatch):
 
 
 def test_each_selectable_profile_has_three_simulations(monkeypatch):
+    """Each selectable profile has three simulations."""
     monkeypatch.setenv("BOT_TOKEN", "operational-test-token")
 
     for profile in server_control.discover_profiles():
@@ -29,6 +33,7 @@ def test_each_selectable_profile_has_three_simulations(monkeypatch):
 
 
 def test_selectable_profiles_share_the_environment_runtime_ports(monkeypatch):
+    """Selectable profiles share the environment runtime ports."""
     monkeypatch.setenv("BOT_TOKEN", "operational-test-token")
     monkeypatch.setenv("API_PORT", "7777")
     monkeypatch.setenv("SIMULATOR_PORT", "7778")
@@ -48,6 +53,7 @@ def test_selectable_profiles_share_the_environment_runtime_ports(monkeypatch):
 
 
 def test_control_channel_accepts_only_discovered_profiles(tmp_path, monkeypatch):
+    """Control channel accepts only discovered profiles."""
     monkeypatch.setenv("AGENTSHUB_CONTROL_DIR", str(tmp_path))
     monkeypatch.setenv("AGENTSHUB_SUPERVISOR", "1")
     server_control.write_status(supervisor_pid=123, state="running")
@@ -63,12 +69,14 @@ def test_control_channel_accepts_only_discovered_profiles(tmp_path, monkeypatch)
 
 @pytest.mark.parametrize("module_path", ["profiles.response_team", "profiles.firefighting"])
 def test_selected_profile_survives_outside_databases(tmp_path, monkeypatch, module_path):
+    """Selected profile survives outside databases."""
     monkeypatch.setenv("AGENTSHUB_CONTROL_DIR", str(tmp_path))
     server_control.save_selected_profile(module_path)
     assert server_control.load_selected_profile() == module_path
 
 
 def test_successful_profile_switch_persists_the_new_last_used_profile(monkeypatch):
+    """Successful profile switch persists the new last used profile."""
     supervisor = run_stack.StackSupervisor("profiles.response_team", python_executable="python")
     starts = []
     saved = []
@@ -85,6 +93,7 @@ def test_successful_profile_switch_persists_the_new_last_used_profile(monkeypatc
 
 
 def test_failed_profile_switch_rolls_back_and_keeps_error_for_admin(monkeypatch):
+    """Failed profile switch rolls back and keeps error for admin."""
     supervisor = run_stack.StackSupervisor("profiles.response_team", python_executable="python")
     starts = []
     monkeypatch.setattr(run_stack, "available_profile", lambda module: object())

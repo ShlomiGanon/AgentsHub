@@ -70,16 +70,13 @@ CREATE TABLE IF NOT EXISTS attendance_broadcast (
 
 
 def _utc_now() -> str:
+    """Return the current UTC time as an ISO-8601 string."""
+
     return datetime.now(timezone.utc).isoformat()
 
 
 def _parse_timestamp(value: str) -> datetime:
-    """A timestamp with no offset is assumed UTC rather than rejected — the same
-    convention `history/event_pipeline.py`'s own `parse_timestamp` already uses.
-    A tool-calling model asked for an "as of" timestamp will sometimes omit the
-    offset (docs/work_process.md §21); defaulting it rather than raising keeps
-    that a normal, successful call instead of a hard failure the model then has
-    to recover from by retrying without the argument."""
+    """Parse an ISO timestamp, treating a missing offset as UTC so tool calls still succeed."""
 
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -94,18 +91,24 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
     """Small connection-per-operation store for one dedicated status DB."""
 
     def __init__(self, db_path: str):
+        """Open the dedicated status DB and create roster tables if they are missing."""
+
         self.db_path = str(db_path)
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(_SCHEMA)
 
     def _connect(self) -> sqlite3.Connection:
+        """Open a row-factory connection with foreign keys enabled."""
+
         connection = sqlite3.connect(self.db_path, timeout=30)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
 
     def register_member(self, telegram_identity: str, full_name: str, registered_at: str | None = None) -> None:
+        """Insert a team_members row, or refresh the name on conflict."""
+
         identity = telegram_identity.strip()
         name = " ".join(full_name.split())
         if not identity or not name:
@@ -123,6 +126,8 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             )
 
     def approve_roster(self, approved_by: str, approved_at: str | None = None) -> int:
+        """Mark every team_members row approved and record the singleton approval."""
+
         if not approved_by.strip():
             raise TeamStatusPersistenceError("approving commander identity is required")
         approved_at = approved_at or _utc_now()
@@ -145,10 +150,14 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         return int(count)
 
     def roster_is_approved(self) -> bool:
+        """True when the singleton roster_approval row exists."""
+
         with self._connect() as connection:
             return connection.execute("SELECT 1 FROM roster_approval WHERE singleton_id = 1").fetchone() is not None
 
     def list_members(self, *, approved_only: bool = True) -> list[dict]:
+        """Return team_members rows, optionally limited to approved members."""
+
         where = "WHERE approved = 1" if approved_only else ""
         with self._connect() as connection:
             rows = connection.execute(
@@ -157,6 +166,8 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         return [dict(row) for row in rows]
 
     def open_cycle(self, cycle_key: str, opened_at: str, deadline_at: str) -> AttendanceCycle:
+        """Create an attendance_cycles row for this key, or return the existing one."""
+
         if not self.roster_is_approved():
             raise TeamStatusPersistenceError("the commander must approve the roster before attendance checks begin")
         opened = _parse_timestamp(opened_at)
@@ -180,6 +191,8 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         return AttendanceCycle(**dict(row), created=created)
 
     def latest_cycle(self) -> dict | None:
+        """Return the newest attendance_cycles row, or None."""
+
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT cycle_id, cycle_key, opened_at, deadline_at FROM attendance_cycles ORDER BY opened_at DESC LIMIT 1"
@@ -187,6 +200,8 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         return dict(row) if row is not None else None
 
     def request_broadcast(self, cycle_key: str) -> None:
+        """Queue this cycle_key on the singleton attendance_broadcast row."""
+
         if not cycle_key:
             raise TeamStatusPersistenceError("cycle_key is required")
         with self._connect() as connection:
@@ -200,6 +215,8 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
             )
 
     def claim_broadcast(self) -> dict | None:
+        """Take the pending broadcast row and return the cycle plus members still required."""
+
         with self._connect() as connection:
             pending = connection.execute(
                 "SELECT cycle_key FROM attendance_broadcast WHERE singleton_id = 1"
@@ -233,6 +250,8 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         reason: str | None = None,
         unavailable_until: str | None = None,
     ) -> dict:
+        """Insert an attendance_responses row, or return the existing one for this message id."""
+
         if availability not in {"available", "unavailable"}:
             raise TeamStatusPersistenceError("availability must be 'available' or 'unavailable'")
         if availability == "unavailable" and not (reason or "").strip():
@@ -294,6 +313,8 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
     def review_late_response(
         self, response_id: str, *, approved: bool, reviewed_by: str, reviewed_at: str | None = None
     ) -> dict:
+        """Accept or reject a pending attendance_responses row."""
+
         reviewed_at = reviewed_at or _utc_now()
         _parse_timestamp(reviewed_at)
         with self._connect() as connection:
@@ -320,6 +341,8 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         return dict(updated)
 
     def pending_late_responses(self) -> list[dict]:
+        """Return pending attendance_responses rows with the member's full name."""
+
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -333,11 +356,15 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         return [dict(row) for row in rows]
 
     def list_responses(self) -> list[dict]:
+        """Return every attendance_responses row, newest first."""
+
         with self._connect() as connection:
             rows = connection.execute("SELECT * FROM attendance_responses ORDER BY received_at DESC").fetchall()
         return [dict(row) for row in rows]
 
     def get_response(self, response_id: str) -> dict | None:
+        """Return one attendance_responses row, or None."""
+
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT * FROM attendance_responses WHERE response_id = ?", (response_id,)
@@ -345,13 +372,7 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         return dict(row) if row is not None else None
 
     def admin_update_attendance_fields(self, response_id: str, reviewed_by: str = "admin", **fields) -> dict:
-        """Admin-panel edit of one attendance response (docs/Admin_Tables_Plan.md section 2) --
-        every column is plain-editable. When `approval_status` is among the submitted fields,
-        this replicates `review_late_response`'s own effect (stamping `reviewed_by`/
-        `reviewed_at`) without that method's "must currently be pending" guard, since an admin
-        edit is an explicit override, not the normal single-review flow -- it can also correct
-        an already-reviewed response. `availability_snapshot` reads `approval_status` fresh on
-        every call, so the effect is immediate."""
+        """Overwrite editable attendance columns; stamping review fields when approval_status changes."""
 
         now = _utc_now()
         editable_columns = ("availability", "reason", "unavailable_until", "approval_status")
@@ -378,6 +399,8 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         return dict(updated)
 
     def availability_snapshot(self, as_of: str) -> list[dict]:
+        """Derive each approved member's current availability from the latest accepted response."""
+
         instant = _parse_timestamp(as_of)
         cycle = self.latest_cycle()
         members = self.list_members()

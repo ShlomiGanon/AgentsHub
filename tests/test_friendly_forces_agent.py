@@ -1,8 +1,11 @@
+"""Friendly-forces specialist agent tools."""
+
 from agents import base
 from agents.friendly_forces_agent import FriendlyForcesAgent
 
 
 def test_constructed_with_a_model_like_any_other_agent():
+    """Constructed with a model like any other agent."""
     agent = FriendlyForcesAgent(model="some-model")
 
     assert agent.model == "some-model"
@@ -10,6 +13,7 @@ def test_constructed_with_a_model_like_any_other_agent():
 
 
 def test_role_and_system_prompt_are_real_text_not_placeholders():
+    """Role and system prompt are real text not placeholders."""
     agent = FriendlyForcesAgent(model="m")
 
     assert len(agent.role) > 40
@@ -19,6 +23,7 @@ def test_role_and_system_prompt_are_real_text_not_placeholders():
 
 
 def test_exposes_exactly_the_four_dispatch_tools_with_the_right_marks():
+    """Exposes exactly the four dispatch tools with the right marks."""
     agent = FriendlyForcesAgent(model="m")
     tools = {t.name: t for t in agent.exposed_tools()}
 
@@ -30,6 +35,7 @@ def test_exposes_exactly_the_four_dispatch_tools_with_the_right_marks():
 
 
 def test_dispatch_ambulance_records_the_request_and_confirms():
+    """Dispatch ambulance records the request and confirms."""
     agent = FriendlyForcesAgent(model="m")
 
     token = base._current_allowed_tools.set(frozenset({"dispatch_ambulance"}))
@@ -46,6 +52,7 @@ def test_dispatch_ambulance_records_the_request_and_confirms():
 
 
 def test_dispatch_ambulance_is_blocked_when_not_allowed():
+    """Dispatch ambulance is blocked when not allowed."""
     agent = FriendlyForcesAgent(model="m")
 
     token = base._current_allowed_tools.set(frozenset({"dispatch_police"}))  # dispatch_ambulance not allowed
@@ -63,6 +70,7 @@ def test_dispatch_ambulance_genuinely_records_each_call_it_receives():
     # actually accumulate state, not just return a canned string, so a second call is
     # observably different from stopping after one — this is what makes "a retry does not
     # repeat a dispatch" testable later.
+    """Dispatch ambulance genuinely records each call it receives."""
     agent = FriendlyForcesAgent(model="m")
 
     token = base._current_allowed_tools.set(frozenset({"dispatch_ambulance"}))
@@ -76,6 +84,7 @@ def test_dispatch_ambulance_genuinely_records_each_call_it_receives():
 
 
 def test_dispatch_police_records_the_request_and_confirms():
+    """Dispatch police records the request and confirms."""
     agent = FriendlyForcesAgent(model="m")
 
     token = base._current_allowed_tools.set(frozenset({"dispatch_police"}))
@@ -92,6 +101,7 @@ def test_dispatch_police_records_the_request_and_confirms():
 
 
 def test_dispatch_police_is_blocked_when_not_allowed():
+    """Dispatch police is blocked when not allowed."""
     agent = FriendlyForcesAgent(model="m")
 
     token = base._current_allowed_tools.set(frozenset({"dispatch_ambulance"}))  # dispatch_police not allowed
@@ -105,6 +115,7 @@ def test_dispatch_police_is_blocked_when_not_allowed():
 
 
 def test_dispatch_police_genuinely_records_each_call_it_receives():
+    """Dispatch police genuinely records each call it receives."""
     agent = FriendlyForcesAgent(model="m")
 
     token = base._current_allowed_tools.set(frozenset({"dispatch_police"}))
@@ -118,6 +129,7 @@ def test_dispatch_police_genuinely_records_each_call_it_receives():
 
 
 def test_dispatch_firefighters_records_the_request_and_confirms():
+    """Dispatch firefighters records the request and confirms."""
     agent = FriendlyForcesAgent(model="m")
 
     token = base._current_allowed_tools.set(frozenset({"dispatch_firefighters"}))
@@ -134,6 +146,7 @@ def test_dispatch_firefighters_records_the_request_and_confirms():
 
 
 def test_dispatch_firefighters_is_blocked_when_not_allowed():
+    """Dispatch firefighters is blocked when not allowed."""
     agent = FriendlyForcesAgent(model="m")
 
     token = base._current_allowed_tools.set(frozenset({"dispatch_ambulance"}))  # dispatch_firefighters not allowed
@@ -147,6 +160,7 @@ def test_dispatch_firefighters_is_blocked_when_not_allowed():
 
 
 def test_dispatch_firefighters_genuinely_records_each_call_it_receives():
+    """Dispatch firefighters genuinely records each call it receives."""
     agent = FriendlyForcesAgent(model="m")
 
     token = base._current_allowed_tools.set(frozenset({"dispatch_firefighters"}))
@@ -160,6 +174,7 @@ def test_dispatch_firefighters_genuinely_records_each_call_it_receives():
 
 
 def test_dispatch_military_records_the_request_and_confirms():
+    """Dispatch military records the request and confirms."""
     agent = FriendlyForcesAgent(model="m")
 
     token = base._current_allowed_tools.set(frozenset({"dispatch_military"}))
@@ -176,6 +191,7 @@ def test_dispatch_military_records_the_request_and_confirms():
 
 
 def test_dispatch_military_is_blocked_when_not_allowed():
+    """Dispatch military is blocked when not allowed."""
     agent = FriendlyForcesAgent(model="m")
 
     token = base._current_allowed_tools.set(frozenset({"dispatch_ambulance"}))  # dispatch_military not allowed
@@ -189,6 +205,7 @@ def test_dispatch_military_is_blocked_when_not_allowed():
 
 
 def test_dispatch_military_genuinely_records_each_call_it_receives():
+    """Dispatch military genuinely records each call it receives."""
     agent = FriendlyForcesAgent(model="m")
 
     token = base._current_allowed_tools.set(frozenset({"dispatch_military"}))

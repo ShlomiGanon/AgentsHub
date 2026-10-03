@@ -1,5 +1,5 @@
-"""bot/simulator_transport.py: FakeBotRequest, SimulatorTelegramClient, and
-synthetic-Update construction (docs/bot_simulation_mode_design.md §4.1/§8).
+"""Bot/simulator_transport.py: FakeBotRequest, SimulatorTelegramClient, and
+synthetic-Update construction.
 """
 
 import asyncio
@@ -16,10 +16,12 @@ from bot.simulator_transport import (
 
 
 def _run(coro):
+    """Run."""
     return asyncio.run(coro)
 
 
 def _fake_bot() -> telegram.Bot:
+    """Fake bot."""
     return telegram.Bot(token="simulator", request=FakeBotRequest(), get_updates_request=FakeBotRequest())
 
 
@@ -27,8 +29,8 @@ def _fake_bot() -> telegram.Bot:
 
 
 def test_fake_bot_request_satisfies_application_initialize_with_no_real_network():
-    """`Application.initialize()` unconditionally calls `Bot.initialize()` ->
-    `get_me()` (docs/bot_simulation_mode_design.md §1.2) — this must succeed
+    """`Application.initialize` unconditionally calls `Bot.initialize` ->
+    `get_me` — this must succeed
     without ever constructing a real HTTPXRequest or touching a network."""
 
     async def scenario():
@@ -58,6 +60,7 @@ def test_fake_bot_request_satisfies_set_my_commands():
 
 
 def test_fake_bot_request_get_me_returns_a_plausible_bot_user():
+    """Fake bot request get me returns a plausible bot user."""
     async def scenario():
         bot = _fake_bot()
         user = await bot.get_me()
@@ -79,6 +82,7 @@ def test_simulator_telegram_client_implements_the_full_telegram_client_abc():
 
 
 def test_run_polling_is_refused():
+    """Run polling is refused."""
     client = SimulatorTelegramClient()
     try:
         client.run_polling(lambda application: None)
@@ -124,6 +128,7 @@ def test_reply_since_ignores_a_deleted_status_message():
 
 
 def test_reply_since_is_none_when_nothing_was_sent_to_that_chat():
+    """Reply since is none when nothing was sent to that chat."""
     async def scenario():
         client = SimulatorTelegramClient()
         mark = client.mark()
@@ -178,7 +183,7 @@ def test_reply_since_joins_multiple_distinct_messages_in_order():
 
 def test_synthetic_update_is_classified_as_plain_text_not_a_command():
     """No `entities` on the synthetic Message -> filters.COMMAND never matches
-    (docs/bot_simulation_mode_design.md §1.2's precise finding), so every
+, so every
     scenario message routes to the plain-text handler, never a CommandHandler."""
 
     bot = _fake_bot()
@@ -192,6 +197,7 @@ def test_synthetic_update_is_classified_as_plain_text_not_a_command():
 
 
 def test_synthetic_update_never_matches_a_command_handler():
+    """Synthetic update never matches a command handler."""
     async def scenario():
         bot = _fake_bot()
         application = ApplicationBuilder().bot(bot).build()
@@ -222,6 +228,7 @@ def test_synthetic_update_never_matches_a_command_handler():
 
 
 def test_synthetic_update_carries_the_right_identities_and_text():
+    """Synthetic update carries the right identities and text."""
     bot = _fake_bot()
     update = build_synthetic_text_update(
         update_id=7, source_message_id="s1", sender_identity="9000000000000002",
@@ -235,6 +242,7 @@ def test_synthetic_update_carries_the_right_identities_and_text():
 
 
 def test_synthetic_update_uses_an_explicit_unix_date_when_provided():
+    """Synthetic update uses an explicit unix date when provided."""
     bot = _fake_bot()
     update = build_synthetic_text_update(
         update_id=7, source_message_id="s1", sender_identity="9000000000000002",
@@ -245,6 +253,7 @@ def test_synthetic_update_uses_an_explicit_unix_date_when_provided():
 
 
 def test_stable_message_id_is_deterministic_and_positive():
+    """Stable message id is deterministic and positive."""
     first = _stable_message_id("sim-step-3")
     second = _stable_message_id("sim-step-3")
     other = _stable_message_id("sim-step-4")
@@ -257,7 +266,7 @@ def test_synthetic_update_reuses_the_same_message_id_for_the_same_source_message
     """A re-run with the same source_message_id must produce the same synthetic
     message_id, preserving /Msg's dedup-on-source_message_id behavior once the
     real handler re-derives str(update.message.message_id) as its own
-    source_message_id (docs/bot_simulation_mode_design.md §10)."""
+    source_message_id."""
 
     bot = _fake_bot()
     first = build_synthetic_text_update(

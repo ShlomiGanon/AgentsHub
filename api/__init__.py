@@ -54,7 +54,11 @@ def __getattr__(name: str):
 
 
 class _ContractsModule(ModuleType):
+    """Lazy ``api.contracts`` shim that exposes ApiContext and the HTTP error types."""
+
     def __getattr__(self, name: str):
+        """Resolve ApiContext on first access so ``api.app`` stays out of package import."""
+
         if name != "ApiContext":
             raise AttributeError(f"module {self.__name__!r} has no attribute {name!r}")
         value = __getattr__(name)

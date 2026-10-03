@@ -1,4 +1,4 @@
-"""Fire and Rescue (FIRE) simulation deployment (docs/bar_improves.md Stage 5).
+"""Fire and Rescue simulation deployment: same content, own database and ports.
 
 Same rationale as profiles/response_team_sim.py: a simulation is simply another
 deployment of profiles/fire_station.py's content, with its own DB_PATH, API port, and

@@ -1,4 +1,4 @@
-"""Backend-swap conformance suite (work_plan.md §2.11).
+"""Backend-swap conformance suite.
 
 Written against persistence.interface only. The `persistence` fixture
 below is the *only* place a concrete engine is named — adding a second
@@ -18,12 +18,14 @@ IMPLEMENTATIONS = [SQLitePersistence]
 
 @pytest.fixture(params=IMPLEMENTATIONS, ids=lambda cls: cls.__name__)
 def persistence(request, tmp_path):
+    """Persistence."""
     backend = request.param(str(tmp_path / "conformance.db"))
     yield backend
     backend.close()
 
 
 def _minimal_event(**overrides):
+    """Minimal event."""
     event = {
         "received_at": "2026-08-01T10:00:00",
         "source": "sensor",
@@ -39,6 +41,7 @@ def _minimal_event(**overrides):
 
 
 def test_append_and_fetch_events_range(persistence):
+    """Append and fetch events range."""
     event_id = persistence.append_event(_minimal_event())
 
     events = persistence.fetch_events_range("2026-01-01", "2026-12-31")
@@ -46,6 +49,7 @@ def test_append_and_fetch_events_range(persistence):
 
 
 def test_fetch_event_by_id(persistence):
+    """Fetch event by id."""
     event_id = persistence.append_event(_minimal_event(raw_text="specific text"))
 
     event = persistence.fetch_event(event_id)
@@ -55,20 +59,24 @@ def test_fetch_event_by_id(persistence):
 
 
 def test_fetch_event_returns_none_for_an_unknown_id(persistence):
+    """Fetch event returns none for an unknown id."""
     assert persistence.fetch_event("does-not-exist") is None
 
 
 def test_fetch_events_range_with_no_rows_returns_empty_list(persistence):
+    """Fetch events range with no rows returns empty list."""
     assert persistence.fetch_events_range("2020-01-01", "2020-12-31") == []
 
 
 def test_fetch_events_by_type_area_window_with_no_match_returns_empty_list(persistence):
+    """Fetch events by type area window with no match returns empty list."""
     persistence.append_event(_minimal_event(classification="fire", area="north"))
 
     assert persistence.fetch_events_by_type_area_window("medical", "south", "2000-01-01", "2100-01-01") == []
 
 
 def test_update_event_merges_fields(persistence):
+    """Update event merges fields."""
     event_id = persistence.append_event(_minimal_event())
 
     persistence.update_event(event_id, {"risk_level": "low"})
@@ -78,6 +86,7 @@ def test_update_event_merges_fields(persistence):
 
 
 def test_update_unknown_event_raises_not_found(persistence):
+    """Update unknown event raises not found."""
     with pytest.raises(NotFoundError):
         persistence.update_event("nonexistent", {"risk_level": "low"})
 
@@ -86,6 +95,7 @@ def test_update_unknown_event_raises_not_found(persistence):
 
 
 def test_write_and_fetch_summary(persistence):
+    """Write and fetch summary."""
     persistence.write_summary("daily", {
         "summary_text": "x",
         "period_start": "2026-08-01",
@@ -100,10 +110,12 @@ def test_write_and_fetch_summary(persistence):
 
 
 def test_fetch_summaries_range_with_no_rows_returns_empty_list(persistence):
+    """Fetch summaries range with no rows returns empty list."""
     assert persistence.fetch_summaries_range("daily", "2020-01-01", "2020-12-31") == []
 
 
 def test_writing_a_summary_for_a_period_that_already_has_one_does_not_duplicate(persistence):
+    """Writing a summary for a period that already has one does not duplicate."""
     period = {"period_start": "2026-08-01", "period_end": "2026-08-02"}
 
     persistence.write_summary("daily", {**period, "summary_text": "first", "generated_at": "2026-08-02"})
@@ -118,6 +130,7 @@ def test_writing_a_summary_for_a_period_that_already_has_one_does_not_duplicate(
 
 
 def test_user_crud_round_trip(persistence):
+    """User crud round trip."""
     persistence.write_user("100", "commander")
 
     assert persistence.read_user("100") == {"telegram_identity": "100", "permission_level": "commander", "full_name": "", "auto_register": False}
@@ -128,13 +141,14 @@ def test_user_crud_round_trip(persistence):
 
 
 def test_deleting_an_unknown_user_raises_not_found(persistence):
+    """Deleting an unknown user raises not found."""
     with pytest.raises(NotFoundError):
         persistence.delete_user("nonexistent")
 
 
 def test_ensure_user_exists_creates_once_and_never_overwrites(persistence):
     """Idempotent create-if-missing for simulation-user provisioning
-    (docs/profile_simulations_design.md) — distinct from write_user's upsert
+     — distinct from write_user's upsert
     and from register_telegram_user_if_missing's auto_register=True."""
 
     created = persistence.ensure_user_exists("9000000000000000", "commander", "Sim Commander")
@@ -155,6 +169,7 @@ def test_ensure_user_exists_creates_once_and_never_overwrites(persistence):
 
 
 def test_group_crud_round_trip(persistence):
+    """Group crud round trip."""
     persistence.write_group("-1001", "team_status_agent", "readiness team")
 
     stored = persistence.read_group("-1001")
@@ -183,13 +198,14 @@ def test_group_crud_round_trip(persistence):
 
 
 def test_deleting_an_unknown_group_raises_not_found(persistence):
+    """Deleting an unknown group raises not found."""
     with pytest.raises(NotFoundError):
         persistence.delete_group("-999")
 
 
 def test_ensure_group_exists_creates_once_and_never_overwrites(persistence):
     """Idempotent create-if-missing for simulation-group provisioning
-    (docs/profile_simulations_design.md) — mirrors test_ensure_user_exists_*."""
+     — mirrors test_ensure_user_exists_*."""
 
     created = persistence.ensure_group_exists("-9000000000000000", "team_status_agent", "Sim group")
     assert created is True
@@ -208,7 +224,7 @@ def test_ensure_group_exists_creates_once_and_never_overwrites(persistence):
 
 def test_rename_group_moves_the_row_to_a_new_chat_id(persistence):
     """The operator-driven "replace placeholder ID with a real one" primitive
-    (docs/profile_simulations_design.md) — changes the primary key in place."""
+     — changes the primary key in place."""
 
     persistence.write_group("-9000000000000000", "team_status_agent", "Sim group")
 
@@ -222,11 +238,13 @@ def test_rename_group_moves_the_row_to_a_new_chat_id(persistence):
 
 
 def test_rename_group_unknown_old_id_raises_not_found(persistence):
+    """Rename group unknown old id raises not found."""
     with pytest.raises(NotFoundError):
         persistence.rename_group("-999", "-1001")
 
 
 def test_rename_group_onto_an_existing_id_raises_and_leaves_both_rows_untouched(persistence):
+    """Rename group onto an existing id raises and leaves both rows untouched."""
     persistence.write_group("-1001", "team_status_agent", "existing")
     persistence.write_group("-9000000000000000", "main_agent", "sim placeholder")
 
@@ -242,6 +260,7 @@ def test_rename_group_onto_an_existing_id_raises_and_leaves_both_rows_untouched(
 
 
 def test_store_list_and_resolve_a_held_event(persistence):
+    """Store list and resolve a held event."""
     hold_id = persistence.store_held_event("approval", {"event_id": "evt-1", "reason": "flagged_protocol"})
 
     [held] = persistence.list_held_events("approval")
@@ -257,11 +276,13 @@ def test_store_list_and_resolve_a_held_event(persistence):
 
 def test_resolving_a_hold_that_is_not_held_raises(persistence):
     # 2.11's named failure case, now against the real implementation.
+    """Resolving a hold that is not held raises."""
     with pytest.raises(NotFoundError):
         persistence.resolve_held_event("approval", "never-existed", {"resolved_by": "commander-1"})
 
 
 def test_resolving_an_already_resolved_hold_raises(persistence):
+    """Resolving an already resolved hold raises."""
     hold_id = persistence.store_held_event("approval", {"event_id": "evt-1"})
     persistence.resolve_held_event("approval", hold_id, {"resolved_by": "commander-1"})
 
@@ -270,6 +291,7 @@ def test_resolving_an_already_resolved_hold_raises(persistence):
 
 
 def test_list_held_events_is_scoped_to_its_kind(persistence):
+    """List held events is scoped to its kind."""
     persistence.store_held_event("approval", {"event_id": "evt-1"})
     persistence.store_held_event("clarification", {"event_id": "evt-2"})
 
@@ -278,6 +300,7 @@ def test_list_held_events_is_scoped_to_its_kind(persistence):
 
 
 def test_fetch_held_event_by_event_id_while_pending(persistence):
+    """Fetch held event by event id while pending."""
     hold_id = persistence.store_held_event("approval", {"event_id": "evt-1", "reason": "flagged_protocol"})
 
     held = persistence.fetch_held_event("approval", "evt-1")
@@ -290,6 +313,7 @@ def test_fetch_held_event_by_event_id_while_pending(persistence):
 
 
 def test_fetch_held_event_after_resolution_reports_resolver_and_time(persistence):
+    """Fetch held event after resolution reports resolver and time."""
     hold_id = persistence.store_held_event("approval", {"event_id": "evt-1"})
     persistence.resolve_held_event("approval", hold_id, {"resolved_by": "commander-1", "resolved_at": "2026-08-24T09:00:00", "decision": "approved"})
 
@@ -302,10 +326,12 @@ def test_fetch_held_event_after_resolution_reports_resolver_and_time(persistence
 
 
 def test_fetch_held_event_returns_none_for_an_unknown_event_id(persistence):
+    """Fetch held event returns none for an unknown event id."""
     assert persistence.fetch_held_event("approval", "does-not-exist") is None
 
 
 def test_fetch_held_event_is_scoped_to_its_kind(persistence):
+    """Fetch held event is scoped to its kind."""
     persistence.store_held_event("clarification", {"event_id": "evt-1"})
 
     assert persistence.fetch_held_event("approval", "evt-1") is None
@@ -316,6 +342,7 @@ def test_fetch_held_event_is_scoped_to_its_kind(persistence):
 
 
 def test_storing_a_held_event_writes_a_matching_notification_row(persistence):
+    """Storing a held event writes a matching notification row."""
     persistence.store_held_event("approval", {"event_id": "evt-1"})
     persistence.store_held_event("clarification", {"event_id": "evt-2"})
 
@@ -332,7 +359,7 @@ def test_storing_a_held_event_writes_a_matching_notification_row(persistence):
         ("succeeded", {"job_finished"}),
         ("declined", {"job_finished"}),
         ("failed", {"job_failed"}),
-        # REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 2 (item #8): a third,
+        # Part 2 (item #8): a third
         # reporter-facing kind fires alongside the two that already existed.
         ("uncertain", {"job_finished", "uncertain_verdict", "uncertain_verdict_reporter"}),
         ("closed_on_precedent", {"job_finished", "precedent_closure"}),
@@ -340,6 +367,7 @@ def test_storing_a_held_event_writes_a_matching_notification_row(persistence):
     ],
 )
 def test_setting_an_event_outcome_writes_the_right_notification_kinds(persistence, outcome, expected_kinds):
+    """Setting an event outcome writes the right notification kinds."""
     event_id = persistence.append_event(_minimal_event())
 
     persistence.update_event(event_id, {"outcome": outcome})
@@ -350,6 +378,7 @@ def test_setting_an_event_outcome_writes_the_right_notification_kinds(persistenc
 
 
 def test_updating_an_event_with_no_outcome_change_writes_no_notification(persistence):
+    """Updating an event with no outcome change writes no notification."""
     event_id = persistence.append_event(_minimal_event())
 
     persistence.update_event(event_id, {"risk_level": "high", "risk_reason": "why"})
@@ -358,6 +387,7 @@ def test_updating_an_event_with_no_outcome_change_writes_no_notification(persist
 
 
 def test_notifications_since_a_cursor_returns_only_what_came_after_it(persistence):
+    """Notifications since a cursor returns only what came after it."""
     persistence.store_held_event("approval", {"event_id": "evt-1"})
     first_batch = persistence.fetch_notifications_since(0)
     cursor = first_batch[-1]["sequence_id"]
@@ -374,6 +404,7 @@ def test_notifications_since_a_cursor_returns_only_what_came_after_it(persistenc
 
 
 def test_notifications_since_zero_returns_everything_recorded(persistence):
+    """Notifications since zero returns everything recorded."""
     persistence.store_held_event("approval", {"event_id": "evt-1"})
     persistence.store_held_event("approval", {"event_id": "evt-2"})
 
@@ -381,6 +412,7 @@ def test_notifications_since_zero_returns_everything_recorded(persistence):
 
 
 def test_notifications_are_returned_in_ascending_sequence_order(persistence):
+    """Notifications are returned in ascending sequence order."""
     persistence.store_held_event("approval", {"event_id": "evt-1"})
     persistence.store_held_event("approval", {"event_id": "evt-2"})
     persistence.store_held_event("approval", {"event_id": "evt-3"})
@@ -394,6 +426,7 @@ def test_notifications_are_returned_in_ascending_sequence_order(persistence):
 
 
 def test_write_and_fetch_log_entries_round_trip(persistence):
+    """Write and fetch log entries round trip."""
     persistence.write_log_entry("trace-1", {"level": "INFO", "logger": "x", "message": "hello", "custom_field": 42})
 
     [entry] = persistence.fetch_log_entries("trace-1")
@@ -406,6 +439,7 @@ def test_write_and_fetch_log_entries_round_trip(persistence):
 
 
 def test_fetch_log_entries_is_scoped_to_its_trace_id(persistence):
+    """Fetch log entries is scoped to its trace id."""
     persistence.write_log_entry("trace-1", {"message": "a"})
     persistence.write_log_entry("trace-2", {"message": "b"})
 
@@ -414,10 +448,12 @@ def test_fetch_log_entries_is_scoped_to_its_trace_id(persistence):
 
 
 def test_fetch_log_entries_for_an_unknown_trace_id_returns_empty_list(persistence):
+    """Fetch log entries for an unknown trace id returns empty list."""
     assert persistence.fetch_log_entries("never-logged") == []
 
 
 def test_fetch_log_entries_since_uses_an_exclusive_cursor(persistence):
+    """Fetch log entries since uses an exclusive cursor."""
     persistence.write_log_entry("trace-cursor", {"message": "first"})
     persistence.write_log_entry("trace-cursor", {"message": "second"})
     entries = persistence.fetch_log_entries("trace-cursor")
@@ -428,6 +464,7 @@ def test_fetch_log_entries_since_uses_an_exclusive_cursor(persistence):
 
 
 def test_wait_for_log_entries_returns_after_a_committed_write(persistence):
+    """Wait for log entries returns after a committed write."""
     import threading
     import time
 
@@ -446,6 +483,7 @@ def test_wait_for_log_entries_returns_after_a_committed_write(persistence):
 
 
 def test_log_entries_for_one_trace_id_are_returned_in_the_order_they_were_written(persistence):
+    """Log entries for one trace id are returned in the order they were written."""
     for i in range(5):
         persistence.write_log_entry("trace-1", {"message": f"step {i}", "i": i})
 
@@ -454,6 +492,7 @@ def test_log_entries_for_one_trace_id_are_returned_in_the_order_they_were_writte
 
 
 def test_write_log_entry_accepts_no_trace_id(persistence):
+    """Write log entry accepts no trace id."""
     persistence.write_log_entry(None, {"message": "startup warning"})
 
     assert persistence.fetch_log_entries("") == []  # never conflated with "no trace"
@@ -474,24 +513,28 @@ from persistence.sqlite_store import SQLitePersistence
 
 @pytest.fixture
 def store(tmp_path):
+    """Store."""
     backend = SQLitePersistence(str(tmp_path / "test.db"))
     yield backend
     backend.close()
 
 
 def test_store_generates_a_hold_id_when_none_given(store):
+    """Store generates a hold id when none given."""
     hold_id = store.store_held_event("approval", {"event_id": "evt-1"})
 
     assert hold_id
 
 
 def test_store_respects_a_supplied_hold_id(store):
+    """Store respects a supplied hold id."""
     hold_id = store.store_held_event("approval", {"event_id": "evt-1", "hold_id": "fixed-id"})
 
     assert hold_id == "fixed-id"
 
 
 def test_arbitrary_payload_fields_round_trip(store):
+    """Arbitrary payload fields round trip."""
     store.store_held_event(
         "approval",
         {
@@ -509,6 +552,7 @@ def test_arbitrary_payload_fields_round_trip(store):
 
 
 def test_list_held_events_is_ordered_by_creation(store):
+    """List held events is ordered by creation."""
     store.store_held_event("approval", {"event_id": "evt-1", "hold_id": "first", "created_at": "2026-08-01T00:00:00"})
     store.store_held_event("approval", {"event_id": "evt-2", "hold_id": "second", "created_at": "2026-08-02T00:00:00"})
 
@@ -517,6 +561,7 @@ def test_list_held_events_is_ordered_by_creation(store):
 
 
 def test_resolved_holds_are_excluded_from_list(store):
+    """Resolved holds are excluded from list."""
     hold_id = store.store_held_event("approval", {"event_id": "evt-1"})
     store.resolve_held_event("approval", hold_id, {"resolved_by": "commander-1"})
 
@@ -524,6 +569,7 @@ def test_resolved_holds_are_excluded_from_list(store):
 
 
 def test_resolution_payload_fields_are_stored(store):
+    """Resolution payload fields are stored."""
     hold_id = store.store_held_event("approval", {"event_id": "evt-1"})
     store.resolve_held_event("approval", hold_id, {"resolved_by": "commander-1", "resolved_at": "2026-08-01T00:00:00", "decision": "approved"})
 
@@ -534,6 +580,7 @@ def test_resolution_payload_fields_are_stored(store):
 
 
 def test_resolving_the_wrong_kind_is_treated_as_not_found(store):
+    """Resolving the wrong kind is treated as not found."""
     hold_id = store.store_held_event("approval", {"event_id": "evt-1"})
 
     with pytest.raises(NotFoundError):
@@ -541,9 +588,10 @@ def test_resolving_the_wrong_kind_is_treated_as_not_found(store):
 
 
 def test_two_holds_for_the_same_event_can_coexist_until_resolved(store):
-    # The "at most one hold at a time" rule (docs/vocabulary.md) is an
+    # The "at most one hold at a time" rule is an
     # orchestration-level invariant (orchestrator.holds), not something
     # this generic storage enforces itself.
+    """Two holds for the same event can coexist until resolved."""
     store.store_held_event("approval", {"event_id": "evt-1"})
     store.store_held_event("clarification", {"event_id": "evt-1"})
 

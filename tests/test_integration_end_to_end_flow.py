@@ -1,4 +1,4 @@
-"""9.2 — Run the end-to-end flow test (work_plan.md §9.2).
+"""9.2 — Run the end-to-end flow test.
 
 Drives one event from the simulator's own submission path (`POST /Event`,
 against a real running API) through every stage — extraction, risk
@@ -31,10 +31,12 @@ from tests.crewai_fakes import install_crewai_stub
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch)
 
 
 def test_one_event_end_to_end_writes_every_stages_field_and_shares_one_trace_id(tmp_path, monkeypatch):
+    """One event end to end writes every stages field and shares one trace id."""
     captured = io.StringIO()
     monkeypatch.setattr("sys.stdout", captured)
     configure_logging("test-end-to-end-profile")
@@ -131,6 +133,7 @@ def test_one_event_end_to_end_writes_every_stages_field_and_shares_one_trace_id(
 
 
 def test_intent_decision_is_logged_with_the_request_trace_id(tmp_path, monkeypatch):
+    """Intent decision is logged with the request trace id."""
     captured = io.StringIO()
     monkeypatch.setattr("sys.stdout", captured)
     configure_logging("test-intent-logging-profile")
@@ -161,11 +164,11 @@ def test_intent_decision_is_logged_with_the_request_trace_id(tmp_path, monkeypat
 
 
 def test_model_io_is_not_logged_when_the_debug_flag_is_off(tmp_path, monkeypatch):
-    """docs/server_report.md Finding 1 follow-up (DEBUG_VERBOSE_LOGGING).
+    """Finding 1 follow-up (DEBUG_VERBOSE_LOGGING).
 
     The normal case: no such variable set. The INFO decision log (Finding
     1's own guarantee) must be completely unaffected — an operator
-    following docs/operator_guide.md in normal operation must still see
+    following in normal operation must still see
     the full decision journey with nothing missing.
     """
 
@@ -202,6 +205,7 @@ def test_model_io_is_logged_with_prompt_response_stage_and_trace_id_when_the_deb
     # dispatching by prompt keyword (mirroring ScriptedAgent's own
     # technique, but one layer lower, at the crewai boundary itself) so
     # every real decision call actually goes through the choke point.
+    """Model io is logged with prompt response stage and trace id when the debug flag is on."""
     from orchestrator.insights import InsightsAgent
     from orchestrator.main_agent import MainAgent
     from tests.api_fakes import extraction_response

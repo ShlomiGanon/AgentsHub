@@ -22,17 +22,21 @@ class _MemoryGroups:
     """Just the four group methods of PersistenceInterface, in a dict."""
 
     def __init__(self):
+        """Initialize this test helper."""
         self.rows = {}
         self.list_calls = 0
 
     def list_groups(self):
+        """List groups."""
         self.list_calls += 1
         return [dict(row) for row in self.rows.values()]
 
     def read_group(self, chat_id):
+        """Read group."""
         return self.rows.get(chat_id)
 
     def write_group(self, chat_id, agent_name, label="", *, attendance_check_enabled=None, attendance_check_hour=None):
+        """Write group."""
         existing = self.rows.get(chat_id, {})
         self.rows[chat_id] = {
             "chat_id": chat_id,
@@ -45,11 +49,13 @@ class _MemoryGroups:
         }
 
     def delete_group(self, chat_id):
+        """Delete group."""
         if chat_id not in self.rows:
             raise NotFoundError(chat_id)
         del self.rows[chat_id]
 
     def rename_group(self, old_chat_id, new_chat_id):
+        """Rename group."""
         if old_chat_id not in self.rows:
             raise NotFoundError(old_chat_id)
         if new_chat_id in self.rows:
@@ -61,10 +67,13 @@ class _MemoryGroups:
 
 
 class _Clock:
+    """Clock."""
     def __init__(self):
+        """Initialize this test helper."""
         self.now = 1000.0
 
     def __call__(self):
+        """Call."""
         return self.now
 
 
@@ -72,6 +81,7 @@ ROUTABLE = frozenset({"team_status_agent", "surveillance_agent"})
 
 
 def _table(store, clock=None, refresh=60.0):
+    """Table."""
     return GroupRoutingTable(store, ROUTABLE, refresh_interval_seconds=refresh, clock=clock or _Clock())
 
 
@@ -79,6 +89,7 @@ def _table(store, clock=None, refresh=60.0):
 
 
 def test_load_reads_every_binding_from_persistence_once():
+    """Load reads every binding from persistence once."""
     store = _MemoryGroups()
     store.write_group("-1", "team_status_agent", "readiness")
     store.write_group("-2", "main_agent")
@@ -94,6 +105,7 @@ def test_load_reads_every_binding_from_persistence_once():
 
 
 def test_upsert_is_write_through_and_visible_without_reload():
+    """Upsert is write through and visible without reload."""
     store = _MemoryGroups()
     table = _table(store)
     table.load()
@@ -107,6 +119,7 @@ def test_upsert_is_write_through_and_visible_without_reload():
 
 
 def test_upsert_accepts_main_agent_and_rejects_unknown_targets():
+    """Upsert accepts main agent and rejects unknown targets."""
     table = _table(_MemoryGroups())
     table.load()
 
@@ -122,6 +135,7 @@ def test_upsert_accepts_main_agent_and_rejects_unknown_targets():
 
 
 def test_remove_deletes_from_persistence_and_memory_and_propagates_not_found():
+    """Remove deletes from persistence and memory and propagates not found."""
     store = _MemoryGroups()
     table = _table(store)
     table.load()
@@ -136,7 +150,7 @@ def test_remove_deletes_from_persistence_and_memory_and_propagates_not_found():
 
 
 def test_rename_moves_the_binding_in_persistence_and_memory_without_reload():
-    """docs/profile_simulations_design.md: the operator-driven "replace a
+    """The operator-driven "replace a
     simulation group's placeholder ID with a real one" primitive — generic,
     not simulation-specific."""
 
@@ -157,6 +171,7 @@ def test_rename_moves_the_binding_in_persistence_and_memory_without_reload():
 
 
 def test_rename_propagates_not_found_and_conflict_errors():
+    """Rename propagates not found and conflict errors."""
     store = _MemoryGroups()
     table = _table(store)
     table.load()
@@ -173,6 +188,7 @@ def test_rename_propagates_not_found_and_conflict_errors():
 
 
 def test_external_writes_become_visible_after_the_refresh_interval():
+    """External writes become visible after the refresh interval."""
     store = _MemoryGroups()
     clock = _Clock()
     table = _table(store, clock=clock, refresh=60.0)
@@ -186,6 +202,7 @@ def test_external_writes_become_visible_after_the_refresh_interval():
 
 
 def test_first_lookup_without_explicit_load_loads_lazily():
+    """First lookup without explicit load loads lazily."""
     store = _MemoryGroups()
     store.write_group("-1", "team_status_agent")
     table = _table(store)
@@ -197,6 +214,7 @@ def test_first_lookup_without_explicit_load_loads_lazily():
 
 
 def test_private_chats_and_missing_metadata_are_unscoped():
+    """Private chats and missing metadata are unscoped."""
     table = _table(_MemoryGroups())
     table.load()
 
@@ -206,6 +224,7 @@ def test_private_chats_and_missing_metadata_are_unscoped():
 
 
 def test_registered_group_resolves_to_its_agent_and_unregistered_group_raises():
+    """Registered group resolves to its agent and unregistered group raises."""
     table = _table(_MemoryGroups())
     table.load()
     table.upsert("-100", "team_status_agent")
@@ -218,6 +237,7 @@ def test_registered_group_resolves_to_its_agent_and_unregistered_group_raises():
 
 
 def test_main_agent_binding_is_not_a_scoped_target():
+    """Main agent binding is not a scoped target."""
     assert is_scoped_target(MAIN_AGENT_TARGET) is False
     assert is_scoped_target(None) is False
     assert is_scoped_target("team_status_agent") is True
@@ -227,12 +247,15 @@ def test_main_agent_binding_is_not_a_scoped_target():
 
 
 class _NamedAgent:
+    """NamedAgent."""
     def __init__(self, name):
+        """Initialize this test helper."""
         self.name = name
         self.descriptor = None
 
 
 def _protocol(name, *agents, safety_critical=False):
+    """Protocol."""
     return Protocol(
         name=name,
         description=f"{name} description",
@@ -246,6 +269,7 @@ def _protocol(name, *agents, safety_critical=False):
 
 
 def _deps():
+    """Deps."""
     registry = AgentRegistry({
         name: _NamedAgent(name)
         for name in ("main_agent", "insights_agent", "history_agent", "team_status_agent", "surveillance_agent", "friendly_forces_agent")
@@ -266,6 +290,7 @@ def _deps():
 def test_scope_deps_leaves_the_registry_and_protocol_set_fully_visible():
     # Every protocol and every agent stays selectable/executable from every group --
     # the bound agent is a context hint for the selection prompt only, never a filter.
+    """Scope deps leaves the registry and protocol set fully visible."""
     deps = _deps()
     scoped = scope_deps(deps, "team_status_agent")
 
@@ -276,12 +301,14 @@ def test_scope_deps_leaves_the_registry_and_protocol_set_fully_visible():
 
 
 def test_scope_deps_carries_the_bound_agent_as_a_preferred_hint():
+    """Scope deps carries the bound agent as a preferred hint."""
     scoped = scope_deps(_deps(), "surveillance_agent")
 
     assert scoped.preferred_agent_hint == "surveillance_agent"
 
 
 def test_scope_deps_shares_agent_instances_and_other_deps_with_the_unscoped_instance():
+    """Scope deps shares agent instances and other deps with the unscoped instance."""
     deps = _deps()
     scoped = scope_deps(deps, "surveillance_agent")
 
@@ -291,6 +318,7 @@ def test_scope_deps_shares_agent_instances_and_other_deps_with_the_unscoped_inst
 
 
 def test_scope_deps_with_main_agent_or_none_returns_the_same_deps():
+    """Scope deps with main agent or none returns the same deps."""
     deps = _deps()
 
     assert scope_deps(deps, MAIN_AGENT_TARGET) is deps

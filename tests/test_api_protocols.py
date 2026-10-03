@@ -1,3 +1,5 @@
+"""Protocol list and detail HTTP routes."""
+
 import importlib
 import sys
 import types
@@ -43,6 +45,7 @@ MODEL_CREDENTIAL_ENVS = []
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch)
 
 
@@ -63,6 +66,7 @@ def writable_profile_module(tmp_path, monkeypatch):
 
 
 def _new_protocol_body(name="dispatch_response"):
+    """New protocol body."""
     return {
         "name": name,
         "description": "applies when a response must be dispatched",
@@ -75,6 +79,7 @@ def _new_protocol_body(name="dispatch_response"):
 
 
 def test_get_protocol_lists_the_loaded_set(tmp_path, teardown_ctx):
+    """Get protocol lists the loaded set."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -87,6 +92,7 @@ def test_get_protocol_lists_the_loaded_set(tmp_path, teardown_ctx):
 
 
 def test_get_protocol_includes_criticality_and_approval_flag(tmp_path, teardown_ctx):
+    """Get protocol includes criticality and approval flag."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -100,6 +106,7 @@ def test_get_protocol_includes_criticality_and_approval_flag(tmp_path, teardown_
 
 
 def test_get_protocol_requires_authentication(tmp_path, teardown_ctx):
+    """Get protocol requires authentication."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -110,8 +117,9 @@ def test_get_protocol_requires_authentication(tmp_path, teardown_ctx):
 
 
 def test_get_protocol_denies_a_viewer(tmp_path, teardown_ctx):
-    # docs/Next_Plan.md §5 decision record: list_protocols is commander-only —
+    # Decision record: list_protocols is commander-only
     # a viewer is no longer permitted to enumerate protocols at all.
+    """Get protocol denies a viewer."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -122,6 +130,7 @@ def test_get_protocol_denies_a_viewer(tmp_path, teardown_ctx):
 
 
 def test_post_protocol_writes_the_file_and_returns_the_fixed_message(tmp_path, teardown_ctx, writable_profile_module):
+    """Post protocol writes the file and returns the fixed message."""
     ctx = build_context(tmp_path, module_path=writable_profile_module)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -137,6 +146,7 @@ def test_post_protocol_writes_the_file_and_returns_the_fixed_message(tmp_path, t
 
 
 def test_post_protocol_does_not_change_the_running_loaded_set(tmp_path, teardown_ctx, writable_profile_module):
+    """Post protocol does not change the running loaded set."""
     ctx = build_context(tmp_path, module_path=writable_profile_module)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -149,6 +159,7 @@ def test_post_protocol_does_not_change_the_running_loaded_set(tmp_path, teardown
 
 
 def test_post_protocol_requires_commander_level(tmp_path, teardown_ctx, writable_profile_module):
+    """Post protocol requires commander level."""
     ctx = build_context(tmp_path, module_path=writable_profile_module)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -159,6 +170,7 @@ def test_post_protocol_requires_commander_level(tmp_path, teardown_ctx, writable
 
 
 def test_post_protocol_rejects_a_duplicate_name(tmp_path, teardown_ctx, writable_profile_module):
+    """Post protocol rejects a duplicate name."""
     ctx = build_context(tmp_path, module_path=writable_profile_module)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -169,6 +181,7 @@ def test_post_protocol_rejects_a_duplicate_name(tmp_path, teardown_ctx, writable
 
 
 def test_post_protocol_rejects_a_missing_field(tmp_path, teardown_ctx, writable_profile_module):
+    """Post protocol rejects a missing field."""
     ctx = build_context(tmp_path, module_path=writable_profile_module)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -183,6 +196,7 @@ def test_post_protocol_rejects_a_missing_field(tmp_path, teardown_ctx, writable_
 
 
 def test_post_protocol_rejects_an_agent_that_does_not_exist(tmp_path, teardown_ctx, writable_profile_module):
+    """Post protocol rejects an agent that does not exist."""
     ctx = build_context(tmp_path, module_path=writable_profile_module)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -196,6 +210,7 @@ def test_post_protocol_rejects_an_agent_that_does_not_exist(tmp_path, teardown_c
 
 
 def test_put_protocol_replaces_the_named_one(tmp_path, teardown_ctx, writable_profile_module):
+    """Put protocol replaces the named one."""
     ctx = build_context(tmp_path, module_path=writable_profile_module)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -212,6 +227,7 @@ def test_put_protocol_replaces_the_named_one(tmp_path, teardown_ctx, writable_pr
 
 
 def test_put_protocol_on_a_name_that_does_not_exist_is_rejected(tmp_path, teardown_ctx, writable_profile_module):
+    """Put protocol on a name that does not exist is rejected."""
     ctx = build_context(tmp_path, module_path=writable_profile_module)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -222,6 +238,7 @@ def test_put_protocol_on_a_name_that_does_not_exist_is_rejected(tmp_path, teardo
 
 
 def test_delete_protocol_removes_it(tmp_path, teardown_ctx, writable_profile_module):
+    """Delete protocol removes it."""
     ctx = build_context(tmp_path, module_path=writable_profile_module)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -234,6 +251,7 @@ def test_delete_protocol_removes_it(tmp_path, teardown_ctx, writable_profile_mod
 
 
 def test_delete_protocol_requires_commander_level(tmp_path, teardown_ctx, writable_profile_module):
+    """Delete protocol requires commander level."""
     ctx = build_context(tmp_path, module_path=writable_profile_module)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()

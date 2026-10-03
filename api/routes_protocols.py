@@ -20,10 +20,14 @@ def build_protocols_blueprint(ctx: "ApiContext") -> Blueprint:
     blueprint = Blueprint("protocols", __name__)
 
     def _agents_by_name() -> dict:
+        """Index registered agents by name for protocol edit validation."""
+
         return {agent.name: agent for agent in ctx.deps.registry.all()}
 
     @blueprint.route("/Protocol", methods=["GET"])
     def list_protocols():
+        """Return every protocol declared on the loaded profile."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.LIST_PROTOCOLS)
 
@@ -31,6 +35,8 @@ def build_protocols_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/Protocol", methods=["POST"])
     def create_protocol():
+        """Add one protocol to the loaded profile."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.CREATE_PROTOCOL)
 
@@ -46,6 +52,8 @@ def build_protocols_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/Protocol/<name>", methods=["PUT"])
     def update_protocol(name):
+        """Replace one named protocol on the loaded profile."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.UPDATE_PROTOCOL)
 
@@ -61,6 +69,8 @@ def build_protocols_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/Protocol/<name>", methods=["DELETE"])
     def delete_protocol(name):
+        """Remove one named protocol from the loaded profile."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.DELETE_PROTOCOL)
 

@@ -24,6 +24,8 @@ def register_trace_routes(
 
     @blueprint.route("/simulator/trace/<trace_id>", methods=["GET"])
     def simulator_trace(trace_id: str):
+        """Return aggregated log entries for one simulator trace id."""
+
         redirect_response = require_session()
         if redirect_response is not None:
             return jsonify({"error": {"message": "session expired"}}), 401
@@ -53,6 +55,8 @@ def register_trace_routes(
 
     @blueprint.route("/simulator/traces/recent", methods=["GET"])
     def simulator_recent_traces():
+        """Return the most recent events that have a trace id."""
+
         redirect_response = require_session()
         if redirect_response is not None:
             return jsonify({"error": {"message": "session expired"}}), 401
@@ -96,6 +100,8 @@ def register_trace_routes(
 
     @blueprint.route("/simulator/behind-the-scenes", methods=["GET"])
     def simulator_behind_the_scenes():
+        """Serve the standalone Behind-the-Scenes dashboard page."""
+
         redirect_response = require_session()
         if redirect_response is not None:
             return redirect_response

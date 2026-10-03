@@ -1,7 +1,6 @@
-"""bot/simulator_app.py: identity gating, dispatch through the real bot handlers
+"""Bot/simulator_app.py: identity gating, dispatch through the real bot handlers
 (`bot/app.py`, unmodified), reply capture, and the `/Simulator-msg` HTTP surface
-itself, including its thread/asyncio-loop bridge (docs/bot_simulation_mode_design.md
-§4.2/§4.3/§8, §10's "Flask-in-a-thread bridging correctness" risk).
+itself, including its thread/asyncio-loop bridge.
 """
 
 import asyncio
@@ -21,10 +20,12 @@ from tests.crewai_fakes import install_crewai_stub
 
 
 def _run(coro):
+    """Run."""
     return asyncio.run(coro)
 
 
 def _fake_loaded_profile(tmp_path, simulation_users=(), simulation_groups=(), api_port=0):
+    """Fake loaded profile."""
     return SimpleNamespace(
         module_path="profiles.test_sim",
         profile_name="Test Sim",
@@ -47,6 +48,7 @@ _GROUP_ID = simulation_group_chat_id(_GROUP.offset)
 
 
 def test_handle_message_refuses_an_identity_the_profile_never_declared(tmp_path):
+    """Handle message refuses an identity the profile never declared."""
     loaded = _fake_loaded_profile(tmp_path, simulation_users=(_PERSONA,))
     api_client = FakeBotApiClient(users={_PERSONA_ID: "viewer"})
 
@@ -68,6 +70,7 @@ def test_handle_message_refuses_an_identity_the_profile_never_declared(tmp_path)
 
 
 def test_handle_message_refuses_a_private_chat_id_that_does_not_match_sender(tmp_path):
+    """Handle message refuses a private chat id that does not match sender."""
     loaded = _fake_loaded_profile(tmp_path, simulation_users=(_PERSONA,))
     api_client = FakeBotApiClient(users={_PERSONA_ID: "viewer"})
 
@@ -90,6 +93,7 @@ def test_handle_message_refuses_a_private_chat_id_that_does_not_match_sender(tmp
 
 
 def test_handle_message_refuses_a_group_chat_id_the_profile_never_declared(tmp_path):
+    """Handle message refuses a group chat id the profile never declared."""
     loaded = _fake_loaded_profile(tmp_path, simulation_users=(_PERSONA,), simulation_groups=(_GROUP,))
     api_client = FakeBotApiClient(users={_PERSONA_ID: "viewer"})
 
@@ -112,6 +116,7 @@ def test_handle_message_refuses_a_group_chat_id_the_profile_never_declared(tmp_p
 
 
 def test_handle_message_refuses_an_unknown_chat_type(tmp_path):
+    """Handle message refuses an unknown chat type."""
     loaded = _fake_loaded_profile(tmp_path, simulation_users=(_PERSONA,))
     api_client = FakeBotApiClient(users={_PERSONA_ID: "viewer"})
 
@@ -134,6 +139,7 @@ def test_handle_message_refuses_an_unknown_chat_type(tmp_path):
 
 
 def test_handle_message_refuses_missing_text_or_source_message_id(tmp_path):
+    """Handle message refuses missing text or source message id."""
     loaded = _fake_loaded_profile(tmp_path, simulation_users=(_PERSONA,))
     api_client = FakeBotApiClient(users={_PERSONA_ID: "viewer"})
 
@@ -193,7 +199,7 @@ def test_handle_message_dispatches_through_the_real_handler_and_captures_the_rep
 def test_handle_message_reuses_the_same_message_id_for_a_repeated_source_message_id(tmp_path):
     """Proves the /Msg dedup-preservation property end-to-end: re-sending the
     same source_message_id must be seen by the real handler as the same
-    message (docs/bot_simulation_mode_design.md §10)."""
+    message."""
 
     loaded = _fake_loaded_profile(tmp_path, simulation_users=(_PERSONA,))
     seen_message_ids = []
@@ -239,6 +245,7 @@ class _RunningSimulator:
     simplification of it."""
 
     def __init__(self, tmp_path, bot_service_key="test-key", simulation_users=(_PERSONA,), simulation_groups=()):
+        """Initialize this test helper."""
         self.loaded = _fake_loaded_profile(tmp_path, simulation_users=simulation_users, simulation_groups=simulation_groups)
         self.api_client = FakeBotApiClient(
             users={simulation_user_telegram_id(p.offset): "viewer" for p in simulation_users},
@@ -250,6 +257,7 @@ class _RunningSimulator:
         self._thread = threading.Thread(target=self.loop.run_forever, daemon=True)
 
     def __enter__(self):
+        """Enter the test helper context."""
         self._thread.start()
         asyncio.run_coroutine_threadsafe(self.runtime.startup(), self.loop).result(timeout=10)
         self.flask_app = build_flask_app(self.runtime, self.bot_service_key)
@@ -257,6 +265,7 @@ class _RunningSimulator:
         return self
 
     def __exit__(self, *exc_info):
+        """Exit the test helper context."""
         asyncio.run_coroutine_threadsafe(self.runtime.shutdown(), self.loop).result(timeout=10)
         self.loop.call_soon_threadsafe(self.loop.stop)
         self._thread.join(timeout=10)
@@ -264,18 +273,21 @@ class _RunningSimulator:
 
 
 def test_simulator_msg_refuses_a_missing_service_key(tmp_path):
+    """Simulator msg refuses a missing service key."""
     with _RunningSimulator(tmp_path) as sim:
         response = sim.client.post("/Simulator-msg", json={})
         assert response.status_code == 403
 
 
 def test_simulator_msg_refuses_a_wrong_service_key(tmp_path):
+    """Simulator msg refuses a wrong service key."""
     with _RunningSimulator(tmp_path) as sim:
         response = sim.client.post("/Simulator-msg", json={}, headers={"X-Service-Key": "wrong"})
         assert response.status_code == 403
 
 
 def test_simulator_msg_refuses_a_non_json_body(tmp_path):
+    """Simulator msg refuses a non json body."""
     with _RunningSimulator(tmp_path) as sim:
         response = sim.client.post(
             "/Simulator-msg", data=b"not json", headers={"X-Service-Key": "test-key", "Content-Type": "application/json"}
@@ -284,6 +296,7 @@ def test_simulator_msg_refuses_a_non_json_body(tmp_path):
 
 
 def test_simulator_msg_refuses_an_undeclared_identity(tmp_path):
+    """Simulator msg refuses an undeclared identity."""
     with _RunningSimulator(tmp_path) as sim:
         response = sim.client.post(
             "/Simulator-msg",
@@ -295,6 +308,7 @@ def test_simulator_msg_refuses_an_undeclared_identity(tmp_path):
 
 
 def test_simulator_msg_dispatches_and_returns_the_real_reply(tmp_path):
+    """Simulator msg dispatches and returns the real reply."""
     with _RunningSimulator(tmp_path) as sim:
         response = sim.client.post(
             "/Simulator-msg",
@@ -311,6 +325,7 @@ def test_simulator_msg_dispatches_and_returns_the_real_reply(tmp_path):
 
 
 def test_simulator_msg_applies_timestamp_to_the_synthetic_message_date(tmp_path, monkeypatch):
+    """Simulator msg applies timestamp to the synthetic message date."""
     from bot import simulator_app
 
     updates = []
@@ -341,6 +356,7 @@ def test_simulator_msg_applies_timestamp_to_the_synthetic_message_date(tmp_path,
 
 
 def test_simulator_msg_returns_500_on_an_unexpected_handler_failure(tmp_path):
+    """Simulator msg returns 500 on an unexpected handler failure."""
     with _RunningSimulator(tmp_path) as sim:
         async def _boom(payload):
             raise RuntimeError("boom")
@@ -361,15 +377,15 @@ def test_simulator_msg_returns_500_on_an_unexpected_handler_failure(tmp_path):
 
 
 def test_handle_message_persists_real_state_through_a_real_running_api_server(tmp_path, monkeypatch):
-    """The point of this whole design (docs/bot_simulation_mode_design.md §1.1/§4.2):
+    """The point of this whole design:
     `SimulatorRuntime`'s `api_client` is the real `HttpApiClient`, so a simulated
     persona's message really reaches a real `api.app` Flask server's `/Msg` and
     produces a real, persisted reply — not a fake standing in for that chain, and
-    not `Application.process_update()` in isolation. Mirrors
+    not `Application.process_update` in isolation. Mirrors
     `tests/test_bot_transports.py`'s own `RunningApiServer` + real `HttpApiClient`
     pattern, one layer further up the stack (through the real bot handler too,
     which is why — unlike that file's own tests — this needs a real service key:
-    `_guarded()`'s admission check, upstream of the handler, calls
+    `_guarded`'s admission check, upstream of the handler, calls
     `admit_telegram_update` as bot-service before anything else runs)."""
 
     monkeypatch.setenv("BOT_SERVICE_KEY", "test-service-key")
@@ -405,7 +421,7 @@ def test_handle_message_persists_real_state_through_a_real_running_api_server(tm
 
 
 def test_a_report_in_a_group_is_answered_in_the_group_with_viewer_audience(tmp_path, monkeypatch):
-    """docs/responce_improve.md: a report submitted in a Telegram group ("כיתת כוננות") must be
+    """A report submitted in a Telegram group must be
     answered back in that same group — not the sender's own private chat — and, because a group
     is a shared, visible surface, with the viewer-scoped report even when the poster is a
     commander. Exercises the real queue, the real notification poll dispatch, and the real
@@ -473,11 +489,12 @@ def test_a_report_in_a_group_is_answered_in_the_group_with_viewer_audience(tmp_p
 
 
 # -- SimulatorRuntime.poll_chat / GET /Simulator-msg/poll: Priority 3 -----------------------
-# (docs/work_process.md §16 — surfacing a real run_notification_poll_loop delivery that
+# ( — Surfacing a real run_notification_poll_loop delivery that
 # arrives after the original request already returned, without blocking anything.)
 
 
 def test_poll_chat_returns_nothing_when_nothing_happened_since_the_watermark(tmp_path):
+    """Poll chat returns nothing when nothing happened since the watermark."""
     loaded = _fake_loaded_profile(tmp_path, simulation_users=(_PERSONA,))
     api_client = FakeBotApiClient(users={_PERSONA_ID: "viewer"})
 
@@ -519,6 +536,7 @@ def test_poll_chat_surfaces_a_background_delivery_that_arrives_after_the_waterma
 
 
 def test_poll_chat_refuses_an_undeclared_chat_id(tmp_path):
+    """Poll chat refuses an undeclared chat id."""
     loaded = _fake_loaded_profile(tmp_path, simulation_users=(_PERSONA,))
     api_client = FakeBotApiClient(users={_PERSONA_ID: "viewer"})
 
@@ -540,12 +558,14 @@ def test_poll_chat_refuses_an_undeclared_chat_id(tmp_path):
 
 
 def test_simulator_msg_poll_requires_the_service_key(tmp_path):
+    """Simulator msg poll requires the service key."""
     with _RunningSimulator(tmp_path) as sim:
         response = sim.client.get(f"/Simulator-msg/poll?chat_id={_PERSONA_ID}&status_len=0&sent_len=0")
         assert response.status_code == 403
 
 
 def test_simulator_msg_poll_refuses_an_undeclared_chat_id(tmp_path):
+    """Simulator msg poll refuses an undeclared chat id."""
     with _RunningSimulator(tmp_path) as sim:
         response = sim.client.get(
             "/Simulator-msg/poll?chat_id=999999999999999&status_len=0&sent_len=0",
@@ -555,6 +575,7 @@ def test_simulator_msg_poll_refuses_an_undeclared_chat_id(tmp_path):
 
 
 def test_simulator_msg_poll_finds_a_reply_delivered_after_the_original_watermark(tmp_path):
+    """Simulator msg poll finds a reply delivered after the original watermark."""
     with _RunningSimulator(tmp_path) as sim:
         first = sim.client.post(
             "/Simulator-msg",

@@ -27,16 +27,18 @@ SELECTABLE_PROFILE_STEMS = frozenset({"response_team", "firefighting"})
 
 @dataclass(frozen=True)
 class ProfileInfo:
+    """Discovered profile name, module path, and bound ports."""
+
     module_path: str
     profile_name: str
     api_port: int
-    # Optional (docs/bot_simulation_mode_design.md) — None for every profile that hasn't
-    # declared SIMULATOR_PORT, which `run_stack.py` reads to decide whether to start the
-    # third, simulation-mode bot subprocess at all.
+    # None when the profile has no SIMULATOR_PORT, so run_stack never starts that process.
     simulator_port: int | None = None
 
 
 def control_dir() -> Path:
+    """Control dir."""
+
     configured = os.environ.get("AGENTSHUB_CONTROL_DIR", "").strip()
     return Path(configured) if configured else Path(__file__).resolve().parent.parent / "data" / "server_control"
 
@@ -82,6 +84,8 @@ def _atomic_json(path: Path, value: object) -> None:
 
 
 def discover_profiles(directory: Path | None = None) -> tuple[ProfileInfo, ...]:
+    """Discover profiles."""
+
     profile_dir = directory or Path(__file__).resolve().parent.parent / "profiles"
     discovered: list[ProfileInfo] = []
     for source in sorted(profile_dir.glob("*.py")):
@@ -121,14 +125,20 @@ def discover_profiles(directory: Path | None = None) -> tuple[ProfileInfo, ...]:
 
 
 def available_profile(module_path: str) -> ProfileInfo | None:
+    """Available profile."""
+
     return next((item for item in discover_profiles() if item.module_path == module_path), None)
 
 
 def write_status(**values: object) -> None:
+    """Write status."""
+
     _atomic_json(control_dir() / "status.json", {"updated_at": time.time(), **values})
 
 
 def read_status() -> dict:
+    """Read status."""
+
     try:
         value = json.loads((control_dir() / "status.json").read_text(encoding="utf-8"))
         return value if isinstance(value, dict) else {}
@@ -137,11 +147,15 @@ def read_status() -> dict:
 
 
 def supervisor_available() -> bool:
+    """Supervisor available."""
+
     status = read_status()
     return bool(os.environ.get("AGENTSHUB_SUPERVISOR") == "1" and status.get("supervisor_pid"))
 
 
 def submit_command(action: str, *, profile_module: str | None = None) -> str:
+    """Submit command."""
+
     if action not in {"reset", "switch_profile"}:
         raise ValueError("unsupported server-control action")
     if not supervisor_available():
@@ -157,6 +171,8 @@ def submit_command(action: str, *, profile_module: str | None = None) -> str:
 
 
 def consume_command() -> dict | None:
+    """Consume command."""
+
     path = control_dir() / "command.json"
     try:
         command = json.loads(path.read_text(encoding="utf-8"))
@@ -169,12 +185,16 @@ def consume_command() -> dict | None:
 
 
 def save_selected_profile(module_path: str) -> None:
+    """Save selected profile."""
+
     if available_profile(module_path) is None:
         raise ValueError("unknown profile module")
     _atomic_json(control_dir() / "selected_profile.json", {"module_path": module_path})
 
 
 def load_selected_profile(default: str = "profiles.response_team") -> str:
+    """Load selected profile."""
+
     try:
         value = json.loads((control_dir() / "selected_profile.json").read_text(encoding="utf-8"))
         module_path = value.get("module_path")

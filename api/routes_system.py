@@ -32,6 +32,8 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/SYSTEM", methods=["GET"])
     def get_system():
+        """Return profile overview, internals, and settings the caller may see."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         # VIEW_PROFILE_OVERVIEW is the least-privileged of the three operations this
         # single endpoint now serves — it is the entry gate. The response payload
@@ -79,6 +81,8 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/SYSTEM", methods=["PUT"])
     def put_system():
+        """Write live settings that do not require a process restart."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.CHANGE_SETTINGS)
 
@@ -180,6 +184,8 @@ def build_system_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/Trace/<trace_id>", methods=["GET"])
     def get_trace(trace_id: str):
+        """Poll deep-debug log entries for one live trace id."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.VIEW_LIVE_TRACE)
         if not base_config.DEEP_DEBUG:

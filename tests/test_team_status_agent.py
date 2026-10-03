@@ -1,3 +1,5 @@
+"""Team-status specialist agent tools."""
+
 from datetime import datetime, timedelta, timezone
 
 from agents import AgentResult
@@ -8,20 +10,25 @@ from profiles.firefighting import FirefightingCrewStatusAgent
 
 
 class _TestTeamStatusAgent(TeamStatusAgent):
+    """TestTeamStatusAgent."""
     status_db_path = ""
 
 
 class _Settings:
+    """Settings."""
     def get_retry_count(self):
+        """Get retry count."""
         return 1
 
 
 def _agent(tmp_path):
+    """Agent."""
     _TestTeamStatusAgent.status_db_path = str(tmp_path / "team-status.db")
     return _TestTeamStatusAgent(model="test-model")
 
 
 def _call_tool(agent, name, **kwargs):
+    """Call tool."""
     requester_identity = kwargs.pop("telegram_identity", None)
     token = agent_runtime._current_allowed_tools.set(frozenset({name}))
     try:
@@ -34,6 +41,7 @@ def _call_tool(agent, name, **kwargs):
 
 
 def _prepare_roster(agent, opened_at):
+    """Prepare roster."""
     for identity, name in (
         ("101", "Alex Cohen"),
         ("102", "Dana Levi"),
@@ -45,6 +53,7 @@ def _prepare_roster(agent, opened_at):
 
 
 def test_attendance_tool_binds_to_requester_and_cannot_update_another_member(tmp_path):
+    """Attendance tool binds to requester and cannot update another member."""
     agent = _agent(tmp_path)
     opened_at = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
     _prepare_roster(agent, opened_at)
@@ -67,6 +76,7 @@ def test_attendance_tool_binds_to_requester_and_cannot_update_another_member(tmp
 
 
 def test_firefighting_shift_declaration_records_all_named_crew_members(tmp_path, monkeypatch):
+    """Firefighting shift declaration records all named crew members."""
     monkeypatch.setattr(FirefightingCrewStatusAgent, "status_db_path", str(tmp_path / "fire-crew.db"))
     monkeypatch.setattr("profiles.firefighting.FIREFIGHTING_FIRES_DB_PATH", str(tmp_path / "fires.db"))
     monkeypatch.setattr("profiles.firefighting.FIREFIGHTING_APPARATUS_DB_PATH", str(tmp_path / "apparatus.db"))
@@ -94,6 +104,7 @@ def test_firefighting_shift_declaration_records_all_named_crew_members(tmp_path,
 
 
 def test_attendance_tool_does_not_default_an_ambiguous_message_to_available(tmp_path):
+    """Attendance tool does not default an ambiguous message to available."""
     agent = _agent(tmp_path)
     opened_at = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
     _prepare_roster(agent, opened_at)
@@ -113,6 +124,7 @@ def test_attendance_tool_does_not_default_an_ambiguous_message_to_available(tmp_
 
 
 def test_unknown_requester_is_not_registered_and_roster_approval_is_unchanged(tmp_path):
+    """Unknown requester is not registered and roster approval is unchanged."""
     import sqlite3
 
     agent = _agent(tmp_path)
@@ -139,6 +151,7 @@ def test_unknown_requester_is_not_registered_and_roster_approval_is_unchanged(tm
 
 
 def test_daily_cycle_status_report_and_multiday_unavailability(tmp_path):
+    """Daily cycle status report and multiday unavailability."""
     agent = _agent(tmp_path)
     opened_at = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)  # 08:00 Israel time
     _prepare_roster(agent, opened_at)
@@ -193,6 +206,7 @@ def test_daily_cycle_status_report_and_multiday_unavailability(tmp_path):
 
 
 def test_daily_check_becomes_due_only_at_configured_local_hour(tmp_path):
+    """Daily check becomes due only at configured local hour."""
     agent = _agent(tmp_path)
     before_check = datetime(2026, 9, 3, 4, 59, tzinfo=timezone.utc)  # 07:59 Israel time
     at_check = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)  # 08:00 Israel time
@@ -211,6 +225,7 @@ def test_daily_check_becomes_due_only_at_configured_local_hour(tmp_path):
 
 
 def test_scheduler_does_nothing_until_roster_is_approved(tmp_path):
+    """Scheduler does nothing until roster is approved."""
     agent = _agent(tmp_path)
     at_check = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
     agent.register_member("101", "Alex Cohen", at_check.isoformat())
@@ -221,6 +236,7 @@ def test_scheduler_does_nothing_until_roster_is_approved(tmp_path):
 
 
 def test_force_reuses_todays_cycle_and_unforced_claim_is_one_shot(tmp_path):
+    """Force reuses todays cycle and unforced claim is one shot."""
     agent = _agent(tmp_path)
     at_check = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
     _prepare_roster(agent, at_check)
@@ -235,6 +251,7 @@ def test_force_reuses_todays_cycle_and_unforced_claim_is_one_shot(tmp_path):
 
 
 def test_missing_check_hour_does_not_auto_open(tmp_path):
+    """Missing check hour does not auto open."""
     agent = _agent(tmp_path)
     at_check = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
     _prepare_roster(agent, at_check)
@@ -246,6 +263,7 @@ def test_missing_check_hour_does_not_auto_open(tmp_path):
 
 
 def test_member_is_requested_again_when_multiday_unavailability_expires(tmp_path):
+    """Member is requested again when multiday unavailability expires."""
     agent = _agent(tmp_path)
     opened_at = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
     _prepare_roster(agent, opened_at)
@@ -278,6 +296,7 @@ def test_member_is_requested_again_when_multiday_unavailability_expires(tmp_path
 
 
 def test_unavailable_requires_reason_and_duration(tmp_path):
+    """Unavailable requires reason and duration."""
     agent = _agent(tmp_path)
     opened_at = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
     _prepare_roster(agent, opened_at)
@@ -309,6 +328,7 @@ def test_unavailable_requires_reason_and_duration(tmp_path):
 
 
 def test_late_response_changes_status_only_after_commander_approval(tmp_path):
+    """Late response changes status only after commander approval."""
     agent = _agent(tmp_path)
     opened_at = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
     _prepare_roster(agent, opened_at)
@@ -341,6 +361,7 @@ def test_late_response_changes_status_only_after_commander_approval(tmp_path):
 
 
 def test_rejected_late_response_leaves_member_awaiting_response(tmp_path):
+    """Rejected late response leaves member awaiting response."""
     agent = _agent(tmp_path)
     opened_at = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
     _prepare_roster(agent, opened_at)
@@ -372,6 +393,7 @@ def test_rejected_late_response_leaves_member_awaiting_response(tmp_path):
 
 
 def test_tool_metadata_preserves_side_effect_and_idempotency_policy(tmp_path):
+    """Tool metadata preserves side effect and idempotency policy."""
     agent = _agent(tmp_path)
     tools = {item.name: item for item in agent.exposed_tools()}
 
@@ -384,6 +406,7 @@ def test_tool_metadata_preserves_side_effect_and_idempotency_policy(tmp_path):
 
 
 def test_report_protocol_executes_the_read_only_agent_tool(tmp_path):
+    """Report protocol executes the read only agent tool."""
     agent = _agent(tmp_path)
     opened_at = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
     _prepare_roster(agent, opened_at)

@@ -1,15 +1,12 @@
-"""Mechanically enforces REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md's HARD RULE:
-no Hebrew string, anywhere, in any first-party source file that is not a
-translation/message-catalog file. Every piece of Hebrew text a user ever
-sees must go through `messages/he.py` (or the equivalent catalog module) —
-this test scans the rest of the tracked source tree for stray Hebrew
-Unicode-range characters that would mean that rule was violated.
+"""Fail if first-party source (except message catalogs) contains Hebrew.
+
+Every piece of Hebrew text a user ever sees must go through
+`messages/he.py` (or the equivalent catalog module). This test scans the
+rest of the tracked source tree for stray Hebrew Unicode-range characters.
 
 Test files are deliberately excluded: many legitimately contain Hebrew
-literals when asserting on catalog output (e.g. `assert "גבוה" in text`),
-exactly the carve-out the HARD RULE itself names ("not as test data unless
-the test is specifically testing Hebrew-language output through the
-existing catalog mechanism").
+literals when asserting on catalog output, which is allowed only as test
+data for Hebrew-language catalog output.
 """
 
 import re
@@ -29,6 +26,7 @@ _ALLOWED_HEBREW_FILES = {
 
 
 def _tracked_python_source_files() -> list[str]:
+    """Tracked python source files."""
     result = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "*.py"],
         cwd=ROOT,
@@ -40,16 +38,12 @@ def _tracked_python_source_files() -> list[str]:
         path for path in paths
         if (ROOT / path).is_file()
         and not path.startswith("tests/")
-        # `docs/` holds documentation/illustrative material (e.g.
-        # `docs/code_example.py`, a standalone reference sketch never
-        # imported by the running application), not application source —
-        # out of scope for a rule about leaking Hebrew into real output.
-        and not path.startswith("docs/")
         and path not in _ALLOWED_HEBREW_FILES
     ]
 
 
 def test_no_hebrew_literal_outside_the_message_catalog():
+    """No hebrew literal outside the message catalog."""
     offenders = []
     for path in _tracked_python_source_files():
         text = (ROOT / path).read_text(encoding="utf-8")

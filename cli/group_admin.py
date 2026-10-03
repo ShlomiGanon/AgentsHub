@@ -60,10 +60,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _tier_model_from_environ(prefix: str) -> TierModel:
+    """Read one model-tier credential set from the process environment."""
+
     return resolve_tier_model_from_env(prefix, error_type=ModelTierError)
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse argv, load the profile, and run the requested group-admin command."""
+
     args = _build_parser().parse_args(argv)
 
     try:

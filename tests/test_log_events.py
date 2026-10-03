@@ -10,11 +10,13 @@ from tools.tracing import stage_context, trace_context
 
 
 def _records(capsys):
+    """Records."""
     lines = [line for line in capsys.readouterr().out.strip().splitlines() if line]
     return [json.loads(line) for line in lines]
 
 
 def test_emit_injects_trace_id_and_stage(capsys):
+    """Emit injects trace id and stage."""
     configure_logging("test_profile")
     with trace_context("trace-emit"), stage_context("extraction"):
         emit("test_event", foo="bar")
@@ -27,6 +29,7 @@ def test_emit_injects_trace_id_and_stage(capsys):
 
 
 def test_specialist_helper_refuses_a_missing_agent():
+    """Specialist helper refuses a missing agent."""
     with pytest.raises(TypeError):
         specialist_started()
     with pytest.raises(ValueError, match="agent is required"):
@@ -34,6 +37,7 @@ def test_specialist_helper_refuses_a_missing_agent():
 
 
 def test_queue_helper_never_logs_a_callable(capsys):
+    """Queue helper never logs a callable."""
     configure_logging("test_profile")
     queue_started(
         queue_wait_seconds=0.25,
@@ -50,6 +54,7 @@ def test_queue_helper_never_logs_a_callable(capsys):
 
 
 def test_agent_invocation_helpers_log_when_emit_fails(monkeypatch, capsys):
+    """Agent invocation helpers log when emit fails."""
     import tools.log_events as log_events
     from tools.log_events import agent_invocation_finished, agent_invocation_started
 
@@ -78,12 +83,14 @@ def test_agent_invocation_helpers_log_when_emit_fails(monkeypatch, capsys):
 
 
 def test_event_id_from_queue_payload_ignores_callables():
+    """Event id from queue payload ignores callables."""
     assert event_id_from_queue_payload(("evt-1", lambda: None)) == "evt-1"
     assert event_id_from_queue_payload(lambda: None) is None
     assert event_id_from_queue_payload(("not-an-event", object())) == "not-an-event"
 
 
 def test_step_started_includes_event_id_and_allowed_tools(capsys):
+    """Step started includes event id and allowed tools."""
     from tools.log_events import step_started
 
     configure_logging("test_profile")

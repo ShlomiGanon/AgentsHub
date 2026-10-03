@@ -1,21 +1,4 @@
-"""Shared, cross-profile persistence for incident-scoped responder tracking (rebuilt from
-scratch to replace an earlier, rejected area-co-location design -- see
-`persistence/schema.py::INCIDENT_RESPONDERS_TABLE_DDL`'s own docstring). Links an identity (a
-person's `telegram_identity`, or an apparatus's `apparatus_id`) to the one specific `events` row
-it is actually responding to. Never answers "who else is with me" from area co-location alone:
-someone merely stationed in an area is not the same as someone responding to an incident there.
-
-Connection-per-operation against the SAME db_path as the profile's own core `events` table
-(`profiles.response_team.DB_PATH` / `profiles.firefighting.DB_PATH`), matching every other store
-in this codebase. Runs its own `CREATE TABLE IF NOT EXISTS` DDL (imported from
-`persistence/schema.py`, the single source of truth also used by `persistence.schema.MIGRATIONS`)
-so it is self-sufficient even when nothing has constructed a `SQLitePersistence` against that
-same file yet (e.g. in a test that only builds one profile-owned agent).
-
-One shared mechanism for every profile: response_team's roster agent and firefighting's crew
-status agent both open this same store class against their own respective db_path, rather than
-each profile growing its own copy of this resolution logic.
-"""
+"""Link an identity to the one events row it is currently responding to."""
 
 from __future__ import annotations
 
@@ -35,25 +18,31 @@ CANDIDATE_WINDOW_HOURS = 4
 
 
 def _utc_now() -> str:
+    """Return the current UTC time as an ISO-8601 string."""
+
     return datetime.now(timezone.utc).isoformat()
 
 
 class IncidentResponderStore:
+    """Open-link table for who or what is assigned to a specific incident."""
+
     def __init__(self, db_path: str):
+        """Open the DB file and create incident_responders if it is missing."""
+
         self.db_path = str(db_path)
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(INCIDENT_RESPONDERS_TABLE_DDL)
 
     def _connect(self) -> sqlite3.Connection:
+        """Open a row-factory connection for one operation."""
+
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 
     def find_candidate_events(self, area: str, *, now: str | None = None) -> list[dict]:
-        """Real, persisted, non-retracted `events` rows in `area` within
-        `CANDIDATE_WINDOW_HOURS` hours -- the only source of candidacy. Never falls back to
-        area co-location or general roster availability."""
+        """Return recent non-retracted events in this area that a responder could join."""
 
         cleaned = area.strip()
         reference = now or _utc_now()
@@ -80,9 +69,7 @@ class IncidentResponderStore:
         return [dict(row) for row in rows]
 
     def resolve_single_candidate(self, area: str, *, now: str | None = None) -> tuple[dict | None, str | None]:
-        """The one candidate-resolution used identically by the join and the list/read path.
-        Returns (event, None) when exactly one recent, non-retracted incident is on record for
-        `area`; otherwise (None, a plain-language explanation) -- never a guess."""
+        """Return the sole recent incident in this area, or (None, why it is ambiguous)."""
 
         cleaned = area.strip()
         candidates = self.find_candidate_events(cleaned, now=now)
@@ -95,6 +82,8 @@ class IncidentResponderStore:
         return candidates[0], None
 
     def find_open_link(self, identity: str) -> dict | None:
+        """Return this identity's open incident_responders row, or None."""
+
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM incident_responders WHERE identity = ? AND left_at IS NULL", (identity,)
@@ -102,9 +91,7 @@ class IncidentResponderStore:
         return dict(row) if row is not None else None
 
     def join(self, event_id: str, identity: str) -> dict:
-        """Idempotent: already holding the sole open link to `event_id` for `identity`
-        leaves that link unchanged. Reassignment: any other open link for `identity` is
-        closed (left_at set) before the new one is opened."""
+        """Open a link to this event, closing any other open link for the same identity."""
 
         now = _utc_now()
         with self._connect() as conn:
@@ -129,9 +116,7 @@ class IncidentResponderStore:
         return dict(row)
 
     def leave(self, identity: str) -> dict | None:
-        """Closes `identity`'s own open link, if any. Returns the closed row, or None when
-        there was nothing open -- never an error, since leaving with nothing to leave is a
-        normal, harmless outcome."""
+        """Close this identity's open link and return it, or None when nothing was open."""
 
         with self._connect() as conn:
             existing = conn.execute(
@@ -146,6 +131,8 @@ class IncidentResponderStore:
         return closed
 
     def list_open_responders(self, event_id: str) -> list[dict]:
+        """Return open incident_responders rows for this event, oldest first."""
+
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM incident_responders WHERE event_id = ? AND left_at IS NULL ORDER BY joined_at",
@@ -155,4 +142,6 @@ class IncidentResponderStore:
 
 
 def open_incident_responder_store(db_path: str) -> IncidentResponderStore:
+    """Construct the incident-responder store for this database path."""
+
     return IncidentResponderStore(db_path)

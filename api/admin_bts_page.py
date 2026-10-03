@@ -30,6 +30,8 @@ def render_behind_the_scenes_html(*, trace_id: str = "", profile_name: str = "")
         strings["job_stopped"] = catalog.messages["admin.simulator.job_stopped"]
 
     def _kwargs(raw: str | None) -> dict[str, object]:
+        """Parse catalog-format kwargs from a template ``t()`` call."""
+
         if not raw:
             return {}
         values: dict[str, object] = {}
@@ -38,6 +40,8 @@ def render_behind_the_scenes_html(*, trace_id: str = "", profile_name: str = "")
         return values
 
     def _replace_t(match: re.Match[str]) -> str:
+        """Replace one ``{{ t('key') }}`` match with escaped catalog text."""
+
         return html.escape(catalog.text(match.group(1), **_kwargs(match.group(2))))
 
     page = re.sub(r"\{\{\s*t\('([^']+)'(?:,\s*(.*?))?\s*\)\s*\}\}", _replace_t, HTML_PAGE_TEMPLATE)

@@ -1,34 +1,7 @@
-"""Response Team (SEC) operational profile (docs/responce_improve.md).
+"""Response Team profile: roster, cameras/drones, and neighboring-force dispatch.
 
-One profile = one deployment = one database file = one API port = one
-Telegram bot, exactly the isolation mechanism every other profile in this
-codebase already uses. SEC_001 (the readiness-squad narrative previously
-carried by the now-deleted `profiles/standby_squad.py`) is treated as a real,
-live event here: its absence reports, camera faults, security incidents, and
-neighboring-force dispatch requests write to this profile's own database
-through this profile's own agents/tools, the same way any other real report
-would.
-
-Architecture (docs/responce_improve.md's own rules, restated briefly):
-  - Single DB: `DB_PATH` below (`data/response_team/response_team_history.db`).
-    Roster/attendance, surveillance (cameras/drones), and neighboring-force
-    dispatch state all live in *separate tables in that same file* --
-    `persistence/response_team_store.py` opens `DB_PATH` itself and runs its
-    own `CREATE TABLE IF NOT EXISTS` DDL; none of this is added to the
-    shared `persistence/schema.py` (every profile, including Fire and
-    Rescue, would otherwise inherit it).
-  - The three agents below are profile-owned subclasses of shared bases --
-    `TeamStatusAgent`/`SurveillanceAgent`, and, since
-    docs/Admin_Tables_Plan.md's extraction, `agents.neighboring_forces_agent
-    .NeighboringForcesAgent` too (this profile's own subclass adds only its
-    "squad" special case on top). None of their tools are added to the
-    shared `agents/surveillance_agent.py`, `agents/team_status_agent.py`, or
-    `agents/roster_agent.py` modules, which stay untouched.
-  - Profile module text stays English, per the same hard constraint as
-    every other profile module in this repo -- Hebrew lives only in
-    `messages/he.py`, read here (via `_catalog_text`) only for this
-    profile's SEC_001 simulation content, the same narrow exception
-    `profiles/standby_squad.py` used to document.
+One profile is one deployment, one database, one API port, and one bot.
+Hebrew lives only in the message catalog; this module stays English.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -81,9 +54,7 @@ DB_PATH = str(_PROFILE_DATA_DIR / "response_team_history.db")
 RESETTABLE_DATABASES = (DB_PATH,)
 
 API_PORT = 8907
-# Admin-simulator message-kind steps proxy through this port (docs/
-# bot_simulation_mode_design.md) -- freed by profiles/standby_squad.py's
-# deletion; reused here unchanged since this profile now carries SEC_001.
+# Dedicated port for the simulation-mode bot process of this profile.
 SIMULATOR_PORT = 8915
 
 BOT_TOKEN_ENV = "BOT_TOKEN"
@@ -102,7 +73,7 @@ OPTIMIZATION_POLICY = OptimizationPolicy(
 )
 
 
-# == Profile declarations (docs/responce_improve.md) ==========================
+# == Profile declarations =====================================================
 
 AREAS = [
     "west_gate",
@@ -118,11 +89,7 @@ AREAS = [
 
 DRONES_WAREHOUSE = "drones_warehouse"
 
-# Cameras: create-if-missing only (OPERATIONAL_SEED, below) -- an existing
-# row is never overwritten. IDs/areas per docs/responce_improve.md's table;
-# "Was in SEC_001" column ported into these three camera's own narrative in
-# `messages/he.py` / `messages/en.py` (camera 03 -> CAM-01, camera 04 ->
-# CAM-02, camera 08 -> CAM-03).
+# Cameras: create-if-missing only. IDs match the SEC_001 camera narrative.
 CAMERAS = (
     {
         "camera_id": "CAM-01",
@@ -170,9 +137,7 @@ DRONES = (
     },
 )
 
-# Neighboring force kinds and home bases -- profile constants, not a
-# standing-units table (docs/responce_improve.md). No firefighters; YAMAG
-# folds into 'yasam'.
+# Neighboring force kinds and home bases. No firefighters; YAMAG folds into yasam.
 FORCE_BASES = {
     "ambulance": "expansion_neighborhood",
     "police": "east_orchards",
@@ -201,7 +166,7 @@ FORCE_BUSY_SECONDS = 2 * 60 * 60
 SQUAD_KIND = "squad"
 SQUAD_ORIGIN_AREA = FORCE_BASES["police"]
 
-# ETA matrix (seconds, symmetric; same cell = 45) -- docs/responce_improve.md.
+# ETA matrix (seconds, symmetric; same cell = 45).
 _ETA_AREA_ORDER = (
     "west_gate",
     "east_gate",
@@ -298,7 +263,7 @@ EVENT_TYPE_REQUIRED_FIELDS = {
 }
 
 
-# == Profile-load provisioning (docs/responce_improve.md) ====================
+# == Profile-load provisioning ===============================================
 
 from profiles.response_team_agents import (
     AGENTS,

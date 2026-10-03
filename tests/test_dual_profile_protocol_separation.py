@@ -7,6 +7,7 @@ from orchestrator.capabilities import CAPABILITY_DESCRIPTORS, visible_capabiliti
 
 
 def test_response_team_owns_squad_dispatch_and_excludes_it_from_neighboring_force():
+    """Response team owns squad dispatch and excludes it from neighboring force."""
     names = {protocol.name for protocol in response_team.PROTOCOLS}
     assert "dispatch_own_squad" in names
     neighboring = next(p for p in response_team.PROTOCOLS if p.name == "dispatch_neighboring_force")
@@ -25,6 +26,7 @@ def test_response_team_owns_squad_dispatch_and_excludes_it_from_neighboring_forc
 
 
 def test_firefighting_drone_protocols_are_exclusive_and_not_copied_from_response_team():
+    """Firefighting drone protocols are exclusive and not copied from response team."""
     by_name = {protocol.name: protocol for protocol in firefighting.PROTOCOLS}
     fire = by_name["report_fire_incident"]
     drone = by_name["dispatch_drone_to_incident"]
@@ -58,6 +60,7 @@ def test_firefighting_drone_protocols_are_exclusive_and_not_copied_from_response
 
 
 def test_explain_approval_policy_is_visible_to_viewers_and_commanders():
+    """Explain approval policy is visible to viewers and commanders."""
     names = {descriptor.name for descriptor in CAPABILITY_DESCRIPTORS}
     assert "explain_approval_policy" in names
     for level in (PermissionLevel.VIEWER, PermissionLevel.COMMANDER):

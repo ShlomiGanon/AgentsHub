@@ -18,6 +18,8 @@ class MessageCatalogError(ValueError):
 
 
 def _placeholder_names(template: str) -> frozenset[str]:
+    """Placeholder names."""
+
     names: set[str] = set()
     try:
         parsed = Formatter().parse(template)
@@ -67,6 +69,8 @@ class MessageCatalog:
     messages: Mapping[str, str]
 
     def text(self, key: str, **values: object) -> str:
+        """Text."""
+
         try:
             template = self.messages[key]
         except KeyError as exc:
@@ -97,6 +101,8 @@ _current_catalog: ContextVar[MessageCatalog] = ContextVar(
 
 
 def get_catalog(language: str) -> MessageCatalog:
+    """Return the catalog."""
+
     validate_catalogs()
     try:
         return _CATALOGS[language]  # type: ignore[index]
@@ -107,8 +113,12 @@ def get_catalog(language: str) -> MessageCatalog:
 
 
 def get_current_catalog() -> MessageCatalog:
+    """Return the current catalog."""
+
     return _current_catalog.get()
 
 
 def set_current_catalog(catalog: MessageCatalog) -> None:
+    """Persist the current catalog."""
+
     _current_catalog.set(catalog)

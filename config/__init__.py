@@ -35,24 +35,32 @@ sys.modules[f"{__name__}.settings_store"] = live_settings
 # package boundary without loading profile code until an admin/supervisor
 # operation actually asks for it.
 def discover_profiles(*args, **kwargs):
+    """Return available profile modules without importing server_control at package load."""
+
     from config.server_control import discover_profiles as implementation
 
     return implementation(*args, **kwargs)
 
 
 def read_server_status(*args, **kwargs):
+    """Read the supervisor status file through a lazy server_control import."""
+
     from config.server_control import read_status
 
     return read_status(*args, **kwargs)
 
 
 def submit_server_command(*args, **kwargs):
+    """Queue a supervisor command through a lazy server_control import."""
+
     from config.server_control import submit_command
 
     return submit_command(*args, **kwargs)
 
 
 def supervisor_available(*args, **kwargs):
+    """True when a supervisor process is currently managing the stack."""
+
     from config.server_control import supervisor_available as implementation
 
     return implementation(*args, **kwargs)

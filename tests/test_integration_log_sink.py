@@ -1,4 +1,4 @@
-"""The DB-backed structured-log sink, end to end (work_plan.md §1.8 follow-up).
+"""The DB-backed structured-log sink, end to end.
 
 Drives one event through a real running API (mirroring
 `tests/test_integration_end_to_end_flow.py`'s own harness exactly) with the
@@ -22,6 +22,7 @@ from tools.simulator import _post_event
 
 
 def _fake_crewai(response_text="status nominal, no anomalies"):
+    """Fake crewai."""
     class _FakeOutput:
         def __init__(self, raw):
             self.raw = raw
@@ -114,6 +115,7 @@ def _extraction_trace_id(ctx, event_id: str) -> str:
 
 
 def test_querying_by_trace_id_returns_every_log_row_for_one_request_in_order(tmp_path, monkeypatch):
+    """Querying by trace id returns every log row for one request in order."""
     monkeypatch.setattr(adapter, "_get_crewai", lambda: _fake_crewai())
 
     captured = io.StringIO()

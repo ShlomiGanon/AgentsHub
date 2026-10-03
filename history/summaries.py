@@ -13,10 +13,14 @@ logger = logging.getLogger(__name__)
 
 
 def _resolved(outcome: str | None) -> bool:
+    """Resolved."""
+
     return outcome in {"succeeded", "closed_on_precedent"}
 
 
 def _event_index(events: list[dict]) -> list[dict]:
+    """Event index."""
+
     return [
         {
             "event_id": event["event_id"],
@@ -32,6 +36,8 @@ def _event_index(events: list[dict]) -> list[dict]:
 
 
 def _merged_index(summaries: list[dict]) -> list[dict]:
+    """Merged index."""
+
     by_id = {}
     for summary in summaries:
         for item in summary.get("event_index") or []:
@@ -40,6 +46,8 @@ def _merged_index(summaries: list[dict]) -> list[dict]:
 
 
 def _summary_prompt(level: str, period_start: str, period_end: str, records: list[dict]) -> str:
+    """Summary prompt."""
+
     return (
         f"Create a faithful {level} history summary for [{period_start}, {period_end}). "
         "Use only the supplied records. Retain what happened, selected protocols, exact agent "
@@ -49,6 +57,8 @@ def _summary_prompt(level: str, period_start: str, period_end: str, records: lis
 
 
 def _invoke(history_agent, prompt: str) -> str:
+    """Invoke."""
+
     agent_result = history_agent.process(prompt, allowed_tools=[])
     if agent_result.status != "success":
         raise SummaryGenerationError(f"history agent could not summarize: {agent_result.text}")
@@ -63,6 +73,8 @@ def generate_summary(
     period_end: datetime,
     generated_at: datetime | None = None,
 ) -> dict | None:
+    """Generate summary."""
+
     generated = generated_at or datetime.now(timezone.utc)
     if period_end > generated:
         raise ValueError("cannot summarize an open period")
@@ -99,6 +111,8 @@ def generate_summary(
 
 
 def _exact_summary(persistence, level: str, start: datetime, end: datetime) -> dict | None:
+    """Exact summary."""
+
     start_text = storage_timestamp(start)
     end_text = storage_timestamp(end)
     for summary in persistence.fetch_summaries_range(level, start_text, end_text):
@@ -108,11 +122,17 @@ def _exact_summary(persistence, level: str, start: datetime, end: datetime) -> d
 
 
 def _is_newer(left: str, right: str) -> bool:
+    """Is newer."""
+
     return parse_timestamp(left) > parse_timestamp(right)
 
 
 class SummaryScheduler:
+    """SummaryScheduler."""
+
     def __init__(self, persistence, history_agent, clock=None, poll_interval_seconds: float = 60.0):
+        """Init."""
+
         self._persistence = persistence
         self._history_agent = history_agent
         self._clock = clock or (lambda: datetime.now(timezone.utc))
@@ -134,19 +154,27 @@ class SummaryScheduler:
         }
 
     def _all_events(self, now: datetime) -> list[dict]:
+        """All events."""
+
         return self._persistence.fetch_events_range("0001-01-01T00:00:00", storage_timestamp(now))
 
     def _daily_stale(self, summary: dict, events: list[dict]) -> bool:
+        """Daily stale."""
+
         if summary.get("event_index") is None:
             return True
         return any(_is_newer(event["received_at"], summary["generated_at"]) for event in events)
 
     def _parent_stale(self, summary: dict, children: list[dict]) -> bool:
+        """Parent stale."""
+
         if summary.get("event_index") is None:
             return True
         return any(_is_newer(child["generated_at"], summary["generated_at"]) for child in children)
 
     def reconcile(self) -> list[str]:
+        """Reconcile."""
+
         now = self._clock().astimezone(timezone.utc)
         current_day_start = day_bounds(now)[0]
         events = self._all_events(now)
@@ -222,6 +250,8 @@ class SummaryScheduler:
         return actions
 
     def notify_event_written(self, event_id: str, source: str, occurred_at: str | None, received_at: str) -> None:
+        """Notify event written."""
+
         del event_id
 
         if source == "sensor" or occurred_at is None:
@@ -233,6 +263,8 @@ class SummaryScheduler:
             self._wake_event.set()
 
     def _run(self) -> None:
+        """Run."""
+
         while not self._stop_event.is_set():
             self._wake_event.wait(self._poll_interval_seconds)
             self._wake_event.clear()
@@ -250,6 +282,8 @@ class SummaryScheduler:
                 self._last_run_at = self._clock().astimezone(timezone.utc).isoformat()
 
     def start(self) -> None:
+        """Start."""
+
         if self._thread is not None and self._thread.is_alive():
             return
 
@@ -258,6 +292,8 @@ class SummaryScheduler:
         self._thread.start()
 
     def stop(self) -> None:
+        """Stop."""
+
         if self._thread is None:
             return
 

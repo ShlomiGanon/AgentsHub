@@ -18,7 +18,9 @@ from tools.tracing import trace_context
 
 
 class _ScriptedAgent:
+    """ScriptedAgent."""
     def __init__(self, name, tool_infos=(), response_text="an answer", status="success", raises=None):
+        """Initialize this test helper."""
         self.name = name
         self._tool_infos = tool_infos
         self._response_text = response_text
@@ -27,15 +29,18 @@ class _ScriptedAgent:
         self.calls = []
 
     def exposed_tools(self):
+        """Exposed tools."""
         return self._tool_infos
 
     @property
     def descriptor(self):
+        """Descriptor."""
         from types import SimpleNamespace
 
         return SimpleNamespace(name=self.name, role=f"role of {self.name}", tools=self._tool_infos)
 
     def process(self, text, allowed_tools):
+        """Process."""
         self.calls.append((text, tuple(allowed_tools)))
         if self._raises is not None:
             raise self._raises
@@ -48,11 +53,14 @@ class _ScriptedAgent:
 
 
 class _ScriptedMainAgent:
+    """ScriptedMainAgent."""
     def __init__(self, responses):
+        """Initialize this test helper."""
         self._responses = list(responses)  # consumed in call order
         self.calls = []
 
     def process(self, text, allowed_tools):
+        """Process."""
         self.calls.append((text, allowed_tools))
         response_text, status = self._responses.pop(0)
 
@@ -65,12 +73,15 @@ class _ScriptedMainAgent:
 
 
 class _ScriptedHistoryQueryService:
+    """ScriptedHistoryQueryService."""
     def __init__(self, answer_text=None, raises=None):
+        """Initialize this test helper."""
         self._answer_text = answer_text
         self._raises = raises
         self.calls = []
 
     def query(self, question, **kwargs):
+        """Query."""
         self.calls.append(question)
         if self._raises is not None:
             raise self._raises
@@ -99,6 +110,7 @@ _ROUTE_NORMAL = ("ROUTE: normal", "success")
 
 
 def test_single_agent_chosen_answer_passes_through_without_a_compose_call():
+    """Single agent chosen answer passes through without a compose call."""
     reference_agent = _ScriptedAgent("reference_agent", MIXED_TOOLS, response_text="gate 3 is nominal")
     registry = build_agent_registry({}, [reference_agent])
     main_agent = _ScriptedMainAgent([_ROUTE_NORMAL, ("AGENT: reference_agent\nTASK: check gate 3", "success")])
@@ -110,6 +122,7 @@ def test_single_agent_chosen_answer_passes_through_without_a_compose_call():
 
 
 def test_side_effecting_tool_is_never_passed_to_a_chosen_agent():
+    """Side effecting tool is never passed to a chosen agent."""
     reference_agent = _ScriptedAgent("reference_agent", MIXED_TOOLS)
     registry = build_agent_registry({}, [reference_agent])
     main_agent = _ScriptedMainAgent([_ROUTE_NORMAL, ("AGENT: reference_agent\nTASK: check gate 3", "success")])
@@ -120,6 +133,7 @@ def test_side_effecting_tool_is_never_passed_to_a_chosen_agent():
 
 
 def test_read_only_only_holds_regardless_of_question_wording():
+    """Read only only holds regardless of question wording."""
     reference_agent = _ScriptedAgent("reference_agent", MIXED_TOOLS)
     registry = build_agent_registry({}, [reference_agent])
     # A question phrased as if it wants an action still only gets read-only tools.
@@ -131,6 +145,7 @@ def test_read_only_only_holds_regardless_of_question_wording():
 
 
 def test_multiple_agents_are_composed_into_one_answer():
+    """Multiple agents are composed into one answer."""
     status_agent = _ScriptedAgent("status_agent", (), response_text="two similar incidents last month")
     reference_agent = _ScriptedAgent("reference_agent", READ_ONLY_TOOL, response_text="currently nominal")
     registry = build_agent_registry({}, [status_agent, reference_agent])
@@ -153,6 +168,7 @@ def test_multiple_agents_are_composed_into_one_answer():
 
 
 def test_duplicate_agent_selection_gets_one_targeted_repair():
+    """Duplicate agent selection gets one targeted repair."""
     reference_agent = _ScriptedAgent("reference_agent", READ_ONLY_TOOL, response_text="both sectors are nominal")
     registry = build_agent_registry({}, [reference_agent])
     duplicate = (
@@ -173,6 +189,7 @@ def test_duplicate_agent_selection_gets_one_targeted_repair():
 def test_no_agent_chosen_raises():
     # Free text with neither an AGENT:/TASK: block nor a NONE: line —
     # a genuine parse failure, distinct from a clean NONE decline.
+    """No agent chosen raises."""
     registry = build_agent_registry({}, [])
     main_agent = _ScriptedMainAgent([_ROUTE_NORMAL, ("I cannot determine which agent to ask.", "success")])
 
@@ -184,6 +201,7 @@ def test_none_selection_returns_a_clean_cant_answer_reply_not_a_crash():
     # The repro-1 shape: a question matching no loaded agent's role at
     # all. The model uses the new NONE: line instead of being forced onto
     # the closest-sounding agent — no agent is ever asked anything.
+    """None selection returns a clean cant answer reply not a crash."""
     reference_agent = _ScriptedAgent("reference_agent", MIXED_TOOLS)
     registry = build_agent_registry({}, [reference_agent])
     main_agent = _ScriptedMainAgent(
@@ -197,6 +215,7 @@ def test_none_selection_returns_a_clean_cant_answer_reply_not_a_crash():
 
 
 def test_unclear_routing_status_raises():
+    """Unclear routing status raises."""
     registry = build_agent_registry({}, [])
     main_agent = _ScriptedMainAgent([_ROUTE_NORMAL, ("missing context", "unclear_task")])
 
@@ -209,6 +228,7 @@ def test_a_sub_agent_that_fails_does_not_crash_the_whole_answer():
     # agent clean-reply path below must not apply here; an unusable
     # specialist result still feeds composition rather than becoming the
     # whole answer.
+    """A sub agent that fails does not crash the whole answer."""
     failing_agent = _ScriptedAgent("reference_agent", READ_ONLY_TOOL, response_text="broken", status="unclear_task")
     other_agent = _ScriptedAgent("status_agent", (), response_text="all clear")
     registry = build_agent_registry({}, [failing_agent, other_agent])
@@ -230,6 +250,7 @@ def test_a_single_chosen_agents_unclear_task_gets_the_clean_cant_answer_reply():
     # agent's raw internal text verbatim as the final answer. Now routed
     # through the same clean presentation a true NONE selection gets, and
     # the agent's own wording is never quoted back to the asker.
+    """A single chosen agents unclear task gets the clean cant answer reply."""
     failing_agent = _ScriptedAgent("reference_agent", READ_ONLY_TOOL, response_text="please specify a location", status="unclear_task")
     registry = build_agent_registry({}, [failing_agent])
     main_agent = _ScriptedMainAgent([_ROUTE_NORMAL, ("AGENT: reference_agent\nTASK: check on my tasks", "success")])
@@ -244,6 +265,7 @@ def test_a_single_chosen_agents_unclear_task_gets_the_clean_cant_answer_reply():
 
 
 def test_a_real_history_agent_is_routed_through_the_query_service_not_process():
+    """A real history agent is routed through the query service not process."""
     history_agent = HistoryAgent(model="m")
     registry = build_agent_registry({}, [history_agent])
     main_agent = _ScriptedMainAgent([_ROUTE_NORMAL, ("AGENT: history_agent\nTASK: has this happened before?", "success")])
@@ -256,6 +278,7 @@ def test_a_real_history_agent_is_routed_through_the_query_service_not_process():
 
 
 def test_history_query_service_receives_the_agent_specific_task_not_the_original_question():
+    """History query service receives the agent specific task not the original question."""
     history_agent = HistoryAgent(model="m")
     reference_agent = _ScriptedAgent("reference_agent", READ_ONLY_TOOL, response_text="nominal")
     registry = build_agent_registry({}, [history_agent, reference_agent])
@@ -274,6 +297,7 @@ def test_history_query_service_receives_the_agent_specific_task_not_the_original
 
 
 def test_history_query_error_does_not_crash_the_whole_answer():
+    """History query error does not crash the whole answer."""
     from history.query import HistoryQueryError
 
     history_agent = HistoryAgent(model="m")
@@ -287,6 +311,7 @@ def test_history_query_error_does_not_crash_the_whole_answer():
 
 
 def test_empty_history_reply_uses_the_error_flag_not_the_exception_wording():
+    """Empty history reply uses the error flag not the exception wording."""
     from history.query import HistoryQueryError
 
     history_agent = HistoryAgent(model="m")
@@ -308,6 +333,7 @@ def test_empty_history_reply_uses_the_error_flag_not_the_exception_wording():
 
 
 def test_a_successful_answer_that_looks_like_a_timeout_marker_is_still_the_answer():
+    """A successful answer that looks like a timeout marker is still the answer."""
     reference_agent = _ScriptedAgent(
         "reference_agent", MIXED_TOOLS, response_text="(timeout: this is the real finding)"
     )
@@ -320,6 +346,7 @@ def test_a_successful_answer_that_looks_like_a_timeout_marker_is_still_the_answe
 
 
 def test_a_specialist_exception_appends_the_partial_failure_note():
+    """A specialist exception appends the partial failure note."""
     failing_agent = _ScriptedAgent("reference_agent", READ_ONLY_TOOL, raises=RuntimeError("boom"))
     other_agent = _ScriptedAgent("status_agent", (), response_text="all clear")
     registry = build_agent_registry({}, [failing_agent, other_agent])
@@ -338,6 +365,7 @@ def test_a_specialist_exception_appends_the_partial_failure_note():
 
 
 def test_run_parallel_specialists_records_an_exception_on_the_result_not_in_the_answer():
+    """Run parallel specialists records an exception on the result not in the answer."""
     def _boom():
         raise RuntimeError("provider failed")
 
@@ -350,6 +378,7 @@ def test_run_parallel_specialists_records_an_exception_on_the_result_not_in_the_
 
 
 def test_run_parallel_specialists_records_a_timeout_on_the_result_not_in_the_answer():
+    """Run parallel specialists records a timeout on the result not in the answer."""
     def _slow():
         time.sleep(0.4)
         return SpecialistResult(answer="late")
@@ -371,6 +400,7 @@ def test_run_parallel_specialists_records_a_timeout_on_the_result_not_in_the_ans
 
 
 def test_run_parallel_specialists_does_not_treat_answer_text_as_a_failure_signal():
+    """Run parallel specialists does not treat answer text as a failure signal."""
     results = run_parallel_specialists(
         [("agent", lambda: SpecialistResult(answer="(timeout: real finding)"))]
     )
@@ -379,6 +409,7 @@ def test_run_parallel_specialists_does_not_treat_answer_text_as_a_failure_signal
 
 
 def test_specialist_logs_include_agent_trace_and_event_id(capsys):
+    """Specialist logs include agent trace and event id."""
     import json
 
     configure_logging("test_profile")
@@ -403,6 +434,7 @@ def test_specialist_logs_include_agent_trace_and_event_id(capsys):
 
 
 def test_specialist_timeout_includes_trace_id(capsys):
+    """Specialist timeout includes trace id."""
     import json
 
     configure_logging("test_profile")
@@ -428,6 +460,7 @@ def test_specialist_timeout_includes_trace_id(capsys):
 
 
 def test_queue_started_includes_event_id_and_concurrency_keys(capsys):
+    """Queue started includes event id and concurrency keys."""
     import json
 
     from orchestrator.event_queue import SerialEventQueue, WorkItem
@@ -457,13 +490,16 @@ def test_queue_started_includes_event_id_and_concurrency_keys(capsys):
 
 
 class _ScriptedHistoryQueryServiceWithDirectLookup(_ScriptedHistoryQueryService):
+    """ScriptedHistoryQueryServiceWithDirectLookup."""
     def __init__(self, *args, most_recent_answer=None, most_recent_raises=None, **kwargs):
+        """Initialize this test helper."""
         super().__init__(*args, **kwargs)
         self._most_recent_answer = most_recent_answer
         self._most_recent_raises = most_recent_raises
         self.most_recent_calls = []
 
     def answer_most_recent_event(self, question, **kwargs):
+        """Answer most recent event."""
         self.most_recent_calls.append(question)
         if self._most_recent_raises is not None:
             raise self._most_recent_raises
@@ -479,6 +515,7 @@ def test_a_recognized_direct_lookup_bypasses_agent_selection_entirely():
     # classification step, answered via HistoryQueryService.
     # answer_most_recent_event directly. No AGENT:/TASK: call is ever made
     # — agent-selection's own free-text-parsing crash risk never runs.
+    """A recognized direct lookup bypasses agent selection entirely."""
     reference_agent = _ScriptedAgent("reference_agent", MIXED_TOOLS)
     registry = build_agent_registry({}, [reference_agent])
     main_agent = _ScriptedMainAgent([("DIRECT_LOOKUP: most_recent", "success")])
@@ -493,6 +530,7 @@ def test_a_recognized_direct_lookup_bypasses_agent_selection_entirely():
 
 
 def test_a_direct_lookup_with_no_events_yet_gets_a_clean_reply_not_a_crash():
+    """A direct lookup with no events yet gets a clean reply not a crash."""
     from history.query import HistoryQueryError
 
     registry = build_agent_registry({}, [])
@@ -509,6 +547,7 @@ def test_an_unparseable_classification_response_falls_back_to_normal_routing():
     # anything other than a clean DIRECT_LOOKUP: line (free text, "ROUTE:
     # normal", or an unclear_task status) falls through to ordinary
     # agent-selection unchanged.
+    """An unparseable classification response falls back to normal routing."""
     reference_agent = _ScriptedAgent("reference_agent", MIXED_TOOLS, response_text="gate 3 is nominal")
     registry = build_agent_registry({}, [reference_agent])
     main_agent = _ScriptedMainAgent(
@@ -524,6 +563,7 @@ def test_an_unparseable_classification_response_falls_back_to_normal_routing():
 
 
 def test_a_classification_call_reporting_unclear_task_falls_back_to_normal_routing():
+    """A classification call reporting unclear task falls back to normal routing."""
     reference_agent = _ScriptedAgent("reference_agent", MIXED_TOOLS, response_text="gate 3 is nominal")
     registry = build_agent_registry({}, [reference_agent])
     main_agent = _ScriptedMainAgent(
@@ -539,6 +579,7 @@ def test_a_classification_call_reporting_unclear_task_falls_back_to_normal_routi
 
 
 def test_structured_history_route_executes_a_validated_history_query_spec():
+    """Structured history route executes a validated history query spec."""
     import json
     from types import SimpleNamespace
 
@@ -583,13 +624,14 @@ def test_structured_history_route_executes_a_validated_history_query_spec():
 
 
 def test_conversation_reference_resolves_to_a_fresh_event_details_lookup():
-    # docs/Next_Plan.md §10: "that event" is resolved from conversation
+    # "That event" is resolved from conversation
     # context to a stable Event ID, then re-fetched fresh from history —
     # the remembered assistant text is never treated as current fact. The
     # model (simulated here by the scripted response) is the one that
     # reads conversation context and decides the event_id; this proves the
     # conversation context actually reaches the prompt it needs to, and
     # that the resolved reference flows through as a real, fresh query.
+    """Conversation reference resolves to a fresh event details lookup."""
     import json
     from types import SimpleNamespace
 
@@ -634,6 +676,7 @@ def test_conversation_reference_resolves_to_a_fresh_event_details_lookup():
 
 
 def test_question_router_does_not_expose_decision_only_agents():
+    """Question router does not expose decision only agents."""
     main_registry_agent = _ScriptedAgent("main_agent")
     insights_registry_agent = _ScriptedAgent("insights_agent")
     reference_agent = _ScriptedAgent("reference_agent", READ_ONLY_TOOL)
@@ -649,6 +692,7 @@ def test_question_router_does_not_expose_decision_only_agents():
 
 
 def test_direct_lookup_marker_requires_the_exact_supported_value():
+    """Direct lookup marker requires the exact supported value."""
     reference_agent = _ScriptedAgent("reference_agent", READ_ONLY_TOOL, response_text="gate 3 is nominal")
     registry = build_agent_registry({}, [reference_agent])
     main_agent = _ScriptedMainAgent([
@@ -662,6 +706,7 @@ def test_direct_lookup_marker_requires_the_exact_supported_value():
 
 
 def test_items_are_processed_in_strict_arrival_order():
+    """Items are processed in strict arrival order."""
     processed = []
     q = SerialEventQueue(processed.append)
     q.start()
@@ -675,6 +720,7 @@ def test_items_are_processed_in_strict_arrival_order():
 
 
 def test_one_failing_item_does_not_stop_subsequent_items():
+    """One failing item does not stop subsequent items."""
     processed = []
 
     def _process(item):
@@ -697,6 +743,7 @@ def test_one_failing_item_does_not_stop_subsequent_items():
 def test_processing_is_serial_not_concurrent():
     # A slow item must finish before the next one starts — this would
     # fail if items were processed concurrently.
+    """Processing is serial not concurrent."""
     order = []
     lock_held = threading.Event()
 
@@ -720,6 +767,7 @@ def test_processing_is_serial_not_concurrent():
 
 
 def test_wait_until_idle_blocks_until_processing_actually_finished():
+    """Wait until idle blocks until processing actually finished."""
     processed = []
 
     def _slow_process(item):
@@ -736,6 +784,7 @@ def test_wait_until_idle_blocks_until_processing_actually_finished():
 
 
 def test_start_is_idempotent():
+    """Start is idempotent."""
     processed = []
     q = SerialEventQueue(processed.append)
 
@@ -749,6 +798,7 @@ def test_start_is_idempotent():
 
 
 def test_qsize_reflects_items_not_yet_picked_up():
+    """Qsize reflects items not yet picked up."""
     release = threading.Event()
 
     def _process(item):
@@ -771,6 +821,7 @@ def test_qsize_reflects_items_not_yet_picked_up():
 
 
 def test_currently_processing_reports_the_in_flight_item_then_clears():
+    """Currently processing reports the in flight item then clears."""
     seen_while_processing = []
     release = threading.Event()
 
@@ -797,6 +848,7 @@ def test_currently_processing_reports_the_in_flight_item_then_clears():
 
 
 def test_currently_processing_clears_even_when_the_item_raises():
+    """Currently processing clears even when the item raises."""
     q = SerialEventQueue(lambda item: (_ for _ in ()).throw(ValueError("boom")))
     q.start()
 
@@ -808,6 +860,7 @@ def test_currently_processing_clears_even_when_the_item_raises():
 
 
 def test_stop_returns_within_timeout_when_the_worker_is_blocked(monkeypatch):
+    """Stop returns within timeout when the worker is blocked."""
     from orchestrator import event_queue as event_queue_module
     from orchestrator.event_queue import SerialEventQueue
 

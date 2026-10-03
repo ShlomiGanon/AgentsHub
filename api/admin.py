@@ -29,7 +29,7 @@ deliberately) rides along with a browser's requests automatically.
 protections below — the login password, the session cookie, the CSRF token
 — travels in the request/response bodies and headers exactly like
 `BOT_SERVICE_KEY` (`bot/contracts.py`) and the `X-Identity` scheme
-(`api/request_boundary.py`, `docs/PRODUCTION_READY.md` Task 7) do: safe on
+(`api/request_boundary.py`) do: safe on
 localhost, sent in the clear over plain HTTP otherwise. This module does not
 set the session cookie's `Secure` flag (forcing that on would break login
 over plain HTTP in local development) and implements no TLS itself — put a

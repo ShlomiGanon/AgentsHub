@@ -1,0 +1,464 @@
+"""Roster and attendance tables for the response-team profile database."""
+
+from __future__ import annotations
+
+import sqlite3
+import uuid
+from pathlib import Path
+
+from persistence.response_team_support import _parse_timestamp, _utc_now
+from persistence.team_status_contracts import (
+    AttendanceCycle,
+    TeamStatusPersistenceError,
+    TeamStatusPersistenceInterface,
+)
+
+# --- schema ---
+
+_ROSTER_SCHEMA = """
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS team_members (
+    telegram_identity TEXT PRIMARY KEY,
+    full_name TEXT NOT NULL,
+    registered_at TEXT NOT NULL,
+    approved INTEGER NOT NULL DEFAULT 0 CHECK (approved IN (0, 1)),
+    current_area TEXT
+);
+
+CREATE TABLE IF NOT EXISTS roster_approval (
+    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+    approved_by TEXT NOT NULL,
+    approved_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS attendance_cycles (
+    cycle_id TEXT PRIMARY KEY,
+    cycle_key TEXT NOT NULL UNIQUE,
+    opened_at TEXT NOT NULL,
+    deadline_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS attendance_responses (
+    response_id TEXT PRIMARY KEY,
+    source_message_id TEXT NOT NULL UNIQUE,
+    cycle_id TEXT NOT NULL REFERENCES attendance_cycles(cycle_id),
+    telegram_identity TEXT NOT NULL REFERENCES team_members(telegram_identity),
+    availability TEXT NOT NULL CHECK (availability IN ('available', 'unavailable')),
+    reason TEXT,
+    unavailable_until TEXT,
+    original_text TEXT NOT NULL,
+    received_at TEXT NOT NULL,
+    approval_status TEXT NOT NULL CHECK (approval_status IN ('accepted', 'pending', 'rejected')),
+    reviewed_by TEXT,
+    reviewed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_rt_attendance_responses_member_time
+ON attendance_responses(telegram_identity, received_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_rt_attendance_responses_cycle
+ON attendance_responses(cycle_id, telegram_identity, received_at DESC);
+
+CREATE TABLE IF NOT EXISTS attendance_broadcast (
+    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+    cycle_key TEXT NOT NULL
+);
+"""
+
+
+class ResponseTeamRosterStore(TeamStatusPersistenceInterface):
+    """Team-status contract plus current_area for movement reports on the shared profile DB."""
+
+    def __init__(self, db_path: str):
+        """Open the DB file and create roster tables if they are missing."""
+
+        self.db_path = str(db_path)
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        with self._connect() as connection:
+            connection.executescript(_ROSTER_SCHEMA)
+
+    def _connect(self) -> sqlite3.Connection:
+        """Open a row-factory connection with foreign keys enabled."""
+
+        connection = sqlite3.connect(self.db_path, timeout=30)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        return connection
+
+    def register_member(self, telegram_identity: str, full_name: str, registered_at: str | None = None) -> None:
+        """Insert a team_members row, or refresh the name on conflict."""
+
+        identity = telegram_identity.strip()
+        name = " ".join(full_name.split())
+        if not identity or not name:
+            raise TeamStatusPersistenceError("telegram identity and full name are required")
+        registered_at = registered_at or _utc_now()
+        _parse_timestamp(registered_at)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO team_members(telegram_identity, full_name, registered_at, approved)
+                VALUES (?, ?, ?, 0)
+                ON CONFLICT(telegram_identity) DO UPDATE SET full_name = excluded.full_name
+                """,
+                (identity, name, registered_at),
+            )
+
+    def approve_roster(self, approved_by: str, approved_at: str | None = None) -> int:
+        """Mark every team_members row approved and record the singleton approval."""
+
+        if not approved_by.strip():
+            raise TeamStatusPersistenceError("approving commander identity is required")
+        approved_at = approved_at or _utc_now()
+        _parse_timestamp(approved_at)
+        with self._connect() as connection:
+            count = connection.execute("SELECT COUNT(*) FROM team_members").fetchone()[0]
+            if count == 0:
+                raise TeamStatusPersistenceError("cannot approve an empty roster")
+            connection.execute("UPDATE team_members SET approved = 1")
+            connection.execute(
+                """
+                INSERT INTO roster_approval(singleton_id, approved_by, approved_at)
+                VALUES (1, ?, ?)
+                ON CONFLICT(singleton_id) DO UPDATE SET
+                    approved_by = excluded.approved_by,
+                    approved_at = excluded.approved_at
+                """,
+                (approved_by, approved_at),
+            )
+        return int(count)
+
+    def roster_is_approved(self) -> bool:
+        """True when the singleton roster_approval row exists."""
+
+        with self._connect() as connection:
+            return connection.execute("SELECT 1 FROM roster_approval WHERE singleton_id = 1").fetchone() is not None
+
+    def list_members(self, *, approved_only: bool = True) -> list[dict]:
+        """Return team_members rows, optionally limited to approved members."""
+
+        where = "WHERE approved = 1" if approved_only else ""
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT telegram_identity, full_name, registered_at, approved, current_area "
+                f"FROM team_members {where} ORDER BY full_name"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def open_cycle(self, cycle_key: str, opened_at: str, deadline_at: str) -> AttendanceCycle:
+        """Create an attendance_cycles row for this key, or return the existing one."""
+
+        if not self.roster_is_approved():
+            raise TeamStatusPersistenceError("the commander must approve the roster before attendance checks begin")
+        opened = _parse_timestamp(opened_at)
+        deadline = _parse_timestamp(deadline_at)
+        if deadline <= opened:
+            raise TeamStatusPersistenceError("attendance deadline must be after the cycle opens")
+        cycle_id = f"attendance-{uuid.uuid4().hex}"
+        created = True
+        with self._connect() as connection:
+            try:
+                connection.execute(
+                    "INSERT INTO attendance_cycles(cycle_id, cycle_key, opened_at, deadline_at) VALUES (?, ?, ?, ?)",
+                    (cycle_id, cycle_key, opened_at, deadline_at),
+                )
+            except sqlite3.IntegrityError:
+                created = False
+            row = connection.execute(
+                "SELECT cycle_id, cycle_key, opened_at, deadline_at FROM attendance_cycles WHERE cycle_key = ?",
+                (cycle_key,),
+            ).fetchone()
+        return AttendanceCycle(**dict(row), created=created)
+
+    def latest_cycle(self) -> dict | None:
+        """Return the newest attendance_cycles row, or None."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT cycle_id, cycle_key, opened_at, deadline_at FROM attendance_cycles ORDER BY opened_at DESC LIMIT 1"
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def request_broadcast(self, cycle_key: str) -> None:
+        """Queue this cycle_key on the singleton attendance_broadcast row."""
+
+        if not cycle_key:
+            raise TeamStatusPersistenceError("cycle_key is required")
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO attendance_broadcast(singleton_id, cycle_key)
+                VALUES (1, ?)
+                ON CONFLICT(singleton_id) DO UPDATE SET cycle_key = excluded.cycle_key
+                """,
+                (cycle_key,),
+            )
+
+    def claim_broadcast(self) -> dict | None:
+        """Take the pending broadcast row and return the cycle plus members still required."""
+
+        with self._connect() as connection:
+            pending = connection.execute(
+                "SELECT cycle_key FROM attendance_broadcast WHERE singleton_id = 1"
+            ).fetchone()
+            if pending is None:
+                return None
+            connection.execute("DELETE FROM attendance_broadcast WHERE singleton_id = 1")
+            row = connection.execute(
+                "SELECT cycle_id, cycle_key, opened_at, deadline_at FROM attendance_cycles WHERE cycle_key = ?",
+                (pending["cycle_key"],),
+            ).fetchone()
+        if row is None:
+            return None
+        snapshot = self.availability_snapshot(_utc_now())
+        requested = [entry["full_name"] for entry in snapshot if entry["availability"] != "unavailable"]
+        return {
+            "cycle_key": row["cycle_key"],
+            "opened_at": row["opened_at"],
+            "deadline_at": row["deadline_at"],
+            "members_required": requested,
+        }
+
+    def record_response(
+        self,
+        *,
+        telegram_identity: str,
+        source_message_id: str,
+        availability: str,
+        original_text: str,
+        received_at: str,
+        reason: str | None = None,
+        unavailable_until: str | None = None,
+    ) -> dict:
+        """Insert an attendance_responses row, or return the existing one for this message id."""
+
+        if availability not in {"available", "unavailable"}:
+            raise TeamStatusPersistenceError("availability must be 'available' or 'unavailable'")
+        if availability == "unavailable" and not (reason or "").strip():
+            raise TeamStatusPersistenceError("an unavailable response requires a reason")
+        if availability == "available" and (reason is not None or unavailable_until is not None):
+            raise TeamStatusPersistenceError("an available response cannot include an unavailable reason or end time")
+        received = _parse_timestamp(received_at)
+        if unavailable_until is not None and _parse_timestamp(unavailable_until) <= received:
+            raise TeamStatusPersistenceError("unavailable_until must be after received_at")
+
+        cycle = self.latest_cycle()
+        if cycle is None:
+            raise TeamStatusPersistenceError("no attendance cycle is open")
+        deadline = _parse_timestamp(cycle["deadline_at"])
+        approval_status = "accepted" if received <= deadline else "pending"
+        response_id = f"response-{uuid.uuid4().hex}"
+
+        with self._connect() as connection:
+            member = connection.execute(
+                "SELECT approved FROM team_members WHERE telegram_identity = ?",
+                (telegram_identity,),
+            ).fetchone()
+            if member is None or not member["approved"]:
+                raise TeamStatusPersistenceError("attendance responses are accepted only from the approved roster")
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO attendance_responses(
+                        response_id, source_message_id, cycle_id, telegram_identity,
+                        availability, reason, unavailable_until, original_text,
+                        received_at, approval_status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        response_id,
+                        source_message_id,
+                        cycle["cycle_id"],
+                        telegram_identity,
+                        availability,
+                        reason.strip() if reason else None,
+                        unavailable_until,
+                        original_text,
+                        received_at,
+                        approval_status,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                row = connection.execute(
+                    "SELECT * FROM attendance_responses WHERE source_message_id = ?",
+                    (source_message_id,),
+                ).fetchone()
+                return dict(row)
+            row = connection.execute(
+                "SELECT * FROM attendance_responses WHERE response_id = ?",
+                (response_id,),
+            ).fetchone()
+        return dict(row)
+
+    def review_late_response(
+        self, response_id: str, *, approved: bool, reviewed_by: str, reviewed_at: str | None = None
+    ) -> dict:
+        """Accept or reject a pending attendance_responses row."""
+
+        reviewed_at = reviewed_at or _utc_now()
+        _parse_timestamp(reviewed_at)
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT approval_status FROM attendance_responses WHERE response_id = ?",
+                (response_id,),
+            ).fetchone()
+            if row is None:
+                raise TeamStatusPersistenceError("late response was not found")
+            if row["approval_status"] != "pending":
+                raise TeamStatusPersistenceError("response is not awaiting commander review")
+            connection.execute(
+                """
+                UPDATE attendance_responses
+                SET approval_status = ?, reviewed_by = ?, reviewed_at = ?
+                WHERE response_id = ?
+                """,
+                ("accepted" if approved else "rejected", reviewed_by, reviewed_at, response_id),
+            )
+            updated = connection.execute(
+                "SELECT * FROM attendance_responses WHERE response_id = ?",
+                (response_id,),
+            ).fetchone()
+        return dict(updated)
+
+    def pending_late_responses(self) -> list[dict]:
+        """Return pending attendance_responses rows with the member's full name."""
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT r.*, m.full_name
+                FROM attendance_responses r
+                JOIN team_members m USING (telegram_identity)
+                WHERE r.approval_status = 'pending'
+                ORDER BY r.received_at
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_responses(self) -> list[dict]:
+        """Return every attendance_responses row, newest first."""
+
+        with self._connect() as connection:
+            rows = connection.execute("SELECT * FROM attendance_responses ORDER BY received_at DESC").fetchall()
+        return [dict(row) for row in rows]
+
+    def get_response(self, response_id: str) -> dict | None:
+        """Return one attendance_responses row, or None."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM attendance_responses WHERE response_id = ?", (response_id,)
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def admin_update_attendance_fields(self, response_id: str, reviewed_by: str = "admin", **fields) -> dict:
+        """Overwrite editable attendance columns; stamping review fields when approval_status changes."""
+
+        now = _utc_now()
+        editable_columns = ("availability", "reason", "unavailable_until", "approval_status")
+        with self._connect() as connection:
+            current = connection.execute(
+                "SELECT 1 FROM attendance_responses WHERE response_id = ?", (response_id,)
+            ).fetchone()
+            if current is None:
+                raise TeamStatusPersistenceError(f"Attendance response '{response_id}' not found.")
+
+            updates = {column: fields[column] for column in editable_columns if column in fields}
+            if "approval_status" in updates:
+                updates["reviewed_by"] = reviewed_by
+                updates["reviewed_at"] = now
+            if updates:
+                assignments = ", ".join(f"{column} = ?" for column in updates)
+                connection.execute(
+                    f"UPDATE attendance_responses SET {assignments} WHERE response_id = ?",
+                    (*updates.values(), response_id),
+                )
+            updated = connection.execute(
+                "SELECT * FROM attendance_responses WHERE response_id = ?", (response_id,)
+            ).fetchone()
+        return dict(updated)
+
+    def availability_snapshot(self, as_of: str) -> list[dict]:
+        """Derive each approved member's current availability from the latest accepted response."""
+
+        instant = _parse_timestamp(as_of)
+        cycle = self.latest_cycle()
+        members = self.list_members()
+        snapshot: list[dict] = []
+        with self._connect() as connection:
+            for member in members:
+                accepted = connection.execute(
+                    """
+                    SELECT * FROM attendance_responses
+                    WHERE telegram_identity = ? AND approval_status = 'accepted'
+                    ORDER BY received_at DESC LIMIT 1
+                    """,
+                    (member["telegram_identity"],),
+                ).fetchone()
+                entry = {
+                    "telegram_identity": member["telegram_identity"],
+                    "full_name": member["full_name"],
+                    "current_area": member["current_area"],
+                    "availability": "awaiting_response",
+                    "reason": None,
+                    "unavailable_until": None,
+                    "original_text": None,
+                    "received_at": None,
+                }
+                if accepted is not None:
+                    response = dict(accepted)
+                    active_unavailability = (
+                        response["availability"] == "unavailable"
+                        and response["unavailable_until"] is not None
+                        and _parse_timestamp(response["unavailable_until"]) > instant
+                    )
+                    belongs_to_current_cycle = cycle is not None and response["cycle_id"] == cycle["cycle_id"]
+                    if active_unavailability or belongs_to_current_cycle:
+                        entry.update({key: response[key] for key in (
+                            "availability", "reason", "unavailable_until", "original_text", "received_at"
+                        )})
+                snapshot.append(entry)
+        return snapshot
+
+    def get_member(self, telegram_identity: str) -> dict | None:
+        """Return one team_members row, or None."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT telegram_identity, full_name, registered_at, approved, current_area "
+                "FROM team_members WHERE telegram_identity = ?",
+                (telegram_identity,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def set_current_area(self, telegram_identity: str, area: str, updated_at: str | None = None) -> dict:
+        """Write current_area on an approved team_members row and return it."""
+
+        area = area.strip()
+        if not area:
+            raise TeamStatusPersistenceError("area is required")
+        with self._connect() as connection:
+            member = connection.execute(
+                "SELECT * FROM team_members WHERE telegram_identity = ?", (telegram_identity,)
+            ).fetchone()
+            if member is None or not member["approved"]:
+                raise TeamStatusPersistenceError(
+                    "current area can only be recorded for an approved roster member"
+                )
+            connection.execute(
+                "UPDATE team_members SET current_area = ? WHERE telegram_identity = ?",
+                (area, telegram_identity),
+            )
+            updated = connection.execute(
+                "SELECT telegram_identity, full_name, registered_at, approved, current_area "
+                "FROM team_members WHERE telegram_identity = ?",
+                (telegram_identity,),
+            ).fetchone()
+        return dict(updated)
+
+
+def open_response_team_roster_store(db_path: str) -> ResponseTeamRosterStore:
+    """Construct the response-team roster store for this database path."""
+
+    return ResponseTeamRosterStore(db_path)

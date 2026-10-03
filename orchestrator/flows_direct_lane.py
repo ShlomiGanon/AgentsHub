@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from orchestrator.reasoning import MainAgent
     from protocols import Protocol
 
-from orchestrator.flows import FlowDeps, FlowResult, _log_event_outcome, _record_outcome_with_report
+from orchestrator.flows_execution import FlowDeps, FlowResult, _log_event_outcome, _record_outcome_with_report
 from orchestrator.flows_protocol import _persist_step_outcomes, _persist_step_plan
 
 _DIRECT_LANE_CLASSIFY_POLICY = InvocationPolicy(max_output_tokens=400, reasoning_effort="none")
@@ -133,11 +133,7 @@ def classify_direct_lane(
 def run_direct_lane(
     deps: FlowDeps, event_id: str, sender_identity: str, result: DirectLaneResult,
 ) -> FlowResult:
-    """Calls each identified tool directly (no crewai turn), then finishes exactly like any
-    other succeeded/failed run -- `_record_outcome_with_report` composes the small reply
-    (item 6's actions_taken makes it describe what was actually done) and inserts the same
-    job_finished/job_failed notification the queue-based pipeline already uses, so delivery is
-    entirely unchanged."""
+    """Call each identified tool directly, then record the same succeeded or failed outcome as a queued run."""
 
     agents_by_name = {action.agent_name: deps.registry.get(action.agent_name) for action in result.actions}
     steps = tuple(
@@ -171,11 +167,7 @@ def run_direct_lane(
 def attempt_direct_lane(
     deps: FlowDeps, main_agent: "MainAgent", event_id: str, sender_identity: str, raw_text: str,
 ) -> "FlowResult | None":
-    """Entry point for the direct lane, called synchronously from the request handler (item 9:
-    "runs outside the serial queue") right after `begin_report` -- the event is already saved
-    either way. Returns None (never a FlowResult) when the message is not eligible, so the
-    caller falls back to the ordinary queued full-pipeline path unchanged; returns a real
-    FlowResult, already terminal, when the direct lane handled it."""
+    """Try the fast lane after begin_report; return None so the caller can queue the full pipeline."""
 
     result = classify_direct_lane(main_agent, deps.protocol_set.all(), deps.registry, raw_text)
     if not result.eligible:

@@ -1,4 +1,4 @@
-"""Structured logging (work_plan.md §1.8)."""
+"""Structured logging, request traces, and console/JSON log formatting."""
 
 import json
 import logging
@@ -76,6 +76,8 @@ def is_valid_trace_id(value: str | None) -> bool:
 
 
 def _debug_tokens(entry: dict[str, Any], catalog: Any) -> str:
+    """Debug tokens."""
+
     values = (entry.get("input_tokens"), entry.get("output_tokens"), entry.get("cache_tokens"))
     if entry.get("total_tokens") is not None:
         return str(entry["total_tokens"])
@@ -194,11 +196,15 @@ def render_deep_debug_entry(entry: dict[str, Any], catalog: Any) -> str | None:
 
 
 def get_trace_id() -> str:
+    """Return the trace id."""
+
     return _current_trace_id.get()
 
 
 @contextmanager
 def trace_context(trace_id: str | None = None):
+    """Trace context."""
+
     token = _current_trace_id.set(trace_id or new_trace_id())
     try:
         yield _current_trace_id.get()
@@ -207,27 +213,39 @@ def trace_context(trace_id: str | None = None):
 
 
 def set_trace_id(trace_id: str) -> None:
+    """Persist the trace id."""
+
     _current_trace_id.set(trace_id)
 
 
 def get_current_stage() -> str:
+    """Return the current stage."""
+
     return _current_stage.get()
 
 
 def get_current_protocol() -> str | None:
+    """Return the current protocol."""
+
     return _current_protocol.get()
 
 
 def get_current_event_id() -> str | None:
+    """Return the current event id."""
+
     return _current_event_id.get()
 
 
 def get_profile_name() -> str:
+    """Return the profile name."""
+
     return _active_profile_name
 
 
 @contextmanager
 def protocol_context(protocol_name: str):
+    """Protocol context."""
+
     token = _current_protocol.set(protocol_name)
     try:
         yield
@@ -237,6 +255,8 @@ def protocol_context(protocol_name: str):
 
 @contextmanager
 def event_id_context(event_id: str | None):
+    """Event id context."""
+
     token = _current_event_id.set(event_id)
     try:
         yield
@@ -246,6 +266,8 @@ def event_id_context(event_id: str | None):
 
 @contextmanager
 def stage_context(stage: str):
+    """Stage context."""
+
     token = _current_stage.set(stage)
     started = time.monotonic()
     status = "success"
@@ -293,6 +315,8 @@ def stage_context(stage: str):
 
 @contextmanager
 def telemetry_span(name: str, **attributes: Any):
+    """Telemetry span."""
+
     if _tracer is None:
         yield
         return
@@ -304,6 +328,8 @@ def telemetry_span(name: str, **attributes: Any):
 
 
 def latency_snapshot() -> dict[str, dict[str, float | int]]:
+    """Latency snapshot."""
+
     with _latency_lock:
         copied = {stage: sorted(samples) for stage, samples in _latency_samples.items()}
 
@@ -325,6 +351,8 @@ def latency_snapshot() -> dict[str, dict[str, float | int]]:
 
 
 def configure_telemetry() -> None:
+    """Configure telemetry."""
+
     global _telemetry_configured
     mode = os.environ.get("OBSERVABILITY_MODE", "log").strip().lower()
     if mode not in {"log", "otlp"}:
@@ -374,7 +402,11 @@ def _record_extra_fields(record: logging.LogRecord) -> dict[str, Any]:
 
 
 class _JsonFormatter(logging.Formatter):
+    """JsonFormatter."""
+
     def format(self, record: logging.LogRecord) -> str:
+        """Format."""
+
         payload: dict[str, Any] = {
             "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
             "level": record.levelname,
@@ -408,10 +440,14 @@ def _render_default(fields: dict[str, Any], record: logging.LogRecord) -> str:
 
 
 def _render_intent_classified(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a intent classified console line."""
+
     return f"intent classified → {f.get('intent', '?')} ({_truncate(f.get('reason', ''))})"
 
 
 def _render_extraction_result(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a extraction result console line."""
+
     classification = f.get("classification") or "(unclassified)"
     area = f.get("area") or "(no area)"
     missing = f.get("missing_fields") or []
@@ -422,12 +458,16 @@ def _render_extraction_result(f: dict[str, Any], record: logging.LogRecord) -> s
 
 
 def _render_hold_created(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a hold created console line."""
+
     if f.get("hold_kind") == "clarification":
         return f"clarification hold created → unresolved: {f.get('unresolved_field', '?')}"
     return f"approval hold created → reason: {f.get('reason', '?')}"
 
 
 def _render_hold_resolved(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a hold resolved console line."""
+
     resolved_by = f.get("resolved_by", "?")
     if f.get("hold_kind") == "clarification":
         return f"clarification resolved by {resolved_by} → {f.get('chosen_classification', '?')}"
@@ -435,10 +475,14 @@ def _render_hold_resolved(f: dict[str, Any], record: logging.LogRecord) -> str:
 
 
 def _render_risk_assessed(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a risk assessed console line."""
+
     return f"risk assessed → {f.get('risk_level', '?')} (score={f.get('risk_score', '?')}, {_truncate(f.get('risk_reason', ''))})"
 
 
 def _render_protocol_selection(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a protocol selection console line."""
+
     status = f.get("status")
     if status == "selected":
         return f"protocol selected → {f.get('protocol_name', '?')} ({_truncate(f.get('reason', ''))})"
@@ -451,6 +495,8 @@ def _render_protocol_selection(f: dict[str, Any], record: logging.LogRecord) -> 
 
 
 def _render_precedent_closure(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a precedent closure console line."""
+
     matches = f.get("matched_event_ids") or []
     if f.get("closed"):
         return f"precedent lookup → {len(matches)} match(es), closed via {f.get('closing_event_id', '?')}"
@@ -458,10 +504,14 @@ def _render_precedent_closure(f: dict[str, Any], record: logging.LogRecord) -> s
 
 
 def _render_step_start(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a step start console line."""
+
     return f"step {f.get('step_index', '?')} started → {f.get('agent', '?')}: {_truncate(f.get('task_text', ''))}"
 
 
 def _render_step_result(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a step result console line."""
+
     status = "succeeded" if f.get("succeeded") else "failed"
     result_text = f.get("result_text")
     detail = _truncate(result_text) if result_text else "no result"
@@ -469,26 +519,38 @@ def _render_step_result(f: dict[str, Any], record: logging.LogRecord) -> str:
 
 
 def _render_step_retry(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a step retry console line."""
+
     return f"retrying step → {f.get('agent', '?')}, attempt {f.get('attempt', '?')} ({_truncate(f.get('cause', ''))})"
 
 
 def _render_step_failed(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a step failed console line."""
+
     return f"step failed → {f.get('agent', '?')}, attempt {f.get('attempt', '?')} ({_truncate(f.get('cause', ''))})"
 
 
 def _render_step_unclear(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a step unclear console line."""
+
     return f"step unclear → {f.get('agent', '?')}, attempt {f.get('attempt', '?')} (missing: {_truncate(f.get('missing', ''))})"
 
 
 def _render_insight_generated(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a insight generated console line."""
+
     return f"insight → {f.get('protocol', '?')}: {_truncate(f.get('insight_text', ''))}"
 
 
 def _render_final_verdict(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a final verdict console line."""
+
     return f"final verdict → {f.get('verdict', '?')} ({_truncate(f.get('reasoning', ''))})"
 
 
 def _render_event_outcome(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a event outcome console line."""
+
     outcome = f.get("outcome", "?")
     detail = f.get("failure_reason") or f.get("reasoning") or f.get("precedent_event_id")
     if not detail:
@@ -497,67 +559,99 @@ def _render_event_outcome(f: dict[str, Any], record: logging.LogRecord) -> str:
 
 
 def _render_report_received(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a report received console line."""
+
     return f"report received from {f.get('sender_identity', '?')} ({f.get('source', '?')}): {_truncate(f.get('raw_text', ''))}"
 
 
 def _render_request_received(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a request received console line."""
+
     return f"request received from {f.get('sender_identity', '?')}: {_truncate(f.get('raw_text', ''))}"
 
 
 def _render_tool_blocked(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a tool blocked console line."""
+
     return f"tool call BLOCKED → {f.get('agent', '?')} tried '{f.get('tool', '?')}'"
 
 
 def _render_tool_call(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a tool call console line."""
+
     return f"tool call → {f.get('agent', '?')}: {f.get('tool', '?')}"
 
 
 def _render_queue_processing_failed(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a queue processing failed console line."""
+
     return f"queue item failed → {f.get('event_id') or '?'}"
 
 
 def _render_specialist_started(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a specialist started console line."""
+
     return f"specialist started → {f.get('agent', '?')}"
 
 
 def _render_specialist_finished(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a specialist finished console line."""
+
     return f"specialist {f.get('status', '?')} → {f.get('agent', '?')} ({f.get('duration_ms', '?')}ms)"
 
 
 def _render_specialist_failed(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a specialist failed console line."""
+
     return f"specialist failed → {f.get('agent', '?')} ({_truncate(f.get('cause', ''))})"
 
 
 def _render_specialist_timeout(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a specialist timeout console line."""
+
     return f"specialist timed out → {f.get('agent', '?')} after {f.get('timeout_seconds', '?')}s"
 
 
 def _render_queue_started(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a queue started console line."""
+
     event_id = f.get("event_id") or "-"
     return f"queue started → {event_id} (wait {f.get('queue_wait_seconds', '?')}s)"
 
 
 def _render_agent_invocation_started(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a agent invocation started console line."""
+
     return f"agent invocation started → {f.get('agent') or f.get('agent_name', '?')}"
 
 
 def _render_agent_invocation_finished(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a agent invocation finished console line."""
+
     return f"agent invocation {f.get('status', '?')} → {f.get('agent') or f.get('agent_name', '?')}"
 
 
 def _render_api_error(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a api error console line."""
+
     return f"API request refused → {f.get('status_code', '?')} {f.get('error_class', '?')}: {_truncate(f.get('error_message', ''))}"
 
 
 def _render_api_unexpected_error(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a api unexpected error console line."""
+
     return "unhandled exception in an API request"
 
 
 def _render_model_io(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a model io console line."""
+
     return f"model I/O → {f.get('agent', '?')} [{f.get('stage', '?')}]"
 
 
 def _render_provider_request_failed(f: dict[str, Any], record: logging.LogRecord) -> str:
+    """Format a provider request failed console line."""
+
     target = f"{f.get('provider', '?')}/{f.get('model', '?')}"
     detail = _truncate(f.get("error_detail") or f.get("termination_reason", "provider error"))
     return f"provider request failed → {target} ({detail})"
@@ -613,6 +707,8 @@ class _RedundantCrewAIErrorFilter(logging.Filter):
     )
 
     def filter(self, record: logging.LogRecord) -> bool:
+        """Filter."""
+
         return not (
             record.name == "root"
             and record.getMessage().startswith(self._PREFIXES)
@@ -623,6 +719,8 @@ class _HumanReadableFormatter(logging.Formatter):
     """`[HH:MM:SS] LEVEL <8-char trace> <short message>` — one line per record, for a human watching the process run rather than a machine parsing it."""
 
     def format(self, record: logging.LogRecord) -> str:
+        """Format."""
+
         trace_id = _resolve_trace_id(record)
         trace_display = trace_id[:8] if trace_id else "-" * 8
 
@@ -644,11 +742,15 @@ class _PersistenceLogHandler(logging.Handler):
     """Lands a full, unabbreviated copy of every emitted record in the active deployment's own database, through `PersistenceInterface .write_log_entry` — the one write path (work_plan..."""
 
     def __init__(self, persistence: "PersistenceInterface"):
+        """Init."""
+
         super().__init__()
         self._persistence = persistence
         self._warned = False
 
     def emit(self, record: logging.LogRecord) -> None:
+        """Emit."""
+
         durable_telemetry_events = {
             "api_request_finished",
             "model_invocation_finished",
@@ -702,10 +804,14 @@ class _RecoveringStreamHandler(logging.StreamHandler):
     """Rebind capture streams that pytest (or an embedding host) has closed."""
 
     def __init__(self, stream: Any, fallback: Any) -> None:
+        """Init."""
+
         super().__init__(stream)
         self._fallback = fallback
 
     def emit(self, record: logging.LogRecord) -> None:
+        """Emit."""
+
         if getattr(self.stream, "closed", False):
             self.stream = self._fallback
         super().emit(record)

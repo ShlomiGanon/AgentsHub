@@ -1,8 +1,11 @@
+"""History write-path logging."""
+
 import config.base as base_config
 from tools.logging_config import log_ai_interaction
 
 
 def test_raw_ai_exchange_logs_only_when_deep_debug_is_enabled(monkeypatch, caplog):
+    """Raw ai exchange logs only when deep debug is enabled."""
     monkeypatch.setattr(base_config, "DEEP_DEBUG", False)
     with caplog.at_level("INFO"):
         log_ai_interaction("history", "secret prompt", "secret response")
@@ -22,6 +25,7 @@ def test_raw_ai_exchange_logs_only_when_deep_debug_is_enabled(monkeypatch, caplo
 
 
 def test_stage_defaults_to_the_current_stage_context_when_not_given_explicitly(monkeypatch, caplog):
+    """Stage defaults to the current stage context when not given explicitly."""
     from tools.tracing import stage_context
 
     monkeypatch.setattr(base_config, "DEEP_DEBUG", True)
@@ -39,15 +43,19 @@ from persistence.interface import open_persistence
 
 
 class FakeHistoryAgent:
+    """FakeHistoryAgent."""
     def __init__(self):
+        """Initialize this test helper."""
         self.prompts = []
 
     def process(self, text, allowed_tools):
+        """Process."""
         self.prompts.append(text)
         return AgentResult("success", f"summary-{len(self.prompts)}")
 
 
 def test_rollups_use_lower_level_and_deduplicate_indexes(tmp_path):
+    """Rollups use lower level and deduplicate indexes."""
     store = open_persistence(str(tmp_path / "summary.db"))
     try:
         store.append_event({

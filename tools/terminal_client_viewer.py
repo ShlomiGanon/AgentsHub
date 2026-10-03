@@ -65,6 +65,8 @@ async def _wait_for_completion(deps: BotDeps, cursor: int, job_id: str, poll_int
 
 
 async def _run_repl(deps: BotDeps, observing_client: ObservingApiClient, base_url: str, test_identity: str, poll_interval: float) -> None:
+    """Run repl."""
+
     await deps.api_client.start()
     conversation_id = f"terminal-viewer:{test_identity}:{uuid.uuid4().hex}"
     try:
@@ -131,9 +133,11 @@ async def _run_repl(deps: BotDeps, observing_client: ObservingApiClient, base_ur
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Run the viewer terminal client against a live API."""
+
     parser = argparse.ArgumentParser(
         description="Terminal stand-in for a viewer's Telegram session — talks to a running `api.app` "
-        "server through the same code the real bot uses (work_plan.md §8), for manual end-to-end testing."
+        "server through the same code the real bot uses, for manual end-to-end testing."
     )
     parser.add_argument("--profile", default="profiles.response_team", help="dotted profile module path (default: profiles.response_team)")
     parser.add_argument("--identity", default="viewer_tester", help="viewer-level test identity to act as (default: viewer_tester)")

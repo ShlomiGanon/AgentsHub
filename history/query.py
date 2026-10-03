@@ -66,6 +66,8 @@ def _build_semantic_event_view(event: dict) -> SemanticEventView:
 
 
 def _semantic_view_payload(view: SemanticEventView) -> dict:
+    """Semantic view payload."""
+
     payload = {FIELD_BY_KEY["event_id"].label: view.event_id, **dict(view.fields)}
     if view.steps:
         payload[FIELD_BY_KEY["steps"].label] = view.steps
@@ -91,6 +93,8 @@ def _history_agent_prompt(instruction: str, question: str, views: list[SemanticE
 
 
 def _exact_summary(persistence, level: str, start: datetime, end: datetime) -> dict | None:
+    """Exact summary."""
+
     start_text = storage_timestamp(start)
     end_text = storage_timestamp(end)
     for summary in persistence.fetch_summaries_range(level, start_text, end_text):
@@ -101,6 +105,8 @@ def _exact_summary(persistence, level: str, start: datetime, end: datetime) -> d
 
 
 def _matching_ids(index: list[dict], classification: str | None, area: str | None) -> tuple[str, ...]:
+    """Matching ids."""
+
     return tuple(
         item["event_id"]
         for item in index
@@ -110,6 +116,8 @@ def _matching_ids(index: list[dict], classification: str | None, area: str | Non
 
 
 def _summary_source(level: str, summary: dict, classification: str | None, area: str | None) -> RetrievedSource | None:
+    """Summary source."""
+
     matched_ids = _matching_ids(summary.get("event_index") or [], classification, area)
     if (classification is not None or area is not None) and not matched_ids:
         return None
@@ -127,6 +135,8 @@ def _summary_source(level: str, summary: dict, classification: str | None, area:
 
 
 def _raw_event_sources(events: list[dict], classification: str | None, area: str | None) -> list[RetrievedSource]:
+    """Raw event sources."""
+
     sources = []
     for event in events:
         if classification is not None and event.get("classification") != classification:
@@ -211,6 +221,8 @@ def find_precedents(
     area: str,
     target_event_occurred_at: str,
 ) -> list[PrecedentMatch]:
+    """Find precedents."""
+
     window_end = parse_timestamp(target_event_occurred_at) + timedelta(seconds=1)
     window_start = window_end - timedelta(days=settings_store.get_lookback_window_days())
 
@@ -271,6 +283,8 @@ class HistoryQueryService:
         protocol_names: tuple[str, ...] | None = None,
         timezone_name: str = "UTC",
     ):
+        """Init."""
+
         self._persistence = persistence
         self._history_agent = history_agent
         self._settings_store = settings_store
@@ -300,6 +314,8 @@ class HistoryQueryService:
         }
 
     def _resolve_bounds(self, time_start: str | None, time_end: str | None) -> tuple[datetime, datetime]:
+        """Resolve bounds."""
+
         end = parse_timestamp(time_end) if time_end is not None else self._clock()
 
         if time_start is not None:
@@ -315,6 +331,8 @@ class HistoryQueryService:
 
     @staticmethod
     def _require_known_values(label: str, values: tuple[str, ...], allowed: frozenset[str] | set[str] | None) -> None:
+        """Require known values."""
+
         if allowed is None:
             return
         unknown = sorted(set(values) - set(allowed))
@@ -322,6 +340,8 @@ class HistoryQueryService:
             raise HistoryQueryError(f"unknown {label}: {', '.join(unknown)}")
 
     def _validate_spec(self, spec: HistoryQuerySpec) -> HistoryQuerySpec:
+        """Validate spec."""
+
         if not 1 <= spec.limit <= _MAX_HISTORY_RESULTS:
             raise HistoryQueryError(f"history query limit must be between 1 and {_MAX_HISTORY_RESULTS}")
 
@@ -365,6 +385,8 @@ class HistoryQueryService:
 
     @staticmethod
     def _criteria(spec: HistoryQuerySpec, *, limit: int | None = None, sender_identity: str | None = None) -> EventSearchCriteria:
+        """Criteria."""
+
         return EventSearchCriteria(
             time_start=spec.time_start,
             time_end=spec.time_end,
@@ -382,6 +404,8 @@ class HistoryQueryService:
 
     @staticmethod
     def _sources_for_events(events: tuple[dict, ...]) -> tuple[HistorySource, ...]:
+        """Sources for events."""
+
         return tuple(
             HistorySource(
                 level="raw_event",
@@ -393,10 +417,7 @@ class HistoryQueryService:
         )
 
     def query_spec(self, question: str, spec: HistoryQuerySpec, *, sender_identity_filter: str | None = None) -> HistoryAnswer:
-        """`sender_identity_filter` restricts every count/search/aggregate this call performs to events submitted
-        by exactly this identity — the ownership scoping a viewer's `ask_question` operation requires
-        (docs/Next_Plan.md §5 decision record). `None` (a commander, or an already-unrestricted caller) applies
-        no such restriction. This is the single enforcement point: every operation below shares this criteria."""
+        """Restrict counts and searches to this sender, or apply no ownership filter when None."""
 
         started_at = time.perf_counter()
         normalized = self._validate_spec(spec)
@@ -508,6 +529,8 @@ class HistoryQueryService:
         *,
         sender_identity_filter: str | None = None,
     ) -> HistoryAnswer:
+        """Query."""
+
         start, end = self._resolve_bounds(time_start, time_end)
         retrieved = retrieve_range(self._persistence, start, end, classification, area)
 
@@ -517,7 +540,7 @@ class HistoryQueryService:
             # just one sender's share of it — it can never be safely shown to an
             # ownership-scoped caller, so it is dropped entirely rather than
             # risked. Only raw, per-event sources the caller actually owns
-            # remain (docs/Next_Plan.md §5 decision record).
+            # remain.
             retrieved = [
                 source for source in retrieved
                 if source.level == "raw_event" and source.content.get("sender_identity") == sender_identity_filter
@@ -576,8 +599,7 @@ class HistoryQueryService:
         """A narrow, direct-lookup path for "what is the last event"-shaped questions (orchestrator.question_flow's own direct-lookup classification decides when to call this instead of th...
 
         `sender_identity_filter` restricts the lookup to the caller's own most
-        recent event (docs/Next_Plan.md §5 decision record); `None` (a
-        commander) applies no restriction."""
+        recent event; None (a commander) applies no restriction."""
 
         now = self._clock()
         # `time_basis="received_at"` (DIAGNOSTIC_FINDINGS.MD A.2, the original
@@ -634,6 +656,8 @@ class HistoryQueryService:
         area: str,
         target_event_occurred_at: str,
     ) -> list[PrecedentMatch]:
+        """Search precedents."""
+
         if self._settings_store is None:
             raise HistoryQueryError("precedent search requires a settings store")
 

@@ -4,8 +4,8 @@ Two corpora are supported, selected by `--corpus-type`:
 
 - `intent` (default): `fixtures/response_eval_v1.jsonl` — intent-classification
   accuracy, as before.
-- `disclosure`: `fixtures/adversarial_disclosure_v1.jsonl` (docs/Next_Plan.md
-  §11/Stage 6) — for each adversarial case, `--live` calls the real Main
+- `disclosure`: `fixtures/adversarial_disclosure_v1.jsonl` — for each
+  adversarial case, `--live` calls the real Main
   Agent's conversational path (once as a viewer, once as a commander,
   through the same role-aware system context `orchestrator.capabilities`
   builds for a real request) and checks the model's actual free-text answer
@@ -27,11 +27,15 @@ from profiles import HUMAN_ACTIVATION_TYPE
 
 
 def _load_cases(path: Path, split: str | None) -> list[dict]:
+    """Load cases."""
+
     cases = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     return [case for case in cases if split is None or case["split"] == split]
 
 
 def _score(cases: list[dict], predictions: dict[str, str]) -> dict:
+    """Score."""
+
     by_class: dict[str, Counter] = {}
     correct = 0
     for case in cases:
@@ -52,6 +56,8 @@ def _score(cases: list[dict], predictions: dict[str, str]) -> dict:
 
 
 def _score_disclosure(cases: list[dict], answers: dict[str, str]) -> dict:
+    """Score disclosure."""
+
     failures = []
     for case in cases:
         answer = answers.get(case["id"], "")
@@ -80,6 +86,8 @@ def _evaluate_disclosure_live(context, cases: list[dict]) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Main."""
+
     parser = argparse.ArgumentParser(description="Evaluate AgentsHub response routing. --live incurs provider charges.")
     parser.add_argument("--corpus-type", choices=("intent", "disclosure"), default="intent")
     parser.add_argument("--corpus", type=Path)

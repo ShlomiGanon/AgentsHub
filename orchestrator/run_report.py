@@ -19,6 +19,8 @@ _HOLD_KINDS: tuple[str, ...] = ("approval", "clarification", "event_data")
 
 @dataclass(frozen=True)
 class StepSummary:
+    """One persisted protocol step as shown in a run report."""
+
     agent_name: str
     task_text: str
     status: str
@@ -28,6 +30,8 @@ class StepSummary:
 
 @dataclass(frozen=True)
 class PendingSummary:
+    """An unresolved hold still waiting on a human answer."""
+
     kind: Literal["approval", "clarification", "event_data"]
     reason: str | None = None
     risk_level: str | None = None
@@ -39,6 +43,8 @@ class PendingSummary:
 
 @dataclass(frozen=True)
 class RunSummary:
+    """Snapshot of one event used to compose or fall back a run report."""
+
     event_id: str
     raw_text: str
     sender_permission_level: str
@@ -57,15 +63,13 @@ class RunSummary:
     outcome: str | None
     insight_text: str | None
     outcome_failure_reason: str | None
-    # Set only for outcome="handled_resource_unavailable" (orchestrator/flows.py's
-    # `_finish_with_resource_unavailable`): a short, plain-language, already-localized fact --
-    # never a raw internal identifier like "drone" or "east_gate" -- fed to the composer as
-    # input and shown by this fallback too, for every audience (unlike `insight_text`, which is
-    # commander-only).
+    # Localized fact for handled_resource_unavailable; shown to every audience, unlike insight_text.
     resource_unavailable_fact: str | None = None
 
 
 def _pending_from_hold(kind: str, hold: dict) -> PendingSummary:
+    """Build a PendingSummary from one unresolved hold row."""
+
     if kind == "approval":
         return PendingSummary(
             kind="approval",
@@ -143,6 +147,8 @@ def resolve_audience(summary: RunSummary) -> Audience:
 
 
 def _translated(prefix: str, value: str | None, catalog: MessageCatalog) -> str | None:
+    """Catalog lookup for a known code, or the raw value when no key exists."""
+
     if not value:
         return None
     try:
@@ -152,6 +158,8 @@ def _translated(prefix: str, value: str | None, catalog: MessageCatalog) -> str 
 
 
 def _understood_details(summary: RunSummary, catalog: MessageCatalog) -> str:
+    """Short extracted-field line for the 'understood' sentence."""
+
     parts = [
         part
         for part in (summary.classification, summary.area, summary.severity, summary.description)
@@ -161,6 +169,8 @@ def _understood_details(summary: RunSummary, catalog: MessageCatalog) -> str:
 
 
 def _render_pending(pending: PendingSummary, audience: Audience, catalog: MessageCatalog) -> str:
+    """Audience-scoped text for the still-open hold."""
+
     if pending.kind == "approval":
         if audience == "commander":
             risk_word = _translated("risk", pending.risk_level, catalog) or catalog.text("common.none")

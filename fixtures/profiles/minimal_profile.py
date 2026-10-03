@@ -1,6 +1,6 @@
-"""A minimal valid profile module, used by tests for §1.5/§1.6.
+"""A minimal valid profile module used by loader and API wiring tests.
 
-Satisfies docs/profile_spec.md in full. `AGENTS` declares one real agent
+`AGENTS` declares one real agent
 (`agents.reference.ReferenceAgent`, on the "sub" tier) via
 `profiles.spec.AgentSpec` — every `AGENTS` entry must be a real,
 constructible agent class now (profiles.loader.load_profile builds it at
@@ -10,7 +10,7 @@ as the simplest real agent to use here. `_FixtureProtocol` stays a
 minimal, duck-typed stand-in for `PROTOCOLS` — protocols/spec's
 structural contract hasn't changed and doesn't need a real
 `protocols.model.Protocol`. `criticality` is the one field this contract
-requires to be a real `CriticalityLevel` enum member specifically (§1.6,
+requires to be a real `CriticalityLevel` enum member specifically,
 tightened after the Mission 8 coverage audit found two consumers crash
 and one silently miscompares on a plain string) — every other field on
 `_FixtureProtocol` stays a plain, minimal stand-in.
@@ -37,6 +37,7 @@ MODEL_TIMEOUT_SECONDS = 30
 
 @dataclass(frozen=True)
 class _FixtureProtocol:
+    """Minimal duck-typed protocol stand-in that still carries a real CriticalityLevel."""
     name: str
     description: str
     participating_agents: tuple[str, ...]

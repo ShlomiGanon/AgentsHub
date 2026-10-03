@@ -1,6 +1,8 @@
-"""SQLite schema (work_plan.md §2.9 owns this module in full)."""
+"""Shared SQLite DDL and ordered migrations for the core events database."""
 
 import sqlite3
+
+# --- tables ---
 
 USERS_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS users (
@@ -108,6 +110,8 @@ SUMMARY_TABLE_NAMES = {
 
 
 def _summary_table_ddl(table_name: str) -> str:
+    """Return CREATE TABLE SQL for one summary table including event_index."""
+
     return f"""
 CREATE TABLE IF NOT EXISTS {table_name} (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -132,6 +136,7 @@ CREATE INDEX IF NOT EXISTS idx_events_classification_area ON events(classificati
 CREATE INDEX IF NOT EXISTS idx_event_steps_event_id ON event_steps(event_id);
 """
 
+# --- indexes ---
 # Keep migration-era DDL immutable; newer indexes stay separate.
 LOG_ENTRIES_INDEXES_DDL = """
 CREATE INDEX IF NOT EXISTS idx_log_entries_trace_id ON log_entries(trace_id);
@@ -221,6 +226,8 @@ CREATE INDEX IF NOT EXISTS idx_conversation_messages_lookup
 
 
 def _summary_v4_ddl(table_name: str) -> str:
+    """Return the pre-event_index CREATE TABLE SQL used by migration 4."""
+
     return f"""
 CREATE TABLE IF NOT EXISTS {table_name} (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -238,6 +245,8 @@ SUMMARY_TABLES_V4_DDL = (
     + _summary_v4_ddl("monthly_summaries")
     + _summary_v4_ddl("yearly_summaries")
 )
+
+# --- migrations ---
 
 MIGRATIONS: list[tuple[int, str, str]] = [
     (1, "create users table", USERS_TABLE_DDL),
@@ -348,6 +357,8 @@ MIGRATIONS: list[tuple[int, str, str]] = [
 
 
 def run_migrations(db_path: str) -> None:
+    """Apply pending numbered migrations in order, skipping columns that already exist."""
+
     connection = sqlite3.connect(db_path)
     try:
         current_version = connection.execute("PRAGMA user_version").fetchone()[0]

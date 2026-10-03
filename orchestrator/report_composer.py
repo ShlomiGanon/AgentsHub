@@ -29,6 +29,8 @@ _LANGUAGE_NAMES = {"en": "English", "he": "Hebrew"}
 
 
 class ReportComposerAgent(Agent):
+    """SUB-tier agent that writes the user-facing run reply from a RunSummary."""
+
     name = "report_composer_agent"
     role = (
         "Writes the user-facing reply reporting what was understood and done for one event, "
@@ -42,6 +44,8 @@ class ReportComposerAgent(Agent):
 
 
 def _pending_context(summary: RunSummary, *, include_risk: bool) -> dict | None:
+    """Hold fields the composer may mention, with risk only for commanders."""
+
     pending = summary.pending
     if pending is None:
         return None
@@ -68,6 +72,8 @@ def _actions_taken(summary: RunSummary) -> list[str]:
 
 
 def _viewer_context(summary: RunSummary) -> dict:
+    """Facts a viewer reply may state, without protocol or agent internals."""
+
     context: dict = {
         "raw_text": summary.raw_text,
         "classification": summary.classification,
@@ -89,6 +95,8 @@ def _viewer_context(summary: RunSummary) -> dict:
 
 
 def _commander_context(summary: RunSummary) -> dict:
+    """Viewer facts plus protocol, risk, insight, and per-step detail."""
+
     context = _viewer_context(summary)
     context["insight_text"] = summary.insight_text
     context["selected_protocol"] = summary.selected_protocol
@@ -112,6 +120,8 @@ def _commander_context(summary: RunSummary) -> dict:
 
 
 def build_prompt(summary: RunSummary, audience: Audience, language: str, catalog: MessageCatalog | None = None) -> str:
+    """Compose the grounded report-writer prompt for this audience and language."""
+
     context = _commander_context(summary) if audience == "commander" else _viewer_context(summary)
     audience_rules = REPORT_COMPOSE_COMMANDER_AUDIENCE_RULES if audience == "commander" else REPORT_COMPOSE_VIEWER_AUDIENCE_RULES
     tone_examples = catalog.text("orchestrator.report_tone.examples") if catalog is not None else ""

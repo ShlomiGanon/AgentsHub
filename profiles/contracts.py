@@ -1,4 +1,4 @@
-"""Profile module specification (work_plan.md §1.4)."""
+"""Profile module specification: required attributes and the loaded-profile view."""
 
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class AgentSpec:
-    """One `AGENTS` entry: `cls`, a class taking `(model: str, api_key: str | None = None)` — normally a concrete `agents.base.Agent` subclass (docs/agent_authoring.md) — and `tier`, w..."""
+    """One AGENTS entry: an Agent subclass and its core/sub model tier."""
 
     cls: "type[Agent]"
     tier: Literal["core", "sub"]
@@ -25,12 +25,16 @@ class ProfileValidationError(Exception):
     """The profile violates one or more startup contracts."""
 
     def __init__(self, failures: list[str]):
+        """Init."""
+
         self.failures = failures
         super().__init__("\n".join(failures))
 
 
 @dataclass(frozen=True)
 class StageModelPolicy:
+    """Per-stage model tier, token, timeout, and reasoning defaults."""
+
     tier: Literal["core", "sub"] = "core"
     max_output_tokens: int = 700
     timeout_seconds: float = 60.0
@@ -39,6 +43,8 @@ class StageModelPolicy:
 
 @dataclass(frozen=True)
 class OptimizationPolicy:
+    """Profile-owned concurrency, deadline, and merged-stage policy knobs."""
+
     planner_mode: Literal["legacy", "shadow", "merged"] = "legacy"
     operational_decision_mode: Literal["separate", "shadow", "merged"] = "separate"
     final_assessment_mode: Literal["separate", "low_risk_merged"] = "separate"
@@ -57,6 +63,8 @@ class OptimizationPolicy:
 
 @dataclass(frozen=True)
 class LoadedProfile:
+    """Validated profile attributes plus constructed agents and protocols."""
+
     module_path: str
     profile_name: str
     agents: tuple
@@ -84,24 +92,14 @@ class LoadedProfile:
     # defaults to no required fields for any type that doesn't declare any —
     # backward compatible with every existing profile/fixture.
     event_type_required_fields: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
-    # Optional per-profile-event-type English description declarations
-    # (docs/bar_improves.md); defaults to no description for any type that
-    # doesn't declare one — backward compatible with every existing
-    # profile/fixture, and with a profile file's own hash/validation
-    # unaffected when omitted entirely.
+    # Optional per-type English descriptions; omitted types get no description.
     event_type_descriptions: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
-    # Optional simulation declarations (docs/profile_simulations_design.md); all
-    # default to empty so every existing profile is unaffected. See
-    # profiles/simulation.py for SimulationPersona/SimulationGroup/SimulationScenario/
-    # SimulationRoster.
+    # Optional simulation declarations; empty means the profile has none.
     simulation_users: tuple = ()
     simulation_groups: tuple = ()
     simulations: tuple = ()
     simulation_rosters: tuple = ()
-    # Optional port for the simulation-mode bot process (docs/bot_simulation_mode_design.md),
-    # mirroring `api_port`'s shape exactly. None (the default) means a profile hasn't opted
-    # into that mechanism — the admin simulator's message-kind steps then have no bot-side
-    # proxy target and the feature is simply unavailable, not broken.
+    # Optional simulation-mode bot port; None means that process is never started.
     simulator_port: int | None = None
     # Optional profile-supplied describer for the resource-unavailable mechanism
     # (protocols/executor.py's `ResourceUnavailable` signal, consumed in
@@ -114,9 +112,7 @@ class LoadedProfile:
     # hasn't supplied one -- core then falls back to its own generic (English) phrasing rather
     # than crashing.
     resource_unavailable_description: "Callable[[str, str, str, object], tuple[str, str]] | None" = None
-    # Optional admin-panel table declarations (docs/Admin_Tables_Plan.md) -- profiles.admin_tables
-    # .AdminTable entries. Defaults to empty so every existing profile is unaffected; a profile
-    # that declares none simply gets no /admin/tables/<key> pages at all.
+    # Optional admin-panel tables; empty means the profile has no /admin/tables pages.
     admin_tables: tuple = ()
 
 REQUIRED_PROFILE_ATTRS = (
@@ -180,14 +176,20 @@ def protocol_missing_attrs(protocol: Any) -> list[str]:
 
 @dataclass(frozen=True)
 class AreaRegistry:
+    """Closed set of area names declared by one loaded profile."""
+
     areas: tuple[str, ...]
 
     def is_valid(self, area: str) -> bool:
+        """True when `area` is one of this profile's declared areas."""
+
         return area in self.areas
 
 
 @dataclass(frozen=True)
 class EventTypeRegistry:
+    """Closed event-type set plus required fields and optional descriptions."""
+
     types: tuple[str, ...]
     # Required-field declarations, keyed by event type — profile-defined types
     # come from the profile's own EVENT_TYPE_REQUIRED_FIELDS; `UNCLASSIFIED_TYPE`
@@ -195,21 +197,18 @@ class EventTypeRegistry:
     # not profile-declared. Deliberately NOT keyed on `HUMAN_ACTIVATION_TYPE` —
     # it is a source label, not a type with fields of its own.
     required_fields: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
-    # Optional English descriptions, keyed by event type — profile-defined
-    # types come from the profile's own EVENT_TYPE_DESCRIPTIONS
-    # (docs/bar_improves.md's follow-up: event-type descriptions previously
-    # had no structural home, so classification only ever saw bare type
-    # names). Defaults to empty, backward compatible with every existing
-    # profile/fixture. `UNCLASSIFIED_TYPE` may never have one — a profile
-    # attempting to declare it fails validation (`profiles.loader.
-    # validate_profile`), the same rule already applied to
-    # `EVENT_TYPE_REQUIRED_FIELDS`.
+    # Optional English descriptions so classification sees more than bare type names.
+    # UNCLASSIFIED_TYPE may never have one; validate_profile rejects that declaration.
     descriptions: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
 
     def is_valid(self, event_type: str) -> bool:
+        """True when `event_type` is in this profile's closed type set."""
+
         return event_type in self.types
 
     def required_fields_for(self, event_type: str | None) -> tuple[str, ...]:
+        """Required extracted fields for this type, or empty when unrestricted."""
+
         if event_type is None:
             return ()
         # UNCLASSIFIED_TYPE's required fields are fixed here, not read from

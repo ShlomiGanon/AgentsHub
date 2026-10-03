@@ -1,5 +1,4 @@
-"""`profiles/response_team.py`'s real `ADMIN_TABLES` wiring (docs/Admin_Tables_Plan.md phases
-2, 5, 8) -- drones, standby-squad attendance, and friendly forces, end to end through the Flask
+"""`profiles/response_team.py`'s real `ADMIN_TABLES` wiring -- drones, standby-squad attendance, and friendly forces, end to end through the Flask
 admin routes against the profile's own real stores. The generic mechanism itself (rendering,
 form validation, CSRF) is already covered by tests/test_admin_tables.py against a fake table;
 this file only proves the real wrappers/cascades for this profile's three tables."""
@@ -28,6 +27,7 @@ ADMIN_PASSWORD = "test-admin-password"
 
 @pytest.fixture
 def _admin_env(monkeypatch):
+    """Admin env."""
     monkeypatch.setenv("ADMIN_USERNAME", ADMIN_USERNAME)
     monkeypatch.setenv("ADMIN_PASSWORD", ADMIN_PASSWORD)
     monkeypatch.setenv("ADMIN_SESSION_SECRET", "test-admin-session-secret")
@@ -57,6 +57,7 @@ def _rt_ctx(tmp_path, teardown_ctx):
 
 
 def _login(client):
+    """Login."""
     client.post("/admin/login", data={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD}, follow_redirects=False)
     setup = client.get("/admin/acting-identity")
     match = re.search(r'name="csrf_token" value="([^"]+)"', setup.get_data(as_text=True))
@@ -68,6 +69,7 @@ def _login(client):
 
 
 def _csrf_token(client):
+    """Csrf token."""
     resp = client.get("/admin/")
     match = re.search(r'name="csrf_token" value="([^"]+)"', resp.get_data(as_text=True))
     return match.group(1)
@@ -99,6 +101,7 @@ def _insert_test_drone(store, *, status="ready"):
 
 
 def test_drone_battery_and_area_edit_is_immediately_visible_to_the_real_tool(tmp_path, teardown_ctx, _admin_env):
+    """Drone battery and area edit is immediately visible to the real tool."""
     ctx = _rt_ctx(tmp_path, teardown_ctx)
     surveillance = ctx.deps.registry.get("surveillance_agent")
     drone_id = _insert_test_drone(surveillance.surveillance_store)
@@ -123,6 +126,7 @@ def test_drone_battery_and_area_edit_is_immediately_visible_to_the_real_tool(tmp
 
 
 def test_drone_status_edit_away_from_in_flight_aborts_the_linked_mission(tmp_path, teardown_ctx, _admin_env):
+    """Drone status edit away from in flight aborts the linked mission."""
     ctx = _rt_ctx(tmp_path, teardown_ctx)
     surveillance = ctx.deps.registry.get("surveillance_agent")
     store = surveillance.surveillance_store
@@ -153,6 +157,7 @@ def test_drone_status_edit_away_from_in_flight_aborts_the_linked_mission(tmp_pat
 
 
 def test_drone_edit_rejects_in_flight_status_with_a_nonexistent_mission_id(tmp_path, teardown_ctx, _admin_env):
+    """Drone edit rejects in flight status with a nonexistent mission id."""
     ctx = _rt_ctx(tmp_path, teardown_ctx)
     surveillance = ctx.deps.registry.get("surveillance_agent")
     store = surveillance.surveillance_store
@@ -202,6 +207,7 @@ def _open_roster_and_cycle(store, *, pending: bool):
 
 
 def test_attendance_reason_edit_writes_through(tmp_path, teardown_ctx, _admin_env):
+    """Attendance reason edit writes through."""
     ctx = _rt_ctx(tmp_path, teardown_ctx)
     roster = ctx.deps.registry.get("roster_agent")
     identity, received_at = _open_roster_and_cycle(roster.status_store, pending=False)
@@ -227,10 +233,11 @@ def test_attendance_reason_edit_writes_through(tmp_path, teardown_ctx, _admin_en
 
 
 def test_attendance_approval_status_edit_is_immediately_visible_to_report_team_availability(tmp_path, teardown_ctx, _admin_env):
+    """Attendance approval status edit is immediately visible to report team availability."""
     ctx = _rt_ctx(tmp_path, teardown_ctx)
     roster = ctx.deps.registry.get("roster_agent")
     # A response received AFTER the cycle deadline is auto-stamped "pending", giving the
-    # admin approval edit something real to change (docs/Admin_Tables_Plan.md section 2).
+    # Admin approval edit something real to change.
     identity, received_at = _open_roster_and_cycle(roster.status_store, pending=True)
     response = roster.status_store.record_response(
         telegram_identity=identity, source_message_id=f"msg-{uuid.uuid4().hex[:8]}", availability="unavailable",
@@ -259,6 +266,7 @@ def test_attendance_approval_status_edit_is_immediately_visible_to_report_team_a
 
 
 def test_force_dispatch_status_edit_is_immediately_visible_to_the_list_tool(tmp_path, teardown_ctx, _admin_env):
+    """Force dispatch status edit is immediately visible to the list tool."""
     ctx = _rt_ctx(tmp_path, teardown_ctx)
     forces = ctx.deps.registry.get("neighboring_forces_agent")
     # Inserted directly via the store (bypassing dispatch_neighboring_force's own busy-window

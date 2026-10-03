@@ -13,6 +13,7 @@ import profiles.response_team as rt
 
 
 def _neighboring_forces_agent(tmp_path, monkeypatch):
+    """Neighboring forces agent."""
     db_path = str(tmp_path / "response_team.db")
     monkeypatch.setattr(rt, "DB_PATH", db_path)
     # `dispatch_db_path` is a class attribute bound at class-definition time (the same pattern
@@ -44,6 +45,7 @@ def _seed_available_member(agent, identity, name):
 
 
 def test_dispatch_neighboring_force_succeeds_within_the_pool(tmp_path, monkeypatch):
+    """Dispatch neighboring force succeeds within the pool."""
     agent = _neighboring_forces_agent(tmp_path, monkeypatch)
 
     result = agent.dispatch_neighboring_force(kind="police", target_area="east_gate", unit_count=2)
@@ -53,6 +55,7 @@ def test_dispatch_neighboring_force_succeeds_within_the_pool(tmp_path, monkeypat
 
 
 def test_dispatch_neighboring_force_signals_resource_unavailable_once_the_pool_is_exhausted(tmp_path, monkeypatch):
+    """Dispatch neighboring force signals resource unavailable once the pool is exhausted."""
     agent = _neighboring_forces_agent(tmp_path, monkeypatch)
     agent.dispatch_neighboring_force(kind="police", target_area="east_gate", unit_count=2)
 
@@ -68,6 +71,7 @@ def test_dispatch_neighboring_force_signals_resource_unavailable_once_the_pool_i
 
 
 def test_dispatch_neighboring_force_pool_is_tracked_per_kind_independently(tmp_path, monkeypatch):
+    """Dispatch neighboring force pool is tracked per kind independently."""
     agent = _neighboring_forces_agent(tmp_path, monkeypatch)
     agent.dispatch_neighboring_force(kind="police", target_area="east_gate", unit_count=2)
 
@@ -81,6 +85,7 @@ def test_dispatch_neighboring_force_pool_is_tracked_per_kind_independently(tmp_p
 def test_dispatch_neighboring_force_unit_stays_busy_after_arrival_not_just_en_route(tmp_path, monkeypatch):
     # Fix (d): capacity is checked against dispatched_at + FORCE_BUSY_SECONDS, regardless of
     # the dispatch's own en_route/arrived status -- arriving on scene doesn't free the unit.
+    """Dispatch neighboring force unit stays busy after arrival not just en route."""
     agent = _neighboring_forces_agent(tmp_path, monkeypatch)
     long_ago = datetime.now(timezone.utc) - timedelta(seconds=1)
     # A tiny ETA (same-area dispatch) means this record is already "arrived" by the time we
@@ -98,6 +103,7 @@ def test_dispatch_neighboring_force_unit_stays_busy_after_arrival_not_just_en_ro
 
 
 def test_dispatch_neighboring_force_unit_frees_up_after_the_busy_window_elapses(tmp_path, monkeypatch):
+    """Dispatch neighboring force unit frees up after the busy window elapses."""
     agent = _neighboring_forces_agent(tmp_path, monkeypatch)
     long_ago = datetime.now(timezone.utc) - timedelta(seconds=rt.FORCE_BUSY_SECONDS + 60)
     agent.dispatch_store.dispatch(
@@ -115,6 +121,7 @@ def test_dispatch_neighboring_force_unit_frees_up_after_the_busy_window_elapses(
 
 
 def test_dispatch_neighboring_force_squad_succeeds_when_enough_members_are_available(tmp_path, monkeypatch):
+    """Dispatch neighboring force squad succeeds when enough members are available."""
     agent = _neighboring_forces_agent(tmp_path, monkeypatch)
     _seed_available_member(agent, "9000000000000001", "Eli")
     _seed_available_member(agent, "9000000000000002", "Danny")
@@ -126,13 +133,14 @@ def test_dispatch_neighboring_force_squad_succeeds_when_enough_members_are_avail
 
 
 def test_dispatch_neighboring_force_squad_signals_resource_unavailable_when_too_few_members(tmp_path, monkeypatch):
+    """Dispatch neighboring force squad signals resource unavailable when too few members."""
     agent = _neighboring_forces_agent(tmp_path, monkeypatch)
     _seed_available_member(agent, "9000000000000001", "Eli")
 
     result = agent.dispatch_neighboring_force(kind="squad", target_area="east_orchards", unit_count=2)
 
     # agents/neighboring_forces_agent.py's shared dispatch_neighboring_force always lowercases
-    # kind_norm for this prefix (docs/Admin_Tables_Plan.md section 3.3's extracted base class).
+    # Kind_norm for this prefix.
     assert "squad dispatch failed" in result
     signal = agent.take_resource_unavailable_signal()
     assert signal is not None
@@ -143,6 +151,7 @@ def test_dispatch_neighboring_force_squad_signals_resource_unavailable_when_too_
 
 
 def test_dispatch_neighboring_force_squad_signals_when_no_members_are_registered_at_all(tmp_path, monkeypatch):
+    """Dispatch neighboring force squad signals when no members are registered at all."""
     agent = _neighboring_forces_agent(tmp_path, monkeypatch)
 
     result = agent.dispatch_neighboring_force(kind="squad", target_area="east_orchards", unit_count=1)
@@ -153,6 +162,7 @@ def test_dispatch_neighboring_force_squad_signals_when_no_members_are_registered
 
 
 def test_dispatch_neighboring_force_still_rejects_an_unrecognized_kind(tmp_path, monkeypatch):
+    """Dispatch neighboring force still rejects an unrecognized kind."""
     agent = _neighboring_forces_agent(tmp_path, monkeypatch)
 
     result = agent.dispatch_neighboring_force(kind="helicopter", target_area="east_gate", unit_count=1)
@@ -167,42 +177,56 @@ def test_dispatch_neighboring_force_still_rejects_an_unrecognized_kind(tmp_path,
 
 
 class _FakeSurveillanceStore:
+    """FakeSurveillanceStore."""
     def __init__(self, cameras, drones):
+        """Initialize this test helper."""
         self._cameras = cameras
         self._drones = drones
 
     def list_cameras(self, area=None):
+        """List cameras."""
         return [c for c in self._cameras if area is None or c["area"] == area]
 
     def list_drones(self, status=None):
+        """List drones."""
         return [d for d in self._drones if status is None or d["status"] == status]
 
 
 class _FakeRosterStore:
+    """FakeRosterStore."""
     def __init__(self, snapshot):
+        """Initialize this test helper."""
         self._snapshot = snapshot
 
     def availability_snapshot(self, as_of):
+        """Availability snapshot."""
         return self._snapshot
 
 
 class _FakeDispatchStore:
+    """FakeDispatchStore."""
     def __init__(self, dispatches):
+        """Initialize this test helper."""
         self._dispatches = dispatches
 
     def list_dispatches(self, status=None):
+        """List dispatches."""
         return [d for d in self._dispatches if status is None or d.get("status") == status]
 
 
 class _FakeRegistry:
+    """FakeRegistry."""
     def __init__(self, agents):
+        """Initialize this test helper."""
         self._agents = agents
 
     def get(self, name):
+        """Get."""
         return self._agents[name]
 
 
 def _fake_registry(cameras=(), drones=(), roster_snapshot=(), dispatches=()):
+    """Fake registry."""
     surveillance_agent = type("S", (), {"surveillance_store": _FakeSurveillanceStore(cameras, drones)})()
     roster_agent = type("R", (), {"status_store": _FakeRosterStore(roster_snapshot)})()
     neighboring_forces_agent = type("N", (), {"dispatch_store": _FakeDispatchStore(dispatches)})()
@@ -218,6 +242,7 @@ _JUST_DISPATCHED = _NOW.isoformat()
 
 
 def test_find_resource_alternatives_reports_cameras_covering_the_area():
+    """Find resource alternatives reports cameras covering the area."""
     registry = _fake_registry(cameras=[{"camera_id": "CAM-01", "area": "east_gate", "status": "active"}])
 
     result = rt._find_resource_alternatives("east_gate", registry)
@@ -227,6 +252,7 @@ def test_find_resource_alternatives_reports_cameras_covering_the_area():
 
 
 def test_find_resource_alternatives_reports_no_cameras_when_none_cover_the_area():
+    """Find resource alternatives reports no cameras when none cover the area."""
     registry = _fake_registry(cameras=[{"camera_id": "CAM-01", "area": "east_gate", "status": "active"}])
 
     result = rt._find_resource_alternatives("old_public_building", registry)
@@ -236,6 +262,7 @@ def test_find_resource_alternatives_reports_no_cameras_when_none_cover_the_area(
 
 
 def test_find_resource_alternatives_reports_ready_drone_count():
+    """Find resource alternatives reports ready drone count."""
     registry = _fake_registry(drones=[{"drone_id": "D1", "status": "ready"}, {"drone_id": "D2", "status": "in_flight"}])
 
     result = rt._find_resource_alternatives("east_gate", registry)
@@ -244,6 +271,7 @@ def test_find_resource_alternatives_reports_ready_drone_count():
 
 
 def test_find_resource_alternatives_reports_available_roster_members():
+    """Find resource alternatives reports available roster members."""
     registry = _fake_registry(roster_snapshot=[
         {"full_name": "Eli", "availability": "available"},
         {"full_name": "Danny", "availability": "unavailable"},
@@ -256,6 +284,7 @@ def test_find_resource_alternatives_reports_available_roster_members():
 
 
 def test_find_resource_alternatives_reports_force_kinds_with_remaining_capacity():
+    """Find resource alternatives reports force kinds with remaining capacity."""
     registry = _fake_registry(dispatches=[
         {"force_kind": "police", "unit_count": 2, "status": "en_route", "dispatched_at": _JUST_DISPATCHED},
         {"force_kind": "ambulance", "unit_count": 1, "status": "en_route", "dispatched_at": _JUST_DISPATCHED},
@@ -269,6 +298,7 @@ def test_find_resource_alternatives_reports_force_kinds_with_remaining_capacity(
 
 
 def test_find_resource_alternatives_ignores_a_dispatch_outside_the_busy_window():
+    """Find resource alternatives ignores a dispatch outside the busy window."""
     long_ago = (_NOW - timedelta(seconds=rt.FORCE_BUSY_SECONDS + 60)).isoformat()
     registry = _fake_registry(dispatches=[
         {"force_kind": "police", "unit_count": 2, "status": "arrived", "dispatched_at": long_ago},
@@ -280,6 +310,7 @@ def test_find_resource_alternatives_ignores_a_dispatch_outside_the_busy_window()
 
 
 def test_describe_resource_unavailable_returns_a_hebrew_fact_and_alternatives():
+    """Describe resource unavailable returns a hebrew fact and alternatives."""
     registry = _fake_registry(cameras=[{"camera_id": "CAM-01", "area": "east_gate", "status": "active"}])
 
     fact, alternatives = rt._describe_resource_unavailable("drone", "east_gate", "no units ready", registry)
@@ -291,6 +322,7 @@ def test_describe_resource_unavailable_returns_a_hebrew_fact_and_alternatives():
 
 
 def test_describe_resource_unavailable_replaces_the_english_drone_fleet_reason():
+    """Describe resource unavailable replaces the english drone fleet reason."""
     registry = _fake_registry()
 
     fact, _alternatives = rt._describe_resource_unavailable(
@@ -305,6 +337,7 @@ def test_describe_resource_unavailable_replaces_the_english_drone_fleet_reason()
 
 
 def test_dispatch_squad_wraps_kind_squad(tmp_path, monkeypatch):
+    """Dispatch squad wraps kind squad."""
     agent = _neighboring_forces_agent(tmp_path, monkeypatch)
     result = agent.dispatch_squad(target_area="east_orchards", unit_count=1)
 

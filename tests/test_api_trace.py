@@ -12,12 +12,14 @@ from tests.api_fakes import (
 
 
 def _close(ctx):
+    """Close."""
     ctx.queue.stop()
     ctx.scheduler.stop()
     ctx.deps.persistence.close()
 
 
 def test_commander_receives_rendered_ordered_trace_without_raw_model_io(tmp_path, monkeypatch):
+    """Commander receives rendered ordered trace without raw model io."""
     monkeypatch.setattr(base_config, "DEEP_DEBUG", True)
     ctx = build_context(tmp_path)
     try:
@@ -62,6 +64,7 @@ def test_commander_receives_rendered_ordered_trace_without_raw_model_io(tmp_path
 
 
 def test_viewer_cannot_read_live_trace(tmp_path, monkeypatch):
+    """Viewer cannot read live trace."""
     monkeypatch.setattr(base_config, "DEEP_DEBUG", True)
     ctx = build_context(tmp_path)
     try:
@@ -77,6 +80,7 @@ def test_viewer_cannot_read_live_trace(tmp_path, monkeypatch):
 
 
 def test_trace_feed_is_hidden_when_deep_debug_is_off(tmp_path, monkeypatch):
+    """Trace feed is hidden when deep debug is off."""
     monkeypatch.setattr(base_config, "DEEP_DEBUG", False)
     ctx = build_context(tmp_path)
     try:
@@ -90,6 +94,7 @@ def test_trace_feed_is_hidden_when_deep_debug_is_off(tmp_path, monkeypatch):
 
 
 def test_trace_cursor_is_exclusive(tmp_path, monkeypatch):
+    """Trace cursor is exclusive."""
     monkeypatch.setattr(base_config, "DEEP_DEBUG", True)
     ctx = build_context(tmp_path)
     try:

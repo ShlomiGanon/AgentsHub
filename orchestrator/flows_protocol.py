@@ -1,41 +1,73 @@
-"""Protocol plan execution and step continuation."""
+"""Protocol selection, plan execution, and step continuation."""
 
 import functools
 import json
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
+from agents import authenticated_request_identity
 from history import StepExecutionEnvelope, record_event_state, record_step_executions
-from orchestrator.holds import create_event_data_hold
-from orchestrator.reasoning import build_insight
+from orchestrator.flows_execution import (
+    FlowDeps,
+    FlowResult,
+    _VERDICT_TO_OUTCOME,
+    _deadline_failure,
+    _log_event_outcome,
+    _record_outcome_with_report,
+    call_execute_steps,
+    call_finish_protocol_assessment,
+)
+from orchestrator.holds import (
+    UNRESOLVED_FIELD,
+    create_approval_hold,
+    create_clarification_hold,
+    create_event_data_hold,
+    determine_approval_hold,
+)
 from orchestrator.reasoning import (
     OrchestrationParseError,
+    ProtocolSelectionResult,
+    RiskAssessment,
     assess_final_once,
-    formulate_tasks,
+    assess_risk,
+    build_insight,
+    determine_closure,
     formulate_event_data_question,
+    formulate_tasks,
     judge_success,
+    look_up_precedent,
+    make_operational_decision,
     rewrite_task,
+    select_protocol,
 )
 from orchestrator.situational_picture import compose_picture_from_step_outcomes
-from protocols import EVENT_DATA_FIELDS, Step, StepOutcome
-from agents import authenticated_request_identity
+from profiles import UNCLASSIFIED_TYPE
+from protocols import CriticalityLevel, EVENT_DATA_FIELDS, Step, StepOutcome
 from tools import event_id_context, protocol_context
 from tools.log_events import (
     event_correction_recorded,
     final_assessment_invalid,
     final_verdict,
+    hold_created,
     insight_generated,
+    operational_decision_invalid,
+    precedent_closure,
+    protocol_selection,
     protocol_waiting_for_event_data,
     resource_unavailable_alert,
     resource_unavailable_description_failed,
+    risk_assessed,
     synthesis_failed,
 )
 
 if TYPE_CHECKING:
-    from orchestrator.reasoning import InsightsAgent, MainAgent
+    from orchestrator.holds import HoldReason
+    from orchestrator.reasoning import InsightsAgent, MainAgent, OperationalDecision
     from protocols import Protocol, ResourceUnavailable
 
-from orchestrator.flows import FlowDeps, FlowResult, _VERDICT_TO_OUTCOME, _deadline_failure, _log_event_outcome, _record_outcome_with_report
+
+# --- formulate and execute ---
+
 
 def _run_protocol(
     deps: FlowDeps,
@@ -160,35 +192,9 @@ def _persist_step_outcomes(
     steps: tuple[Step, ...],
     outcomes: tuple[StepOutcome, ...],
 ) -> None:
-    """Match each outcome back to the step it belongs to, by `step_id` where
-    one exists. `outcome.step` is not necessarily `is`-identical to its
-    entry in `steps` — this function receives the *original* `steps`, but
-    `_execute_protocol_plan` runs a derived copy where any step with a
-    non-empty `required_event_fields` has its `task_text` rewritten first
-    (the "Current validated event data JSON" injection, above) — so an
-    outcome's step can differ from the original by value once that
-    injection applies.
+    """Persist each outcome against its original step, matching by step_id or position."""
 
-    A previous version of this function fell back to matching by full
-    value-equality (`step == outcome.step`) whenever a step's `step_id` was
-    empty, on the unstated assumption that a step_id-less step's fields
-    never get mutated after formulation — true only by accident, and it
-    broke the moment a step_id-less step also had a non-empty
-    `required_event_fields`.
-
-    Every step's `step_id` is empty only on one production path today: the
-    legacy AGENT:/TASK: fallback in `orchestrator.reasoning.formulate_tasks`
-    (the JSON formulation path always assigns each step a unique, non-empty
-    id, and reloading a persisted plan via `_step_from_row` always
-    substitutes `str(step_index)` for an absent one) — and a legacy-parsed
-    plan, having no step_id or depends_on on any step, can only ever run
-    through `protocols.executor.execute_steps`' plain sequential branch
-    (never the dependency-graph one), which is guaranteed to produce
-    `outcomes` in exactly the same order and position as `steps`, truncated
-    at most (a blocked or failed run stops partway through) but never
-    reordered or skipped over. So when `step_id` is empty, this outcome's
-    own position *is* its step's position — no value comparison needed, and
-    nothing about it changes if the step was mutated in the meantime."""
+    # Empty step_id happens only on the legacy sequential AGENT:/TASK: path, so position is identity.
 
     index_by_step_id = {step.step_id: index for index, step in enumerate(steps) if step.step_id}
     envelopes = []
@@ -227,8 +233,6 @@ def _execute_protocol_plan(
     event: dict | None = None,
 ) -> FlowResult:
     """Run persist-execute-assess for an already formulated or rebound plan."""
-
-    import orchestrator.flows as _host
 
     if event is None:
         event = deps.persistence.fetch_event(event_id)
@@ -274,7 +278,7 @@ def _execute_protocol_plan(
         for step in steps
     )
     with event_id_context(event_id), protocol_context(protocol.name), authenticated_request_identity(event["sender_identity"]):
-        run_result = _host.execute_steps(
+        run_result = call_execute_steps(
             list(execution_steps),
             agents_by_name,
             deps.settings_store,
@@ -343,7 +347,7 @@ def _execute_protocol_plan(
         )
         return FlowResult(event_id, "waiting_for_drone_selection", recall_selection)
 
-    return _host._finish_protocol_assessment(
+    return call_finish_protocol_assessment(
         deps, event_id, main_agent, insights_agent, protocol, run_result.step_outcomes, precedent_matches,
         enforce_deadline=not resumed,
     )
@@ -351,20 +355,7 @@ def _execute_protocol_plan(
 def _finish_with_resource_unavailable(
     deps: FlowDeps, event_id: str, resource: "ResourceUnavailable",
 ) -> FlowResult:
-    """The resource-unavailable outcome. Two strictly separate texts, both grounded in
-    `resource` alone, never in each other:
-
-    - `fact_sentence`: what happened, in plain already-localized language (the profile's own
-      `resource_unavailable_description` hook translates `resource`, which is why core never
-      hardcodes "drone"/"east_gate"-style identifiers into user-facing text itself). Fed to the
-      *reporter's own* report composer as an ordinary input fact (`resource_unavailable_fact`
-      on `RunSummary`) — reaches the reporter through the normal composed reply (or its
-      deterministic fallback), for every audience. Never contains alternatives.
-    - `commander_alert_text`: the fact plus concrete alternatives, persisted on its own column,
-      read only by the separate `resource_unavailable_alert` notification (api/routes.py),
-      delivered only to each commander's own private chat (bot/interactions.py). Never part of
-      `report_text`, never reaches the reporter's own chat, never model-composed.
-    """
+    """Record handled_resource_unavailable with a reporter fact and a commander-only alert."""
 
     fact_sentence = f"{resource.resource_kind} was unavailable for {resource.area}: {resource.reason}"
     alternatives = ""
@@ -494,3 +485,274 @@ def _finish_protocol_assessment(
     final_verdict(event_id=event_id, verdict=verdict.verdict, reasoning=verdict.reasoning)
     _log_event_outcome(event_id, outcome, reasoning=verdict.reasoning)
     return FlowResult(event_id, outcome, verdict.reasoning)
+
+
+# --- required fields and risk / approval resume ---
+
+
+def _apply_required_fields_gate(
+    deps: FlowDeps, event_id: str, main_agent: "MainAgent", classification: str
+) -> FlowResult | None:
+    """Hold for missing event-type required fields, or return None when the gate is already satisfied."""
+
+    required = deps.event_type_registry.required_fields_for(classification)
+    if not required:
+        return None
+
+    event = deps.persistence.fetch_event(event_id)
+    missing = tuple(name for name in required if not event.get(name))
+    if not missing:
+        return None
+
+    conversation_messages: tuple[dict, ...] = ()
+    if event.get("conversation_id") and deps.conversation_history_turns > 0:
+        conversation_messages = tuple(
+            deps.persistence.fetch_conversation_messages(event["conversation_id"], deps.conversation_history_turns * 2)
+        )
+
+    question = formulate_event_data_question(main_agent, event, missing, conversation_messages, deps.message_catalog)
+
+    if event.get("conversation_id") and deps.conversation_history_turns > 0:
+        deps.persistence.append_conversation_message(
+            event["conversation_id"], "assistant", question,
+            ttl_hours=deps.conversation_history_ttl_hours, max_turns=deps.conversation_history_turns,
+            event_id=event_id,
+        )
+
+    # waiting_step_ids=() — no protocol selected yet, so resume can tell this hold from a per-step one.
+    create_event_data_hold(deps.persistence, event_id, missing, question, ())
+    hold_created(
+        hold_kind="event_data", event_id=event_id, missing_fields=missing, classification=classification,
+    )
+    return FlowResult(event_id, "waiting_for_event_data", question)
+
+
+def _continue_after_required_fields(
+    deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent",
+    raw_text: str, classification: str,
+    operational_decision: "OperationalDecision | None" = None,
+) -> FlowResult:
+    """Continue extraction after required fields are present, shared by the fresh and resumed paths."""
+
+    if classification == UNCLASSIFIED_TYPE:
+        create_clarification_hold(deps.persistence, event_id, raw_text)
+        record_event_state(deps.persistence, event_id, {"clarification_held": True, "clarification_unresolved_field": UNRESOLVED_FIELD})
+        hold_created(
+            hold_kind="clarification", event_id=event_id, unresolved_field=UNRESOLVED_FIELD,
+        )
+        return FlowResult(event_id, "held_for_clarification")
+
+    return continue_from_risk_assessment(
+        deps, event_id, main_agent, insights_agent, operational_decision=operational_decision,
+    )
+
+
+def _look_up_precedent_if_possible(deps: FlowDeps, event_id: str, event: dict) -> tuple:
+    """Comparable prior events for this classification and area, or empty if lookup cannot run."""
+
+    if event["classification"] is None or event["area"] is None:
+        return ()
+    # Fall back to received_at so an unresolved occurred_at does not skip precedent entirely.
+    anchor_time = event["occurred_at"] or event["received_at"]
+    return look_up_precedent(deps.history_query_service, event_id, event["classification"], event["area"], anchor_time)
+
+
+def continue_from_risk_assessment(
+    deps: FlowDeps,
+    event_id: str,
+    main_agent: "MainAgent",
+    insights_agent: "InsightsAgent",
+    originated_from_commander: bool | None = None,
+    selected_protocol: "Protocol | None" = None,
+    operational_decision: "OperationalDecision | None" = None,
+) -> FlowResult:
+    """Run risk, protocol selection, holds, and execution from a persisted event."""
+
+    deadline_failure = _deadline_failure(deps, event_id, "risk_assessment")
+    if deadline_failure is not None:
+        return deadline_failure
+    event = deps.persistence.fetch_event(event_id)
+    if originated_from_commander is None:
+        # Authorization belongs to the original submitter, not a later hold answerer.
+        originated_from_commander = event.get("sender_permission_level") == "commander"
+    raw_text, classification, area = event["raw_text"], event["classification"], event["area"]
+    description, severity = event["description"], event["severity"]
+
+    if selected_protocol is not None:
+        risk_level = "high" if selected_protocol.criticality == CriticalityLevel.HIGH else "low"
+        risk_assessment = RiskAssessment(
+            level=risk_level,
+            score=0.8 if risk_level == "high" else 0.2,
+            reason="Deterministic button protocol selection",
+        )
+        selection = ProtocolSelectionResult(
+            status="selected",
+            protocol_name=selected_protocol.name,
+            candidate_names=(selected_protocol.name,),
+            reason="Deterministic button protocol mapping",
+        )
+    else:
+        operational_mode = deps.optimization_policy.operational_decision_mode
+        combined_decision = operational_decision if operational_mode == "merged" else None
+        if combined_decision is None and operational_mode in {"shadow", "merged"}:
+            try:
+                combined_decision = make_operational_decision(
+                    main_agent, raw_text, classification, area, description, severity,
+                    deps.protocol_set.all(), deps.settings_store.get_risk_threshold(),
+                    preferred_agent_hint=deps.preferred_agent_hint,
+                )
+            except OrchestrationParseError as exc:
+                operational_decision_invalid(mode=operational_mode, reason=str(exc))
+                if operational_mode == "merged":
+                    _record_outcome_with_report(deps, event_id, "failed", failure_reason=str(exc))
+                    return FlowResult(event_id, "failed", str(exc))
+
+        try:
+            risk_assessment = (
+                combined_decision.risk
+                if operational_mode == "merged" and combined_decision is not None
+                else assess_risk(
+                    main_agent, classification, area, description, severity,
+                    deps.settings_store.get_risk_threshold(),
+                )
+            )
+        except OrchestrationParseError as exc:
+            _record_outcome_with_report(deps, event_id, "failed", failure_reason=str(exc))
+            _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="risk_assessment")
+            return FlowResult(event_id, "failed", str(exc))
+        risk_assessed(
+            event_id=event_id, risk_level=risk_assessment.level,
+            risk_score=risk_assessment.score, risk_reason=risk_assessment.reason,
+        )
+
+        deadline_failure = _deadline_failure(deps, event_id, "protocol_selection")
+        if deadline_failure is not None:
+            return deadline_failure
+        try:
+            selection = (
+                combined_decision.selection
+                if operational_mode == "merged" and combined_decision is not None
+                else select_protocol(
+                    main_agent, raw_text, classification, area, description, deps.protocol_set.all(),
+                    risk_assessment.level, preferred_agent_hint=deps.preferred_agent_hint,
+                )
+            )
+        except OrchestrationParseError as exc:
+            _record_outcome_with_report(deps, event_id, "failed", failure_reason=str(exc))
+            _log_event_outcome(event_id, "failed", failure_reason=str(exc), stage="protocol_selection")
+            return FlowResult(event_id, "failed", str(exc))
+
+    protocol_selection(
+        event_id=event_id, status=selection.status, protocol_name=selection.protocol_name,
+        candidate_names=selection.candidate_names, reason=selection.reason,
+    )
+
+    precedent_matches = _look_up_precedent_if_possible(deps, event_id, event)
+    state_updates = {
+        "risk_level": risk_assessment.level,
+        "risk_reason": risk_assessment.reason,
+    }
+    if selection.status == "selected":
+        state_updates["selected_protocol"] = selection.protocol_name
+        state_updates["protocol_reason"] = selection.reason
+    if precedent_matches:
+        state_updates["precedent_matched_event_ids"] = [precedent_match.event_id for precedent_match in precedent_matches]
+    record_event_state(deps.persistence, event_id, state_updates)
+    event.update(state_updates)
+
+    # A precedent can answer an informational report, but not a fresh attendance write.
+    precedent_closure_blocked = (
+        selection.status == "selected" and selection.protocol_name == "record_attendance_response"
+    )
+    closing_event_id = (
+        None
+        if precedent_closure_blocked
+        else determine_closure(risk_assessment.level, classification, precedent_matches)
+    )
+    precedent_closure(
+        event_id=event_id,
+        matched_event_ids=[precedent_match.event_id for precedent_match in precedent_matches],
+        closed=closing_event_id is not None,
+        closing_event_id=closing_event_id,
+    )
+    if closing_event_id is not None:
+        record_event_state(deps.persistence, event_id, {"precedent_closed_by_event_id": closing_event_id})
+        _record_outcome_with_report(deps, event_id, "closed_on_precedent")
+        _log_event_outcome(event_id, "closed_on_precedent", precedent_event_id=closing_event_id)
+        return FlowResult(event_id, "closed_on_precedent", f"closed against resolved precedent '{closing_event_id}'")
+
+    # No-match is terminal because there is no actionable hold to resolve.
+    if selection.status == "no_match":
+        _record_outcome_with_report(deps, event_id, "no_match_protocol", failure_reason=selection.reason)
+        _log_event_outcome(event_id, "no_match_protocol", reason=selection.reason)
+        return FlowResult(event_id, "no_match_protocol", selection.reason)
+
+    protocols_by_name = {protocol.name: protocol for protocol in deps.protocol_set.all()}
+    hold_reason: "HoldReason | None" = determine_approval_hold(selection, protocols_by_name, originated_from_commander)
+
+    if hold_reason is not None:
+        create_approval_hold(deps.persistence, event_id, hold_reason, selection, risk_assessment)
+        record_event_state(deps.persistence, event_id, {"approval_held": True, "approval_reason": hold_reason})
+        hold_created(hold_kind="approval", event_id=event_id, reason=hold_reason)
+        return FlowResult(event_id, "held_for_approval", hold_reason)
+
+    protocol = protocols_by_name[selection.protocol_name]
+    return _run_protocol(
+        deps, event_id, main_agent, insights_agent, protocol, precedent_matches,
+        raw_text, classification, area, description, event=event,
+    )
+
+
+def decline(deps: FlowDeps, event_id: str) -> FlowResult:
+    """Record a rejected approval hold as declined."""
+
+    _record_outcome_with_report(deps, event_id, "declined")
+    _log_event_outcome(event_id, "declined")
+    return FlowResult(event_id, "declined")
+
+
+def continue_after_approval(deps: FlowDeps, event_id: str, main_agent: "MainAgent", insights_agent: "InsightsAgent", selected_protocol_name: str) -> FlowResult:
+    """Resume execution from task formulation through protocol execution after approval."""
+
+    protocol = deps.protocol_set.get(selected_protocol_name)
+    event = deps.persistence.fetch_event(event_id)
+    precedent_matches = _look_up_precedent_if_possible(deps, event_id, event)
+
+    return _run_protocol(
+        deps, event_id, main_agent, insights_agent, protocol, precedent_matches,
+        event["raw_text"], event["classification"], event["area"], event["description"], event=event,
+    )
+
+
+def resume_after_event_data(
+    deps: FlowDeps,
+    event_id: str,
+    main_agent: "MainAgent",
+    insights_agent: "InsightsAgent",
+) -> FlowResult:
+    """Continue a run after missing event fields have been filled in."""
+
+    event = deps.persistence.fetch_event(event_id)
+
+    if event.get("selected_protocol") is None:
+        # No protocol yet — this hold came from the event-type required-fields gate.
+        return _continue_after_required_fields(
+            deps, event_id, main_agent, insights_agent, event.get("raw_text", ""), event.get("classification")
+        )
+
+    protocol = deps.protocol_set.get(event.get("selected_protocol"))
+    if protocol is None:
+        reason = "the selected protocol is no longer available"
+        _record_outcome_with_report(deps, event_id, "failed", failure_reason=reason)
+        return FlowResult(event_id, "failed", reason)
+    if protocol.direct_tool_binder is not None:
+        # Re-bind from the now-complete event; persisted step rows do not round-trip binder fields.
+        steps = protocol.direct_tool_binder(event)
+    else:
+        rows = event.get("steps", [])
+        steps = tuple(_step_from_row(row) for row in rows)
+    precedent_matches = _look_up_precedent_if_possible(deps, event_id, event)
+    return _execute_protocol_plan(
+        deps, event_id, main_agent, insights_agent, protocol, steps, precedent_matches,
+        resumed=True, event=event,
+    )

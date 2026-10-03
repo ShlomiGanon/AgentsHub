@@ -10,6 +10,7 @@ from persistence.sqlite_support import _GROUP_COLUMNS, _group_record, _normalize
 
 
 class SqliteGroupsMixin:
+    """Telegram group reads/writes for SQLitePersistence."""
     def read_group(self, chat_id: str) -> dict | None:
         """Return the telegram_groups row for this chat id, or None."""
 
@@ -40,6 +41,8 @@ class SqliteGroupsMixin:
         hour = _normalized_attendance_hour(attendance_check_hour)
 
         def _do(connection: sqlite3.Connection) -> None:
+            """Insert or update this telegram_groups binding and optional attendance fields."""
+
             try:
                 connection.execute(
                     "INSERT INTO telegram_groups (chat_id, agent_name, label, created_at, auto_register) VALUES (?, ?, ?, ?, 0) "
@@ -73,6 +76,8 @@ class SqliteGroupsMixin:
         created_at = datetime.now(timezone.utc).isoformat()
 
         def _do(connection: sqlite3.Connection) -> None:
+            """Insert an auto-registered telegram_groups row when this chat is new."""
+
             connection.execute(
                 "INSERT INTO telegram_groups (chat_id, agent_name, label, created_at, auto_register) "
                 "VALUES (?, 'main_agent', ?, ?, 1) ON CONFLICT(chat_id) DO NOTHING",
@@ -92,6 +97,8 @@ class SqliteGroupsMixin:
         created_at = datetime.now(timezone.utc).isoformat()
 
         def _do(connection: sqlite3.Connection) -> bool:
+            """Insert this telegram_groups row only when the chat id is new."""
+
             try:
                 cursor = connection.execute(
                     "INSERT INTO telegram_groups (chat_id, agent_name, label, created_at, auto_register) "
@@ -110,6 +117,8 @@ class SqliteGroupsMixin:
         """Change a telegram_groups chat_id, refusing if the new id already exists."""
 
         def _do(connection: sqlite3.Connection) -> None:
+            """Change this telegram_groups chat_id, refusing a colliding new id."""
+
             try:
                 cursor = connection.execute(
                     "UPDATE telegram_groups SET chat_id = ? WHERE chat_id = ?",
@@ -135,6 +144,8 @@ class SqliteGroupsMixin:
         """Clear auto_register on this telegram_groups row."""
 
         def _do(connection: sqlite3.Connection) -> None:
+            """Clear auto_register on this telegram_groups row."""
+
             cursor = connection.execute(
                 "UPDATE telegram_groups SET auto_register = 0 WHERE chat_id = ?",
                 (chat_id,),
@@ -153,6 +164,8 @@ class SqliteGroupsMixin:
         """Delete this telegram_groups row."""
 
         def _do(connection: sqlite3.Connection) -> None:
+            """Delete this telegram_groups row."""
+
             cursor = connection.execute("DELETE FROM telegram_groups WHERE chat_id = ?", (chat_id,))
             connection.commit()
             if cursor.rowcount == 0:

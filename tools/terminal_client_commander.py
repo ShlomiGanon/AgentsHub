@@ -44,6 +44,8 @@ class _BackgroundState:
     """Shared, single-writer-single-reader state between the background poll task and the foreground REPL loop — safe with no locking since both run as coroutines on the one asyncio ev..."""
 
     def __init__(self):
+        """Init."""
+
         self.arrived: list = []
         self.poll_error: str | None = None
 
@@ -206,6 +208,8 @@ async def _prompt_approval(deps: BotDeps, answering_identity: str, notice) -> bo
 
 
 async def _handle_holds_command(deps: BotDeps, pending_holds: list, answering_identity: str) -> None:
+    """Handle holds command."""
+
     if not pending_holds:
         print(message_catalog_for(deps).text("terminal.no_holds"))
         return
@@ -231,6 +235,8 @@ async def _run_repl(
     cursor_store: NotificationCursorStore,
     cursor_path: Path,
 ) -> None:
+    """Run repl."""
+
     await deps.api_client.start()
     conversation_id = f"terminal-commander:{test_identity}:{uuid.uuid4().hex}"
     cursor = await _initial_cursor(deps, cursor_store, cursor_path, test_identity)
@@ -313,9 +319,11 @@ async def _run_repl(
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Run the commander terminal client against a live API."""
+
     parser = argparse.ArgumentParser(
         description="Terminal stand-in for a commander's Telegram session — talks to a running `api.app` "
-        "server through the same code the real bot uses (work_plan.md §8), for manual end-to-end testing."
+        "server through the same code the real bot uses, for manual end-to-end testing."
     )
     parser.add_argument("--profile", default="profiles.response_team", help="dotted profile module path (default: profiles.response_team)")
     parser.add_argument("--identity", default="cli_tester", help="commander-level test identity to act as (default: cli_tester)")

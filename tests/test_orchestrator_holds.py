@@ -1,3 +1,5 @@
+"""Hold creation, resume, and expiry in the orchestrator."""
+
 import pytest
 
 from auth.permissions import PermissionLevel
@@ -19,6 +21,7 @@ from profiles import EventTypeRegistry
 
 
 def _protocol(name, approval_flag, *, commander_only=False, requires_confirmation=False):
+    """Protocol."""
     return Protocol(
         name=name,
         description="d",
@@ -34,6 +37,7 @@ def _protocol(name, approval_flag, *, commander_only=False, requires_confirmatio
 
 @pytest.fixture
 def store(tmp_path):
+    """Store."""
     backend = SQLitePersistence(str(tmp_path / "test.db"))
     yield backend
     backend.close()
@@ -43,6 +47,7 @@ def store(tmp_path):
 
 
 def test_flagged_protocol_not_commander_holds():
+    """Flagged protocol not commander holds."""
     selection = ProtocolSelectionResult(status="selected", protocol_name="p", reason="r")
     protocols = {"p": _protocol("p", approval_flag=True)}
 
@@ -50,6 +55,7 @@ def test_flagged_protocol_not_commander_holds():
 
 
 def test_flagged_protocol_commander_bypasses_the_flag():
+    """Flagged protocol commander bypasses the flag."""
     selection = ProtocolSelectionResult(status="selected", protocol_name="p", reason="r")
     protocols = {"p": _protocol("p", approval_flag=True)}
 
@@ -57,6 +63,7 @@ def test_flagged_protocol_commander_bypasses_the_flag():
 
 
 def test_ambiguous_not_commander_holds():
+    """Ambiguous not commander holds."""
     selection = ProtocolSelectionResult(status="ambiguous", candidate_names=("a", "b"), reason="r")
 
     assert determine_approval_hold(selection, {}, originated_from_commander=False) == "ambiguous_selection"
@@ -65,12 +72,14 @@ def test_ambiguous_not_commander_holds():
 def test_ambiguous_commander_still_holds():
     # A commander's authority bypasses the approval flag, not ambiguity —
     # there's no protocol yet for their authority to authorize.
+    """Ambiguous commander still holds."""
     selection = ProtocolSelectionResult(status="ambiguous", candidate_names=("a", "b"), reason="r")
 
     assert determine_approval_hold(selection, {}, originated_from_commander=True) == "ambiguous_selection"
 
 
 def test_unflagged_selected_protocol_never_holds():
+    """Unflagged selected protocol never holds."""
     selection = ProtocolSelectionResult(status="selected", protocol_name="p", reason="r")
     protocols = {"p": _protocol("p", approval_flag=False)}
 
@@ -95,6 +104,7 @@ def test_unflagged_selected_protocol_never_holds():
 def test_protocol_approval_policy_matrix(
     is_commander, approval_flag, commander_only, requires_confirmation, expected
 ):
+    """Protocol approval policy matrix."""
     protocol = _protocol(
         "p",
         approval_flag,
@@ -109,14 +119,17 @@ def test_protocol_approval_policy_matrix(
 
 
 def _selection():
+    """Selection."""
     return ProtocolSelectionResult(status="selected", protocol_name="dispatch_response", reason="matches")
 
 
 def _risk():
+    """Risk."""
     return RiskAssessment(score=0.8, level="high", reason="active fire")
 
 
 def test_create_and_answer_round_trip_approved(store):
+    """Create and answer round trip approved."""
     hold_id = create_approval_hold(store, "evt-1", "flagged_protocol", _selection(), _risk())
 
     [held] = store.list_held_events("approval")
@@ -132,6 +145,7 @@ def test_create_and_answer_round_trip_approved(store):
 
 
 def test_answer_rejected_decision(store):
+    """Answer rejected decision."""
     hold_id = create_approval_hold(store, "evt-1", "flagged_protocol", _selection(), _risk())
 
     result = answer_approval_hold(store, hold_id, "commander-1", PermissionLevel.COMMANDER, "rejected")
@@ -140,6 +154,7 @@ def test_answer_rejected_decision(store):
 
 
 def test_viewer_cannot_answer(store):
+    """Viewer cannot answer."""
     hold_id = create_approval_hold(store, "evt-1", "flagged_protocol", _selection(), _risk())
 
     result = answer_approval_hold(store, hold_id, "viewer-1", PermissionLevel.VIEWER, "approved")
@@ -150,12 +165,14 @@ def test_viewer_cannot_answer(store):
 
 
 def test_answering_an_unknown_hold_is_not_found(store):
+    """Answering an unknown hold is not found."""
     result = answer_approval_hold(store, "never-existed", "commander-1", PermissionLevel.COMMANDER, "approved")
 
     assert result.status == "not_found"
 
 
 def test_answering_an_already_resolved_hold_is_reported_distinctly(store):
+    """Answering an already resolved hold is reported distinctly."""
     hold_id = create_approval_hold(store, "evt-1", "flagged_protocol", _selection(), _risk())
     first = answer_approval_hold(store, hold_id, "commander-1", PermissionLevel.COMMANDER, "approved")
     second = answer_approval_hold(store, hold_id, "commander-2", PermissionLevel.COMMANDER, "approved")
@@ -168,10 +185,12 @@ def test_answering_an_already_resolved_hold_is_reported_distinctly(store):
 
 
 def _ambiguous_selection():
+    """Ambiguous selection."""
     return ProtocolSelectionResult(status="ambiguous", candidate_names=("status_check", "dispatch_response"), reason="both fit")
 
 
 def test_a_valid_candidate_name_resolves_and_records_the_selection(store):
+    """A valid candidate name resolves and records the selection."""
     hold_id = create_approval_hold(store, "evt-1", "ambiguous_selection", _ambiguous_selection(), _risk())
     [held] = store.list_held_events("approval")
     assert held["selected_protocol_name"] is None  # nothing chosen yet
@@ -184,6 +203,7 @@ def test_a_valid_candidate_name_resolves_and_records_the_selection(store):
 
 
 def test_a_name_outside_the_holds_own_candidates_is_rejected(store):
+    """A name outside the holds own candidates is rejected."""
     hold_id = create_approval_hold(store, "evt-1", "ambiguous_selection", _ambiguous_selection(), _risk())
 
     result = answer_approval_hold(store, hold_id, "commander-1", PermissionLevel.COMMANDER, "not_a_real_candidate")
@@ -195,6 +215,7 @@ def test_a_name_outside_the_holds_own_candidates_is_rejected(store):
 
 
 def test_approved_and_rejected_are_not_meaningful_answers_to_an_ambiguous_hold(store):
+    """Approved and rejected are not meaningful answers to an ambiguous hold."""
     hold_id = create_approval_hold(store, "evt-1", "ambiguous_selection", _ambiguous_selection(), _risk())
 
     approved = answer_approval_hold(store, hold_id, "commander-1", PermissionLevel.COMMANDER, "approved")
@@ -208,6 +229,7 @@ def test_flagged_protocol_holds_are_unaffected_by_the_ambiguous_selection_path(s
     # A flagged_protocol hold's own approve/reject handling is reached
     # exactly as before, whatever `decision` is passed — confirming the
     # widening in answer_approval_hold is additive, not a behavior change.
+    """Flagged protocol holds are unaffected by the ambiguous selection path."""
     hold_id = create_approval_hold(store, "evt-1", "flagged_protocol", _selection(), _risk())
 
     result = answer_approval_hold(store, hold_id, "commander-1", PermissionLevel.COMMANDER, "approved")
@@ -220,10 +242,12 @@ def test_flagged_protocol_holds_are_unaffected_by_the_ambiguous_selection_path(s
 
 
 def _registry():
+    """Registry."""
     return EventTypeRegistry(types=("fire", "medical", "human_activation"))
 
 
 def _unresolved_extraction():
+    """Unresolved extraction."""
     return ExtractionResult(
         classification=None,
         classification_status="unresolved",
@@ -238,6 +262,7 @@ def _unresolved_extraction():
 
 
 def _resolved_extraction():
+    """Resolved extraction."""
     return ExtractionResult(
         classification="fire",
         classification_status="resolved",
@@ -252,14 +277,17 @@ def _resolved_extraction():
 
 
 def test_unresolved_classification_holds():
+    """Unresolved classification holds."""
     assert determine_clarification_hold(_unresolved_extraction()) is True
 
 
 def test_resolved_classification_does_not_hold():
+    """Resolved classification does not hold."""
     assert determine_clarification_hold(_resolved_extraction()) is False
 
 
 def test_create_and_answer_clarification_hold_round_trip(store):
+    """Create and answer clarification hold round trip."""
     hold_id = create_clarification_hold(store, "evt-1", "something happened, unclear what")
 
     [held] = store.list_held_events("clarification")
@@ -274,6 +302,7 @@ def test_create_and_answer_clarification_hold_round_trip(store):
 
 
 def test_free_text_outside_the_registry_is_rejected(store):
+    """Free text outside the registry is rejected."""
     hold_id = create_clarification_hold(store, "evt-1", "raw text")
 
     result = answer_clarification_hold(store, hold_id, "commander-1", PermissionLevel.COMMANDER, "not_a_real_type", _registry())
@@ -284,6 +313,7 @@ def test_free_text_outside_the_registry_is_rejected(store):
 
 
 def test_viewer_cannot_resolve_a_clarification_hold(store):
+    """Viewer cannot resolve a clarification hold."""
     hold_id = create_clarification_hold(store, "evt-1", "raw text")
 
     result = answer_clarification_hold(store, hold_id, "viewer-1", PermissionLevel.VIEWER, "fire", _registry())
@@ -293,6 +323,7 @@ def test_viewer_cannot_resolve_a_clarification_hold(store):
 
 
 def test_answering_an_unknown_clarification_hold_is_not_found(store):
+    """Answering an unknown clarification hold is not found."""
     result = answer_clarification_hold(store, "never-existed", "commander-1", PermissionLevel.COMMANDER, "fire", _registry())
 
     assert result.status == "not_found"
@@ -300,6 +331,7 @@ def test_answering_an_unknown_clarification_hold_is_not_found(store):
 
 def test_clarification_and_approval_holds_do_not_interfere(store):
     # Both kinds share one table — confirm resolving one never touches the other.
+    """Clarification and approval holds do not interfere."""
     clar_id = create_clarification_hold(store, "evt-1", "raw text")
     appr_id = create_approval_hold(store, "evt-2", "flagged_protocol", _selection(), _risk())
 
@@ -319,12 +351,15 @@ from protocols.model import CriticalityLevel, Protocol
 
 
 class _ScriptedMainAgent:
+    """ScriptedMainAgent."""
     def __init__(self, response_text, status="success"):
+        """Initialize this test helper."""
         self._response_text = response_text
         self._status = status
         self.calls = []
 
     def process(self, text, allowed_tools):
+        """Process."""
         self.calls.append((text, allowed_tools))
 
         class _Result:
@@ -335,6 +370,7 @@ class _ScriptedMainAgent:
 
 
 def _protocols():
+    """Protocols."""
     return (
         Protocol(
             name="dispatch_response",
@@ -353,23 +389,27 @@ def _protocols():
 
 @pytest.mark.parametrize("intent", ["question", "report", "request", "conversational"])
 def test_parse_each_intent(intent):
+    """Parse each intent."""
     result = _parse_intent_response(f"INTENT: {intent}\nREASON: because")
 
     assert result == IntentResult(intent=intent, reason="because")
 
 
 def test_parse_is_case_insensitive():
+    """Parse is case insensitive."""
     result = _parse_intent_response("INTENT: REQUEST\nREASON: r")
 
     assert result.intent == "request"
 
 
 def test_parse_rejects_an_invalid_intent_word():
+    """Parse rejects an invalid intent word."""
     with pytest.raises(OrchestrationParseError):
         _parse_intent_response("INTENT: complaint\nREASON: r")
 
 
 def test_parse_rejects_missing_reason():
+    """Parse rejects missing reason."""
     with pytest.raises(OrchestrationParseError):
         _parse_intent_response("INTENT: question")
 
@@ -378,6 +418,7 @@ def test_parse_rejects_missing_reason():
 
 
 def test_classify_intent_returns_the_parsed_result():
+    """Classify intent returns the parsed result."""
     agent = _ScriptedMainAgent("INTENT: request\nREASON: asks for a response to be dispatched")
 
     result = classify_intent(agent, _protocols(), "please send someone to gate 3")
@@ -389,6 +430,7 @@ def test_protocol_names_appear_in_the_prompt_without_their_full_descriptions():
     # Trimmed for prompt size (Phase A): intent classification only needs to validate
     # matched_protocol_names against real protocol names, never the full description --
     # that's `select_protocol`'s job, not this stage's.
+    """Protocol names appear in the prompt without their full descriptions."""
     agent = _ScriptedMainAgent("INTENT: question\nREASON: r")
 
     classify_intent(agent, _protocols(), "is gate 3 ok?")
@@ -398,6 +440,7 @@ def test_protocol_names_appear_in_the_prompt_without_their_full_descriptions():
 
 
 def test_classify_intent_passes_no_tools():
+    """Classify intent passes no tools."""
     agent = _ScriptedMainAgent("INTENT: question\nREASON: r")
 
     classify_intent(agent, _protocols(), "is gate 3 ok?")
@@ -406,6 +449,7 @@ def test_classify_intent_passes_no_tools():
 
 
 def test_unclear_task_status_raises():
+    """Unclear task status raises."""
     agent = _ScriptedMainAgent("missing info", status="unclear_task")
 
     with pytest.raises(OrchestrationParseError):
@@ -413,6 +457,7 @@ def test_unclear_task_status_raises():
 
 
 def test_a_greeting_classifies_as_conversational():
+    """A greeting classifies as conversational."""
     agent = _ScriptedMainAgent("INTENT: conversational\nREASON: purely social, nothing to look up or act on")
 
     result = classify_intent(agent, _protocols(), "hey, how are you?")
@@ -425,6 +470,7 @@ def test_classify_intent_unwraps_a_fenced_json_response_without_a_retry():
     # fence-stripping fix, this shape failed to parse on the first attempt and silently cost a
     # second, otherwise-identical model call every time (observed ~40% of messages in a real-model
     # diagnostic run) — assert here that a fenced response is accepted on the first call.
+    """Classify intent unwraps a fenced json response without a retry."""
     fenced_response = (
         "```json\n"
         '{"primary_intent":"report","asks_for_information":false,"reports_occurrence":true,'
@@ -447,6 +493,7 @@ def test_a_question_asking_for_real_capability_stays_a_question_not_conversation
     # tasks?" asks the system to check something real — it's a QUESTION
     # even though no agent here can actually answer it — never
     # CONVERSATIONAL, whatever the eventual answer turns out to be.
+    """A question asking for real capability stays a question not conversational."""
     agent = _ScriptedMainAgent("INTENT: question\nREASON: asks the system to check something real")
 
     result = classify_intent(agent, _protocols(), "do I have any tasks?")
@@ -455,6 +502,7 @@ def test_a_question_asking_for_real_capability_stays_a_question_not_conversation
 
 
 def test_conversational_prompt_explicitly_distinguishes_from_a_real_question():
+    """Conversational prompt explicitly distinguishes from a real question."""
     agent = _ScriptedMainAgent("INTENT: conversational\nREASON: r")
 
     classify_intent(agent, _protocols(), "hey, how are you?")
@@ -465,6 +513,7 @@ def test_conversational_prompt_explicitly_distinguishes_from_a_real_question():
 
 
 def test_classify_intent_receives_prior_conversation_for_followup_resolution():
+    """Classify intent receives prior conversation for followup resolution."""
     agent = _ScriptedMainAgent("INTENT: conversational\nREASON: follows the prior system conversation")
     conversation = (
         {"role": "user", "content": "What protocols do you have?"},
@@ -483,6 +532,7 @@ def test_classify_intent_receives_prior_conversation_for_followup_resolution():
 
 
 def test_answer_conversationally_returns_the_agents_direct_reply():
+    """Answer conversationally returns the agents direct reply."""
     agent = _ScriptedMainAgent("Doing well, thanks for asking! How can I help?")
 
     reply = answer_conversationally(agent, "hey, how are you?")
@@ -491,6 +541,7 @@ def test_answer_conversationally_returns_the_agents_direct_reply():
 
 
 def test_answer_conversationally_passes_no_tools():
+    """Answer conversationally passes no tools."""
     agent = _ScriptedMainAgent("hi there")
 
     answer_conversationally(agent, "hey")
@@ -499,6 +550,7 @@ def test_answer_conversationally_passes_no_tools():
 
 
 def test_answer_conversationally_prompt_carries_an_honesty_constraint():
+    """Answer conversationally prompt carries an honesty constraint."""
     agent = _ScriptedMainAgent("hi there")
 
     answer_conversationally(agent, "hey")
@@ -508,6 +560,7 @@ def test_answer_conversationally_prompt_carries_an_honesty_constraint():
 
 
 def test_conversational_prompt_grounds_identity_and_capabilities_dynamically():
+    """Conversational prompt grounds identity and capabilities dynamically."""
     agent = _ScriptedMainAgent("I am the main agent for For Tests.")
     system_context = {
         "identity": {"profile_name": "For Tests"},
@@ -525,6 +578,7 @@ def test_conversational_prompt_grounds_identity_and_capabilities_dynamically():
 
 
 def test_answer_conversationally_receives_prior_user_and_assistant_messages():
+    """Answer conversationally receives prior user and assistant messages."""
     agent = _ScriptedMainAgent("No, I cannot share even one protocol name with you.")
     conversation = (
         {"role": "user", "content": "What protocols do you have?"},
@@ -540,6 +594,7 @@ def test_answer_conversationally_receives_prior_user_and_assistant_messages():
 
 
 def test_identity_and_capability_questions_are_defined_as_conversational():
+    """Identity and capability questions are defined as conversational."""
     agent = _ScriptedMainAgent("INTENT: conversational\nREASON: system self-description")
 
     classify_intent(agent, _protocols(), "what are your capabilities?")
@@ -550,6 +605,7 @@ def test_identity_and_capability_questions_are_defined_as_conversational():
 
 
 def test_procedural_questions_about_visible_capabilities_are_defined_as_conversational():
+    """Procedural questions about visible capabilities are defined as conversational."""
     agent = _ScriptedMainAgent("INTENT: conversational\nREASON: asks how a visible capability works")
 
     result = classify_intent(agent, _protocols(), "What happens if I report an event?")
@@ -559,6 +615,7 @@ def test_procedural_questions_about_visible_capabilities_are_defined_as_conversa
 
 
 def test_answer_conversationally_raises_on_an_unusable_response():
+    """Answer conversationally raises on an unusable response."""
     agent = _ScriptedMainAgent("missing info", status="unclear_task")
 
     with pytest.raises(OrchestrationParseError):
@@ -566,6 +623,7 @@ def test_answer_conversationally_raises_on_an_unusable_response():
 
 
 def test_end_to_end_through_the_mocked_adapter(monkeypatch):
+    """End to end through the mocked adapter."""
     from orchestrator.main_agent import MainAgent
 
     class _FakeOutput:
@@ -589,6 +647,7 @@ def test_end_to_end_through_the_mocked_adapter(monkeypatch):
 
 
 def _structured_intent(**overrides):
+    """Structured intent."""
     import json
 
     payload = {
@@ -611,6 +670,7 @@ def _structured_intent(**overrides):
 
 
 def test_structured_intent_requires_evidence_from_the_original_message():
+    """Structured intent requires evidence from the original message."""
     agent = _ScriptedMainAgent(_structured_intent(evidence={"request": "words not in the message"}))
 
     with pytest.raises(OrchestrationParseError):
@@ -618,6 +678,7 @@ def test_structured_intent_requires_evidence_from_the_original_message():
 
 
 def test_structured_intent_returns_a_safe_clarification_decision():
+    """Structured intent returns a safe clarification decision."""
     agent = _ScriptedMainAgent(
         _structured_intent(
             primary_intent="needs_clarification",
@@ -637,5 +698,6 @@ def test_structured_intent_returns_a_safe_clarification_decision():
 
 
 def test_legacy_intent_parser_rejects_multiple_intent_blocks():
+    """Legacy intent parser rejects multiple intent blocks."""
     with pytest.raises(OrchestrationParseError):
         _parse_intent_response("INTENT: request\nREASON: first\nINTENT: question\nREASON: second")

@@ -11,6 +11,7 @@ from protocols import CriticalityLevel
 
 
 def _agent(tmp_path, monkeypatch):
+    """Agent."""
     monkeypatch.setattr(ff.FirefightingCrewStatusAgent, "status_db_path", str(tmp_path / "crew.db"))
     monkeypatch.setattr(ff, "FIREFIGHTING_APPARATUS_DB_PATH", str(tmp_path / "apparatus.db"))
     monkeypatch.setattr(ff, "FIREFIGHTING_FIRES_DB_PATH", str(tmp_path / "fires.db"))
@@ -22,6 +23,7 @@ def _agent(tmp_path, monkeypatch):
 
 
 def _add_event(agent, *, area: str, minutes_ago: int = 5) -> str:
+    """Add event."""
     persistence = SQLitePersistence(ff.DB_PATH)
     occurred_at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
     return persistence.append_event(
@@ -38,6 +40,7 @@ def _add_event(agent, *, area: str, minutes_ago: int = 5) -> str:
 
 
 def test_dispatched_apparatus_status_is_recorded(tmp_path, monkeypatch):
+    """Dispatched apparatus status is recorded."""
     agent = _agent(tmp_path, monkeypatch)
 
     result = agent.update_apparatus_status("Ashed 3", "dispatched")
@@ -47,6 +50,7 @@ def test_dispatched_apparatus_status_is_recorded(tmp_path, monkeypatch):
 
 
 def test_dispatched_apparatus_with_no_area_given_names_no_one(tmp_path, monkeypatch):
+    """Dispatched apparatus with no area given names no one."""
     agent = _agent(tmp_path, monkeypatch)
 
     result = agent.update_apparatus_status("Ashed 3", "dispatched")
@@ -73,6 +77,7 @@ def test_join_and_list_link_only_the_dispatched_apparatus_not_one_merely_relocat
 
 
 def test_two_incidents_same_area_refuses_to_guess(tmp_path, monkeypatch):
+    """Two incidents same area refuses to guess."""
     agent = _agent(tmp_path, monkeypatch)
     _add_event(agent, area="pine_ridge", minutes_ago=10)
     _add_event(agent, area="pine_ridge", minutes_ago=5)
@@ -86,6 +91,7 @@ def test_two_incidents_same_area_refuses_to_guess(tmp_path, monkeypatch):
 
 
 def test_joining_a_new_incident_closes_the_previous_link_on_reassignment(tmp_path, monkeypatch):
+    """Joining a new incident closes the previous link on reassignment."""
     agent = _agent(tmp_path, monkeypatch)
     _add_event(agent, area="pine_ridge")
     _add_event(agent, area="oak_valley")
@@ -98,6 +104,7 @@ def test_joining_a_new_incident_closes_the_previous_link_on_reassignment(tmp_pat
 
 
 def test_leave_incident_response_closes_the_open_link(tmp_path, monkeypatch):
+    """Leave incident response closes the open link."""
     agent = _agent(tmp_path, monkeypatch)
     _add_event(agent, area="pine_ridge")
 
@@ -109,6 +116,7 @@ def test_leave_incident_response_closes_the_open_link(tmp_path, monkeypatch):
 
 
 def test_joining_an_area_with_no_recent_event_links_nothing(tmp_path, monkeypatch):
+    """Joining an area with no recent event links nothing."""
     agent = _agent(tmp_path, monkeypatch)
 
     join_result = agent.join_incident_response(identifier="Ashed 3", area="pine_ridge")
@@ -118,6 +126,7 @@ def test_joining_an_area_with_no_recent_event_links_nothing(tmp_path, monkeypatc
 
 
 def test_report_apparatus_movement_protocol_is_declared_and_not_commander_only():
+    """Report apparatus movement protocol is declared and not commander only."""
     protocol = next(p for p in ff.PROTOCOLS if p.name == "report_apparatus_movement")
 
     assert protocol.commander_only is False

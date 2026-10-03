@@ -35,6 +35,7 @@ _EMOJI_PATTERN = re.compile(
 
 @pytest.mark.parametrize("emoji", ["⏳", "⚠️", "⌚", "⏰", "☀", "🔥", "🇮🇱"])
 def test_emoji_pattern_catches_every_range_it_claims_to(emoji):
+    """Emoji pattern catches every range it claims to."""
     assert _EMOJI_PATTERN.findall(emoji)
 
 
@@ -54,10 +55,12 @@ def test_no_emoji_in_any_catalog_message():
 
 
 def test_english_and_hebrew_catalogs_have_matching_keys_and_placeholders():
+    """English and hebrew catalogs have matching keys and placeholders."""
     validate_catalogs()
 
 
 def test_catalog_formats_the_profile_selected_language():
+    """Catalog formats the profile selected language."""
     english = get_catalog("en")
     hebrew = get_catalog("he")
 
@@ -68,6 +71,7 @@ def test_catalog_formats_the_profile_selected_language():
 
 
 def test_catalog_rejects_missing_extra_or_unknown_format_fields():
+    """Catalog rejects missing extra or unknown format fields."""
     catalog = get_catalog("en")
 
     with pytest.raises(MessageCatalogError, match="requires placeholders"):
@@ -79,15 +83,18 @@ def test_catalog_rejects_missing_extra_or_unknown_format_fields():
 
 
 def test_catalog_validation_rejects_missing_language_key():
+    """Catalog validation rejects missing language key."""
     with pytest.raises(MessageCatalogError, match="keys differ"):
         validate_catalogs({"one": "One"}, {})
 
 
 def test_catalog_validation_rejects_placeholder_drift():
+    """Catalog validation rejects placeholder drift."""
     with pytest.raises(MessageCatalogError, match="different placeholders"):
         validate_catalogs({"one": "Value {value}"}, {"one": "Value {other}"})
 
 
 def test_unsupported_language_is_rejected():
+    """Unsupported language is rejected."""
     with pytest.raises(MessageCatalogError, match="unsupported DEFAULT_LANGUAGE"):
         get_catalog("fr")

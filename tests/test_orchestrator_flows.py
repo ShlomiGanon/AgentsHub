@@ -1,3 +1,5 @@
+"""Main orchestrator ingest, execution, and hold-sweep flows."""
+
 import json
 import types
 from dataclasses import replace
@@ -48,6 +50,7 @@ from tests.crewai_fakes import install_crewai_stub
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch)
 
 
@@ -55,6 +58,7 @@ def _mock_crewai(monkeypatch):
 
 
 def test_assemble_core_agents_merges_profile_main_and_insights_agents():
+    """Assemble core agents merges profile main and insights agents."""
     history_agent = SimpleNamespace(name="history_agent")
     loaded_profile = SimpleNamespace(core_agents={"history_agent": history_agent})
     base_config = BaseConfig(core_model=TierModel(model="main-model", api_key="core-key"))
@@ -72,6 +76,7 @@ def test_assemble_core_agents_merges_profile_main_and_insights_agents():
 
 
 def test_assemble_core_agents_does_not_mutate_the_profiles_dict():
+    """Assemble core agents does not mutate the profiles dict."""
     loaded_profile = SimpleNamespace(core_agents={"history_agent": SimpleNamespace(name="history_agent")})
     base_config = BaseConfig(core_model=TierModel(model="m", api_key="k"))
 
@@ -84,7 +89,9 @@ def test_assemble_core_agents_does_not_mutate_the_profiles_dict():
 
 
 class _FakeResult:
+    """FakeResult."""
     def __init__(self, status, text):
+        """Initialize this test helper."""
         self.status = status
         self.text = text
 
@@ -95,11 +102,13 @@ class _ScriptedAgent:
     plays every role a real MainAgent plays across one flow run."""
 
     def __init__(self, dispatch: dict[str, str], default_status="success"):
+        """Initialize this test helper."""
         self._dispatch = dispatch
         self._default_status = default_status
         self.calls = []
 
     def process(self, text, allowed_tools):
+        """Process."""
         self.calls.append(text)
         for keyword, response_text in self._dispatch.items():
             if keyword in text:
@@ -108,26 +117,33 @@ class _ScriptedAgent:
 
 
 class _FakeSettings:
+    """FakeSettings."""
     def __init__(self, risk_threshold=0.5, retry_count=3, lookback_window_days=30, rich_reports_enabled=False):
+        """Initialize this test helper."""
         self.risk_threshold = risk_threshold
         self.retry_count = retry_count
         self.lookback_window_days = lookback_window_days
         self.rich_reports_enabled = rich_reports_enabled
 
     def get_risk_threshold(self):
+        """Get risk threshold."""
         return self.risk_threshold
 
     def get_retry_count(self):
+        """Get retry count."""
         return self.retry_count
 
     def get_lookback_window_days(self):
+        """Get lookback window days."""
         return self.lookback_window_days
 
     def get_rich_reports_enabled(self):
+        """Get rich reports enabled."""
         return self.rich_reports_enabled
 
 
 def _protocols():
+    """Protocols."""
     return (
         Protocol(
             name="status_check",
@@ -152,6 +168,7 @@ def _protocols():
 
 @pytest.fixture
 def deps(tmp_path):
+    """Deps."""
     persistence = SQLitePersistence(str(tmp_path / "flows.db"))
     reference_agent = ReferenceAgent(model="m")
     history_agent = HistoryAgent(model="m")
@@ -173,6 +190,7 @@ def deps(tmp_path):
 
 
 def _extraction_response(classification="fire", area="north_sector", description="smoke at gate 3", severity="moderate", occurred_at="2026-08-20T09:00:00"):
+    """Extraction response."""
     import json
 
     return json.dumps(
@@ -181,6 +199,7 @@ def _extraction_response(classification="fire", area="north_sector", description
 
 
 def _happy_path_agent(risk_score="0.2", selected="status_check", verdict="success", agent_task="check gate 3", extraction=None):
+    """Happy path agent."""
     return _ScriptedAgent(
         {
             "Extract this operational event": extraction or _extraction_response(),
@@ -193,7 +212,7 @@ def _happy_path_agent(risk_score="0.2", selected="status_check", verdict="succes
 
 
 def test_process_report_holds_for_clarification_when_classification_is_unresolved(deps):
-    """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 (item #6): an unresolved
+    """Part 1 (item #6): an unresolved
     classification now resolves to the built-in UNCLASSIFIED_TYPE, which
     requires `area` — asked (via the event-data hold) before the clarification
     hold that lets a commander pick a real classification exists at all."""
@@ -222,6 +241,7 @@ def test_process_report_holds_for_clarification_when_classification_is_unresolve
 
 
 def test_process_report_holds_for_clarification_logs_the_hold_kind(deps, caplog):
+    """Process report holds for clarification logs the hold kind."""
     agent = _ScriptedAgent(
         {
             "Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}',
@@ -254,6 +274,7 @@ def test_process_report_holds_for_clarification_logs_the_hold_kind(deps, caplog)
 
 
 def test_resumed_event_uses_original_sender_permission_snapshot(deps):
+    """Resumed event uses original sender permission snapshot."""
     commander_controlled = tuple(
         replace(
             protocol,
@@ -298,7 +319,7 @@ def test_resumed_event_uses_original_sender_permission_snapshot(deps):
 
 
 def test_required_fields_gate_asks_only_for_the_field_extraction_could_not_resolve(deps):
-    """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 1 (item #6): a profile-
+    """Part 1 (item #6): a profile-
     defined event type's required fields are checked immediately after
     extraction, before risk assessment or protocol selection ever run —
     asking only for the one extraction couldn't resolve."""
@@ -327,6 +348,7 @@ def test_required_fields_gate_asks_only_for_the_field_extraction_could_not_resol
 
 
 def _direct_tool_protocol(name="log_status"):
+    """Direct tool protocol."""
     def binder(event):
         return (
             Step(
@@ -353,6 +375,7 @@ def test_direct_tool_protocol_never_calls_task_formulation_or_judge_success(deps
     # _happy_path_agent's dispatch deliberately has no entry for "participating in the"
     # (task_formulation) or "VERDICT:" (judge_success) — _ScriptedAgent.process raises
     # AssertionError on an unscripted prompt, so this fails loudly if either is ever reached.
+    """Direct tool protocol never calls task formulation or judge success."""
     direct_deps = replace(deps, protocol_set=ProtocolSet(protocols=(*deps.protocol_set.all(), _direct_tool_protocol())))
     agent = _happy_path_agent(risk_score="0.1", selected="log_status")
     insights_agent = _ScriptedAgent({})  # never called either -- needs_insight=False
@@ -365,6 +388,7 @@ def test_direct_tool_protocol_never_calls_task_formulation_or_judge_success(deps
 
 
 def test_direct_tool_protocol_fails_deterministically_without_a_model_call(deps):
+    """Direct tool protocol fails deterministically without a model call."""
     def failing_binder(event):
         return (
             Step(
@@ -388,6 +412,7 @@ def test_direct_tool_protocol_fails_deterministically_without_a_model_call(deps)
 
 
 def _resource_unavailable_protocol(name="dispatch_something"):
+    """Resource unavailable protocol."""
     def _try_dispatch(self, area=""):
         self.signal_resource_unavailable("drone", area, "no ready drones available")
         return f"Drone dispatch failed: no ready drones available for {area}."
@@ -415,6 +440,7 @@ def _resource_unavailable_protocol(name="dispatch_something"):
 
 
 def test_resource_unavailable_is_handled_not_failed_and_skips_judgment_entirely(deps):
+    """Resource unavailable is handled not failed and skips judgment entirely."""
     protocol, try_dispatch = _resource_unavailable_protocol()
     resource_deps = replace(deps, protocol_set=ProtocolSet(protocols=(*deps.protocol_set.all(), protocol)))
     reference_agent = resource_deps.registry.get("reference_agent")
@@ -443,6 +469,7 @@ def test_resource_unavailable_is_handled_not_failed_and_skips_judgment_entirely(
 
 
 def test_resource_unavailable_uses_the_profiles_description_hook_when_supplied(deps):
+    """Resource unavailable uses the profiles description hook when supplied."""
     protocol, try_dispatch = _resource_unavailable_protocol()
     calls = []
 
@@ -475,6 +502,7 @@ def test_resource_unavailable_uses_the_profiles_description_hook_when_supplied(d
 
 
 def test_resource_unavailable_survives_the_description_hook_raising(deps):
+    """Resource unavailable survives the description hook raising."""
     protocol, try_dispatch = _resource_unavailable_protocol()
 
     def broken_hook(resource_kind, area, reason, registry):
@@ -500,10 +528,11 @@ def test_resource_unavailable_survives_the_description_hook_raising(deps):
     assert "no alternatives could be determined" in event["commander_alert_text"]
 
 
-# -- Availability fields for absence reports (Stage 3, docs/bar_improves.md) -
+# Availability fields for absence reports (Stage 3, )
 
 
 def _attendance_gated_deps(deps):
+    """Attendance gated deps."""
     return replace(
         deps,
         event_type_registry=EventTypeRegistry(
@@ -573,6 +602,7 @@ def test_absence_without_interval_holds_for_exactly_the_two_missing_fields(deps)
 
 
 def test_absence_reply_fills_interval_and_resumes(deps):
+    """Absence reply fills interval and resumes."""
     gated_deps = _attendance_gated_deps(deps)
     agent = _happy_path_agent(risk_score="0.1", selected="status_check")
     agent._dispatch["Extract this operational event"] = (
@@ -614,6 +644,7 @@ def test_absence_reply_fills_interval_and_resumes(deps):
 
 
 def test_absence_reply_with_end_before_start_is_rejected(deps):
+    """Absence reply with end before start is rejected."""
     from orchestrator.main_agent import OrchestrationParseError
 
     gated_deps = _attendance_gated_deps(deps)
@@ -715,7 +746,7 @@ def test_per_step_required_fields_still_work_alongside_the_new_event_type_gate(d
 
 
 def test_required_fields_floor_is_enforced_end_to_end_for_the_reported_fire_bug(deps):
-    """The original reported bug (docs/IMPROVES/AREA_FIELD_REGRESSION_CHECK.MD),
+    """The original reported fire-without-area bug,
     closed end to end: a "fire" report with no area (i) is held by the
     pre-formulation gate before protocol selection ever runs, and (ii) once
     area is supplied, every persisted step's required_event_fields includes
@@ -909,6 +940,7 @@ def test_execution_injects_complete_event_provenance_into_every_step(deps, monke
 
 
 def test_approved_async_event_is_not_expired_by_its_original_queue_deadline(deps):
+    """Approved async event is not expired by its original queue deadline."""
     event_id = begin_report(
         deps,
         "camera update awaiting commander approval",
@@ -949,6 +981,7 @@ def test_persist_step_outcomes_matches_multiple_step_id_less_steps_by_position(d
 
 
 def test_drone_selection_result_creates_a_resumable_hold(deps, monkeypatch):
+    """Drone selection result creates a resumable hold."""
     event_id = begin_report(deps, "return the drone", "telegram", "2026-08-20T10:00:00", "commander-1")
     step = Step(
         agent_name="reference_agent", task_text="recall", allowed_tools=("check_status",), step_id="recall-1"
@@ -985,27 +1018,33 @@ def test_drone_selection_result_creates_a_resumable_hold(deps, monkeypatch):
 
 
 class _TestSurveillanceAgent(SurveillanceAgent):
+    """TestSurveillanceAgent."""
     surveillance_db_path = ""
 
 
 class _DecidingSurveillance:
+    """DecidingSurveillance."""
     name = "surveillance_agent"
 
     def __init__(self, inner, decide):
+        """Initialize this test helper."""
         self._inner = inner
         self._decide = decide
         self.calls = []
         self.surveillance_store = inner.surveillance_store
 
     def exposed_tools(self):
+        """Exposed tools."""
         return self._inner.exposed_tools()
 
     def process(self, text, allowed_tools, invocation_policy=None):
+        """Process."""
         self.calls.append((text, tuple(allowed_tools)))
         return self._decide(self._inner, text, allowed_tools)
 
 
 def _live_surveillance(tmp_path):
+    """Live surveillance."""
     _TestSurveillanceAgent.surveillance_db_path = str(tmp_path / "drone-selection.db")
     agent = _TestSurveillanceAgent(model="m")
     agent.dispatch_drone_to_area("north_gate", "first")
@@ -1014,6 +1053,7 @@ def _live_surveillance(tmp_path):
 
 
 def _drone_selection_hold(deps, question):
+    """Drone selection hold."""
     event_id = begin_report(deps, "return the drone", "telegram", "2026-08-20T10:00:00", "commander-1")
     create_event_data_hold(deps.persistence, event_id, ("drone_selection",), question, ("recall-1",))
     [hold] = deps.persistence.list_held_events("event_data")
@@ -1021,12 +1061,14 @@ def _drone_selection_hold(deps, question):
 
 
 def _deps_with_surveillance(deps, agent):
+    """Deps with surveillance."""
     existing = {item.name: item for item in deps.registry.all()}
     existing[agent.name] = agent
     return replace(deps, registry=AgentRegistry(existing))
 
 
 def _result_from_tool(raw):
+    """Result from tool."""
     return AgentResult(
         status="success",
         text=str(raw),
@@ -1035,6 +1077,7 @@ def _result_from_tool(raw):
 
 
 def test_drone_selection_reply_is_forwarded_to_the_surveillance_agent(deps, tmp_path):
+    """Drone selection reply is forwarded to the surveillance agent."""
     inner = _live_surveillance(tmp_path)
     deciding = _DecidingSurveillance(inner, lambda real, text, allowed: _result_from_tool(real.return_all_drones_to_base()))
     scoped = _deps_with_surveillance(deps, deciding)
@@ -1052,6 +1095,7 @@ def test_drone_selection_reply_is_forwarded_to_the_surveillance_agent(deps, tmp_
 
 
 def test_drone_selection_reply_task_uses_the_active_message_catalog(deps, tmp_path):
+    """Drone selection reply task uses the active message catalog."""
     inner = _live_surveillance(tmp_path)
     deciding = _DecidingSurveillance(inner, lambda real, text, allowed: _result_from_tool(real.return_all_drones_to_base()))
     hebrew = get_catalog("he")
@@ -1074,6 +1118,7 @@ def test_drone_selection_reply_task_uses_the_active_message_catalog(deps, tmp_pa
 
 
 def test_drone_selection_reply_recalls_every_drone_when_the_agent_calls_return_all(deps, tmp_path):
+    """Drone selection reply recalls every drone when the agent calls return all."""
     inner = _live_surveillance(tmp_path)
     deciding = _DecidingSurveillance(inner, lambda real, text, allowed: _result_from_tool(real.return_all_drones_to_base()))
     scoped = _deps_with_surveillance(deps, deciding)
@@ -1088,6 +1133,7 @@ def test_drone_selection_reply_recalls_every_drone_when_the_agent_calls_return_a
 
 
 def test_drone_selection_reply_recalls_one_drone_when_the_agent_passes_an_identifier(deps, tmp_path):
+    """Drone selection reply recalls one drone when the agent passes an identifier."""
     inner = _live_surveillance(tmp_path)
     selected = inner.surveillance_store.get_active_missions()[0]["callsign"]
 
@@ -1107,6 +1153,7 @@ def test_drone_selection_reply_recalls_one_drone_when_the_agent_passes_an_identi
 
 
 def test_drone_selection_reply_keeps_the_hold_when_selection_is_still_required(deps, tmp_path):
+    """Drone selection reply keeps the hold when selection is still required."""
     inner = _live_surveillance(tmp_path)
     deciding = _DecidingSurveillance(inner, lambda real, text, allowed: _result_from_tool(real.return_drone_to_base("")))
     scoped = _deps_with_surveillance(deps, deciding)
@@ -1145,6 +1192,7 @@ def test_precedent_lookup_still_runs_when_the_target_events_occurred_at_is_unres
 
 
 def test_process_report_low_risk_unflagged_protocol_runs_to_success(deps, caplog):
+    """Process report low risk unflagged protocol runs to success."""
     agent = _happy_path_agent(risk_score="0.1", selected="status_check", verdict="success")
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "no notable precedent")})()
 
@@ -1174,15 +1222,18 @@ class _ScriptedComposerAgent:
     """A duck-typed ReportComposerAgent stand-in — no crewai/model involved."""
 
     def __init__(self, response_text):
+        """Initialize this test helper."""
         self._response_text = response_text
         self.calls = []
 
     def process(self, text, allowed_tools, *, invocation_policy=None):
+        """Process."""
         self.calls.append(text)
         return _FakeResult("success", self._response_text)
 
 
 def test_report_text_is_composed_and_persisted_when_rich_reports_enabled(deps):
+    """Report text is composed and persisted when rich reports enabled."""
     deps.settings_store.rich_reports_enabled = True
     composer = _ScriptedComposerAgent("Understood: smoke at gate 3. Handled successfully.")
     deps_with_composer = replace(deps, report_composer_agent=composer)
@@ -1197,6 +1248,7 @@ def test_report_text_is_composed_and_persisted_when_rich_reports_enabled(deps):
 
 
 def test_situational_picture_report_returns_the_picture_without_generic_rich_report(deps):
+    """Situational picture report returns the picture without generic rich report."""
     deps.settings_store.rich_reports_enabled = True
     composer = _ScriptedComposerAgent("this generic report must not be used")
     deps_with_composer = replace(deps, report_composer_agent=composer)
@@ -1218,6 +1270,7 @@ def test_situational_picture_report_returns_the_picture_without_generic_rich_rep
 
 
 def test_report_text_falls_back_to_render_summary_when_no_composer_agent_is_available(deps):
+    """Report text falls back to render summary when no composer agent is available."""
     deps.settings_store.rich_reports_enabled = True  # deps.report_composer_agent stays None
     agent = _happy_path_agent(risk_score="0.1", selected="status_check", verdict="success")
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "no notable precedent")})()
@@ -1230,6 +1283,7 @@ def test_report_text_falls_back_to_render_summary_when_no_composer_agent_is_avai
 
 def test_report_text_is_absent_when_rich_reports_disabled(deps):
     # deps.settings_store.rich_reports_enabled defaults to False (_FakeSettings)
+    """Report text is absent when rich reports disabled."""
     agent = _happy_path_agent(risk_score="0.1", selected="status_check", verdict="success")
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "no notable precedent")})()
 
@@ -1242,6 +1296,7 @@ def test_report_text_is_absent_when_rich_reports_disabled(deps):
 def test_report_composed_for_a_group_message_uses_viewer_audience_even_from_a_commander(deps):
     # A message posted in a group is a shared, visible surface — protocol/agent/risk
     # internals must not leak into it just because the poster happens to be a commander.
+    """Report composed for a group message uses viewer audience even from a commander."""
     deps.settings_store.rich_reports_enabled = True
     composer = _ScriptedComposerAgent("Understood: smoke at gate 3. Handled successfully.")
     deps_with_composer = replace(deps, report_composer_agent=composer)
@@ -1260,6 +1315,7 @@ def test_report_composed_for_a_group_message_uses_viewer_audience_even_from_a_co
 
 
 def test_attendance_protocol_is_never_closed_on_precedent(deps):
+    """Attendance protocol is never closed on precedent."""
     prior_id = begin_report(
         deps, "availability report", "telegram", "2026-08-20T09:00:00", "viewer-1"
     )
@@ -1317,6 +1373,7 @@ def test_attendance_protocol_is_never_closed_on_precedent(deps):
 
 
 def test_process_report_flagged_protocol_holds_for_approval_then_resumes_approved(deps, caplog):
+    """Process report flagged protocol holds for approval then resumes approved."""
     agent = _happy_path_agent(risk_score="0.9", selected="dispatch_response", verdict="success", agent_task="dispatch to gate 3")
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
 
@@ -1341,6 +1398,7 @@ def test_process_report_flagged_protocol_holds_for_approval_then_resumes_approve
 
 
 def test_resume_after_approval_rejection_declines_and_records_outcome(deps):
+    """Resume after approval rejection declines and records outcome."""
     agent = _happy_path_agent(risk_score="0.9", selected="dispatch_response")
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
 
@@ -1354,6 +1412,7 @@ def test_resume_after_approval_rejection_declines_and_records_outcome(deps):
 
 
 def test_resume_after_clarification_continues_at_risk_assessment_not_extraction(deps):
+    """Resume after clarification continues at risk assessment not extraction."""
     agent = _ScriptedAgent(
         {
             "Extract this operational event": '{"classification": null, "area": "north_sector", "entities": [], "description": "d", "severity": "s", "occurred_at": "2026-08-20T09:00:00"}',
@@ -1383,6 +1442,7 @@ def test_resume_after_clarification_continues_at_risk_assessment_not_extraction(
 
 
 def test_resume_after_clarification_rejects_free_text(deps):
+    """Resume after clarification rejects free text."""
     agent = _ScriptedAgent(
         {
             "Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}',
@@ -1404,6 +1464,7 @@ def test_resume_after_clarification_rejects_free_text(deps):
 
 
 def test_process_request_bypasses_extraction_entirely(deps):
+    """Process request bypasses extraction entirely."""
     agent = _ScriptedAgent(
         {
             "RISK_SCORE": "RISK_SCORE: 0.9\nREASON: commander request",
@@ -1425,6 +1486,7 @@ def test_process_request_bypasses_extraction_entirely(deps):
 
 
 def test_process_request_from_a_viewer_still_holds_for_a_flagged_protocol(deps):
+    """Process request from a viewer still holds for a flagged protocol."""
     agent = _ScriptedAgent(
         {
             "RISK_SCORE": "RISK_SCORE: 0.9\nREASON: r",
@@ -1439,6 +1501,7 @@ def test_process_request_from_a_viewer_still_holds_for_a_flagged_protocol(deps):
 
 
 def test_process_message_routes_question_without_writing_an_event(deps):
+    """Process message routes question without writing an event."""
     agent = _ScriptedAgent(
         {
             "kind of message": "INTENT: question\nREASON: asks about status",
@@ -1461,6 +1524,7 @@ def test_process_message_routes_conversational_directly_with_no_agent_routing(de
     # given here at all — if the conversational branch ever fell through
     # into question_flow.py's machinery, _ScriptedAgent.process would
     # raise on the unmatched prompt, failing this test loudly.
+    """Process message routes conversational directly with no agent routing."""
     agent = _ScriptedAgent(
         {
             "kind of message": "INTENT: conversational\nREASON: purely social, nothing to look up or act on",
@@ -1484,6 +1548,7 @@ def test_process_message_still_declines_a_genuine_no_agent_fit_question(deps):
     # "question" (not "conversational") and go through question_flow.py's
     # own NONE decline — completely unaffected by the new conversational
     # branch.
+    """Process message still declines a genuine no agent fit question."""
     agent = _ScriptedAgent(
         {
             "kind of message": "INTENT: question\nREASON: asks the system to check something real",
@@ -1500,6 +1565,7 @@ def test_process_message_still_declines_a_genuine_no_agent_fit_question(deps):
 
 
 def test_process_message_routes_report_into_the_new_event_flow(deps):
+    """Process message routes report into the new event flow."""
     agent = _happy_path_agent(risk_score="0.1", selected="status_check")
     agent._dispatch["kind of message"] = "INTENT: report\nREASON: describes something that happened"
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
@@ -1514,6 +1580,7 @@ def test_process_message_routes_request_into_the_new_event_flow(deps):
     # Unaffected by the new conversational branch — "request" is checked
     # after both "conversational" and "question" and reaches process_request
     # exactly as before.
+    """Process message routes request into the new event flow."""
     agent = _happy_path_agent(risk_score="0.9", selected="dispatch_response", agent_task="dispatch to gate 3")
     agent._dispatch["kind of message"] = "INTENT: request\nREASON: asks for a response to be dispatched"
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
@@ -1525,6 +1592,7 @@ def test_process_message_routes_request_into_the_new_event_flow(deps):
 
 
 def test_a_held_event_resumes_correctly_after_a_simulated_restart(deps, tmp_path):
+    """A held event resumes correctly after a simulated restart."""
     agent = _happy_path_agent(risk_score="0.9", selected="dispatch_response")
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
 
@@ -1557,6 +1625,7 @@ def test_a_held_event_resumes_correctly_after_a_simulated_restart(deps, tmp_path
 
 
 def test_begin_report_returns_immediately_with_no_model_call(deps):
+    """Begin report returns immediately with no model call."""
     agent = _ScriptedAgent({})  # would raise on any .process() call
 
     event_id = begin_report(deps, "smoke at gate 3", "telegram", "2026-08-20T10:00:00", "viewer-1")
@@ -1568,12 +1637,13 @@ def test_begin_report_returns_immediately_with_no_model_call(deps):
 
 
 class _TimeoutThenScriptedAgent:
-    """Stage 2 (docs/bar_improves.md): duck-typed agent stand-in whose
+    """Stage 2: duck-typed agent stand-in whose
     extraction call fails a fixed number of times with a model-layer error
     before behaving like `_ScriptedAgent` — used to verify the one-retry
     behavior without needing a real model or crewai."""
 
     def __init__(self, dispatch: dict[str, str], *, extraction_failures: int, error_cls=None):
+        """Initialize this test helper."""
         self._dispatch = dispatch
         self._extraction_failures = extraction_failures
         self._error_cls = error_cls
@@ -1581,6 +1651,7 @@ class _TimeoutThenScriptedAgent:
         self._extraction_attempts = 0
 
     def process(self, text, allowed_tools):
+        """Process."""
         self.calls.append(text)
         if "Extract this operational event" in text:
             self._extraction_attempts += 1
@@ -1593,6 +1664,7 @@ class _TimeoutThenScriptedAgent:
 
 
 def test_extraction_retries_once_on_a_model_timeout_then_succeeds(deps, caplog):
+    """Extraction retries once on a model timeout then succeeds."""
     from agents.errors import AgentTimeoutError
 
     agent = _TimeoutThenScriptedAgent(
@@ -1619,6 +1691,7 @@ def test_extraction_retries_once_on_a_model_timeout_then_succeeds(deps, caplog):
 
 
 def test_extraction_retries_once_on_a_model_error_then_succeeds(deps):
+    """Extraction retries once on a model error then succeeds."""
     from agents.errors import AgentModelError
 
     agent = _TimeoutThenScriptedAgent(
@@ -1641,6 +1714,7 @@ def test_extraction_retries_once_on_a_model_error_then_succeeds(deps):
 
 
 def test_extraction_fails_after_two_timeouts_never_attempts_a_third_time(deps):
+    """Extraction fails after two timeouts never attempts a third time."""
     from agents.errors import AgentTimeoutError
 
     agent = _TimeoutThenScriptedAgent({}, extraction_failures=2, error_cls=AgentTimeoutError)
@@ -1655,6 +1729,7 @@ def test_extraction_fails_after_two_timeouts_never_attempts_a_third_time(deps):
 
 
 def test_run_report_extraction_continues_from_a_begin_report_event_id(deps):
+    """Run report extraction continues from a begin report event id."""
     agent = _happy_path_agent(risk_score="0.1", selected="status_check")
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
 
@@ -1666,6 +1741,7 @@ def test_run_report_extraction_continues_from_a_begin_report_event_id(deps):
 
 
 def test_begin_request_returns_immediately_with_no_model_call(deps):
+    """Begin request returns immediately with no model call."""
     agent = _ScriptedAgent({})  # would raise on any .process() call
 
     event_id = begin_request(deps, "please dispatch someone", "2026-08-20T10:00:00", "commander-1")
@@ -1696,6 +1772,7 @@ def test_apply_event_data_reply_refuses_to_guess_between_two_pending_holds_for_t
 
 
 def test_apply_event_data_reply_still_applies_normally_when_only_one_hold_is_pending(deps):
+    """Apply event data reply still applies normally when only one hold is pending."""
     event_id = begin_report(deps, "smoke near the north gate", "telegram", "2026-08-20T10:00:00", "viewer-1", conversation_id="c1")
     create_event_data_hold(deps.persistence, event_id, ("area",), "Which area?", ())
     agent = _ScriptedAgent(
@@ -1710,6 +1787,7 @@ def test_apply_event_data_reply_still_applies_normally_when_only_one_hold_is_pen
 
 
 def test_resolve_clarification_writes_the_answer_without_resuming(deps):
+    """Resolve clarification writes the answer without resuming."""
     agent = _ScriptedAgent(
         {
             "Extract this operational event": '{"classification": null, "area": null, "entities": [], "description": null, "severity": null, "occurred_at": null}',
@@ -1734,6 +1812,7 @@ def test_resolve_clarification_writes_the_answer_without_resuming(deps):
 
 
 def test_continue_after_clarification_finishes_the_run(deps):
+    """Continue after clarification finishes the run."""
     agent = _happy_path_agent(risk_score="0.1", selected="status_check")
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
     agent._dispatch["Extract this operational event"] = '{"classification": null, "area": "north_sector", "entities": [], "description": "d", "severity": "s", "occurred_at": "2026-08-20T09:00:00"}'
@@ -1748,6 +1827,7 @@ def test_continue_after_clarification_finishes_the_run(deps):
 
 
 def test_resolve_approval_denial_is_synchronous_with_no_continuation_needed(deps):
+    """Resolve approval denial is synchronous with no continuation needed."""
     agent = _happy_path_agent(risk_score="0.9", selected="dispatch_response")
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
 
@@ -1765,6 +1845,7 @@ def test_resolve_approval_denial_is_synchronous_with_no_continuation_needed(deps
 
 
 def test_resolve_approval_then_continue_after_approval_composes_to_success(deps):
+    """Resolve approval then continue after approval composes to success."""
     agent = _happy_path_agent(risk_score="0.9", selected="dispatch_response", agent_task="dispatch to gate 3")
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
 
@@ -1784,6 +1865,7 @@ def test_process_report_no_match_selection_writes_a_terminal_outcome_not_a_hold(
     # nothing a hold could ever resolve — it must behave like
     # uncertain/closed_on_precedent: a real terminal outcome plus a
     # one-way notification, never a held_events row.
+    """Process report no match selection writes a terminal outcome not a hold."""
     agent = _ScriptedAgent(
         {
             "Extract this operational event": _extraction_response(),
@@ -1816,6 +1898,7 @@ def test_an_ambiguous_selection_hold_resolves_to_a_real_protocol_and_resumes(dep
     # fix, `selected_protocol_name` stayed None for an ambiguous hold and
     # continue_after_approval had nothing real to run — this asserts a
     # chosen candidate reaches it, not just that the None case is absent.
+    """An ambiguous selection hold resolves to a real protocol and resumes."""
     agent = _ScriptedAgent(
         {
             "Extract this operational event": _extraction_response(),
@@ -1857,12 +1940,15 @@ from protocols.model import CriticalityLevel, Protocol, ProtocolRunResult, Step,
 
 
 class _ScriptedMainAgent:
+    """ScriptedMainAgent."""
     def __init__(self, response_text, status="success"):
+        """Initialize this test helper."""
         self._response_text = response_text
         self._status = status
         self.calls = []
 
     def process(self, text, allowed_tools):
+        """Process."""
         self.calls.append((text, allowed_tools))
 
         class _Result:
@@ -1873,11 +1959,14 @@ class _ScriptedMainAgent:
 
 
 class _SequentialMainAgent:
+    """SequentialMainAgent."""
     def __init__(self, responses):
+        """Initialize this test helper."""
         self._responses = list(responses)
         self.calls = []
 
     def process(self, text, allowed_tools):
+        """Process."""
         self.calls.append((text, allowed_tools))
         response_text, status = self._responses.pop(0)
 
@@ -1891,11 +1980,13 @@ class _SequentialMainAgent:
 
 @pytest.fixture
 def registry():
+    """Registry."""
     agent = ReferenceAgent(model="m")
     return build_agent_registry({}, [agent])
 
 
 def _protocol(**overrides):
+    """Protocol."""
     fields = dict(
         name="dispatch_response",
         description="d",
@@ -1913,12 +2004,14 @@ def _protocol(**overrides):
 
 
 def test_parse_single_agent_block():
+    """Parse single agent block."""
     tasks = _parse_formulation_response("AGENT: reference_agent\nTASK: check gate 3")
 
     assert tasks == {"reference_agent": "check gate 3"}
 
 
 def test_parse_multiple_agent_blocks():
+    """Parse multiple agent blocks."""
     response = "AGENT: a1\nTASK: do the first thing\nAGENT: a2\nTASK: do the second thing"
 
     tasks = _parse_formulation_response(response)
@@ -1930,6 +2023,7 @@ def test_parse_multiple_agent_blocks():
 
 
 def test_formulate_tasks_produces_a_step_per_participating_agent(registry):
+    """Formulate tasks produces a step per participating agent."""
     agent = _ScriptedMainAgent("AGENT: reference_agent\nTASK: check status at gate 3")
 
     result = formulate_tasks(agent, _protocol(), registry, "raw", "fire", "north", "d")
@@ -1957,6 +2051,7 @@ def test_legacy_formulated_steps_still_have_no_step_id(registry):
 
 
 def test_formulation_preserves_valid_required_event_fields(registry):
+    """Formulation preserves valid required event fields."""
     agent = _ScriptedMainAgent(json.dumps({
         "steps": [{
             "step_id": "check-location",
@@ -1974,6 +2069,7 @@ def test_formulation_preserves_valid_required_event_fields(registry):
 
 
 def test_formulation_preserves_required_event_fields_when_json_is_markdown_fenced(registry):
+    """Formulation preserves required event fields when json is markdown fenced."""
     fenced = "```json\n" + json.dumps({
         "steps": [{
             "step_id": "check-location",
@@ -2035,6 +2131,7 @@ def test_formulation_merges_the_floor_alongside_the_models_own_additional_fields
 
 @pytest.fixture
 def two_agent_registry():
+    """Two agent registry."""
     return build_agent_registry({}, [ReferenceAgent(model="m"), HistoryAgent(model="m")])
 
 
@@ -2099,6 +2196,7 @@ def test_formulation_floor_survives_the_markdown_fenced_json_path_when_the_model
 
 
 def test_allowed_tools_are_filtered_to_what_the_agent_actually_exposes(registry):
+    """Allowed tools are filtered to what the agent actually exposes."""
     agent = _ScriptedMainAgent("AGENT: reference_agent\nTASK: t")
     protocol = _protocol(approved_tools=("check_status", "record_action", "some_other_tool_no_agent_has"))
 
@@ -2108,6 +2206,7 @@ def test_allowed_tools_are_filtered_to_what_the_agent_actually_exposes(registry)
 
 
 def test_missing_an_agents_block_fails_naming_that_agent(registry):
+    """Missing an agents block fails naming that agent."""
     agent = _ScriptedMainAgent("this response has no AGENT/TASK blocks at all")
 
     result = formulate_tasks(agent, _protocol(), registry, "raw", "fire", "north", "d")
@@ -2117,6 +2216,7 @@ def test_missing_an_agents_block_fails_naming_that_agent(registry):
 
 
 def test_formulation_repairs_one_invalid_response_with_the_parse_failure(registry):
+    """Formulation repairs one invalid response with the parse failure."""
     repaired = json.dumps({
         "steps": [{
             "step_id": "check-south",
@@ -2139,6 +2239,7 @@ def test_formulation_repairs_one_invalid_response_with_the_parse_failure(registr
 
 
 def test_unclear_task_status_fails_formulation(registry):
+    """Unclear task status fails formulation."""
     agent = _ScriptedMainAgent("missing context", status="unclear_task")
 
     result = formulate_tasks(agent, _protocol(), registry, "raw", "fire", "north", "d")
@@ -2147,6 +2248,7 @@ def test_unclear_task_status_fails_formulation(registry):
 
 
 def test_precedent_context_defaults_to_empty_and_is_optional(registry):
+    """Precedent context defaults to empty and is optional."""
     agent = _ScriptedMainAgent("AGENT: reference_agent\nTASK: t")
 
     result = formulate_tasks(agent, _protocol(), registry, "raw", "fire", "north", "d")  # no precedent_context passed
@@ -2155,6 +2257,7 @@ def test_precedent_context_defaults_to_empty_and_is_optional(registry):
 
 
 def _precedent(event_id="prior-1", *, resolved: bool, outcome="succeeded"):
+    """Precedent."""
     return PrecedentMatch(
         event_id=event_id, classification="fire", area="north", occurred_at="2026-01-01T00:00:00+00:00",
         protocol_name="report_fire_incident", steps_summary=[{"agent_name": "x", "result_text": "prior incident X"}],
@@ -2163,6 +2266,7 @@ def _precedent(event_id="prior-1", *, resolved: bool, outcome="succeeded"):
 
 
 def test_precedent_context_appears_in_the_prompt_when_given(registry):
+    """Precedent context appears in the prompt when given."""
     agent = _ScriptedMainAgent("AGENT: reference_agent\nTASK: t")
 
     formulate_tasks(agent, _protocol(), registry, "raw", "fire", "north", "d", precedent_context=(_precedent(resolved=True),))
@@ -2175,6 +2279,7 @@ def test_unresolved_precedent_is_excluded_from_the_prompt(registry):
     # failure reasoning into a new event's formulation prompt as unqualified "what was tried
     # before" primes the model to preemptively refuse a fresh attempt (the firefighting
     # crew-shift-status bug this fix addresses).
+    """Unresolved precedent is excluded from the prompt."""
     agent = _ScriptedMainAgent("AGENT: reference_agent\nTASK: t")
 
     formulate_tasks(
@@ -2187,6 +2292,7 @@ def test_unresolved_precedent_is_excluded_from_the_prompt(registry):
 
 
 def test_a_mix_of_resolved_and_unresolved_precedents_only_shows_the_resolved_one(registry):
+    """A mix of resolved and unresolved precedents only shows the resolved one."""
     agent = _ScriptedMainAgent("AGENT: reference_agent\nTASK: t")
 
     formulate_tasks(
@@ -2203,6 +2309,7 @@ def test_a_mix_of_resolved_and_unresolved_precedents_only_shows_the_resolved_one
 
 
 def test_conversation_messages_appear_in_the_prompt_when_given(registry):
+    """Conversation messages appear in the prompt when given."""
     agent = _ScriptedMainAgent("AGENT: reference_agent\nTASK: t")
 
     formulate_tasks(
@@ -2215,6 +2322,7 @@ def test_conversation_messages_appear_in_the_prompt_when_given(registry):
 
 
 def test_conversation_messages_absent_by_default(registry):
+    """Conversation messages absent by default."""
     agent = _ScriptedMainAgent("AGENT: reference_agent\nTASK: t")
 
     formulate_tasks(agent, _protocol(), registry, "raw", "fire", "north", "d")
@@ -2223,6 +2331,7 @@ def test_conversation_messages_absent_by_default(registry):
 
 
 def test_corrects_event_id_is_parsed_when_the_model_names_a_shown_precedent(registry):
+    """Corrects event id is parsed when the model names a shown precedent."""
     agent = _ScriptedMainAgent(json.dumps({
         "steps": [{"step_id": "s1", "agent_name": "reference_agent", "task": "t", "depends_on": [], "required_event_fields": []}],
         "corrects_event_id": "prior-ok",
@@ -2240,6 +2349,7 @@ def test_corrects_event_id_is_parsed_when_the_model_names_a_shown_precedent(regi
 def test_corrects_event_id_is_rejected_when_not_one_of_the_shown_precedents(registry):
     # Never trust an arbitrary model-supplied event_id -- only a candidate it was actually shown
     # (a resolved precedent) counts as a valid correction/retraction link.
+    """Corrects event id is rejected when not one of the shown precedents."""
     agent = _ScriptedMainAgent(json.dumps({
         "steps": [{"step_id": "s1", "agent_name": "reference_agent", "task": "t", "depends_on": [], "required_event_fields": []}],
         "corrects_event_id": "some-other-event-not-shown",
@@ -2252,6 +2362,7 @@ def test_corrects_event_id_is_rejected_when_not_one_of_the_shown_precedents(regi
 
 
 def test_corrects_event_id_defaults_to_none(registry):
+    """Corrects event id defaults to none."""
     agent = _ScriptedMainAgent(json.dumps({
         "steps": [{"step_id": "s1", "agent_name": "reference_agent", "task": "t", "depends_on": [], "required_event_fields": []}],
     }))
@@ -2262,6 +2373,7 @@ def test_corrects_event_id_defaults_to_none(registry):
 
 
 def test_formulate_tasks_passes_no_tools_to_the_main_agent(registry):
+    """Formulate tasks passes no tools to the main agent."""
     agent = _ScriptedMainAgent("AGENT: reference_agent\nTASK: t")
 
     formulate_tasks(agent, _protocol(), registry, "raw", "fire", "north", "d")
@@ -2273,6 +2385,7 @@ def test_formulate_tasks_passes_no_tools_to_the_main_agent(registry):
 
 
 def test_rewrite_task_returns_the_full_response_as_the_new_task():
+    """Rewrite task returns the full response as the new task."""
     agent = _ScriptedMainAgent("check status specifically at gate 3, not the whole perimeter")
     step = Step(agent_name="reference_agent", task_text="check status", allowed_tools=("check_status",))
 
@@ -2282,6 +2395,7 @@ def test_rewrite_task_returns_the_full_response_as_the_new_task():
 
 
 def test_rewrite_task_raises_when_the_agent_reports_unclear_again():
+    """Rewrite task raises when the agent reports unclear again."""
     agent = _ScriptedMainAgent("still unclear", status="unclear_task")
     step = Step(agent_name="a", task_text="t", allowed_tools=())
 
@@ -2290,6 +2404,7 @@ def test_rewrite_task_raises_when_the_agent_reports_unclear_again():
 
 
 def test_rewrite_task_matches_the_executors_task_rewriter_signature():
+    """Rewrite task matches the executors task rewriter signature."""
     import functools
 
     from protocols.executor import execute_steps
@@ -2331,6 +2446,7 @@ def test_rewrite_task_matches_the_executors_task_rewriter_signature():
 
 
 def test_end_to_end_through_the_mocked_adapter(monkeypatch, registry):
+    """End to end through the mocked adapter."""
     from orchestrator.main_agent import MainAgent
 
     class _FakeOutput:

@@ -16,6 +16,8 @@ from tools.log_events import provider_request_finished
 
 @dataclass(frozen=True)
 class _CallStart:
+    """CallStart."""
+
     trace_id: str
     stage: str
     model: str
@@ -83,6 +85,8 @@ def _purpose_for_event(stage: str, call_type: Any) -> str:
 
 
 def _next_sequence(trace_id: str) -> int | None:
+    """Next sequence."""
+
     if not trace_id:
         return None
     with _lock:
@@ -106,10 +110,14 @@ def track_provider_finish_reasons():
 
 
 def _provider_name(model: str) -> str:
+    """Provider name."""
+
     return model.split("/", 1)[0] if "/" in model else model
 
 
 def _usage_value(usage: dict[str, Any] | None, *names: str) -> Any:
+    """Usage value."""
+
     if not usage:
         return None
     for name in names:
@@ -119,6 +127,8 @@ def _usage_value(usage: dict[str, Any] | None, *names: str) -> Any:
 
 
 def _cache_tokens(usage: dict[str, Any] | None) -> Any:
+    """Cache tokens."""
+
     direct = _usage_value(usage, "cached_tokens", "cache_read_tokens")
     if direct is not None:
         return direct
@@ -127,6 +137,8 @@ def _cache_tokens(usage: dict[str, Any] | None) -> Any:
 
 
 def _provider_error_detail(event: Any) -> str | None:
+    """Provider error detail."""
+
     error = getattr(event, "error", None)
     if error is None:
         return None
@@ -142,6 +154,8 @@ def _provider_error_detail(event: Any) -> str | None:
 
 
 def _write_finish(start: _CallStart, event: Any) -> None:
+    """Write finish."""
+
     usage = getattr(event, "usage", None)
     usage = usage if isinstance(usage, dict) else None
     failed = getattr(event, "type", "") == "llm_call_failed"

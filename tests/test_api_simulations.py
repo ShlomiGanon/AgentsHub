@@ -1,4 +1,4 @@
-"""GET /Simulations, GET /Simulations/<key> (docs/profile_simulations_design.md)."""
+"""GET /Simulations, GET /Simulations/<key>."""
 
 import pytest
 
@@ -33,6 +33,7 @@ _SIMULATIONS = (
 
 
 def _ctx(tmp_path, teardown_ctx):
+    """Ctx."""
     ctx = build_context(
         tmp_path,
         simulation_users=_SIMULATION_USERS,
@@ -44,6 +45,7 @@ def _ctx(tmp_path, teardown_ctx):
 
 
 def test_list_simulations_is_commander_only(tmp_path, teardown_ctx):
+    """List simulations is commander only."""
     ctx = _ctx(tmp_path, teardown_ctx)
     client = build_app(ctx).test_client()
 
@@ -69,6 +71,7 @@ def test_list_simulations_empty_by_default(tmp_path, teardown_ctx):
 
 
 def test_get_simulation_is_commander_only(tmp_path, teardown_ctx):
+    """Get simulation is commander only."""
     ctx = _ctx(tmp_path, teardown_ctx)
     client = build_app(ctx).test_client()
 
@@ -76,6 +79,7 @@ def test_get_simulation_is_commander_only(tmp_path, teardown_ctx):
 
 
 def test_get_simulation_materializes_reserved_ids_and_keeps_the_shape(tmp_path, teardown_ctx):
+    """Get simulation materializes reserved ids and keeps the shape."""
     ctx = _ctx(tmp_path, teardown_ctx)
     client = build_app(ctx).test_client()
 
@@ -97,6 +101,7 @@ def test_get_simulation_materializes_reserved_ids_and_keeps_the_shape(tmp_path, 
 
 
 def test_get_unknown_simulation_is_404(tmp_path, teardown_ctx):
+    """Get unknown simulation is 404."""
     ctx = _ctx(tmp_path, teardown_ctx)
     client = build_app(ctx).test_client()
 

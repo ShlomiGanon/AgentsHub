@@ -1,3 +1,5 @@
+"""Unsafe-system guardrails and refusals."""
+
 import json
 
 import pytest
@@ -13,6 +15,7 @@ BOT_SERVICE_KEY = "unsafe-system-test-service-key"
 
 @pytest.fixture
 def ctx(tmp_path):
+    """Ctx."""
     context = build_context(tmp_path)
     yield context
     context.queue.stop()
@@ -20,11 +23,13 @@ def ctx(tmp_path):
 
 
 def _enable_bot_service(ctx, monkeypatch):
+    """Enable bot service."""
     monkeypatch.setenv("BOT_SERVICE_KEY", BOT_SERVICE_KEY)
     ctx.deps.persistence.write_user("bot-service", "commander")
 
 
 def _service_headers(identity="bot-service", chat_id=None, chat_type=None):
+    """Service headers."""
     headers = {"X-Identity": identity, "X-Service-Key": BOT_SERVICE_KEY}
     if chat_id is not None:
         headers["X-Telegram-Chat-ID"] = str(chat_id)
@@ -34,6 +39,7 @@ def _service_headers(identity="bot-service", chat_id=None, chat_type=None):
 
 
 def test_new_and_legacy_settings_default_to_open_mode(tmp_path):
+    """New and legacy settings default to open mode."""
     db_path = str(tmp_path / "deployment.db")
     new_store = SettingsStore(db_path, 3, 0.5, 30)
     assert new_store.get_safe_mode() is False
@@ -49,6 +55,7 @@ def test_new_and_legacy_settings_default_to_open_mode(tmp_path):
 
 
 def test_manual_and_automatic_records_keep_distinct_sources(tmp_path):
+    """Manual and automatic records keep distinct sources."""
     store = SQLitePersistence(str(tmp_path / "records.db"))
     try:
         store.write_user("manual", "viewer", "Manual User")
@@ -76,6 +83,7 @@ def test_manual_and_automatic_records_keep_distinct_sources(tmp_path):
 
 
 def test_system_exposes_and_changes_safe_mode_only_for_commander(ctx):
+    """System exposes and changes safe mode only for commander."""
     client = build_app(ctx).test_client()
     commander_view = client.get("/SYSTEM", headers=auth_headers(COMMANDER_IDENTITY))
     assert commander_view.status_code == 200
@@ -98,6 +106,7 @@ def test_system_exposes_and_changes_safe_mode_only_for_commander(ctx):
 
 
 def test_invalid_multi_setting_request_is_not_partially_applied(ctx):
+    """Invalid multi setting request is not partially applied."""
     client = build_app(ctx).test_client()
     response = client.put(
         "/SYSTEM",
@@ -110,6 +119,7 @@ def test_invalid_multi_setting_request_is_not_partially_applied(ctx):
 
 
 def test_open_mode_admission_atomically_registers_user_and_group(ctx, monkeypatch):
+    """Open mode admission atomically registers user and group."""
     _enable_bot_service(ctx, monkeypatch)
     client = build_app(ctx).test_client()
     response = client.post(
@@ -138,6 +148,7 @@ def test_open_mode_admission_atomically_registers_user_and_group(ctx, monkeypatc
 
 
 def test_safe_mode_blocks_unknown_and_automatic_entities_until_approved(ctx, monkeypatch):
+    """Safe mode blocks unknown and automatic entities until approved."""
     _enable_bot_service(ctx, monkeypatch)
     client = build_app(ctx).test_client()
     admission_payload = {
@@ -167,6 +178,7 @@ def test_safe_mode_blocks_unknown_and_automatic_entities_until_approved(ctx, mon
 
 
 def test_safe_mode_does_not_create_unknown_records(ctx, monkeypatch):
+    """Safe mode does not create unknown records."""
     _enable_bot_service(ctx, monkeypatch)
     ctx.deps.settings_store.set_safe_mode(True)
     client = build_app(ctx).test_client()
@@ -181,6 +193,7 @@ def test_safe_mode_does_not_create_unknown_records(ctx, monkeypatch):
 
 
 def test_generic_api_never_auto_registers_an_unknown_identity(ctx):
+    """Generic api never auto registers an unknown identity."""
     client = build_app(ctx).test_client()
     response = client.post(
         "/Msg",
@@ -192,6 +205,7 @@ def test_generic_api_never_auto_registers_an_unknown_identity(ctx):
 
 
 def test_admission_requires_the_real_bot_service_credentials(ctx, monkeypatch):
+    """Admission requires the real bot service credentials."""
     _enable_bot_service(ctx, monkeypatch)
     client = build_app(ctx).test_client()
     payload = {"telegram_identity": "7333", "chat_id": "7333", "chat_type": "private"}
@@ -201,6 +215,7 @@ def test_admission_requires_the_real_bot_service_credentials(ctx, monkeypatch):
 
 
 def test_private_admission_has_no_user_agent_assignment(ctx, monkeypatch):
+    """Private admission has no user agent assignment."""
     _enable_bot_service(ctx, monkeypatch)
     client = build_app(ctx).test_client()
     body = client.post(

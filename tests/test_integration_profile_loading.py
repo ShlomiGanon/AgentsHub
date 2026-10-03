@@ -1,4 +1,4 @@
-"""9.3 — Test profile loading and validation (work_plan.md §9.3).
+"""9.3 — Test profile loading and validation.
 
 Most of this subtask's bullets are already thoroughly covered at the unit
 level — `tests/test_profile_loading.py` (missing env vars, hash tracking)
@@ -18,6 +18,7 @@ from tests.helpers import write_profile_module
 
 
 def test_a_valid_profile_loads_exactly_its_agents_protocols_event_types_and_areas(monkeypatch, test_core_model, test_sub_model):
+    """A valid profile loads exactly its agents protocols event types and areas."""
     monkeypatch.setenv("AGENTSHUB_FIXTURE_BOT_TOKEN", "token-value")
     monkeypatch.setenv("AGENTSHUB_FIXTURE_MODEL_KEY", "key-value")
 
@@ -35,6 +36,7 @@ def test_a_valid_profile_loads_exactly_its_agents_protocols_event_types_and_area
 
 
 def test_two_profiles_differing_only_in_model_route_each_to_its_own(tmp_path, monkeypatch, test_core_model):
+    """Two profiles differing only in model route each to its own."""
     from agents import adapter
     from config.base import build_tier_model
 

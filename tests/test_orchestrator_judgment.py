@@ -1,3 +1,5 @@
+"""Success-judgment prompts and outcomes."""
+
 import types
 
 import pytest
@@ -9,12 +11,15 @@ from protocols.executor import StepOutcome
 
 
 class _ScriptedMainAgent:
+    """ScriptedMainAgent."""
     def __init__(self, response_text, status="success"):
+        """Initialize this test helper."""
         self._response_text = response_text
         self._status = status
         self.calls = []
 
     def process(self, text, allowed_tools):
+        """Process."""
         self.calls.append((text, allowed_tools))
 
         class _Result:
@@ -25,6 +30,7 @@ class _ScriptedMainAgent:
 
 
 def _protocol():
+    """Protocol."""
     return Protocol(
         name="p",
         description="d",
@@ -37,6 +43,7 @@ def _protocol():
 
 
 def _outcomes():
+    """Outcomes."""
     step = Step(agent_name="a1", task_text="check gate 3", allowed_tools=())
     return (StepOutcome(step=step, result_text="gate 3 is clear", attempt_count=1, succeeded=True),)
 
@@ -46,23 +53,27 @@ def _outcomes():
 
 @pytest.mark.parametrize("verdict", ["success", "failure", "uncertain"])
 def test_parse_each_verdict(verdict):
+    """Parse each verdict."""
     result = _parse_judgment_response(f"VERDICT: {verdict}\nREASONING: because")
 
     assert result == SuccessVerdict(verdict=verdict, reasoning="because")
 
 
 def test_parse_is_case_insensitive_on_verdict():
+    """Parse is case insensitive on verdict."""
     result = _parse_judgment_response("VERDICT: SUCCESS\nREASONING: r")
 
     assert result.verdict == "success"
 
 
 def test_parse_rejects_an_invalid_verdict_word():
+    """Parse rejects an invalid verdict word."""
     with pytest.raises(OrchestrationParseError):
         _parse_judgment_response("VERDICT: maybe\nREASONING: r")
 
 
 def test_parse_rejects_missing_reasoning():
+    """Parse rejects missing reasoning."""
     with pytest.raises(OrchestrationParseError):
         _parse_judgment_response("VERDICT: success")
 
@@ -71,6 +82,7 @@ def test_parse_rejects_missing_reasoning():
 
 
 def test_judge_success_returns_the_parsed_verdict():
+    """Judge success returns the parsed verdict."""
     agent = _ScriptedMainAgent("VERDICT: success\nREASONING: matches expected output")
 
     verdict = judge_success(agent, _protocol(), _outcomes())
@@ -79,6 +91,7 @@ def test_judge_success_returns_the_parsed_verdict():
 
 
 def test_judge_success_works_with_default_empty_insight_text():
+    """Judge success works with default empty insight text."""
     agent = _ScriptedMainAgent("VERDICT: uncertain\nREASONING: r")
 
     verdict = judge_success(agent, _protocol(), _outcomes())  # insight_text not passed
@@ -88,6 +101,7 @@ def test_judge_success_works_with_default_empty_insight_text():
 
 
 def test_insight_text_appears_in_the_prompt_when_given():
+    """Insight text appears in the prompt when given."""
     agent = _ScriptedMainAgent("VERDICT: success\nREASONING: r")
 
     judge_success(agent, _protocol(), _outcomes(), insight_text="matches a resolved precedent")
@@ -96,6 +110,7 @@ def test_insight_text_appears_in_the_prompt_when_given():
 
 
 def test_judge_success_passes_no_tools():
+    """Judge success passes no tools."""
     agent = _ScriptedMainAgent("VERDICT: success\nREASONING: r")
 
     judge_success(agent, _protocol(), _outcomes())
@@ -104,7 +119,7 @@ def test_judge_success_passes_no_tools():
 
 
 def test_judgment_prompt_states_a_tool_result_proves_only_its_own_effect():
-    """Stage 7, docs/bar_improves.md: the success-judgment prompt itself now
+    """Stage 7,: the success-judgment prompt itself now
     states the rule — a tool result proves only its own recorded effect,
     never an unobserved real-world outcome. Asserted on the built prompt
     text (deterministic, this codebase's own words), never on any model's
@@ -160,6 +175,7 @@ def test_judge_success_never_produces_a_stored_step_result_claiming_arrival():
 
 
 def test_unclear_task_status_raises():
+    """Unclear task status raises."""
     agent = _ScriptedMainAgent("missing info", status="unclear_task")
 
     with pytest.raises(OrchestrationParseError):
@@ -167,6 +183,7 @@ def test_unclear_task_status_raises():
 
 
 def test_end_to_end_through_the_mocked_adapter(monkeypatch):
+    """End to end through the mocked adapter."""
     from orchestrator.main_agent import MainAgent
 
     class _FakeOutput:
@@ -193,6 +210,7 @@ from orchestrator.precedent import determine_closure, look_up_precedent
 
 
 def _match(event_id, resolved):
+    """Match."""
     return PrecedentMatch(
         event_id=event_id,
         classification="fire",
@@ -206,11 +224,14 @@ def _match(event_id, resolved):
 
 
 class _ScriptedHistoryQueryService:
+    """ScriptedHistoryQueryService."""
     def __init__(self, matches):
+        """Initialize this test helper."""
         self._matches = matches
         self.calls = []
 
     def search_precedents(self, target_event_id, classification, area, target_event_occurred_at):
+        """Search precedents."""
         self.calls.append((target_event_id, classification, area, target_event_occurred_at))
         return self._matches
 
@@ -219,6 +240,7 @@ class _ScriptedHistoryQueryService:
 
 
 def test_look_up_precedent_passes_arguments_through():
+    """Look up precedent passes arguments through."""
     service = _ScriptedHistoryQueryService([_match("evt-old", True)])
 
     result = look_up_precedent(service, "evt-new", "fire", "north_sector", "2026-08-20T10:00:00")
@@ -228,6 +250,7 @@ def test_look_up_precedent_passes_arguments_through():
 
 
 def test_look_up_precedent_returns_empty_tuple_for_no_matches():
+    """Look up precedent returns empty tuple for no matches."""
     service = _ScriptedHistoryQueryService([])
 
     assert look_up_precedent(service, "evt-new", "fire", "north", "t") == ()
@@ -237,28 +260,33 @@ def test_look_up_precedent_returns_empty_tuple_for_no_matches():
 
 
 def test_high_risk_never_closes_even_with_a_resolved_match():
+    """High risk never closes even with a resolved match."""
     precedents = (_match("evt-old", resolved=True),)
 
     assert determine_closure("high", "fire", precedents) is None
 
 
 def test_low_risk_with_resolved_match_closes():
+    """Low risk with resolved match closes."""
     precedents = (_match("evt-old", resolved=True),)
 
     assert determine_closure("low", "fire", precedents) == "evt-old"
 
 
 def test_low_risk_with_only_unresolved_match_does_not_close():
+    """Low risk with only unresolved match does not close."""
     precedents = (_match("evt-old", resolved=False),)
 
     assert determine_closure("low", "fire", precedents) is None
 
 
 def test_low_risk_with_no_matches_does_not_close():
+    """Low risk with no matches does not close."""
     assert determine_closure("low", "fire", ()) is None
 
 
 def test_human_activation_never_closes_even_with_a_resolved_match():
+    """Human activation never closes even with a resolved match."""
     precedents = (_match("evt-old", resolved=True),)
 
     assert determine_closure("low", "human_activation", precedents) is None
@@ -267,6 +295,7 @@ def test_human_activation_never_closes_even_with_a_resolved_match():
 def test_most_recent_resolved_match_is_used_among_several():
     # search_precedents already returns most-recent-first; the first
     # resolved one encountered is used.
+    """Most recent resolved match is used among several."""
     precedents = (_match("evt-unresolved-recent", resolved=False), _match("evt-resolved-older", resolved=True))
 
     assert determine_closure("low", "fire", precedents) == "evt-resolved-older"

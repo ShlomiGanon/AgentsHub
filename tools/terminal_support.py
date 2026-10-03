@@ -17,6 +17,8 @@ do_request = _do_request
 
 
 def _run_user_admin(argv: list[str]) -> int:
+    """Run user admin."""
+
     from cli.user_admin import main
 
     return main(argv)
@@ -39,6 +41,8 @@ SAMPLE_EVENT_TEXTS = [
 
 
 def _catalog(catalog: MessageCatalog | None = None) -> MessageCatalog:
+    """Catalog."""
+
     return catalog or get_catalog("en")
 
 
@@ -46,22 +50,32 @@ class ConsoleTelegramClient(TelegramClient):
     """The one substitution either tool makes: prints exactly what the real `PTBTelegramClient` would have sent to Telegram, instead of sending it."""
 
     def __init__(self, owning_identity: str):
+        """Init."""
+
         self._owning_identity = owning_identity
         self._next_status_id = 1
 
     def _addressed_to_this_console(self, chat_id: str) -> bool:
+        """Addressed to this console."""
+
         return chat_id in (self._owning_identity, CONSOLE_CHAT_ID)
 
     async def validate_token(self) -> bool:
+        """Validate token."""
+
         return True
 
     async def send_text(self, chat_id: str, text: str) -> None:
+        """Send text."""
+
         if not self._addressed_to_this_console(chat_id):
             return
         for chunk in split_message(text):
             print(f"\n{chunk}")
 
     async def send_status(self, chat_id: str, text: str) -> str:
+        """Send status."""
+
         status_id = f"console-status-{self._next_status_id}"
         self._next_status_id += 1
         if self._addressed_to_this_console(chat_id):
@@ -69,14 +83,20 @@ class ConsoleTelegramClient(TelegramClient):
         return status_id
 
     async def edit_status(self, chat_id: str, message_id: str, text: str) -> None:
+        """Edit status."""
+
         if self._addressed_to_this_console(chat_id):
             print(f"\r\x1b[2K{text}")
 
     async def delete_status(self, chat_id: str, message_id: str) -> None:
+        """Delete status."""
+
         if self._addressed_to_this_console(chat_id):
             print("\r\x1b[2K", end="", flush=True)
 
     async def send_with_buttons(self, chat_id: str, text: str, buttons: Sequence[tuple[str, str]]) -> None:
+        """Send with buttons."""
+
         if not self._addressed_to_this_console(chat_id):
             return
         chunks = split_message(text)
@@ -85,12 +105,18 @@ class ConsoleTelegramClient(TelegramClient):
         print(f"\n{chunks[-1] if chunks else ''}")
 
     async def send_reply(self, chat_id: str, text: str, reply_to_message_id: str | None) -> None:
+        """Send reply."""
+
         await self.send_text(chat_id, text)
 
     async def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> None:
+        """Answer callback query."""
+
         pass
 
     def run_polling(self, register_handlers) -> None:
+        """Run polling."""
+
         raise NotImplementedError("the terminal client never runs a polling loop of this kind")
 
 
@@ -98,19 +124,27 @@ class ObservingApiClient:
     """Delegates every call to the real `HttpApiClient` unchanged, and additionally remembers the last `submit_message` result — so the REPL can learn the job ID `handle_incoming_messa..."""
 
     def __init__(self, inner: HttpApiClient):
+        """Init."""
+
         self._inner = inner
         self.last_submission = None
 
     def __getattr__(self, name):
+        """Getattr."""
+
         return getattr(self._inner, name)
 
     async def submit_message(self, *args, **kwargs):
+        """Submit message."""
+
         submission_result = await self._inner.submit_message(*args, **kwargs)
         self.last_submission = submission_result
         return submission_result
 
 
 def new_message_id() -> str:
+    """New message id."""
+
     return f"cli-{uuid.uuid4().hex[:8]}"
 
 
@@ -121,10 +155,14 @@ def notification_subject_id(note) -> str | None:
 
 
 def submit_event(base_url: str, text: str, sender_identity: str) -> tuple[int, dict]:
+    """Submit event."""
+
     return do_request(f"{base_url}/Event", "POST", sender_identity, {"text": text, "sender_identity": sender_identity})
 
 
 async def choose_mode(catalog: MessageCatalog | None = None) -> str | None:
+    """Choose mode."""
+
     messages = _catalog(catalog)
     while True:
         selected_option = (await ainput(messages.text("terminal.mode_prompt"))).strip().lower()
@@ -140,6 +178,8 @@ async def choose_mode(catalog: MessageCatalog | None = None) -> str | None:
 async def choose_event_payload(
     default_sender: str, catalog: MessageCatalog | None = None
 ) -> tuple[str, str] | None:
+    """Choose event payload."""
+
     messages = _catalog(catalog)
     print(messages.text("terminal.sample_events"))
     for choice_number, (label_key, _) in enumerate(SAMPLE_EVENT_TEXTS, start=1):

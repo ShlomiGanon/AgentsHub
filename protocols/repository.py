@@ -15,12 +15,18 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ProtocolSet:
+    """ProtocolSet."""
+
     protocols: tuple[Protocol, ...]
 
     def all(self) -> tuple[Protocol, ...]:
+        """All."""
+
         return self.protocols
 
     def get(self, name: str) -> Protocol | None:
+        """Get."""
+
         for protocol in self.protocols:
             if protocol.name == name:
                 return protocol
@@ -28,6 +34,8 @@ class ProtocolSet:
 
 
 def load_protocols(loaded_profile: "LoadedProfile") -> ProtocolSet:
+    """Load protocols."""
+
     return ProtocolSet(protocols=loaded_profile.protocols)
 
 
@@ -35,10 +43,14 @@ EDIT_SUCCESS_MESSAGE = "The running system is unchanged. This edit applies from 
 
 
 def read_protocols(protocol_set) -> tuple[Protocol, ...]:
+    """Read protocols."""
+
     return protocol_set.all()
 
 
 def add_protocol(module_path: str, current_protocols: tuple[Protocol, ...], agents_by_name: dict, new_protocol: Protocol) -> str:
+    """Add protocol."""
+
     if any(protocol.name == new_protocol.name for protocol in current_protocols):
         raise ProtocolEditError(f"a protocol named '{new_protocol.name}' already exists — use replace, not add")
 
@@ -48,6 +60,8 @@ def add_protocol(module_path: str, current_protocols: tuple[Protocol, ...], agen
 
 
 def replace_protocol(module_path: str, current_protocols: tuple[Protocol, ...], agents_by_name: dict, updated_protocol: Protocol) -> str:
+    """Replace protocol."""
+
     if not any(protocol.name == updated_protocol.name for protocol in current_protocols):
         raise ProtocolEditError(f"no protocol named '{updated_protocol.name}' exists — use add, not replace")
 
@@ -58,6 +72,8 @@ def replace_protocol(module_path: str, current_protocols: tuple[Protocol, ...], 
 
 
 def remove_protocol(module_path: str, current_protocols: tuple[Protocol, ...], name: str) -> str:
+    """Remove protocol."""
+
     if not any(protocol.name == name for protocol in current_protocols):
         raise ProtocolEditError(f"no protocol named '{name}' exists")
 
@@ -66,6 +82,8 @@ def remove_protocol(module_path: str, current_protocols: tuple[Protocol, ...], n
 
 
 def _validate_or_raise(protocol: Protocol, agents_by_name: dict) -> None:
+    """Validate or raise."""
+
     from profiles.loader import validate_single_protocol
 
     failures = validate_single_protocol(protocol, agents_by_name)
@@ -74,6 +92,8 @@ def _validate_or_raise(protocol: Protocol, agents_by_name: dict) -> None:
 
 
 def _render_protocol(protocol: Protocol) -> str:
+    """Format a protocol console line."""
+
     return (
         "    Protocol(\n"
         f"        name={protocol.name!r},\n"
@@ -88,6 +108,8 @@ def _render_protocol(protocol: Protocol) -> str:
 
 
 def _render_protocols_assignment(protocols: tuple[Protocol, ...]) -> str:
+    """Format a protocols assignment console line."""
+
     if not protocols:
         return "PROTOCOLS = []"
 
@@ -96,6 +118,8 @@ def _render_protocols_assignment(protocols: tuple[Protocol, ...]) -> str:
 
 
 def _find_protocols_assignment_span(source: str) -> tuple[int, int]:
+    """Find protocols assignment span."""
+
     tree = ast.parse(source)
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "PROTOCOLS" for target in node.targets):
@@ -105,6 +129,8 @@ def _find_protocols_assignment_span(source: str) -> tuple[int, int]:
 
 
 def _resolve_profile_file(module_path: str) -> Path:
+    """Resolve profile file."""
+
     spec = importlib.util.find_spec(module_path)
     if spec is None or spec.origin is None:
         raise ProtocolEditError(f"cannot locate source file for profile module '{module_path}'")
@@ -113,6 +139,8 @@ def _resolve_profile_file(module_path: str) -> Path:
 
 
 def _write_protocols(module_path: str, protocols: tuple[Protocol, ...]) -> None:
+    """Write protocols."""
+
     file_path = _resolve_profile_file(module_path)
     profile_source = file_path.read_text(encoding="utf-8")
     start_line, end_line = _find_protocols_assignment_span(profile_source)

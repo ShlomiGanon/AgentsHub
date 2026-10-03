@@ -1,4 +1,4 @@
-"""9.16 — Test history accuracy over time (work_plan.md §9.16).
+"""9.16 — Test history accuracy over time.
 
 Multi-month fidelity and cross-level query assembly are already covered
 by `tests/test_history_fidelity.py::test_seed_dataset_survives_three_summary_levels_with_contradictions`
@@ -19,11 +19,14 @@ from persistence.interface import open_persistence
 
 
 class _FakeHistoryAgent:
+    """FakeHistoryAgent."""
     def process(self, text, allowed_tools):
+        """Process."""
         return AgentResult("success", text)
 
 
 def test_a_late_arriving_report_regenerates_all_three_summary_levels(tmp_path):
+    """A late arriving report regenerates all three summary levels."""
     store = open_persistence(str(tmp_path / "late_arrival.db"))
     try:
         store.append_event({
@@ -72,7 +75,7 @@ def test_a_late_arriving_report_regenerates_all_three_summary_levels(tmp_path):
         store.close()
 
 
-# --- Stage 6 (docs/Next_Plan.md §11): prompt injection inside raw_text
+# Stage 6: prompt injection inside raw_text
 # cannot change field filtering or source selection. Which events are
 # returned is decided entirely by SQL WHERE-clause criteria
 # (persistence/sqlite_store.py::_search_where) before any event's raw_text
@@ -81,6 +84,7 @@ def test_a_late_arriving_report_regenerates_all_three_summary_levels(tmp_path):
 
 
 def test_injected_instruction_in_raw_text_does_not_widen_ownership_scoping(tmp_path):
+    """Injected instruction in raw text does not widen ownership scoping."""
     from history.contracts import HistoryQuerySpec
     from history.query import HistoryQueryService
 
@@ -117,6 +121,7 @@ def test_injected_instruction_in_raw_text_does_not_widen_ownership_scoping(tmp_p
 
 
 def test_injected_instruction_in_raw_text_does_not_change_which_event_a_list_covers(tmp_path):
+    """Injected instruction in raw text does not change which event a list covers."""
     from history.contracts import HistoryQuerySpec
     from history.query import HistoryQueryService
 

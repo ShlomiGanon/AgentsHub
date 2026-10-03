@@ -9,6 +9,7 @@ from tools.tracing import get_trace_id, new_trace_id, trace_context
 
 
 def test_log_record_is_a_single_json_object_with_named_fields(capsys):
+    """Log record is a single json object with named fields."""
     configure_logging("test_profile")
     logging.getLogger("test").info("something happened", extra={"risk_level": "high"})
 
@@ -23,6 +24,7 @@ def test_log_record_is_a_single_json_object_with_named_fields(capsys):
 
 
 def test_trace_id_is_attached_to_every_record_within_the_context(capsys):
+    """Trace id is attached to every record within the context."""
     configure_logging("test_profile")
 
     with trace_context() as trace_id:
@@ -37,6 +39,7 @@ def test_trace_id_is_attached_to_every_record_within_the_context(capsys):
 
 
 def test_trace_context_restores_previous_value_on_exit():
+    """Trace context restores previous value on exit."""
     outer_id = new_trace_id()
 
     with trace_context(outer_id):
@@ -56,10 +59,12 @@ class _FakePersistence:
     """
 
     def __init__(self, raise_on_write: Exception | None = None):
+        """Initialize this test helper."""
         self.calls: list[tuple[str | None, dict]] = []
         self._raise_on_write = raise_on_write
 
     def write_log_entry(self, trace_id, details):
+        """Write log entry."""
         if self._raise_on_write is not None:
             raise self._raise_on_write
         self.calls.append((trace_id, dict(details)))
@@ -79,6 +84,7 @@ def test_configure_logging_with_no_persistence_never_touches_any_write_path(caps
 
 
 def test_a_persistence_handle_receives_a_full_copy_of_every_log_record(capsys):
+    """A persistence handle receives a full copy of every log record."""
     fake = _FakePersistence()
     configure_logging("test_profile", persistence=fake)
 
@@ -102,6 +108,7 @@ def test_a_persistence_handle_receives_a_full_copy_of_every_log_record(capsys):
 
 
 def test_a_write_failure_in_the_db_sink_never_raises_into_the_caller(capsys):
+    """A write failure in the db sink never raises into the caller."""
     fake = _FakePersistence(raise_on_write=RuntimeError("disk full"))
     configure_logging("test_profile", persistence=fake)
 
@@ -115,6 +122,7 @@ def test_a_write_failure_in_the_db_sink_never_raises_into_the_caller(capsys):
 
 
 def test_a_write_failure_warns_to_stderr_exactly_once(capsys):
+    """A write failure warns to stderr exactly once."""
     fake = _FakePersistence(raise_on_write=RuntimeError("disk full"))
     configure_logging("test_profile", persistence=fake)
 
@@ -127,6 +135,7 @@ def test_a_write_failure_warns_to_stderr_exactly_once(capsys):
 
 
 def test_a_record_with_no_active_trace_context_is_passed_through_as_no_trace(capsys):
+    """A record with no active trace context is passed through as no trace."""
     fake = _FakePersistence()
     configure_logging("test_profile", persistence=fake)
 
@@ -137,6 +146,7 @@ def test_a_record_with_no_active_trace_context_is_passed_through_as_no_trace(cap
 
 
 def test_approved_telemetry_only_records_are_persisted(capsys):
+    """Approved telemetry only records are persisted."""
     fake = _FakePersistence()
     configure_logging("test_profile", persistence=fake)
 
@@ -158,6 +168,7 @@ def test_approved_telemetry_only_records_are_persisted(capsys):
 
 
 def test_unapproved_telemetry_only_noise_is_not_persisted(capsys):
+    """Unapproved telemetry only noise is not persisted."""
     fake = _FakePersistence()
     configure_logging("test_profile", persistence=fake)
 
@@ -187,6 +198,7 @@ def test_the_json_stream_is_unaffected_by_the_console_formatter(capsys):
 
 
 def test_console_line_has_the_documented_shape(capsys):
+    """Console line has the documented shape."""
     configure_logging("test_profile")
 
     with trace_context("abcdef1234567890"):
@@ -201,6 +213,7 @@ def test_console_line_has_the_documented_shape(capsys):
 
 
 def test_console_line_shows_eight_dashes_when_there_is_no_trace_id(capsys):
+    """Console line shows eight dashes when there is no trace id."""
     configure_logging("test_profile")
     logging.getLogger("test").info("outside any trace")
 
@@ -209,6 +222,7 @@ def test_console_line_shows_eight_dashes_when_there_is_no_trace_id(capsys):
 
 
 def test_console_line_for_a_known_event_is_a_curated_summary_not_a_dumped_dict(capsys):
+    """Console line for a known event is a curated summary not a dumped dict."""
     configure_logging("test_profile")
     logging.getLogger("api.ingestion").info(
         "intent classified",
@@ -224,6 +238,7 @@ def test_console_line_for_a_known_event_is_a_curated_summary_not_a_dumped_dict(c
 
 
 def test_console_line_for_an_unrecognized_event_falls_back_to_the_raw_message(capsys):
+    """Console line for an unrecognized event falls back to the raw message."""
     configure_logging("test_profile")
     logging.getLogger("httpx").info("HTTP Request: POST https://example.com/ \"HTTP/1.1 200 OK\"")
 
@@ -232,6 +247,7 @@ def test_console_line_for_an_unrecognized_event_falls_back_to_the_raw_message(ca
 
 
 def test_crewai_raw_openai_compatible_error_is_replaced_by_structured_provider_failure(capsys):
+    """Crewai raw openai compatible error is replaced by structured provider failure."""
     configure_logging("test_profile")
 
     logging.error("OpenAI API call failed: invalid provider request parameter")
@@ -254,6 +270,7 @@ def test_crewai_raw_openai_compatible_error_is_replaced_by_structured_provider_f
 
 
 def test_console_line_truncates_a_long_value_instead_of_wrapping(capsys):
+    """Console line truncates a long value instead of wrapping."""
     configure_logging("test_profile")
     long_reason = "x" * 300
     logging.getLogger("orchestrator.flows").info(
@@ -273,6 +290,7 @@ def test_console_line_distinguishes_no_match_from_ambiguous_protocol_selection(c
     # "protocol selection → ambiguous among []", misleading during manual
     # testing even though the actually-stored outcome was correctly
     # "no_match_protocol" the whole time.
+    """Console line distinguishes no match from ambiguous protocol selection."""
     configure_logging("test_profile")
     logging.getLogger("orchestrator.flows").info(
         "protocol selection",
@@ -286,6 +304,7 @@ def test_console_line_distinguishes_no_match_from_ambiguous_protocol_selection(c
 
 
 def test_console_line_still_renders_a_genuine_ambiguous_selection_correctly(capsys):
+    """Console line still renders a genuine ambiguous selection correctly."""
     configure_logging("test_profile")
     logging.getLogger("orchestrator.flows").info(
         "protocol selection",
@@ -341,6 +360,7 @@ def test_default_behavior_is_unchanged_json_on_stdout_human_readable_on_stderr(c
 
 
 def test_disabling_console_json_removes_only_the_stdout_handler(capsys, monkeypatch):
+    """Disabling console json removes only the stdout handler."""
     monkeypatch.setattr(base_config, "LOG_CONSOLE_JSON_ENABLED", False)
 
     configure_logging("test_profile")
@@ -352,6 +372,7 @@ def test_disabling_console_json_removes_only_the_stdout_handler(capsys, monkeypa
 
 
 def test_disabling_console_json_never_affects_the_db_sink(capsys, monkeypatch):
+    """Disabling console json never affects the db sink."""
     monkeypatch.setattr(base_config, "LOG_CONSOLE_JSON_ENABLED", False)
 
     fake = _FakePersistence()
@@ -366,6 +387,7 @@ def test_disabling_console_json_never_affects_the_db_sink(capsys, monkeypatch):
 
 
 def test_configure_logging_creates_server_jsonl(tmp_path, monkeypatch):
+    """Configure logging creates server jsonl."""
     monkeypatch.setenv("AGENTSHUB_LOG_DIR", str(tmp_path))
     configure_logging("profiles.response_team")
     logging.getLogger("test").info("hello-jsonl", extra={"event": "report_received"})
@@ -378,6 +400,7 @@ def test_configure_logging_creates_server_jsonl(tmp_path, monkeypatch):
 
 
 def test_agent_invocation_started_is_written_when_persistence_is_attached():
+    """Agent invocation started is written when persistence is attached."""
     from tools.log_events import agent_invocation_started
 
     fake = _FakePersistence()
@@ -403,6 +426,7 @@ def test_agent_invocation_started_is_written_when_persistence_is_attached():
 
 
 def test_reply_latency_is_written_when_persistence_is_attached():
+    """Reply latency is written when persistence is attached."""
     from tools.log_events import reply_latency
 
     fake = _FakePersistence()
@@ -415,7 +439,7 @@ def test_reply_latency_is_written_when_persistence_is_attached():
     assert events["reply_latency"]["elapsed_seconds"] == 1.5
 
 
-"""tools/simulator.py (work_plan.md §9.1)."""
+"""tools/simulator.py scripted sensor and operator traffic."""
 
 import types
 
@@ -429,6 +453,7 @@ from tests.crewai_fakes import install_crewai_stub
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch)
 
 
@@ -436,6 +461,7 @@ def _mock_crewai(monkeypatch):
 
 
 def test_fire_and_medical_text_differ_in_content():
+    """Fire and medical text differ in content."""
     fire_texts = {simulator._generate_text("fire", "north_sector") for _ in range(30)}
     medical_texts = {simulator._generate_text("medical", "north_sector") for _ in range(30)}
 
@@ -445,6 +471,7 @@ def test_fire_and_medical_text_differ_in_content():
 
 
 def test_unclassifiable_text_is_drawn_from_its_own_pool():
+    """Unclassifiable text is drawn from its own pool."""
     texts = {simulator._generate_text(None, "north_sector") for _ in range(30)}
 
     assert len(texts) > 1
@@ -453,6 +480,7 @@ def test_unclassifiable_text_is_drawn_from_its_own_pool():
 
 
 def test_generated_text_names_the_area():
+    """Generated text names the area."""
     text = simulator._generate_text("fire", "south_sector")
     assert "south_sector" in text
 
@@ -461,12 +489,14 @@ def test_generated_text_names_the_area():
 
 
 def test_unclassifiable_rate_of_one_always_produces_no_classification():
+    """Unclassifiable rate of one always produces no classification."""
     for _ in range(10):
         event_type, _area = simulator._next_classification_area(["fire"], ["north_sector"], repeat_rate=0.0, unclassifiable_rate=1.0, recent=[])
         assert event_type is None
 
 
 def test_repeat_rate_of_one_with_a_nonempty_pool_always_reuses_it():
+    """Repeat rate of one with a nonempty pool always reuses it."""
     recent = [("fire", "north_sector")]
     for _ in range(10):
         pair = simulator._next_classification_area(["fire", "medical"], ["north_sector", "south_sector"], repeat_rate=1.0, unclassifiable_rate=0.0, recent=recent)
@@ -476,6 +506,7 @@ def test_repeat_rate_of_one_with_a_nonempty_pool_always_reuses_it():
 def test_repeat_rate_of_one_with_an_empty_pool_falls_back_to_a_fresh_pick():
     # Nothing to repeat yet — must not crash or always return the same
     # thing by coincidence.
+    """Repeat rate of one with an empty pool falls back to a fresh pick."""
     event_type, area = simulator._next_classification_area(["fire"], ["north_sector"], repeat_rate=1.0, unclassifiable_rate=0.0, recent=[])
     assert event_type == "fire"
     assert area == "north_sector"
@@ -485,12 +516,14 @@ def test_repeat_rate_of_one_with_an_empty_pool_falls_back_to_a_fresh_pick():
 
 
 def test_giving_neither_count_nor_duration_is_an_error(capsys):
+    """Giving neither count nor duration is an error."""
     exit_code = simulator.main(["--port", "1", "--identity", "x"])
     assert exit_code == 1
     assert "exactly one of --count or --duration" in capsys.readouterr().err
 
 
 def test_giving_both_count_and_duration_is_an_error(capsys):
+    """Giving both count and duration is an error."""
     exit_code = simulator.main(["--port", "1", "--identity", "x", "--count", "1", "--duration", "1"])
     assert exit_code == 1
 
@@ -499,6 +532,7 @@ def test_giving_both_count_and_duration_is_an_error(capsys):
 
 
 def test_a_real_run_against_a_real_server_creates_the_events(tmp_path):
+    """A real run against a real server creates the events."""
     ctx = build_context(tmp_path, main_agent=happy_path_agent())
     with RunningApiServer(ctx) as server:
         exit_code = simulator.main([
@@ -521,6 +555,7 @@ def test_a_real_run_against_a_real_server_creates_the_events(tmp_path):
 
 
 def test_burst_size_sends_events_with_no_inter_event_delay(tmp_path):
+    """Burst size sends events with no inter event delay."""
     ctx = build_context(tmp_path, main_agent=happy_path_agent())
     with RunningApiServer(ctx) as server:
         exit_code = simulator.main([
@@ -542,6 +577,7 @@ def test_burst_size_sends_events_with_no_inter_event_delay(tmp_path):
 
 
 def test_an_unregistered_identity_fails_every_submission(tmp_path):
+    """An unregistered identity fails every submission."""
     ctx = build_context(tmp_path, main_agent=happy_path_agent())
     with RunningApiServer(ctx) as server:
         exit_code = simulator.main([

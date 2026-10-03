@@ -40,7 +40,9 @@ IDENTITY_HEADER = "X-Identity"
 
 
 class FakeResult:
+    """FakeResult."""
     def __init__(self, status, text):
+        """Initialize this test helper."""
         self.status = status
         self.text = text
 
@@ -53,11 +55,13 @@ class ScriptedAgent:
     """
 
     def __init__(self, dispatch: dict[str, str], default_status="success"):
+        """Initialize this test helper."""
         self._dispatch = dispatch
         self._default_status = default_status
         self.calls = []
 
     def process(self, text, allowed_tools):
+        """Process."""
         self.calls.append(text)
         for keyword, response_text in self._dispatch.items():
             if keyword in text:
@@ -66,10 +70,12 @@ class ScriptedAgent:
 
 
 class FakeSettings:
+    """FakeSettings."""
     def __init__(
         self, risk_threshold=0.5, retry_count=3, lookback_window_days=30, safe_mode=False, rich_reports_enabled=False,
         hold_reminder_minutes=10, hold_escalation_minutes=30, hold_expiry_hours=2,
     ):
+        """Initialize this test helper."""
         self.risk_threshold = risk_threshold
         self.retry_count = retry_count
         self.lookback_window_days = lookback_window_days
@@ -80,55 +86,72 @@ class FakeSettings:
         self.hold_expiry_hours = hold_expiry_hours
 
     def get_retry_count(self):
+        """Get retry count."""
         return self.retry_count
 
     def get_risk_threshold(self):
+        """Get risk threshold."""
         return self.risk_threshold
 
     def get_lookback_window_days(self):
+        """Get lookback window days."""
         return self.lookback_window_days
 
     def get_safe_mode(self):
+        """Get safe mode."""
         return self.safe_mode
 
     def get_rich_reports_enabled(self):
+        """Get rich reports enabled."""
         return self.rich_reports_enabled
 
     def set_retry_count(self, value):
+        """Set retry count."""
         self.retry_count = value
 
     def set_risk_threshold(self, value):
+        """Set risk threshold."""
         self.risk_threshold = value
 
     def set_lookback_window_days(self, value):
+        """Set lookback window days."""
         self.lookback_window_days = value
 
     def set_safe_mode(self, value):
+        """Set safe mode."""
         self.safe_mode = value
 
     def set_rich_reports_enabled(self, value):
+        """Set rich reports enabled."""
         self.rich_reports_enabled = value
 
     def get_hold_reminder_minutes(self):
+        """Get hold reminder minutes."""
         return self.hold_reminder_minutes
 
     def get_hold_escalation_minutes(self):
+        """Get hold escalation minutes."""
         return self.hold_escalation_minutes
 
     def get_hold_expiry_hours(self):
+        """Get hold expiry hours."""
         return self.hold_expiry_hours
 
     def set_hold_reminder_minutes(self, value):
+        """Set hold reminder minutes."""
         self.hold_reminder_minutes = value
 
     def set_hold_escalation_minutes(self, value):
+        """Set hold escalation minutes."""
         self.hold_escalation_minutes = value
 
     def set_hold_expiry_hours(self, value):
+        """Set hold expiry hours."""
         self.hold_expiry_hours = value
 
 
 def protocols() -> tuple[Protocol, ...]:
+    """Protocols."""
     return (
         Protocol(
             name="status_check",
@@ -152,6 +175,7 @@ def protocols() -> tuple[Protocol, ...]:
 
 
 def extraction_response(classification="fire", area="north_sector", description="smoke at gate 3", severity="moderate", occurred_at="2026-08-20T09:00:00") -> str:
+    """Extraction response."""
     import json
 
     return json.dumps(
@@ -160,6 +184,7 @@ def extraction_response(classification="fire", area="north_sector", description=
 
 
 def happy_path_agent(risk_score="0.2", selected="status_check", verdict="success", agent_task="check gate 3", extraction=None, intent=None) -> ScriptedAgent:
+    """Happy path agent."""
     dispatch = {
         "Extract this operational event": extraction or extraction_response(),
         "RISK_SCORE": f"RISK_SCORE: {risk_score}\nREASON: assessed",
@@ -187,6 +212,7 @@ class _AlwaysSucceedsAgent:
     """
 
     def process(self, text, allowed_tools):
+        """Process."""
         return FakeResult("success", "insight")
 
 
@@ -197,6 +223,7 @@ def build_context(
     simulation_users=(), simulation_groups=(), simulations=(), simulator_port=None,
     admin_tables=(),
 ) -> ApiContext:
+    """Build context."""
     persistence = SQLitePersistence(str(tmp_path / "api_test.db"))
     for identity, level in users:
         persistence.write_user(identity, level)
@@ -265,6 +292,7 @@ class _FakeLoadedProfile:
         simulation_users: tuple = (), simulation_groups: tuple = (), simulations: tuple = (),
         simulator_port: int | None = None, admin_tables: tuple = (),
     ):
+        """Initialize this test helper."""
         from profiles.loader import hash_profile_file
 
         self.module_path = module_path
@@ -276,21 +304,21 @@ class _FakeLoadedProfile:
         self.model_timeout_seconds = 30
         # Defaults to 0 (conversation memory off) to match every existing
         # test's assumptions unchanged; a test exercising follow-up
-        # behavior (docs/Next_Plan.md Stage 5) passes a positive value.
+        # behavior passes a positive value.
         self.conversation_history_turns = conversation_history_turns
         self.conversation_history_ttl_hours = 24
         # Defaults to empty, mirroring the real LoadedProfile's defaults
-        # (docs/profile_simulations_design.md) — a test exercising
+        # a test exercising
         # GET /Simulations passes real SimulationPersona/SimulationGroup/
         # SimulationScenario declarations instead.
         self.simulation_users = simulation_users
         self.simulation_groups = simulation_groups
         self.simulations = simulations
-        # Optional (docs/bot_simulation_mode_design.md); None (the default) mirrors the
+        # Optional; None (the default) mirrors the
         # real LoadedProfile's default — a test exercising the /admin/simulator/bot-msg
         # proxy route passes a real port instead.
         self.simulator_port = simulator_port
-        # Optional (docs/Admin_Tables_Plan.md); empty by default, mirroring the real
+        # Optional; empty by default, mirroring the real
         # LoadedProfile's own default — a test exercising /admin/tables/... passes real
         # AdminTable declarations instead.
         self.admin_tables = admin_tables
@@ -302,6 +330,7 @@ class _FakeLoadedProfile:
 
 
 def auth_headers(identity: str) -> dict:
+    """Auth headers."""
     return {IDENTITY_HEADER: identity}
 
 
@@ -316,6 +345,7 @@ class RunningApiServer:
     """
 
     def __init__(self, ctx: ApiContext):
+        """Initialize this test helper."""
         from werkzeug.serving import make_server
 
         from api.app import build_app
@@ -329,20 +359,24 @@ class RunningApiServer:
         self._thread.start()
 
     def close(self) -> None:
+        """Close."""
         self._server.shutdown()
         self._thread.join()
         self.ctx.queue.stop()
         self.ctx.deps.persistence.close()
 
     def __enter__(self) -> "RunningApiServer":
+        """Enter the test helper context."""
         return self
 
     def __exit__(self, *exc_info) -> None:
+        """Exit the test helper context."""
         self.close()
 
 
 @pytest.fixture
 def teardown_ctx():
+    """Teardown ctx."""
     contexts = []
     yield contexts
     for ctx in contexts:

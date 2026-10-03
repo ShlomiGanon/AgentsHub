@@ -1,4 +1,4 @@
-"""Sensor event simulator (work_plan.md §9.1)."""
+"""Emit synthetic sensor events against a running deployment's POST /Event."""
 
 import argparse
 import json
@@ -43,6 +43,8 @@ _SEVERITIES = [
 
 
 def _generate_text(event_type: str | None, area: str) -> str:
+    """Generate text."""
+
     if event_type == "fire":
         template = random.choice(_FIRE_TEMPLATES)
     elif event_type == "medical":
@@ -66,6 +68,8 @@ def _next_classification_area(event_types: list[str], areas: list[str], repeat_r
 
 
 def _post_event(base_url: str, identity: str, text: str, timeout: float = 10.0) -> dict:
+    """Post event."""
+
     body = json.dumps({"text": text, "sender_identity": identity}).encode("utf-8")
     request = urllib.request.Request(
         f"{base_url}/Event", data=body, method="POST",
@@ -87,6 +91,8 @@ def _post_event(base_url: str, identity: str, text: str, timeout: float = 10.0) 
 
 
 def _emit_one(base_url: str, identity: str, event_types: list[str], areas: list[str], repeat_rate: float, unclassifiable_rate: float, recent: list[tuple[str, str]]) -> dict:
+    """Emit one."""
+
     event_type, area = _next_classification_area(event_types, areas, repeat_rate, unclassifiable_rate, recent)
     text = _generate_text(event_type, area)
 
@@ -102,9 +108,11 @@ def _emit_one(base_url: str, identity: str, event_types: list[str], areas: list[
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Build parser."""
+
     parser = argparse.ArgumentParser(
         prog="python -m tools.simulator",
-        description="Emit synthetic sensor events as free-form English text against a running deployment's POST /Event (work_plan.md §9.1).",
+        description="Emit synthetic sensor events as free-form English text against a running deployment's POST /Event.",
     )
     parser.add_argument("--host", default="localhost", help="target deployment host (default: localhost)")
     parser.add_argument("--port", type=int, required=True, help="the target deployment's API port (the profile's own API_PORT)")
@@ -134,6 +142,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Main."""
+
     args = _build_parser().parse_args(argv)
 
     if (args.count is None) == (args.duration is None):

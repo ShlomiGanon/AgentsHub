@@ -1,3 +1,5 @@
+"""Team-status store reads and writes."""
+
 from datetime import datetime, timedelta, timezone
 import sqlite3
 
@@ -8,10 +10,12 @@ from persistence.sqlite_store import SQLitePersistence
 
 
 def _timestamp(day: int = 3, hour: int = 5, minute: int = 0) -> str:
+    """Timestamp."""
     return datetime(2026, 9, day, hour, minute, tzinfo=timezone.utc).isoformat()
 
 
 def test_empty_roster_cannot_be_approved(tmp_path):
+    """Empty roster cannot be approved."""
     store = open_team_status_persistence(str(tmp_path / "team-status.db"))
 
     with pytest.raises(TeamStatusPersistenceError, match="empty roster"):
@@ -19,6 +23,7 @@ def test_empty_roster_cannot_be_approved(tmp_path):
 
 
 def test_attendance_cycle_cannot_open_before_whole_roster_approval(tmp_path):
+    """Attendance cycle cannot open before whole roster approval."""
     store = open_team_status_persistence(str(tmp_path / "team-status.db"))
     store.register_member("101", "Alex Cohen", _timestamp())
 
@@ -27,6 +32,7 @@ def test_attendance_cycle_cannot_open_before_whole_roster_approval(tmp_path):
 
 
 def test_member_added_after_roster_approval_cannot_submit_until_next_approval(tmp_path):
+    """Member added after roster approval cannot submit until next approval."""
     store = open_team_status_persistence(str(tmp_path / "team-status.db"))
     store.register_member("101", "Alex Cohen", _timestamp())
     store.approve_roster("commander-1", _timestamp())
@@ -44,6 +50,7 @@ def test_member_added_after_roster_approval_cannot_submit_until_next_approval(tm
 
 
 def test_replayed_telegram_message_is_idempotent(tmp_path):
+    """Replayed telegram message is idempotent."""
     store = open_team_status_persistence(str(tmp_path / "team-status.db"))
     store.register_member("101", "Alex Cohen", _timestamp())
     store.approve_roster("commander-1", _timestamp())
@@ -69,6 +76,7 @@ def test_replayed_telegram_message_is_idempotent(tmp_path):
 
 
 def test_late_response_is_pending_and_does_not_change_snapshot(tmp_path):
+    """Late response is pending and does not change snapshot."""
     store = open_team_status_persistence(str(tmp_path / "team-status.db"))
     store.register_member("101", "Alex Cohen", _timestamp())
     store.approve_roster("commander-1", _timestamp())
@@ -87,6 +95,7 @@ def test_late_response_is_pending_and_does_not_change_snapshot(tmp_path):
 
 
 def test_operational_history_and_team_status_use_different_schemas(tmp_path):
+    """Operational history and team status use different schemas."""
     operational_path = tmp_path / "operational-history.db"
     status_path = tmp_path / "team-status.db"
     operational = SQLitePersistence(str(operational_path))
@@ -104,7 +113,7 @@ def test_operational_history_and_team_status_use_different_schemas(tmp_path):
     assert "events" not in status_tables
 
 
-# -- _parse_timestamp: a missing offset defaults to UTC (docs/work_process.md §21) --
+# _Parse_timestamp: a missing offset defaults to UTC
 # A tool-calling model asked for an "as of" timestamp sometimes omits the offset;
 # this used to be a hard TeamStatusPersistenceError the model had to recover from
 # by retrying without the argument — now it is treated as UTC, the same
@@ -112,12 +121,14 @@ def test_operational_history_and_team_status_use_different_schemas(tmp_path):
 
 
 def test_parse_timestamp_defaults_a_naive_timestamp_to_utc():
+    """Parse timestamp defaults a naive timestamp to utc."""
     from persistence.team_status_store import _parse_timestamp
 
     assert _parse_timestamp("2026-09-15T05:23:00") == datetime(2026, 9, 15, 5, 23, tzinfo=timezone.utc)
 
 
 def test_parse_timestamp_still_converts_a_non_utc_offset_to_utc():
+    """Parse timestamp still converts a non utc offset to utc."""
     from persistence.team_status_store import _parse_timestamp
 
     # 02:00 at +05:00 is 21:00 UTC the *previous* day.
@@ -125,6 +136,7 @@ def test_parse_timestamp_still_converts_a_non_utc_offset_to_utc():
 
 
 def test_parse_timestamp_still_rejects_genuinely_unparseable_input():
+    """Parse timestamp still rejects genuinely unparseable input."""
     from persistence.team_status_store import _parse_timestamp
 
     with pytest.raises(TeamStatusPersistenceError, match="invalid ISO timestamp"):

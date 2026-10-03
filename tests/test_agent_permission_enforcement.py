@@ -1,3 +1,5 @@
+"""Agents refuse tools the caller is not allowed to use."""
+
 import pytest
 
 from agents import base
@@ -6,35 +8,42 @@ from agents.runtime import tool
 
 
 class _ToolAgent(Agent):
+    """ToolAgent."""
     name = "test_agent"
     role = "a test role"
     system_prompt = "a test system prompt"
 
     def __init__(self, model="test-model"):
+        """Initialize this test helper."""
         self.calls = []
         super().__init__(model)
 
     @tool("read_thing", "reads a thing", side_effecting=False)
     def read_thing(self):
+        """Read thing."""
         self.calls.append("read_thing")
         return "read ok"
 
     @tool("write_thing", "writes a thing", side_effecting=True, idempotent=False)
     def write_thing(self):
+        """Write thing."""
         self.calls.append("write_thing")
         return "write ok"
 
 
 class _IncompleteAgent(Agent):
+    """IncompleteAgent."""
     role = "missing a name and a system prompt"
 
 
 def test_missing_required_class_attrs_fails_at_construction():
+    """Missing required class attrs fails at construction."""
     with pytest.raises(TypeError, match="name"):
         _IncompleteAgent(model="x")
 
 
 def test_descriptor_is_built_at_construction_with_both_tools():
+    """Descriptor is built at construction with both tools."""
     agent = _ToolAgent()
 
     assert agent.descriptor.name == "test_agent"
@@ -43,6 +52,7 @@ def test_descriptor_is_built_at_construction_with_both_tools():
 
 
 def test_tool_call_allowed_when_in_allowed_tools():
+    """Tool call allowed when in allowed tools."""
     agent = _ToolAgent()
 
     token = base._current_allowed_tools.set(frozenset({"read_thing"}))
@@ -56,6 +66,7 @@ def test_tool_call_allowed_when_in_allowed_tools():
 
 
 def test_tool_call_refused_when_not_in_allowed_tools():
+    """Tool call refused when not in allowed tools."""
     agent = _ToolAgent()
 
     token = base._current_allowed_tools.set(frozenset({"read_thing"}))  # write_thing not allowed
@@ -69,6 +80,7 @@ def test_tool_call_refused_when_not_in_allowed_tools():
 
 
 def test_tool_call_refused_outside_any_call_context():
+    """Tool call refused outside any call context."""
     agent = _ToolAgent()
 
     result = agent._wrapped_tools["write_thing"]()  # no allowed_tools context set at all
@@ -78,6 +90,7 @@ def test_tool_call_refused_outside_any_call_context():
 
 
 def test_blocked_attempt_is_logged(caplog):
+    """Blocked attempt is logged."""
     agent = _ToolAgent()
 
     with caplog.at_level("INFO"):
@@ -92,6 +105,7 @@ def test_blocked_attempt_is_logged(caplog):
 def test_allowed_attempt_is_logged(caplog):
     # Successful calls are INFO so the structured record is available to
     # commander-only Deep Debug. Normal clients never render these entries.
+    """Allowed attempt is logged."""
     agent = _ToolAgent()
 
     token = base._current_allowed_tools.set(frozenset({"read_thing"}))
@@ -111,6 +125,7 @@ def test_allowed_attempt_is_logged(caplog):
 def test_permission_check_is_per_call_not_bound_at_construction():
     # The same agent instance legitimately has different permissions on
     # two consecutive calls — nothing about the wrapping is fixed once.
+    """Permission check is per call not bound at construction."""
     agent = _ToolAgent()
 
     token = base._current_allowed_tools.set(frozenset({"write_thing"}))
@@ -137,20 +152,24 @@ def test_tool_requires_side_effecting_explicitly():
     # side_effecting is a required keyword-only parameter with no default —
     # omitting it entirely is a TypeError from Python itself, which is
     # exactly "no default" enforced as strongly as possible.
+    """Tool requires side effecting explicitly."""
     with pytest.raises(TypeError, match="side_effecting"):
         tool("t", "does a thing")
 
 def test_side_effecting_true_requires_idempotent():
+    """Side effecting true requires idempotent."""
     with pytest.raises(ValueError, match="idempotent"):
         tool("t", "does a thing", side_effecting=True)
 
 
 def test_idempotent_forbidden_for_read_only_tool():
+    """Idempotent forbidden for read only tool."""
     with pytest.raises(ValueError, match="no meaning"):
         tool("t", "does a thing", side_effecting=False, idempotent=True)
 
 
 def test_read_only_tool_decorates_successfully():
+    """Read only tool decorates successfully."""
     @tool("check_status", "Returns a canned status.", side_effecting=False)
     def check_status(self):
         return "ok"
@@ -160,6 +179,7 @@ def test_read_only_tool_decorates_successfully():
 
 
 def test_side_effecting_tool_decorates_successfully():
+    """Side effecting tool decorates successfully."""
     @tool("record_action", "Records that it acted.", side_effecting=True, idempotent=False)
     def record_action(self):
         return "recorded"
@@ -170,6 +190,7 @@ def test_side_effecting_tool_decorates_successfully():
 
 
 def test_exposed_tools_for_derives_from_actual_methods():
+    """Exposed tools for derives from actual methods."""
     class Toy:
         @tool("a", "does a", side_effecting=False)
         def a(self):
@@ -187,6 +208,7 @@ def test_exposed_tools_for_derives_from_actual_methods():
 
 
 def test_a_tool_added_to_the_class_shows_up_without_a_hand_maintained_list():
+    """A tool added to the class shows up without a hand maintained list."""
     class Toy:
         @tool("a", "does a", side_effecting=False)
         def a(self):

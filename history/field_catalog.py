@@ -1,4 +1,4 @@
-"""English field catalog for event-history responses (docs/Next_Plan.md §4.6, §9).
+"""English field catalog for event-history responses.
 
 Response-layer metadata only — never persistence schema. Defines what each
 persisted `events`/`event_steps` field (persistence/schema.py) means in
@@ -184,8 +184,7 @@ EVENT_FIELD_CATALOG: tuple[EventFieldDefinition, ...] = (
         "result.",
         "narrative",
     ),
-    # Internal plumbing — never enters a narrative answer, for any caller,
-    # merely because it exists (docs/Next_Plan.md §9's field list).
+    # Internal plumbing — never enters a narrative answer for any caller.
     EventFieldDefinition("trace_id", "Trace ID", "Internal request-tracing identifier.", "internal"),
     EventFieldDefinition("conversation_id", "Conversation ID", "Internal conversation-memory key.", "internal"),
     EventFieldDefinition("deadline_at", "Deadline", "Internal processing deadline.", "internal"),

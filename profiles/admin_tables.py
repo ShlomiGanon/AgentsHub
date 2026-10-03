@@ -1,4 +1,4 @@
-"""Profile-declared admin-panel tables (docs/Admin_Tables_Plan.md).
+"""Profile-declared admin-panel tables.
 
 A profile that wants an editable admin-panel table for one of its own persisted stores declares
 a flat tuple of `AdminTable` entries as a module-level `ADMIN_TABLES` constant -- the same

@@ -24,12 +24,15 @@ from tests.crewai_fakes import install_crewai_stub
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch)
 
 
 
 class _LiveSpecialist:
+    """LiveSpecialist."""
     def __init__(self, name: str, tool_name: str, answer: str):
+        """Initialize this test helper."""
         self.name = name
         self.role = f"{name} role"
         self.system_prompt = "fake"
@@ -39,12 +42,15 @@ class _LiveSpecialist:
 
     @property
     def descriptor(self) -> AgentDescriptor:
+        """Descriptor."""
         return AgentDescriptor(self.name, self.role, self.system_prompt, self._tools, "m")
 
     def exposed_tools(self):
+        """Exposed tools."""
         return self._tools
 
     def process(self, text, allowed_tools, *, invocation_policy=None):
+        """Process."""
         self.calls.append((text, list(allowed_tools)))
         return AgentResult("success", self.answer)
 
@@ -53,9 +59,11 @@ class _PictureMainAgent:
     """Plans one question per specialist, then composes by echoing the live facts it was given."""
 
     def __init__(self):
+        """Initialize this test helper."""
         self.prompts: list[str] = []
 
     def process(self, text, allowed_tools, *, invocation_policy=None):
+        """Process."""
         self.prompts.append(text)
         if "Specialists JSON" in text:
             return AgentResult(
@@ -78,13 +86,17 @@ class _PictureMainAgent:
 
 
 class _RecordingHistory:
+    """RecordingHistory."""
     def __init__(self):
+        """Initialize this test helper."""
         self.calls = []
 
     def planning_context(self):
+        """Planning context."""
         return {"current_time_local": "2026-09-10T15:00:00+03:00", "timezone": "Asia/Jerusalem"}
 
     def query_spec(self, question, spec, *, sender_identity_filter=None):
+        """Query spec."""
         self.calls.append((spec, sender_identity_filter))
         if sender_identity_filter is not None:
             raise HistoryQueryError("no stored events match the requested history filters", empty=True)
@@ -92,6 +104,7 @@ class _RecordingHistory:
 
 
 def _picture_ctx(tmp_path):
+    """Picture ctx."""
     ctx = build_context(tmp_path, main_agent=_PictureMainAgent())
     surveillance = _LiveSpecialist("surveillance_agent", "get_surveillance_overview", "Drones: 2 ready, 1 in flight. Cameras 3/4 active.")
     team = _LiveSpecialist("team_status_agent", "get_team_status_roster", "Roster 6: available 1, awaiting 5.")
@@ -118,6 +131,7 @@ def _picture_ctx(tmp_path):
 
 
 def test_hinted_picture_is_built_from_live_specialist_answers_and_recent_events(tmp_path, teardown_ctx):
+    """Hinted picture is built from live specialist answers and recent events."""
     ctx, surveillance, team, history = _picture_ctx(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()

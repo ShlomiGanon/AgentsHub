@@ -72,6 +72,7 @@ INTENT_CASES = (
 
 
 def _require_env(name: str) -> str:
+    """Require env."""
     value = os.environ.get(name)
     if value is None:
         raise ModelTierError(f"required environment variable '{name}' is not set")
@@ -79,6 +80,7 @@ def _require_env(name: str) -> str:
 
 
 def production_check() -> int:
+    """Production check."""
     print("=== AgentsHub real-model sanity check (live, billed API call) ===\n")
 
     print("[1/5] reading CORE_MODEL_* from the real environment and building the core TierModel...")
@@ -144,6 +146,7 @@ def production_check() -> int:
 
 
 def key_check() -> int:
+    """Key check."""
     api_key = os.environ.get("CORE_MODEL_KEY", "").strip()
     if not api_key:
         print("FAIL: CORE_MODEL_KEY is not set.")
@@ -164,6 +167,7 @@ def key_check() -> int:
 
 
 def openrouter_check() -> int:
+    """Openrouter check."""
     api_key = os.environ.get("CORE_MODEL_KEY", "").strip()
     if not api_key:
         print("FAIL: CORE_MODEL_KEY is not set.")
@@ -190,6 +194,7 @@ def openrouter_check() -> int:
 
 
 def crewai_check() -> int:
+    """Crewai check."""
     api_key = os.environ.get("CORE_MODEL_KEY", "").strip()
     model_name = os.environ.get("CORE_MODEL_NAME", "poolside/laguna-s-2.1:free").strip()
     if not api_key:
@@ -241,6 +246,7 @@ def intent_check() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Main."""
     parser = argparse.ArgumentParser(description="Manual live-model checks; never run from CI.")
     parser.add_argument("check", nargs="?", choices=("production", "intent", "key", "openrouter", "crewai"), default="production")
     selected = parser.parse_args(argv).check

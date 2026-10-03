@@ -25,13 +25,14 @@ def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/User/<identity>", methods=["GET"])
     def get_user(identity):
+        """Return one registered user's public registration fields."""
+
         caller_identity = request.headers.get("X-Identity")
         level = authenticate(ctx.deps.persistence, caller_identity)
         require(level, RequestedOperation.VIEW_USER_REGISTRATION)
 
-        # Ownership scoping (docs/Next_Plan.md §5 decision record): a viewer may
-        # look up only their own identity. A commander (e.g. bot-service, which
-        # resolves every caller's registration) is unrestricted by this check.
+        # A viewer may look up only their own identity; a commander (including
+        # bot-service resolving callers) is unrestricted.
         if level is PermissionLevel.VIEWER and identity != caller_identity:
             raise AuthorizationError(messages.text("api.other_identity_forbidden"))
 
@@ -48,6 +49,8 @@ def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/User/<identity>/name", methods=["PUT"])
     def update_own_name(identity):
+        """Let the authenticated caller update their own display name."""
+
         caller_identity = request.headers.get("X-Identity")
         authenticate(ctx.deps.persistence, caller_identity)
         if identity != caller_identity:
@@ -68,6 +71,8 @@ def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/User/<identity>/approve", methods=["POST"])
     def approve_user(identity):
+        """Approve an auto-registered Telegram user so they may use the system."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.MANAGE_USERS)
         try:
@@ -93,6 +98,8 @@ def build_users_blueprint(ctx: "ApiContext") -> Blueprint:
 
     @blueprint.route("/Commanders", methods=["GET"])
     def get_commanders():
+        """List commander identities, excluding the bot-service account."""
+
         level = authenticate(ctx.deps.persistence, request.headers.get("X-Identity"))
         require(level, RequestedOperation.VIEW_COMMANDER_ROSTER)
 

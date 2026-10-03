@@ -9,10 +9,12 @@ from tests.bot_fakes import FakeBotApiClient, FakeTelegramClient
 
 
 def _run(coro):
+    """Run."""
     return asyncio.run(coro)
 
 
 def test_names_failed_step_and_reason_and_includes_prior_successes():
+    """Names failed step and reason and includes prior successes."""
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
 
@@ -34,6 +36,7 @@ def test_names_failed_step_and_reason_and_includes_prior_successes():
 
 
 def test_failure_notification_uses_the_server_composed_report_text_when_present():
+    """Failure notification uses the server composed report text when present."""
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
 
@@ -51,6 +54,7 @@ def test_failure_notification_uses_the_server_composed_report_text_when_present(
 def test_failure_always_sends_a_new_reply_never_edits_the_ack_with_the_full_text():
     # Telegram doesn't notify a user of an edit — only a genuinely new message pings them,
     # so a failure (unlike a success) must always go out as a new reply.
+    """Failure always sends a new reply never edits the ack with the full text."""
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
 
@@ -70,6 +74,7 @@ def test_failure_always_sends_a_new_reply_never_edits_the_ack_with_the_full_text
 
 
 def test_failure_edits_the_ack_to_a_short_neutral_line_pointing_at_the_new_reply():
+    """Failure edits the ack to a short neutral line pointing at the new reply."""
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
 
@@ -85,6 +90,7 @@ def test_failure_edits_the_ack_to_a_short_neutral_line_pointing_at_the_new_reply
 
 
 def test_failure_sends_the_new_reply_even_when_editing_the_ack_fails():
+    """Failure sends the new reply even when editing the ack fails."""
     class _RaisingEditTelegramClient(FakeTelegramClient):
         async def edit_status(self, chat_id, message_id, text):
             raise RuntimeError("message to edit not found")
@@ -107,12 +113,13 @@ def test_failure_sends_the_new_reply_even_when_editing_the_ack_fails():
 
 
 def test_failed_run_is_distinguishable_from_a_declined_or_uncertain_one():
+    """Failed run is distinguishable from a declined or uncertain one."""
     from bot.formatting import format_header
 
     assert format_header("failed") != format_header("declined")
     assert format_header("failed") != format_header("uncertain_verdict")
 
-"""bot/formatting.py (work_plan.md §8.10)."""
+"""bot/formatting.py notification and job-result wording."""
 
 import pytest
 
@@ -121,14 +128,17 @@ from bot.formatting import TELEGRAM_MESSAGE_LIMIT, format_failure_notice, format
 
 
 def test_short_text_is_returned_as_one_chunk():
+    """Short text is returned as one chunk."""
     assert split_message("hello") == ["hello"]
 
 
 def test_empty_text_returns_one_empty_chunk():
+    """Empty text returns one empty chunk."""
     assert split_message("") == [""]
 
 
 def test_splits_at_paragraph_boundary_when_it_fits():
+    """Splits at paragraph boundary when it fits."""
     paragraph_a = "a" * 3000
     paragraph_b = "b" * 3000
     text = f"{paragraph_a}\n\n{paragraph_b}"
@@ -142,6 +152,7 @@ def test_splits_at_paragraph_boundary_when_it_fits():
 
 
 def test_falls_back_to_sentence_boundary_when_no_paragraph_breaks_fit():
+    """Falls back to sentence boundary when no paragraph breaks fit."""
     sentence = "x" * 100 + ". "
     text = sentence * 60  # one giant paragraph, well past a small limit
 
@@ -162,6 +173,7 @@ def test_falls_back_to_sentence_boundary_when_no_paragraph_breaks_fit():
 
 
 def test_falls_back_to_hard_cut_when_a_single_run_exceeds_the_limit():
+    """Falls back to hard cut when a single run exceeds the limit."""
     text = "a" * 10000  # no separators at all
 
     chunks = split_message(text, limit=4096)
@@ -172,6 +184,7 @@ def test_falls_back_to_hard_cut_when_a_single_run_exceeds_the_limit():
 
 
 def test_never_produces_a_chunk_over_the_limit_default():
+    """Never produces a chunk over the limit default."""
     text = ("paragraph one. " * 400) + "\n\n" + ("paragraph two. " * 400)
     chunks = split_message(text)
     assert all(len(c) <= TELEGRAM_MESSAGE_LIMIT for c in chunks)
@@ -191,20 +204,24 @@ def test_never_produces_a_chunk_over_the_limit_default():
     ],
 )
 def test_every_message_kind_has_a_visually_distinct_header(kind_a, kind_b):
+    """Every message kind has a visually distinct header."""
     assert format_header(kind_a) != format_header(kind_b)
 
 
 @pytest.mark.parametrize("kind", ["clarification_needed", "approval_needed"])
 def test_headers_needing_a_reply_say_so(kind):
+    """Headers needing a reply say so."""
     assert "reply" in format_header(kind).lower()
 
 
 @pytest.mark.parametrize("kind", ["precedent_closure", "uncertain_verdict", "no_match"])
 def test_headers_needing_no_reply_say_so(kind):
+    """Headers needing no reply say so."""
     assert "no reply needed" in format_header(kind).lower()
 
 
 def test_job_result_orders_verdict_then_what_was_done_then_insight():
+    """Job result orders verdict then what was done then insight."""
     result = JobResult(job_id="j1", outcome="succeeded", insight_text="all clear", steps_completed=("checked status", "dispatched response"))
 
     text = format_job_result(result)
@@ -220,6 +237,7 @@ def test_job_result_orders_verdict_then_what_was_done_then_insight():
 
 
 def test_drone_selection_is_rendered_as_required_input_not_completed_action():
+    """Drone selection is rendered as required input not completed action."""
     result = JobResult(
         job_id="j1",
         outcome="succeeded",
@@ -244,6 +262,7 @@ def test_surveillance_job_result_uses_the_generic_format_not_a_profile_specific_
     # bot/interactions.py::format_job_result no longer special-cases protocol names from
     # specific profiles (that hardcoded profile leak was removed) — every protocol, including
     # these tactical ones, goes through the same generic rendering.
+    """Surveillance job result uses the generic format not a profile specific one."""
     result = JobResult(
         job_id="dispatch-123",
         outcome="succeeded",
@@ -262,25 +281,28 @@ def test_surveillance_job_result_uses_the_generic_format_not_a_profile_specific_
 
 
 def test_declined_job_result_uses_the_declined_header():
+    """Declined job result uses the declined header."""
     result = JobResult(job_id="j1", outcome="declined")
     text = format_job_result(result)
     assert format_header("declined") in text
 
 
 def test_no_match_job_result_includes_the_failure_reason_text():
+    """No match job result includes the failure reason text."""
     result = JobResult(job_id="j1", outcome="no_match_protocol", failure_reason="no loaded protocol handles this kind of request")
     text = format_job_result(result)
     assert "no loaded protocol handles this kind of request" in text
 
 
 def test_job_result_with_no_failure_reason_adds_no_extra_line():
+    """Job result with no failure reason adds no extra line."""
     result = JobResult(job_id="j1", outcome="succeeded")
     text = format_job_result(result)
     assert text == "\n".join([format_header("result"), "", "Verdict: succeeded"])
 
 
 def test_job_result_includes_protocol_suffix_when_a_protocol_ran():
-    """REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 3 (item #9): always-on
+    """Part 3 (item #9): always-on
     trailing protocol/reason line for protocol-driven outcomes."""
     result = JobResult(
         job_id="j1", outcome="succeeded",
@@ -301,6 +323,7 @@ def test_job_result_omits_protocol_suffix_when_no_protocol_was_selected():
 
 
 def test_job_result_protocol_suffix_risk_level_is_translated_for_hebrew_not_left_as_raw_english():
+    """Job result protocol suffix risk level is translated for hebrew not left as raw english."""
     from messages import get_catalog
 
     result = JobResult(
@@ -317,8 +340,8 @@ def test_job_result_protocol_suffix_risk_level_is_translated_for_hebrew_not_left
 def test_job_result_caps_a_very_long_failure_reason():
     """Regression test: failure_reason's actual source can be an entire rejected model response
     (e.g. protocol selection's raw reasoning when the reply didn't parse) rather than a short
-    explanation — the displayed copy must be capped regardless (docs/IMPROVES/
-    CRITICAL_FIXES_PLAN.MD item 3); the untruncated value is unaffected everywhere else."""
+    explanation — the displayed copy must be capped regardless of source;
+    the untruncated value is unaffected everywhere else."""
 
     long_reason = "could not parse protocol selection response: " + ("reasoning through each candidate protocol. " * 30)
     assert len(long_reason) > 500
@@ -334,7 +357,7 @@ def test_job_result_caps_a_very_long_failure_reason():
 def test_job_result_verdict_is_translated_for_hebrew_not_left_as_raw_english():
     """Regression test: event["outcome"] (history.event_pipeline.VALID_OUTCOMES) is a fixed
     internal English identifier — interpolating it directly into a Hebrew message left an English
-    word inside an otherwise-Hebrew sentence (docs/IMPROVES/CRITICAL_FIXES_PLAN.MD item 4)."""
+    word inside an otherwise-Hebrew sentence."""
 
     from messages import get_catalog
 
@@ -346,6 +369,7 @@ def test_job_result_verdict_is_translated_for_hebrew_not_left_as_raw_english():
 
 
 def test_failure_notice_names_step_and_reason_and_prior_successes():
+    """Failure notice names step and reason and prior successes."""
     notice = FailureNotice(
         event_id="e1",
         failed_step_agent_name="reference_agent",
@@ -361,12 +385,14 @@ def test_failure_notice_names_step_and_reason_and_prior_successes():
 
 
 def test_failure_notice_with_nothing_completed_says_so():
+    """Failure notice with nothing completed says so."""
     notice = FailureNotice(event_id="e1", failed_step_agent_name="a1", failure_reason="boom", steps_completed_before_failure=())
     text = format_failure_notice(notice)
     assert "Nothing completed before the failure." in text
 
 
 def test_failure_notice_caps_a_very_long_failure_reason():
+    """Failure notice caps a very long failure reason."""
     long_reason = "reasoning through each candidate protocol before answering. " * 20
     assert len(long_reason) > 500
 
@@ -399,10 +425,12 @@ from tests.bot_fakes import FakeBotApiClient, FakeTelegramClient
 
 
 def _run(coro):
+    """Run."""
     return asyncio.run(coro)
 
 
 def _deps(api, commander_chat_ids=("c1",)):
+    """Deps."""
     api.commander_chat_ids = commander_chat_ids
     return BotDeps(loaded_profile=None, telegram_client=FakeTelegramClient(), api_client=api)
 
@@ -430,6 +458,7 @@ def _deps(api, commander_chat_ids=("c1",)):
     ],
 )
 def test_dispatch_routes_every_kind_to_a_delivered_message(kind, payload, target_chat_ids):
+    """Dispatch routes every kind to a delivered message."""
     api = FakeBotApiClient()
     deps = _deps(api)
     notification = BotNotification(kind=kind, target_chat_ids=target_chat_ids, payload=payload, reply_to_message_id="m1")
@@ -440,6 +469,7 @@ def test_dispatch_routes_every_kind_to_a_delivered_message(kind, payload, target
 
 
 def test_dispatch_rejects_an_unknown_kind():
+    """Dispatch rejects an unknown kind."""
     api = FakeBotApiClient()
     deps = _deps(api)
     bad = BotNotification(kind="not_a_real_kind", target_chat_ids=(), payload=None)  # type: ignore[arg-type]
@@ -449,6 +479,7 @@ def test_dispatch_rejects_an_unknown_kind():
 
 
 def test_poll_once_dispatches_every_pending_notification():
+    """Poll once dispatches every pending notification."""
     api = FakeBotApiClient(
         commander_chat_ids=("c1",),
         pending_notifications=(
@@ -466,6 +497,7 @@ def test_poll_once_dispatches_every_pending_notification():
 
 
 def test_event_data_notification_registers_the_exact_telegram_reply_target():
+    """Event data notification registers the exact telegram reply target."""
     from bot import interactions
 
     interactions._EVENT_DATA_REPLY_TARGETS.clear()
@@ -485,6 +517,7 @@ def test_event_data_notification_registers_the_exact_telegram_reply_target():
 
 
 def test_poll_loop_survives_an_unimplemented_api_and_stops_after_max_iterations():
+    """Poll loop survives an unimplemented api and stops after max iterations."""
     from bot.api_client import UnimplementedApiClient
 
     deps = BotDeps(loaded_profile=None, telegram_client=FakeTelegramClient(), api_client=UnimplementedApiClient())
@@ -505,11 +538,13 @@ class _RaisingApiClient(FakeBotApiClient):
     """
 
     def __init__(self, exc: Exception, **kwargs):
+        """Initialize this test helper."""
         super().__init__(**kwargs)
         self._exc = exc
         self.poll_call_count = 0
 
     async def poll_pending_notifications(self, since: int):
+        """Poll pending notifications."""
         self.poll_call_count += 1
         raise self._exc
 
@@ -519,6 +554,7 @@ def test_poll_loop_logs_and_continues_past_a_non_api_not_implemented_error():
     # its dedicated ApiNotImplementedError branch) must log and keep
     # looping — not re-raise, not stop early — for any other exception a
     # real client implementation could raise.
+    """Poll loop logs and continues past a non api not implemented error."""
     api = _RaisingApiClient(RuntimeError("connection reset"))
     deps = BotDeps(loaded_profile=None, telegram_client=FakeTelegramClient(), api_client=api)
 
@@ -539,6 +575,7 @@ from tests.bot_fakes import FakeBotApiClient, FakeTelegramClient
 
 
 def _run(coro):
+    """Run."""
     return asyncio.run(coro)
 
 
@@ -548,6 +585,7 @@ NOTICE = PrecedentClosureNotice(
 
 
 def test_notice_includes_event_precedent_and_ending():
+    """Notice includes event precedent and ending."""
     text = format_precedent_closure_notice(NOTICE)
     assert NOTICE.raw_text in text
     assert NOTICE.matched_precedent_event_id in text
@@ -555,12 +593,14 @@ def test_notice_includes_event_precedent_and_ending():
 
 
 def test_notice_is_informational_and_needs_no_reply():
+    """Notice is informational and needs no reply."""
     text = format_precedent_closure_notice(NOTICE)
     assert "no reply needed" in text.lower()
     assert "?" not in text
 
 
 def test_pushed_to_every_commander_individually():
+    """Pushed to every commander individually."""
     api = FakeBotApiClient(commander_chat_ids=("c1", "c2"))
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=api)
@@ -572,6 +612,7 @@ def test_pushed_to_every_commander_individually():
 
 
 def test_precedent_ending_is_translated_for_hebrew_not_left_as_raw_english():
+    """Precedent ending is translated for hebrew not left as raw english."""
     from messages import get_catalog
 
     text = format_precedent_closure_notice(NOTICE, get_catalog("he"))
@@ -590,10 +631,12 @@ from tests.bot_fakes import FakeBotApiClient, FakeTelegramClient
 
 
 def _run(coro):
+    """Run."""
     return asyncio.run(coro)
 
 
 def test_delivers_to_the_original_chat_referencing_the_original_message():
+    """Delivers to the original chat referencing the original message."""
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
 
@@ -614,6 +657,7 @@ def test_delivers_to_the_original_chat_referencing_the_original_message():
 def test_delivers_the_server_composed_report_text_verbatim_when_present():
     # rich reports (orchestrator.report_composer): when the server already composed
     # report_text, the bot sends it as-is instead of rendering its own fixed template.
+    """Delivers the server composed report text verbatim when present."""
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
 
@@ -631,6 +675,7 @@ def test_delivers_the_server_composed_report_text_verbatim_when_present():
 
 
 def test_falls_back_to_the_fixed_template_when_report_text_is_absent():
+    """Falls back to the fixed template when report text is absent."""
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
 
@@ -643,6 +688,7 @@ def test_falls_back_to_the_fixed_template_when_report_text_is_absent():
 
 
 def test_delivery_edits_the_ack_message_in_place_when_one_is_recorded():
+    """Delivery edits the ack message in place when one is recorded."""
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
 
@@ -659,6 +705,7 @@ def test_delivery_edits_the_ack_message_in_place_when_one_is_recorded():
 
 
 def test_delivery_falls_back_to_a_new_reply_when_editing_the_ack_fails():
+    """Delivery falls back to a new reply when editing the ack fails."""
     class _RaisingEditTelegramClient(FakeTelegramClient):
         async def edit_status(self, chat_id, message_id, text):
             raise RuntimeError("message to edit not found")
@@ -679,6 +726,7 @@ def test_delivery_falls_back_to_a_new_reply_when_editing_the_ack_fails():
 
 
 def test_delivery_skips_editing_and_sends_a_new_reply_when_the_text_is_too_long_to_fit():
+    """Delivery skips editing and sends a new reply when the text is too long to fit."""
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
 

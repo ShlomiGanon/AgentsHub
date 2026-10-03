@@ -1,5 +1,4 @@
-"""persistence/sqlite_store.py's own concurrency guarantee (work_plan.md
-§2.9): one serialized writer thread draining a queue, backed by SQLite's
+"""Persistence/sqlite_store.py's own concurrency guarantee: one serialized writer thread draining a queue, backed by SQLite's
 WAL mode, so concurrent readers proceed without blocking on an in-flight
 write. Every other persistence test drives the backend single-threaded —
 this file is the one place that guarantee is actually exercised under
@@ -16,6 +15,7 @@ THREAD_JOIN_TIMEOUT_SECONDS = 30  # generous — a hang here means a real deadlo
 
 
 def _minimal_event(**overrides):
+    """Minimal event."""
     event = {
         "received_at": "2026-08-01T10:00:00",
         "source": "sensor",
@@ -43,6 +43,7 @@ def _run_threads(targets):
 
 
 def test_concurrent_appends_from_many_threads_lose_nothing(tmp_path):
+    """Concurrent appends from many threads lose nothing."""
     persistence = SQLitePersistence(str(tmp_path / "concurrent_append.db"))
     thread_count = 25
     results: list = [None] * thread_count
@@ -77,6 +78,7 @@ def test_concurrent_appends_from_many_threads_lose_nothing(tmp_path):
 
 
 def test_concurrent_updates_to_different_events_are_all_applied(tmp_path):
+    """Concurrent updates to different events are all applied."""
     persistence = SQLitePersistence(str(tmp_path / "concurrent_update.db"))
     thread_count = 20
 
@@ -107,6 +109,7 @@ def test_concurrent_updates_to_different_events_are_all_applied(tmp_path):
 
 
 def test_concurrent_readers_during_a_write_burst_see_only_whole_events_never_partial(tmp_path):
+    """Concurrent readers during a write burst see only whole events never partial."""
     persistence = SQLitePersistence(str(tmp_path / "concurrent_read_write.db"))
     writer_count = 15
     reader_count = 10
@@ -167,17 +170,20 @@ from persistence.sqlite_store import SQLitePersistence
 
 @pytest.fixture
 def store(tmp_path):
+    """Store."""
     backend = SQLitePersistence(str(tmp_path / "test.db"))
     yield backend
     backend.close()
 
 
 def test_fresh_database_has_no_users(store):
+    """Fresh database has no users."""
     assert store.list_users() == []
     assert store.read_user("12345") is None
 
 
 def test_write_then_read_user(store):
+    """Write then read user."""
     store.write_user("12345", "commander")
 
     assert store.read_user("12345") == {
@@ -189,12 +195,14 @@ def test_write_then_read_user(store):
 
 
 def test_permission_update_preserves_existing_full_name(store):
+    """Permission update preserves existing full name."""
     store.write_user("12345", "viewer", "Dana Levi")
     store.write_user("12345", "commander")
     assert store.read_user("12345")["full_name"] == "Dana Levi"
 
 
 def test_write_user_twice_updates_rather_than_duplicates(store):
+    """Write user twice updates rather than duplicates."""
     store.write_user("12345", "viewer")
     store.write_user("12345", "commander")
 
@@ -203,6 +211,7 @@ def test_write_user_twice_updates_rather_than_duplicates(store):
 
 
 def test_delete_user(store):
+    """Delete user."""
     store.write_user("12345", "viewer")
     store.delete_user("12345")
 
@@ -210,6 +219,7 @@ def test_delete_user(store):
 
 
 def test_delete_unknown_user_raises_not_found(store):
+    """Delete unknown user raises not found."""
     with pytest.raises(NotFoundError):
         store.delete_user("does-not-exist")
 

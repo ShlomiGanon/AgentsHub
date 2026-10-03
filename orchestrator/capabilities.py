@@ -1,8 +1,6 @@
-"""Role-aware capability context for the Main Agent (docs/Next_Plan.md §4.3, §4.4, §8).
+"""Role-aware capability context for the Main Agent.
 
-The application controls which capabilities and runtime metadata may enter a
-prompt; the model only ever phrases the natural-language answer from what it
-is given here. See docs/Next_Plan.md §2.5.
+The application chooses which capabilities enter a prompt; the model only phrases the answer.
 """
 
 from __future__ import annotations
@@ -162,11 +160,7 @@ def build_role_aware_system_context(
 ) -> dict:
     """Build the Main Agent's system context, filtered for `level`.
 
-    Protected arrays (`protocols`, `sub_agents`) are absent entirely for a
-    caller not authorized for `VIEW_SYSTEM_INTERNALS` — never present as an
-    empty hint (docs/Next_Plan.md §4.5). `capabilities` is always the
-    caller's own `visible_capabilities`, never the full set with some
-    filtered out after the fact.
+    Protected arrays are omitted entirely when the caller may not see internals.
     """
 
     context: dict = {

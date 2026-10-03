@@ -1,10 +1,4 @@
-"""Dedicated SQLite registry for currently-known fires -- a create-or-update COP table
-with a burning/extinguished status, mirroring `persistence/apparatus_store.py`'s
-connection-per-operation idiom. One burning fire per area; a later report in the same
-area while still burning refreshes `last_updated` rather than inserting a second row.
-A burning fire with no registry write for `FIRE_ACTIVE_TTL` is treated as extinguished
-on the next read (lazy expiry, same shape as `IncidentResponderStore`'s lookback window).
-"""
+"""Burning/extinguished fire rows with one active fire per area and lazy TTL expiry."""
 
 from __future__ import annotations
 
@@ -37,10 +31,14 @@ class FireStoreError(Exception):
 
 
 def _utc_now() -> str:
+    """Return the current UTC time as an ISO-8601 string."""
+
     return datetime.now(timezone.utc).isoformat()
 
 
 def _as_aware(value: str) -> datetime:
+    """Parse an ISO timestamp, treating a missing offset as UTC."""
+
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
@@ -48,22 +46,32 @@ def _as_aware(value: str) -> datetime:
 
 
 def _new_fire_id() -> str:
+    """Return a new FIRE-xxxxxxxx identifier."""
+
     return f"FIRE-{uuid.uuid4().hex[:8].upper()}"
 
 
 class FireStore:
+    """Connection-per-operation COP table for known fires."""
+
     def __init__(self, db_path: str):
+        """Open the DB file and create the fires table if it is missing."""
+
         self.db_path = str(db_path)
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
 
     def _connect(self) -> sqlite3.Connection:
+        """Open a row-factory connection for one operation."""
+
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 
     def _expire_stale(self, conn: sqlite3.Connection, now: str) -> None:
+        """Mark burning rows extinguished when last_updated is older than FIRE_ACTIVE_TTL."""
+
         cutoff = (_as_aware(now) - FIRE_ACTIVE_TTL).isoformat()
         conn.execute(
             "UPDATE fires SET status = 'extinguished', extinguished_at = ?, expiry_reason = 'stale' "
@@ -74,6 +82,8 @@ class FireStore:
     def upsert_burning(
         self, *, area: str, source_event_id: str | None = None, now: str | None = None,
     ) -> dict:
+        """Refresh the burning fire in this area, or insert one if none is active."""
+
         cleaned = area.strip()
         if not cleaned:
             raise FireStoreError("area is required.")
@@ -107,8 +117,7 @@ class FireStore:
         return dict(row)
 
     def touch(self, area: str, *, now: str | None = None) -> dict | None:
-        """Refresh `last_updated` on the burning fire in `area`, if one exists after expiry.
-        Does not create a row -- recon of an unknown fire is not a first report."""
+        """Refresh last_updated on the burning fire in this area without creating a row."""
 
         cleaned = area.strip()
         if not cleaned:
@@ -133,6 +142,8 @@ class FireStore:
     def extinguish(
         self, area: str, *, reason: str = "reported", now: str | None = None,
     ) -> dict:
+        """Mark the burning fire in this area extinguished, or record an extinguished-only row."""
+
         cleaned = area.strip()
         if not cleaned:
             raise FireStoreError("area is required.")
@@ -162,6 +173,8 @@ class FireStore:
         return dict(row)
 
     def list_fires(self, *, status: str | None = None, now: str | None = None) -> list[dict]:
+        """Expire stale rows, then return fires rows optionally filtered by status."""
+
         stamp = now or _utc_now()
         with self._connect() as conn:
             self._expire_stale(conn, stamp)
@@ -177,6 +190,8 @@ class FireStore:
         return [dict(row) for row in rows]
 
     def list_active(self, *, area: str | None = None, now: str | None = None) -> list[dict]:
+        """Return currently burning fires, optionally limited to one area."""
+
         rows = self.list_fires(status="burning", now=now)
         cleaned = (area or "").strip()
         if cleaned:
@@ -184,6 +199,8 @@ class FireStore:
         return rows
 
     def get_fire(self, fire_id: str, *, now: str | None = None) -> dict | None:
+        """Expire stale rows, then return one fires row, or None."""
+
         stamp = now or _utc_now()
         with self._connect() as conn:
             self._expire_stale(conn, stamp)
@@ -191,9 +208,7 @@ class FireStore:
         return dict(row) if row is not None else None
 
     def admin_update_fire(self, fire_id: str, **fields) -> dict:
-        """Admin-panel edit of one fire row -- the same immediate-effect convention as
-        `NeighboringForceStore.admin_update_dispatch`. Setting status to burning restarts
-        the two-day TTL; setting it to extinguished stamps `extinguished_at`."""
+        """Overwrite area/status on one fire row, restarting or closing the TTL as needed."""
 
         editable_columns = ("area", "status")
         stamp = _utc_now()
@@ -236,4 +251,6 @@ class FireStore:
 
 
 def open_fire_store(db_path: str) -> FireStore:
+    """Construct the fires store for this database path."""
+
     return FireStore(db_path)

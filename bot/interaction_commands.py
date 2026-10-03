@@ -12,6 +12,8 @@ if TYPE_CHECKING:
     from bot.contracts import BotDeps, ProfileView, SettingsView
 
 
+# --- profile ---
+
 NOTHING_CHANGED_NOTICE = get_catalog("en").text("profile.nothing_changed")
 
 
@@ -115,6 +117,8 @@ async def write_protocol(
 
     return f"{protocol_write_result.message}\n\n{messages.text('profile.nothing_changed')}"
 
+
+# --- settings ---
 
 SettingField = Literal["retry_count", "risk_threshold", "lookback_window_days", "safe_mode"]
 

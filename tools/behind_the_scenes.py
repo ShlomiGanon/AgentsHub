@@ -40,6 +40,8 @@ SENSITIVE_FIELD_NAMES = frozenset({
 
 
 def _safe_str(value: Any, limit: int = 140) -> str:
+    """Safe str."""
+
     if value is None:
         return ""
     text = str(value).strip()
@@ -67,6 +69,8 @@ def _trace_status(value: Any, *, event: str | None = None) -> str:
 
 
 def _number(value: Any, default: float = 0.0) -> float:
+    """Number."""
+
     try:
         return default if value is None else float(value)
     except (TypeError, ValueError, OverflowError):
@@ -74,6 +78,8 @@ def _number(value: Any, default: float = 0.0) -> float:
 
 
 def _parse_timestamp(val: Any) -> datetime | None:
+    """Parse timestamp."""
+
     if not val or not isinstance(val, str):
         return None
     try:
@@ -104,6 +110,8 @@ def sanitize_trace_details(details: dict[str, Any]) -> dict[str, Any]:
 
 
 def _profiles_match(expected: str | None, actual: str | None) -> bool:
+    """Profiles match."""
+
     if not expected or not actual:
         return True
     if expected == actual:
@@ -118,6 +126,8 @@ def _profiles_match(expected: str | None, actual: str | None) -> bool:
 
 
 def _agent_icon(name: str) -> str:
+    """Agent icon."""
+
     return {
         "main_agent": "🤖", "roster_agent": "📋", "team_status_agent": "📋",
         "surveillance_agent": "👁️", "neighboring_forces_agent": "🤝",
@@ -129,6 +139,8 @@ def _agent_icon(name: str) -> str:
 
 
 def _agent_display_name(name: str) -> str:
+    """Agent display name."""
+
     return {
         "main_agent": "Main Agent (orchestrator)", "team_status_agent": "Attendance and personnel specialist",
         "roster_agent": "Attendance and personnel specialist", "surveillance_agent": "Surveillance and drone specialist",

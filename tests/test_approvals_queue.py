@@ -30,6 +30,7 @@ from tests.bot_fakes import FakeBotApiClient, FakeTelegramClient
 
 
 def _make_bot_deps(api_client, telegram_client):
+    """Make bot deps."""
     loaded_profile = types.SimpleNamespace(
         message_catalog=get_catalog("he"),
         db_path=None,
@@ -132,7 +133,7 @@ def test_viewer_blocked_on_bot_shortcut_phrases():
 
 
 def test_empty_queue_display():
-    """Requirement 8 & 10: Empty queue displays '✅ אין כרגע בקשות הממתינות לאישורך.'"""
+    """Requirement 8 & 10: Empty queue displays """
     api_client = FakeBotApiClient()
     api_client.users["cmd_user"] = "commander"
     api_client.pending_holds = {"holds": [], "count": 0}
@@ -303,7 +304,7 @@ def test_approval_and_clarification_rendered_differently():
 
 
 def test_approve_removes_from_queue_and_edits_card(tmp_path, teardown_ctx):
-    """Requirement 6, 7 & 10: Approve marks hold resolved, edits card to '✅ אושר', and removes from queue."""
+    """Requirement 6, 7 & 10: Approve marks hold resolved, edits card to, and removes from queue."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -334,7 +335,7 @@ def test_approve_removes_from_queue_and_edits_card(tmp_path, teardown_ctx):
     telegram_client = FakeTelegramClient()
     deps = _make_bot_deps(api_client, telegram_client)
 
-    # Simulate callback query when Commander clicks [✅ אשר]
+    # Simulate callback query when Commander clicks [✅ ]
     update = MagicMock()
     update.effective_user.id = "cmd_user"
     update.effective_chat.id = "chat_123"
@@ -367,7 +368,7 @@ def test_approve_removes_from_queue_and_edits_card(tmp_path, teardown_ctx):
 
 
 def test_reject_removes_from_queue_and_edits_card(tmp_path, teardown_ctx):
-    """Requirement 6, 7 & 10: Reject marks hold resolved, edits card to '❌ נדחה', and removes from queue."""
+    """Requirement 6, 7 & 10: Reject marks hold resolved, edits card to, and removes from queue."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()

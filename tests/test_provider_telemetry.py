@@ -12,6 +12,7 @@ from tools import stage_context, trace_context
 
 
 def _event(call_id: str, event_type: str, timestamp: datetime, **values):
+    """Event."""
     return SimpleNamespace(
         call_id=call_id,
         type=event_type,
@@ -27,6 +28,7 @@ def _event(call_id: str, event_type: str, timestamp: datetime, **values):
 
 
 def test_four_crewai_provider_calls_produce_four_correlated_records(caplog):
+    """Four crewai provider calls produce four correlated records."""
     started_at = datetime.now(timezone.utc)
     with caplog.at_level("INFO"), trace_context("trace-four"), stage_context("tool_loop"):
         for index in range(4):
@@ -63,6 +65,7 @@ def test_four_crewai_provider_calls_produce_four_correlated_records(caplog):
 
 
 def test_provider_failure_has_no_invented_usage(caplog):
+    """Provider failure has no invented usage."""
     started_at = datetime.now(timezone.utc)
     with caplog.at_level("INFO"), trace_context("trace-failure"), stage_context("risk"):
         handle_provider_call_started(None, _event("failed-call", "llm_call_started", started_at))
@@ -88,6 +91,7 @@ def test_provider_failure_has_no_invented_usage(caplog):
 
 
 def test_duplicate_terminal_failure_event_is_ignored_without_becoming_pending(caplog):
+    """Duplicate terminal failure event is ignored without becoming pending."""
     started_at = datetime.now(timezone.utc)
     call_id = "duplicate-failure"
     failure = _event(
@@ -112,6 +116,7 @@ def test_duplicate_terminal_failure_event_is_ignored_without_becoming_pending(ca
 
 
 def test_out_of_order_handler_execution_is_correlated_by_call_id(caplog):
+    """Out of order handler execution is correlated by call id."""
     started_at = datetime.now(timezone.utc)
     completed = _event(
         "raced-call",

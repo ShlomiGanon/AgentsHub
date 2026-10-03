@@ -61,6 +61,8 @@ async def _for_each_target_chat(chat_ids: list[str], send) -> None:
         await send(chat_id)
 
 
+# --- notifications ---
+
 async def dispatch_notification(deps: "BotDeps", notification: "BotNotification") -> None:
     """Route one notification kind to the matching Telegram delivery helper."""
 
@@ -208,7 +210,7 @@ async def run_notification_poll_loop(
             )
 
 
-# -- group attendance checks ---------------------------------------------------
+# --- attendance ---
 
 ATTENDANCE_CALLBACK_PREFIX = "attend"
 
@@ -327,16 +329,14 @@ async def run_attendance_check_loop(
             )
 
 
+# --- delivery ---
+
 if TYPE_CHECKING:
     from bot.contracts import BotDeps, BotNotification
 
 
 async def _deliver_editing_the_ack_first(deps: "BotDeps", chat_id: str, text: str, notification: "BotNotification") -> None:
-    """One message per report (docs/responce_improve.md): edit the ack message in place when
-    possible — it already carries the original message's own reply threading, so nothing else
-    needs to reference it. Only send a genuinely new message (a reply to the original) when
-    there's no ack to edit, the text no longer fits in one message, or editing it fails outright
-    (deleted, too old, or any other transport error)."""
+    """Edit the ack in place when it still fits; otherwise send a new reply to the original."""
 
     if notification.ack_message_id and len(text) <= TELEGRAM_MESSAGE_LIMIT:
         try:
@@ -352,11 +352,7 @@ async def _deliver_editing_the_ack_first(deps: "BotDeps", chat_id: str, text: st
 
 
 async def deliver_failure_notification(deps: "BotDeps", notification: "BotNotification") -> None:
-    """Telegram never notifies a user that a message was *edited* — only a new message pings
-    them. So unlike a successful result, a failure always goes out as a genuinely new reply (the
-    thing that actually notifies the user something needs their attention); the ack is only
-    best-effort edited to a short neutral line pointing at it, never left showing "Handling
-    it..." — but that edit's success or failure never gates sending the real reply below."""
+    """Send a failure as a new reply so the user is pinged; best-effort edit the ack to a neutral line."""
 
     notice = notification.payload
     text = notice.report_text or format_failure_notice(notice, message_catalog_for(deps))
@@ -454,6 +450,8 @@ class NotificationCursorStore:
 
 
 
+
+# --- process lock ---
 
 def _pid_is_running(pid: int) -> bool:
     """True when `pid` still names a live process. Used to tell a crashed bot's leftover

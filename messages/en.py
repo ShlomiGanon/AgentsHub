@@ -654,7 +654,7 @@ MESSAGES = {
     "admin.simulator.profile_simulations_commander_required": "Select a commander identity to load simulations.",
     "admin.simulator.profile_simulation_load_failed": "Could not load this simulation: {message}",
     "admin.simulator.select_identity_first": "Sign in and choose an acting identity to list this profile's simulations.",
-    "admin.simulator.bot_mode_unconfigured": "This profile has not declared SIMULATOR_PORT, so message steps cannot be routed through the simulation-mode bot process (docs/bot_simulation_mode_design.md).",
+    "admin.simulator.bot_mode_unconfigured": "This profile has not declared SIMULATOR_PORT, so message steps cannot be routed through the simulation-mode bot process.",
     "admin.simulator.bot_mode_unreachable": "Could not reach the simulation-mode bot process. Is `python -m bot.simulator_app` running for this profile?",
     "admin.simulator.bot_no_reply": "(the bot sent no reply)",
     "admin.simulator.bts.title": "Behind the Scenes",

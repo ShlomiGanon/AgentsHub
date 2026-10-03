@@ -35,20 +35,28 @@ sys.modules[f"{__name__}.logging_config"] = observability
 sys.modules[f"{__name__}.tracing"] = observability
 
 class _TerminalAliasFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    """Resolve legacy tools.terminal imports onto tools.terminal_support."""
+
     aliases = {f"{__name__}.terminal", f"{__name__}._terminal_client_shared"}
 
     def find_spec(self, fullname, path=None, target=None):
+        """Return a loader spec only for the terminal alias module names."""
+
         if fullname in self.aliases:
             return importlib.util.spec_from_loader(fullname, self)
         return None
 
     def create_module(self, spec):
+        """Load terminal_support once and register it under every alias."""
+
         module = importlib.import_module("tools.terminal_support")
         for alias in self.aliases:
             sys.modules[alias] = module
         return module
 
     def exec_module(self, module):
+        """No-op; create_module already returned the live module."""
+
         return None
 
 

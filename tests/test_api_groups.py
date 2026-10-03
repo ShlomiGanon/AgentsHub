@@ -17,10 +17,12 @@ GROUP = "-100200300"
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch)
 
 
 class _OtherAgent(ReferenceAgent):
+    """OtherAgent."""
     name = "other_agent"
 
 
@@ -30,10 +32,12 @@ class _FakeAttendanceAgent:
     name = "team_status_agent"
 
     def __init__(self, opened):
+        """Initialize this test helper."""
         self.opened = opened
         self.calls = []
 
     def open_scheduled_cycle(self, now_iso=None, *, force=False, check_hour=None):
+        """Open scheduled cycle."""
         self.calls.append((now_iso, force, check_hour))
         return self.opened
 
@@ -59,6 +63,7 @@ def _two_agent_ctx(tmp_path, main_agent, extra_agents=()):
 
 
 def _group_message(text, identity, chat_id=GROUP, chat_type="supergroup", **extra):
+    """Group message."""
     return {
         "text": text,
         "sender_identity": identity,
@@ -73,6 +78,7 @@ def _group_message(text, identity, chat_id=GROUP, chat_type="supergroup", **extr
 
 
 def test_group_listing_is_commander_only(tmp_path, teardown_ctx):
+    """Group listing is commander only."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -87,6 +93,7 @@ def test_group_listing_is_commander_only(tmp_path, teardown_ctx):
 
 
 def test_group_bindings_are_created_listed_and_removed(tmp_path, teardown_ctx):
+    """Group bindings are created listed and removed."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -118,6 +125,7 @@ def test_group_bindings_are_created_listed_and_removed(tmp_path, teardown_ctx):
 
 
 def test_group_writes_reject_viewers_and_unroutable_agents(tmp_path, teardown_ctx):
+    """Group writes reject viewers and unroutable agents."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -139,6 +147,7 @@ def test_group_writes_reject_viewers_and_unroutable_agents(tmp_path, teardown_ct
 
 
 def test_private_chat_messages_are_unaffected_by_group_routing(tmp_path, teardown_ctx):
+    """Private chat messages are unaffected by group routing."""
     agent = happy_path_agent(intent="conversational")
     agent._dispatch["Reply naturally and directly"] = "hi"
     ctx = build_context(tmp_path, main_agent=agent)
@@ -155,6 +164,7 @@ def test_private_chat_messages_are_unaffected_by_group_routing(tmp_path, teardow
 
 
 def test_a_message_from_an_unregistered_group_is_refused(tmp_path, teardown_ctx):
+    """A message from an unregistered group is refused."""
     agent = happy_path_agent(intent="conversational")
     ctx = build_context(tmp_path, main_agent=agent)
     teardown_ctx.append(ctx)
@@ -191,6 +201,7 @@ def test_a_message_from_a_bound_group_still_sees_every_agent_and_protocol(tmp_pa
 
 
 def test_a_group_bound_to_main_agent_is_unscoped(tmp_path, teardown_ctx):
+    """A group bound to main agent is unscoped."""
     agent = happy_path_agent(intent="conversational")
     agent._dispatch["Reply naturally and directly"] = "full hi"
     ctx = _two_agent_ctx(tmp_path, agent)
@@ -227,6 +238,7 @@ def test_a_protocol_hint_outside_the_group_scope_is_accepted(tmp_path, teardown_
 
 
 def test_a_protocol_hint_inside_the_group_scope_takes_the_fast_path(tmp_path, teardown_ctx):
+    """A protocol hint inside the group scope takes the fast path."""
     agent = happy_path_agent(intent="conversational")
     ctx = _two_agent_ctx(tmp_path, agent)
     teardown_ctx.append(ctx)
@@ -246,6 +258,7 @@ def test_a_protocol_hint_inside_the_group_scope_takes_the_fast_path(tmp_path, te
 
 
 def test_attendance_check_404s_when_no_attendance_specialist_is_registered(tmp_path, teardown_ctx):
+    """Attendance check 404s when no attendance specialist is registered."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -255,6 +268,7 @@ def test_attendance_check_404s_when_no_attendance_specialist_is_registered(tmp_p
 
 
 def test_attendance_check_opens_a_due_cycle_and_names_the_bound_groups(tmp_path, teardown_ctx):
+    """Attendance check opens a due cycle and names the bound groups."""
     opened = {"cycle_key": "2026-09-10", "opened_at": "o", "deadline_at": "2026-09-10T06:00:00+00:00", "members_required": ["Alex Cohen"]}
     attendance_agent = _FakeAttendanceAgent(opened)
     ctx = _two_agent_ctx(tmp_path, happy_path_agent(), extra_agents=(attendance_agent,))
@@ -278,6 +292,7 @@ def test_attendance_check_opens_a_due_cycle_and_names_the_bound_groups(tmp_path,
 
 
 def test_attendance_check_reports_not_opened_when_nothing_is_due(tmp_path, teardown_ctx):
+    """Attendance check reports not opened when nothing is due."""
     attendance_agent = _FakeAttendanceAgent(None)
     ctx = _two_agent_ctx(tmp_path, happy_path_agent(), extra_agents=(attendance_agent,))
     teardown_ctx.append(ctx)
@@ -291,6 +306,7 @@ def test_attendance_check_reports_not_opened_when_nothing_is_due(tmp_path, teard
 
 
 def test_attendance_check_omits_disabled_groups_from_targets(tmp_path, teardown_ctx):
+    """Attendance check omits disabled groups from targets."""
     opened = {"cycle_key": "2026-09-10", "opened_at": "o", "deadline_at": "d", "members_required": []}
     attendance_agent = _FakeAttendanceAgent(opened)
     ctx = _two_agent_ctx(tmp_path, happy_path_agent(), extra_agents=(attendance_agent,))
@@ -309,6 +325,7 @@ def test_attendance_check_omits_disabled_groups_from_targets(tmp_path, teardown_
 
 
 def test_group_put_updates_attendance_settings_without_resetting_on_label_edit(tmp_path, teardown_ctx):
+    """Group put updates attendance settings without resetting on label edit."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -328,6 +345,7 @@ def test_group_put_updates_attendance_settings_without_resetting_on_label_edit(t
 
 
 def test_real_attendance_agent_opens_claims_and_respects_group_hour(tmp_path, teardown_ctx):
+    """Real attendance agent opens claims and respects group hour."""
     from datetime import datetime, timezone
 
     from agents.team_status_agent import TeamStatusAgent
@@ -375,6 +393,7 @@ def test_real_attendance_agent_opens_claims_and_respects_group_hour(tmp_path, te
 
 
 def test_group_put_rejects_an_invalid_attendance_hour(tmp_path, teardown_ctx):
+    """Group put rejects an invalid attendance hour."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()

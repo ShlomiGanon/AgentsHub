@@ -1,4 +1,4 @@
-"""9.14 — Test retry and idempotency (work_plan.md §9.14).
+"""9.14 — Test retry and idempotency.
 
 The first three bullets (idempotency blocking retry after a side-effecting
 tool acted, read-only retry to the limit, the limit read live) are already
@@ -23,6 +23,7 @@ from tools.simulator import _post_event
 
 @pytest.fixture(autouse=True)
 def _mock_crewai_always_fails(monkeypatch):
+    """Mock crewai always fails."""
     class _FakeCrewAgent:
         def __init__(self, **kwargs):
             pass
@@ -41,6 +42,7 @@ _TEST_BOT_SERVICE_KEY = "test-bot-service-key-0123456789abcdef"
 
 
 def test_retry_exhaustion_notifies_the_originator_and_the_next_event_still_proceeds(tmp_path, monkeypatch):
+    """Retry exhaustion notifies the originator and the next event still proceeds."""
     monkeypatch.setenv("BOT_SERVICE_KEY", _TEST_BOT_SERVICE_KEY)
     agent = happy_path_agent(risk_score="0.1", selected="status_check")
     ctx = build_context(tmp_path, main_agent=agent)
@@ -75,6 +77,7 @@ def test_retry_exhaustion_notifies_the_originator_and_the_next_event_still_proce
 
 
 def _get_notifications(base_url: str) -> dict:
+    """Get notifications."""
     import json
     import urllib.request
 

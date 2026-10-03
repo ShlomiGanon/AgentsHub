@@ -1,11 +1,9 @@
 """Response Team specialist agents and resource-unavailable copy."""
 
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from agents import (
     Agent,
-    InvocationPolicy,
     NeighboringForcesAgent as _NeighboringForcesAgentBase,
     SurveillanceAgent,
     TeamStatusAgent,
@@ -13,7 +11,6 @@ from agents import (
     get_authenticated_request_identity,
     tool,
 )
-from messages import get_catalog
 from persistence import (
     SurveillancePersistenceError,
     TeamStatusPersistenceError,
@@ -21,13 +18,19 @@ from persistence import (
     open_response_team_roster_store,
     open_response_team_surveillance_store,
 )
-from profiles.admin_tables import AdminColumn, AdminTable
-from profiles.contracts import AgentSpec, OptimizationPolicy
-from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
-from protocols import CriticalityLevel, Protocol, Step
-
-import profiles.response_team as _facade
-globals().update({name: getattr(_facade, name) for name in dir(_facade) if not name.startswith("__")})
+from profiles.contracts import AgentSpec
+from profiles.response_team import (
+    DB_PATH,
+    DRONES_WAREHOUSE,
+    FORCE_BASES,
+    FORCE_BUSY_SECONDS,
+    FORCE_POOL_SIZE,
+    SQUAD_KIND,
+    SQUAD_ORIGIN_AREA,
+    TIMEZONE,
+    _catalog_text,
+    eta_seconds,
+)
 
 class ResponseTeamRosterAgent(TeamStatusAgent):
     """Roster/attendance specialist -- a profile-owned subclass of the
@@ -45,6 +48,8 @@ class ResponseTeamRosterAgent(TeamStatusAgent):
     response_window_hours = 1
 
     def __init__(self, model: str, api_key: str | None = None):
+        """Open this profile's roster and incident stores, then finish Agent setup."""
+
         if not self.status_db_path:
             raise TypeError("ResponseTeamRosterAgent requires a class-level status_db_path")
         self.status_store = open_response_team_roster_store(self.status_db_path)
@@ -62,6 +67,8 @@ class ResponseTeamRosterAgent(TeamStatusAgent):
         idempotent=True,
     )
     def report_team_movement(self, area: str = "", member_identity: str = "") -> str:
+        """Record the caller's current area without linking them to an incident."""
+
         identity = (member_identity or get_authenticated_request_identity() or "").strip()
         if not identity:
             return failed_tool_result("The movement report was not stored: authenticated requester identity is unavailable.")
@@ -92,6 +99,8 @@ class ResponseTeamRosterAgent(TeamStatusAgent):
         idempotent=True,
     )
     def join_incident_response(self, area: str = "", member_identity: str = "") -> str:
+        """Link the caller to the single incident currently on record for `area`."""
+
         identity = (member_identity or get_authenticated_request_identity() or "").strip()
         if not identity:
             return "Not linked: authenticated requester identity is unavailable."
@@ -117,6 +126,8 @@ class ResponseTeamRosterAgent(TeamStatusAgent):
         idempotent=True,
     )
     def leave_incident_response(self, member_identity: str = "") -> str:
+        """Close the caller's current incident link, if they have one."""
+
         identity = (member_identity or get_authenticated_request_identity() or "").strip()
         if not identity:
             return "Not updated: authenticated requester identity is unavailable."
@@ -135,6 +146,8 @@ class ResponseTeamRosterAgent(TeamStatusAgent):
         side_effecting=False,
     )
     def list_incident_responders(self, area: str = "") -> str:
+        """List members linked to the single incident currently on record for `area`."""
+
         if not area.strip():
             return failed_tool_result("Clarification required: area is required.")
 
@@ -169,6 +182,8 @@ class ResponseTeamSurveillanceAgent(SurveillanceAgent):
     surveillance_db_path = DB_PATH
 
     def __init__(self, model: str, api_key: str | None = None):
+        """Open this profile's surveillance store with its ETA matrix and warehouse home."""
+
         if not self.surveillance_db_path:
             raise TypeError("ResponseTeamSurveillanceAgent requires a class-level surveillance_db_path")
         self.surveillance_store = open_response_team_surveillance_store(
@@ -192,7 +207,10 @@ class ResponseTeamSurveillanceAgent(SurveillanceAgent):
         status: str = "",
         camera_identifier: str = "",
     ) -> str:
+        """Record one camera's observation and optional status."""
+
         # Some model/tool adapters use the prose-level name `camera_identifier`
+
         # even though the public protocol field is `camera_id`. Accept both so
         # that a harmless naming variation cannot fail the operational step.
         camera_id = camera_id.strip() or camera_identifier.strip()
@@ -224,17 +242,13 @@ class ResponseTeamSurveillanceAgent(SurveillanceAgent):
         idempotent=True,
     )
     def recall_drone(self, drone_or_mission_id: str = "") -> str:
+        """Recall one active drone to the warehouse via the shared return-to-base tool."""
+
         return self.return_drone_to_base(drone_or_mission_id)
 
 
 class NeighboringForcesAgent(_NeighboringForcesAgentBase):
-    """Thin profile subclass of the shared `agents.neighboring_forces_agent.NeighboringForcesAgent`
-    (docs/Admin_Tables_Plan.md section 3.3) -- own DB, own force kinds/pool/busy-window, own ETA
-    matrix, plus one addition the shared base doesn't know about: `kind="squad"` dispatches the
-    response team's own roster (not a real external force) through the same tool, checked
-    against the roster's live availability instead of `FORCE_POOL_SIZE`. `_resolve_kind`/
-    `_check_capacity`/`_capacity_shortage_text` are overridden only for that one extra kind;
-    every other kind uses the shared base's own default behavior unchanged."""
+    """Dispatch specialist with this profile's kinds plus own-roster `squad` capacity."""
 
     dispatch_db_path = DB_PATH
     force_bases = FORCE_BASES
@@ -243,18 +257,28 @@ class NeighboringForcesAgent(_NeighboringForcesAgentBase):
     eta_fn = staticmethod(eta_seconds)
 
     def __init__(self, model: str, api_key: str | None = None):
+        """Open the roster store used only for the squad-capacity check."""
+
         super().__init__(model, api_key)
-        self.roster_store = open_response_team_roster_store(_facade.DB_PATH)
+        from profiles import response_team as profile
+        # Read DB_PATH from the profile module so test monkeypatches on that facade apply.
+        self.roster_store = open_response_team_roster_store(profile.DB_PATH)
 
     def _valid_kinds(self) -> "tuple[str, ...]":
+        """Include the site's own squad kind alongside real external forces."""
+
         return tuple(sorted((*self.force_bases, SQUAD_KIND)))
 
     def _resolve_kind(self, kind_norm: str) -> "tuple[str, str] | None":
+        """Map squad to its origin area; every other kind uses the shared default."""
+
         if kind_norm == SQUAD_KIND:
             return SQUAD_ORIGIN_AREA, "squad_member"
         return super()._resolve_kind(kind_norm)
 
     def _check_capacity(self, kind_norm: str, unit_count: int) -> "tuple[bool, int]":
+        """Count live available roster members for squad; use the pool for other kinds."""
+
         if kind_norm == SQUAD_KIND:
             now_iso = datetime.now(timezone.utc).isoformat()
             available = sum(
@@ -265,6 +289,8 @@ class NeighboringForcesAgent(_NeighboringForcesAgentBase):
         return super()._check_capacity(kind_norm, unit_count)
 
     def _capacity_shortage_text(self, kind_norm: str, remaining: int, unit_count: int) -> str:
+        """Localized shortage text for squad availability or an external-force pool."""
+
         if kind_norm == SQUAD_KIND:
             return _catalog_text(
                 "response_team.resource_unavailable.squad_reason", available=remaining, unit_count=unit_count,
@@ -285,20 +311,16 @@ class NeighboringForcesAgent(_NeighboringForcesAgentBase):
         idempotent=False,
     )
     def dispatch_squad(self, target_area: str, unit_count: int = 1, note: str = "") -> str:
+        """Dispatch this site's own roster through the shared neighboring-force tool."""
+
         return self.dispatch_neighboring_force(
             kind=SQUAD_KIND, target_area=target_area, unit_count=unit_count, note=note,
         )
 
 
-# == Resource-unavailable description (orchestrator/flows.py's shared mechanism) ============
-#
-# Registered below as RESOURCE_UNAVAILABLE_DESCRIPTION. Two responsibilities, both localized
-# here (core never composes resource/area names itself, per this module's own Hebrew-only-in-
-# messages rule -- _catalog_text is still the one place this module reads Hebrew):
-#   - the reporter-facing fact sentence (resource + area + reason, translated);
-#   - the commander-facing alternatives: the SAME full picture of everything else that could
-#     cover the area right now -- cameras, ready drones, available roster members, and force
-#     kinds with remaining capacity -- not just alternatives within one resource's own category.
+# -- Resource-unavailable copy ------------------------------------------------
+# Core never composes resource or area names; this module localizes both the
+# reporter-facing fact and the commander-facing alternatives list.
 
 _RESOURCE_KIND_LABELS = {
     "drone": _catalog_text("response_team.resource_kind.drone"),
@@ -324,10 +346,7 @@ _AREA_LABELS = {
 
 
 def _force_remaining_capacity(neighboring_forces_agent) -> dict[str, int]:
-    """Remaining capacity per external force kind, using the SAME busy-window definition
-    `dispatch_neighboring_force`'s own capacity check uses (fix d) -- a dispatched unit stays
-    busy for FORCE_BUSY_SECONDS regardless of en_route/arrived status, so this must never be
-    computed from status="en_route" alone or the two would disagree."""
+    """Remaining units per force kind inside the same busy window the dispatch tool uses."""
 
     busy_since = (datetime.now(timezone.utc) - timedelta(seconds=FORCE_BUSY_SECONDS)).isoformat()
     busy_by_kind: dict[str, int] = {}
@@ -338,6 +357,8 @@ def _force_remaining_capacity(neighboring_forces_agent) -> dict[str, int]:
 
 
 def _find_resource_alternatives(area: str, registry) -> str:
+    """Commander-facing list of cameras, drones, roster, and forces that can cover `area`."""
+
     parts: list[str] = []
 
     surveillance_agent = registry.get("surveillance_agent")
@@ -392,6 +413,8 @@ def _localize_unavailable_reason(reason: str) -> str:
 
 
 def _describe_resource_unavailable(resource_kind: str, area: str, reason: str, registry) -> tuple[str, str]:
+    """Return the reporter-facing fact sentence and commander-facing alternatives."""
+
     resource_label = _RESOURCE_KIND_LABELS.get(resource_kind, resource_kind)
     area_label = _AREA_LABELS.get(area, area)
     fact = _catalog_text(
@@ -411,4 +434,16 @@ AGENTS = [
     AgentSpec(cls=ResponseTeamRosterAgent, tier="sub"),
     AgentSpec(cls=ResponseTeamSurveillanceAgent, tier="sub"),
     AgentSpec(cls=NeighboringForcesAgent, tier="sub"),
+]
+
+__all__ = [
+    "AGENTS",
+    "NeighboringForcesAgent",
+    "RESOURCE_UNAVAILABLE_DESCRIPTION",
+    "ResponseTeamRosterAgent",
+    "ResponseTeamSurveillanceAgent",
+    "_AREA_LABELS",
+    "_RESOURCE_KIND_LABELS",
+    "_describe_resource_unavailable",
+    "_find_resource_alternatives",
 ]

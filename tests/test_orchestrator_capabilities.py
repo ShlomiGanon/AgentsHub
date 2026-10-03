@@ -1,15 +1,17 @@
-"""Role-aware capability context (docs/Next_Plan.md §4.3, §4.4, §8, §11)."""
+"""Role-aware capability context."""
 
 from auth.permissions import PermissionLevel, RequestedOperation, ViewerAllowedAction, is_permitted
 from orchestrator.capabilities import CAPABILITY_DESCRIPTORS, build_role_aware_system_context, visible_capabilities
 
 
 def test_every_descriptor_operation_is_a_real_requested_operation():
+    """Every descriptor operation is a real requested operation."""
     for descriptor in CAPABILITY_DESCRIPTORS:
         assert isinstance(descriptor.operation, RequestedOperation)
 
 
 def test_visible_capabilities_matches_is_permitted_for_every_descriptor_and_level():
+    """Visible capabilities matches is permitted for every descriptor and level."""
     for level in (PermissionLevel.VIEWER, PermissionLevel.COMMANDER):
         visible_names = {descriptor.name for descriptor in visible_capabilities(level)}
         for descriptor in CAPABILITY_DESCRIPTORS:
@@ -18,7 +20,7 @@ def test_visible_capabilities_matches_is_permitted_for_every_descriptor_and_leve
 
 
 def test_a_descriptor_whose_operation_is_absent_from_viewer_allowed_action_is_hidden_from_a_viewer():
-    # docs/Next_Plan.md §11's "a viewer action is removed from
+    # 'S "a viewer action is removed from
     # ViewerAllowedAction disappears from both execution and
     # self-description" — proven structurally here: every descriptor built
     # on an operation outside the current ViewerAllowedAction membership is
@@ -26,6 +28,7 @@ def test_a_descriptor_whose_operation_is_absent_from_viewer_allowed_action_is_hi
     # it is also denied at execution (is_permitted), since both derive from
     # the identical check. Changing ViewerAllowedAction's membership changes
     # both together, with nothing else to keep in sync.
+    """A descriptor whose operation is absent from viewer allowed action is hidden from a viewer."""
     viewer_allowed_values = {member.value for member in ViewerAllowedAction}
     viewer_visible_names = {descriptor.name for descriptor in visible_capabilities(PermissionLevel.VIEWER)}
 
@@ -39,6 +42,7 @@ def test_a_descriptor_whose_operation_is_absent_from_viewer_allowed_action_is_hi
 
 
 def test_build_role_aware_system_context_capabilities_match_visible_capabilities():
+    """Build role aware system context capabilities match visible capabilities."""
     for level in (PermissionLevel.VIEWER, PermissionLevel.COMMANDER):
         context = build_role_aware_system_context(level, "Test Service", (), _EmptyRegistry(), (), ())
         expected_names = {descriptor.name for descriptor in visible_capabilities(level)}
@@ -46,6 +50,7 @@ def test_build_role_aware_system_context_capabilities_match_visible_capabilities
 
 
 def test_build_role_aware_system_context_omits_protocols_and_sub_agents_for_a_viewer():
+    """Build role aware system context omits protocols and sub agents for a viewer."""
     context = build_role_aware_system_context(PermissionLevel.VIEWER, "Test Service", (), _EmptyRegistry(), (), ())
 
     assert "protocols" not in context
@@ -53,6 +58,7 @@ def test_build_role_aware_system_context_omits_protocols_and_sub_agents_for_a_vi
 
 
 def test_build_role_aware_system_context_includes_protocols_and_sub_agents_for_a_commander():
+    """Build role aware system context includes protocols and sub agents for a commander."""
     context = build_role_aware_system_context(PermissionLevel.COMMANDER, "Test Service", (), _EmptyRegistry(), (), ())
 
     assert "protocols" in context
@@ -60,5 +66,7 @@ def test_build_role_aware_system_context_includes_protocols_and_sub_agents_for_a
 
 
 class _EmptyRegistry:
+    """EmptyRegistry."""
     def all(self):
+        """All."""
         return []

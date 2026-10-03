@@ -24,12 +24,14 @@ from protocols.model import CriticalityLevel, Protocol
 
 
 def test_main_agent_has_no_tools_of_its_own():
+    """Main agent has no tools of its own."""
     agent = MainAgent(model="m")
 
     assert agent.exposed_tools() == ()
 
 
 def test_main_agent_construction_requires_no_special_setup():
+    """Main agent construction requires no special setup."""
     agent = MainAgent(model="some-model")
 
     assert agent.name == "main_agent"
@@ -40,6 +42,7 @@ def test_main_agent_construction_requires_no_special_setup():
 
 
 def test_build_prompt_includes_all_fields():
+    """Build prompt includes all fields."""
     prompt = _build_risk_assessment_prompt("fire", "north_sector", "smoke at gate 3", "moderate")
 
     assert "fire" in prompt
@@ -49,6 +52,7 @@ def test_build_prompt_includes_all_fields():
 
 
 def test_build_prompt_handles_missing_fields():
+    """Build prompt handles missing fields."""
     prompt = _build_risk_assessment_prompt(None, None, None, None)
 
     assert "unresolved" in prompt
@@ -56,6 +60,7 @@ def test_build_prompt_handles_missing_fields():
 
 
 def test_parse_valid_response():
+    """Parse valid response."""
     score, reason = _parse_risk_assessment_response("RISK_SCORE: 0.8\nREASON: multiple prior incidents nearby")
 
     assert score == 0.8
@@ -63,11 +68,12 @@ def test_parse_valid_response():
 
 
 def test_parse_rejects_missing_score():
+    """Parse rejects missing score."""
     with pytest.raises(OrchestrationParseError):
         _parse_risk_assessment_response("REASON: no score given")
 
 
-# --- Stage 6 (docs/Next_Plan.md §11): refusal of unknown model-generated
+# Stage 6: refusal of unknown model-generated
 # operations. A model never emits a `RequestedOperation` directly — it only
 # ever emits `primary_intent` (message-plan JSON) or `operation`
 # (history-query JSON), both closed vocabularies the application validates
@@ -78,6 +84,7 @@ def test_parse_rejects_missing_score():
 
 
 def test_structured_intent_rejects_an_invented_primary_intent():
+    """Structured intent rejects an invented primary intent."""
     from orchestrator.main_agent import _parse_structured_intent_response
 
     payload = '{"primary_intent": "delete_everything"}'
@@ -87,6 +94,7 @@ def test_structured_intent_rejects_an_invented_primary_intent():
 
 
 def test_structured_intent_accepts_every_valid_primary_intent_shape():
+    """Structured intent accepts every valid primary intent shape."""
     from orchestrator.main_agent import _parse_structured_intent_response
 
     for intent in ("question", "report", "request", "conversational"):
@@ -108,6 +116,7 @@ def test_structured_intent_accepts_every_valid_primary_intent_shape():
 
 
 def test_intent_prompt_no_longer_hardcodes_a_single_evidence_key_example():
+    """Intent prompt no longer hardcodes a single evidence key example."""
     from orchestrator.main_agent import _build_intent_prompt
 
     prompt = _build_intent_prompt("smoke observed near gate 3", ())
@@ -120,8 +129,7 @@ def test_structured_intent_accepts_evidence_keyed_differently_from_primary_inten
     """Regression test for the bug where the model copies the prompt's own example evidence
     key ("question") verbatim regardless of the real primary_intent — a report/request
     classification with genuine, message-quoted evidence must not be rejected just because the
-    evidence dict's key doesn't literally match primary_intent's value (docs/IMPROVES/
-    CRITICAL_FIXES_PLAN.MD item 2)."""
+    evidence dict's key doesn't literally match primary_intent's value."""
 
     from orchestrator.main_agent import _parse_structured_intent_response
 
@@ -142,6 +150,7 @@ def test_structured_intent_accepts_evidence_keyed_differently_from_primary_inten
 
 
 def test_structured_intent_still_rejects_an_operational_intent_with_no_evidence_at_all():
+    """Structured intent still rejects an operational intent with no evidence at all."""
     from orchestrator.main_agent import _parse_structured_intent_response
 
     payload = {
@@ -159,6 +168,7 @@ def test_structured_intent_still_rejects_an_operational_intent_with_no_evidence_
 
 
 def test_history_query_spec_rejects_an_invented_operation():
+    """History query spec rejects an invented operation."""
     from orchestrator.main_agent import _history_query_spec_from_payload
 
     with pytest.raises(OrchestrationParseError, match="invalid history operation"):
@@ -166,6 +176,7 @@ def test_history_query_spec_rejects_an_invented_operation():
 
 
 def test_history_query_spec_accepts_every_valid_operation():
+    """History query spec accepts every valid operation."""
     from orchestrator.main_agent import _history_query_spec_from_payload
 
     for operation in ("latest", "event_details", "list", "count", "aggregate", "compare", "similar_cases", "narrative"):
@@ -174,6 +185,7 @@ def test_history_query_spec_accepts_every_valid_operation():
 
 
 def test_history_query_spec_rejects_an_invented_time_basis():
+    """History query spec rejects an invented time basis."""
     from orchestrator.main_agent import _history_query_spec_from_payload
 
     with pytest.raises(OrchestrationParseError):
@@ -181,11 +193,13 @@ def test_history_query_spec_rejects_an_invented_time_basis():
 
 
 def test_parse_rejects_missing_reason():
+    """Parse rejects missing reason."""
     with pytest.raises(OrchestrationParseError):
         _parse_risk_assessment_response("RISK_SCORE: 0.5")
 
 
 def test_parse_rejects_out_of_range_score():
+    """Parse rejects out of range score."""
     with pytest.raises(OrchestrationParseError):
         _parse_risk_assessment_response("RISK_SCORE: 1.5\nREASON: too high")
 
@@ -194,11 +208,14 @@ def test_parse_rejects_out_of_range_score():
 
 
 class _ScriptedMainAgent:
+    """ScriptedMainAgent."""
     def __init__(self, response_text):
+        """Initialize this test helper."""
         self._response_text = response_text
         self.calls = []
 
     def process(self, text, allowed_tools, *, invocation_policy=None):
+        """Process."""
         self.calls.append((text, allowed_tools))
 
         class _Result:
@@ -209,6 +226,7 @@ class _ScriptedMainAgent:
 
 
 def test_assess_risk_derives_high_when_score_meets_threshold():
+    """Assess risk derives high when score meets threshold."""
     agent = _ScriptedMainAgent("RISK_SCORE: 0.6\nREASON: matches threshold exactly")
 
     assessment = assess_risk(agent, "fire", "north", "d", "s", risk_threshold=0.6)
@@ -217,6 +235,7 @@ def test_assess_risk_derives_high_when_score_meets_threshold():
 
 
 def test_assess_risk_derives_low_when_score_is_below_threshold():
+    """Assess risk derives low when score is below threshold."""
     agent = _ScriptedMainAgent("RISK_SCORE: 0.2\nREASON: minor")
 
     assessment = assess_risk(agent, "fire", "north", "d", "s", risk_threshold=0.6)
@@ -225,6 +244,7 @@ def test_assess_risk_derives_low_when_score_is_below_threshold():
 
 
 def test_assess_risk_passes_no_tools():
+    """Assess risk passes no tools."""
     agent = _ScriptedMainAgent("RISK_SCORE: 0.5\nREASON: r")
 
     assess_risk(agent, "fire", "north", "d", "s", risk_threshold=0.5)
@@ -233,6 +253,7 @@ def test_assess_risk_passes_no_tools():
 
 
 def test_assess_risk_raises_when_the_agent_reports_the_task_unclear():
+    """Assess risk raises when the agent reports the task unclear."""
     class _UnclearAgent:
         def process(self, text, allowed_tools):
             class _Result:
@@ -246,6 +267,7 @@ def test_assess_risk_raises_when_the_agent_reports_the_task_unclear():
 
 
 def test_assess_risk_end_to_end_through_the_mocked_adapter(monkeypatch):
+    """Assess risk end to end through the mocked adapter."""
     class _FakeOutput:
         def __init__(self, raw):
             self.raw = raw
@@ -271,6 +293,7 @@ def test_assess_risk_end_to_end_through_the_mocked_adapter(monkeypatch):
 
 
 def _one_protocol():
+    """One protocol."""
     return (
         Protocol(
             name="record_attendance",
@@ -288,6 +311,7 @@ def test_make_operational_decision_parses_a_markdown_fenced_response_on_the_firs
     # A model asked for bare JSON commonly wraps it in a ```json fence anyway -- this must
     # not cost a wasted repair call (_structured_call_with_one_repair's shared parsing path),
     # since the fenced content itself is already well-formed.
+    """Make operational decision parses a markdown fenced response on the first attempt."""
     fenced = (
         "```json\n"
         '{"risk_score": 0.1, "risk_reason": "routine", "protocol_status": "selected", '
@@ -307,6 +331,7 @@ def test_make_operational_decision_parses_a_markdown_fenced_response_on_the_firs
 def test_make_operational_decision_accepts_match_as_an_alias_for_selected():
     # Observed in a live model response in place of the literal "selected" -- accepted as
     # an alias rather than failing a decision the model otherwise expressed correctly.
+    """Make operational decision accepts match as an alias for selected."""
     agent = _ScriptedMainAgent(
         '{"risk_score": 0.6, "risk_reason": "confirmed", "protocol_status": "MATCH", '
         '"protocol_name": "record_attendance", "candidate_names": [], "protocol_reason": "matches"}'
@@ -324,6 +349,7 @@ def test_make_operational_decision_auto_resolves_a_high_risk_ambiguous_selection
     # ambiguous decision between report_security_incident (HIGH) and report_team_movement
     # (LOW) at risk_score=0.93 -- must not stop for clarification on a message like this,
     # mirroring select_protocol's own high-risk auto-resolve on the separate path.
+    """Make operational decision auto resolves a high risk ambiguous selection to the most critical candidate."""
     agent = _ScriptedMainAgent(
         '{"risk_score": 0.93, "risk_reason": "gunfire reported near the west gate", '
         '"protocol_status": "ambiguous", "protocol_name": null, '
@@ -352,6 +378,7 @@ def test_make_operational_decision_auto_resolves_a_high_risk_ambiguous_selection
 
 
 def test_make_operational_decision_auto_resolves_an_ambiguous_selection_with_a_safety_critical_candidate_even_at_low_risk():
+    """Make operational decision auto resolves an ambiguous selection with a safety critical candidate even at low risk."""
     agent = _ScriptedMainAgent(
         '{"risk_score": 0.1, "risk_reason": "seems routine", '
         '"protocol_status": "ambiguous", "protocol_name": null, '
@@ -380,6 +407,7 @@ def test_make_operational_decision_auto_resolves_an_ambiguous_selection_with_a_s
 
 
 def _extract_and_decide_payload(**overrides):
+    """Extract and decide payload."""
     payload = {
         "classification": "attendance",
         "area": "north",
@@ -403,6 +431,7 @@ def _extract_and_decide_payload(**overrides):
 
 
 def test_extract_and_decide_returns_the_same_fields_as_the_two_step_path():
+    """Extract and decide returns the same fields as the two step path."""
     agent = _ScriptedMainAgent(_extract_and_decide_payload())
     extraction, decision = extract_and_decide(
         agent,
@@ -426,6 +455,7 @@ def test_extract_and_decide_returns_the_same_fields_as_the_two_step_path():
 
 
 def test_extract_and_decide_falls_back_to_extraction_only_when_operational_fields_are_unusable():
+    """Extract and decide falls back to extraction only when operational fields are unusable."""
     agent = _ScriptedMainAgent(_extract_and_decide_payload(risk_score=2, protocol_reason=""))
     extraction, decision = extract_and_decide(
         agent,
@@ -443,6 +473,7 @@ def test_extract_and_decide_falls_back_to_extraction_only_when_operational_field
 
 
 def test_make_operational_decision_leaves_a_low_risk_non_safety_critical_ambiguity_unresolved():
+    """Make operational decision leaves a low risk non safety critical ambiguity unresolved."""
     agent = _ScriptedMainAgent(
         '{"risk_score": 0.1, "risk_reason": "seems routine", '
         '"protocol_status": "ambiguous", "protocol_name": null, '
@@ -472,6 +503,7 @@ def test_make_operational_decision_leaves_a_low_risk_non_safety_critical_ambigui
 
 
 def test_construct_core_agents_returns_the_main_agent_with_the_configured_model():
+    """Construct core agents returns the main agent with the configured model."""
     base_config = BaseConfig(core_model=TierModel(model="the-main-model", api_key="the-core-key"))
 
     core_agents = construct_core_agents(base_config)
@@ -486,11 +518,14 @@ def test_construct_core_agents_returns_the_main_agent_with_the_configured_model(
 
 
 class _SequentialScriptedMainAgent:
+    """SequentialScriptedMainAgent."""
     def __init__(self, response_texts):
+        """Initialize this test helper."""
         self._responses = list(response_texts)
         self.calls = []
 
     def process(self, text, allowed_tools):
+        """Process."""
         self.calls.append((text, allowed_tools))
 
         class _Result:
@@ -501,6 +536,7 @@ class _SequentialScriptedMainAgent:
 
 
 def test_event_data_question_retries_once_after_a_banned_opener():
+    """Event data question retries once after a banned opener."""
     agent = _SequentialScriptedMainAgent([
         "Your report was received. Please provide the missing area.",
         "Which area were you reporting from?",
@@ -514,6 +550,7 @@ def test_event_data_question_retries_once_after_a_banned_opener():
 
 
 def test_event_data_question_falls_back_to_the_deterministic_catalog_template():
+    """Event data question falls back to the deterministic catalog template."""
     agent = _SequentialScriptedMainAgent([
         "Your report was received, please clarify the area.",
         "Your report was received once more, still missing the area.",
@@ -527,6 +564,7 @@ def test_event_data_question_falls_back_to_the_deterministic_catalog_template():
 
 
 def test_event_data_question_without_a_catalog_skips_the_tone_check():
+    """Event data question without a catalog skips the tone check."""
     agent = _SequentialScriptedMainAgent(["Your report was received, please clarify the area."])
 
     question = formulate_event_data_question(agent, {"raw_text": "camera issue"}, ("area",), ())

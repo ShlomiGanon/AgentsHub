@@ -1,4 +1,4 @@
-"""9.5 — Test user administration (work_plan.md §9.5).
+"""9.5 — Test user administration.
 
 Most of this subtask's bullets are already covered at the unit level
 (`tests/test_user_admin.py`'s own CLI tests, `tests/test_bot_users.py`'s
@@ -8,7 +8,7 @@ actually approve a real held run through the real API, and a structural
 check — over the real registered Flask routes, not by inspection — that
 no `api/*` route creates, changes, or removes a user, including the two
 read-only lookups added after this subtask was first drafted
-(`GET /Commanders`, `GET /User/<identity>`, §8.13/§8.14).
+(`GET /Commanders`, `GET /User/<identity>`,).
 """
 
 import types
@@ -32,6 +32,7 @@ MODEL_CRED_ENV = "TEST_INT_USER_ADMIN_MODEL_KEY"
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     install_crewai_stub(monkeypatch, 'status nominal')
 
 
@@ -43,6 +44,7 @@ def test_a_commander_added_via_the_admin_command_can_approve_a_real_held_run(tmp
     # DB_PATH must be the exact file build_context's own ApiContext reads
     # from, matching tests/test_api_protocols.py's writable_profile_module
     # pattern.
+    """A commander added via the admin command can approve a real held run."""
     db_path = tmp_path / "api_test.db"
     module_name = f"user_admin_integration_profile_{uuid.uuid4().hex}"
     monkeypatch.setenv(BOT_TOKEN_ENV, "token")
@@ -86,6 +88,7 @@ def test_user_api_exposes_reads_self_name_update_and_commander_approval(tmp_path
     # Isolate from the admin panel: api/app.py registers /admin/* routes (including
     # /admin/users and friends) only when both are set, so this test's fixed route
     # list must not depend on whether the ambient shell happens to have them set.
+    """User api exposes reads self name update and commander approval."""
     monkeypatch.delenv("ADMIN_USERNAME", raising=False)
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
     ctx = build_context(tmp_path)

@@ -1,3 +1,5 @@
+"""run_stack.py process launch and shutdown."""
+
 import sys
 from types import ModuleType
 
@@ -8,6 +10,7 @@ from run_stack import reset_profile_databases
 
 
 def test_main_starts_the_last_selected_profile(monkeypatch):
+    """Main starts the last selected profile."""
     started = []
 
     class FakeSupervisor:
@@ -27,6 +30,7 @@ def test_main_starts_the_last_selected_profile(monkeypatch):
 
 
 def test_reset_removes_only_declared_databases_and_known_sidecars(tmp_path):
+    """Reset removes only declared databases and known sidecars."""
     database = tmp_path / "main.db"
     settings = tmp_path / "main.db.settings.json"
     unrelated = tmp_path / "keep.txt"
@@ -45,6 +49,7 @@ def test_reset_removes_only_declared_databases_and_known_sidecars(tmp_path):
 
 
 def test_run_stops_children_when_start_fails(monkeypatch):
+    """Run stops children when start fails."""
     calls = []
     monkeypatch.setattr(run_stack, "write_status", lambda **kwargs: None)
 
@@ -67,6 +72,7 @@ def test_run_stops_children_when_start_fails(monkeypatch):
 
 
 def test_spawn_opens_child_logs_under_the_profile_log_dir(tmp_path, monkeypatch):
+    """Spawn opens child logs under the profile log dir."""
     from types import SimpleNamespace
 
     opened = []
@@ -111,6 +117,7 @@ def test_spawn_opens_child_logs_under_the_profile_log_dir(tmp_path, monkeypatch)
 
 
 def test_start_refuses_an_already_occupied_api_port(monkeypatch):
+    """Start refuses an already occupied api port."""
     from types import SimpleNamespace
 
     monkeypatch.setattr(
@@ -126,6 +133,7 @@ def test_start_refuses_an_already_occupied_api_port(monkeypatch):
 
 
 def test_unexpected_child_exit_names_the_process_and_code():
+    """Unexpected child exit names the process and code."""
     from types import SimpleNamespace
 
     supervisor = run_stack.StackSupervisor("profiles.response_team")
@@ -135,6 +143,7 @@ def test_unexpected_child_exit_names_the_process_and_code():
 
 
 def test_reset_refuses_a_declared_non_database_path(tmp_path):
+    """Reset refuses a declared non database path."""
     module = ModuleType("profiles.test_unsafe_reset_profile")
     module.DB_PATH = str(tmp_path)
     module.RESETTABLE_DATABASES = (str(tmp_path),)

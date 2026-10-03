@@ -4,7 +4,7 @@ same way whether run as `pytest` or `python -m pytest`.
 
 Also defines `test_core_model`/`test_sub_model` (below) — the test
 suite's own model-tier config source, built from `TEST_`-prefixed real
-process environment variables (shell export, CI secrets, ...), never a
+process environment variables (shell export, CI secrets,...), never a
 file. Every function in the model-tier chain (`config.base.build_tier_model`/
 `load_base_config`, `profiles.loader.load_profile`, `api.app.build_context`,
 `bot.app.build_deps`) takes already-resolved `config.base.TierModel`
@@ -14,28 +14,27 @@ production system and automated test suite read `os.environ` for
 model-tier config: `api.app.main`, `bot.app.main`, `cli.user_admin.main`,
 and these two fixtures. (A handful of standalone, hand-run scripts under
 `tests/` — never collected by pytest, never imported by anything — read
-model-tier-shaped variables of their own accord too; see
-`docs/profile_spec.md`'s "Model tiers" section.)
+model-tier-shaped variables of their own accord too.)
 
 `real_tier_env` (below) is not a fifth such place — it never reads a
 resolved value from `os.environ` itself. It only *writes* the real
 `CORE_MODEL_*`/`SUB_MODEL_*` variables (mirroring `test_core_model`/
 `test_sub_model`'s already-configured `TEST_` values) for the rare test
-that must exercise one of the three real `main()` entry points end to
+that must exercise one of the three real `main` entry points end to
 end, so that root's own environment read has something real to find.
 
 `_reset_trace_id_between_tests` (below) exists because of one specific
 gap `api.app.build_app`'s own `before_request` hook cannot close on its
 own: that hook resets `tools.tracing`'s trace-ID contextvar at the start
 of every real HTTP request, on whichever thread serves it — but a test
-using Flask's `test_client()` (unlike `tests.api_fakes.RunningApiServer`,
+using Flask's `test_client` (unlike `tests.api_fakes.RunningApiServer`,
 which serves on its own background thread) runs the whole request
 in-process, on the *same* thread pytest itself runs on. Without this
 fixture, `tools.tracing.set_trace_id` (needed so a route's trace ID
 survives long enough for werkzeug's own request-log line to carry it —
 see that function's own docstring) would leave its value sitting on that
-shared thread's context, visible to whatever unrelated test runs next.
-"""
+shared thread's context, visible to whatever unrelated test runs next."""
+
 
 import os
 import sys
@@ -51,15 +50,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 @pytest.fixture(autouse=True)
 def _reset_trace_id_between_tests():
+    """Clear the shared request trace id so in-process Flask tests cannot leak it."""
     set_trace_id("")
 
 
 def _require_test_env(name: str) -> str:
+    """Read a required TEST_-prefixed environment variable or fail the suite."""
     value = os.environ.get(f"TEST_{name}")
     if value is None:
         pytest.fail(
             f"Missing required environment variable TEST_{name} for the test suite. "
-            "See docs/profile_spec.md's \"Model tiers\" section."
+            "Set TEST_* model-tier environment variables before running the suite."
         )
     return value
 
@@ -101,6 +102,7 @@ def test_sub_model() -> TierModel:
 
 
 def _mirror_real_tier_env(monkeypatch, prefix: str) -> None:
+    """Mirror real tier env."""
     provider = _require_test_env(f"{prefix}_MODEL_PROVIDER")
     model_name = _require_test_env(f"{prefix}_MODEL_NAME")
     api_key_env_name = _require_test_env(f"{prefix}_MODEL_API_KEY_ENV")

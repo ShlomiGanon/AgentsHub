@@ -1,8 +1,14 @@
-"""Permission model (work_plan.md §1.9; docs/Next_Plan.md §2, §6)."""
+"""Permission levels, requestable operations, and the shared bot-service identity."""
 
 from enum import Enum, IntEnum
 
 from auth.user_names import InvalidFullNameError, MAX_FULL_NAME_LENGTH, normalize_full_name
+
+# Public deployment identity for service-level API calls; it is not a secret.
+BOT_SERVICE_IDENTITY = "bot-service"
+
+# Env var holding the shared secret sent as X-Service-Key with this identity.
+BOT_SERVICE_KEY_ENV_VAR = "BOT_SERVICE_KEY"
 
 
 class PermissionLevel(IntEnum):
@@ -13,12 +19,11 @@ class PermissionLevel(IntEnum):
 
 
 class RequestedOperation(Enum):
-    """Complete vocabulary of externally requestable operations (docs/vocabulary.md).
+    """Complete vocabulary of externally requestable operations.
 
     Not itself an allowlist — see `ViewerAllowedAction` for the viewer
     policy. Every API route, bot command/callback, and resolved message
-    intent maps to exactly one member; see docs/allowed_calls.md's
-    "Operation matrix" for the full entry-point mapping.
+    intent maps to exactly one member.
     """
 
     SUBMIT_EVENT = "submit_event"
@@ -50,7 +55,7 @@ class RequestedOperation(Enum):
 
 
 class ViewerAllowedAction(Enum):
-    """The complete viewer authorization policy (docs/Next_Plan.md §2.2, §5 decision record).
+    """The complete viewer authorization policy.
 
     A viewer may perform an operation only if it is a member here. A
     commander is unrestricted by this enum entirely — commander

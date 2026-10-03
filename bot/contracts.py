@@ -1,9 +1,13 @@
-"""The bot's one gateway to the system (work_plan.md §8, docs/allowed_calls.md)."""
+"""Bot contracts: errors, API views, and the BotApiClient interface."""
 
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
+
+from auth.permissions import BOT_SERVICE_IDENTITY, BOT_SERVICE_KEY_ENV_VAR
+
+# --- errors ---
 
 if TYPE_CHECKING:
     from bot.transports import TelegramClient
@@ -23,7 +27,7 @@ class BotStartupError(BotError):
 
 
 class ApiNotImplementedError(BotError, NotImplementedError):
-    """The API client has no implementation for this operation yet."""
+    """This client does not implement the requested API operation."""
 
     def __init__(self, operation: str, blocked_on: str):
         """Record which operation is blocked and what it still depends on."""
@@ -31,8 +35,7 @@ class ApiNotImplementedError(BotError, NotImplementedError):
         self.operation = operation
         self.blocked_on = blocked_on
         super().__init__(
-            f"'{operation}' is not available: it depends on {blocked_on} "
-            f"(work_plan.md §7 — API Layer), which has not been built yet."
+            f"'{operation}' is not available: it depends on {blocked_on}."
         )
 
 
@@ -63,19 +66,11 @@ class BotDeps:
     telegram_client: "TelegramClient"
     api_client: "BotApiClient"
 
+# --- identity ---
+
 PermissionLevelName = Literal["viewer", "commander"]
 
-# Public deployment identity for service-level API calls; it is not a secret.
-BOT_SERVICE_IDENTITY = "bot-service"
-
-# The real secret paired with BOT_SERVICE_IDENTITY: since that identity string is public
-# (visible in source, docs, and the API response of any caller who tries it), the API
-# additionally requires this shared secret — sent as the X-Service-Key header — before
-# granting any caller BOT_SERVICE_IDENTITY's (commander-level) permissions. Read directly
-# from the process environment, never through a profile, so every process presenting this
-# identity (the real bot, the terminal test clients, the API that validates them) reads the
-# exact same value from the exact same place.
-BOT_SERVICE_KEY_ENV_VAR = "BOT_SERVICE_KEY"
+# Canonical values live in auth.permissions so api and bot never import each other.
 
 
 def resolve_bot_service_key() -> str | None:
@@ -96,6 +91,8 @@ HoldAnswerStatus = Literal[
     "resolved", "approved", "rejected", "unauthorized", "not_found", "invalid_classification", "invalid_candidate"
 ]
 
+
+# --- views ---
 
 @dataclass(frozen=True)
 class UserLookupResult:
@@ -173,14 +170,12 @@ class JobResult:
     failed_step_agent_name: str | None = None
     # Sourced from data already computed during the run (no new model call) —
     # None whenever no protocol was ever selected (e.g. a `no_match_protocol`
-    # outcome), which format_job_result treats as "no suffix to show"
-    # (REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md Part 3 / item #9).
+    # outcome), which format_job_result treats as "no suffix to show".
     protocol_name: str | None = None
     risk_level: str | None = None
     protocol_reason: str | None = None
-    # Composed once, server-side, when the run finished (orchestrator.run_report /
-    # orchestrator.report_composer) — None when rich reporting is disabled, in which case the
-    # bot falls back to format_job_result's fixed-template rendering.
+    # Composed once, server-side, when the run finished — None when rich
+    # reporting is disabled, in which case the bot falls back to format_job_result.
     report_text: str | None = None
     selection_required: bool = False
 
@@ -229,20 +224,14 @@ class UncertainVerdictNotice:
 
 @dataclass(frozen=True)
 class UncertainVerdictReporterNotice:
-    """The short, generic counterpart to UncertainVerdictNotice, delivered to the
-    original sender (any role) instead of the commander-only detailed notice —
-    carries no insight text by design (REQUIRED_FIELDS_AND_CLOSED_DECISIONS.md
-    Part 2 / item #8)."""
+    """Reporter-facing uncertain notice with no insight text, unlike the commander notice."""
 
     event_id: str
 
 
 @dataclass(frozen=True)
 class ResourceUnavailableAlertNotice:
-    """Commander-only: a resource the run needed was unavailable, plus concrete alternatives.
-    Delivered to every commander's own private chat (bot/interactions.py's
-    `notify_resource_unavailable_alert`, mirroring `notify_uncertain_verdict`) — never to the
-    reporter's own chat, which gets only its own plain job_finished reply."""
+    """Commander-only alert that a required resource was unavailable, with alternatives."""
 
     event_id: str
     alert_text: str
@@ -250,11 +239,7 @@ class ResourceUnavailableAlertNotice:
 
 @dataclass(frozen=True)
 class HoldEscalationNotice:
-    """Commander-only: an unresolved hold (clarification/approval/event_data) has gone past the
-    configured escalation window with no answer. Delivered to every commander's own private chat
-    (bot/interactions.py's `notify_hold_escalation`, mirroring `notify_resource_unavailable_alert`
-    exactly) -- never to the original sender's own chat, which keeps getting only its own
-    reminder of the same original prompt."""
+    """Commander-only alert that a hold sat unanswered past the escalation window."""
 
     event_id: str
     alert_text: str
@@ -384,8 +369,10 @@ class BotNotification:
     trace_id: str | None = None
 
 
+# --- client ---
+
 class BotApiClient(ABC):
-    """Everything `bot/` needs from the API Layer."""
+    """Everything `bot/` needs from the API over HTTP."""
 
     async def start(self) -> None:
         """Open lifecycle-managed transport resources when needed."""
@@ -419,7 +406,7 @@ class BotApiClient(ABC):
 
     @abstractmethod
     async def list_commander_chat_ids(self) -> tuple[str, ...]:
-        """Every commander's Telegram identity, for pushing §8.4/§8.5/§8.6 notifications to."""
+        """Every commander's Telegram identity, for pushing hold and verdict notifications."""
 
     @abstractmethod
     async def list_groups(self) -> tuple[GroupBindingView, ...]:
@@ -443,13 +430,7 @@ class BotApiClient(ABC):
         telegram_chat_type: str | None = None,
         ack_message_id: str | None = None,
     ) -> MessageSubmissionResult:
-        """`source_message_id` — the incoming Telegram message's own ID — is what an eventual asynchronous job result (§8.9) or failure notification (§8.11) needs to send its reply *as a r...
-
-        `telegram_chat_id`/`telegram_chat_type` (Telegram's own `chat.id`/`chat.type`) let the
-        server scope a group's message to the agent the group is bound to; a private chat sends
-        `chat_type="private"` and is never scoped. `ack_message_id` is the status/ack message's
-        own Telegram message ID — stored with the event so a later job_finished/job_failed
-        notification can edit that same message in place instead of sending a new one."""
+        """Submit inbound text; `source_message_id` and `ack_message_id` let later replies thread and edit in place."""
 
 
     @abstractmethod
@@ -471,7 +452,7 @@ class BotApiClient(ABC):
 
     @abstractmethod
     async def get_profile_view(self, caller_identity: str) -> ProfileView:
-        """`caller_identity` — the real Telegram identity asking, already resolved and permission-checked by `bot.users.resolve_caller` before this is ever called — is what the API's own §..."""
+        """Live profile snapshot for the already-resolved caller identity."""
 
     @abstractmethod
     async def get_profile_diff_status(self) -> bool:
@@ -483,21 +464,21 @@ class BotApiClient(ABC):
     async def write_protocol(
         self, action: Literal["add", "edit", "remove"], protocol_payload: dict, caller_identity: str
     ) -> WriteResult:
-        """`caller_identity` — see `get_profile_view`'s docstring; the same reasoning applies to every write in this interface."""
+        """Add, edit, or remove a protocol as this already-resolved caller."""
 
 
     @abstractmethod
     async def get_settings_view(self, caller_identity: str) -> SettingsView:
-        """`caller_identity` — see `get_profile_view`'s docstring."""
+        """Live settings snapshot for the already-resolved caller identity."""
 
     @abstractmethod
     async def write_setting(self, field: str, value: object, caller_identity: str) -> WriteResult:
-        """`caller_identity` — see `get_profile_view`'s docstring."""
+        """Persist one settings field as this already-resolved caller."""
 
 
     @abstractmethod
     async def get_job_result(self, job_id: str, caller_identity: str) -> JobResult | None:
-        """`caller_identity` — see `get_profile_view`'s docstring."""
+        """Finished-job fields for this caller, or None if the job is missing."""
 
 
     @abstractmethod
@@ -516,7 +497,7 @@ class BotApiClient(ABC):
 
 
 class UnimplementedApiClient(BotApiClient):
-    """The only concrete `BotApiClient` today."""
+    """Test double that raises ApiNotImplementedError; production uses HttpApiClient."""
 
     async def admit_telegram_update(
         self,
@@ -525,7 +506,7 @@ class UnimplementedApiClient(BotApiClient):
         chat_type: str,
         chat_label: str = "",
     ) -> TelegramAdmissionResult:
-        """Placeholder until the HTTP client is wired."""
+        """Refuse; inject HttpApiClient for a live API."""
 
         raise ApiNotImplementedError(
             "admit_telegram_update",
@@ -533,18 +514,28 @@ class UnimplementedApiClient(BotApiClient):
         )
 
     async def resolve_user(self, telegram_identity: str) -> UserLookupResult:
+        """Refuse; inject HttpApiClient for a live API."""
+
         raise ApiNotImplementedError("resolve_user", "§7.9 (authentication/authorization enforcement)")
 
     async def update_own_full_name(self, telegram_identity: str, full_name: str) -> str:
-        raise ApiNotImplementedError("update_own_full_name", "work_plan.md §7 — API Layer (PUT /User/<identity>/name)")
+        """Refuse; inject HttpApiClient for a live API."""
+
+        raise ApiNotImplementedError("update_own_full_name", "§7.9 (PUT /User/<identity>/name)")
 
     async def list_commander_chat_ids(self) -> tuple[str, ...]:
+        """Refuse; inject HttpApiClient for a live API."""
+
         raise ApiNotImplementedError("list_commander_chat_ids", "§7.9 (authentication/authorization enforcement)")
 
     async def list_groups(self) -> tuple[GroupBindingView, ...]:
+        """Refuse; inject HttpApiClient for a live API."""
+
         raise ApiNotImplementedError("list_groups", "§7.9 (GET /Groups, Telegram group routing)")
 
     async def run_attendance_check(self) -> AttendanceCheckResult:
+        """Refuse; inject HttpApiClient for a live API."""
+
         raise ApiNotImplementedError("run_attendance_check", "§7.9 (POST /TeamStatus/AttendanceCheck)")
 
     async def submit_message(
@@ -554,41 +545,65 @@ class UnimplementedApiClient(BotApiClient):
         telegram_chat_id: str | None = None, telegram_chat_type: str | None = None,
         ack_message_id: str | None = None,
     ) -> MessageSubmissionResult:
+        """Refuse; inject HttpApiClient for a live API."""
+
         raise ApiNotImplementedError("submit_message", "§7.4 (POST /Msg)")
 
     async def answer_clarification_hold(
         self, event_id: str, chosen_classification: str, answering_identity: str
     ) -> HoldAnswerOutcome:
+        """Refuse; inject HttpApiClient for a live API."""
+
         raise ApiNotImplementedError("answer_clarification_hold", "§7.9 (authentication/authorization enforcement)")
 
     async def answer_approval_hold(self, event_id: str, decision: str, answering_identity: str) -> HoldAnswerOutcome:
+        """Refuse; inject HttpApiClient for a live API."""
+
         raise ApiNotImplementedError("answer_approval_hold", "§7.9 (authentication/authorization enforcement)")
 
     async def fetch_pending_holds(self, caller_identity: str) -> dict:
+        """Refuse; inject HttpApiClient for a live API."""
+
         raise ApiNotImplementedError("fetch_pending_holds", "§7.9 (GET /Holds/Pending)")
 
     async def get_profile_view(self, caller_identity: str) -> ProfileView:
+        """Refuse; inject HttpApiClient for a live API."""
+
         raise ApiNotImplementedError("get_profile_view", "§7.7 (GET /SYSTEM)")
 
     async def get_profile_diff_status(self) -> bool:
+        """Refuse; inject HttpApiClient for a live API."""
+
         raise ApiNotImplementedError("get_profile_diff_status", "§7.7 (GET /SYSTEM)")
 
     async def write_protocol(self, action: Literal["add", "edit", "remove"], protocol_payload: dict, caller_identity: str) -> WriteResult:
+        """Refuse; inject HttpApiClient for a live API."""
+
         raise ApiNotImplementedError("write_protocol", "§7.6 (CRUD /Protocol)")
 
     async def get_settings_view(self, caller_identity: str) -> SettingsView:
+        """Refuse; inject HttpApiClient for a live API."""
+
         raise ApiNotImplementedError("get_settings_view", "§7.7 (GET /SYSTEM)")
 
     async def write_setting(self, field: str, value: object, caller_identity: str) -> WriteResult:
+        """Refuse; inject HttpApiClient for a live API."""
+
         raise ApiNotImplementedError("write_setting", "§7.8 (PUT /SYSTEM)")
 
     async def get_job_result(self, job_id: str, caller_identity: str) -> JobResult | None:
+        """Refuse; inject HttpApiClient for a live API."""
+
         raise ApiNotImplementedError("get_job_result", "§7.2 (async job mechanism)")
 
     async def poll_trace(
         self, trace_id: str, since: int, wait_seconds: int, caller_identity: str
     ) -> TracePollResult:
+        """Refuse; inject HttpApiClient for a live API."""
+
         raise ApiNotImplementedError("poll_trace", "§7 commander Deep Debug trace feed")
 
     async def poll_pending_notifications(self, since: int, wait_seconds: int = 0) -> tuple[tuple[BotNotification, ...], int]:
+        """Refuse; inject HttpApiClient for a live API."""
+
         raise ApiNotImplementedError("poll_pending_notifications", "§7.2 (async job mechanism)")

@@ -1,8 +1,6 @@
 """Acceptance scenarios for the two operational profiles, run offline and
 deterministically through the real API with the model boundary faked
-(docs/bar_improves.md Stage 6; the SEC scenarios below were retargeted to
-profiles/response_team.py's rebuilt protocol/agent/tool set by
-docs/responce_improve.md). These verify pipeline wiring — classification
+. These verify pipeline wiring — classification
 routing, required-field gating, holds, approval, persisted fields,
 notifications — never model quality; nothing here asserts model wording.
 
@@ -18,7 +16,7 @@ was actually given, so a scenario can assert e.g. "the step result says a
 dispatch request was recorded" without depending on a real model's wording.
 
 Every profiles/response_team.py protocol declares `approval_flag=False`
-(docs/responce_improve.md), so none of the SEC scenarios below exercise an
+, so none of the SEC scenarios below exercise an
 approval hold the way the deleted profiles/standby_squad.py's
 `external_force_response` protocol once did -- `query_situational_picture`
 below instead exercises this profile's one three-agent protocol.
@@ -58,14 +56,17 @@ class _KeywordCrewAgent:
     """
 
     def __init__(self, **kwargs):
+        """Initialize this test helper."""
         pass
 
     def kickoff(self, text):
+        """Kickoff."""
         return types.SimpleNamespace(raw=f"recorded: {text}")
 
 
 @pytest.fixture(autouse=True)
 def _mock_crewai(monkeypatch):
+    """Mock crewai."""
     from agents import adapter
 
     fake_module = types.SimpleNamespace(
@@ -76,6 +77,7 @@ def _mock_crewai(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _bot_tokens(monkeypatch):
+    """Bot tokens."""
     monkeypatch.setenv("BOT_TOKEN", "operational-test-token")
 
 
@@ -113,6 +115,7 @@ def _operational_ctx(tmp_path, module_path, main_agent):
 
 
 def _sec_ctx(tmp_path, teardown_ctx, main_agent):
+    """Sec ctx."""
     ctx = _operational_ctx(tmp_path, "profiles.response_team", main_agent)
     teardown_ctx.append(ctx)
     # Phase A: record_attendance/report_team_movement's direct-tool steps call the real
@@ -127,12 +130,14 @@ def _sec_ctx(tmp_path, teardown_ctx, main_agent):
 
 
 def _fire_ctx(tmp_path, teardown_ctx, main_agent):
+    """Fire ctx."""
     ctx = _operational_ctx(tmp_path, "profiles.fire_station", main_agent)
     teardown_ctx.append(ctx)
     return ctx
 
 
 def _extraction(**overrides) -> str:
+    """Extraction."""
     import json
 
     payload = {
@@ -145,16 +150,19 @@ def _extraction(**overrides) -> str:
 
 
 def _submit(client, identity, text):
+    """Submit."""
     resp = client.post("/Event", headers=auth_headers(identity), json={"text": text, "sender_identity": identity})
     assert resp.status_code == 202
     return resp.get_json()["event_id"]
 
 
 def _single_agent_formulation(agent_name: str, task: str) -> str:
+    """Single agent formulation."""
     return f"AGENT: {agent_name}\nTASK: {task}"
 
 
 def _two_agent_formulation(first_agent: str, first_task: str, second_agent: str, second_task: str) -> str:
+    """Two agent formulation."""
     import json
 
     return json.dumps(
@@ -170,6 +178,7 @@ def _two_agent_formulation(first_agent: str, first_task: str, second_agent: str,
 def _three_agent_formulation(
     first_agent: str, first_task: str, second_agent: str, second_task: str, third_agent: str, third_task: str
 ) -> str:
+    """Three agent formulation."""
     import json
 
     return json.dumps(
@@ -190,6 +199,7 @@ _VERDICT_SUCCESS = "VERDICT: success\nREASONING: matches expected output"
 
 
 def test_scenario_1_absence_without_interval_then_reply_fills_it_and_resumes(tmp_path, teardown_ctx):
+    """Scenario 1 absence without interval then reply fills it and resumes."""
     agent = ScriptedAgent(
         {
             "Extract this operational event": _extraction(
@@ -246,6 +256,7 @@ def test_scenario_1_absence_without_interval_then_reply_fills_it_and_resumes(tmp
 
 
 def test_scenario_2_camera_interference_near_the_east_fence(tmp_path, teardown_ctx):
+    """Scenario 2 camera interference near the east fence."""
     agent = ScriptedAgent(
         {
             "Extract this operational event": _extraction(
@@ -279,6 +290,7 @@ def test_scenario_2_camera_interference_near_the_east_fence(tmp_path, teardown_c
 
 
 def test_scenario_3_team_member_in_transit(tmp_path, teardown_ctx):
+    """Scenario 3 team member in transit."""
     agent = ScriptedAgent(
         {
             "Extract this operational event": _extraction(
@@ -311,7 +323,8 @@ def test_scenario_4_two_cameras_in_one_message(tmp_path, teardown_ctx):
     # genuine per-camera model decision (kind="agent"), not a keyword heuristic, so this
     # fake crewai stand-in's fixed echo never actually calls update_camera_status for real --
     # real store mutation for this case is a live-verification concern
-    # (docs/pending_live_verification.md), not something an offline scripted agent can prove.
+    # Not something an offline scripted agent can prove.
+    """Scenario 4 two cameras in one message."""
     agent = ScriptedAgent(
         {
             "Extract this operational event": _extraction(
@@ -344,6 +357,7 @@ def test_scenario_4_two_cameras_in_one_message(tmp_path, teardown_ctx):
 
 
 def test_scenario_5_cut_communications_cable(tmp_path, teardown_ctx):
+    """Scenario 5 cut communications cable."""
     agent = ScriptedAgent(
         {
             "Extract this operational event": _extraction(
@@ -371,7 +385,7 @@ def test_scenario_5_cut_communications_cable(tmp_path, teardown_ctx):
 
 
 def test_scenario_6_ambulance_dispatched_for_a_casualty(tmp_path, teardown_ctx):
-    """docs/responce_improve.md: every profiles/response_team.py protocol declares
+    """Every profiles/response_team.py protocol declares
     approval_flag=False -- unlike the deleted profiles/standby_squad.py's
     external_force_response, a viewer's own force-dispatch report runs immediately,
     with no commander approval hold."""
@@ -443,6 +457,7 @@ def test_scenario_6_variant_combined_situational_picture(tmp_path, teardown_ctx)
 
 
 def test_scenario_7_hazardous_fire_viewer_report_held_for_approval(tmp_path, teardown_ctx):
+    """Scenario 7 hazardous fire viewer report held for approval."""
     agent = ScriptedAgent(
         {
             "Extract this operational event": _extraction(
@@ -524,10 +539,12 @@ class _TimeoutOnceThenScriptedAgent(ScriptedAgent):
     not just orchestrator.flows unit-level."""
 
     def __init__(self, dispatch):
+        """Initialize this test helper."""
         super().__init__(dispatch)
         self._extraction_attempts = 0
 
     def process(self, text, allowed_tools):
+        """Process."""
         if "Extract this operational event" in text:
             self._extraction_attempts += 1
             if self._extraction_attempts == 1:
@@ -536,6 +553,7 @@ class _TimeoutOnceThenScriptedAgent(ScriptedAgent):
 
 
 def test_scenario_8_extraction_times_out_once_then_succeeds(tmp_path, teardown_ctx):
+    """Scenario 8 extraction times out once then succeeds."""
     agent = _TimeoutOnceThenScriptedAgent(
         {
             "Extract this operational event": _extraction(
@@ -561,6 +579,7 @@ def test_scenario_8_extraction_times_out_once_then_succeeds(tmp_path, teardown_c
 
 
 def test_scenario_9_malformed_optional_field_proceeds_with_it_null(tmp_path, teardown_ctx):
+    """Scenario 9 malformed optional field proceeds with it null."""
     import json
 
     malformed_extraction = json.dumps(

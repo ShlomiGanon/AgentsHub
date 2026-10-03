@@ -1,23 +1,4 @@
-"""The two Telegram-network stubs `bot/simulator_app.py` uses so PTB's real
-`Application`/dispatcher and the real handlers in `bot/app.py` can run for
-simulation-reserved identities with zero real Telegram credentials or
-network access anywhere in the process (docs/bot_simulation_mode_design.md
-§4.1).
-
-`FakeBotRequest` satisfies every Bot-API call PTB's own startup machinery
-makes (`Application.initialize()`'s mandatory `get_me()`, and
-`register_handlers()`'s `post_init` hook calling `set_my_commands()`).
-`SimulatorTelegramClient` is the
-outbound stub — an extension of `tests/bot_fakes.py`'s already-tested
-`FakeTelegramClient` shape, moved here (not test-only) since it's now also
-production code for this one specific, isolated purpose, plus one addition:
-reading back what a single request sent to one chat, so the `/Simulator-msg`
-endpoint can hand the admin simulator a reply the same way `/Msg` already
-does. `build_synthetic_text_update()` turns one simulated text message into
-a real `telegram.Update` via PTB's own `Update.de_json` — the same
-deserialization path real webhook/getUpdates delivery uses — so PTB's real
-filters/dispatch classify it exactly as they would a real one.
-"""
+"""Telegram-network stubs so the simulator can run real handlers with no Telegram I/O."""
 
 from __future__ import annotations
 
@@ -35,29 +16,13 @@ from bot.transports import TelegramClient
 # A fixed, fake bot identity — never presented to Telegram, never checked
 # against anything real. Only `Bot.initialize()`'s own `User(**this)`
 # parsing needs it to look like a valid Bot API `User` object.
+# --- request stub ---
+
 _FAKE_BOT_USER = {"id": 1, "is_bot": True, "first_name": "AgentsHub Simulator"}
 
 
 class FakeBotRequest(telegram.request.BaseRequest):
-    """Implements PTB's own transport seam (`telegram.request.BaseRequest`,
-    4 abstract methods) so every Bot-API call `python-telegram-bot`'s own
-    internals make while starting up — `Bot.initialize()`'s mandatory
-    `get_me()` (docs/bot_simulation_mode_design.md §1.2), and
-    `register_handlers()`'s `post_init` hook calling `set_my_commands()`
-    (`bot/app.py`, reused unmodified — see §4.2/§8: this file exists to make
-    that reuse possible, not to change it) — succeeds with zero network I/O.
-
-    This is deliberately permissive rather than a narrow allowlist: every
-    handler and background loop in this codebase already sends real
-    business traffic exclusively through `deps.telegram_client`
-    (`SimulatorTelegramClient` below), never through `context.bot`/
-    `self._application.bot` directly (confirmed by reading every call site
-    in `bot/app.py`/`bot/background_services.py`) — so the only calls that
-    can ever reach this stub are PTB's own harmless bootstrap machinery,
-    not real message content. `getMe` gets a real-shaped `User` payload
-    (some callers parse the result into a concrete type); everything else
-    gets a generic successful `True`, which is what PTB's other bootstrap
-    calls (`setMyCommands`) expect back."""
+    """Stub PTB Bot-API transport so bootstrap calls succeed with zero network I/O."""
 
     @property
     def read_timeout(self) -> float | None:
@@ -100,6 +65,8 @@ class SentMessage:
     buttons: tuple[tuple[str, str], ...] | None = None
     reply_to_message_id: str | None = None
 
+
+# --- client ---
 
 class SimulatorTelegramClient(TelegramClient):
     """Records every outbound action in memory, exactly like
@@ -220,16 +187,7 @@ class SimulatorTelegramClient(TelegramClient):
 
 
 def _stable_message_id(source_message_id: str) -> int:
-    """PTB's `Message.message_id` must be a Bot-API integer; a scenario's
-    `source_message_id` is an arbitrary caller-chosen string (matching
-    `/Msg`'s own existing contract). `crc32` gives a small, positive,
-    *deterministic* integer for the same string every time — unlike
-    Python's own randomized `hash()` — so re-sending the same
-    `source_message_id` still produces the same synthetic numeric
-    message_id, preserving `/Msg`'s existing dedup-on-source_message_id
-    behavior once the real bot handler re-derives its own `source_message_id`
-    as `str(update.message.message_id)` (docs/bot_simulation_mode_design.md
-    §10's `source_message_id`/`conversation_id` edge case)."""
+    """Deterministic positive int for a scenario source_message_id so Telegram dedup stays stable."""
 
     return zlib.crc32(source_message_id.encode("utf-8")) & 0x7FFFFFFF
 
@@ -245,15 +203,7 @@ def build_synthetic_text_update(
     bot: "telegram.Bot",
     date: float | None = None,
 ) -> telegram.Update:
-    """One simulated text message, as a real `telegram.Update` — built the
-    same way PTB itself deserializes a real webhook/getUpdates payload
-    (`telegram.Update.de_json`), so every registered handler's
-    `check_update()` (PTB's real filters, not a reimplementation of them)
-    classifies it exactly as it would a real message. Deliberately scoped
-    to plain text only (docs/bot_simulation_mode_design.md §2 decision 1,
-    §11) — no `entities`, so `filters.COMMAND` never matches and every
-    scenario message routes to `_on_text_message`.
-    """
+    """Build a real telegram.Update for one plain-text message so PTB filters classify it normally."""
 
     payload = {
         "update_id": update_id,
