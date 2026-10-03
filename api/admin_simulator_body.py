@@ -3,7 +3,7 @@
 from api.admin_api_pages import FLASH_MESSAGES
 
 SIMULATOR_BODY = """
-<div class="ls-page-wide">
+<div class="ls-page-wide ls-simulator">
 
   <div class="ls-page-header">
     <div>
@@ -14,62 +14,84 @@ SIMULATOR_BODY = """
 
   """ + FLASH_MESSAGES + """
 
-  <div class="sim-toolbar">
-    <div class="sim-step">
-      <div class="sim-step-head"><span class="sim-step-num">1</span><div class="sim-step-label">{{ t('admin.simulator.step_choose') }}</div></div>
-      <label class="form-label-console" for="profile-simulation-select">{{ t('admin.simulator.profile_simulations') }}</label>
-      <select id="profile-simulation-select" class="form-select form-select-console" {% if not page_data.profile_simulations %}disabled{% endif %}>
-        <option value="">{{ t('admin.simulator.choose_profile_simulation') }}</option>
-        {% for simulation in page_data.profile_simulations %}
-        <option value="{{ simulation.key }}">{{ simulation.title or simulation.key }}</option>
-        {% endfor %}
-      </select>
-      <button type="button" class="btn btn-console-primary" id="load-profile-simulation" disabled>{{ t('admin.simulator.load_profile_simulation') }}</button>
-      <button type="button" class="btn btn-console" id="show-profile-simulation-json" disabled>{{ t('admin.simulator.show_simulation_json') }}</button>
-      <div class="subtitle" id="profile-sim-hint" style="font-size:12px; margin:0;">{% if page_data.profile_simulations_hint_key %}{{ t(page_data.profile_simulations_hint_key) }}{% endif %}</div>
-    </div>
-    <div class="sim-flow-join" aria-hidden="true"></div>
-    <div class="sim-step">
-      <div class="sim-step-head"><span class="sim-step-num">2</span><div class="sim-step-label">{{ t('admin.simulator.step_load') }}</div></div>
-      <div class="sim-drop" id="drop-zone">
-        <span>{{ t('admin.simulator.drop_zone') }}</span>
-        <input type="file" id="file-input" accept=".json,application/json" style="display:none">
+  <div class="sim-workspace">
+    <aside class="sim-setup" id="sim-setup" aria-labelledby="sim-setup-title">
+      <div class="sim-setup-head">
+        <h2 class="sim-panel-title" id="sim-setup-title">{{ t('admin.simulator.step_choose') }}</h2>
       </div>
-      <div class="sim-paste">
-        <div class="form-label-console">{{ t('admin.simulator.paste_label') }}</div>
-        <textarea id="paste-input" class="form-control form-control-console" spellcheck="false" dir="ltr"></textarea>
-        <button type="button" class="btn btn-console btn-sm" id="load-pasted">{{ t('admin.simulator.load_pasted') }}</button>
+
+      <div class="sim-setup-body">
+        <div class="block-console mapping-panel" id="mapping-panel">
+          <span class="block-label">{{ t('admin.simulator.mapping_title') }}</span>
+          <p class="subtitle">{{ t('admin.simulator.mapping_help') }}</p>
+          <div class="mapping-grid" id="mapping-fields"></div>
+          <button type="button" class="btn btn-console-primary mt-3" id="apply-mapping">{{ t('admin.simulator.apply_mapping') }}</button>
+        </div>
+
+        <section class="sim-setup-section">
+          <label class="form-label-console" for="profile-simulation-select">{{ t('admin.simulator.profile_simulations') }}</label>
+          <div class="sim-select-row">
+            <select id="profile-simulation-select" class="form-select form-select-console" {% if not page_data.profile_simulations %}disabled{% endif %}>
+              <option value="">{{ t('admin.simulator.choose_profile_simulation') }}</option>
+              {% for simulation in page_data.profile_simulations %}
+              <option value="{{ simulation.key }}">{{ simulation.title or simulation.key }}</option>
+              {% endfor %}
+            </select>
+            <div class="sim-select-actions">
+              <button type="button" class="btn btn-console-primary" id="load-profile-simulation" disabled>{{ t('admin.simulator.load_profile_simulation') }}</button>
+              <button type="button" class="btn btn-console" id="show-profile-simulation-json" disabled>{{ t('admin.simulator.show_simulation_json') }}</button>
+            </div>
+          </div>
+          <div class="subtitle" id="profile-sim-hint">{% if page_data.profile_simulations_hint_key %}{{ t(page_data.profile_simulations_hint_key) }}{% endif %}</div>
+        </section>
+
+        <div class="sim-setup-divider">{{ t('admin.simulator.or_json') }}</div>
+
+        <section class="sim-setup-section">
+          <button type="button" class="sim-json-toggle" id="toggle-json-editor" aria-expanded="false" aria-controls="sim-json-panel">{{ t('admin.simulator.json_toggle') }}</button>
+          <div class="sim-json-panel" id="sim-json-panel" hidden>
+            <div class="sim-drop" id="drop-zone">
+              <span>{{ t('admin.simulator.drop_zone') }}</span>
+              <input type="file" id="file-input" accept=".json,application/json" style="display:none">
+            </div>
+            <div class="sim-paste">
+              <div class="form-label-console">{{ t('admin.simulator.paste_label') }}</div>
+              <textarea id="paste-input" class="form-control form-control-console sim-json-viewer" spellcheck="false" dir="ltr"></textarea>
+              <button type="button" class="btn btn-console btn-sm" id="load-pasted">{{ t('admin.simulator.load_pasted') }}</button>
+            </div>
+          </div>
+        </section>
+
+        <div id="sim-setup-status" class="sim-setup-status" hidden></div>
       </div>
-    </div>
-    <div class="sim-flow-join" aria-hidden="true"></div>
-    <div class="sim-step is-primary">
-      <div class="sim-step-head"><span class="sim-step-num">3</span><div class="sim-step-label">{{ t('admin.simulator.step_run') }}</div></div>
-      <div class="sim-actions">
+
+      <div class="sim-run-toolbar" role="group" aria-label="{{ t('admin.simulator.run_toolbar') }}">
         <button type="button" class="btn btn-console-primary send-btn" id="send-next" disabled>{{ t('admin.simulator.send_next') }}</button>
-        <button type="button" class="btn btn-console-danger" id="reset-view" disabled>{{ t('admin.simulator.reset_view') }}</button>
-        <button type="button" class="btn btn-console" id="toggle-bts" title="{{ t('admin.simulator.bts.toggle_title') }}">{{ t('admin.simulator.bts.toggle_btn') }} ({{ t('admin.simulator.bts.separate_window') }})</button>
+        <button type="button" class="btn btn-console-danger" id="reset-view">{{ t('admin.simulator.reset_view') }}</button>
+        <button type="button" class="btn btn-console" id="toggle-bts" disabled title="{{ t('admin.simulator.bts.toggle_title') }}">{{ t('admin.simulator.bts.toggle_btn') }} ({{ t('admin.simulator.bts.separate_window') }})</button>
       </div>
-    </div>
+    </aside>
+
+    <section class="sim-review is-locked" id="scenario-info" aria-labelledby="sim-review-title">
+      <div class="sim-review-head">
+        <h2 class="sim-panel-title" id="sim-review-title">{{ t('admin.simulator.step_review') }}</h2>
+        <h2 id="scenario-title">{{ t('admin.simulator.no_scenario') }}</h2>
+        <div id="sim-alert"></div>
+      </div>
+      <div class="sim-review-scroll">
+        <div class="sim-empty-state" id="sim-empty-state">
+          <div class="sim-empty-mark" aria-hidden="true"></div>
+          <p class="description" id="sim-empty-help">{{ t('admin.simulator.review_empty_help') }}</p>
+        </div>
+        <div class="sim-review-live" id="sim-review-live" hidden>
+          <p id="scenario-desc" class="description"></p>
+          <div class="sim-badges" id="scenario-badges"></div>
+          <div class="expected-actions" id="expected-actions"></div>
+          <div class="sim-grid" id="chats-container"></div>
+        </div>
+      </div>
+    </section>
   </div>
-
-  <div class="block-console mapping-panel" id="mapping-panel">
-    <span class="block-label">{{ t('admin.simulator.mapping_title') }}</span>
-    <p class="subtitle">{{ t('admin.simulator.mapping_help') }}</p>
-    <div class="mapping-grid" id="mapping-fields"></div>
-    <button type="button" class="btn btn-console-primary mt-3" id="apply-mapping">{{ t('admin.simulator.apply_mapping') }}</button>
-  </div>
-
-  <div id="sim-alert"></div>
-
-  <div class="sim-header" id="scenario-info">
-    <div class="sim-step-head"><span class="sim-step-num">4</span><div class="sim-step-label">{{ t('admin.simulator.step_review') }}</div></div>
-    <h2 id="scenario-title">{{ t('admin.simulator.no_scenario') }}</h2>
-    <p id="scenario-desc" class="description"></p>
-    <div class="sim-badges" id="scenario-badges"></div>
-    <div class="expected-actions" id="expected-actions"></div>
-  </div>
-
-  <div class="sim-grid" id="chats-container"></div>
 
   <div id="edit-step-overlay" class="sim-edit-overlay" hidden>
     <div class="block-console sim-edit-dialog" id="edit-step-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-step-title">
@@ -377,6 +399,51 @@ SIMULATOR_BODY = """
     box.appendChild(node);
   }
 
+  function showSetupStatus(message, kind) {
+    const node = document.getElementById('sim-setup-status');
+    if (!node) return;
+    node.hidden = !message;
+    node.className = 'sim-setup-status' + (kind ? ' is-' + kind : '');
+    node.innerHTML = '';
+    if (!message) return;
+    if (kind === 'busy') node.appendChild(el('span', 'sim-spinner'));
+    node.appendChild(el('span', null, message));
+  }
+
+  function setSetupBusy(busy, message) {
+    const setup = document.getElementById('sim-setup');
+    if (setup) setup.classList.toggle('is-busy', !!busy);
+    if (busy) showSetupStatus(message || t('loading_scenario'), 'busy');
+  }
+
+  function setJsonEditorOpen(open) {
+    const panel = document.getElementById('sim-json-panel');
+    const toggle = document.getElementById('toggle-json-editor');
+    if (!panel || !toggle) return;
+    panel.hidden = !open;
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    toggle.textContent = open ? t('json_toggle_hide') : t('json_toggle');
+  }
+
+  function setReviewReady(ready) {
+    const review = document.getElementById('scenario-info');
+    const empty = document.getElementById('sim-empty-state');
+    const live = document.getElementById('sim-review-live');
+    const toggleBts = document.getElementById('toggle-bts');
+    if (review) {
+      review.classList.toggle('is-locked', !ready);
+      review.classList.toggle('is-ready', !!ready);
+    }
+    if (empty) empty.hidden = !!ready;
+    if (live) live.hidden = !ready;
+    if (!ready) {
+      document.getElementById('send-next').disabled = true;
+      if (toggleBts) toggleBts.disabled = true;
+      return;
+    }
+    if (toggleBts) toggleBts.disabled = false;
+  }
+
   // ---- scenario model -------------------------------------------------------------------
 
   const state = { scenario: null, scenarioSteps: [], chats: [], chatsByKey: {}, queues: {}, runId: null, busy: false };
@@ -501,8 +568,8 @@ SIMULATOR_BODY = """
     }
 
     renderCards();
-    document.getElementById('reset-view').disabled = false;
-    showAlert(t('loaded', { title: parsed.scenario.title }), false);
+    setReviewReady(true);
+    showSetupStatus(t('loaded', { title: parsed.scenario.title }), 'ok');
   }
 
   // ---- routing / preflight (mirrors what the API will decide, from the embedded live data) --
@@ -1290,7 +1357,7 @@ SIMULATOR_BODY = """
     try {
       loadScenario(raw);
     } catch (error) {
-      showAlert(error.message, true);
+      showSetupStatus(error.message, 'error');
     }
   }
 
@@ -1309,44 +1376,64 @@ SIMULATOR_BODY = """
     profileSimJsonButton.disabled = disabled;
   }
 
-  profileSimSelect.addEventListener('change', syncProfileSimButtons);
-  syncProfileSimButtons();
+  async function fetchProfileSimulation(key) {
+    const result = await apiCall('GET', '/Simulations/' + encodeURIComponent(key), DATA.api_identity);
+    if (result.status >= 400 || !result.payload) {
+      throw new Error(errorMessage(result));
+    }
+    return result.payload;
+  }
 
-  profileSimLoadButton.addEventListener('click', async function () {
+  function fillJsonViewer(payload) {
+    document.getElementById('paste-input').value = JSON.stringify(payload, null, 2);
+    setJsonEditorOpen(true);
+  }
+
+  async function loadSelectedProfileSimulation() {
     const key = profileSimSelect.value;
     if (!key) return;
     profileSimLoadButton.disabled = true;
+    setSetupBusy(true);
     try {
-      const result = await apiCall('GET', '/Simulations/' + encodeURIComponent(key), DATA.api_identity);
-      if (result.status >= 400 || !result.payload) {
-        showAlert(t('profile_simulation_load_failed', { message: errorMessage(result) }), true);
-        return;
-      }
+      const payload = await fetchProfileSimulation(key);
+      fillJsonViewer(payload);
       // Always the already-materialized shape (reserved IDs already embedded server-side) — routed
       // through loadRawScenario purely as defense-in-depth, on the same one rule every other entry
       // point uses; a real profile simulation is never expected to have anything left to map.
-      loadRawScenario(result.payload);
+      loadRawScenario(payload);
     } catch (error) {
-      showAlert(t('profile_simulation_load_failed', { message: error.message }), true);
+      const message = t('profile_simulation_load_failed', { message: error.message });
+      showSetupStatus(message, 'error');
     } finally {
+      setSetupBusy(false);
       syncProfileSimButtons();
     }
+  }
+
+  profileSimSelect.addEventListener('change', function () {
+    syncProfileSimButtons();
+    if (profileSimSelect.value) loadSelectedProfileSimulation();
+  });
+  syncProfileSimButtons();
+
+  profileSimLoadButton.addEventListener('click', function () {
+    loadSelectedProfileSimulation();
   });
 
   profileSimJsonButton.addEventListener('click', async function () {
     const key = profileSimSelect.value;
     if (!key) return;
     profileSimJsonButton.disabled = true;
+    setSetupBusy(true);
     try {
-      const result = await apiCall('GET', '/Simulations/' + encodeURIComponent(key), DATA.api_identity);
-      if (result.status >= 400 || !result.payload) {
-        showAlert(t('profile_simulation_load_failed', { message: errorMessage(result) }), true);
-        return;
-      }
-      document.getElementById('paste-input').value = JSON.stringify(result.payload, null, 2);
+      const payload = await fetchProfileSimulation(key);
+      fillJsonViewer(payload);
+      showSetupStatus('', '');
     } catch (error) {
-      showAlert(t('profile_simulation_load_failed', { message: error.message }), true);
+      const message = t('profile_simulation_load_failed', { message: error.message });
+      showSetupStatus(message, 'error');
     } finally {
+      setSetupBusy(false);
       syncProfileSimButtons();
     }
   });
@@ -1358,15 +1445,28 @@ SIMULATOR_BODY = """
     try {
       raw = JSON.parse(text);
     } catch (error) {
-      showAlert(t('err_parse', { message: error.message }), true);
+      const message = t('err_parse', { message: error.message });
+      showSetupStatus(message, 'error');
       return;
     }
     loadRawScenario(raw);
   }
 
   function loadFromFile(file) {
+    setSetupBusy(true);
     const reader = new FileReader();
-    reader.onload = function (event) { loadFromText(String(event.target.result)); };
+    reader.onload = function (event) {
+      const text = String(event.target.result);
+      document.getElementById('paste-input').value = text;
+      setJsonEditorOpen(true);
+      loadFromText(text);
+      setSetupBusy(false);
+    };
+    reader.onerror = function () {
+      setSetupBusy(false);
+      const message = t('err_parse', { message: 'file' });
+      showSetupStatus(message, 'error');
+    };
     reader.readAsText(file);
   }
 
@@ -1385,6 +1485,14 @@ SIMULATOR_BODY = """
     dropZone.classList.remove('dragover');
     if (event.dataTransfer.files && event.dataTransfer.files.length > 0) loadFromFile(event.dataTransfer.files[0]);
   });
+
+  const jsonToggle = document.getElementById('toggle-json-editor');
+  if (jsonToggle) {
+    jsonToggle.addEventListener('click', function () {
+      const panel = document.getElementById('sim-json-panel');
+      setJsonEditorOpen(!!(panel && panel.hidden));
+    });
+  }
 
   // ---- Live Agent Execution Graph (Behind-the-Scenes) --------------------------------
   const BehindTheScenes = (function () {
@@ -2550,9 +2658,10 @@ SIMULATOR_BODY = """
     document.getElementById('scenario-badges').innerHTML = '';
     document.getElementById('expected-actions').innerHTML = '';
     document.getElementById('send-next').disabled = true;
-    document.getElementById('reset-view').disabled = true;
+    setReviewReady(false);
     closeMappingPanel();
     closeEditDialog();
+    showSetupStatus('', '');
     showAlert('', false);
     BehindTheScenes.reset();
   });

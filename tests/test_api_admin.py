@@ -1356,6 +1356,10 @@ def test_admin_pages_render_rtl_hebrew_for_a_hebrew_profile(tmp_path, teardown_c
     simulator = client.get("/admin/simulator").data.decode("utf-8")
     assert '<html lang="he" dir="rtl">' in simulator
     assert hebrew.text("admin.simulator.title") in simulator
+    assert hebrew.text("admin.simulator.step_choose") in simulator
+    assert hebrew.text("admin.simulator.step_review") in simulator
+    assert hebrew.text("admin.simulator.or_json") in simulator
+    assert hebrew.text("admin.simulator.review_empty_help") in simulator
 
 
 # -- Scenario simulator -------------------------------------------------------
@@ -1437,7 +1441,19 @@ def test_simulator_page_talks_to_the_real_endpoints_only(tmp_path, teardown_ctx,
     assert "/admin/simulator/example" not in page  # the legacy bundled-fixture route is gone
     assert "function syncProfileSimButtons()" in page
     assert "show-profile-simulation-json" in page
-    assert "JSON.stringify(result.payload, null, 2)" in page
+    assert "JSON.stringify(payload, null, 2)" in page
+    assert 'class="sim-workspace"' in page
+    assert 'id="sim-setup"' in page
+    assert 'class="sim-review is-locked"' in page
+    assert 'id="chats-container"' in page
+    assert page.index('id="sim-setup"') < page.index('id="scenario-info"')
+    assert page.index('id="scenario-info"') < page.index('id="chats-container"')
+    assert 'id="send-next" disabled' in page
+    assert 'id="toggle-bts" disabled' in page
+    assert 'id="sim-json-panel" hidden' in page
+    assert "Scenario Selection and Loading" in page
+    assert "Result Review" in page
+    assert "Choose a profile simulation or load JSON to open the run view." in page
 
 
 def test_simulator_script_is_syntactically_valid_javascript(tmp_path, teardown_ctx, _admin_env):
