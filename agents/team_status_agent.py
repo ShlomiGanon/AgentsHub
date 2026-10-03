@@ -40,7 +40,7 @@ class TeamStatusAgent(Agent):
         "time. Never refuse a write because those provenance fields are absent from the prose task "
         "and never ask the caller to repeat them; use the envelope/runtime context and call the "
         "approved write tool with the normalized availability, reason, and duration. "
-        "Responses received after the one-hour window require commander approval. When the Main "
+        "Every attendance report is stored immediately. When the Main "
         "Agent asks for the team picture, call report_team_availability and return its complete "
         "name-by-name result without dropping unavailable or missing members."
     )
@@ -168,7 +168,7 @@ class TeamStatusAgent(Agent):
 
     @tool(
         "record_attendance_response",
-        "Stores one approved-roster member's normalized free-text response; late responses remain pending until a commander reviews them.",
+        "Stores one approved-roster member's normalized free-text response immediately.",
         side_effecting=True,
         idempotent=True,
     )
@@ -221,8 +221,6 @@ class TeamStatusAgent(Agent):
         except TeamStatusPersistenceError as exc:
             return failed_tool_result(f"The attendance response was not stored: {exc}")
 
-        if response["approval_status"] == "pending":
-            return f"The late response is pending commander approval. Response ID: {response['response_id']}"
         return "The attendance response was stored."
 
     @tool(

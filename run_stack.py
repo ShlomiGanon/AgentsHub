@@ -36,7 +36,10 @@ logger = logging.getLogger("stack_runner")
 _SQLITE_SIDECARS = ("-wal", "-shm", "-journal")
 _APP_SIDECARS = (".settings.json", ".settings.json.tmp", ".notification_cursor", ".bot.lock", ".bot-simulator.lock")
 _API_BIND_HOST = "127.0.0.1"
-_API_READY_TIMEOUT_SECONDS = 45
+# The API binds the port only after CrewAI import and a live model warmup.
+# A cold Windows import can take ~40s; warmup is one billed call per unique
+# model and may use the profile's model timeout (up to 45s each).
+_API_READY_TIMEOUT_SECONDS = 180
 _BOT_READY_GRACE_SECONDS = 2
 _SIMULATOR_READY_TIMEOUT_SECONDS = 45
 

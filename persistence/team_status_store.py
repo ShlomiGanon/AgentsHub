@@ -265,8 +265,6 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         cycle = self.latest_cycle()
         if cycle is None:
             raise TeamStatusPersistenceError("no attendance cycle is open")
-        deadline = _parse_timestamp(cycle["deadline_at"])
-        approval_status = "accepted" if received <= deadline else "pending"
         response_id = f"response-{uuid.uuid4().hex}"
 
         with self._connect() as connection:
@@ -295,7 +293,7 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
                         unavailable_until,
                         original_text,
                         received_at,
-                        approval_status,
+                        "accepted",
                     ),
                 )
             except sqlite3.IntegrityError:
@@ -402,39 +400,53 @@ class SQLiteTeamStatusPersistence(TeamStatusPersistenceInterface):
         """Derive each approved member's current availability from the latest accepted response."""
 
         instant = _parse_timestamp(as_of)
-        cycle = self.latest_cycle()
-        members = self.list_members()
-        snapshot: list[dict] = []
         with self._connect() as connection:
-            for member in members:
-                accepted = connection.execute(
-                    """
-                    SELECT * FROM attendance_responses
-                    WHERE telegram_identity = ? AND approval_status = 'accepted'
-                    ORDER BY received_at DESC LIMIT 1
-                    """,
-                    (member["telegram_identity"],),
-                ).fetchone()
-                entry = {
-                    "telegram_identity": member["telegram_identity"],
-                    "full_name": member["full_name"],
-                    "availability": "awaiting_response",
-                    "reason": None,
-                    "unavailable_until": None,
-                    "original_text": None,
-                    "received_at": None,
-                }
-                if accepted is not None:
-                    response = dict(accepted)
-                    active_unavailability = (
-                        response["availability"] == "unavailable"
-                        and response["unavailable_until"] is not None
-                        and _parse_timestamp(response["unavailable_until"]) > instant
-                    )
-                    belongs_to_current_cycle = cycle is not None and response["cycle_id"] == cycle["cycle_id"]
-                    if active_unavailability or belongs_to_current_cycle:
-                        entry.update({key: response[key] for key in (
-                            "availability", "reason", "unavailable_until", "original_text", "received_at"
-                        )})
-                snapshot.append(entry)
+            cycle = connection.execute(
+                "SELECT cycle_id FROM attendance_cycles ORDER BY opened_at DESC LIMIT 1"
+            ).fetchone()
+            current_cycle_id = cycle["cycle_id"] if cycle is not None else None
+            rows = connection.execute(
+                """
+                SELECT m.telegram_identity, m.full_name,
+                       r.availability AS response_availability, r.reason, r.unavailable_until,
+                       r.original_text, r.received_at, r.cycle_id
+                FROM team_members m
+                LEFT JOIN attendance_responses r
+                  ON r.response_id = (
+                        SELECT response_id FROM attendance_responses
+                        WHERE telegram_identity = m.telegram_identity
+                          AND approval_status = 'accepted'
+                        ORDER BY received_at DESC LIMIT 1
+                  )
+                WHERE m.approved = 1
+                ORDER BY m.full_name
+                """
+            ).fetchall()
+        snapshot: list[dict] = []
+        for row in rows:
+            entry = {
+                "telegram_identity": row["telegram_identity"],
+                "full_name": row["full_name"],
+                "availability": "awaiting_response",
+                "reason": None,
+                "unavailable_until": None,
+                "original_text": None,
+                "received_at": None,
+            }
+            if row["response_availability"] is not None:
+                active_unavailability = (
+                    row["response_availability"] == "unavailable"
+                    and row["unavailable_until"] is not None
+                    and _parse_timestamp(row["unavailable_until"]) > instant
+                )
+                belongs_to_current_cycle = current_cycle_id is not None and row["cycle_id"] == current_cycle_id
+                if active_unavailability or belongs_to_current_cycle:
+                    entry.update({
+                        "availability": row["response_availability"],
+                        "reason": row["reason"],
+                        "unavailable_until": row["unavailable_until"],
+                        "original_text": row["original_text"],
+                        "received_at": row["received_at"],
+                    })
+            snapshot.append(entry)
         return snapshot

@@ -189,7 +189,7 @@ def _open_roster_and_cycle(store, *, pending: bool):
     a fixed-date `opened_at` could tie with, or lose to, a leftover cycle from an earlier test
     run. Anchoring on `datetime.now()` guarantees this call's own cycle is always the newest.
     Returns (member_identity, received_at) -- `received_at` is placed on whichever side of
-    `deadline_at` produces the requested approval_status."""
+    `deadline_at` is still opened so leftover cycles stay older than this one."""
 
     now = datetime.now(timezone.utc)
     opened_at = now.isoformat()
@@ -236,30 +236,29 @@ def test_attendance_approval_status_edit_is_immediately_visible_to_report_team_a
     """Attendance approval status edit is immediately visible to report team availability."""
     ctx = _rt_ctx(tmp_path, teardown_ctx)
     roster = ctx.deps.registry.get("roster_agent")
-    # A response received AFTER the cycle deadline is auto-stamped "pending", giving the
-    # Admin approval edit something real to change.
-    identity, received_at = _open_roster_and_cycle(roster.status_store, pending=True)
+    identity, received_at = _open_roster_and_cycle(roster.status_store, pending=False)
     response = roster.status_store.record_response(
         telegram_identity=identity, source_message_id=f"msg-{uuid.uuid4().hex[:8]}", availability="unavailable",
         reason="late", original_text="x", received_at=received_at,
+        unavailable_until=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
     )
-    assert response["approval_status"] == "pending"
+    assert response["approval_status"] == "accepted"
     client = build_app(ctx).test_client()
     _login(client)
     token = _csrf_token(client)
 
     client.post(
         f"/admin/tables/attendance/edit/{response['response_id']}",
-        data={"csrf_token": token, "availability": "unavailable", "approval_status": "accepted"},
+        data={"csrf_token": token, "availability": "unavailable", "approval_status": "rejected"},
         follow_redirects=False,
     )
 
     updated = roster.status_store.get_response(response["response_id"])
-    assert updated["approval_status"] == "accepted"
+    assert updated["approval_status"] == "rejected"
     assert updated["reviewed_by"]
     assert updated["reviewed_at"]
     snapshot_text = roster.report_team_availability()
-    assert "member-1" in snapshot_text or "Test Member" in snapshot_text
+    assert "Test Member: awaiting response" in snapshot_text
 
 
 # -- Friendly forces -------------------------------------------------------------------------

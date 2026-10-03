@@ -327,8 +327,8 @@ def test_unavailable_requires_reason_and_duration(tmp_path):
     assert "how many days" in missing_duration
 
 
-def test_late_response_changes_status_only_after_commander_approval(tmp_path):
-    """Late response changes status only after commander approval."""
+def test_late_response_is_stored_immediately(tmp_path):
+    """A report after the cycle window is stored and listed without commander review."""
     agent = _agent(tmp_path)
     opened_at = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
     _prepare_roster(agent, opened_at)
@@ -343,53 +343,11 @@ def test_late_response_changes_status_only_after_commander_approval(tmp_path):
         original_text="Available",
         received_at=(opened_at + timedelta(hours=2)).isoformat(),
     )
-    assert "pending commander approval" in late_result
-    pending = agent.status_store.pending_late_responses()
-    assert len(pending) == 1
+    assert late_result == "The attendance response was stored."
+    assert agent.status_store.pending_late_responses() == []
 
-    before = _call_tool(agent, "report_team_availability", as_of_iso=(opened_at + timedelta(hours=2)).isoformat())
-    assert "Noa Israeli: awaiting response" in before
-
-    agent.review_late_response(
-        pending[0]["response_id"],
-        approved=True,
-        commander_identity="commander-1",
-        reviewed_at=(opened_at + timedelta(hours=2, minutes=5)).isoformat(),
-    )
-    after = _call_tool(agent, "report_team_availability", as_of_iso=(opened_at + timedelta(hours=2, minutes=6)).isoformat())
-    assert "Noa Israeli: available" in after
-
-
-def test_rejected_late_response_leaves_member_awaiting_response(tmp_path):
-    """Rejected late response leaves member awaiting response."""
-    agent = _agent(tmp_path)
-    opened_at = datetime(2026, 9, 3, 5, 0, tzinfo=timezone.utc)
-    _prepare_roster(agent, opened_at)
-    _call_tool(agent, "start_daily_attendance_check", now_iso=opened_at.isoformat())
-    _call_tool(
-        agent,
-        "record_attendance_response",
-        telegram_identity="104",
-        source_message_id="late-rejected-message",
-        availability="available",
-        original_text="Available",
-        received_at=(opened_at + timedelta(hours=2)).isoformat(),
-    )
-    pending = agent.status_store.pending_late_responses()
-
-    agent.review_late_response(
-        pending[0]["response_id"],
-        approved=False,
-        commander_identity="commander-1",
-        reviewed_at=(opened_at + timedelta(hours=2, minutes=5)).isoformat(),
-    )
-
-    report = _call_tool(
-        agent,
-        "report_team_availability",
-        as_of_iso=(opened_at + timedelta(hours=2, minutes=6)).isoformat(),
-    )
-    assert "Noa Israeli: awaiting response" in report
+    report = _call_tool(agent, "report_team_availability", as_of_iso=(opened_at + timedelta(hours=2)).isoformat())
+    assert "Noa Israeli: available" in report
 
 
 def test_tool_metadata_preserves_side_effect_and_idempotency_policy(tmp_path):

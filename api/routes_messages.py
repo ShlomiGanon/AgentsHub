@@ -382,15 +382,23 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             ag_name = matched_protocol.participating_agents[0]
             ag = ctx.deps.registry.get(ag_name)
             allowed_tools = list(matched_protocol.approved_tools)
+            exposed_by_name = {tool_info.name: tool_info for tool_info in ag.exposed_tools()}
             require_op = (
                 RequestedOperation.REQUEST_ACTION
-                if any(getattr(t, "side_effecting", False) for t in ag.exposed_tools() if t.name in allowed_tools)
+                if any(exposed_by_name[name].side_effecting for name in allowed_tools if name in exposed_by_name)
                 else RequestedOperation.ASK_QUESTION
             )
             require(level, require_op)
             with authenticated_request_identity(caller_identity):
-                res = ag.process(text, allowed_tools)
-            answer = res.text if res.status == "success" else f"\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05d4\u05e4\u05e2\u05dc\u05ea \u05e1\u05d5\u05db\u05df: {res.text}"
+                # A single read-only tool is already the answer. Calling it directly
+                # skips a specialist model round-trip on attendance/status buttons.
+                only_tool = allowed_tools[0] if len(allowed_tools) == 1 else None
+                only_info = exposed_by_name.get(only_tool) if only_tool else None
+                if only_info is not None and not only_info.side_effecting and hasattr(ag, only_tool):
+                    answer = getattr(ag, only_tool)()
+                else:
+                    res = ag.process(text, allowed_tools)
+                    answer = res.text if res.status == "success" else f"\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05d4\u05e4\u05e2\u05dc\u05ea \u05e1\u05d5\u05db\u05df: {res.text}"
             _remember("assistant", answer)
             return jsonify({
                 "taken_as": "question" if require_op == RequestedOperation.ASK_QUESTION else "event_update",

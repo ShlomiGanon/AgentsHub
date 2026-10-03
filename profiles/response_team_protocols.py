@@ -327,6 +327,24 @@ PROTOCOLS = [
         direct_lane_eligible=True,
     ),
     Protocol(
+        name="report_team_availability",
+        description=(
+            "Applies when someone asks only for the current readiness-team attendance list -- "
+            "who is available, unavailable, or still awaiting a report. Does not apply to a "
+            "combined picture that also asks about cameras or neighboring forces (use "
+            "query_situational_picture for that)."
+        ),
+        participating_agents=("roster_agent",),
+        approved_tools=("report_team_availability",),
+        expected_success_output="The current name-by-name attendance list from the roster store.",
+        criticality=CriticalityLevel.LOW,
+        approval_flag=False,
+        requires_confirmation=False,
+        commander_only=False,
+        needs_insight=False,
+        direct_lane_eligible=True,
+    ),
+    Protocol(
         name="query_situational_picture",
         description=(
             "Applies when someone asks for a combined, current snapshot spanning any of the "

@@ -75,8 +75,8 @@ def test_replayed_telegram_message_is_idempotent(tmp_path):
     assert replay["source_message_id"] == "telegram-message-42"
 
 
-def test_late_response_is_pending_and_does_not_change_snapshot(tmp_path):
-    """Late response is pending and does not change snapshot."""
+def test_late_response_is_accepted_and_updates_snapshot(tmp_path):
+    """A report after the cycle deadline is stored immediately and changes the list."""
     store = open_team_status_persistence(str(tmp_path / "team-status.db"))
     store.register_member("101", "Alex Cohen", _timestamp())
     store.approve_roster("commander-1", _timestamp())
@@ -90,8 +90,8 @@ def test_late_response_is_pending_and_does_not_change_snapshot(tmp_path):
         received_at=_timestamp(hour=7),
     )
 
-    assert late["approval_status"] == "pending"
-    assert store.availability_snapshot(_timestamp(hour=7))[0]["availability"] == "awaiting_response"
+    assert late["approval_status"] == "accepted"
+    assert store.availability_snapshot(_timestamp(hour=7))[0]["availability"] == "available"
 
 
 def test_operational_history_and_team_status_use_different_schemas(tmp_path):

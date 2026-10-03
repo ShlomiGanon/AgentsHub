@@ -95,7 +95,8 @@ def test_response_team_exposes_exactly_its_declared_protocols(sec_profile):
     assert {protocol.name for protocol in sec_profile.protocols} == {
         "record_attendance", "update_camera_status", "report_security_incident",
         "log_security_observation", "dispatch_neighboring_force", "dispatch_own_squad",
-        "report_team_movement", "query_situational_picture", "query_incident_summary",
+        "report_team_movement", "report_team_availability", "query_situational_picture",
+        "query_incident_summary",
     }
 
 
