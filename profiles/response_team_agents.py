@@ -179,6 +179,7 @@ class ResponseTeamSurveillanceAgent(SurveillanceAgent):
     `get_surveillance_overview` unchanged; adds `update_camera_status` and
     `recall_drone` (recalling to `DRONES_WAREHOUSE`)."""
 
+    camera_catalog_stem = "response_team"
     surveillance_db_path = DB_PATH
 
     def __init__(self, model: str, api_key: str | None = None):
@@ -213,7 +214,13 @@ class ResponseTeamSurveillanceAgent(SurveillanceAgent):
 
         # even though the public protocol field is `camera_id`. Accept both so
         # that a harmless naming variation cannot fail the operational step.
-        camera_id = camera_id.strip() or camera_identifier.strip()
+        from messages.camera_names import resolve_camera_id
+
+        camera_id = resolve_camera_id(
+            self.surveillance_store,
+            camera_id.strip() or camera_identifier.strip(),
+            getattr(self, "camera_catalog_stem", ""),
+        )
         if not camera_id.strip():
             return failed_tool_result("Clarification required: camera_id is required.")
         if not observation.strip():
@@ -232,6 +239,16 @@ class ResponseTeamSurveillanceAgent(SurveillanceAgent):
             f"- Observation: {updated['feed_summary']}\n"
             f"- Last updated: {updated['last_updated']}"
         )
+
+    @tool(
+        "log_security_observation",
+        "Records an already-handled security observation. Never dispatches a drone or any other resource.",
+        side_effecting=False,
+    )
+    def log_security_observation(self, note: str = "") -> str:
+        """Acknowledge an already-handled observation without dispatching anything."""
+
+        return "Observation logged. No resource was dispatched."
 
     @tool(
         "recall_drone",

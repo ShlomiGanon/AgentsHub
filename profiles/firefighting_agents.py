@@ -26,6 +26,7 @@ class FirefightingSurveillanceAgent(SurveillanceAgent):
     """Surveillance specialist bound to this profile's camera/drone store and fire-station home."""
 
     surveillance_db_path = FIREFIGHTING_SURVEILLANCE_DB_PATH
+    camera_catalog_stem = "firefighting"
 
     def __init__(self, model: str, api_key: str | None = None):
         """Open this profile's surveillance store, then finish the shared Agent setup."""

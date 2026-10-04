@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from agents.runtime import Agent, get_authenticated_request_identity, tool
 from agents.contracts import failed_tool_result
+from messages import get_current_catalog
 from persistence import AttendanceCycle, TeamStatusPersistenceError, open_team_status_persistence
 
 
@@ -17,7 +18,7 @@ def _aware_datetime(value: str | None) -> datetime:
         return datetime.now(timezone.utc)
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
-        raise ValueError("timestamp must include a timezone")
+        parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
 
 
@@ -222,6 +223,19 @@ class TeamStatusAgent(Agent):
             return failed_tool_result(f"The attendance response was not stored: {exc}")
 
         return "The attendance response was stored."
+
+    @tool(
+        "post_operational_notice",
+        "Returns the catalog sentence for one operational update. Does not dispatch a resource and does not ask which camera to check.",
+        side_effecting=False,
+    )
+    def post_operational_notice(self, notice_key: str = "") -> str:
+        """Return the catalog sentence for a profile-declared operational update."""
+
+        catalog = get_current_catalog()
+        if notice_key not in catalog.messages:
+            return failed_tool_result("Clarification required: unknown operational notice.")
+        return catalog.text(notice_key)
 
     @tool(
         "report_team_availability",

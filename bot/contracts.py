@@ -268,6 +268,14 @@ class HoldAnswerOutcome:
 
 
 @dataclass(frozen=True)
+class OperationalUpdateNotice:
+    """Short operational update for commanders and the profile's operational group."""
+
+    event_id: str
+    report_text: str
+
+
+@dataclass(frozen=True)
 class PrecedentClosureNotice:
     """Commander-facing notice that a report closed on a precedent."""
 
@@ -330,6 +338,7 @@ BotNotificationKind = Literal[
     "event_data_hold",
     "resource_unavailable_alert",
     "hold_escalation",
+    "operational_update",
 ]
 
 
@@ -361,6 +370,7 @@ class BotNotification:
         | FailureNotice
         | EventDataNeededNotice
         | HoldEscalationNotice
+        | OperationalUpdateNotice
     )
     reply_to_message_id: str | None = None
     # job_finished/job_failed only: the status/ack message to edit in place with the final

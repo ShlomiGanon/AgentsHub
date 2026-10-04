@@ -31,8 +31,16 @@ from protocols import CriticalityLevel, EVENT_DATA_FIELDS
 
 
 def build_area_registry(loaded_profile: "LoadedProfile") -> AreaRegistry:
-    """Closed area set declared by this loaded profile."""
-    return AreaRegistry(areas=loaded_profile.areas)
+    """Closed area set plus catalog labels (`{stem}.area.{id}`) for this loaded profile."""
+
+    stem = loaded_profile.module_path.rsplit(".", 1)[-1]
+    catalog = loaded_profile.message_catalog
+    labels = {}
+    for area in loaded_profile.areas:
+        key = f"{stem}.area.{area}"
+        if key in catalog.messages:
+            labels[area] = catalog.text(key)
+    return AreaRegistry(areas=loaded_profile.areas, labels=labels)
 
 
 def build_event_type_registry(loaded_profile: "LoadedProfile") -> EventTypeRegistry:

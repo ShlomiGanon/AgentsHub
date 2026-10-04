@@ -382,6 +382,13 @@ class SurveillanceAgent(Agent):
     def update_camera_observation(self, camera_id: str, new_observation: str, status: str = "") -> str:
         """Update camera observation."""
 
+        from messages.camera_names import resolve_camera_id
+
+        camera_id = resolve_camera_id(
+            self.surveillance_store,
+            camera_id,
+            getattr(self, "camera_catalog_stem", ""),
+        )
         if not camera_id.strip():
             return failed_tool_result("Clarification required: camera_id is required.")
         if not new_observation.strip():

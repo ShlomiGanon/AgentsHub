@@ -527,6 +527,7 @@ def extract_and_decide(
         getattr(event_type_registry, "types", ()),
         getattr(area_registry, "areas", ()),
         getattr(event_type_registry, "descriptions", None),
+        getattr(area_registry, "labels", None),
     )
     prompt = (
         extract_prompt

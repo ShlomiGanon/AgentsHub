@@ -179,11 +179,34 @@ class AreaRegistry:
     """Closed set of area names declared by one loaded profile."""
 
     areas: tuple[str, ...]
+    labels: Mapping[str, str] = field(default_factory=dict)
 
     def is_valid(self, area: str) -> bool:
         """True when `area` is one of this profile's declared areas."""
 
         return area in self.areas
+
+    def resolve(self, value: str) -> str | None:
+        """Map an id, a catalog label, or a phrase that contains a label back to the area id."""
+
+        text = value.strip()
+        if not text:
+            return None
+        if text in self.areas:
+            return text
+        folded = text.casefold()
+        best_id = None
+        best_len = 0
+        for area_id, label in self.labels.items():
+            if area_id not in self.areas or not label:
+                continue
+            label_folded = label.casefold()
+            if folded == label_folded:
+                return area_id
+            if label_folded in folded and len(label) > best_len:
+                best_id = area_id
+                best_len = len(label)
+        return best_id
 
 
 @dataclass(frozen=True)

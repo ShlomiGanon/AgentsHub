@@ -254,6 +254,108 @@ def _bind_log_fire_observation(event: dict) -> tuple[Step, ...]:
     )
 
 
+def _fire_notice_step(notice_key: str, task_text: str, step_id: str) -> Step:
+    """Catalog update for the station commander. No camera check."""
+
+    return Step(
+        agent_name="team_status_agent",
+        task_text=task_text,
+        allowed_tools=("post_operational_notice",),
+        step_id=step_id,
+        kind="direct_tool",
+        direct_tool_name="post_operational_notice",
+        direct_tool_kwargs={"notice_key": notice_key},
+    )
+
+
+def _bind_close_contained_fire(event: dict) -> tuple[Step, ...]:
+    """Mark the fire extinguished when the area is known, then notify containment."""
+
+    area = (event.get("area") or "").strip()
+    steps: list[Step] = []
+    if area:
+        steps.append(
+            Step(
+                agent_name="team_status_agent",
+                task_text="Record the fire as extinguished because the incident is contained.",
+                allowed_tools=("record_fire_status",),
+                step_id="1",
+                kind="direct_tool",
+                direct_tool_name="record_fire_status",
+                direct_tool_kwargs={"area": area, "status": "extinguished"},
+            )
+        )
+    steps.append(
+        _fire_notice_step(
+            "firefighting.notice.incident_contained",
+            "Notify that the fire incident is contained.",
+            str(len(steps) + 1),
+        )
+    )
+    return tuple(steps)
+
+
+def _bind_correct_false_fire_report(event: dict) -> tuple[Step, ...]:
+    """Record a false alarm as extinguished when the area is known, then notify."""
+
+    area = (event.get("area") or "").strip()
+    steps: list[Step] = []
+    if area:
+        steps.append(
+            Step(
+                agent_name="team_status_agent",
+                task_text="Record the reported fire as extinguished because the report was a false alarm.",
+                allowed_tools=("record_fire_status",),
+                step_id="1",
+                kind="direct_tool",
+                direct_tool_name="record_fire_status",
+                direct_tool_kwargs={"area": area, "status": "extinguished"},
+            )
+        )
+    steps.append(
+        _fire_notice_step(
+            "firefighting.notice.false_alarm",
+            "Notify that the fire report was a false alarm.",
+            str(len(steps) + 1),
+        )
+    )
+    return tuple(steps)
+
+
+def _bind_overall_situational_picture(event: dict) -> tuple[Step, ...]:
+    """Read cameras, crew availability, and burning fires. No specialist model call."""
+
+    return (
+        Step(
+            agent_name="surveillance_agent",
+            task_text="Read the current surveillance overview.",
+            allowed_tools=("get_surveillance_overview",),
+            step_id="1",
+            kind="direct_tool",
+            direct_tool_name="get_surveillance_overview",
+            direct_tool_kwargs={},
+        ),
+        Step(
+            agent_name="team_status_agent",
+            task_text="Read the current crew availability.",
+            allowed_tools=("report_team_availability",),
+            step_id="2",
+            kind="direct_tool",
+            direct_tool_name="report_team_availability",
+            direct_tool_kwargs={},
+        ),
+        Step(
+            agent_name="team_status_agent",
+            task_text="Read the currently burning fires.",
+            allowed_tools=("list_active_fires",),
+            step_id="3",
+            kind="direct_tool",
+            direct_tool_name="list_active_fires",
+            direct_tool_kwargs={},
+        ),
+    )
+
+
 def _bind_report_active_fires(event: dict) -> tuple[Step, ...]:
     """Read-only list of burning fires, optionally filtered to one area."""
 
@@ -466,7 +568,10 @@ PROTOCOLS = [
             "Does not apply to camera equipment status (use update_camera_observation for that). "
             "Does not apply to dispatching water tankers, aircraft, police, or ambulance (use "
             "dispatch_mutual_aid for that), and does not apply to moving Ashed 3 or Carmel 1 "
-            "(use report_apparatus_movement for that)."
+            "(use report_apparatus_movement for that). Does not apply when the report says the "
+            "fire is already contained (use close_contained_fire for that) or that the report "
+            "was a false alarm, including a false trapped-persons or Oranim Street alarm (use "
+            "correct_false_fire_report for that)."
         ),
         participating_agents=("team_status_agent", "surveillance_agent"),
         approved_tools=("record_fire_status", "dispatch_drone_to_area"),
@@ -501,6 +606,50 @@ PROTOCOLS = [
         commander_only=False,
         needs_insight=False,
         direct_tool_binder=_bind_log_fire_observation,
+        safety_critical=True,
+    ),
+    Protocol(
+        name="close_contained_fire",
+        description=(
+            "Applies when a report says the fire is contained, under control, or no longer "
+            "spreading -- for example the incident is contained. Records the fire extinguished "
+            "when the area is known and notifies the station commander. Does not ask which "
+            "camera to check and does not dispatch mutual aid. Does not apply to a new active "
+            "fire (use report_fire_incident for that)."
+        ),
+        participating_agents=("team_status_agent",),
+        approved_tools=("record_fire_status", "post_operational_notice"),
+        expected_success_output="The fire was recorded as contained and the station commander was notified.",
+        criticality=CriticalityLevel.MEDIUM,
+        approval_flag=False,
+        requires_confirmation=False,
+        commander_only=False,
+        needs_insight=False,
+        direct_tool_binder=_bind_close_contained_fire,
+        viewer_reply_key="firefighting.reply.incident_contained",
+        operational_notice_key="firefighting.notice.incident_contained",
+        safety_critical=True,
+    ),
+    Protocol(
+        name="correct_false_fire_report",
+        description=(
+            "Applies when a fire report is retracted as a false alarm -- no fire, trapped "
+            "persons were not actually trapped, or a mistaken alarm on Oranim Street. Records "
+            "the fire extinguished when the area is known and notifies the station commander. "
+            "Does not ask which camera to check. Does not apply to a fire that is still burning "
+            "(use report_fire_incident for that)."
+        ),
+        participating_agents=("team_status_agent",),
+        approved_tools=("record_fire_status", "post_operational_notice"),
+        expected_success_output="The false alarm was recorded and the station commander was notified.",
+        criticality=CriticalityLevel.MEDIUM,
+        approval_flag=False,
+        requires_confirmation=False,
+        commander_only=False,
+        needs_insight=False,
+        direct_tool_binder=_bind_correct_false_fire_report,
+        viewer_reply_key="firefighting.reply.false_alarm",
+        operational_notice_key="firefighting.notice.false_alarm",
         safety_critical=True,
     ),
     Protocol(
@@ -567,6 +716,8 @@ PROTOCOLS = [
         approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
+        needs_insight=False,
+        direct_tool_binder=_bind_overall_situational_picture,
     ),
     Protocol(
         name="query_historical_incidents",

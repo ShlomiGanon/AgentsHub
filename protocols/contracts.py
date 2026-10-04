@@ -73,6 +73,10 @@ class Protocol:
     # instructions, and no crewai/LLM call happens for the step(s) themselves. Global mechanism;
     # each profile supplies its own binder per protocol (this field IS the config).
     direct_tool_binder: "Callable[[dict], tuple[Step, ...]] | None" = None
+    # Catalog key for the one short sentence shown to the reporter when the run succeeds.
+    viewer_reply_key: str = ""
+    # Catalog key for an operational update sent to commanders and the profile's operational group.
+    operational_notice_key: str = ""
 
 
 @dataclass(frozen=True)

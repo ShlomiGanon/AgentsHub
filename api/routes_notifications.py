@@ -110,6 +110,18 @@ def _no_match_payload(ctx: "ApiContext", event_id: str, event: dict | None = Non
         "risk_reason": event.get("risk_reason") or "",
     }
 
+def _operational_update_payload(ctx: "ApiContext", event_id: str, event: dict | None = None) -> dict:
+    """Catalog sentence for a protocol that declares an operational notice."""
+
+    if event is None:
+        event = ctx.deps.persistence.fetch_event(event_id)
+    protocol_name = (event or {}).get("selected_protocol") or ""
+    protocol = ctx.deps.protocol_set.get(protocol_name) if protocol_name else None
+    notice_key = getattr(protocol, "operational_notice_key", "") if protocol else ""
+    text = ctx.loaded_profile.message_catalog.text(notice_key) if notice_key else ""
+    return {"event_id": event_id, "report_text": text}
+
+
 def _job_payload(ctx: "ApiContext", event_id: str, event: dict | None = None) -> dict:
     """Finished-or-failed job fields the bot already knows how to render."""
 
@@ -146,6 +158,7 @@ _PAYLOAD_BUILDERS = {
     "job_failed": _job_payload,
     "resource_unavailable_alert": _resource_unavailable_alert_payload,
     "hold_escalation": _hold_escalation_payload,
+    "operational_update": _operational_update_payload,
 }
 
 def _target_chat_ids(ctx: "ApiContext", kind: str, event_id: str, event: dict | None = None) -> list[str]:

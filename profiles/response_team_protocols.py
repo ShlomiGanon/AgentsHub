@@ -88,6 +88,158 @@ def _bind_dispatch_drone(event: dict) -> tuple[Step, ...]:
     )
 
 
+def _notice_step(agent_name: str, notice_key: str, task_text: str) -> Step:
+    """One catalog notice, with no camera check and no resource dispatch."""
+
+    return Step(
+        agent_name=agent_name,
+        task_text=task_text,
+        allowed_tools=("post_operational_notice",),
+        step_id="1",
+        kind="direct_tool",
+        direct_tool_name="post_operational_notice",
+        direct_tool_kwargs={"notice_key": notice_key},
+    )
+
+
+def _bind_log_security_observation(event: dict) -> tuple[Step, ...]:
+    """Record an already-handled observation. Never dispatches a drone."""
+
+    return (
+        Step(
+            agent_name="surveillance_agent",
+            task_text="Log the already-handled observation. Do not dispatch a drone or any other resource.",
+            allowed_tools=("log_security_observation",),
+            step_id="1",
+            kind="direct_tool",
+            direct_tool_name="log_security_observation",
+            direct_tool_kwargs={"note": _report_text(event)},
+        ),
+    )
+
+
+def _bind_armed_threat(event: dict) -> tuple[Step, ...]:
+    """Drone, police, YASAM, and this site's squad, all to the extracted area."""
+
+    area = (event.get("area") or "").strip()
+    description = _report_text(event) or "Armed life-threatening incident"
+    missing = tuple(name for name in ("area",) if not area)
+    if missing:
+        return (
+            Step(
+                agent_name="surveillance_agent",
+                task_text="The armed-threat response needs the reported area.",
+                allowed_tools=("dispatch_drone_to_area",),
+                step_id="1",
+                required_event_fields=missing,
+                kind="direct_tool",
+                direct_tool_name="dispatch_drone_to_area",
+                direct_tool_kwargs={},
+            ),
+        )
+    note = description
+    return (
+        Step(
+            agent_name="surveillance_agent",
+            task_text="Dispatch a recon drone to the armed-threat area.",
+            allowed_tools=("dispatch_drone_to_area",),
+            step_id="1",
+            kind="direct_tool",
+            direct_tool_name="dispatch_drone_to_area",
+            direct_tool_kwargs={
+                "target_area": area,
+                "incident_description": note,
+                "mission_type": "recon",
+            },
+        ),
+        Step(
+            agent_name="neighboring_forces_agent",
+            task_text="Dispatch police to the armed-threat area.",
+            allowed_tools=("dispatch_neighboring_force",),
+            step_id="2",
+            kind="direct_tool",
+            direct_tool_name="dispatch_neighboring_force",
+            direct_tool_kwargs={"kind": "police", "target_area": area, "unit_count": 1, "note": note},
+        ),
+        Step(
+            agent_name="neighboring_forces_agent",
+            task_text="Dispatch YASAM to the armed-threat area.",
+            allowed_tools=("dispatch_neighboring_force",),
+            step_id="3",
+            kind="direct_tool",
+            direct_tool_name="dispatch_neighboring_force",
+            direct_tool_kwargs={"kind": "yasam", "target_area": area, "unit_count": 1, "note": note},
+        ),
+        Step(
+            agent_name="neighboring_forces_agent",
+            task_text="Dispatch this site's own squad to the armed-threat area.",
+            allowed_tools=("dispatch_squad",),
+            step_id="4",
+            kind="direct_tool",
+            direct_tool_name="dispatch_squad",
+            direct_tool_kwargs={"target_area": area, "unit_count": 1, "note": note},
+        ),
+    )
+
+
+def _bind_correct_false_security_report(event: dict) -> tuple[Step, ...]:
+    """Retract a false report. Do not ask which camera to check."""
+
+    return (
+        _notice_step(
+            "roster_agent",
+            "response_team.notice.false_gunfire",
+            "Record that the earlier security report was false and notify the operational update.",
+        ),
+    )
+
+
+def _bind_close_security_incident(event: dict) -> tuple[Step, ...]:
+    """Record that the incident is under control. Do not ask which camera to check."""
+
+    return (
+        _notice_step(
+            "roster_agent",
+            "response_team.notice.incident_closed",
+            "Record that the incident is under control and notify the operational update.",
+        ),
+    )
+
+
+def _bind_query_situational_picture(event: dict) -> tuple[Step, ...]:
+    """Read roster, cameras, and neighboring-force dispatches. No specialist model call."""
+
+    return (
+        Step(
+            agent_name="roster_agent",
+            task_text="Read the current team availability.",
+            allowed_tools=("report_team_availability",),
+            step_id="1",
+            kind="direct_tool",
+            direct_tool_name="report_team_availability",
+            direct_tool_kwargs={},
+        ),
+        Step(
+            agent_name="surveillance_agent",
+            task_text="Read the current surveillance overview.",
+            allowed_tools=("get_surveillance_overview",),
+            step_id="2",
+            kind="direct_tool",
+            direct_tool_name="get_surveillance_overview",
+            direct_tool_kwargs={},
+        ),
+        Step(
+            agent_name="neighboring_forces_agent",
+            task_text="Read the current neighboring-force dispatches.",
+            allowed_tools=("list_neighboring_force_dispatches",),
+            step_id="3",
+            kind="direct_tool",
+            direct_tool_name="list_neighboring_force_dispatches",
+            direct_tool_kwargs={},
+        ),
+    )
+
+
 def _bind_dispatch_own_squad(event: dict) -> tuple[Step, ...]:
     """Direct-tool squad dispatch when area is known; otherwise a missing-fields hold."""
 
@@ -228,7 +380,12 @@ PROTOCOLS = [
             "observation with no security implication, including dual-camera outages or a cut "
             "cable (use update_camera_status for that). Does not apply to sending this site's "
             "own roster/squad (use dispatch_own_squad for that). Does not apply to a request to "
-            "send an external neighboring force (use dispatch_neighboring_force for that)."
+            "send an external neighboring force (use dispatch_neighboring_force for that). "
+            "Does not apply to an armed suspect, active life-threatening gunfire, or a person "
+            "on a roof with a weapon or a dark object (use respond_armed_threat for that). "
+            "Does not apply to a correction that an earlier gunfire report was false (use "
+            "correct_false_security_report for that). Does not apply to a report that the "
+            "incident is under control or closed (use close_security_incident for that)."
         ),
         participating_agents=("surveillance_agent",),
         approved_tools=("dispatch_drone_to_area",),
@@ -255,13 +412,87 @@ PROTOCOLS = [
             "ongoing, or unconfirmed (use report_security_incident for that)."
         ),
         participating_agents=("surveillance_agent",),
-        approved_tools=(),
+        approved_tools=("log_security_observation",),
         expected_success_output="A plain acknowledgement that the observation was logged.",
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
         needs_insight=False,
+        direct_tool_binder=_bind_log_security_observation,
+        viewer_reply_key="response_team.reply.observation_logged",
+        safety_critical=True,
+    ),
+    Protocol(
+        name="respond_armed_threat",
+        description=(
+            "Applies to an armed, life-threatening security event: an armed suspect, active "
+            "gunfire that endangers people, or a person on a roof of the old public building "
+            "holding a weapon or a dark object. Sends a drone, police, YASAM, and this site's "
+            "own squad to the reported area in one response. Does not apply to an already-handled "
+            "observation (use log_security_observation). Does not apply to unconfirmed recon that "
+            "needs only a drone (use report_security_incident). Does not apply to a false-report "
+            "correction (use correct_false_security_report) or to an incident already under "
+            "control (use close_security_incident)."
+        ),
+        participating_agents=("surveillance_agent", "neighboring_forces_agent"),
+        approved_tools=(
+            "dispatch_drone_to_area",
+            "dispatch_neighboring_force",
+            "dispatch_squad",
+        ),
+        expected_success_output="Police, YASAM, a drone, and the site squad were sent to the area.",
+        criticality=CriticalityLevel.HIGH,
+        approval_flag=False,
+        requires_confirmation=False,
+        commander_only=False,
+        needs_insight=False,
+        direct_tool_binder=_bind_armed_threat,
+        viewer_reply_key="response_team.reply.armed_threat",
+        safety_critical=True,
+    ),
+    Protocol(
+        name="correct_false_security_report",
+        description=(
+            "Applies when a report retracts an earlier security report as false -- for example "
+            "gunfire at the west gate that was not gunfire, a false alarm, or a clarification "
+            "that the earlier report is no longer relevant. Records the correction and sends a "
+            "short operational update. Does not check cameras and does not ask which camera to "
+            "review. Does not apply to a still-active threat (use respond_armed_threat)."
+        ),
+        participating_agents=("roster_agent",),
+        approved_tools=("post_operational_notice",),
+        expected_success_output="The false report was corrected and the operational update was sent.",
+        criticality=CriticalityLevel.MEDIUM,
+        approval_flag=False,
+        requires_confirmation=False,
+        commander_only=False,
+        needs_insight=False,
+        direct_tool_binder=_bind_correct_false_security_report,
+        viewer_reply_key="response_team.reply.false_report",
+        operational_notice_key="response_team.notice.false_gunfire",
+        safety_critical=True,
+    ),
+    Protocol(
+        name="close_security_incident",
+        description=(
+            "Applies when a report says the incident is under control, contained, or closed -- "
+            "for example 'the event is under control'. Records the closure and alerts the site "
+            "security officer and the response-team group. Does not ask which camera to check "
+            "and does not dispatch a drone. Does not apply to a new or still-active threat "
+            "(use respond_armed_threat or report_security_incident)."
+        ),
+        participating_agents=("roster_agent",),
+        approved_tools=("post_operational_notice",),
+        expected_success_output="The incident was recorded as under control and the operational update was sent.",
+        criticality=CriticalityLevel.MEDIUM,
+        approval_flag=False,
+        requires_confirmation=False,
+        commander_only=False,
+        needs_insight=False,
+        direct_tool_binder=_bind_close_security_incident,
+        viewer_reply_key="response_team.reply.incident_closed",
+        operational_notice_key="response_team.notice.incident_closed",
         safety_critical=True,
     ),
     Protocol(
@@ -364,6 +595,8 @@ PROTOCOLS = [
         approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
+        needs_insight=False,
+        direct_tool_binder=_bind_query_situational_picture,
     ),
     Protocol(
         name="query_incident_summary",

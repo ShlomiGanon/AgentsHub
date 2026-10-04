@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Callable
 from agents import InvocationPolicy, authenticated_request_identity
 from history import HistoryQuerySpec, storage_timestamp
 from history.query import HistoryQueryError
-from messages import get_current_catalog
+from messages import SUPPORTED_LANGUAGES, get_catalog, get_current_catalog
 from messages.model_messages import (
     SITUATIONAL_PICTURE_COMPOSE_INSTRUCTION,
     SITUATIONAL_PICTURE_PLAN_INSTRUCTION,
@@ -551,3 +551,54 @@ def compose_picture_from_step_outcomes(
         current_time=current_time,
         recent_events_hours=DEFAULT_RECENT_EVENTS_HOURS,
     )
+
+
+_PICTURE_PROTOCOL_NAMES = ("query_situational_picture", "overall_situational_picture")
+
+
+def question_requests_picture(question: str, stem: str) -> bool:
+    """True when the question contains a catalog picture marker for this profile."""
+
+    folded = question.casefold()
+    key = f"{stem}.picture.markers"
+    for language in SUPPORTED_LANGUAGES:
+        catalog = get_catalog(language)
+        if key not in catalog.messages:
+            continue
+        for marker in catalog.text(key).split("|"):
+            marker = marker.strip()
+            if marker and marker.casefold() in folded:
+                return True
+    return False
+
+
+def picture_protocol(protocol_set):
+    """The profile's read-only picture protocol, if it declares one."""
+
+    for name in _PICTURE_PROTOCOL_NAMES:
+        protocol = protocol_set.get(name)
+        if protocol is not None:
+            return protocol
+    return None
+
+
+def read_picture_directly(protocol, registry) -> str:
+    """Call the picture protocol's read tools in Python. No subagent and no model call."""
+
+    lines: list[str] = []
+    for tool_name in protocol.approved_tools:
+        agent = None
+        for agent_name in protocol.participating_agents:
+            candidate = registry.get(agent_name)
+            if hasattr(candidate, tool_name):
+                agent = candidate
+                break
+        if agent is None:
+            continue
+        raw = getattr(agent, tool_name)()
+        text = getattr(raw, "text", None)
+        if text is None:
+            text = "" if raw is None else str(raw)
+        if text.strip():
+            lines.append(text.strip())
+    return "\n".join(lines)

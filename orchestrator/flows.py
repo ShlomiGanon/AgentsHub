@@ -94,6 +94,9 @@ from orchestrator.situational_picture import (  # re-exported: api may only impo
     SituationalPicture,
     build_situational_picture,
     compose_picture_from_step_outcomes,
+    picture_protocol,
+    question_requests_picture,
+    read_picture_directly,
 )
 
 __all__ = [

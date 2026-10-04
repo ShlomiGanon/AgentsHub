@@ -180,8 +180,9 @@ class SimulatorTelegramClient(TelegramClient):
                 final_by_message_id.pop(message_id, None)
 
         pieces: list[str] = list(final_by_message_id.values())
+        status_texts = set(pieces)
         for message in self.sent[sent_mark:]:
-            if message.chat_id == chat_id:
+            if message.chat_id == chat_id and message.text not in status_texts:
                 pieces.append(message.text)
         return "\n".join(pieces) if pieces else None
 

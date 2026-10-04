@@ -64,19 +64,35 @@ FORCE_BUSY_SECONDS = 2 * 60 * 60
 CAMERAS = (
     {
         "camera_id": "CAM-02",
-        "name": "Quarry Junction Camera",
+        "name": _catalog_text("firefighting.camera.cam_02.name"),
         "area": "quarry_junction",
         "status": "active",
         "azimuth_degrees": 45,
-        "feed_summary": "Clear view of the quarry junction approach.",
+        "feed_summary": _catalog_text("firefighting.camera.cam_02.feed"),
     },
     {
         "camera_id": "CAM-03",
-        "name": "Pine Ridge Camera",
+        "name": _catalog_text("firefighting.camera.cam_03.name"),
         "area": "pine_ridge",
         "status": "active",
         "azimuth_degrees": 0,
-        "feed_summary": "Wide-angle overlook of the pine ridge tree line.",
+        "feed_summary": _catalog_text("firefighting.camera.cam_03.feed"),
+    },
+    {
+        "camera_id": "CAM-THERMAL",
+        "name": _catalog_text("firefighting.camera.cam_thermal.name"),
+        "area": "ornim_street",
+        "status": "active",
+        "azimuth_degrees": 20,
+        "feed_summary": _catalog_text("firefighting.camera.cam_thermal.feed"),
+    },
+    {
+        "camera_id": "CAM-AERIAL",
+        "name": _catalog_text("firefighting.camera.cam_drone.name"),
+        "area": "pine_ridge",
+        "status": "active",
+        "azimuth_degrees": 0,
+        "feed_summary": _catalog_text("firefighting.camera.cam_drone.feed"),
     },
 )
 

@@ -138,7 +138,9 @@ class ResponseTeamSurveillanceStore(SurveillancePersistenceInterface):
                 """,
                 (camera_id, name, area, status, azimuth_degrees, feed_summary, now),
             )
-            return cursor.rowcount > 0
+            inserted = cursor.rowcount > 0
+            conn.execute("UPDATE cameras SET name = ? WHERE camera_id = ?", (name, camera_id))
+            return inserted
 
     def ensure_drone(
         self,

@@ -1,5 +1,6 @@
 """Direct-lane classification and execution."""
 
+import inspect
 import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -79,6 +80,25 @@ def _build_direct_lane_prompt(protocols: "tuple[Protocol, ...]", registry: "Agen
     )
     return prompt, tool_owner
 
+
+def _parameters_match_tool(method, parameters: dict) -> bool:
+    """False when the model named a parameter the tool does not accept."""
+
+    try:
+        signature = inspect.signature(method)
+    except (TypeError, ValueError):
+        return True
+    allowed: set[str] = set()
+    for name, param in signature.parameters.items():
+        if name == "self":
+            continue
+        if param.kind == inspect.Parameter.VAR_KEYWORD:
+            return True
+        if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
+            allowed.add(name)
+    return set(parameters).issubset(allowed)
+
+
 def classify_direct_lane(
     main_agent: "MainAgent", protocols: "tuple[Protocol, ...]", registry: "AgentRegistry", raw_text: str
 ) -> DirectLaneResult:
@@ -124,6 +144,9 @@ def classify_direct_lane(
         if not isinstance(parameters, dict):
             parameters = {}
         protocol_name, agent_name = owner
+        method = getattr(registry.get(agent_name), tool_name, None)
+        if method is not None and not _parameters_match_tool(method, parameters):
+            return DirectLaneResult(eligible=False, reason="direct lane parameters do not match the tool")
         actions.append(
             DirectLaneAction(protocol_name=protocol_name, agent_name=agent_name, tool_name=tool_name, parameters=parameters)
         )

@@ -93,6 +93,7 @@ _ACTING_IDENTITY_TEMPLATE = """<!DOCTYPE html>
 
     <form method="post">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <h2>{{ t('admin.api.identity_profile_heading') }}</h2>
       <div class="field-group">
         <label class="form-label-console" for="api-identity-select">{{ t('admin.api.identity_label') }}</label>
         <select id="api-identity-select" name="api_identity" class="form-select form-select-console" {% if not api_users %}disabled{% endif %}>
@@ -103,10 +104,6 @@ _ACTING_IDENTITY_TEMPLATE = """<!DOCTYPE html>
           {% endfor %}
         </select>
       </div>
-      <label class="system-admin-row">
-        <input type="checkbox" name="use_system_admin" value="1" id="use-system-admin">
-        <span>{{ t('admin.api.use_system_admin') }}</span>
-      </label>
       {% if not api_users %}
         <p class="api-hint">{{ t('admin.api.no_identity') }}</p>
       {% else %}
@@ -114,6 +111,14 @@ _ACTING_IDENTITY_TEMPLATE = """<!DOCTYPE html>
       {% endif %}
       <div class="login-actions">
         <button type="submit" class="btn-console-primary">{{ t('admin.api.identity_save') }}</button>
+      </div>
+    </form>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="use_system_admin" value="1">
+      <h2>{{ t('admin.api.identity_admin_heading') }}</h2>
+      <div class="login-actions">
+        <button type="submit" class="btn-console-primary">{{ t('admin.api.identity_admin_button') }}</button>
       </div>
     </form>
   </div>

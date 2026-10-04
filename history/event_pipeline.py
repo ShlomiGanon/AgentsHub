@@ -12,7 +12,18 @@ from tools import get_trace_id, stage_context
 logger = logging.getLogger(__name__)
 
 
-def _prompt(raw_text: str, source: str, received_at: str, event_types, areas, event_type_descriptions=None) -> str:
+def _area_choices(areas, area_labels=None) -> list[str]:
+    """Show each area id with its catalog label when the profile has one."""
+
+    labels = area_labels or {}
+    choices = []
+    for area in areas:
+        label = labels.get(area)
+        choices.append(f"{area} ({label})" if label else str(area))
+    return choices
+
+
+def _prompt(raw_text: str, source: str, received_at: str, event_types, areas, event_type_descriptions=None, area_labels=None) -> str:
     """Prompt."""
 
     timestamp_rule = (
@@ -46,7 +57,9 @@ def _prompt(raw_text: str, source: str, received_at: str, event_types, areas, ev
         "availability_end, absence_reason. "
         f"classification must be one of {event_types_list} or null. "
         f"{descriptions_block}"
-        f"area must be one of {list(areas)} or null. "
+        f"area must be one of {_area_choices(areas, area_labels)} or null. "
+        "When the report names a place inside a listed area, or uses that area's label, "
+        "set area to the listed id. "
         "entities must be an array of strings — list every identifier the report refers to, e.g. "
         "equipment or unit identifiers. Do not guess missing values. availability_start and "
         "availability_end are only present when the report is someone stating their own "
@@ -126,6 +139,7 @@ def extract_event(
         getattr(event_type_registry, "types", ()),
         getattr(area_registry, "areas", ()),
         getattr(event_type_registry, "descriptions", None),
+        getattr(area_registry, "labels", None),
     )
 
     try:
@@ -179,8 +193,11 @@ def extraction_result_from_payload(
     if classification is not None and not event_type_registry.is_valid(classification):
         classification = None
 
-    if area is not None and not area_registry.is_valid(area):
-        area = None
+    if area is not None:
+        if hasattr(area_registry, "resolve"):
+            area = area_registry.resolve(area)
+        elif not area_registry.is_valid(area):
+            area = None
 
     occurred_at = received_at if source == "sensor" else model_occurred_at
 

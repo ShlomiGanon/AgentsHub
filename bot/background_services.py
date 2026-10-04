@@ -109,6 +109,10 @@ async def dispatch_notification(deps: "BotDeps", notification: "BotNotification"
         )
         return
 
+    if notification.kind == "operational_update":
+        await notify_operational_update(deps, notification.payload)
+        return
+
     if notification.kind == "precedent_closure":
         await notify_precedent_closure(deps, notification.payload)
         return
@@ -356,22 +360,17 @@ async def deliver_failure_notification(deps: "BotDeps", notification: "BotNotifi
 
     notice = notification.payload
     text = notice.report_text or format_failure_notice(notice, message_catalog_for(deps))
-    messages = message_catalog_for(deps)
+    if notification.ack_message_id:
+        await _for_each_target_chat(
+            notification.target_chat_ids,
+            lambda chat_id: _deliver_editing_the_ack_first(deps, chat_id, text, notification),
+        )
+        return
 
-    async def _send_failure(chat_id: str) -> None:
-        """Edit the ack if possible, then send the failure as a new reply."""
-
-        if notification.ack_message_id:
-            try:
-                await deps.telegram_client.edit_status(chat_id, notification.ack_message_id, messages.text("failure.ack_not_completed"))
-            except Exception as exc:
-                logger.warning(
-                    "editing the ack message to the neutral failure line failed; sending the real reply regardless",
-                    extra={"event": "ack_edit_failed", "reason": str(exc)},
-                )
-        await deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id)
-
-    await _for_each_target_chat(notification.target_chat_ids, _send_failure)
+    await _for_each_target_chat(
+        notification.target_chat_ids,
+        lambda chat_id: deps.telegram_client.send_reply(chat_id, text, notification.reply_to_message_id),
+    )
 
 
 if TYPE_CHECKING:
@@ -405,6 +404,23 @@ def format_precedent_closure_notice(notice: "PrecedentClosureNotice", catalog=No
         precedent_id=notice.matched_precedent_event_id,
         ending=interactions._outcome_word(notice.precedent_ending, messages),
     )
+
+
+_OPERATIONAL_GROUP_AGENTS = frozenset({"roster_agent", "team_status_agent"})
+
+
+async def notify_operational_update(deps: "BotDeps", notice: "OperationalUpdateNotice") -> None:
+    """Send one short update to commander private chats and the operational group."""
+
+    text = (notice.report_text or "").strip()
+    if not text:
+        return
+    targets = set(await deps.api_client.list_commander_chat_ids())
+    for group in await deps.api_client.list_groups():
+        if group.agent_name in _OPERATIONAL_GROUP_AGENTS:
+            targets.add(group.chat_id)
+    for chat_id in targets:
+        await deps.telegram_client.send_text(chat_id, text)
 
 
 async def notify_precedent_closure(deps: "BotDeps", notice: "PrecedentClosureNotice") -> None:

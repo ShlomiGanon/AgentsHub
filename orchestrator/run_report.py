@@ -185,6 +185,18 @@ def _render_pending(pending: PendingSummary, audience: Audience, catalog: Messag
     return catalog.text("report.pending_event_data", question=pending.question or "")
 
 
+def _viewer_action_text(result_text: str) -> str | None:
+    """Keep a short tool confirmation. Drop JSON, unclear tasks, and English scratch."""
+
+    stripped = result_text.strip()
+    if not stripped or stripped[0] in "{[":
+        return None
+    lowered = stripped.casefold()
+    if "unclear_task" in lowered or lowered.startswith("let me"):
+        return None
+    return stripped
+
+
 def render_summary(summary: RunSummary, audience: Audience, catalog: MessageCatalog) -> str:
     """The deterministic fallback — always produces text, without a model, from `summary`
     alone. Commander sees protocol/risk/per-step detail; viewer sees only what was understood,
@@ -214,7 +226,13 @@ def render_summary(summary: RunSummary, audience: Audience, catalog: MessageCata
         # Same underlying facts a commander sees per step, but in the tool's own plain-language
         # confirmation text only -- never the agent name or the task text it was given, which
         # are internal routing details a viewer has no reason to see.
-        actions = [step.result_text for step in summary.steps if step.status == "succeeded" and step.result_text]
+        actions = [
+            action
+            for step in summary.steps
+            if step.status == "succeeded" and step.result_text
+            for action in (_viewer_action_text(step.result_text),)
+            if action
+        ]
         if actions:
             lines.append("")
             lines.append(catalog.text("result.what_was_done"))

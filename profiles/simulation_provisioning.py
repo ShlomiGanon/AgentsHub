@@ -147,11 +147,9 @@ def _ensure_roster_memberships(
     that roster's table approved. Calling it unconditionally on every restart
     would silently re-approve a real, still-pending member an operator hasn't
     approved yet. So this only ever calls it the first time a given roster has
-    no approval record at all (`roster_is_approved()` is False) — mirroring the
-    "create if missing, never touch again" idiom used for users/groups above,
-    applied to "has this roster ever been approved" instead of per-row
-    existence. Once any approval exists (from this routine, a real commander,
-    or a profile's own seed data), it is never called again automatically.
+    no approval record at all (`roster_is_approved()` is False). Once any
+    approval exists, a newly declared pre-approved persona is approved on that
+    row only (`approve_member`), and every other row is left as it is.
     """
 
     personas_by_roster_key: dict[str, list] = {}
@@ -178,7 +176,12 @@ def _ensure_roster_memberships(
             if telegram_id not in already_registered:
                 registered_members.append((roster_key, telegram_id))
 
-        if not store.roster_is_approved():
+        if store.roster_is_approved():
+            approve_member = getattr(store, "approve_member", None)
+            if approve_member is not None:
+                for persona in personas:
+                    approve_member(simulation_user_telegram_id(persona.offset))
+        else:
             store.approve_roster(roster.approved_by)
             newly_approved.append(roster_key)
 

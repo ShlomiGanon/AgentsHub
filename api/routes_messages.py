@@ -39,6 +39,9 @@ from orchestrator.flows import (
     build_role_aware_system_context,
     build_situational_picture,
     classify_intent,
+    picture_protocol,
+    question_requests_picture,
+    read_picture_directly,
     continue_from_risk_assessment,
     plan_message,
     protocol_requires_approval,
@@ -491,6 +494,13 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             # A viewer's question may only see events they submitted; a commander
             # is unrestricted (filter stays None).
             caller_sender_identity_filter = None if level is PermissionLevel.COMMANDER else caller_identity
+            picture_stem = ctx.loaded_profile.module_path.rsplit(".", 1)[-1]
+            if question_requests_picture(text, picture_stem):
+                protocol = picture_protocol(ctx.deps.protocol_set)
+                if protocol is not None:
+                    answer = read_picture_directly(protocol, ctx.deps.registry)
+                    _remember("assistant", answer)
+                    return jsonify({"taken_as": "question", "answer": answer})
             try:
                 if planner_mode == "merged" and message_plan is not None and message_plan.question_selection is not None:
                     question_answer = answer_question_from_plan(

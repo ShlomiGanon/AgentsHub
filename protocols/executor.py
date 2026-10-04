@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -64,6 +65,19 @@ def _take_resource_unavailable_signal(agent: Agent) -> "tuple[str, str, str] | N
     return method() if method is not None else None
 
 
+def _accepted_kwargs(method, raw: dict) -> dict:
+    """Drop parameter names the tool does not accept so a model cannot fail the call with TypeError."""
+
+    try:
+        signature = inspect.signature(method)
+    except (TypeError, ValueError):
+        return dict(raw)
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
+        return dict(raw)
+    allowed = {name for name in signature.parameters if name != "self"}
+    return {key: value for key, value in raw.items() if key in allowed}
+
+
 def _execute_direct_tool_step(agent: Agent, step: Step) -> StepOutcome:
     """Call `step.direct_tool_name` as a plain Python method — no crewai, no LLM call at all.
 
@@ -82,7 +96,7 @@ def _execute_direct_tool_step(agent: Agent, step: Step) -> StepOutcome:
     _take_resource_unavailable_signal(agent)
     try:
         tool_method = getattr(agent, step.direct_tool_name)
-        result = _as_tool_result(tool_method(**step.direct_tool_kwargs))
+        result = _as_tool_result(tool_method(**_accepted_kwargs(tool_method, step.direct_tool_kwargs)))
     except Exception as exc:
         direct_tool_step_error(agent=step.agent_name, tool=step.direct_tool_name, cause=str(exc))
         _take_resource_unavailable_signal(agent)

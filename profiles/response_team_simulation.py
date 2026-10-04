@@ -49,7 +49,7 @@ SIMULATION_USERS = [
     SimulationPersona(key="dan_response_team", offset=11, permission_level="viewer", full_name=_catalog_text("response_team.simulation.sec001.persona.dan_response_team"), pre_approved_rosters=("team_status",)),
     SimulationPersona(key="mda_dispatch", offset=12, permission_level="viewer", full_name=_catalog_text("response_team.simulation.sec001.persona.mda_dispatch")),
     SimulationPersona(key="police_patrol", offset=13, permission_level="viewer", full_name=_catalog_text("response_team.simulation.sec001.persona.police_patrol")),
-    SimulationPersona(key="yasam_commander", offset=14, permission_level="viewer", full_name=_catalog_text("response_team.simulation.sec001.persona.yasam_commander")),
+    SimulationPersona(key="yasam_commander", offset=14, permission_level="viewer", full_name=_catalog_text("response_team.simulation.sec001.persona.yasam_commander"), pre_approved_rosters=("team_status",)),
 ]
 
 SIMULATION_GROUPS = [

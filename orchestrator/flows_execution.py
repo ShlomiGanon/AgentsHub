@@ -135,6 +135,16 @@ def _log_reply_latency(deps: FlowDeps, event_id: str) -> None:
     reply_latency(event_id=event_id, elapsed_seconds=elapsed_seconds)
 
 
+def _selected_protocol(deps: FlowDeps, event_id: str):
+    """The protocol already stored on the event, if selection finished."""
+
+    event = deps.persistence.fetch_event(event_id)
+    protocol_name = event.get("selected_protocol") if event else None
+    if not protocol_name:
+        return None
+    return deps.protocol_set.get(protocol_name)
+
+
 def _record_outcome_with_report(
     deps: FlowDeps,
     event_id: str,
@@ -148,7 +158,12 @@ def _record_outcome_with_report(
     """Persist a terminal outcome and compose report_text once before notifications fire."""
 
     report_text = None
-    if deps.settings_store.get_rich_reports_enabled() or resource_unavailable_fact is not None or force_compose:
+    protocol = _selected_protocol(deps, event_id)
+    reply_key = getattr(protocol, "viewer_reply_key", "") if protocol else ""
+    notice_key = getattr(protocol, "operational_notice_key", "") if protocol else ""
+    if outcome == "succeeded" and reply_key:
+        report_text = deps.message_catalog.text(reply_key)
+    elif deps.settings_store.get_rich_reports_enabled() or resource_unavailable_fact is not None or force_compose:
         summary = build_run_summary(deps.persistence, event_id)
         summary = replace(
             summary,
@@ -168,6 +183,8 @@ def _record_outcome_with_report(
         failure_reason=failure_reason, insight_text=insight_text, report_text=report_text,
         commander_alert_text=commander_alert_text,
     )
+    if outcome == "succeeded" and notice_key:
+        deps.persistence.insert_notification("operational_update", event_id)
     _log_reply_latency(deps, event_id)
 
 

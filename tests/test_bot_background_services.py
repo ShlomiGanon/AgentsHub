@@ -51,10 +51,8 @@ def test_failure_notification_uses_the_server_composed_report_text_when_present(
     assert telegram.sent[0].text == "We couldn't finish checking the gate after several attempts."
 
 
-def test_failure_always_sends_a_new_reply_never_edits_the_ack_with_the_full_text():
-    # Telegram doesn't notify a user of an edit — only a genuinely new message pings them,
-    # so a failure (unlike a success) must always go out as a new reply.
-    """Failure always sends a new reply never edits the ack with the full text."""
+def test_failure_with_an_ack_edits_that_ack_and_does_not_send_a_second_copy():
+    """A failure with an ack edits that ack to the report and does not send a second copy."""
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
 
@@ -69,12 +67,14 @@ def test_failure_always_sends_a_new_reply_never_edits_the_ack_with_the_full_text
 
     _run(deliver_failure_notification(deps, notification))
 
-    assert telegram.sent[0].text == "We couldn't finish checking the gate after several attempts."
-    assert telegram.sent[0].reply_to_message_id == "msg-1"
+    assert telegram.sent == []
+    assert telegram.status_events == [
+        ("edit", "chat-1", "ack-1", "We couldn't finish checking the gate after several attempts."),
+    ]
 
 
-def test_failure_edits_the_ack_to_a_short_neutral_line_pointing_at_the_new_reply():
-    """Failure edits the ack to a short neutral line pointing at the new reply."""
+def test_failure_edits_the_ack_to_the_failure_report():
+    """Failure edits the ack to the failure report instead of a stub plus a second message."""
     telegram = FakeTelegramClient()
     deps = BotDeps(loaded_profile=None, telegram_client=telegram, api_client=FakeBotApiClient())
 
@@ -86,7 +86,10 @@ def test_failure_edits_the_ack_to_a_short_neutral_line_pointing_at_the_new_reply
 
     _run(deliver_failure_notification(deps, notification))
 
-    assert telegram.status_events == [("edit", "chat-1", "ack-1", "Not completed — details below")]
+    assert telegram.sent == []
+    assert telegram.status_events[0][0] == "edit"
+    assert telegram.status_events[0][2] == "ack-1"
+    assert "boom" in telegram.status_events[0][3]
 
 
 def test_failure_sends_the_new_reply_even_when_editing_the_ack_fails():

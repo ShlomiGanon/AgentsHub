@@ -105,6 +105,18 @@ class ResponseTeamRosterStore(TeamStatusPersistenceInterface):
                 (identity, name, registered_at),
             )
 
+    def approve_member(self, telegram_identity: str) -> None:
+        """Mark one team_members row approved without touching the rest of the roster."""
+
+        identity = telegram_identity.strip()
+        if not identity:
+            raise TeamStatusPersistenceError("telegram identity is required")
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE team_members SET approved = 1 WHERE telegram_identity = ?",
+                (identity,),
+            )
+
     def approve_roster(self, approved_by: str, approved_at: str | None = None) -> int:
         """Mark every team_members row approved and record the singleton approval."""
 
