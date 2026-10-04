@@ -85,6 +85,8 @@ jobs:
           tests/test_messages.py
           tests/test_hebrew_leakage.py
           tests/test_observability.py
+          tests/test_log_events.py
+          tests/test_log_paths.py
           tests/test_permissions.py
           tests/test_profile_loading.py
           tests/test_profile_simulations.py
@@ -95,6 +97,9 @@ jobs:
       - name: Mission 2 - Data Layer
         run: >
           python -m pytest -v --color=yes
+          tests/test_attendance_broadcast_store.py
+          tests/test_attendance_schedule.py
+          tests/test_fire_store.py
           tests/test_migrations.py
           tests/test_persistence_conformance.py
           tests/test_persistence_events.py
@@ -121,6 +126,7 @@ jobs:
           python -m pytest -v --color=yes
           tests/test_protocol_repository.py
           tests/test_protocol_retry.py
+          tests/test_protocols_binders.py
 
       - name: Mission 5 - History System
         run: >
@@ -205,11 +211,18 @@ jobs:
       - name: Mission 10 - Operational profiles
         run: >
           python -m pytest -v --color=yes
+          tests/test_dual_profile_protocol_separation.py
+          tests/test_firefighting_apparatus_movement.py
+          tests/test_firefighting_direct_tool_binders.py
+          tests/test_firefighting_fires.py
+          tests/test_firefighting_resource_unavailable.py
           tests/test_operational_profiles.py
           tests/test_operational_scenarios.py
           tests/test_response_team_direct_tool_binders.py
           tests/test_response_team_resource_unavailable.py
+          tests/test_response_team_roster_agent.py
           tests/test_response_team_admin_tables.py
+          tests/test_simulation_alignment.py
           tests/test_firefighting_admin_tables.py
 
       - name: Confirm tests did not modify tracked files

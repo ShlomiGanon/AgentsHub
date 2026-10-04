@@ -1,6 +1,7 @@
 """Message ingestion routes (`POST /Msg`)."""
 
 from datetime import datetime, timedelta, timezone
+import inspect
 import logging
 import time
 from typing import TYPE_CHECKING
@@ -57,6 +58,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _queued_answer_text = queued_answer_text
+
+def _accepts_a_call_with_no_arguments(fn) -> bool:
+    """True when every parameter already has a default, so a button can call the tool as-is."""
+
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return False
+    for param in signature.parameters.values():
+        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+            continue
+        if param.default is inspect.Parameter.empty:
+            return False
+    return True
+
 
 def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
     """JSON route that classifies and runs one inbound `/Msg`."""
@@ -397,8 +413,9 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 # skips a specialist model round-trip on attendance/status buttons.
                 only_tool = allowed_tools[0] if len(allowed_tools) == 1 else None
                 only_info = exposed_by_name.get(only_tool) if only_tool else None
-                if only_info is not None and not only_info.side_effecting and hasattr(ag, only_tool):
-                    answer = getattr(ag, only_tool)()
+                tool_fn = getattr(ag, only_tool) if only_tool and hasattr(ag, only_tool) else None
+                if only_info is not None and not only_info.side_effecting and tool_fn is not None and _accepts_a_call_with_no_arguments(tool_fn):
+                    answer = tool_fn()
                 else:
                     res = ag.process(text, allowed_tools)
                     answer = res.text if res.status == "success" else f"\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05d4\u05e4\u05e2\u05dc\u05ea \u05e1\u05d5\u05db\u05df: {res.text}"
