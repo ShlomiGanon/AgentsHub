@@ -665,6 +665,60 @@ _LOGIN_STYLE = """
     box-shadow: 0 0 0 3px rgba(132,204,22,.28);
     margin-inline-end: 6px;
   }
+
+  .identity-card {
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    min-width: 0;
+  }
+  .identity-card .subtitle { margin-bottom: 8px; }
+  .identity-card > .api-hint { text-align: center; margin: 0 0 16px; }
+  .identity-split {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+    min-height: 292px;
+    min-width: 0;
+  }
+  .identity-pane {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: stretch;
+    text-align: center;
+    min-width: 0;
+    min-height: 0;
+    padding-block: 12px;
+  }
+  .identity-pane .form-select-console {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+  .identity-pane .field-group { margin-bottom: 10px; }
+  .identity-pane .api-hint { margin-bottom: 12px; }
+  .identity-pane h2 {
+    font-size: 16px;
+    font-weight: 700;
+    margin: 0 0 10px;
+  }
+  .identity-divider {
+    height: 1px;
+    background: #e2e8f0;
+    width: 100%;
+  }
+  @media (max-width: 768px) {
+    .identity-split {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .identity-pane { padding-block: 16px; }
+    .identity-pane .btn-console-primary {
+      width: 100%;
+      min-height: 48px;
+    }
+  }
 </style>
 """
 

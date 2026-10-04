@@ -590,6 +590,13 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             raise RunFailureError(f"unsupported message intent: {intent.intent!r}")
 
         require(level, RequestedOperation.REQUEST_ACTION)
+        picture_stem = ctx.loaded_profile.module_path.rsplit(".", 1)[-1]
+        if question_requests_picture(text, picture_stem):
+            protocol = picture_protocol(ctx.deps.protocol_set)
+            if protocol is not None:
+                answer = read_picture_directly(protocol, ctx.deps.registry)
+                _remember("assistant", answer)
+                return jsonify({"taken_as": "request", "answer": answer})
         is_commander = level >= PermissionLevel.COMMANDER
         reservation = ctx.queue.reserve(False)
         if reservation is None:

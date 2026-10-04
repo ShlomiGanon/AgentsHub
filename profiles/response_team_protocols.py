@@ -471,6 +471,7 @@ PROTOCOLS = [
         direct_tool_binder=_bind_correct_false_security_report,
         viewer_reply_key="response_team.reply.false_report",
         operational_notice_key="response_team.notice.false_gunfire",
+        retracts_precedent=True,
         safety_critical=True,
     ),
     Protocol(

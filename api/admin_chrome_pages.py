@@ -83,7 +83,7 @@ _ACTING_IDENTITY_TEMPLATE = """<!DOCTYPE html>
   <div class="login-brand">
     <img class="ls-logo" src="{{ url_for('static', filename='leadspotting-logo.gif') }}" alt="LeadSpotting">
   </div>
-  <div class="login-card">
+  <div class="login-card identity-card">
     <h1>{{ t('admin.api.identity_title') }}</h1>
     <p class="subtitle">{{ t('admin.api.identity_subtitle') }}</p>
 
@@ -91,36 +91,40 @@ _ACTING_IDENTITY_TEMPLATE = """<!DOCTYPE html>
       <div class="alert-console-error">{{ message }}</div>
     {% endfor %}
 
-    <form method="post">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <h2>{{ t('admin.api.identity_profile_heading') }}</h2>
-      <div class="field-group">
-        <label class="form-label-console" for="api-identity-select">{{ t('admin.api.identity_label') }}</label>
-        <select id="api-identity-select" name="api_identity" class="form-select form-select-console" {% if not api_users %}disabled{% endif %}>
-          {% for user in api_users %}
-            <option value="{{ user.telegram_identity }}">
-              {{ user.full_name or t('admin.api.missing_name') }} — {{ user.telegram_identity }} ({{ user.permission_level }})
-            </option>
-          {% endfor %}
-        </select>
-      </div>
-      {% if not api_users %}
-        <p class="api-hint">{{ t('admin.api.no_identity') }}</p>
-      {% else %}
-        <p class="api-hint">{{ t('admin.api.identity_help') }}</p>
-      {% endif %}
-      <div class="login-actions">
-        <button type="submit" class="btn-console-primary">{{ t('admin.api.identity_save') }}</button>
-      </div>
-    </form>
-    <form method="post">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="hidden" name="use_system_admin" value="1">
-      <h2>{{ t('admin.api.identity_admin_heading') }}</h2>
-      <div class="login-actions">
-        <button type="submit" class="btn-console-primary">{{ t('admin.api.identity_admin_button') }}</button>
-      </div>
-    </form>
+    {% if not api_users %}
+      <p class="api-hint">{{ t('admin.api.no_identity') }}</p>
+    {% else %}
+      <p class="api-hint">{{ t('admin.api.identity_help') }}</p>
+    {% endif %}
+
+    <div class="identity-split">
+      <form method="post" class="identity-pane">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <h2>{{ t('admin.api.identity_profile_heading') }}</h2>
+        <div class="field-group">
+          <label class="form-label-console" for="api-identity-select">{{ t('admin.api.identity_label') }}</label>
+          <select id="api-identity-select" name="api_identity" class="form-select form-select-console" {% if not api_users %}disabled{% endif %}>
+            {% for user in api_users %}
+              <option value="{{ user.telegram_identity }}">
+                {{ user.full_name or t('admin.api.missing_name') }} — {{ user.telegram_identity }} ({{ user.permission_level }})
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="login-actions">
+          <button type="submit" class="btn-console-primary">{{ t('admin.api.identity_save') }}</button>
+        </div>
+      </form>
+      <div class="identity-divider" role="separator"></div>
+      <form method="post" class="identity-pane">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="use_system_admin" value="1">
+        <h2>{{ t('admin.api.identity_admin_heading') }}</h2>
+        <div class="login-actions">
+          <button type="submit" class="btn-console-primary">{{ t('admin.api.identity_admin_button') }}</button>
+        </div>
+      </form>
+    </div>
   </div>
 
 </body>

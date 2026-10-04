@@ -557,7 +557,7 @@ def extract_and_decide(
 
     try:
         extraction = extraction_result_from_payload(
-            payload, source, received_at, event_type_registry, area_registry,
+            payload, source, received_at, event_type_registry, area_registry, raw_text=raw_text,
         )
     except ExtractionExecutionError:
         raise

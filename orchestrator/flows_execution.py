@@ -172,9 +172,14 @@ def _record_outcome_with_report(
             insight_text=insight_text if insight_text is not None else summary.insight_text,
             resource_unavailable_fact=resource_unavailable_fact,
         )
-        if summary.selected_protocol in {"query_situational_picture", "overall_situational_picture"} and summary.insight_text:
-            # Picture text is already user-facing; the generic composer would leak step internals.
-            report_text = summary.insight_text.strip()
+        if summary.selected_protocol in {"query_situational_picture", "overall_situational_picture"}:
+            # The read tools already wrote the picture. Do not ask the composer to retell it.
+            picture_lines = [
+                step.result_text.strip()
+                for step in summary.steps
+                if step.status == "succeeded" and step.result_text and step.result_text.strip()
+            ]
+            report_text = "\n".join(picture_lines) if picture_lines else (summary.insight_text or "").strip()
         else:
             report_text = compose_report(deps.report_composer_agent, summary, resolve_audience(summary), deps.message_catalog)
 

@@ -156,7 +156,9 @@ def extract_event(
     except (json.JSONDecodeError, TypeError) as exc:
         raise ExtractionExecutionError("model response was not valid JSON") from exc
 
-    return extraction_result_from_payload(payload, source, received_at, event_type_registry, area_registry)
+    return extraction_result_from_payload(
+        payload, source, received_at, event_type_registry, area_registry, raw_text=raw_text,
+    )
 
 
 def extraction_result_from_payload(
@@ -165,6 +167,7 @@ def extraction_result_from_payload(
     received_at: str,
     event_type_registry,
     area_registry,
+    raw_text: str = "",
 ) -> ExtractionResult:
     """Extraction result from payload."""
 
@@ -198,6 +201,9 @@ def extraction_result_from_payload(
             area = area_registry.resolve(area)
         elif not area_registry.is_valid(area):
             area = None
+    # A place named in the report still counts when the model leaves area empty.
+    if area is None and hasattr(area_registry, "resolve"):
+        area = area_registry.resolve(f"{raw_text} {description or ''}".strip())
 
     occurred_at = received_at if source == "sensor" else model_occurred_at
 

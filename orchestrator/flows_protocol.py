@@ -95,6 +95,8 @@ def _run_protocol(
         # formulate_tasks/task_rewrite call at all, so precedent_matches (whatever comparable
         # history this event has) structurally cannot reach or escalate a direct-tool step's
         # instructions, since no instructions are ever written for one.
+        if getattr(protocol, "retracts_precedent", False):
+            _retract_latest_resolved_precedent(deps, event_id, precedent_matches)
         direct_tool_steps = protocol.direct_tool_binder(event)
         return _execute_protocol_plan(
             deps, event_id, main_agent, insights_agent, protocol, direct_tool_steps, precedent_matches,
@@ -130,6 +132,18 @@ def _run_protocol(
         deps, event_id, main_agent, insights_agent, protocol, formulation.steps, precedent_matches,
         event=event,
     )
+
+def _retract_latest_resolved_precedent(deps: FlowDeps, event_id: str, precedent_matches: tuple) -> None:
+    """Mark the latest resolved comparable event as retracted by this correction."""
+
+    resolved = [item for item in precedent_matches if getattr(item, "resolved", False) and getattr(item, "event_id", "")]
+    if not resolved:
+        return
+    target = max(resolved, key=lambda item: getattr(item, "occurred_at", "") or "")
+    record_event_state(deps.persistence, event_id, {"corrects_event_id": target.event_id})
+    record_event_state(deps.persistence, target.event_id, {"retracted": True})
+    event_correction_recorded(event_id=event_id, corrects_event_id=target.event_id)
+
 
 def _persist_step_plan(deps: FlowDeps, event_id: str, steps: tuple[Step, ...]) -> None:
     """Store the formulated step plan so a later resume can continue it."""
@@ -660,9 +674,17 @@ def continue_from_risk_assessment(
     record_event_state(deps.persistence, event_id, state_updates)
     event.update(state_updates)
 
-    # A precedent can answer an informational report, but not a fresh attendance write.
-    precedent_closure_blocked = (
-        selection.status == "selected" and selection.protocol_name == "record_attendance_response"
+    # A precedent can answer an informational report. A protocol that writes a reply
+    # or sends an operational notice has to run, the same way a fresh attendance write does.
+    selected_protocol = (
+        deps.protocol_set.get(selection.protocol_name)
+        if selection.status == "selected" and selection.protocol_name
+        else None
+    )
+    precedent_closure_blocked = selected_protocol is not None and (
+        selected_protocol.name in {"record_attendance", "record_attendance_response"}
+        or bool(getattr(selected_protocol, "viewer_reply_key", ""))
+        or bool(getattr(selected_protocol, "operational_notice_key", ""))
     )
     closing_event_id = (
         None

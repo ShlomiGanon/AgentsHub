@@ -650,6 +650,7 @@ PROTOCOLS = [
         direct_tool_binder=_bind_correct_false_fire_report,
         viewer_reply_key="firefighting.reply.false_alarm",
         operational_notice_key="firefighting.notice.false_alarm",
+        retracts_precedent=True,
         safety_critical=True,
     ),
     Protocol(

@@ -77,6 +77,9 @@ class Protocol:
     viewer_reply_key: str = ""
     # Catalog key for an operational update sent to commanders and the profile's operational group.
     operational_notice_key: str = ""
+    # When true, a direct-tool run retracts the latest resolved precedent in the same
+    # classification and area. Used by false-report corrections, which skip formulate_tasks.
+    retracts_precedent: bool = False
 
 
 @dataclass(frozen=True)

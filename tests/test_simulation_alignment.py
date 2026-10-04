@@ -24,6 +24,7 @@ from profiles.response_team_protocols import (
     _bind_correct_false_security_report,
     _bind_log_security_observation,
 )
+from profiles.response_team_agents import ResponseTeamRosterAgent
 from profiles.response_team_simulation import SIMULATION_USERS
 from api.admin_chrome_pages import _ACTING_IDENTITY_TEMPLATE
 from history.event_pipeline import extraction_result_from_payload
@@ -86,6 +87,32 @@ def test_hebrew_area_label_and_containing_phrase_resolve_to_the_id():
     )
     assert result.area == "expansion_neighborhood"
 
+    mda = catalog.text("response_team.simulation.sec001.phase3.step3.text")
+    held = extraction_result_from_payload(
+        {"classification": "security_incident", "area": None, "entities": [], "description": None},
+        "telegram",
+        "2026-10-04T00:00:00+00:00",
+        _Types(),
+        registry,
+        raw_text=mda,
+    )
+    assert held.area == "expansion_neighborhood"
+
+    fire_label = catalog.text("firefighting.area.ornim_street")
+    fire_registry = AreaRegistry(
+        areas=("ornim_street",),
+        labels={"ornim_street": fire_label},
+    )
+    fire = extraction_result_from_payload(
+        {"classification": "fire", "area": None, "entities": []},
+        "telegram",
+        "2026-10-04T00:00:00+00:00",
+        _Types(),
+        fire_registry,
+        raw_text=catalog.text("firefighting.simulation.fire002.phase3.step3.text"),
+    )
+    assert fire.area == "ornim_street"
+
 
 def test_camera_phrases_in_both_languages_resolve_to_the_catalog_id():
     hebrew = get_catalog("he")
@@ -126,9 +153,11 @@ def test_correction_and_closure_notify_without_asking_about_cameras():
     assert correction[0].direct_tool_name == "post_operational_notice"
     assert closure[0].direct_tool_name == "post_operational_notice"
     assert "camera" not in correction[0].direct_tool_name
-    assert _protocol(RESPONSE_PROTOCOLS, "correct_false_security_report").operational_notice_key == (
+    correction_protocol = _protocol(RESPONSE_PROTOCOLS, "correct_false_security_report")
+    assert correction_protocol.operational_notice_key == (
         "response_team.notice.false_gunfire"
     )
+    assert correction_protocol.retracts_precedent
     assert _protocol(RESPONSE_PROTOCOLS, "close_security_incident").operational_notice_key == (
         "response_team.notice.incident_closed"
     )
@@ -151,6 +180,13 @@ def test_yasam_commander_is_approved_on_an_already_approved_roster(tmp_path):
     assert members["9000000000000014"]["approved"]
     assert not members["pending-real"]["approved"]
 
+    agent = ResponseTeamRosterAgent.__new__(ResponseTeamRosterAgent)
+    agent.status_store = store
+    stored = agent.report_team_movement(area="old_public_building", member_identity="9000000000000014")
+    assert "old_public_building" in stored
+    updated = {row["telegram_identity"]: row for row in store.list_members(approved_only=False)}
+    assert updated["9000000000000014"]["current_area"] == "old_public_building"
+
 
 def test_contained_fire_and_false_alarm_notify_without_a_camera_check():
     contained = _bind_close_contained_fire({"area": "pine_ridge", "raw_text": "the incident is contained"})
@@ -160,11 +196,13 @@ def test_contained_fire_and_false_alarm_notify_without_a_camera_check():
     assert contained[1].direct_tool_kwargs["notice_key"] == "firefighting.notice.incident_contained"
     assert false_alarm[-1].direct_tool_kwargs["notice_key"] == "firefighting.notice.false_alarm"
     assert _protocol(FIRE_PROTOCOLS, "close_contained_fire").viewer_reply_key
+    assert _protocol(FIRE_PROTOCOLS, "correct_false_fire_report").retracts_precedent
     assert "YASAM" not in _protocol(FIRE_PROTOCOLS, "correct_false_fire_report").description
 
 
 def test_picture_question_reads_tools_without_a_subagent():
-    assert question_requests_picture("תמונת מצב עדכנית לקראת הלילה", "response_team")
+    picture_request = get_catalog("he").text("response_team.simulation.sec001.phase1.step9.text")
+    assert question_requests_picture(picture_request, "response_team")
     protocol = _protocol(RESPONSE_PROTOCOLS, "query_situational_picture")
     answer = read_picture_directly(protocol, _PictureRegistry())
     assert "roster ready" in answer
@@ -197,3 +235,6 @@ def test_identity_card_splits_profile_selection_from_system_admin():
     assert "admin.api.identity_save" in template
     assert "admin.api.identity_admin_button" in template
     assert 'name="use_system_admin"' in template
+    assert 'class="identity-split"' in template
+    assert template.count('class="identity-pane"') == 2
+    assert 'class="identity-divider"' in template
