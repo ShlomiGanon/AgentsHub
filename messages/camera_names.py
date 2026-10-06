@@ -1,5 +1,7 @@
 """Resolve a camera phrase to the stable camera id using both message catalogs."""
 
+import re
+
 from messages.catalog import SUPPORTED_LANGUAGES, get_catalog
 
 
@@ -19,6 +21,15 @@ def resolve_camera_id(store, phrase: str, stem: str) -> str:
     for camera in store.list_cameras():
         if str(camera.get("name", "")).casefold() == text.casefold():
             return camera["camera_id"]
+    if re.fullmatch(r"\d+", text):
+        number = int(text)
+        numeric_matches = []
+        for camera in store.list_cameras():
+            suffix = re.search(r"(\d+)$", str(camera.get("camera_id", "")))
+            if suffix and int(suffix.group(1)) == number:
+                numeric_matches.append(camera["camera_id"])
+        if len(numeric_matches) == 1:
+            return numeric_matches[0]
     if not stem:
         return text
 

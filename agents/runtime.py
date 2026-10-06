@@ -62,6 +62,15 @@ from tools.log_events import (
 )
 
 _REQUIRED_CLASS_ATTRS = ("name", "role", "system_prompt")
+_USER_FACING_HEBREW_STYLE = (
+    " When the task asks for text that will be shown to a user and the user's message is in Hebrew, "
+    "write the entire user-facing answer in natural, everyday Hebrew. Use short, clear sentences and a "
+    "simple, tidy layout. Keep technical identifiers such as camera, drone, mission, and event IDs unchanged, "
+    "but explain statuses and other technical terms in Hebrew. Do not use English headings, internal field names, "
+    "raw timestamps, dramatic wording, heavy Markdown, or recommendations that were not requested. "
+    "This rule applies only to user-facing prose; preserve every exact JSON, schema, tool argument, and other "
+    "machine-readable response format required by the task."
+)
 _current_allowed_tools: ContextVar[frozenset | None] = ContextVar("current_allowed_tools", default=None)
 _authenticated_request_identity: ContextVar[str | None] = ContextVar(
     "authenticated_request_identity", default=None
@@ -227,7 +236,7 @@ class Agent:
         self.descriptor = AgentDescriptor(
             name=self.name,
             role=self.role,
-            system_prompt=self.system_prompt,
+            system_prompt=self.system_prompt + _USER_FACING_HEBREW_STYLE,
             tools=tool_infos,
             model=model,
             api_key=api_key,

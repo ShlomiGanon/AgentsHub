@@ -14,7 +14,10 @@ the same IDs, and the server-side JSON adapter (`api/simulations.py`) never
 needs a database round trip to compute them.
 """
 
+import json
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Mapping
 
 # Chosen so a simulation ID is always:
@@ -137,3 +140,68 @@ class SimulationScenario:
     raw: Mapping
     description: str = ""
     tags: tuple[str, ...] = ()
+
+
+def load_scenario_fixtures(
+    directory: str | Path,
+    users: list[SimulationPersona],
+    groups: list[SimulationGroup],
+    scenario_prefix: str,
+    fallback_scenarios: list[SimulationScenario] | tuple[SimulationScenario, ...] = (),
+) -> tuple[SimulationScenario, ...]:
+    """Load the editable admin scenario JSON files into the simulator contract."""
+
+    directory = Path(directory)
+    users_by_name = {user.full_name: user.key for user in users}
+    fallback_senders = {
+        (scenario.raw["scenario"]["id"], step["step"]): step["sender_identity"]
+        for scenario in fallback_scenarios
+        for step in scenario.raw["steps"]
+    }
+    group_by_source = {
+        "TELEGRAM_GROUP_RESPONSE_TEAM": next((group.key for group in groups if "response" in group.key), None),
+        "TELEGRAM_GROUP_CAMERAS": next((group.key for group in groups if "camera" in group.key), None),
+        "TELEGRAM_GROUP_EXTERNAL_FORCES": next((group.key for group in groups if "external" in group.key), None),
+        "TELEGRAM_DIRECT_COMMANDER": next((group.key for group in groups if "commander" in group.key), "commander_dm"),
+    }
+    scenarios = []
+    for path in sorted(directory.glob("*.json")):
+        document = json.loads(path.read_text(encoding="utf-8"))
+        metadata = document["scenario_metadata"]
+        scenario_id = metadata["scenario_id"]
+        if not scenario_id.startswith(scenario_prefix):
+            continue
+        steps = []
+        for event in document["event_stream"]:
+            payload = event["payload"]
+            sender_name = payload["sender"]
+            sender_identity = users_by_name.get(sender_name) or fallback_senders.get((scenario_id, event["step"]))
+            if sender_identity is None:
+                raise ValueError(f"Unknown simulation sender {sender_name!r} in {path}")
+            chat = group_by_source.get(event["source_chat"])
+            if chat is None:
+                raise ValueError(f"Unknown simulation chat {event['source_chat']!r} in {path}")
+            step = {
+                "step": event["step"],
+                "chat": chat,
+                "sender_identity": sender_identity,
+                "sender_name": sender_name,
+                "text": payload["message"],
+            }
+            if event.get("timestamp"):
+                step["timestamp"] = event["timestamp"]
+            steps.append(step)
+        chats = [
+            {"key": group.key, "kind": "message", "label": group.label, "telegram_chat_type": "supergroup", "telegram_chat_id": group.key}
+            for group in groups
+        ]
+        chats.append({"key": "commander_dm", "kind": "message", "label": "commander_dm", "telegram_chat_type": "private"})
+        key = re.sub(r"_(\d)", r"\1", scenario_id.lower())
+        scenarios.append(SimulationScenario(
+            key=key,
+            title=metadata["title"],
+            description=metadata.get("description", ""),
+            tags=(metadata.get("domain", "").lower(), metadata.get("phase", "").lower()),
+            raw={"scenario": {"id": scenario_id, "title": metadata["title"], "description": metadata.get("description", ""), "tags": []}, "chats": chats, "steps": steps},
+        ))
+    return tuple(scenarios)

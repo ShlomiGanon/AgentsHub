@@ -18,7 +18,7 @@ from profiles.firefighting import (
     FIREFIGHTING_SURVEILLANCE_DB_PATH,
     _catalog_text,
 )
-from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
+from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario, load_scenario_fixtures
 
 def _ensure_operational_seed_data() -> None:
     """Create missing cameras/apparatus and open yesterday's cycle if the roster has none."""
@@ -77,7 +77,7 @@ FIRE002_CHATS = (
     {"key": "fire_commander_dm", "kind": "message", "label": _catalog_text("firefighting.simulation.fire002.chat.fire_commander_dm.label"), "telegram_chat_type": "private"},
 )
 
-SIMULATIONS = [
+_CODE_SIMULATIONS = [
     SimulationScenario(
         key="fire002_phase1",
     title=_catalog_text("firefighting.simulation.fire002.phase1.title"),
@@ -247,6 +247,10 @@ SIMULATIONS = [
     },
     ),
 ]
+
+SIMULATIONS = load_scenario_fixtures(
+    "fixtures/admin_scenarios", SIMULATION_USERS, SIMULATION_GROUPS, "FIRE_002", _CODE_SIMULATIONS
+)
 
 
 __all__ = [

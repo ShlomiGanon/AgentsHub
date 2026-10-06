@@ -87,7 +87,7 @@ def test_get_simulation_materializes_reserved_ids_and_keeps_the_shape(tmp_path, 
     assert resp.status_code == 200
     body = resp.get_json()
 
-    # ID-bearing fields are substituted; custom timestamps are stripped so send-time is used.
+    # ID-bearing fields are substituted; the scenario timestamp remains intact.
     assert body["scenario"] == _SCENARIO_RAW["scenario"]
     assert body["chats"][0] == _SCENARIO_RAW["chats"][0]  # private chat: no chat_id to substitute
     assert body["chats"][1]["telegram_chat_id"] == "-9000000000000000"  # response_team, offset=0
@@ -96,7 +96,7 @@ def test_get_simulation_materializes_reserved_ids_and_keeps_the_shape(tmp_path, 
     # Every other field passes through untouched.
     assert body["steps"][0]["text"] == "hello"
     assert body["steps"][1]["text"] == "status?"
-    assert "timestamp" not in body["steps"][0]
+    assert body["steps"][0]["timestamp"] == "2026-01-01T00:00:00Z"
     assert "timestamp" not in body["steps"][1]
 
 

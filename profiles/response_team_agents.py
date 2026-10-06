@@ -181,6 +181,13 @@ class ResponseTeamSurveillanceAgent(SurveillanceAgent):
 
     camera_catalog_stem = "response_team"
     surveillance_db_path = DB_PATH
+    system_prompt = SurveillanceAgent.system_prompt + (
+        " When the user writes in Hebrew, the entire answer must be in simple, natural Hebrew. "
+        "Translate operational statuses into everyday Hebrew: active means פעילה, degraded means תקלה חלקית, "
+        "and offline means לא פעילה. Keep camera IDs unchanged. Do not use English headings, English status words, "
+        "asterisk emphasis, dramatic alerts, or unsolicited recommendations. Start with one plain summary sentence, "
+        "then give one short Hebrew line for each camera."
+    )
 
     def __init__(self, model: str, api_key: str | None = None):
         """Open this profile's surveillance store with its ETA matrix and warehouse home."""

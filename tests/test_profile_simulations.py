@@ -488,7 +488,7 @@ def test_materialize_simulation_substitutes_only_the_declared_ids():
     assert materialized["chats"][1]["telegram_chat_id"] == simulation_group_chat_id(7)
     assert materialized["chats"][2] == _RAW_SCENARIO["chats"][2]  # event chat: untouched
     assert materialized["steps"][0]["sender_identity"] == simulation_user_telegram_id(3)
-    assert "timestamp" not in materialized["steps"][0]
+    assert materialized["steps"][0]["timestamp"] == "2026-01-01T00:00:00Z"
     assert materialized["steps"][1]["sender_identity"] == "sensor-north-1"  # not a persona key: untouched
 
 

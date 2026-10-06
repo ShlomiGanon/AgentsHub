@@ -679,7 +679,7 @@ SIMULATOR_SCRIPT = """<script id="sim-data" type="application/json">{{ page_data
 
   async function pollSimulatorChat(
     chatKey, chatId, watermark, myGeneration, reply, ackMessageId, traceId,
-    deliveryState, privateTargetIdentity, privateFollowupWatcher, privateMessageChatKey
+    deliveryState, privateTargetIdentity, privateFollowupWatcher, privateMessageChatKey, displayTimestamp
   ) {
     if (!deliveryState) deliveryState = { waitingForJob: false };
     const startedAt = Date.now();
@@ -743,7 +743,7 @@ SIMULATOR_SCRIPT = """<script id="sim-data" type="application/json">{{ page_data
                 t('private_followup_label', { identity: privateTargetIdentity }),
                 update.text,
                 null,
-                null,
+                displayTimestamp,
                 traceId
               );
               privateStatusBubbles.set(String(update.message_id), bubble);
@@ -756,7 +756,7 @@ SIMULATOR_SCRIPT = """<script id="sim-data" type="application/json">{{ page_data
             setBubbleText(knownBubble, update.text, null, false);
             if (String(update.message_id) === String(ackMessageId)) deliveryState.waitingForJob = false;
           } else if (update.kind === 'send' || update.kind === 'edit') {
-            appendBubble(chatKey, 'sys', t('system_label'), update.text, null);
+            appendBubble(chatKey, 'sys', t('system_label'), update.text, null, displayTimestamp);
             if (privateTargetIdentity) receivedPrivateMessage = true;
           }
         }
@@ -767,7 +767,7 @@ SIMULATOR_SCRIPT = """<script id="sim-data" type="application/json">{{ page_data
             privateFollowupWatcher ? t('private_followup_label', { identity: privateTargetIdentity }) : t('system_label'),
             text,
             null,
-            null,
+            displayTimestamp,
             privateFollowupWatcher ? traceId : null
           );
           if (privateTargetIdentity) receivedPrivateMessage = true;
@@ -782,7 +782,7 @@ SIMULATOR_SCRIPT = """<script id="sim-data" type="application/json">{{ page_data
             privateFollowupWatcher ? t('private_followup_label', { identity: privateTargetIdentity }) : t('system_label'),
             result.payload.reply_text,
             null,
-            null,
+            displayTimestamp,
             privateFollowupWatcher ? traceId : null
           );
           if (privateFollowupWatcher) receivedPrivateMessage = true;
@@ -850,7 +850,7 @@ SIMULATOR_SCRIPT = """<script id="sim-data" type="application/json">{{ page_data
     });
 
     appendBubble(chatKey, null, step.sender_name, step.text, step.step, step.timestamp, traceId);
-    const reply = appendBubble(chatKey, 'sys', t('system_label'), t('sending'), null, null, traceId);
+    const reply = appendBubble(chatKey, 'sys', t('system_label'), t('sending'), null, step.timestamp, traceId);
 
     // §20: claimed here, synchronously, before the POST (and its own real send/edit cycle)
     // even starts — see pollGenerationByChatId's own comment for why. Event-kind steps never
@@ -918,7 +918,8 @@ SIMULATOR_SCRIPT = """<script id="sim-data" type="application/json">{{ page_data
       deliveryState,
       null,
       false,
-      chatKey
+      chatKey,
+      step.timestamp
     );
     if (waitingForJob && !isPrivateOrigin && senderIdentity && senderIdentity !== String(request.body.chat_id || '')) {
       const privateGeneration = claimPollGeneration(senderIdentity);
@@ -933,7 +934,8 @@ SIMULATOR_SCRIPT = """<script id="sim-data" type="application/json">{{ page_data
         deliveryState,
         senderIdentity,
         true,
-        privateChatKeyForIdentity(senderIdentity)
+        privateChatKeyForIdentity(senderIdentity),
+        step.timestamp
       );
     }
   }

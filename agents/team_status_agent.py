@@ -250,30 +250,44 @@ class TeamStatusAgent(Agent):
         if not snapshot:
             return "The readiness-team roster is empty or has not been approved."
 
-        labels = {
-            "available": "available",
-            "unavailable": "unavailable",
-            "awaiting_response": "awaiting response",
-        }
-        lines = ["Readiness-team status:"]
+        is_hebrew = get_current_catalog().language == "he"
+        labels = (
+            {"available": "זמין", "unavailable": "לא זמין", "awaiting_response": "טרם התקבלה תשובה"}
+            if is_hebrew
+            else {"available": "available", "unavailable": "unavailable", "awaiting_response": "awaiting response"}
+        )
+        lines = ["👥 סטטוס כיתת הכוננות" if is_hebrew else "Readiness-team status:"]
         counts = {"available": 0, "unavailable": 0, "awaiting_response": 0}
         for entry in snapshot:
             status = entry["availability"]
             counts[status] += 1
             detail = ""
             if status == "unavailable":
-                detail = f" — reason: {entry['reason']}; unavailable until: {entry['unavailable_until']}"
-            if entry["original_text"]:
+                if is_hebrew:
+                    detail = f" — סיבה: {entry['reason']}"
+                else:
+                    detail = f" — reason: {entry['reason']}; unavailable until: {entry['unavailable_until']}"
+                if is_hebrew and entry["unavailable_until"]:
+                    unavailable_until = _aware_datetime(entry["unavailable_until"]).astimezone(
+                        ZoneInfo(self.timezone_name)
+                    )
+                    detail += f"; עד {unavailable_until.strftime('%d/%m/%Y בשעה %H:%M')}"
+            if not is_hebrew and entry["original_text"]:
                 detail += f"; original response: {entry['original_text']}; received at: {entry['received_at']}"
             lines.append(f"- {entry['full_name']}: {labels[status]}{detail}")
 
-        lines.extend(
-            (
+        if is_hebrew:
+            lines.extend((
+                "",
+                f"סה״כ חברי כיתה: {len(snapshot)}",
+                f"זמינים: {counts['available']} | לא זמינים: {counts['unavailable']} | טרם ענו: {counts['awaiting_response']}",
+            ))
+        else:
+            lines.extend((
                 "",
                 f"Total: {len(snapshot)}",
                 f"Available: {counts['available']}",
                 f"Unavailable: {counts['unavailable']}",
                 f"Awaiting response: {counts['awaiting_response']}",
-            )
-        )
+            ))
         return "\n".join(lines)

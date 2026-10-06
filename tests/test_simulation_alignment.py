@@ -126,6 +126,9 @@ def test_camera_phrases_in_both_languages_resolve_to_the_catalog_id():
     assert resolve_camera_id(store, "CAM-01", "response_team") == "CAM-01"
     assert resolve_camera_id(store, "Camera 1", "response_team") == "CAM-01"
     assert resolve_camera_id(store, "Camera 05", "response_team") == "CAM-03"
+    assert resolve_camera_id(store, "1", "response_team") == "CAM-01"
+    assert resolve_camera_id(store, "01", "response_team") == "CAM-01"
+    assert resolve_camera_id(store, "03", "response_team") == "CAM-03"
     assert store.get_camera("CAM-01")["name"] == hebrew.text("response_team.camera.cam_01.name")
     assert CAMERAS[0]["name"] == hebrew.text("response_team.camera.cam_01.name")
     assert CAMERAS[0]["camera_id"] == "CAM-01"

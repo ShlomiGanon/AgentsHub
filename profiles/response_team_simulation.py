@@ -8,7 +8,7 @@ from persistence import (
     open_response_team_surveillance_store,
 )
 from profiles.response_team import CAMERAS, DB_PATH, DRONES, DRONES_WAREHOUSE, _catalog_text, eta_seconds
-from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario
+from profiles.simulation import SimulationGroup, SimulationPersona, SimulationRoster, SimulationScenario, load_scenario_fixtures
 
 def _ensure_operational_seed_data() -> None:
     """Create missing cameras/drones and open yesterday's cycle if the roster has none."""
@@ -69,7 +69,7 @@ SEC001_CHATS = (
     {"key": "commander_dm", "kind": "message", "label": _catalog_text("response_team.simulation.sec001.chat.commander_dm.label"), "telegram_chat_type": "private"},
 )
 
-SIMULATIONS = [
+_CODE_SIMULATIONS = [
     SimulationScenario(
         key="sec001_phase1",
     title=_catalog_text("response_team.simulation.sec001.phase1.title"),
@@ -264,6 +264,10 @@ SIMULATIONS = [
     },
     ),
 ]
+
+SIMULATIONS = load_scenario_fixtures(
+    "fixtures/admin_scenarios", SIMULATION_USERS, SIMULATION_GROUPS, "SEC_001", _CODE_SIMULATIONS
+)
 
 
 __all__ = [
