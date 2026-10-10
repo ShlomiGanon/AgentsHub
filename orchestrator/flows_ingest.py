@@ -24,8 +24,10 @@ from tools import get_trace_id
 from tools.log_events import (
     extraction_result as log_extraction_result,
     extraction_retry,
+    protocol_selection,
     report_received,
     request_received,
+    risk_assessed,
 )
 
 from orchestrator.flows_execution import (
@@ -153,6 +155,49 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
     )
 
     record_extracted_fields(deps.persistence, event_id, extraction_result)
+
+    # A merged extraction/decision can positively determine that the primary update is outside
+    # every declared protocol. Finish that result before the classification/required-field gates:
+    # an unsupported primary update must not be turned into a clarification merely because an
+    # incidental clause resembled an event type or left that type's fields empty.
+    if operational_decision is not None and operational_decision.selection.status == "no_match":
+        risk_assessed(
+            event_id=event_id,
+            risk_level=operational_decision.risk.level,
+            risk_score=operational_decision.risk.score,
+            risk_reason=operational_decision.risk.reason,
+        )
+        protocol_selection(
+            event_id=event_id,
+            status="no_match",
+            protocol_name=None,
+            candidate_names=(),
+            reason=operational_decision.selection.reason,
+        )
+        record_event_state(
+            deps.persistence,
+            event_id,
+            {
+                "risk_level": operational_decision.risk.level,
+                "risk_reason": operational_decision.risk.reason,
+            },
+        )
+        _record_outcome_with_report(
+            deps,
+            event_id,
+            "no_match_protocol",
+            failure_reason=operational_decision.selection.reason,
+        )
+        _log_event_outcome(
+            event_id,
+            "no_match_protocol",
+            reason=operational_decision.selection.reason,
+        )
+        return FlowResult(
+            event_id,
+            "no_match_protocol",
+            operational_decision.selection.reason,
+        )
 
     # Persist UNCLASSIFIED_TYPE so the event has a real type; clarification still uses the original result.
     if determine_clarification_hold(extraction_result):

@@ -322,9 +322,10 @@ PROTOCOLS = [
     Protocol(
         name="record_attendance",
         description=(
-            "Applies when a response-team member reports their own attendance/availability "
-            "status for the current or an upcoming period -- available, or unavailable with a "
-            "reason and, once known, a day count. Does not apply to a member reporting their "
+            "Applies when a response-team member's primary operational purpose is to submit their "
+            "own attendance/availability status for the current or an upcoming period -- available, "
+            "or unavailable with a reason and, once known, a day count. An incidental availability "
+            "remark inside a different primary update does not qualify. Does not apply to a member reporting their "
             "current location while still on duty (use report_team_movement for that), and does "
             "not apply to a commander asking about the team's overall roster (use "
             "query_situational_picture for that)."

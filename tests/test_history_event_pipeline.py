@@ -67,6 +67,27 @@ def test_extraction_prompt_includes_each_declared_event_type_description():
     assert "A medical incident with a casualty." in prompt
 
 
+def test_extraction_prompt_uses_primary_purpose_instead_of_incidental_keywords():
+    """A secondary clause must not hijack the event classification."""
+
+    captured, invoker = _capture_prompt(_response())
+
+    extract_event(
+        "Primary update, plus an incidental status remark",
+        "telegram",
+        "2026-08-20T10:00:00",
+        EventTypeRegistry(("attendance", "camera_status")),
+        AreaRegistry(("north",)),
+        invoker,
+    )
+
+    [prompt] = captured
+    assert "primary operational purpose" in prompt
+    assert "isolated keyword" in prompt
+    assert "secondary/incidental clause" in prompt
+    assert "primary update does not fit any listed event type" in prompt
+
+
 def test_extraction_prompt_omits_description_text_for_a_type_that_has_none():
     """Extraction prompt omits description text for a type that has none."""
     registry = EventTypeRegistry(

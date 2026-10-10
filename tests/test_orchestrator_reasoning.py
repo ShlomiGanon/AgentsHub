@@ -328,6 +328,27 @@ def test_make_operational_decision_parses_a_markdown_fenced_response_on_the_firs
     assert len(agent.calls) == 1  # parsed on the first attempt -- no repair call spent
 
 
+def test_operational_decision_prompt_rejects_protocol_matches_from_incidental_details():
+    """Merged protocol selection is based on the message's primary purpose."""
+
+    agent = _ScriptedMainAgent(
+        '{"risk_score": 0.1, "risk_reason": "routine", "protocol_status": "no_match", '
+        '"protocol_name": null, "candidate_names": [], "protocol_reason": "incidental detail only"}'
+    )
+
+    decision = make_operational_decision(
+        agent, "a primary update with an incidental availability remark", None, None, None, None,
+        _one_protocol(), risk_threshold=0.5,
+    )
+
+    assert decision.selection.status == "no_match"
+    [(prompt, _tools)] = agent.calls
+    assert "primary operational purpose" in prompt
+    assert "isolated keyword" in prompt
+    assert "secondary/incidental clause" in prompt
+    assert "return no_match" in prompt
+
+
 def test_make_operational_decision_accepts_match_as_an_alias_for_selected():
     # Observed in a live model response in place of the literal "selected" -- accepted as
     # an alias rather than failing a decision the model otherwise expressed correctly.

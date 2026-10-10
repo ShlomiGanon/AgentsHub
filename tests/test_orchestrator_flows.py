@@ -107,7 +107,7 @@ class _ScriptedAgent:
         self._default_status = default_status
         self.calls = []
 
-    def process(self, text, allowed_tools):
+    def process(self, text, allowed_tools, invocation_policy=None):
         """Process."""
         self.calls.append(text)
         for keyword, response_text in self._dispatch.items():
@@ -238,6 +238,56 @@ def test_process_report_holds_for_clarification_when_classification_is_unresolve
     assert resumed.outcome == "held_for_clarification"
     [held] = deps.persistence.list_held_events("clarification")
     assert held["event_id"] == result.event_id
+
+
+def test_merged_no_match_finishes_before_classification_or_required_field_holds(deps):
+    """An unsupported primary update is not converted into an unrelated clarification."""
+
+    merged_deps = replace(
+        deps,
+        optimization_policy=replace(
+            deps.optimization_policy,
+            operational_decision_mode="merged",
+        ),
+    )
+    agent = _ScriptedAgent(
+        {
+            "Extract this operational event": json.dumps(
+                {
+                    "classification": None,
+                    "area": None,
+                    "entities": [],
+                    "description": "primary update outside system capabilities",
+                    "severity": None,
+                    "occurred_at": None,
+                    "availability_start": None,
+                    "availability_end": None,
+                    "absence_reason": None,
+                    "risk_score": 0.1,
+                    "risk_reason": "routine update",
+                    "protocol_status": "no_match",
+                    "protocol_name": None,
+                    "candidate_names": [],
+                    "protocol_reason": "the primary update matches no declared protocol",
+                }
+            ),
+        }
+    )
+    insights_agent = _ScriptedAgent({})
+
+    result = process_report(
+        merged_deps,
+        agent,
+        insights_agent,
+        "A primary update with an incidental availability remark",
+        "telegram",
+        "2026-08-20T10:00:00",
+        "viewer-1",
+    )
+
+    assert result.outcome == "no_match_protocol"
+    assert merged_deps.persistence.list_held_events("clarification") == []
+    assert merged_deps.persistence.list_held_events("event_data") == []
 
 
 def test_process_report_holds_for_clarification_logs_the_hold_kind(deps, caplog):
@@ -566,6 +616,28 @@ def test_absence_with_interval_proceeds_without_a_hold(deps):
     assert event["availability_start"] == "2026-08-25T00:00:00"
     assert event["availability_end"] == "2026-08-27T00:00:00"
     assert event["absence_reason"] == "family matter"
+    assert gated_deps.persistence.list_held_events("event_data") == []
+
+
+def test_available_status_does_not_ask_for_an_absence_interval(deps):
+    """Availability bounds are conditional on an actual absence declaration."""
+
+    gated_deps = _attendance_gated_deps(deps)
+    agent = _happy_path_agent(risk_score="0.1", selected="status_check")
+    agent._dispatch["Extract this operational event"] = (
+        '{"classification": "attendance", "area": null, "entities": [], '
+        '"description": "available tonight", "severity": null, '
+        '"occurred_at": "2026-08-20T09:00:00", "availability_start": null, '
+        '"availability_end": null, "absence_reason": null}'
+    )
+    insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
+
+    result = process_report(
+        gated_deps, agent, insights_agent, "I am available tonight",
+        "telegram", "2026-08-20T10:00:00", "michael",
+    )
+
+    assert result.outcome == "succeeded"
     assert gated_deps.persistence.list_held_events("event_data") == []
 
 

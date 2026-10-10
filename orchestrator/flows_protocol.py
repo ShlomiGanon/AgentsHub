@@ -514,6 +514,16 @@ def _apply_required_fields_gate(
         return None
 
     event = deps.persistence.fetch_event(event_id)
+    # Availability bounds describe a period of absence. They are conditionally required only
+    # when the reporter actually declared an absence; an available/on-duty status has no missing
+    # start or end to clarify. The protocol's dynamic attendance binder applies the same rule at
+    # step level. Keeping it here as well prevents the earlier event-type gate from asking an
+    # irrelevant time question before protocol selection has even run.
+    if not (event.get("absence_reason") or "").strip():
+        required = tuple(
+            field_name for field_name in required
+            if field_name not in {"availability_start", "availability_end"}
+        )
     missing = tuple(name for name in required if not event.get(name))
     if not missing:
         return None

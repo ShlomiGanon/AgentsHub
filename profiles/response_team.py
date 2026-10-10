@@ -241,8 +241,9 @@ EVENT_TYPES = [
 
 EVENT_TYPE_DESCRIPTIONS = {
     "attendance": (
-        "A team member reporting their own attendance/availability status, with or without a "
-        "stated reason or day count."
+        "A message whose primary operational purpose is a team member submitting their own "
+        "attendance/availability status, with or without a stated reason or day count. An "
+        "incidental availability remark inside a different primary update is not attendance."
     ),
     "camera_status": (
         "A camera offline, degraded, back online, or physically damaged, including a physically "

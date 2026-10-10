@@ -134,6 +134,21 @@ def test_camera_phrases_in_both_languages_resolve_to_the_catalog_id():
     assert CAMERAS[0]["camera_id"] == "CAM-01"
 
 
+def test_firefighting_thermal_camera_scenario_alias_resolves_to_seeded_asset():
+    """The simulation's natural-language tower reference names CAM-THERMAL."""
+
+    hebrew = get_catalog("he")
+    store = _CameraStore([
+        {"camera_id": "CAM-THERMAL", "name": hebrew.text("firefighting.camera.cam_thermal.name")},
+    ])
+
+    assert resolve_camera_id(
+        store,
+        "מצלמה תרמית במגדל תצפית אורנים",
+        "firefighting",
+    ) == "CAM-THERMAL"
+
+
 def test_armed_threat_binds_drone_police_yasam_and_squad():
     steps = _bind_armed_threat({"area": "old_public_building", "description": "suspect on the roof"})
     assert [step.direct_tool_name for step in steps] == [

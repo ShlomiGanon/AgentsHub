@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta, timezone
 
 from agents import Agent, NeighboringForcesAgent, SurveillanceAgent, TeamStatusAgent, failed_tool_result, get_authenticated_request_identity, tool
+from messages.apparatus_names import resolve_apparatus_id
 from persistence import (
     ApparatusStoreError,
     FireStoreError,
@@ -44,6 +45,7 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
     status_db_path = FIREFIGHTING_CREW_STATUS_DB_PATH
     timezone_name = "Asia/Jerusalem"
     response_window_hours = 1
+    apparatus_catalog_stem = "firefighting"
 
     def __init__(self, model: str, api_key: str | None = None):
         """Open apparatus, fire, and incident stores after the shared team-status setup."""
@@ -156,7 +158,8 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         "update_apparatus_status",
         "Records one apparatus/engine's own operating status (operational, dispatched, "
         "unavailable, or maintenance), and its area if the source states one. identifier is the "
-        "apparatus's callsign (e.g. 'Ashed 3') or apparatus_id. Side-effecting and idempotent -- "
+        "apparatus's localized callsign (for example, 'Ashed 3') or apparatus_id. "
+        "Side-effecting and idempotent -- "
         "recording the identical status for the same apparatus twice leaves one record. This "
         "alone does not link the apparatus to any incident -- call join_incident_response "
         "separately when the report indicates it is dispatched to one.",
@@ -166,6 +169,9 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
     def update_apparatus_status(self, identifier: str, status: str, current_area: str = "") -> str:
         """Record one apparatus status and optional area; does not link it to an incident."""
 
+        identifier = resolve_apparatus_id(
+            self.apparatus_store, identifier, self.apparatus_catalog_stem
+        )
         try:
             updated = self.apparatus_store.update_status(identifier, status.strip().lower(), current_area.strip() or None)
         except ApparatusStoreError as exc:
@@ -178,7 +184,8 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
         "Links one named apparatus to the one specific real incident currently on record for "
         "`area`, when exactly one exists -- use when a report clearly indicates that apparatus is "
         "dispatched to a specific incident there, not merely relocated or stationed. identifier is "
-        "the apparatus's callsign (e.g. 'Ashed 3') or apparatus_id. Never links on area alone: if "
+        "the apparatus's localized callsign (for example, 'Ashed 3') or apparatus_id. "
+        "Never links on area alone: if "
         "no recent incident is on record, or more than one is, nothing is linked and a plain "
         "explanation is returned instead of a guess. Automatically closes any other incident that "
         "apparatus was previously linked to (reassignment). Side-effecting and idempotent.",
@@ -188,6 +195,9 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
     def join_incident_response(self, identifier: str = "", area: str = "") -> str:
         """Link one named apparatus to the single incident currently on record for `area`."""
 
+        identifier = resolve_apparatus_id(
+            self.apparatus_store, identifier, self.apparatus_catalog_stem
+        )
         apparatus = self.apparatus_store.get_apparatus(identifier)
         if apparatus is None:
             return f"Not linked: apparatus '{identifier}' not found."
@@ -212,6 +222,9 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
     def leave_incident_response(self, identifier: str = "") -> str:
         """Close one named apparatus's current incident link, if it has one."""
 
+        identifier = resolve_apparatus_id(
+            self.apparatus_store, identifier, self.apparatus_catalog_stem
+        )
         apparatus = self.apparatus_store.get_apparatus(identifier)
         if apparatus is None:
             return f"Not updated: apparatus '{identifier}' not found."

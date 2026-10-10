@@ -1,5 +1,8 @@
 """profiles/firefighting.py direct-tool binders for crew availability and shift status."""
 
+from messages import get_catalog
+from persistence import open_response_team_surveillance_store
+from profiles.firefighting import CAMERAS, FIREFIGHTING_DRONE_HOME
 from profiles.firefighting import (
     _bind_dispatch_drone,
     _bind_dispatch_drone_to_incident,
@@ -11,6 +14,8 @@ from profiles.firefighting import (
     _bind_report_fire_incident,
     _bind_update_camera_observation,
 )
+from profiles.firefighting_agents import FirefightingSurveillanceAgent
+from protocols.executor import execute_step_with_retry
 
 
 def test_crew_availability_available_needs_no_dates():
@@ -61,8 +66,39 @@ def test_crew_shift_status_binds_all_members_and_named_apparatus():
     assert steps[0].direct_tool_kwargs["member_identities"] == "all"
     assert steps[0].direct_tool_kwargs["availability"] == "available"
     assert [step.allowed_tools for step in steps[1:]] == [("update_apparatus_status",), ("update_apparatus_status",)]
-    assert "Ashed 3" in steps[1].task_text
-    assert "Carmel 1" in steps[2].task_text
+    assert "APP-ASHED-3" in steps[1].task_text
+    assert "APP-CARMEL-1" in steps[2].task_text
+
+
+def test_crew_shift_status_never_treats_people_as_apparatus():
+    """Mixed extraction binds only the two pre-registered station vehicles."""
+
+    catalog = get_catalog("he")
+    event = {
+        "entities": [
+            catalog.text("firefighting.simulation.fire002.persona.lahav_avi_shift_commander"),
+            catalog.text("firefighting.simulation.fire002.persona.omri_firefighter"),
+            catalog.text("firefighting.simulation.fire002.persona.yuval_ashed3_commander"),
+            catalog.text("firefighting.apparatus.ashed_3.name"),
+            catalog.text("firefighting.apparatus.carmel_1.name"),
+        ],
+        "description": catalog.text("firefighting.simulation.fire002.phase1.step1.text"),
+        "source_message_id": "m1",
+        "received_at": "2026-09-09T07:00:00",
+    }
+
+    steps = _bind_record_crew_shift_status(event)
+
+    assert len(steps) == 3
+    assert [step.step_id for step in steps] == ["1", "2", "3"]
+    apparatus_tasks = " ".join(step.task_text for step in steps[1:])
+    assert "APP-ASHED-3" in apparatus_tasks
+    assert "APP-CARMEL-1" in apparatus_tasks
+    for persona_key in (
+        "lahav_avi_shift_commander", "omri_firefighter", "yuval_ashed3_commander",
+    ):
+        person = catalog.text(f"firefighting.simulation.fire002.persona.{persona_key}")
+        assert f"Apparatus {person} was named" not in apparatus_tasks
 
 
 def test_crew_shift_status_without_apparatus_is_only_the_shift_tool():
@@ -82,9 +118,100 @@ def test_update_camera_observation_one_step_per_camera():
     steps = _bind_update_camera_observation(event)
 
     assert {s.step_id for s in steps} == {"1", "2"}
-    assert all(s.kind == "agent" for s in steps)
-    assert "MUST call update_camera_observation exactly once" in steps[0].task_text
-    assert "CAM-02" in steps[0].task_text and "CAM-02" not in steps[1].task_text
+    assert all(s.kind == "direct_tool" for s in steps)
+    assert [s.direct_tool_name for s in steps] == ["update_camera_observation", "update_camera_observation"]
+    assert [s.direct_tool_kwargs["camera_id"] for s in steps] == ["CAM-02", "CAM-03"]
+    assert all(s.direct_tool_kwargs["status"] == "offline" for s in steps)
+
+
+def test_update_camera_observation_resolves_thermal_sensor_scenario_without_model():
+    """The FIRE_002 wording resolves to one thermal camera and a valid degraded status."""
+
+    report = "חיישן טמפרטורה ומצלמה תרמית במגדל תצפית אורנים מציגים התראת חום נמוכה עקב שרב כבד ורוחות מזרחיות."
+    event = {
+        "entities": ["חיישן טמפרטורה", "מצלמה תרמית במגדל תצפית אורנים"],
+        "area": "ornim_street",
+        "description": report,
+        "raw_text": report,
+    }
+
+    (step,) = _bind_update_camera_observation(event)
+
+    assert step.kind == "direct_tool"
+    assert step.direct_tool_kwargs == {
+        "camera_id": "CAM-THERMAL",
+        "new_observation": report,
+        "status": "degraded",
+    }
+
+
+def test_update_camera_observation_recovers_camera_from_report_when_entities_are_empty():
+    """A known camera phrase in the report is stronger than a missing/wrong extracted entity."""
+
+    report = "חיישן טמפרטורה ומצלמה תרמית במגדל תצפית אורנים מציגים התראת חום נמוכה."
+
+    (step,) = _bind_update_camera_observation({
+        "entities": [],
+        "area": "pine_ridge",
+        "description": report,
+    })
+
+    assert step.required_event_fields == ()
+    assert step.direct_tool_kwargs["camera_id"] == "CAM-THERMAL"
+    assert step.direct_tool_kwargs["status"] == "degraded"
+
+
+def test_update_camera_observation_uses_unique_area_when_extractor_names_only_sensor():
+    """A generic sensor entity can resolve through a uniquely-covered profile area."""
+
+    event = {
+        "entities": ["temperature sensor"],
+        "area": "ornim_street",
+        "description": "Low heat alert at the Oranim observation tower.",
+    }
+
+    (step,) = _bind_update_camera_observation(event)
+
+    assert step.direct_tool_kwargs["camera_id"] == "CAM-THERMAL"
+    assert step.direct_tool_kwargs["status"] == "degraded"
+
+
+def test_update_camera_observation_does_not_rewrite_explicit_unknown_camera_id():
+    """Area fallback must not silently turn a named unknown asset into another camera."""
+
+    (step,) = _bind_update_camera_observation({
+        "entities": "CAM-999",
+        "area": "ornim_street",
+        "description": "CAM-999 is inactive.",
+    })
+
+    assert step.direct_tool_kwargs["camera_id"] == "CAM-999"
+    assert step.direct_tool_kwargs["status"] == "offline"
+
+
+def test_thermal_sensor_step_executes_against_seeded_camera_without_model(tmp_path, monkeypatch):
+    """The bound scenario step updates the real profile store in one direct execution."""
+
+    db_path = str(tmp_path / "firefighting-surveillance.db")
+    store = open_response_team_surveillance_store(db_path, home_area=FIREFIGHTING_DRONE_HOME)
+    for camera in CAMERAS:
+        store.ensure_camera(**camera)
+    monkeypatch.setattr(FirefightingSurveillanceAgent, "surveillance_db_path", db_path)
+    agent = FirefightingSurveillanceAgent(model="test-model")
+    report = "חיישן טמפרטורה ומצלמה תרמית במגדל תצפית אורנים מציגים התראת חום נמוכה עקב שרב כבד ורוחות מזרחיות."
+    (step,) = _bind_update_camera_observation({
+        "entities": ["חיישן טמפרטורה", "מצלמה תרמית במגדל תצפית אורנים"],
+        "area": "ornim_street",
+        "description": report,
+    })
+
+    outcome = execute_step_with_retry(agent, step, settings_store=None)
+
+    assert outcome.succeeded is True
+    assert outcome.attempt_count == 1
+    updated = store.get_camera("CAM-THERMAL")
+    assert updated["status"] == "degraded"
+    assert updated["feed_summary"] == report
 
 
 def test_update_camera_observation_missing_entities_requires_them():

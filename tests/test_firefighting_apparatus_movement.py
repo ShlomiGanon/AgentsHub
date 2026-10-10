@@ -6,6 +6,7 @@ an actual event on record for that area, never from area co-location alone."""
 from datetime import datetime, timedelta, timezone
 
 import profiles.firefighting as ff
+from messages import get_catalog
 from persistence.sqlite_store import SQLitePersistence
 from protocols import CriticalityLevel
 
@@ -47,6 +48,34 @@ def test_dispatched_apparatus_status_is_recorded(tmp_path, monkeypatch):
 
     assert "Ashed 3 status recorded: DISPATCHED" in result
     assert agent.apparatus_store.get_apparatus("Ashed 3")["status"] == "dispatched"
+
+
+def test_hebrew_apparatus_names_resolve_to_seeded_stable_ids(tmp_path, monkeypatch):
+    """Localized simulation names update the same seeded records as English callsigns."""
+
+    agent = _agent(tmp_path, monkeypatch)
+    catalog = get_catalog("he")
+
+    ashed_result = agent.update_apparatus_status(
+        catalog.text("firefighting.apparatus.ashed_3.name"), "dispatched"
+    )
+    carmel_alias = catalog.text("firefighting.apparatus.carmel_1.aliases").split("|")[3]
+    carmel_result = agent.update_apparatus_status(carmel_alias, "maintenance")
+
+    assert "Ashed 3 status recorded: DISPATCHED" in ashed_result
+    assert "Carmel 1 status recorded: MAINTENANCE" in carmel_result
+    assert agent.apparatus_store.get_apparatus("APP-ASHED-3")["status"] == "dispatched"
+    assert agent.apparatus_store.get_apparatus("APP-CARMEL-1")["status"] == "maintenance"
+
+
+def test_unknown_localized_apparatus_is_not_silently_remapped(tmp_path, monkeypatch):
+    """Alias resolution remains strict for assets that are not in the registry."""
+
+    agent = _agent(tmp_path, monkeypatch)
+
+    result = agent.update_apparatus_status("unknown apparatus 9", "operational")
+
+    assert "not found" in result.text
 
 
 def test_dispatched_apparatus_with_no_area_given_names_no_one(tmp_path, monkeypatch):
@@ -133,3 +162,12 @@ def test_report_apparatus_movement_protocol_is_declared_and_not_commander_only()
     assert protocol.approved_tools == ("update_apparatus_status", "join_incident_response", "list_incident_responders")
     assert protocol.participating_agents == ("team_status_agent",)
     assert protocol.criticality == CriticalityLevel.LOW
+
+
+def test_routine_camera_observation_does_not_wait_for_commander_approval():
+    """Passive equipment updates must complete and replace the simulator acknowledgement."""
+
+    protocol = next(p for p in ff.PROTOCOLS if p.name == "update_camera_observation")
+
+    assert protocol.approval_flag is False
+    assert protocol.requires_confirmation is False

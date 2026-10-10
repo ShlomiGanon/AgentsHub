@@ -691,3 +691,4 @@ def test_response_team_profile_declares_area_required_for_its_flagged_event_type
     assert registry.required_fields_for("security_incident") == ("area",)
     assert registry.required_fields_for("force_dispatch") == ("area",)
     assert registry.required_fields_for("squad_dispatch") == ("area",)
+    assert registry.required_fields_for("attendance") == ("availability_start", "availability_end")

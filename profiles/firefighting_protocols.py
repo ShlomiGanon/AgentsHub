@@ -1,9 +1,13 @@
 """Firefighting protocol declarations and direct-tool binders."""
 
+import re
 from dataclasses import replace
 
 from agents import InvocationPolicy
-from profiles.firefighting import FORCE_BASES
+from messages import SUPPORTED_LANGUAGES, get_catalog
+from messages.camera_names import resolve_camera_id_from_records
+from messages.apparatus_names import resolve_apparatus_ids_from_records
+from profiles.firefighting import APPARATUS, CAMERAS, FORCE_BASES
 from protocols import CriticalityLevel, Protocol, Step
 from protocols import as_aware_iso as _as_aware_iso
 from protocols import bind_record_attendance_response
@@ -17,6 +21,67 @@ def _report_text(event: dict) -> str:
     return (event.get("description") or event.get("raw_text") or "").strip()
 
 
+def _camera_status_markers(kind: str) -> tuple[str, ...]:
+    """Collect status vocabulary from every supported message catalog."""
+
+    key = f"firefighting.camera.status_markers.{kind}"
+    return tuple(
+        marker.strip()
+        for language in SUPPORTED_LANGUAGES
+        for marker in get_catalog(language).text(key).split("|")
+        if marker.strip()
+    )
+
+
+_CAMERA_OFFLINE_MARKERS = _camera_status_markers("offline")
+_CAMERA_DEGRADED_MARKERS = _camera_status_markers("degraded")
+_CAMERA_ACTIVE_MARKERS = _camera_status_markers("active")
+
+
+def _camera_status_from_report(report: str) -> str:
+    """Map explicit operating-condition language to the store's stable status values."""
+
+    folded = report.casefold()
+    if any(marker in folded for marker in _CAMERA_OFFLINE_MARKERS):
+        return "offline"
+    if any(marker in folded for marker in _CAMERA_DEGRADED_MARKERS):
+        return "degraded"
+    if any(marker in folded for marker in _CAMERA_ACTIVE_MARKERS):
+        return "active"
+    return ""
+
+
+def _camera_ids_for_event(event: dict) -> tuple[str, ...]:
+    """Canonicalize extracted camera references and deduplicate one physical asset."""
+
+    raw_references = event.get("entities") or ()
+    if isinstance(raw_references, str):
+        raw_references = (raw_references,)
+    references = tuple(str(value).strip() for value in raw_references if str(value).strip())
+    if not references:
+        report = _report_text(event)
+        report_camera_id = resolve_camera_id_from_records(CAMERAS, report, "firefighting")
+        if report_camera_id in {camera["camera_id"] for camera in CAMERAS}:
+            references = (report,)
+    area = str(event.get("area") or "").strip()
+    area_cameras = tuple(
+        camera["camera_id"]
+        for camera in CAMERAS
+        if str(camera.get("area") or "").casefold() == area.casefold()
+    )
+    resolved: list[str] = []
+    for reference in references:
+        camera_id = resolve_camera_id_from_records(CAMERAS, reference, "firefighting")
+        explicit_camera_id = re.fullmatch(r"CAM-[A-Z0-9_-]+", reference, flags=re.IGNORECASE)
+        if camera_id == reference and not explicit_camera_id and len(area_cameras) == 1:
+            camera_id = area_cameras[0]
+        if camera_id not in resolved:
+            resolved.append(camera_id)
+    if not resolved and len(area_cameras) == 1:
+        resolved.append(area_cameras[0])
+    return tuple(resolved)
+
+
 def _bind_record_crew_availability(event: dict) -> tuple[Step, ...]:
     """Same tool and kwargs as response_team attendance: record_attendance_response from extracted fields."""
 
@@ -24,6 +89,19 @@ def _bind_record_crew_availability(event: dict) -> tuple[Step, ...]:
         event,
         agent_name="team_status_agent",
         task_text="Record the reporter's own crew availability response, bound directly from the event's extracted fields.",
+    )
+
+
+def _apparatus_ids_for_event(event: dict) -> tuple[str, ...]:
+    """Keep only profile-owned apparatus, never people or external resources."""
+
+    entities = event.get("entities") or ()
+    if isinstance(entities, str):
+        entities = (entities,)
+    return resolve_apparatus_ids_from_records(
+        APPARATUS,
+        (*entities, _report_text(event)),
+        stem="firefighting",
     )
 
 
@@ -51,10 +129,9 @@ def _bind_record_crew_shift_status(event: dict) -> tuple[Step, ...]:
             direct_tool_kwargs=shift_kwargs,
         )
     ]
-    entities = event.get("entities") or []
     description = _report_text(event)
     area = (event.get("area") or "").strip()
-    for index, identifier in enumerate(entities):
+    for index, identifier in enumerate(_apparatus_ids_for_event(event)):
         steps.append(
             Step(
                 agent_name="team_status_agent",
@@ -78,10 +155,10 @@ def _bind_apparatus_movement(event: dict) -> tuple[Step, ...]:
     while the step(s) it returns still run through the normal agent turn -- status and
     incident-linking are genuine judgment calls from free text."""
 
-    entities = event.get("entities") or []
+    apparatus_ids = _apparatus_ids_for_event(event)
     area = (event.get("area") or "").strip()
     description = _report_text(event)
-    missing = tuple(name for name in ("entities",) if not entities)
+    missing = tuple(name for name in ("entities",) if not apparatus_ids)
     if missing:
         return (
             Step(
@@ -112,16 +189,16 @@ def _bind_apparatus_movement(event: dict) -> tuple[Step, ...]:
             step_id=str(index + 1),
             invocation_policy=_FAST_JUDGMENT_POLICY,
         )
-        for index, identifier in enumerate(entities)
+        for index, identifier in enumerate(apparatus_ids)
     )
 
 
 def _bind_update_camera_observation(event: dict) -> tuple[Step, ...]:
-    """One camera-observation step per named camera, or a missing-fields hold."""
+    """Update each named camera directly with canonical id and deterministic status."""
 
-    entities = event.get("entities") or []
+    camera_ids = _camera_ids_for_event(event)
     description = _report_text(event)
-    if not entities:
+    if not camera_ids:
         return (
             Step(
                 agent_name="surveillance_agent",
@@ -137,18 +214,18 @@ def _bind_update_camera_observation(event: dict) -> tuple[Step, ...]:
     return tuple(
         Step(
             agent_name="surveillance_agent",
-            task_text=(
-                f"You MUST call update_camera_observation exactly once for camera {camera_id} and "
-                f"for no other camera. Do not skip the tool call. Map the report to status: offline "
-                f"(paused, frozen, cannot be moved, communications cut), degraded (heat-alert, "
-                f"smoke-blinded, glare, lens cleaning, thermal confusion), or active (restored, "
-                f"back online). new_observation is a short restatement of what was reported for "
-                f"this camera only.\n\nReport: {description}"
-            ),
+            task_text=f"Record the reported operating-condition observation for camera {camera_id}.",
             allowed_tools=("update_camera_observation",),
             step_id=str(index + 1),
+            kind="direct_tool",
+            direct_tool_name="update_camera_observation",
+            direct_tool_kwargs={
+                "camera_id": camera_id,
+                "new_observation": description,
+                "status": _camera_status_from_report(description),
+            },
         )
-        for index, camera_id in enumerate(entities)
+        for index, camera_id in enumerate(camera_ids)
     )
 
 
@@ -521,7 +598,9 @@ PROTOCOLS = [
         approved_tools=("update_camera_observation",),
         expected_success_output="Confirmation that the camera's observation/status was recorded.",
         criticality=CriticalityLevel.MEDIUM,
-        approval_flag=True,
+        # This only records an idempotent equipment observation; it dispatches
+        # no resource and must not leave routine group reports awaiting approval.
+        approval_flag=False,
         requires_confirmation=False,
         commander_only=False,
         needs_insight=False,
