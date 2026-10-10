@@ -173,13 +173,18 @@ def _record_outcome_with_report(
             resource_unavailable_fact=resource_unavailable_fact,
         )
         if summary.selected_protocol in {"query_situational_picture", "overall_situational_picture"}:
-            # The read tools already wrote the picture. Do not ask the composer to retell it.
-            picture_lines = [
-                step.result_text.strip()
-                for step in summary.steps
-                if step.status == "succeeded" and step.result_text and step.result_text.strip()
-            ]
-            report_text = "\n".join(picture_lines) if picture_lines else (summary.insight_text or "").strip()
+            # Picture protocols collect deliberately detailed, heterogeneous read-tool output.
+            # Prefer the dedicated picture synthesis produced by flows_protocol; concatenating
+            # the raw tool strings leaks their unrelated headings, languages and formatting.
+            # The raw findings remain a deterministic fallback if synthesis was unavailable.
+            report_text = (summary.insight_text or "").strip()
+            if not report_text:
+                picture_lines = [
+                    step.result_text.strip()
+                    for step in summary.steps
+                    if step.status == "succeeded" and step.result_text and step.result_text.strip()
+                ]
+                report_text = "\n".join(picture_lines)
         else:
             report_text = compose_report(deps.report_composer_agent, summary, resolve_audience(summary), deps.message_catalog)
 

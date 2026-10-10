@@ -429,12 +429,41 @@ def _finish_protocol_assessment(
     if not protocol.needs_insight:
         # Deterministic verdict, no build_insight/judge_success call at all (Phase A): every
         # step succeeded -> succeeded, else failed with the first failing step's own reason.
-        # Recording a report exactly as given IS correct behavior for a direct-tool step, not
-        # something that needs a model's judgment call.
+        # Recording a report exactly as given IS correct for an ordinary direct-tool step.
+        # A picture protocol is the presentation-only exception: its factual tool results are
+        # synthesized after execution, without changing the deterministic verdict.
         first_failure = next((outcome for outcome in step_outcomes if not outcome.succeeded), None)
         outcome = "succeeded" if first_failure is None else "failed"
         failure_reason = first_failure.failure_reason if first_failure is not None else None
-        _record_outcome_with_report(deps, event_id, outcome, failure_reason=failure_reason, insight_text="")
+        picture_text = ""
+        if outcome == "succeeded" and protocol.name in {"query_situational_picture", "overall_situational_picture"}:
+            # Keep the deterministic read plan and success decision intact. Only the final
+            # presentation is synthesized so mixed specialist formats become one grounded,
+            # requester-language operational picture.
+            persisted_event = deps.persistence.fetch_event(event_id) or {}
+            sender_filter = (
+                None
+                if persisted_event.get("sender_permission_level") == "commander"
+                else persisted_event.get("sender_identity")
+            )
+            try:
+                picture_text = compose_picture_from_step_outcomes(
+                    main_agent,
+                    protocol,
+                    step_outcomes,
+                    persisted_event.get("raw_text", ""),
+                    deps.history_query_service,
+                    sender_identity_filter=sender_filter,
+                )
+            except Exception as exc:
+                synthesis_failed(cause=str(exc))
+        _record_outcome_with_report(
+            deps,
+            event_id,
+            outcome,
+            failure_reason=failure_reason,
+            insight_text=picture_text,
+        )
         _log_event_outcome(event_id, outcome, failure_reason=failure_reason)
         return FlowResult(event_id, outcome, failure_reason or "")
     final_assessment = None

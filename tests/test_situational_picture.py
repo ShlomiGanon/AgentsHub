@@ -367,6 +367,26 @@ def test_compose_prompt_instructs_a_labeled_recommendation_only_when_explicitly_
     assert "Never add this line unless a recommendation was explicitly asked for" in prompt
 
 
+def test_compose_prompt_requires_people_vehicles_field_picture_and_grounded_insight():
+    """The general composer preserves operational detail without case-specific wording."""
+
+    reports = (
+        DomainReport("team_status_agent", "crew", "Six available. Ashed 3 operational.", True),
+        DomainReport("surveillance_agent", "field", "Thermal sensor alert at tower.", True),
+    )
+    main_agent = FakeMainAgent()
+
+    compose_situational_picture(main_agent, reports, "current picture", current_time="T", recent_events_hours=6)
+
+    prompt = main_agent.prompts[0]
+    assert "people and staffing" in prompt
+    assert "vehicles and operational resources" in prompt
+    assert "field picture" in prompt
+    assert "operational insight" in prompt
+    assert "every deduction must be directly supported" in prompt
+    assert "synthesize it instead of copying each specialist's raw formatting" in prompt
+
+
 def test_compose_prompt_instructs_correcting_a_confused_requester_instead_of_echoing_it():
     """Memory/continuity audit gap: a commander recapping earlier reports incorrectly (gap
     covered by fix 6) must be corrected against the actual reports/log, not repeated back."""

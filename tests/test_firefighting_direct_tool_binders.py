@@ -14,6 +14,7 @@ from profiles.firefighting import (
     _bind_report_fire_incident,
     _bind_update_camera_observation,
 )
+from profiles.firefighting_protocols import _bind_overall_situational_picture
 from profiles.firefighting_agents import FirefightingSurveillanceAgent
 from protocols.executor import execute_step_with_retry
 
@@ -30,6 +31,22 @@ def test_crew_availability_available_needs_no_dates():
     assert step.direct_tool_kwargs["unavailable_days"] == 0
     assert step.kind == "direct_tool"
     assert step.agent_name == "team_status_agent"
+
+
+def test_overall_picture_reads_people_apparatus_and_field_state_without_mutation():
+    """The general picture is assembled from read-only sources across all core domains."""
+
+    steps = _bind_overall_situational_picture({})
+
+    assert [step.step_id for step in steps] == ["1", "2", "3", "4"]
+    assert [step.direct_tool_name for step in steps] == [
+        "get_surveillance_overview",
+        "report_team_availability",
+        "get_apparatus_status",
+        "list_active_fires",
+    ]
+    assert all(step.kind == "direct_tool" for step in steps)
+    assert all(step.allowed_tools == (step.direct_tool_name,) for step in steps)
 
 
 def test_crew_availability_unavailable_computes_day_count():

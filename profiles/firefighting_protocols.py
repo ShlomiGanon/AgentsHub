@@ -400,7 +400,7 @@ def _bind_correct_false_fire_report(event: dict) -> tuple[Step, ...]:
 
 
 def _bind_overall_situational_picture(event: dict) -> tuple[Step, ...]:
-    """Read cameras, crew availability, and burning fires. No specialist model call."""
+    """Read surveillance, crew, apparatus, and burning fires. No specialist model call."""
 
     return (
         Step(
@@ -423,9 +423,18 @@ def _bind_overall_situational_picture(event: dict) -> tuple[Step, ...]:
         ),
         Step(
             agent_name="team_status_agent",
+            task_text="Read every station apparatus status and location.",
+            allowed_tools=("get_apparatus_status",),
+            step_id="3",
+            kind="direct_tool",
+            direct_tool_name="get_apparatus_status",
+            direct_tool_kwargs={},
+        ),
+        Step(
+            agent_name="team_status_agent",
             task_text="Read the currently burning fires.",
             allowed_tools=("list_active_fires",),
-            step_id="3",
+            step_id="4",
             kind="direct_tool",
             direct_tool_name="list_active_fires",
             direct_tool_kwargs={},
@@ -790,8 +799,8 @@ PROTOCOLS = [
             "not apply when only currently burning fires are asked about (use report_active_fires)."
         ),
         participating_agents=("surveillance_agent", "team_status_agent"),
-        approved_tools=("get_surveillance_overview", "report_team_availability", "list_active_fires"),
-        expected_success_output="One combined report covering current camera status, crew availability, and burning fires.",
+        approved_tools=("get_surveillance_overview", "report_team_availability", "get_apparatus_status", "list_active_fires"),
+        expected_success_output="One combined report covering current camera status, crew availability, apparatus, and burning fires.",
         criticality=CriticalityLevel.LOW,
         approval_flag=False,
         requires_confirmation=False,

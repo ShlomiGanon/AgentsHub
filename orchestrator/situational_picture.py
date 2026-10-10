@@ -46,7 +46,7 @@ MIN_RECENT_EVENTS_HOURS = 1
 MAX_RECENT_EVENTS_HOURS = 72
 RECENT_EVENTS_LIMIT = 8
 SPECIALIST_TIMEOUT_SECONDS = 25.0
-PICTURE_MAX_LINES = 8
+PICTURE_MAX_LINES = 12
 
 _PLAN_POLICY = InvocationPolicy(max_output_tokens=400, timeout_seconds=30.0, reasoning_effort="none")
 _COMPOSE_POLICY = InvocationPolicy(max_output_tokens=450, timeout_seconds=45.0, reasoning_effort="none")

@@ -13,10 +13,12 @@ import pytest
 
 from agents.contracts import AgentDescriptor, AgentResult, ToolInfo
 from agents.runtime import AgentRegistry
+import api.routes_messages as routes_messages_module
 from api.app import build_app, build_group_routing
 from api.routes import SITUATIONAL_PICTURE_PROTOCOL
 from history import HistoryAnswer
 from history.query import HistoryQueryError
+from orchestrator.reasoning_schemas import IntentResult
 from protocols import CriticalityLevel, Protocol, ProtocolSet
 from tests.api_fakes import COMMANDER_IDENTITY, VIEWER_IDENTITY, auth_headers, build_context, teardown_ctx
 from tests.crewai_fakes import install_crewai_stub
@@ -155,6 +157,39 @@ def test_hinted_picture_is_built_from_live_specialist_answers_and_recent_events(
     assert [d["domain"] for d in body["provenance"]["domains"]] == ["surveillance_agent", "team_status_agent", "recent_events"]
     assert history.calls[0][1] is None  # a commander's recent events are unscoped
     assert ctx.deps.persistence.fetch_events_range("2000-01-01", "2100-01-01") == []  # read-only, no event written
+
+
+@pytest.mark.parametrize("intent_name", ["question", "request"])
+def test_picture_phrase_uses_the_composer_for_both_question_and_request_intents(
+    tmp_path, teardown_ctx, monkeypatch, intent_name
+):
+    """A wording marker must never return concatenated raw tool output, regardless of intent."""
+
+    ctx, surveillance, team, history = _picture_ctx(tmp_path)
+    teardown_ctx.append(ctx)
+    monkeypatch.setattr(
+        routes_messages_module,
+        "classify_intent",
+        lambda *args, **kwargs: IntentResult(intent_name, "test classification"),
+    )
+    monkeypatch.setattr(routes_messages_module, "question_requests_picture", lambda *args: True)
+    client = build_app(ctx).test_client()
+
+    resp = client.post(
+        "/Msg",
+        headers=auth_headers(COMMANDER_IDENTITY),
+        json={"text": "produce a current picture", "sender_identity": COMMANDER_IDENTITY},
+    )
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["taken_as"] == intent_name
+    assert body["protocol"] == SITUATIONAL_PICTURE_PROTOCOL
+    assert "2 ready, 1 in flight" in body["answer"]
+    assert "available 1, awaiting 5" in body["answer"]
+    assert len(ctx.main_agent.prompts) == 2  # one plan and one unified composition
+    assert "Specialist reports JSON" in ctx.main_agent.prompts[-1]
+    assert history.calls[0][1] is None
 
 
 def test_plain_words_asking_for_the_picture_no_longer_shortcut_to_the_live_picture(tmp_path, teardown_ctx):

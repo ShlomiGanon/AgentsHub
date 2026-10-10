@@ -15,6 +15,7 @@ from agents.runtime import build_agent_registry
 from agents.surveillance_agent import SurveillanceAgent
 from auth.permissions import PermissionLevel
 from config.base import BaseConfig, TierModel
+from history import StepExecutionEnvelope, record_step_executions
 from history.query import HistoryQueryService
 from messages import get_catalog
 import orchestrator.flows as flows_module
@@ -1330,6 +1331,21 @@ def test_situational_picture_report_returns_the_picture_without_generic_rich_rep
     )
     flows_module.record_event_state(
         deps.persistence, event_id, {"selected_protocol": "query_situational_picture"}
+    )
+    record_step_executions(
+        deps.persistence,
+        event_id,
+        (
+            StepExecutionEnvelope(
+                step_index=0,
+                agent_name="surveillance_agent",
+                task_text="read raw surveillance output",
+                allowed_tools=["get_surveillance_overview"],
+                result_text="=== RAW SPECIALIST HEADING ===\nCAM-01: ACTIVE",
+                attempt_count=1,
+                status="succeeded",
+            ),
+        ),
     )
 
     flows_module._record_outcome_with_report(

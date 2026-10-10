@@ -42,7 +42,6 @@ from orchestrator.flows import (
     classify_intent,
     picture_protocol,
     question_requests_picture,
-    read_picture_directly,
     continue_from_risk_assessment,
     plan_message,
     protocol_requires_approval,
@@ -515,9 +514,22 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             if question_requests_picture(text, picture_stem):
                 protocol = picture_protocol(ctx.deps.protocol_set)
                 if protocol is not None:
-                    answer = read_picture_directly(protocol, ctx.deps.registry)
-                    _remember("assistant", answer)
-                    return jsonify({"taken_as": "question", "answer": answer})
+                    picture = build_situational_picture(
+                        ctx.main_agent,
+                        protocol,
+                        ctx.deps.registry,
+                        ctx.deps.history_query_service,
+                        str(text),
+                        caller_identity=caller_identity,
+                        sender_identity_filter=caller_sender_identity_filter,
+                    )
+                    _remember("assistant", picture.text)
+                    return jsonify({
+                        "taken_as": "question",
+                        "answer": picture.text,
+                        "protocol": protocol.name,
+                        "provenance": picture.provenance(),
+                    })
             try:
                 if planner_mode == "merged" and message_plan is not None and message_plan.question_selection is not None:
                     question_answer = answer_question_from_plan(
@@ -607,14 +619,27 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             raise RunFailureError(f"unsupported message intent: {intent.intent!r}")
 
         require(level, RequestedOperation.REQUEST_ACTION)
+        is_commander = level >= PermissionLevel.COMMANDER
         picture_stem = ctx.loaded_profile.module_path.rsplit(".", 1)[-1]
         if question_requests_picture(text, picture_stem):
             protocol = picture_protocol(ctx.deps.protocol_set)
             if protocol is not None:
-                answer = read_picture_directly(protocol, ctx.deps.registry)
-                _remember("assistant", answer)
-                return jsonify({"taken_as": "request", "answer": answer})
-        is_commander = level >= PermissionLevel.COMMANDER
+                picture = build_situational_picture(
+                    ctx.main_agent,
+                    protocol,
+                    ctx.deps.registry,
+                    ctx.deps.history_query_service,
+                    str(text),
+                    caller_identity=caller_identity,
+                    sender_identity_filter=None if is_commander else caller_identity,
+                )
+                _remember("assistant", picture.text)
+                return jsonify({
+                    "taken_as": "request",
+                    "answer": picture.text,
+                    "protocol": protocol.name,
+                    "provenance": picture.provenance(),
+                })
         reservation = ctx.queue.reserve(False)
         if reservation is None:
             raise ServiceUnavailableError(messages.text("api.queue_full"))
