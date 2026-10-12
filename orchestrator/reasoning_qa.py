@@ -829,6 +829,16 @@ def answer_question(
                     question, selection.history_query_spec, sender_identity_filter=caller_sender_identity_filter
                 ).answer
         except HistoryQueryError as exc:
+            # An empty or failed stored-history lookup is not the end of the answer: what people
+            # reported lately may still answer it, or show plainly that nothing is known.
+            if recent_reports:
+                composed = _compose_answer(
+                    main_agent, question,
+                    {"history_agent": SpecialistResult(answer="no stored event matched", failure=SpecialistFailure.EMPTY_HISTORY)},
+                    recent_reports, conversation_messages,
+                )
+                if composed:
+                    return composed
             return _cant_answer_reply(str(exc), is_hebrew=is_hebrew, empty_history=exc.empty)
 
     selectable_names = {agent.name for agent in selectable_agents}
@@ -879,14 +889,21 @@ def answer_question(
     if len(sub_answers) == 1:
         agent_name, single_result = next(iter(sub_answers.items()))
         if not _usable_specialist_result(single_result):
+            # The one live source failed (an outage, or it cannot answer this); the recent
+            # reports may still answer, and the reply says that live data is unavailable.
+            composed = (
+                _compose_answer(main_agent, question, sub_answers, recent_reports, conversation_messages)
+                if recent_reports
+                else None
+            )
+            if composed:
+                return composed
             if agent_name == "history_agent":
                 return _cant_answer_reply(
                     single_result.answer, is_hebrew=is_hebrew,
                     empty_history=single_result.failure is SpecialistFailure.EMPTY_HISTORY,
                 )
-            return _cant_answer_reply(
-                f"{agent_name} doesn't have a way to help with this question.", is_hebrew=is_hebrew
-            )
+            return _cant_answer_reply("", is_hebrew=is_hebrew)
         if isinstance(registry.get(agent_name), HistoryAgent):
             # The history agent already answered this question from the stored records, in the
             # question's language; a second pass would only shorten a timeline or debrief.

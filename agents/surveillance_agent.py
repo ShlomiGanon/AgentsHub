@@ -401,9 +401,17 @@ class SurveillanceAgent(Agent):
             )
         eta_sec = mission["eta_seconds"]
         eta_min = round(eta_sec / 60, 1)
+        retasked = mission.get("retasked_from")
+        retask_line = (
+            f"- Retasked from: {retasked['target_area']} (mission {retasked['mission_id']} closed; "
+            "no drone was free, and this mission outranks routine recon)\n"
+            if retasked
+            else ""
+        )
 
         return (
             f"Drone dispatched successfully:\n"
+            f"{retask_line}"
             f"- Mission ID: {mission['mission_id']}\n"
             f"- Drone: {drone['callsign']} ({drone['drone_id']}, Model: {drone['model']})\n"
             f"- Status: {mission['status'].upper()}\n"

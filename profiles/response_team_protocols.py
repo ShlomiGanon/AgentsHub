@@ -191,7 +191,8 @@ def _bind_armed_threat(event: dict) -> tuple[Step, ...]:
             direct_tool_kwargs={
                 "target_area": area,
                 "incident_description": note,
-                "mission_type": "recon",
+                # A life-threatening event may take a drone off routine recon when none is free.
+                "mission_type": "threat_response",
                 **links,
             },
         ),
@@ -505,6 +506,29 @@ PROTOCOLS = [
         direct_tool_binder=_bind_log_security_observation,
         viewer_reply_key="response_team.reply.observation_logged",
         safety_critical=True,
+    ),
+    Protocol(
+        name="record_outside_update",
+        description=(
+            "Applies when a message only informs this site of something it does not need to act "
+            "on now: an outside force (police, YASAM, ambulance, a neighboring site's security) "
+            "reporting that it is arriving, entering, or taking command of an incident; or a "
+            "warning about something outside this site (for example a theft or a fire in a "
+            "neighboring community) with no threat inside the site yet. Records it, linked to the "
+            "incident it concerns, without dispatching anything. Does not apply to a request to "
+            "send a force (use dispatch_neighboring_force), to a new suspicious or hostile event "
+            "inside the site (use report_security_incident), or to a report that the incident is "
+            "over (use close_security_incident)."
+        ),
+        participating_agents=("surveillance_agent",),
+        approved_tools=("log_security_observation",),
+        expected_success_output="A plain acknowledgement of what the outside party reported.",
+        criticality=CriticalityLevel.LOW,
+        approval_flag=False,
+        requires_confirmation=False,
+        commander_only=False,
+        needs_insight=False,
+        direct_tool_binder=_bind_log_security_observation,
     ),
     Protocol(
         name="respond_armed_threat",

@@ -557,3 +557,52 @@ def test_a_released_dispatch_is_not_reused(tmp_path, monkeypatch):
     again = agent.dispatch_neighboring_force(kind="yasam", target_area="west_gate")
 
     assert "dispatch recorded" in again
+
+
+def test_a_threat_response_retasks_the_longest_on_station_recon_drone_when_none_is_free(tmp_path):
+    """With no drone ready, a life-threatening mission takes the drone that has watched routine recon longest."""
+    clock = _Clock(_T0)
+    store = _store(tmp_path, clock)
+    first = store.dispatch_drone(target_area="west_gate", incident_description="routine a")
+    clock.advance(30)
+    store.dispatch_drone(target_area="east_gate", incident_description="routine b")
+    clock.advance(_WAREHOUSE_TO_WEST_GATE + 5)  # the first is now on station
+
+    moved = store.dispatch_drone(
+        target_area="old_public_building", incident_description="armed suspect", mission_type="threat_response",
+    )
+
+    assert moved["drone"]["drone_id"] == first["drone"]["drone_id"]
+    assert moved["retasked_from"]["mission_id"] == first["mission_id"]
+    assert _mission_row(store, first["mission_id"])["status"] == "completed"
+
+
+def test_routine_recon_never_takes_a_drone_from_another_mission(tmp_path):
+    """Only a priority mission may retask; a second routine request still finds no drone."""
+    clock = _Clock(_T0)
+    store = _store(tmp_path, clock)
+    store.dispatch_drone(target_area="west_gate", incident_description="a")
+    store.dispatch_drone(target_area="east_gate", incident_description="b")
+
+    with pytest.raises(SurveillancePersistenceError):
+        store.dispatch_drone(target_area="south_corner", incident_description="c", mission_type="recon")
+
+
+def test_a_threat_response_does_not_retask_another_threat_response(tmp_path):
+    """Two life-threatening missions keep their drones; the third request is told none is free."""
+    clock = _Clock(_T0)
+    store = _store(tmp_path, clock)
+    store.dispatch_drone(target_area="west_gate", incident_description="a", mission_type="threat_response")
+    store.dispatch_drone(target_area="east_gate", incident_description="b", mission_type="threat_response")
+
+    with pytest.raises(SurveillancePersistenceError):
+        store.dispatch_drone(target_area="south_corner", incident_description="c", mission_type="threat_response")
+
+
+def test_armed_threat_binder_marks_its_drone_mission_as_priority():
+    """The armed-threat drone step asks for a threat_response mission."""
+    from profiles.response_team_protocols import _bind_armed_threat
+
+    steps = _bind_armed_threat({"event_id": "e1", "area": "old_public_building", "raw_text": "armed suspect"})
+
+    assert steps[0].direct_tool_kwargs["mission_type"] == "threat_response"

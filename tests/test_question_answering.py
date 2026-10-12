@@ -290,7 +290,8 @@ def test_a_single_chosen_agents_unclear_task_gets_the_clean_cant_answer_reply():
 
     answer = answer_question(main_agent, "do I have any tasks?", registry, NO_HISTORY_SERVICE)
 
-    assert answer == "I don't have a way to answer that. reference_agent doesn't have a way to help with this question."
+    # Neither the agent's own wording nor its internal name is shown to the asker.
+    assert answer == "I don't have a way to answer that."
     assert "please specify a location" not in answer
 
 

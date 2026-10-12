@@ -934,6 +934,7 @@ MESSAGES = {
     "response_team.area.south_corner": "הפינה הדרומית",
     "response_team.area.access_road": "כביש הגישה",
     "response_team.area.drones_warehouse": "מחסן הרחפנים",
+    "response_team.area.outside_site": "מחוץ ליישוב (יישוב שכן או ציר מרוחק)",
     "response_team.area_scope.whole_site_aliases": "הכל|הכול|כל השטח|כל הגזרות|כל האזורים|כל היישוב|כל המתחם|כל ההיקף|היקף|כללי|כללית|כל המצלמות|כל הרחפנים",
     "response_team.camera_status.active": "פעילה",
     "response_team.camera_status.degraded": "תקלה חלקית",

@@ -85,6 +85,9 @@ AREAS = [
     "south_corner",
     "access_road",
     "drones_warehouse",
+    # Everything beyond this site's own grounds (a neighboring community, a distant road):
+    # a warning about it is still recorded instead of being held for a place that cannot exist.
+    "outside_site",
 ]
 
 DRONES_WAREHOUSE = "drones_warehouse"

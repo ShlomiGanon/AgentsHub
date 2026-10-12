@@ -82,6 +82,8 @@ CREATE INDEX IF NOT EXISTS idx_rt_missions_incident ON drone_missions(incident_i
 CAMERA_KINDS = ("fixed", "mast", "drone")
 
 _ACTIVE_MISSION_SQL = "('dispatched', 'en_route', 'on_station')"
+# Mission types that may take a drone off a routine mission when none is ready.
+PRIORITY_MISSION_TYPES = frozenset({"threat_response"})
 _MISSION_END_OUTCOMES = ("completed", "aborted")
 
 _DRONE_STATUS_SYNONYMS = {
@@ -200,6 +202,26 @@ class ResponseTeamSurveillanceStore(SurveillancePersistenceInterface):
                     "UPDATE drone_missions SET status = 'on_station', updated_at = ? WHERE mission_id = ?",
                     (arrival.isoformat(), row["mission_id"]),
                 )
+
+    def _retask_candidate(self, conn: sqlite3.Connection, mission_type: str) -> sqlite3.Row | None:
+        """The routine mission whose drone may be moved to a priority mission, or None.
+
+        Only a priority mission type may take a drone, only from a non-priority mission, and only
+        when the lifecycle is on (so mission states are current); prefer a drone already on station,
+        then the one that has been out longest."""
+
+        if self.mission_loiter_seconds is None or mission_type.strip() not in PRIORITY_MISSION_TYPES:
+            return None
+        placeholders = ", ".join("?" for _ in PRIORITY_MISSION_TYPES)
+        return conn.execute(
+            f"""
+            SELECT * FROM drone_missions
+            WHERE status IN {_ACTIVE_MISSION_SQL} AND mission_type NOT IN ({placeholders})
+            ORDER BY CASE status WHEN 'on_station' THEN 0 ELSE 1 END, dispatched_at ASC
+            LIMIT 1
+            """,
+            tuple(sorted(PRIORITY_MISSION_TYPES)),
+        ).fetchone()
 
     def _covering_mission(
         self, conn: sqlite3.Connection, target_area: str, specific_drone_id: str | None
@@ -381,6 +403,7 @@ class ResponseTeamSurveillanceStore(SurveillancePersistenceInterface):
         """
 
         now = self._now(now_iso)
+        retasked_from: dict | None = None
         with self._connect() as conn:
             self._advance_missions(conn, now)
             if self.mission_loiter_seconds is not None:
@@ -418,9 +441,20 @@ class ResponseTeamSurveillanceStore(SurveillancePersistenceInterface):
                     "SELECT * FROM drones WHERE status = 'ready' ORDER BY battery_percent DESC"
                 ).fetchall()
                 if not drones:
-                    raise SurveillancePersistenceError("No ready drones available in fleet for immediate dispatch.")
-                same_area = [d for d in drones if d["current_area"].lower() == target_area.lower()]
-                drone = same_area[0] if same_area else drones[0]
+                    retask = self._retask_candidate(conn, mission_type)
+                    if retask is None:
+                        raise SurveillancePersistenceError("No ready drones available in fleet for immediate dispatch.")
+                    # A life-threatening event outranks routine recon: the drone that has watched
+                    # its routine area longest is moved, and its old mission is closed as retasked.
+                    conn.execute(
+                        "UPDATE drone_missions SET status = 'completed', notes = ?, updated_at = ? WHERE mission_id = ?",
+                        (f"Retasked to {target_area.strip()} for a higher-priority mission.", now, retask["mission_id"]),
+                    )
+                    retasked_from = dict(retask)
+                    drone = conn.execute("SELECT * FROM drones WHERE drone_id = ?", (retask["drone_id"],)).fetchone()
+                else:
+                    same_area = [d for d in drones if d["current_area"].lower() == target_area.lower()]
+                    drone = same_area[0] if same_area else drones[0]
 
             mission_id = f"MSN-{uuid.uuid4().hex[:8].upper()}"
             eta_seconds = self._calculate_eta(drone["current_area"], target_area)
@@ -463,6 +497,7 @@ class ResponseTeamSurveillanceStore(SurveillancePersistenceInterface):
             result = dict(mission)
             result["drone"] = dict(updated_drone)
             result["reused"] = False
+            result["retasked_from"] = retasked_from
             return result
 
     def get_active_missions(self, *, now_iso: str | None = None) -> list[dict]:

@@ -939,6 +939,7 @@ MESSAGES = {
     "response_team.area.south_corner": "the south corner",
     "response_team.area.access_road": "the access road",
     "response_team.area.drones_warehouse": "the drone warehouse",
+    "response_team.area.outside_site": "outside the site (a neighboring community or a distant road)",
     "response_team.area_scope.whole_site_aliases": "all areas|all sectors|entire perimeter|the entire perimeter|whole perimeter|perimeter|whole site|entire site|the whole site|site-wide|sitewide|everything|everywhere|general|overall|current|requested",
     "response_team.camera_status.active": "active",
     "response_team.camera_status.degraded": "degraded",
