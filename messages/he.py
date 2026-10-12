@@ -275,7 +275,7 @@ MESSAGES = {
     "admin.dashboard_subtitle": "ניהול מי רשאי לדבר עם הבוט ומה מותר לו לעשות.",
     "admin.menu_title": "ניהול המערכת",
     "admin.menu_subtitle": "בחר את האזור שברצונך לנהל.",
-    "admin.menu_all": "כל",
+    "admin.menu_all": "לוח בקרה",
     "admin.menu_profiles": "פרופילים",
     "admin.menu_protocols": "פרוטוקולים",
     "admin.menu_events": "אירועים",

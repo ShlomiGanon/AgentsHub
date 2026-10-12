@@ -278,7 +278,7 @@ MESSAGES = {
     "admin.dashboard_subtitle": "Manage who can talk to the bot and what they're allowed to do.",
     "admin.menu_title": "Administration",
     "admin.menu_subtitle": "Choose an area to manage.",
-    "admin.menu_all": "All",
+    "admin.menu_all": "Dashboard",
     "admin.menu_profiles": "Profiles",
     "admin.menu_protocols": "Protocols",
     "admin.menu_events": "Events",

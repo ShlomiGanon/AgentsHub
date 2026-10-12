@@ -1,5 +1,6 @@
 """Bounded event queues with legacy serial and policy-aware modes."""
 
+import contextvars
 import queue
 import threading
 import time
@@ -36,6 +37,10 @@ class WorkItem:
     deadline_monotonic: float | None = None
     concurrency_keys: tuple[str, ...] = ()
     submitted_at: float = field(default_factory=time.monotonic)
+    # Captured where the item is built (the request thread), so request-scoped context such as
+    # the profile's message catalog follows the work into the worker thread instead of the
+    # worker silently falling back to every ContextVar's process default (English).
+    context: contextvars.Context = field(default_factory=contextvars.copy_context, compare=False, repr=False)
 
 
 class SerialEventQueue:
@@ -114,7 +119,7 @@ class SerialEventQueue:
                         concurrency_keys=work_item.concurrency_keys,
                     )
                     with stage_context("queue_execution"):
-                        self._process_fn(queued_item)
+                        work_item.context.run(self._process_fn, queued_item)
             except Exception:
                 queue_processing_failed(payload=queued_item)
             finally:
@@ -261,7 +266,7 @@ class PolicyAwareEventQueue:
                         for resource_lock in locks:
                             resource_lock.acquire()
                         with stage_context("queue_execution"):
-                            self._process_fn(payload)
+                            work_item.context.run(self._process_fn, payload)
             except Exception:
                 with trace_context(work_item.trace_id or None):
                     queue_processing_failed(payload=payload)
