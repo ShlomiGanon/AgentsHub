@@ -374,7 +374,9 @@ def test_a_question_matching_no_agent_gets_a_clean_reply_not_a_forced_dispatch(t
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["taken_as"] == "question"
-    assert body["answer"] == "I don't have a way to answer that. no loaded agent tracks individual user tasks"
+    # Composed for the asker (the shared fake's scripted reply), never the router's internal reason.
+    assert body["answer"] == "gate 3 is nominal"
+    assert "no loaded agent" not in body["answer"]
 
 
 def test_a_direct_lookup_question_bypasses_agent_selection_and_answers_from_history(tmp_path, teardown_ctx):

@@ -1643,6 +1643,7 @@ def test_process_message_still_declines_a_genuine_no_agent_fit_question(deps):
             "kind of message": "INTENT: question\nREASON: asks the system to check something real",
             "Decide whether this question can be answered by directly looking up": "ROUTE: normal",
             "Decide which of the following agents": "NONE: no loaded agent tracks personal tasks",
+            "Write the reply to the operator's question": "The system has no record of personal tasks.",
         }
     )
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()
@@ -1650,7 +1651,8 @@ def test_process_message_still_declines_a_genuine_no_agent_fit_question(deps):
     kind, result = process_message(deps, agent, insights_agent, "do I have any tasks?", "viewer-1", "2026-08-20T10:00:00", is_commander=False)
 
     assert kind == "question"
-    assert result == "I don't have a way to answer that. no loaded agent tracks personal tasks"
+    # A no-fit question still gets a plain answer written for the asker, not the router's reason.
+    assert result == "The system has no record of personal tasks."
 
 
 def test_process_message_routes_report_into_the_new_event_flow(deps):

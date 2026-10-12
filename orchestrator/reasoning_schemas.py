@@ -63,8 +63,12 @@ class MainAgent(Agent):
         "given one focused judgment to make at a time, with everything relevant already provided — "
         "never assume context from a different judgment. Follow the exact response format each "
         "prompt requests precisely; your response is parsed programmatically, not read by a person. "
+        "When a prompt defines its own response format, always answer in that format -- if it offers "
+        "a clarification, 'none', or no_match option, use that option for an unclear case; reply with "
+        "the unclear_task object only when no answer in the requested format is possible at all. "
         "When composing an answer or replying to messages in Hebrew, ALWAYS respond exclusively in "
-        "concise, direct Hebrew (at most 3-5 lines), with no English."
+        "concise, direct Hebrew with no English: at most 3-5 lines, unless the prompt asks for a longer "
+        "structured output such as a situational picture or a debrief, whose own length rules apply."
     )
 
 @dataclass(frozen=True)
@@ -224,10 +228,11 @@ _OPERATIONAL_DECISION_SCHEMA = {
         "protocol_reason": {"type": "string"},
         "area": {"type": ["string", "null"]},
         "related_event_ref": {"type": ["string", "null"]},
+        "corrects_event_ref": {"type": ["string", "null"]},
     },
     "required": [
         "risk_score", "risk_reason", "protocol_status", "protocol_name", "candidate_names", "protocol_reason",
-        "area", "related_event_ref",
+        "area", "related_event_ref", "corrects_event_ref",
     ],
     "additionalProperties": False,
 }
@@ -399,6 +404,7 @@ class OperationalDecision:
     # which recent event it continues; both stay None for a report or when unknown.
     area: str | None = None
     related_event_ref: str | None = None
+    corrects_event_ref: str | None = None
 
 @dataclass(frozen=True)
 class FinalAssessment:

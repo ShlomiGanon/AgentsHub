@@ -692,7 +692,10 @@ def _continue_after_required_fields(
 ) -> FlowResult:
     """Continue extraction after required fields are present, shared by the fresh and resumed paths."""
 
-    if classification == UNCLASSIFIED_TYPE:
+    decided = operational_decision is not None and operational_decision.selection.status == "selected"
+    if classification == UNCLASSIFIED_TYPE and not decided:
+        # A missing event-type label only blocks when nothing else says what to do: when the same
+        # call already chose a protocol for the message, that choice is acted on, not held.
         create_clarification_hold(deps.persistence, event_id, raw_text)
         record_event_state(deps.persistence, event_id, {"clarification_held": True, "clarification_unresolved_field": UNRESOLVED_FIELD})
         hold_created(
@@ -770,10 +773,13 @@ def continue_from_risk_assessment(
                 if operational_mode == "merged":
                     _record_outcome_with_report(deps, event_id, "failed", failure_reason=str(exc))
                     return FlowResult(event_id, "failed", str(exc))
-            if combined_decision is not None and (combined_decision.area or combined_decision.related_event_ref):
+            if combined_decision is not None and (
+                combined_decision.area or combined_decision.related_event_ref or combined_decision.corrects_event_ref
+            ):
                 links = apply_event_links(
                     deps, event_id, operational_context,
                     related_ref=combined_decision.related_event_ref,
+                    corrects_ref=combined_decision.corrects_event_ref,
                     area=combined_decision.area,
                 )
                 if links:

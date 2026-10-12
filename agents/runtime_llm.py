@@ -69,6 +69,19 @@ def configure_structured_output_mode(mode: str) -> None:
     _structured_output_mode = mode
 
 
+# Claude generations whose extended thinking is always on: a request without a reasoning
+# setting runs at the model's default effort rather than with thinking off.
+_ALWAYS_ON_THINKING_MARKERS = ("claude-sonnet-5", "claude-opus-5", "claude-haiku-5", "claude-fable", "claude-mythos")
+_ALWAYS_ON_THINKING_HEADROOM_TOKENS = 1024
+
+
+def _thinking_always_on(model: str) -> bool:
+    """True for a model whose thinking cannot be disabled, so 'no reasoning' must mean 'low'."""
+
+    lowered = (model or "").lower()
+    return any(marker in lowered for marker in _ALWAYS_ON_THINKING_MARKERS)
+
+
 def _llm_options(
     descriptor: AgentDescriptor,
     *,
@@ -91,6 +104,13 @@ def _llm_options(
         options["max_tokens"] = invocation_policy.max_output_tokens
     if invocation_policy is not None and invocation_policy.reasoning_effort != "none":
         options["reasoning_effort"] = invocation_policy.reasoning_effort
+    elif invocation_policy is not None and _thinking_always_on(descriptor.model):
+        # These models think by default and cannot switch it off, so "none" (send nothing)
+        # meant their default effort, whose thinking used up a small answer budget and came
+        # back empty. Ask for the least thinking instead, and give that thinking its own room.
+        options["reasoning_effort"] = "low"
+        if "max_tokens" in options:
+            options["max_tokens"] = options["max_tokens"] + _ALWAYS_ON_THINKING_HEADROOM_TOKENS
     if invocation_policy is not None and invocation_policy.response_schema is not None and _structured_output_mode != "off":
         capabilities = _runtime_provider_capabilities(descriptor.model)
         if capabilities.strict_json_schema:

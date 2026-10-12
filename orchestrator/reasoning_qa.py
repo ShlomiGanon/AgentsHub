@@ -785,6 +785,15 @@ def answer_question(
         selection_result = main_agent.process(selection_prompt, [])
 
     if selection_result.status != "success":
+        # The router declared the routing task itself unclear instead of choosing a route; answer
+        # from what is known rather than failing the whole question with a run error.
+        composed = _compose_answer(
+            main_agent, question, {},
+            recent_reports_for_answer(history_query_service, caller_sender_identity_filter),
+            conversation_messages,
+        )
+        if composed:
+            return composed
         raise OrchestrationParseError(f"question routing did not produce a usable response: {selection_result.text}")
 
     try:
@@ -810,13 +819,13 @@ def answer_question(
     )
     recent_reports = recent_reports_for_answer(history_query_service, caller_sender_identity_filter)
     if selection.status == "none":
-        # No live specialist fits, but what people reported may still answer it (or show that
-        # nothing is known) -- e.g. "is there planned work at the gate?".
-        if recent_reports:
-            composed = _compose_answer(main_agent, question, {}, recent_reports, conversation_messages)
-            if composed:
-                return composed
-        return _cant_answer_reply(selection.reason, is_hebrew=is_hebrew)
+        # No live specialist fits, but what people reported may still answer it, or the reply can
+        # say plainly that nothing is known -- e.g. "is there planned work at the gate?". The
+        # router's own reason is internal (it names agents) and is never shown to the asker.
+        composed = _compose_answer(main_agent, question, {}, recent_reports, conversation_messages)
+        if composed:
+            return composed
+        return _cant_answer_reply("", is_hebrew=is_hebrew)
     if selection.status == "clarification":
         if is_hebrew or any('\u0590' <= c <= '\u05ea' for c in selection.reason):
             return f"\u05e0\u05d3\u05e8\u05e9\u05d9\u05dd \u05e4\u05e8\u05d8\u05d9\u05dd \u05e0\u05d5\u05e1\u05e4\u05d9\u05dd \u05db\u05d3\u05d9 \u05e9\u05d0\u05d5\u05db\u05dc \u05dc\u05d4\u05e9\u05d9\u05d1: {selection.reason}"

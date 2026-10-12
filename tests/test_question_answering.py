@@ -243,7 +243,9 @@ def test_none_selection_returns_a_clean_cant_answer_reply_not_a_crash():
 
     answer = answer_question(main_agent, "do I have any tasks?", registry, NO_HISTORY_SERVICE)
 
-    assert answer == "I don't have a way to answer that. no loaded agent tracks individual user tasks"
+    # Composition is unavailable here (unscripted), so the clean fallback is used -- and the
+    # router's internal reason, which names agents, is never shown to the asker.
+    assert answer == "I don't have a way to answer that."
     assert reference_agent.calls == []  # never dispatched to
 
 

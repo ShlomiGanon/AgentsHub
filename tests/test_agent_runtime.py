@@ -2,6 +2,7 @@
 
 import sys
 import types
+from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -938,3 +939,33 @@ def test_real_crewai_agent_constructs_with_a_bare_model_string_when_there_is_no_
     )
 
     assert isinstance(crewai_agent, crewai_module.Agent)
+
+
+def test_no_reasoning_policy_asks_always_thinking_models_for_low_effort_with_headroom():
+    """A model that cannot turn thinking off gets low effort and extra room instead of its default."""
+    from agents import InvocationPolicy
+    from agents.runtime_llm import _llm_options
+
+    descriptor = SimpleNamespace(model="openrouter/anthropic/claude-sonnet-5.5", api_key=None, name="main_agent")
+    options = _llm_options(
+        descriptor, timeout_seconds=30.0,
+        invocation_policy=InvocationPolicy(max_output_tokens=400, reasoning_effort="none"),
+    )
+
+    assert options["reasoning_effort"] == "low"
+    assert options["max_tokens"] == 400 + 1024
+
+
+def test_no_reasoning_policy_leaves_older_models_without_a_reasoning_setting():
+    """Sonnet 4.6 and older keep the exact request they had: no reasoning field, same budget."""
+    from agents import InvocationPolicy
+    from agents.runtime_llm import _llm_options
+
+    descriptor = SimpleNamespace(model="openrouter/anthropic/claude-sonnet-4.6", api_key=None, name="main_agent")
+    options = _llm_options(
+        descriptor, timeout_seconds=30.0,
+        invocation_policy=InvocationPolicy(max_output_tokens=400, reasoning_effort="none"),
+    )
+
+    assert "reasoning_effort" not in options
+    assert options["max_tokens"] == 400

@@ -108,6 +108,8 @@ UNCLEAR_TASK_PROMPT_INSTRUCTION = (
     'respond with exactly one JSON object {"status": "unclear_task", "text": "<what is missing>"} '
     "naming the specific parameter, context, or ambiguity. "
     "Do not attempt a partial or guessed answer in that case. "
+    "A tool parameter that has a default is optional: leave it out (for example a time that defaults "
+    "to now) rather than treating its absence as unclear. "
     'Otherwise respond with the answer as plain text, or {"status": "success", "text": "<answer>"}.'
 )
 

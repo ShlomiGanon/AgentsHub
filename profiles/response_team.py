@@ -269,7 +269,10 @@ EVENT_TYPE_DESCRIPTIONS = {
     ),
     "security_incident": (
         "An unconfirmed hostile, suspicious, or security-relevant event -- a suspicious vehicle "
-        "or person, gunfire, a sighted armed suspect, an intrusion, or a fence breach."
+        "or person, gunfire, a sighted armed suspect, an intrusion, or a fence breach -- and any "
+        "update about such an event: a correction that it was false, a force arriving or taking "
+        "command, the incident being under control or closed, or a security-relevant warning "
+        "about something outside the site (a theft or a fire nearby)."
     ),
     "force_dispatch": (
         "A request to dispatch a real neighboring/external force (ambulance, police, K9, or "
