@@ -96,7 +96,8 @@ def test_dispatch_neighboring_force_unit_stays_busy_after_arrival_not_just_en_ro
     )
     assert agent.dispatch_store.list_dispatches(status="en_route") == []  # already "arrived"
 
-    result = agent.dispatch_neighboring_force(kind="police", target_area="east_gate", unit_count=1)
+    # A different area: the same area would reuse the unit already there instead of a new one.
+    result = agent.dispatch_neighboring_force(kind="police", target_area="west_gate", unit_count=1)
 
     assert "dispatch failed" in result
     assert agent.take_resource_unavailable_signal() is not None

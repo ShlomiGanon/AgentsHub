@@ -668,6 +668,45 @@ PROTOCOLS = [
         needs_insight=False,
         direct_lane_eligible=True,
     ),
+    # The bot's drone buttons already name these two protocols (api/routes_messages_support.py);
+    # without them a direct "send a drone to X" or "bring the drone back" had nothing to run.
+    Protocol(
+        name="dispatch_drone_to_incident",
+        description=(
+            "Applies when someone directly asks to send a drone to a named area to look at "
+            "something -- check a camera, a fence section, a gate, or a place where something "
+            "was reported -- rather than reporting a new security event themselves. Sends one "
+            "ready drone for recon, or reports the drone already covering that area. Does not "
+            "apply to a fresh report of a suspicious or hostile event (use "
+            "report_security_incident for that) or to an armed threat (use respond_armed_threat)."
+        ),
+        participating_agents=("surveillance_agent",),
+        approved_tools=("dispatch_drone_to_area",),
+        expected_success_output="Confirmation of the drone sent to, or already over, the requested area (callsign, ETA, mission ID).",
+        criticality=CriticalityLevel.LOW,
+        # A commander's request runs at once; a team member's waits for a commander to approve.
+        approval_flag=True,
+        requires_confirmation=False,
+        commander_only=False,
+        needs_insight=False,
+        direct_tool_binder=_bind_dispatch_drone,
+    ),
+    Protocol(
+        name="recall_drone_to_base",
+        description=(
+            "Applies when someone asks to bring a drone, or every drone, back to base -- end its "
+            "patrol or recall it to the drones warehouse. Does not apply to sending a drone out "
+            "(use dispatch_drone_to_incident for that)."
+        ),
+        participating_agents=("surveillance_agent",),
+        approved_tools=("recall_drone", "return_all_drones_to_base"),
+        expected_success_output="Confirmation of which drone(s) were recalled to the drones warehouse.",
+        criticality=CriticalityLevel.LOW,
+        approval_flag=True,
+        requires_confirmation=False,
+        commander_only=False,
+        needs_insight=False,
+    ),
     Protocol(
         name="query_situational_picture",
         description=(

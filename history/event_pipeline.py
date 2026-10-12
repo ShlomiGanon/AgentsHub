@@ -23,11 +23,27 @@ def _area_choices(areas, area_labels=None) -> list[str]:
     return choices
 
 
-def _context_block(operational_context) -> str:
+SENDER_RULE = (
+    "Use the sender to tell whether the message is about the sender themself (their own "
+    "availability, position, or movement as a member of this site's team) or is an outside party "
+    "(another organization, a force commander, a resident) reporting about others; an outside "
+    "force's arrival or handover is not a team member's own movement. "
+)
+
+
+def _sender_block(sender) -> str:
+    """Who sent the message being extracted, when known."""
+
+    if not sender:
+        return ""
+    return f"Current message sender JSON: {json.dumps(dict(sender), ensure_ascii=False)}. {SENDER_RULE}"
+
+
+def _context_block(operational_context, sender=None) -> str:
     """Linking instructions plus the recent cross-channel digest, so a follow-up can inherit its incident."""
 
     context_json = json.dumps(list(operational_context or ()), ensure_ascii=False)
-    return (
+    return _sender_block(sender) + (
         "related_event_ref and corrects_event_ref link this message to the recent operational context "
         "below; both must be null when the context is empty or nothing in it applies. "
         "Recent operational context JSON (recent messages from every channel of this deployment, oldest "
@@ -42,7 +58,7 @@ def _context_block(operational_context) -> str:
     )
 
 
-def _prompt(raw_text: str, source: str, received_at: str, event_types, areas, event_type_descriptions=None, area_labels=None, operational_context=None) -> str:
+def _prompt(raw_text: str, source: str, received_at: str, event_types, areas, event_type_descriptions=None, area_labels=None, operational_context=None, sender=None) -> str:
     """Extraction instructions for one report, with the recent cross-channel context when given."""
 
     timestamp_rule = (
@@ -101,7 +117,7 @@ def _prompt(raw_text: str, source: str, received_at: str, event_types, areas, ev
         "report explicitly says the reporter is unavailable, absent, cannot attend, or otherwise "
         "will not participate. "
         f"{timestamp_rule} "
-        f"{_context_block(operational_context)}\nEvent text:\n{raw_text}"
+        f"{_context_block(operational_context, sender)}\nEvent text:\n{raw_text}"
     )
 
 
@@ -156,6 +172,7 @@ def extract_event(
     area_registry,
     model_invoker: Callable[[str], str] | None = None,
     operational_context=None,
+    sender=None,
 ) -> ExtractionResult:
     """Extract one report's fields, linking it to the recent operational context when given."""
 
@@ -174,6 +191,7 @@ def extract_event(
         getattr(event_type_registry, "descriptions", None),
         getattr(area_registry, "labels", None),
         operational_context,
+        sender,
     )
 
     try:

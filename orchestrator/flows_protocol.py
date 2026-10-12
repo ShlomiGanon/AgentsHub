@@ -26,6 +26,7 @@ from orchestrator.flows_execution import (
     call_execute_steps,
     call_finish_protocol_assessment,
     operational_context_for,
+    sender_context_for,
 )
 from orchestrator.holds import (
     UNRESOLVED_FIELD,
@@ -762,6 +763,7 @@ def continue_from_risk_assessment(
                     preferred_agent_hint=deps.preferred_agent_hint,
                     operational_context=operational_context,
                     area_choices=list(getattr(deps.area_registry, "areas", ())),
+                    sender=sender_context_for(deps, event),
                 )
             except OrchestrationParseError as exc:
                 operational_decision_invalid(mode=operational_mode, reason=str(exc))

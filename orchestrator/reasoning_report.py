@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Callable, Literal
 from agents import Agent, AgentOutputParseError, HistoryAgent, InvocationPolicy, last_finished_invocation_id, record_finished_invocation_id
 from config import BaseConfig
 from history import EVENT_FIELD_CATALOG, ExtractionExecutionError, HistoryQuerySpec, PrecedentMatch
-from history.event_pipeline import extraction_result_from_payload, _prompt as _extraction_prompt
+from history.event_pipeline import extraction_result_from_payload, _prompt as _extraction_prompt, _sender_block
 from history.query import HistoryQueryError
 from messages import get_current_catalog
 from messages.model_messages import (
@@ -114,6 +114,7 @@ def _build_intent_prompt(
     message_text: str,
     protocols: tuple[Protocol, ...],
     conversation_messages: tuple[dict, ...] = (),
+    operational_context: list[dict] | None = None,
 ) -> str:
     """Prompt asking Main to classify one inbound message."""
 
@@ -144,7 +145,11 @@ def _build_intent_prompt(
         "and 'which sub-agents do you have?' are CONVERSATIONAL system self-description.\n\n"
         "Conversation context may be used only to resolve what the current message refers to. It is not an "
         "authoritative source for operational facts, permissions, protocols, approvals, or outcomes. A follow-up "
-        "has missing context only when the supplied conversation does not resolve its reference.\n\n"
+        "has missing context only when the supplied conversation does not resolve its reference.\n"
+        "The recent operational reports below come from every channel of this deployment. A message that "
+        "refers to something described there (\"the motorbike\", \"the casualty\", \"that fire\") has its "
+        "context and is not a follow-up without context, even when it was reported in another chat.\n\n"
+        f"Recent operational reports JSON: {json.dumps(list(operational_context or ()), ensure_ascii=False)}\n"
         f"Available protocol names JSON: {json.dumps(protocol_names, ensure_ascii=False, sort_keys=True)}\n"
         f"Conversation context JSON: {json.dumps(conversation_messages, ensure_ascii=False, sort_keys=True)}\n"
         f"Message JSON: {json.dumps(message_text, ensure_ascii=False)}\n\n"
@@ -276,10 +281,11 @@ def classify_intent(
     protocols: tuple[Protocol, ...],
     message_text: str,
     conversation_messages: tuple[dict, ...] = (),
+    operational_context: list[dict] | None = None,
 ) -> IntentResult:
     """Classify an inbound message as question, report, request, conversational, or needs clarification."""
 
-    prompt = _build_intent_prompt(message_text, protocols, conversation_messages)
+    prompt = _build_intent_prompt(message_text, protocols, conversation_messages, operational_context)
     last_error: OrchestrationParseError | None = None
     for attempt in range(2):
         attempt_prompt = prompt
@@ -429,6 +435,7 @@ def make_operational_decision(
     preferred_agent_hint: str | None = None,
     operational_context: list[dict] | None = None,
     area_choices: list[str] | None = None,
+    sender: dict | None = None,
 ) -> OperationalDecision:
     """Ask Main for risk and protocol selection in one structured call, informed by recent events."""
 
@@ -445,6 +452,7 @@ def make_operational_decision(
         f"{_PRIMARY_PROTOCOL_PURPOSE_RULE}\n"
         f"{_preferred_agent_hint_block(preferred_agent_hint)}"
         f"{_decision_context_block(operational_context, area_choices)}"
+        f"{_sender_block(sender)}"
         f"Protocols JSON: {json.dumps(protocol_data, ensure_ascii=False, sort_keys=True)}\n"
         f"Event JSON: {json.dumps({'raw_text': raw_text, 'classification': classification, 'area': area, 'description': description, 'severity': severity}, ensure_ascii=False, sort_keys=True)}"
     )
@@ -556,6 +564,7 @@ def extract_and_decide(
     risk_threshold: float,
     preferred_agent_hint: str | None = None,
     operational_context: list[dict] | None = None,
+    sender: dict | None = None,
 ) -> tuple:
     """One Main Agent call that returns extraction fields and the operational decision.
 
@@ -575,6 +584,7 @@ def extract_and_decide(
         getattr(event_type_registry, "descriptions", None),
         getattr(area_registry, "labels", None),
         operational_context,
+        sender,
     )
     prompt = (
         extract_prompt

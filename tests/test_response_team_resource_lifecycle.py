@@ -532,3 +532,28 @@ def _append_event(agent, *, area: str, description: str) -> str:
         "occurred_at": occurred_at, "received_at": occurred_at, "source": "test",
         "sender_identity": "test-sender", "raw_text": description,
     })
+
+
+def test_a_repeat_request_for_the_same_force_and_area_reuses_the_active_dispatch(tmp_path, monkeypatch):
+    """A second report about the same place does not send another unit of a kind already there."""
+    agent = _neighboring_forces_agent(tmp_path, monkeypatch)
+
+    first = agent.dispatch_neighboring_force(kind="police", target_area="old_public_building")
+    second = agent.dispatch_neighboring_force(kind="police", target_area="old_public_building")
+    elsewhere = agent.dispatch_neighboring_force(kind="police", target_area="west_gate")
+
+    rows = agent.dispatch_store.list_dispatches()
+    assert "dispatch recorded" in first and "dispatch recorded" in elsewhere
+    assert "already dispatched" in second and "no additional unit" in second
+    assert len([row for row in rows if row["force_kind"] == "police"]) == 2
+
+
+def test_a_released_dispatch_is_not_reused(tmp_path, monkeypatch):
+    """Once a dispatch is released, a new request for that place sends a fresh unit."""
+    agent = _neighboring_forces_agent(tmp_path, monkeypatch)
+    agent.dispatch_neighboring_force(kind="yasam", target_area="west_gate", event_id="evt-1")
+    agent.release_force_dispatches(event_id="evt-1", reason="report corrected as false")
+
+    again = agent.dispatch_neighboring_force(kind="yasam", target_area="west_gate")
+
+    assert "dispatch recorded" in again

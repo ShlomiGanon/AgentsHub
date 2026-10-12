@@ -39,6 +39,7 @@ from orchestrator.flows_execution import (
     _record_outcome_with_report,
     apply_event_links,
     operational_context_for,
+    sender_context_for,
 )
 from orchestrator.flows_protocol import (
     _apply_required_fields_gate,
@@ -120,6 +121,7 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
     # What every channel reported lately: lets a follow-up inherit its incident and area instead
     # of being parsed as if it were the first message the system ever saw.
     operational_context = operational_context_for(deps, exclude_event_id=event_id)
+    sender = sender_context_for(deps, event)
 
     operational_decision = None
     try:
@@ -136,12 +138,14 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
                     deps.settings_store.get_risk_threshold(),
                     preferred_agent_hint=deps.preferred_agent_hint,
                     operational_context=operational_context,
+                    sender=sender,
                 )
             except ExtractionExecutionError:
                 extraction_result = extract_event(
                     raw_text, source, received_at, deps.event_type_registry, deps.area_registry,
                     model_invoker=_model_invoker_for(main_agent),
                     operational_context=operational_context,
+                    sender=sender,
                 )
                 operational_decision = None
         else:
@@ -149,6 +153,7 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
                 raw_text, source, received_at, deps.event_type_registry, deps.area_registry,
                 model_invoker=_model_invoker_for(main_agent),
                 operational_context=operational_context,
+                sender=sender,
             )
     except ExtractionExecutionError as exc:
         _record_outcome_with_report(deps, event_id, "failed", failure_reason=str(exc))

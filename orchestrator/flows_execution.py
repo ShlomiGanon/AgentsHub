@@ -102,6 +102,37 @@ def operational_context_for(deps: FlowDeps, exclude_event_id: str | None = None)
     return entries if isinstance(entries, list) else []
 
 
+def sender_context_for(deps: FlowDeps, event: dict) -> dict | None:
+    """Who sent this event and from which channel, so a decision can tell a team member's own
+    update from an outside party's report about others."""
+
+    identity = str(event.get("sender_identity") or "")
+    if not identity:
+        return None
+    try:
+        user = deps.persistence.read_user(identity) or {}
+    except Exception:  # advisory only
+        user = {}
+    channel = None
+    chat_id = event.get("telegram_chat_id")
+    if chat_id:
+        try:
+            channel = next(
+                (group.get("label") for group in deps.persistence.list_groups() if str(group.get("chat_id")) == str(chat_id)),
+                None,
+            )
+        except Exception:
+            channel = None
+    if channel is None and event.get("telegram_chat_type") == "private":
+        channel = "private chat with the system"
+    context = {
+        "name": (user.get("full_name") or "").strip() or None,
+        "role": "commander" if event.get("sender_permission_level") == "commander" else None,
+        "channel": channel,
+    }
+    return {key: value for key, value in context.items() if value} or None
+
+
 def apply_event_links(
     deps: FlowDeps,
     event_id: str,

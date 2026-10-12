@@ -58,6 +58,19 @@ logger = logging.getLogger(__name__)
 
 _queued_answer_text = queued_answer_text
 
+def _recent_reports_for(ctx: "ApiContext", sender_identity_filter: str | None) -> list[dict]:
+    """Recent cross-channel reports this caller may see; empty when history cannot supply them."""
+
+    reader = getattr(ctx.deps.history_query_service, "operational_context", None)
+    if not callable(reader):
+        return []
+    try:
+        entries = reader(sender_identity_filter=sender_identity_filter)
+    except Exception:  # advisory context; classification still runs without it
+        return []
+    return entries if isinstance(entries, list) else []
+
+
 def _accepts_a_call_with_no_arguments(fn) -> bool:
     """True when every parameter already has a default, so a button can call the tool as-is."""
 
@@ -452,7 +465,10 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
 
         try:
             intent = message_plan.intent if planner_mode == "merged" and message_plan is not None else classify_intent(
-                ctx.main_agent, ctx.deps.protocol_set.all(), text, prior_messages
+                ctx.main_agent, ctx.deps.protocol_set.all(), text, prior_messages,
+                # A commander's "what about the motorbike?" refers to something reported in another
+                # chat; without the cross-channel reports it looked like a follow-up with no context.
+                _recent_reports_for(ctx, None if level >= PermissionLevel.COMMANDER else caller_identity),
             )
         except OrchestrationParseError as exc:
             raise RunFailureError(str(exc)) from exc

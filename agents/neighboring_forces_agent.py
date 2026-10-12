@@ -61,6 +61,10 @@ class NeighboringForcesAgent(Agent):
     # `eta_fn` parameter is passed the same underlying function) -- otherwise Python's normal
     # attribute-lookup binds it as a method and silently passes `self` as its first argument.
     eta_fn: "Callable[[str, str], int] | None" = None
+    # Opt-in: answer a repeat request with the unit already sent to that same area (en route or
+    # on scene, not released) instead of sending another one. Off by default so profiles whose
+    # protocols count every dispatch keep their exact behavior.
+    reuse_active_dispatches: bool = False
 
     def __init__(self, model: str, api_key: str | None = None):
         """Open the dispatch store for this subclass's database path."""
@@ -113,6 +117,19 @@ class NeighboringForcesAgent(Agent):
         remaining = max(self.force_pool_size - busy_units, 0)
         return remaining >= unit_count, remaining
 
+    def _active_dispatch(self, kind_norm: str, target_area: str) -> dict | None:
+        """The newest unreleased dispatch of this kind to this area still inside its busy window."""
+
+        busy_since = (datetime.now(timezone.utc) - timedelta(seconds=self.force_busy_seconds)).isoformat()
+        matches = [
+            dispatch for dispatch in self.dispatch_store.list_dispatches()
+            if dispatch["force_kind"] == kind_norm
+            and dispatch["target_area"] == target_area
+            and dispatch["dispatched_at"] > busy_since
+            and not dispatch.get("released_at")
+        ]
+        return max(matches, key=lambda dispatch: dispatch["dispatched_at"]) if matches else None
+
     def _capacity_shortage_text(self, kind_norm: str, remaining: int, unit_count: int) -> str:
         """Plain-English shortage wording by default -- a subclass with its own localized
         catalog text (e.g. response_team.py's Hebrew) overrides this entirely."""
@@ -160,6 +177,13 @@ class NeighboringForcesAgent(Agent):
 
         origin_area, signal_kind = resolved
         cleaned_area = target_area.strip()
+        if self.reuse_active_dispatches:
+            active = self._active_dispatch(kind_norm, cleaned_area)
+            if active is not None:
+                return (
+                    f"{kind_norm} already dispatched to {active['target_area']} "
+                    f"({active['status']}, request {active['request_id']}); no additional unit was sent."
+                )
         ok, remaining = self._check_capacity(kind_norm, unit_count)
         if not ok:
             reason = self._capacity_shortage_text(kind_norm, remaining, unit_count)

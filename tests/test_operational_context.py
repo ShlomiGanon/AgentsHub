@@ -247,3 +247,24 @@ def test_non_history_agents_are_not_wrapped(deps):
     specialist = SimpleNamespace(name="surveillance_agent")
 
     assert _record_backed(deps, {}, specialist) is specialist
+
+
+def test_sender_context_names_the_sender_role_and_channel(deps):
+    """Decisions learn who wrote the message and where, to tell own updates from outside reports."""
+    from orchestrator.flows_execution import sender_context_for
+
+    deps.persistence.write_user("9014", "viewer", "מפקד יס\"מ - משטרה")
+    event = {"sender_identity": "9014", "sender_permission_level": "viewer", "telegram_chat_type": "private"}
+
+    assert sender_context_for(deps, event) == {"name": "מפקד יס\"מ - משטרה", "channel": "private chat with the system"}
+    assert sender_context_for(deps, {"sender_identity": ""}) is None
+
+
+def test_extraction_prompt_carries_the_sender_and_the_outside_party_rule():
+    """The extraction prompt shows the sender and how to read an outside force's report."""
+    from history.event_pipeline import _prompt
+
+    prompt = _prompt("forces entering the site", "telegram", "2026-10-12T11:00:00Z", ("team_movement",), ("east_gate",),
+                     sender={"name": "YASAM commander"})
+
+    assert "YASAM commander" in prompt and "outside force's arrival" in prompt

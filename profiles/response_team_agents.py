@@ -391,6 +391,9 @@ class NeighboringForcesAgent(_NeighboringForcesAgentBase):
     force_pool_size = FORCE_POOL_SIZE
     force_busy_seconds = FORCE_BUSY_SECONDS
     eta_fn = staticmethod(eta_seconds)
+    # Several reports about one incident must not each send another police or YASAM unit to
+    # the same place while the first one is still there or on its way.
+    reuse_active_dispatches = True
 
     def __init__(self, model: str, api_key: str | None = None):
         """Open the roster store used only for the squad-capacity check."""
