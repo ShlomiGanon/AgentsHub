@@ -67,7 +67,10 @@ _PRIMARY_PROTOCOL_PURPOSE_RULE = (
     "Do not select a protocol merely because an isolated keyword or a secondary/incidental clause "
     "resembles its description. Context, background, and reassurance are not separate operational "
     "requests. If the primary update is outside the listed protocols and only an incidental detail "
-    "matches one, return no_match. "
+    "matches one, return no_match. An explicit operational statement is not an incidental detail even "
+    "when it shares the message with an unrelated update: when the primary update has no protocol but "
+    "the message also plainly states something a protocol handles (for example the sender stating "
+    "their own availability or absence), select that protocol instead of no_match. "
 )
 
 def _build_risk_assessment_prompt(classification: str | None, area: str | None, description: str | None, severity: str | None) -> str:
