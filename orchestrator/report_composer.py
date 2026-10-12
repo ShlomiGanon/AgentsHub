@@ -22,8 +22,10 @@ from tools import get_trace_id, stage_context
 
 logger = logging.getLogger(__name__)
 
-REPORT_COMPOSE_TIMEOUT_SECONDS = 10.0
-_COMPOSE_POLICY = InvocationPolicy(max_output_tokens=400, timeout_seconds=REPORT_COMPOSE_TIMEOUT_SECONDS, reasoning_effort="none")
+# Hebrew costs several tokens per word, and this runs off the request thread (the reporter is
+# already acknowledged), so the budget favours a complete reply over a fast fallback.
+REPORT_COMPOSE_TIMEOUT_SECONDS = 30.0
+_COMPOSE_POLICY = InvocationPolicy(max_output_tokens=800, timeout_seconds=REPORT_COMPOSE_TIMEOUT_SECONDS, reasoning_effort="none")
 
 _LANGUAGE_NAMES = {"en": "English", "he": "Hebrew"}
 
@@ -84,6 +86,8 @@ def _viewer_context(summary: RunSummary) -> dict:
         "outcome_failure_reason": summary.outcome_failure_reason,
         "actions_taken": _actions_taken(summary),
     }
+    if summary.corrected_report:
+        context["corrects_earlier_report"] = summary.corrected_report
     if summary.resource_unavailable_fact:
         # Unlike insight_text (commander-only), this fact must reach every audience -- the
         # reporter is told concretely what could not be dispatched, regardless of their level.
@@ -119,10 +123,20 @@ def _commander_context(summary: RunSummary) -> dict:
     return context
 
 
-def build_prompt(summary: RunSummary, audience: Audience, language: str, catalog: MessageCatalog | None = None) -> str:
+def build_prompt(
+    summary: RunSummary,
+    audience: Audience,
+    language: str,
+    catalog: MessageCatalog | None = None,
+    recent_reports: list[dict] | None = None,
+) -> str:
     """Compose the grounded report-writer prompt for this audience and language."""
 
     context = _commander_context(summary) if audience == "commander" else _viewer_context(summary)
+    if audience == "commander" and recent_reports:
+        # A commander's request often also asks to cross-check what came in or to recommend a
+        # deployment; those answers can only come from what every channel reported.
+        context["recent_reports"] = recent_reports
     audience_rules = REPORT_COMPOSE_COMMANDER_AUDIENCE_RULES if audience == "commander" else REPORT_COMPOSE_VIEWER_AUDIENCE_RULES
     tone_examples = catalog.text("orchestrator.report_tone.examples") if catalog is not None else ""
     return REPORT_COMPOSE_INSTRUCTION.format(
@@ -139,16 +153,18 @@ def compose_report(
     summary: RunSummary,
     audience: Audience,
     catalog: MessageCatalog,
+    fallback_text: str | None = None,
+    recent_reports: list[dict] | None = None,
 ) -> str:
     """Always returns usable text — the model's composed reply, or, on any failure, timeout,
-    unclear/empty response, or when no agent is available at all, the deterministic
-    `render_summary` fallback. Never raises."""
+    unclear/empty response, or when no agent is available at all, `fallback_text` when the
+    caller has a better fixed reply, else the deterministic `render_summary`. Never raises."""
 
-    fallback = render_summary(summary, audience, catalog)
+    fallback = fallback_text or render_summary(summary, audience, catalog)
     if agent is None:
         return fallback
 
-    prompt = build_prompt(summary, audience, catalog.language, catalog)
+    prompt = build_prompt(summary, audience, catalog.language, catalog, recent_reports)
     started = time.monotonic()
     for attempt in (1, 2):
         try:

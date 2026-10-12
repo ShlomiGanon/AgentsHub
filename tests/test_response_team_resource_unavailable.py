@@ -96,7 +96,8 @@ def test_dispatch_neighboring_force_unit_stays_busy_after_arrival_not_just_en_ro
     )
     assert agent.dispatch_store.list_dispatches(status="en_route") == []  # already "arrived"
 
-    result = agent.dispatch_neighboring_force(kind="police", target_area="east_gate", unit_count=1)
+    # A different area: the same area would reuse the unit already there instead of a new one.
+    result = agent.dispatch_neighboring_force(kind="police", target_area="west_gate", unit_count=1)
 
     assert "dispatch failed" in result
     assert agent.take_resource_unavailable_signal() is not None
@@ -178,10 +179,11 @@ def test_dispatch_neighboring_force_still_rejects_an_unrecognized_kind(tmp_path,
 
 class _FakeSurveillanceStore:
     """FakeSurveillanceStore."""
-    def __init__(self, cameras, drones):
+    def __init__(self, cameras, drones, missions=()):
         """Initialize this test helper."""
         self._cameras = cameras
         self._drones = drones
+        self._missions = missions
 
     def list_cameras(self, area=None):
         """List cameras."""
@@ -190,6 +192,10 @@ class _FakeSurveillanceStore:
     def list_drones(self, status=None):
         """List drones."""
         return [d for d in self._drones if status is None or d["status"] == status]
+
+    def get_active_missions(self):
+        """Active missions."""
+        return list(self._missions)
 
 
 class _FakeRosterStore:
@@ -225,9 +231,9 @@ class _FakeRegistry:
         return self._agents[name]
 
 
-def _fake_registry(cameras=(), drones=(), roster_snapshot=(), dispatches=()):
+def _fake_registry(cameras=(), drones=(), roster_snapshot=(), dispatches=(), missions=()):
     """Fake registry."""
-    surveillance_agent = type("S", (), {"surveillance_store": _FakeSurveillanceStore(cameras, drones)})()
+    surveillance_agent = type("S", (), {"surveillance_store": _FakeSurveillanceStore(cameras, drones, missions)})()
     roster_agent = type("R", (), {"status_store": _FakeRosterStore(roster_snapshot)})()
     neighboring_forces_agent = type("N", (), {"dispatch_store": _FakeDispatchStore(dispatches)})()
     return _FakeRegistry({
@@ -307,6 +313,31 @@ def test_find_resource_alternatives_ignores_a_dispatch_outside_the_busy_window()
     result = rt._find_resource_alternatives("east_gate", registry)
 
     assert f"{rt._RESOURCE_KIND_LABELS['police']} (2/2)" in result  # fully free again
+
+
+def test_find_resource_alternatives_names_a_drone_already_over_the_area():
+    """A drone mission already over the area is listed as existing coverage; other areas are not."""
+    registry = _fake_registry(missions=[
+        {"mission_id": "MSN-1", "callsign": "Falcon-1", "target_area": "west_gate", "status": "on_station"},
+        {"mission_id": "MSN-2", "callsign": "Falcon-2", "target_area": "east_gate", "status": "dispatched"},
+    ])
+
+    result = rt._find_resource_alternatives("west_gate", registry)
+
+    assert "Falcon-1 (MSN-1, on_station)" in result
+    assert "Falcon-2" not in result
+
+
+def test_find_resource_alternatives_ignores_a_released_dispatch():
+    """A released dispatch frees its units in the alternatives' capacity count."""
+    registry = _fake_registry(dispatches=[
+        {"force_kind": "police", "unit_count": 2, "status": "en_route", "dispatched_at": _JUST_DISPATCHED,
+         "released_at": _JUST_DISPATCHED},
+    ])
+
+    result = rt._find_resource_alternatives("east_gate", registry)
+
+    assert f"{rt._RESOURCE_KIND_LABELS['police']} (2/2)" in result
 
 
 def test_describe_resource_unavailable_returns_a_hebrew_fact_and_alternatives():

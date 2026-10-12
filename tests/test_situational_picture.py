@@ -259,7 +259,10 @@ def test_planner_failure_falls_back_to_default_domain_questions_and_still_asks_l
     )
 
     default_query = get_catalog("en").text("orchestrator.picture.default_domain_query")
-    assert surveillance.calls[0][0] == default_query and team.calls[0][0] == default_query
+    # The fallback question still carries the request it serves, so each specialist can focus.
+    for specialist in (surveillance, team):
+        assert specialist.calls[0][0].startswith(default_query)
+        assert '"picture"' in specialist.calls[0][0]
     assert picture.plan.planned_by_model is False
     assert picture.plan.recent_events_hours == DEFAULT_RECENT_EVENTS_HOURS
     assert "Drones: 2 ready." in picture.text and "available 1" in picture.text

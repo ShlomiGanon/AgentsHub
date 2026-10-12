@@ -79,7 +79,7 @@ def test_response_team_exposes_exactly_its_declared_areas(sec_profile):
     """Response team exposes exactly its declared areas."""
     assert set(sec_profile.areas) == {
         "west_gate", "east_gate", "east_fence", "east_orchards", "expansion_neighborhood",
-        "old_public_building", "south_corner", "access_road", "drones_warehouse",
+        "old_public_building", "south_corner", "access_road", "drones_warehouse", "outside_site",
     }
 
 
@@ -97,7 +97,8 @@ def test_response_team_exposes_exactly_its_declared_protocols(sec_profile):
         "log_security_observation", "respond_armed_threat", "correct_false_security_report",
         "close_security_incident", "dispatch_neighboring_force", "dispatch_own_squad",
         "report_team_movement", "report_team_availability", "query_situational_picture",
-        "query_incident_summary",
+        "query_incident_summary", "dispatch_drone_to_incident", "recall_drone_to_base",
+        "record_outside_update",
     }
 
 

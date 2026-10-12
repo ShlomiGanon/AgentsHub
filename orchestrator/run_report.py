@@ -65,6 +65,8 @@ class RunSummary:
     outcome_failure_reason: str | None
     # Localized fact for handled_resource_unavailable; shown to every audience, unlike insight_text.
     resource_unavailable_fact: str | None = None
+    # The earlier report this message explicitly corrected, so the reply can say what changed.
+    corrected_report: str | None = None
 
 
 def _pending_from_hold(kind: str, hold: dict) -> PendingSummary:
@@ -113,6 +115,11 @@ def build_run_summary(persistence, event_id: str) -> RunSummary:
         for step in event.get("steps", [])
     )
 
+    corrected_report = None
+    if event.get("corrects_event_id"):
+        corrected = persistence.fetch_event(event["corrects_event_id"])
+        corrected_report = (corrected or {}).get("raw_text") or None
+
     return RunSummary(
         event_id=event_id,
         raw_text=event.get("raw_text") or "",
@@ -132,6 +139,7 @@ def build_run_summary(persistence, event_id: str) -> RunSummary:
         outcome=event.get("outcome"),
         insight_text=event.get("insight_text"),
         outcome_failure_reason=event.get("outcome_failure_reason"),
+        corrected_report=corrected_report,
     )
 
 

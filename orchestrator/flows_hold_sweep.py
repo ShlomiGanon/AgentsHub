@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Literal
 
 from history import parse_timestamp, record_event_data_update, record_event_outcome, record_event_state, storage_timestamp
+from messages import set_current_catalog
 from orchestrator.flows_execution import (
     DroneSelectionReplyResult,
     EventDataReplyResult,
@@ -145,6 +146,11 @@ class HoldSweepScheduler:
     def _run(self) -> None:
         """Loop: sleep, sweep, record status, until cancelled."""
 
+        # A fresh thread starts with every ContextVar at its process default, so bind this
+        # profile's catalog here; otherwise reminders and escalations render in English.
+        catalog = getattr(self._deps, "message_catalog", None)
+        if catalog is not None:
+            set_current_catalog(catalog)
         while not self._stop_event.is_set():
             self._wake_event.wait(self._poll_interval_seconds)
             self._wake_event.clear()

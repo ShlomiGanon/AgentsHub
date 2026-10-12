@@ -23,7 +23,7 @@ from api.routes_messages_support import (
     queued_answer_text,
     validate_message_fields,
 )
-from agents import AgentInvocationError, authenticated_request_identity, set_invocation_deadline
+from agents import AgentInvocationError, AgentTimeoutError, authenticated_request_identity, set_invocation_deadline
 from auth.permissions import PermissionLevel, RequestedOperation
 from history import record_event_outcome, storage_timestamp
 from orchestrator.flows import (
@@ -57,6 +57,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _queued_answer_text = queued_answer_text
+
+def _recent_reports_for(ctx: "ApiContext", sender_identity_filter: str | None) -> list[dict]:
+    """Recent cross-channel reports this caller may see; empty when history cannot supply them."""
+
+    reader = getattr(ctx.deps.history_query_service, "operational_context", None)
+    if not callable(reader):
+        return []
+    try:
+        entries = reader(sender_identity_filter=sender_identity_filter)
+    except Exception:  # advisory context; classification still runs without it
+        return []
+    return entries if isinstance(entries, list) else []
+
 
 def _accepts_a_call_with_no_arguments(fn) -> bool:
     """True when every parameter already has a default, so a button can call the tool as-is."""
@@ -452,7 +465,10 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
 
         try:
             intent = message_plan.intent if planner_mode == "merged" and message_plan is not None else classify_intent(
-                ctx.main_agent, ctx.deps.protocol_set.all(), text, prior_messages
+                ctx.main_agent, ctx.deps.protocol_set.all(), text, prior_messages,
+                # A commander's "what about the motorbike?" refers to something reported in another
+                # chat; without the cross-channel reports it looked like a follow-up with no context.
+                _recent_reports_for(ctx, None if level >= PermissionLevel.COMMANDER else caller_identity),
             )
         except OrchestrationParseError as exc:
             raise RunFailureError(str(exc)) from exc
@@ -553,6 +569,10 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     provenance = None
             except OrchestrationParseError as exc:
                 raise RunFailureError(str(exc)) from exc
+            except AgentTimeoutError:
+                # A question has no event to report back on later, so a model timeout must turn
+                # into a plain reply here rather than a bare 500 the asker never sees explained.
+                answer, provenance = messages.text("api.question_too_slow"), None
             _remember("assistant", answer)
             response_payload = {"taken_as": "question", "answer": answer}
             if provenance is not None:

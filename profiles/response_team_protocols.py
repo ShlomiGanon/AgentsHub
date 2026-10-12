@@ -25,6 +25,16 @@ def _report_text(event: dict) -> str:
     return (event.get("description") or event.get("raw_text") or "").strip()
 
 
+def _resource_links(event: dict) -> dict:
+    """event_id and incident_id for every dispatching step, so a later correction or closure can release it.
+
+    A report not yet grouped into an incident is its own incident.
+    """
+
+    event_id = event.get("event_id")
+    return {"event_id": event_id, "incident_id": event.get("incident_id") or event_id}
+
+
 def _bind_update_camera_status(event: dict) -> tuple[Step, ...]:
     """One camera-status step per named camera, or a missing-fields hold."""
 
@@ -73,6 +83,7 @@ def _bind_dispatch_drone(event: dict) -> tuple[Step, ...]:
             "target_area": area,
             "incident_description": description or "Reported security incident",
             "mission_type": "recon",
+            **_resource_links(event),
         }
     return (
         Step(
@@ -88,18 +99,48 @@ def _bind_dispatch_drone(event: dict) -> tuple[Step, ...]:
     )
 
 
-def _notice_step(agent_name: str, notice_key: str, task_text: str) -> Step:
-    """One catalog notice, with no camera check and no resource dispatch."""
+def _notice_step(agent_name: str, notice_key: str, task_text: str, step_id: str = "1", **details: str) -> Step:
+    """One catalog notice, with no camera check and no resource dispatch.
+
+    `details` (area, description, about_event_id) let the notice tool pick a more specific
+    catalog sentence for the event the notice is about.
+    """
 
     return Step(
         agent_name=agent_name,
         task_text=task_text,
         allowed_tools=("post_operational_notice",),
-        step_id="1",
+        step_id=step_id,
         kind="direct_tool",
         direct_tool_name="post_operational_notice",
-        direct_tool_kwargs={"notice_key": notice_key},
+        direct_tool_kwargs={"notice_key": notice_key, **{key: value for key, value in details.items() if value}},
     )
+
+
+def _release_steps(*, event_id: str = "", incident_id: str = "", outcome: str, reason: str) -> list[Step]:
+    """End the drone missions and release the force dispatches linked to one event or incident."""
+
+    links = {key: value for key, value in (("event_id", event_id), ("incident_id", incident_id)) if value}
+    return [
+        Step(
+            agent_name="surveillance_agent",
+            task_text="End the drone missions linked to the referenced report.",
+            allowed_tools=("end_drone_missions",),
+            step_id="1",
+            kind="direct_tool",
+            direct_tool_name="end_drone_missions",
+            direct_tool_kwargs={**links, "outcome": outcome, "reason": reason},
+        ),
+        Step(
+            agent_name="neighboring_forces_agent",
+            task_text="Release the force dispatches linked to the referenced report.",
+            allowed_tools=("release_force_dispatches",),
+            step_id="2",
+            kind="direct_tool",
+            direct_tool_name="release_force_dispatches",
+            direct_tool_kwargs={**links, "reason": reason},
+        ),
+    ]
 
 
 def _bind_log_security_observation(event: dict) -> tuple[Step, ...]:
@@ -138,6 +179,7 @@ def _bind_armed_threat(event: dict) -> tuple[Step, ...]:
             ),
         )
     note = description
+    links = _resource_links(event)
     return (
         Step(
             agent_name="surveillance_agent",
@@ -149,7 +191,9 @@ def _bind_armed_threat(event: dict) -> tuple[Step, ...]:
             direct_tool_kwargs={
                 "target_area": area,
                 "incident_description": note,
-                "mission_type": "recon",
+                # A life-threatening event may take a drone off routine recon when none is free.
+                "mission_type": "threat_response",
+                **links,
             },
         ),
         Step(
@@ -159,7 +203,7 @@ def _bind_armed_threat(event: dict) -> tuple[Step, ...]:
             step_id="2",
             kind="direct_tool",
             direct_tool_name="dispatch_neighboring_force",
-            direct_tool_kwargs={"kind": "police", "target_area": area, "unit_count": 1, "note": note},
+            direct_tool_kwargs={"kind": "police", "target_area": area, "unit_count": 1, "note": note, **links},
         ),
         Step(
             agent_name="neighboring_forces_agent",
@@ -168,7 +212,7 @@ def _bind_armed_threat(event: dict) -> tuple[Step, ...]:
             step_id="3",
             kind="direct_tool",
             direct_tool_name="dispatch_neighboring_force",
-            direct_tool_kwargs={"kind": "yasam", "target_area": area, "unit_count": 1, "note": note},
+            direct_tool_kwargs={"kind": "yasam", "target_area": area, "unit_count": 1, "note": note, **links},
         ),
         Step(
             agent_name="neighboring_forces_agent",
@@ -177,33 +221,60 @@ def _bind_armed_threat(event: dict) -> tuple[Step, ...]:
             step_id="4",
             kind="direct_tool",
             direct_tool_name="dispatch_squad",
-            direct_tool_kwargs={"target_area": area, "unit_count": 1, "note": note},
+            direct_tool_kwargs={"target_area": area, "unit_count": 1, "note": note, **links},
         ),
     )
 
 
 def _bind_correct_false_security_report(event: dict) -> tuple[Step, ...]:
-    """Retract a false report. Do not ask which camera to check."""
+    """Release what the corrected report dispatched, then post a notice built from that report.
 
-    return (
+    Does not ask which camera to check. Without a known corrected event nothing is released,
+    because guessing which resources belong to a retracted report could stand down a real one.
+    """
+
+    corrected_event_id = (event.get("corrects_event_id") or "").strip()
+    steps: list[Step] = []
+    if corrected_event_id:
+        steps.extend(_release_steps(event_id=corrected_event_id, outcome="aborted", reason="report corrected as false"))
+    steps.append(
         _notice_step(
             "roster_agent",
-            "response_team.notice.false_gunfire",
-            "Record that the earlier security report was false and notify the operational update.",
-        ),
+            "response_team.notice.report_corrected",
+            "Record that the earlier security report is no longer in effect and notify the operational update.",
+            step_id=str(len(steps) + 1),
+            about_event_id=corrected_event_id,
+            # Used only when the corrected report itself cannot be read.
+            area=(event.get("area") or "").strip(),
+        )
     )
+    return tuple(steps)
 
 
 def _bind_close_security_incident(event: dict) -> tuple[Step, ...]:
-    """Record that the incident is under control. Do not ask which camera to check."""
+    """Release the closed incident's drones and forces, then notify that it is under control.
 
-    return (
+    Does not ask which camera to check. Resources are released only for a known incident_id,
+    so a closure message that names no incident never stands down unrelated work.
+    """
+
+    incident_id = (event.get("incident_id") or "").strip()
+    steps: list[Step] = []
+    if incident_id:
+        steps.extend(_release_steps(incident_id=incident_id, outcome="completed", reason="incident closed"))
+    steps.append(
         _notice_step(
             "roster_agent",
             "response_team.notice.incident_closed",
             "Record that the incident is under control and notify the operational update.",
-        ),
+            step_id=str(len(steps) + 1),
+            # The incident's first report names its area when the incident id is an event id;
+            # otherwise the closure message's own area is used.
+            about_event_id=incident_id,
+            area=(event.get("area") or "").strip(),
+        )
     )
+    return tuple(steps)
 
 
 def _bind_query_situational_picture(event: dict) -> tuple[Step, ...]:
@@ -252,6 +323,7 @@ def _bind_dispatch_own_squad(event: dict) -> tuple[Step, ...]:
             "target_area": area,
             "unit_count": 1,
             "note": description,
+            **_resource_links(event),
         }
     return (
         Step(
@@ -296,6 +368,15 @@ def _bind_report_team_movement(event: dict) -> tuple[Step, ...]:
     # from the free-text report, the same class of decision `_bind_update_camera_status` makes
     # for a camera's resulting status -- so the specialist agent decides and calls the relevant
     # tool(s) itself rather than a keyword heuristic pre-deciding it.
+    incident_id = (event.get("incident_id") or "").strip()
+    # The orchestrator already tied this report to an incident from the shared context; naming
+    # it keeps two open incidents in one sector from turning "who is with me?" into a refusal.
+    incident_hint = (
+        f" This report belongs to incident '{incident_id}': pass incident_id='{incident_id}' to "
+        f"join_incident_response and list_incident_responders."
+        if incident_id
+        else ""
+    )
     return (
         Step(
             agent_name="roster_agent",
@@ -305,7 +386,8 @@ def _bind_report_team_movement(event: dict) -> tuple[Step, ...]:
                 f"is responding to, heading to, or dispatched to a specific incident at that area (not "
                 f"merely stationed or passing through)? If so, also call join_incident_response for the "
                 f"same area. If the report also asks who else is with/responding, also call "
-                f"list_incident_responders for the same area and include its answer in your reply.\n\n"
+                f"list_incident_responders for the same area and include its answer in your reply."
+                f"{incident_hint}\n\n"
                 f"Report: {description}"
             ),
             allowed_tools=("report_team_movement", "join_incident_response", "list_incident_responders"),
@@ -354,8 +436,9 @@ PROTOCOLS = [
             "Camera identifiers belong in entities; call update_camera_status once per named "
             "camera. Does not apply to what a camera shows about a hostile or suspicious event "
             "(use report_security_incident for that). Record the physical observation reported "
-            "(what was seen); any stated cause or suspicion from the reporter is the reporter's "
-            "own claim, never recorded as fact."
+            "(what was seen). A cause the reporter only suspects is their own claim, never "
+            "recorded as fact; a finding the reporter says they checked or verified on site "
+            "themselves is recorded as verified by that reporter (attributed to them)."
         ),
         participating_agents=("surveillance_agent",),
         approved_tools=("update_camera_status",),
@@ -425,6 +508,29 @@ PROTOCOLS = [
         safety_critical=True,
     ),
     Protocol(
+        name="record_outside_update",
+        description=(
+            "Applies when a message only informs this site of something it does not need to act "
+            "on now: an outside force (police, YASAM, ambulance, a neighboring site's security) "
+            "reporting that it is arriving, entering, or taking command of an incident; or a "
+            "warning about something outside this site (for example a theft or a fire in a "
+            "neighboring community) with no threat inside the site yet. Records it, linked to the "
+            "incident it concerns, without dispatching anything. Does not apply to a request to "
+            "send a force (use dispatch_neighboring_force), to a new suspicious or hostile event "
+            "inside the site (use report_security_incident), or to a report that the incident is "
+            "over (use close_security_incident)."
+        ),
+        participating_agents=("surveillance_agent",),
+        approved_tools=("log_security_observation",),
+        expected_success_output="A plain acknowledgement of what the outside party reported.",
+        criticality=CriticalityLevel.LOW,
+        approval_flag=False,
+        requires_confirmation=False,
+        commander_only=False,
+        needs_insight=False,
+        direct_tool_binder=_bind_log_security_observation,
+    ),
+    Protocol(
         name="respond_armed_threat",
         description=(
             "Applies to an armed, life-threatening security event: an armed suspect, active "
@@ -456,14 +562,19 @@ PROTOCOLS = [
         name="correct_false_security_report",
         description=(
             "Applies when a report retracts an earlier security report as false -- for example "
-            "gunfire at the west gate that was not gunfire, a false alarm, or a clarification "
-            "that the earlier report is no longer relevant. Records the correction and sends a "
-            "short operational update. Does not check cameras and does not ask which camera to "
-            "review. Does not apply to a still-active threat (use respond_armed_threat)."
+            "reported gunfire that was not gunfire, a false alarm, or a clarification that the "
+            "earlier report is no longer relevant. Records the correction, ends the drone "
+            "missions and releases the forces sent for the corrected report, and sends a short "
+            "operational update naming that report. Does not check cameras and does not ask "
+            "which camera to review. Does not apply to a still-active threat (use "
+            "respond_armed_threat)."
         ),
-        participating_agents=("roster_agent",),
-        approved_tools=("post_operational_notice",),
-        expected_success_output="The false report was corrected and the operational update was sent.",
+        participating_agents=("roster_agent", "surveillance_agent", "neighboring_forces_agent"),
+        approved_tools=("post_operational_notice", "end_drone_missions", "release_force_dispatches"),
+        expected_success_output=(
+            "The false report was corrected, its drones and forces were released, and the "
+            "operational update was sent."
+        ),
         criticality=CriticalityLevel.MEDIUM,
         approval_flag=False,
         requires_confirmation=False,
@@ -471,7 +582,7 @@ PROTOCOLS = [
         needs_insight=False,
         direct_tool_binder=_bind_correct_false_security_report,
         viewer_reply_key="response_team.reply.false_report",
-        operational_notice_key="response_team.notice.false_gunfire",
+        operational_notice_key="response_team.notice.report_corrected",
         retracts_precedent=True,
         safety_critical=True,
     ),
@@ -479,14 +590,18 @@ PROTOCOLS = [
         name="close_security_incident",
         description=(
             "Applies when a report says the incident is under control, contained, or closed -- "
-            "for example 'the event is under control'. Records the closure and alerts the site "
+            "for example 'the event is under control'. Records the closure, ends the drone "
+            "missions and releases the forces linked to that incident, and alerts the site "
             "security officer and the response-team group. Does not ask which camera to check "
             "and does not dispatch a drone. Does not apply to a new or still-active threat "
             "(use respond_armed_threat or report_security_incident)."
         ),
-        participating_agents=("roster_agent",),
-        approved_tools=("post_operational_notice",),
-        expected_success_output="The incident was recorded as under control and the operational update was sent.",
+        participating_agents=("roster_agent", "surveillance_agent", "neighboring_forces_agent"),
+        approved_tools=("post_operational_notice", "end_drone_missions", "release_force_dispatches"),
+        expected_success_output=(
+            "The incident was recorded as under control, its drones and forces were released, and "
+            "the operational update was sent."
+        ),
         criticality=CriticalityLevel.MEDIUM,
         approval_flag=False,
         requires_confirmation=False,
@@ -576,6 +691,45 @@ PROTOCOLS = [
         commander_only=False,
         needs_insight=False,
         direct_lane_eligible=True,
+    ),
+    # The bot's drone buttons already name these two protocols (api/routes_messages_support.py);
+    # without them a direct "send a drone to X" or "bring the drone back" had nothing to run.
+    Protocol(
+        name="dispatch_drone_to_incident",
+        description=(
+            "Applies when someone directly asks to send a drone to a named area to look at "
+            "something -- check a camera, a fence section, a gate, or a place where something "
+            "was reported -- rather than reporting a new security event themselves. Sends one "
+            "ready drone for recon, or reports the drone already covering that area. Does not "
+            "apply to a fresh report of a suspicious or hostile event (use "
+            "report_security_incident for that) or to an armed threat (use respond_armed_threat)."
+        ),
+        participating_agents=("surveillance_agent",),
+        approved_tools=("dispatch_drone_to_area",),
+        expected_success_output="Confirmation of the drone sent to, or already over, the requested area (callsign, ETA, mission ID).",
+        criticality=CriticalityLevel.LOW,
+        # A commander's request runs at once; a team member's waits for a commander to approve.
+        approval_flag=True,
+        requires_confirmation=False,
+        commander_only=False,
+        needs_insight=False,
+        direct_tool_binder=_bind_dispatch_drone,
+    ),
+    Protocol(
+        name="recall_drone_to_base",
+        description=(
+            "Applies when someone asks to bring a drone, or every drone, back to base -- end its "
+            "patrol or recall it to the drones warehouse. Does not apply to sending a drone out "
+            "(use dispatch_drone_to_incident for that)."
+        ),
+        participating_agents=("surveillance_agent",),
+        approved_tools=("recall_drone", "return_all_drones_to_base"),
+        expected_success_output="Confirmation of which drone(s) were recalled to the drones warehouse.",
+        criticality=CriticalityLevel.LOW,
+        approval_flag=True,
+        requires_confirmation=False,
+        commander_only=False,
+        needs_insight=False,
     ),
     Protocol(
         name="query_situational_picture",

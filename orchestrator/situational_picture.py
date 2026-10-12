@@ -48,8 +48,12 @@ RECENT_EVENTS_LIMIT = 8
 SPECIALIST_TIMEOUT_SECONDS = 25.0
 PICTURE_MAX_LINES = 12
 
-_PLAN_POLICY = InvocationPolicy(max_output_tokens=400, timeout_seconds=30.0, reasoning_effort="none")
-_COMPOSE_POLICY = InvocationPolicy(max_output_tokens=450, timeout_seconds=45.0, reasoning_effort="none")
+# Planning is optional (the default plan is a sound fallback), so it gets a short leash and the
+# saved time goes to composition: a Hebrew picture of 12 lines plus an answer and a
+# recommendation does not fit the old 450-token cap, and a capped reply used to surface as the
+# raw specialist dump instead of a picture.
+_PLAN_POLICY = InvocationPolicy(max_output_tokens=400, timeout_seconds=15.0, reasoning_effort="none")
+_COMPOSE_POLICY = InvocationPolicy(max_output_tokens=1600, timeout_seconds=60.0, reasoning_effort="none")
 
 
 # --- picture types ---
@@ -150,10 +154,19 @@ def _specialists_json(protocol: "Protocol", registry: "AgentRegistry") -> str:
     return json.dumps(specialists, ensure_ascii=False, sort_keys=True)
 
 
-def _default_plan(protocol: "Protocol") -> PicturePlan:
-    """Fallback plan: the catalog default question for every participating agent."""
+def _default_query(raw_text: str | None) -> str:
+    """The catalog's whole-domain question, followed by the request it must serve."""
 
     default_query = get_current_catalog().text("orchestrator.picture.default_domain_query")
+    if raw_text:
+        return f"{default_query}\n{json.dumps(raw_text, ensure_ascii=False)}"
+    return default_query
+
+
+def _default_plan(protocol: "Protocol", raw_text: str | None = None) -> PicturePlan:
+    """Fallback plan: the catalog default question, plus the request, for every participating agent."""
+
+    default_query = _default_query(raw_text)
     return PicturePlan(
         briefings=tuple(DomainBriefing(agent_name, default_query) for agent_name in protocol.participating_agents),
         recent_events_hours=DEFAULT_RECENT_EVENTS_HOURS,
@@ -236,7 +249,7 @@ def plan_situational_picture(
             "situational picture planning failed; using default domain questions",
             extra={"event": "picture_plan_fallback", "reason": str(exc), "trace_id": get_trace_id()},
         )
-        return _default_plan(protocol)
+        return _default_plan(protocol, raw_text)
 
     logger.info(
         "situational picture planned",
@@ -251,6 +264,25 @@ def plan_situational_picture(
     return plan
 
 
+def render_recent_entries(entries: list[dict]) -> str:
+    """One compact line per recent event: time, channel, sender, message, area, status."""
+
+    lines = []
+    for entry in entries:
+        parts = [entry.get("time") or "", entry.get("channel") or ""]
+        message = entry.get("message") or ""
+        parts.append(f"{entry.get('from')}: {message}" if entry.get("from") else message)
+        if entry.get("area"):
+            parts.append(str(entry["area"]))
+        status = entry.get("status") or ""
+        if entry.get("retracted_as_false"):
+            status = f"{status}; retracted as false" if status else "retracted as false"
+        if status:
+            parts.append(status)
+        lines.append(" | ".join(part for part in parts if part))
+    return "\n".join(lines)
+
+
 def collect_recent_events(
     history_query_service: "HistoryQueryService",
     *,
@@ -263,6 +295,25 @@ def collect_recent_events(
 
     catalog = get_current_catalog()
     question = catalog.text("orchestrator.picture.recent_events_question", hours=hours)
+    reader = getattr(history_query_service, "operational_context", None)
+    if callable(reader):
+        # Straight from the event log: what was reported, where, by whom, and what became of it.
+        # A model-written history list here used to invent "unspecified" fields, raw ids and dates.
+        try:
+            with stage_context("picture_recent_events"):
+                entries = reader(hours=hours, limit=limit, sender_identity_filter=sender_identity_filter)
+        except Exception as exc:
+            logger.warning(
+                "recent events unavailable for situational picture",
+                extra={"event": "picture_recent_events_failed", "reason": str(exc), "trace_id": get_trace_id()},
+            )
+            return DomainReport(RECENT_EVENTS_DOMAIN, question, str(exc), False)
+        if isinstance(entries, list):
+            if not entries:
+                return DomainReport(
+                    RECENT_EVENTS_DOMAIN, question, catalog.text("orchestrator.picture.no_recent_events", hours=hours), True
+                )
+            return DomainReport(RECENT_EVENTS_DOMAIN, question, render_recent_entries(entries), True)
     spec = HistoryQuerySpec(
         operation="list",
         time_start=storage_timestamp(now - timedelta(hours=hours)),

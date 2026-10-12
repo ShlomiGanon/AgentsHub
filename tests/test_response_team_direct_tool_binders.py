@@ -173,8 +173,8 @@ def test_dispatch_drone_without_area_requires_it():
 
 
 def test_dispatch_own_squad_binds_unit_count_one():
-    """Dispatch own squad binds unit count one."""
-    event = {"area": "east_orchards", "description": "send our people", "raw_text": "send our squad"}
+    """Dispatch own squad binds unit count one and links the dispatch to its event."""
+    event = {"event_id": "evt-9", "area": "east_orchards", "description": "send our people", "raw_text": "send our squad"}
 
     (step,) = _bind_dispatch_own_squad(event)
 
@@ -184,4 +184,6 @@ def test_dispatch_own_squad_binds_unit_count_one():
         "target_area": "east_orchards",
         "unit_count": 1,
         "note": "send our people",
+        "event_id": "evt-9",
+        "incident_id": "evt-9",
     }

@@ -1,5 +1,6 @@
 """Bounded event queues with legacy serial and policy-aware modes."""
 
+import contextvars
 import queue
 import threading
 import time
@@ -7,11 +8,27 @@ from dataclasses import dataclass, field
 from itertools import count
 from typing import Callable
 
+from agents import set_invocation_deadline
 from tools import stage_context, trace_context
 from tools.log_events import queue_deadline_expired, queue_processing_failed, queue_started, queue_stop_timeout
 
 _STOP = object()
 STOP_JOIN_TIMEOUT_SECONDS = 2.0
+
+
+def _run_in_submitter_context(work_item: "WorkItem", process_fn: Callable[[object], None]) -> None:
+    """Run one item inside the context captured where it was built, minus the request's clock.
+
+    The submitting request's model-call deadline belongs to that HTTP exchange; a queued run
+    has its own job deadline, so it must not inherit a deadline that expires seconds later."""
+
+    def _call() -> None:
+        """Clear the request-scoped model deadline, then process the payload."""
+
+        set_invocation_deadline(None)
+        process_fn(work_item.payload)
+
+    work_item.context.run(_call)
 
 
 class EventQueueFullError(Exception):
@@ -36,15 +53,20 @@ class WorkItem:
     deadline_monotonic: float | None = None
     concurrency_keys: tuple[str, ...] = ()
     submitted_at: float = field(default_factory=time.monotonic)
+    # Captured where the item is built (the request thread), so request-scoped context such as
+    # the profile's message catalog follows the work into the worker thread instead of the
+    # worker silently falling back to every ContextVar's process default (English).
+    context: contextvars.Context = field(default_factory=contextvars.copy_context, compare=False, repr=False)
 
 
 class SerialEventQueue:
     """Single-worker FIFO queue used by the default API event path."""
 
-    def __init__(self, process_fn: Callable[[object], None]):
+    def __init__(self, process_fn: Callable[[object], None], *, on_expired: Callable[[object], None] | None = None):
         """Remember the worker callback and create the backing thread."""
 
         self._process_fn = process_fn
+        self._on_expired = on_expired
         self._queue: queue.Queue = queue.Queue()
         self._worker = threading.Thread(target=self._run, daemon=True)
         self._started = False
@@ -114,7 +136,7 @@ class SerialEventQueue:
                         concurrency_keys=work_item.concurrency_keys,
                     )
                     with stage_context("queue_execution"):
-                        self._process_fn(queued_item)
+                        _run_in_submitter_context(work_item, self._process_fn)
             except Exception:
                 queue_processing_failed(payload=queued_item)
             finally:
@@ -132,10 +154,14 @@ class PolicyAwareEventQueue:
         workers: int = 4,
         max_size: int = 100,
         reserved_continuation_percent: int = 20,
+        on_expired: Callable[[object], None] | None = None,
     ):
         """Remember the worker callback, pool size, and reservation budget."""
 
         self._process_fn = process_fn
+        # Called for an item whose deadline passed while it waited, so its sender is told it
+        # failed instead of the item silently disappearing from the queue.
+        self._on_expired = on_expired
         self._queue: queue.PriorityQueue = queue.PriorityQueue()
         self._workers = [threading.Thread(target=self._run, daemon=True) for _ in range(workers)]
         self._started = False
@@ -257,11 +283,13 @@ class PolicyAwareEventQueue:
                     )
                     if work_item.deadline_monotonic is not None and time.monotonic() >= work_item.deadline_monotonic:
                         queue_deadline_expired(payload=payload)
+                        if self._on_expired is not None:
+                            work_item.context.run(self._on_expired, payload)
                     else:
                         for resource_lock in locks:
                             resource_lock.acquire()
                         with stage_context("queue_execution"):
-                            self._process_fn(payload)
+                            _run_in_submitter_context(work_item, self._process_fn)
             except Exception:
                 with trace_context(work_item.trace_id or None):
                     queue_processing_failed(payload=payload)

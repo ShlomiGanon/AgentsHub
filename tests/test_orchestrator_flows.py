@@ -1595,6 +1595,7 @@ def test_process_message_routes_question_without_writing_an_event(deps):
             "kind of message": "INTENT: question\nREASON: asks about status",
             "Decide whether this question can be answered by directly looking up": "ROUTE: normal",
             "Decide which of the following agents": "AGENT: reference_agent\nTASK: what's the status?",
+            "Write the reply to the operator's question": "Gate 3 is nominal.",
         }
     )
     insights_agent = type("I", (), {"process": lambda self, text, tools: _FakeResult("success", "insight")})()

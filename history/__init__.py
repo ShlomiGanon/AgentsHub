@@ -2,7 +2,7 @@
 
 import sys
 
-from history import contracts, event_pipeline, field_catalog, query, summaries
+from history import contracts, event_pipeline, field_catalog, operational_context, query, summaries
 from history.field_catalog import EVENT_FIELD_CATALOG
 from history.contracts import (
     ExtractionExecutionError,
@@ -33,6 +33,7 @@ from history.event_pipeline import (
     storage_timestamp,
     year_bounds,
 )
+from history.operational_context import operational_context_entries
 from history.query import HistoryQueryService, find_precedents, retrieve_range
 from history.summaries import SummaryScheduler, generate_summary
 
@@ -68,6 +69,7 @@ __all__ = [
     "extract_event",
     "find_precedents",
     "generate_summary",
+    "operational_context_entries",
     "record_event_outcome",
     "record_event_data_update",
     "record_event_state",

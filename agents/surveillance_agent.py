@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import inspect
 from datetime import datetime, timezone
 
 from agents.contracts import AgentResult, InvocationPolicy, ToolResult, failed_tool_result
+from agents.neighboring_forces_agent import resolve_event_links
 from agents.runtime import Agent, make_exact_result_capture, tool
+from messages import SUPPORTED_LANGUAGES, get_catalog, get_current_catalog
 from persistence import (
     SurveillancePersistenceError,
     open_surveillance_persistence,
@@ -16,6 +19,29 @@ def _utc_now() -> str:
     """Utc now."""
 
     return datetime.now(timezone.utc).isoformat()
+
+
+# Language-neutral words that always mean "no area filter"; localized phrases come from the
+# profile catalog's `<stem>.area_scope.whole_site_aliases`.
+_WHOLE_SITE_WORDS = frozenset({"all", "*"})
+
+
+def _fold_area_text(text: str) -> str:
+    """Casefold and treat underscores, hyphens, and repeated spaces alike for area matching."""
+
+    return " ".join(text.replace("_", " ").replace("-", " ").casefold().split())
+
+
+def _accepts_parameters(method, names: tuple[str, ...]) -> bool:
+    """True when `method` takes every name in `names` (or **kwargs); older stores lack new ones."""
+
+    try:
+        parameters = inspect.signature(method).parameters
+    except (TypeError, ValueError):
+        return False
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
+        return True
+    return all(name in parameters for name in names)
 
 
 # `ContextVar` + lock + capture function + `process()`-override helper for
@@ -69,6 +95,10 @@ class SurveillanceAgent(Agent):
     )
 
     surveillance_db_path = ""
+    # A profile subclass declares its areas and the catalog stem holding their labels
+    # (`<stem>.area.<id>`). With no declared areas, area arguments pass through unchanged.
+    declared_areas: tuple[str, ...] = ()
+    area_catalog_stem = ""
 
     def __init__(self, model: str, api_key: str | None = None):
         """Init."""
@@ -77,6 +107,79 @@ class SurveillanceAgent(Agent):
             raise TypeError("SurveillanceAgent requires a class-level surveillance_db_path")
         self.surveillance_store = open_surveillance_persistence(self.surveillance_db_path)
         super().__init__(model, api_key)
+
+    def _area_label(self, area_id: str) -> str:
+        """Localized label for one declared area in the current catalog, or the id itself."""
+
+        key = f"{self.area_catalog_stem}.area.{area_id}"
+        catalog = get_current_catalog()
+        return catalog.text(key) if self.area_catalog_stem and key in catalog.messages else area_id
+
+    def _area_aliases(self) -> dict[str, set[str]]:
+        """Every accepted spelling per declared area: the id and its label in each catalog."""
+
+        aliases: dict[str, set[str]] = {}
+        for area_id in self.declared_areas:
+            spellings = {_fold_area_text(area_id)}
+            key = f"{self.area_catalog_stem}.area.{area_id}"
+            for language in SUPPORTED_LANGUAGES:
+                catalog = get_catalog(language)
+                if self.area_catalog_stem and key in catalog.messages:
+                    spellings.add(_fold_area_text(catalog.text(key)))
+            aliases[area_id] = spellings
+        return aliases
+
+    def _whole_site_aliases(self) -> set[str]:
+        """Phrases meaning "the whole site" in every catalog, plus the language-neutral words."""
+
+        phrases = set(_WHOLE_SITE_WORDS)
+        key = f"{self.area_catalog_stem}.area_scope.whole_site_aliases"
+        for language in SUPPORTED_LANGUAGES:
+            catalog = get_catalog(language)
+            if self.area_catalog_stem and key in catalog.messages:
+                phrases.update(_fold_area_text(part) for part in catalog.text(key).split("|") if part.strip())
+        return phrases
+
+    def _resolve_area(self, raw: str) -> tuple[str | None, str | None]:
+        """Map an area argument to (declared area id or None for the whole site, error or None).
+
+        Accepts the id, its catalog label in any language, or a unique partial match. An
+        unrecognized or ambiguous value is an error listing the valid areas, so a lookup can
+        never silently come back empty because of a spelling the store does not use.
+        """
+
+        cleaned = " ".join((raw or "").split())
+        if not self.declared_areas:
+            return (cleaned or None), None
+        if not cleaned:
+            return None, None
+        folded = _fold_area_text(cleaned)
+        if folded in self._whole_site_aliases():
+            return None, None
+        aliases = self._area_aliases()
+        exact = [area_id for area_id, spellings in aliases.items() if folded in spellings]
+        if len(exact) == 1:
+            return exact[0], None
+        # A label inside a longer phrase ("the west gate area"), or a shortened label missing
+        # its article, still names one area; three characters keeps stray letters from matching.
+        partial = [
+            area_id for area_id, spellings in aliases.items()
+            if any(spelling in folded or (len(folded) >= 3 and folded in spelling) for spelling in spellings)
+        ]
+        if len(partial) == 1:
+            return partial[0], None
+        valid = ", ".join(f"{area_id} ({self._area_label(area_id)})" for area_id in self.declared_areas)
+        return None, (
+            f"Clarification required: unknown or ambiguous area '{cleaned}'. Valid areas: {valid}. "
+            "Leave area empty for the whole site."
+        )
+
+    @staticmethod
+    def _camera_line_suffix(camera: dict) -> str:
+        """Camera kind wording, so a mast or drone feed is never mistaken for a fixed fence camera."""
+
+        kind = camera.get("kind")
+        return f", {kind} camera" if kind else ""
 
     def process(
         self, text: str, allowed_tools: list[str], *, invocation_policy: InvocationPolicy | None = None
@@ -148,31 +251,36 @@ class SurveillanceAgent(Agent):
         "Returns current visual feed descriptions, azimuth, and status for security cameras, optionally filtered by area or specific camera ID.",
         side_effecting=False,
     )
-    def get_camera_feeds(self, area: str = "", camera_id: str = "") -> str:
+    def get_camera_feeds(self, area: str = "", camera_id: str = "") -> str | ToolResult:
         """Return the camera feeds."""
 
+        cleaned_area = ""
         if camera_id.strip():
             camera = self.surveillance_store.get_camera(camera_id.strip())
             if not camera:
                 return f"Camera '{camera_id}' was not found in the surveillance registry."
             cameras = [camera]
         else:
-            cameras = self.surveillance_store.list_cameras(area=area.strip() or None)
+            resolved_area, area_error = self._resolve_area(area)
+            if area_error:
+                return failed_tool_result(area_error)
+            cleaned_area = resolved_area or ""
+            cameras = self.surveillance_store.list_cameras(area=resolved_area)
 
         if not cameras:
-            cleaned_area = area.strip()
             if cleaned_area:
                 # Deterministic, from the store's own list_cameras count — never inferred from
                 # any wording — so an incident-handling step that relies on camera coverage for
                 # an area gets the same resource-unavailable treatment as a failed dispatch.
                 self.signal_resource_unavailable("camera", cleaned_area, "no active camera covering the area")
-            scope = f"in area '{area}'" if area.strip() else "in the surveillance registry"
+            scope = f"in area '{cleaned_area}'" if cleaned_area else "in the surveillance registry"
             return f"No cameras found {scope}."
 
         lines = [f"Camera feeds ({len(cameras)} cameras):"]
         for c in cameras:
             lines.append(
-                f"- [{c['camera_id']}] {c['name']} ({c['area']}, {c['azimuth_degrees']}°): {c['feed_summary']} [{c['status'].upper()}]"
+                f"- [{c['camera_id']}] {c['name']} ({c['area']}, {c['azimuth_degrees']}°{self._camera_line_suffix(c)}): "
+                f"{c['feed_summary']} [{c['status'].upper()}]"
             )
         return "\n".join(lines)
 
@@ -228,7 +336,9 @@ class SurveillanceAgent(Agent):
         "dispatch_drone_to_area",
         "Dispatches an available tactical drone to an incident area for visual coverage/recon, calculating ETA and tracking mission status. "
         "specific_drone_id is optional: when omitted or empty, the system deterministically selects a ready drone by target-area proximity "
-        "and then highest battery. Do not request a drone ID unless the user explicitly asked for a particular drone.",
+        "and then highest battery. Do not request a drone ID unless the user explicitly asked for a particular drone. "
+        "If a drone mission already covers the target area, that mission is reported instead of launching a second drone. "
+        "event_id and incident_id are optional links to the report being handled.",
         side_effecting=True,
         idempotent=False,
     )
@@ -239,6 +349,8 @@ class SurveillanceAgent(Agent):
         mission_type: str = "recon",
         specific_drone_id: str = "",
         dispatched_by: str = "commander",
+        event_id: str = "",
+        incident_id: str = "",
     ) -> str:
         """Dispatch drone to area."""
 
@@ -247,28 +359,59 @@ class SurveillanceAgent(Agent):
         if not incident_description.strip():
             return failed_tool_result("Clarification required: incident_description is required for drone mission dispatch.")
 
+        # A recognizable label becomes the declared id so ETA and coverage checks match; an
+        # unknown value still dispatches as given, because refusing a launch over a spelling
+        # would be worse than an approximate ETA.
+        resolved_area, _area_error = self._resolve_area(target_area)
+        cleaned_area = resolved_area or target_area.strip()
+
         _SENTINEL_IDS = {"auto", "none", "null", "n/a", "-", "automatic", "any", "best", "default"}
         cleaned_drone_id = specific_drone_id.strip()
         if cleaned_drone_id.lower() in _SENTINEL_IDS:
             cleaned_drone_id = ""
+        link_kwargs: dict = {}
+        linked_event, linked_incident = resolve_event_links(event_id, incident_id)
+        if (linked_event or linked_incident) and _accepts_parameters(
+            self.surveillance_store.dispatch_drone, ("event_id", "incident_id")
+        ):
+            link_kwargs = {"event_id": linked_event, "incident_id": linked_incident}
         try:
             mission = self.surveillance_store.dispatch_drone(
-                target_area=target_area.strip(),
+                target_area=cleaned_area,
                 incident_description=incident_description.strip(),
                 mission_type=mission_type.strip() or "recon",
                 dispatched_by=dispatched_by.strip() or "commander",
                 specific_drone_id=cleaned_drone_id or None,
+                **link_kwargs,
             )
         except SurveillancePersistenceError as exc:
-            self.signal_resource_unavailable("drone", target_area.strip(), str(exc))
+            self.signal_resource_unavailable("drone", cleaned_area, str(exc))
             return f"Drone dispatch failed: {exc}"
 
         drone = mission["drone"]
+        if mission.get("reused"):
+            return (
+                "Drone already covering the area; no additional drone was launched:\n"
+                f"- Mission ID: {mission['mission_id']}\n"
+                f"- Drone: {drone['callsign']} ({drone['drone_id']}, Model: {drone['model']})\n"
+                f"- Status: {mission['status'].upper()}\n"
+                f"- Target Area: {mission['target_area']}\n"
+                f"- Dispatched At: {mission['dispatched_at']} (ETA {mission['eta_seconds']}s from dispatch)\n"
+                f"- Original Task: {mission['incident_description']}"
+            )
         eta_sec = mission["eta_seconds"]
         eta_min = round(eta_sec / 60, 1)
+        retasked = mission.get("retasked_from")
+        retask_line = (
+            f"- Retasked from: {retasked['target_area']} (mission {retasked['mission_id']} closed; "
+            "no drone was free, and this mission outranks routine recon)\n"
+            if retasked
+            else ""
+        )
 
         return (
             f"Drone dispatched successfully:\n"
+            f"{retask_line}"
             f"- Mission ID: {mission['mission_id']}\n"
             f"- Drone: {drone['callsign']} ({drone['drone_id']}, Model: {drone['model']})\n"
             f"- Status: {mission['status'].upper()}\n"
@@ -329,14 +472,18 @@ class SurveillanceAgent(Agent):
 
     @tool(
         "get_surveillance_overview",
-        "Returns a combined tactical picture of all visual assets (cameras, drone fleet, and active airborne missions) for a specific sector or entire perimeter.",
+        "Returns a combined tactical picture of all visual assets (cameras, drone fleet, and active airborne missions). "
+        "Leave area empty for the whole site; otherwise pass one area id or its name. An unknown area returns an error listing the valid areas.",
         side_effecting=False,
     )
-    def get_surveillance_overview(self, area: str = "") -> str:
+    def get_surveillance_overview(self, area: str = "") -> str | ToolResult:
         """Return the surveillance overview."""
 
-        overview = self.surveillance_store.surveillance_overview(area=area.strip() or None)
-        target = f"Sector '{area}'" if area.strip() else "All Sectors"
+        resolved_area, area_error = self._resolve_area(area)
+        if area_error:
+            return failed_tool_result(area_error)
+        overview = self.surveillance_store.surveillance_overview(area=resolved_area)
+        target = f"Sector '{resolved_area}'" if resolved_area else "All Sectors"
 
         lines = [
             f"=== Tactical Surveillance Overview: {target} ===",
@@ -346,7 +493,8 @@ class SurveillanceAgent(Agent):
         ]
         for c in overview["cameras"]:
             lines.append(
-                f"  - [{c['camera_id']}] {c['name']} ({c['area']}): {c['status'].upper()} — {c['feed_summary']}"
+                f"  - [{c['camera_id']}] {c['name']} ({c['area']}{self._camera_line_suffix(c)}): "
+                f"{c['status'].upper()} — {c['feed_summary']}"
             )
 
         lines.extend(
@@ -355,9 +503,14 @@ class SurveillanceAgent(Agent):
                 f"Drones ({overview['ready_drone_count']} Ready, {overview['in_flight_drone_count']} In Flight):",
             )
         )
+        if resolved_area and "fleet_ready_drone_count" in overview:
+            lines.append(f"  Fleet-wide ready for dispatch: {overview['fleet_ready_drone_count']}")
         for d in overview["drones"]:
+            # A drone in flight with its mission id is on assignment, not an anomaly.
+            mission_info = f", Mission: {d['assigned_mission_id']}" if d.get("assigned_mission_id") else ""
             lines.append(
-                f"  - [{d['drone_id']}] {d['callsign']}: {d['status'].upper()} (Battery: {d['battery_percent']}%, Area: {d['current_area']})"
+                f"  - [{d['drone_id']}] {d['callsign']}: {d['status'].upper()} "
+                f"(Battery: {d['battery_percent']}%, Area: {d['current_area']}{mission_info})"
             )
 
         lines.extend(

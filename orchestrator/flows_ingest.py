@@ -22,6 +22,7 @@ from profiles import HUMAN_ACTIVATION_TYPE, UNCLASSIFIED_TYPE
 from agents import AgentModelError, AgentTimeoutError, is_retryable_invocation_error
 from tools import get_trace_id
 from tools.log_events import (
+    event_links_recorded,
     extraction_result as log_extraction_result,
     extraction_retry,
     protocol_selection,
@@ -36,6 +37,9 @@ from orchestrator.flows_execution import (
     _deadline_failure,
     _log_event_outcome,
     _record_outcome_with_report,
+    apply_event_links,
+    operational_context_for,
+    sender_context_for,
 )
 from orchestrator.flows_protocol import (
     _apply_required_fields_gate,
@@ -114,6 +118,10 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
 
     event = deps.persistence.fetch_event(event_id)
     raw_text, source, received_at = event["raw_text"], event["source"], event["received_at"]
+    # What every channel reported lately: lets a follow-up inherit its incident and area instead
+    # of being parsed as if it were the first message the system ever saw.
+    operational_context = operational_context_for(deps, exclude_event_id=event_id)
+    sender = sender_context_for(deps, event)
 
     operational_decision = None
     try:
@@ -129,17 +137,23 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
                     deps.protocol_set.all(),
                     deps.settings_store.get_risk_threshold(),
                     preferred_agent_hint=deps.preferred_agent_hint,
+                    operational_context=operational_context,
+                    sender=sender,
                 )
             except ExtractionExecutionError:
                 extraction_result = extract_event(
                     raw_text, source, received_at, deps.event_type_registry, deps.area_registry,
                     model_invoker=_model_invoker_for(main_agent),
+                    operational_context=operational_context,
+                    sender=sender,
                 )
                 operational_decision = None
         else:
             extraction_result = extract_event(
                 raw_text, source, received_at, deps.event_type_registry, deps.area_registry,
                 model_invoker=_model_invoker_for(main_agent),
+                operational_context=operational_context,
+                sender=sender,
             )
     except ExtractionExecutionError as exc:
         _record_outcome_with_report(deps, event_id, "failed", failure_reason=str(exc))
@@ -155,6 +169,13 @@ def run_report_extraction(deps: FlowDeps, event_id: str, main_agent: "MainAgent"
     )
 
     record_extracted_fields(deps.persistence, event_id, extraction_result)
+    links = apply_event_links(
+        deps, event_id, operational_context,
+        related_ref=getattr(extraction_result, "related_event_ref", None),
+        corrects_ref=getattr(extraction_result, "corrects_event_ref", None),
+    )
+    if links:
+        event_links_recorded(event_id=event_id, links=links)
 
     # A merged extraction/decision can positively determine that the primary update is outside
     # every declared protocol. Finish that result before the classification/required-field gates:

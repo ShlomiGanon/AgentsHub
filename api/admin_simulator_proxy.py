@@ -15,6 +15,11 @@ from api.request_boundary import BOT_SERVICE_IDENTITY, BOT_SERVICE_KEY_ENV_VAR, 
 from messages import get_current_catalog
 from tools import get_trace_id
 
+
+# The simulation bot waits up to 120s for its handler, which waits on the API (bot read timeout
+# 100s); the proxy must outlast both or a slow but successful reply is reported as lost.
+SIMULATOR_READ_TIMEOUT_SECONDS = 130.0
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,7 +45,7 @@ def register_simulator_routes(blueprint: Blueprint, panel: AdminPanel) -> None:
                 method,
                 f"http://localhost:{simulator_port}{path}",
                 headers=forward_headers,
-                timeout=httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=75.0),
+                timeout=httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=SIMULATOR_READ_TIMEOUT_SECONDS),
                 **kwargs,
             )
         except httpx.HTTPError:

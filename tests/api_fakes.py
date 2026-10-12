@@ -60,7 +60,7 @@ class ScriptedAgent:
         self._default_status = default_status
         self.calls = []
 
-    def process(self, text, allowed_tools):
+    def process(self, text, allowed_tools, invocation_policy=None):
         """Process."""
         self.calls.append(text)
         for keyword, response_text in self._dispatch.items():
@@ -197,6 +197,8 @@ def happy_path_agent(risk_score="0.2", selected="status_check", verdict="success
         # "Decide which of the following agents" dispatch entry reachable
         # unchanged, exactly as before this classification step existed.
         "Decide whether this question can be answered by directly looking up": "ROUTE: normal",
+        # Every specialist answer is composed against the operator's question.
+        "Write the reply to the operator's question": "gate 3 is nominal",
     }
     if intent is not None:
         dispatch["kind of message"] = f"INTENT: {intent}\nREASON: classified"

@@ -18,7 +18,8 @@ from history.contracts import (
 )
 from history.event_pipeline import day_bounds, month_bounds, parse_timestamp, storage_timestamp, year_bounds
 from history.field_catalog import FIELD_BY_KEY, FIELD_MEANINGS_GLOSSARY
-from messages.model_messages import HISTORY_LATEST_INSTRUCTION, HISTORY_LIST_INSTRUCTION
+from history.operational_context import DEFAULT_CONTEXT_HOURS, DEFAULT_CONTEXT_LIMIT, operational_context_entries
+from messages.model_messages import HISTORY_LATEST_INSTRUCTION, HISTORY_LIST_INSTRUCTION, NARRATIVE_INSTRUCTION
 from persistence import EventSearchCriteria, PersistenceError
 from tools import get_trace_id
 
@@ -74,14 +75,20 @@ def _semantic_view_payload(view: SemanticEventView) -> dict:
     return payload
 
 
-def _history_agent_prompt(instruction: str, question: str, views: list[SemanticEventView]) -> str:
+def _history_agent_prompt(instruction: str, question: str, views: list[SemanticEventView], *, concise: bool = True) -> str:
     """Build a History Agent prompt from already-filtered `SemanticEventView`s only —
     never a raw persistence record. Includes the field glossary so the agent can
-    faithfully explain what a present field means without inventing semantics."""
+    faithfully explain what a present field means without inventing semantics.
+    `concise=False` is for a debrief or timeline, which a 3-4 line cap would truncate."""
 
     events_payload = [_semantic_view_payload(view) for view in views]
-    if any('\u0590' <= c <= '\u05ea' for c in question):
-        instruction = "\u05d7\u05d5\u05d1\u05d4 \u05dc\u05e2\u05e0\u05d5\u05ea \u05d0\u05da \u05d5\u05e8\u05e7 \u05d1\u05e2\u05d1\u05e8\u05d9\u05ea \u05e7\u05e6\u05e8\u05d4 \u05d5\u05de\u05d1\u05e6\u05e2\u05d9\u05ea (\u05e2\u05d3 3-4 \u05e9\u05d5\u05e8\u05d5\u05ea \u05dc\u05db\u05dc \u05d4\u05d9\u05d5\u05ea\u05e8). \u05d0\u05d9\u05df \u05dc\u05d4\u05e9\u05ea\u05de\u05e9 \u05d1\u05d0\u05e0\u05d2\u05dc\u05d9\u05ea \u05db\u05dc\u05dc.\n" + instruction
+    if _is_hebrew(question):
+        length_rule = (
+            "Keep it short and operational: at most 3-4 lines. "
+            if concise
+            else "Be complete but compact: cover every part the question asks for, in chronological order. "
+        )
+        instruction = "Respond only in Hebrew, never in English. " + length_rule + "\n" + instruction
     return (
         f"{instruction}\n"
         "Every field below is already filtered to what you may discuss for this caller — treat any field not "
@@ -90,6 +97,12 @@ def _history_agent_prompt(instruction: str, question: str, views: list[SemanticE
         f"Question: {question}\n"
         f"Events: {json.dumps(events_payload, ensure_ascii=False, sort_keys=True, default=str)}"
     )
+
+
+def _is_hebrew(text: str) -> bool:
+    """True when the text contains any Hebrew letter."""
+
+    return any("\u0590" <= character <= "\u05ea" for character in text)
 
 
 def _exact_summary(persistence, level: str, start: datetime, end: datetime) -> dict | None:
@@ -282,6 +295,7 @@ class HistoryQueryService:
         areas: tuple[str, ...] | None = None,
         protocol_names: tuple[str, ...] | None = None,
         timezone_name: str = "UTC",
+        area_labels: dict[str, str] | None = None,
     ):
         """Init."""
 
@@ -297,6 +311,7 @@ class HistoryQueryService:
         except ZoneInfoNotFoundError as exc:
             raise HistoryQueryError(f"unknown history query timezone: {timezone_name!r}") from exc
         self._timezone_name = timezone_name
+        self._area_labels = dict(area_labels or {})
 
     def planning_context(self) -> dict:
         """Return only the bounded vocabulary needed to plan a history query."""
@@ -312,6 +327,28 @@ class HistoryQueryService:
             "outcomes": sorted(_HISTORY_OUTCOMES),
             "risk_levels": sorted(_RISK_LEVELS),
         }
+
+    def operational_context(
+        self,
+        *,
+        area_labels=None,
+        exclude_event_ids=(),
+        hours: int = DEFAULT_CONTEXT_HOURS,
+        limit: int = DEFAULT_CONTEXT_LIMIT,
+        sender_identity_filter: str | None = None,
+    ) -> list[dict]:
+        """Recent events from every channel as a compact digest, on this service's clock and timezone."""
+
+        return operational_context_entries(
+            self._persistence,
+            now=self._clock(),
+            zone=self._timezone,
+            area_labels=area_labels if area_labels is not None else self._area_labels,
+            exclude_event_ids=exclude_event_ids,
+            hours=hours,
+            limit=limit,
+            sender_identity_filter=sender_identity_filter,
+        )
 
     def _resolve_bounds(self, time_start: str | None, time_end: str | None) -> tuple[datetime, datetime]:
         """Resolve bounds."""
@@ -497,6 +534,8 @@ class HistoryQueryService:
                 else:
                     answer += f"\n\nShowing {len(events)} of {total_count} matching events."
             return _finish(HistoryAnswer(answer, sources, normalized.time_start, normalized.time_end, total_count, normalized, truncated))
+        elif normalized.operation == "narrative":
+            context_instruction = NARRATIVE_INSTRUCTION
         else:
             context_instruction = (
                 "Answer only from the supplied, database-filtered history. Preserve contradictions, state when "
@@ -504,7 +543,9 @@ class HistoryQueryService:
                 "each discussed event's Event ID explicitly."
             )
 
-        prompt = _history_agent_prompt(context_instruction, question, views)
+        prompt = _history_agent_prompt(
+            context_instruction, question, views, concise=normalized.operation != "narrative",
+        )
         agent_result = self._history_agent.process(prompt, allowed_tools=[])
         if agent_result.status != "success":
             raise HistoryQueryError(f"history agent could not answer: {agent_result.text}")
