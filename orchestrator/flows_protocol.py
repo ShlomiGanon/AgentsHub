@@ -3,10 +3,18 @@
 import functools
 import json
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
-from agents import authenticated_request_identity
-from history import StepExecutionEnvelope, record_event_state, record_step_executions
+from agents import AgentResult, HistoryAgent, authenticated_request_identity
+from history import (
+    HistoryQueryError,
+    HistoryQuerySpec,
+    StepExecutionEnvelope,
+    record_event_state,
+    record_step_executions,
+    storage_timestamp,
+)
 from orchestrator.flows_execution import (
     FlowDeps,
     FlowResult,
@@ -14,8 +22,10 @@ from orchestrator.flows_execution import (
     _deadline_failure,
     _log_event_outcome,
     _record_outcome_with_report,
+    apply_event_links,
     call_execute_steps,
     call_finish_protocol_assessment,
+    operational_context_for,
 )
 from orchestrator.holds import (
     UNRESOLVED_FIELD,
@@ -46,6 +56,7 @@ from protocols import CriticalityLevel, EVENT_DATA_FIELDS, Step, StepOutcome
 from tools import event_id_context, protocol_context
 from tools.log_events import (
     event_correction_recorded,
+    event_links_recorded,
     final_assessment_invalid,
     final_verdict,
     hold_created,
@@ -95,8 +106,10 @@ def _run_protocol(
         # formulate_tasks/task_rewrite call at all, so precedent_matches (whatever comparable
         # history this event has) structurally cannot reach or escalate a direct-tool step's
         # instructions, since no instructions are ever written for one.
-        if getattr(protocol, "retracts_precedent", False):
-            _retract_latest_resolved_precedent(deps, event_id, precedent_matches)
+        # A correction protocol retracts only the report the model explicitly linked from the
+        # shared operational context (apply_event_links). The old time-order fallback -- "the
+        # latest resolved report with the same type and area" -- retracted the wrong report
+        # whenever the correction named the true location instead of the false one.
         direct_tool_steps = protocol.direct_tool_binder(event)
         return _execute_protocol_plan(
             deps, event_id, main_agent, insights_agent, protocol, direct_tool_steps, precedent_matches,
@@ -133,16 +146,69 @@ def _run_protocol(
         event=event,
     )
 
-def _retract_latest_resolved_precedent(deps: FlowDeps, event_id: str, precedent_matches: tuple) -> None:
-    """Mark the latest resolved comparable event as retracted by this correction."""
+DEBRIEF_WINDOW_HOURS = 24
 
-    resolved = [item for item in precedent_matches if getattr(item, "resolved", False) and getattr(item, "event_id", "")]
-    if not resolved:
-        return
-    target = max(resolved, key=lambda item: getattr(item, "occurred_at", "") or "")
-    record_event_state(deps.persistence, event_id, {"corrects_event_id": target.event_id})
-    record_event_state(deps.persistence, target.event_id, {"retracted": True})
-    event_correction_recorded(event_id=event_id, corrects_event_id=target.event_id)
+
+class _RecordBackedHistoryAgent:
+    """A protocol's history step answered from the stored event log rather than a bare task.
+
+    The history agent has no tools and may answer only from records it is handed, so running it
+    on its formulated task text alone could never produce the timeline or debrief the protocol
+    promises. Everything except `process` is delegated to the real agent."""
+
+    def __init__(self, agent, history_query_service, question: str, sender_identity_filter: str | None):
+        """Remember the wrapped agent, the history service, and whose request this answers."""
+
+        self._agent = agent
+        self._history_query_service = history_query_service
+        self._question = question
+        self._sender_identity_filter = sender_identity_filter
+
+    def __getattr__(self, name):
+        """Delegate descriptors, tools, and names to the wrapped history agent."""
+
+        return getattr(self._agent, name)
+
+    def process(self, task_text, allowed_tools=(), **_kwargs):
+        """Answer the original request from the last day of stored events, oldest first."""
+
+        now = datetime.now(timezone.utc)
+        spec = HistoryQuerySpec(
+            operation="narrative",
+            time_start=storage_timestamp(now - timedelta(hours=DEBRIEF_WINDOW_HOURS)),
+            time_end=storage_timestamp(now),
+            time_basis="received_at",
+            order="oldest",
+            limit=100,
+        )
+        try:
+            answer = self._history_query_service.query_spec(
+                self._question or task_text, spec, sender_identity_filter=self._sender_identity_filter,
+            )
+        except HistoryQueryError as exc:
+            return AgentResult(status="unclear_task", text=str(exc))
+        return AgentResult(status="success", text=answer.answer)
+
+
+def _record_backed(deps: FlowDeps, event: dict, agent):
+    """Wrap the history agent so a protocol step reads the stored record; other agents pass through."""
+
+    if not isinstance(agent, HistoryAgent) or not callable(getattr(deps.history_query_service, "query_spec", None)):
+        return agent
+    is_commander = event.get("sender_permission_level") == "commander"
+    return _RecordBackedHistoryAgent(
+        agent,
+        deps.history_query_service,
+        event.get("raw_text") or "",
+        None if is_commander else event.get("sender_identity"),
+    )
+
+
+def _known_places(deps: FlowDeps) -> tuple[str, ...]:
+    """Human-readable names of this deployment's areas, for a question that has to ask where."""
+
+    labels = getattr(deps.area_registry, "labels", None) or {}
+    return tuple(labels.get(area) or area for area in getattr(deps.area_registry, "areas", ()))
 
 
 def _persist_step_plan(deps: FlowDeps, event_id: str, steps: tuple[Step, ...]) -> None:
@@ -255,7 +321,9 @@ def _execute_protocol_plan(
         if deadline_failure is not None:
             return deadline_failure
 
-    agents_by_name = {name: deps.registry.get(name) for name in protocol.participating_agents}
+    agents_by_name = {
+        name: _record_backed(deps, event, deps.registry.get(name)) for name in protocol.participating_agents
+    }
     persisted_rows = event.get("steps", [])
     prior = _prior_outcomes(persisted_rows, steps)
     # Every agent step receives the complete immutable envelope of the event that
@@ -312,7 +380,8 @@ def _execute_protocol_plan(
                 deps.persistence.fetch_conversation_messages(latest_event["conversation_id"], 12)
             )
         question = formulate_event_data_question(
-            main_agent, latest_event, run_result.missing_event_fields, conversation_messages, deps.message_catalog
+            main_agent, latest_event, run_result.missing_event_fields, conversation_messages, deps.message_catalog,
+            known_places=_known_places(deps),
         )
         waiting_step_ids = tuple(
             outcome.step.step_id for outcome in run_result.step_outcomes
@@ -366,6 +435,30 @@ def _execute_protocol_plan(
         enforce_deadline=not resumed,
     )
 
+ALERT_DEDUP_MINUTES = 10
+
+
+def _recently_alerted(deps: FlowDeps, event_id: str, fact_sentence: str, now: datetime | None = None) -> bool:
+    """True when another event raised a commander alert for the same unavailable resource lately."""
+
+    if not fact_sentence:
+        return False
+    now = now or datetime.now(timezone.utc)
+    try:
+        recent = deps.persistence.fetch_events_range(
+            storage_timestamp(now - timedelta(minutes=ALERT_DEDUP_MINUTES)),
+            storage_timestamp(now + timedelta(minutes=1)),
+        )
+    except Exception:  # dedup is a courtesy; never block the outcome on it
+        return False
+    return any(
+        other.get("event_id") != event_id
+        and other.get("outcome") == "handled_resource_unavailable"
+        and fact_sentence in (other.get("commander_alert_text") or "")
+        for other in recent
+    )
+
+
 def _finish_with_resource_unavailable(
     deps: FlowDeps, event_id: str, resource: "ResourceUnavailable",
 ) -> FlowResult:
@@ -386,6 +479,10 @@ def _finish_with_resource_unavailable(
     commander_alert_text = deps.message_catalog.text(
         "orchestrator.resource_unavailable.commander_alert", fact=fact_sentence, alternatives=alternatives,
     )
+    if _recently_alerted(deps, event_id, fact_sentence):
+        # Several reports about one incident each hit the same missing resource; the commander
+        # already has this exact decision in front of them, so a repeat is noise, not news.
+        commander_alert_text = None
 
     _record_outcome_with_report(
         deps, event_id, "handled_resource_unavailable",
@@ -563,7 +660,9 @@ def _apply_required_fields_gate(
             deps.persistence.fetch_conversation_messages(event["conversation_id"], deps.conversation_history_turns * 2)
         )
 
-    question = formulate_event_data_question(main_agent, event, missing, conversation_messages, deps.message_catalog)
+    question = formulate_event_data_question(
+        main_agent, event, missing, conversation_messages, deps.message_catalog, known_places=_known_places(deps),
+    )
 
     if event.get("conversation_id") and deps.conversation_history_turns > 0:
         deps.persistence.append_conversation_message(
@@ -648,17 +747,32 @@ def continue_from_risk_assessment(
         operational_mode = deps.optimization_policy.operational_decision_mode
         combined_decision = operational_decision if operational_mode == "merged" else None
         if combined_decision is None and operational_mode in {"shadow", "merged"}:
+            # A request skips extraction, so this decision is the only place it can learn which
+            # incident and area it is about -- give it what every channel reported lately.
+            operational_context = operational_context_for(deps, exclude_event_id=event_id)
             try:
                 combined_decision = make_operational_decision(
                     main_agent, raw_text, classification, area, description, severity,
                     deps.protocol_set.all(), deps.settings_store.get_risk_threshold(),
                     preferred_agent_hint=deps.preferred_agent_hint,
+                    operational_context=operational_context,
+                    area_choices=list(getattr(deps.area_registry, "areas", ())),
                 )
             except OrchestrationParseError as exc:
                 operational_decision_invalid(mode=operational_mode, reason=str(exc))
                 if operational_mode == "merged":
                     _record_outcome_with_report(deps, event_id, "failed", failure_reason=str(exc))
                     return FlowResult(event_id, "failed", str(exc))
+            if combined_decision is not None and (combined_decision.area or combined_decision.related_event_ref):
+                links = apply_event_links(
+                    deps, event_id, operational_context,
+                    related_ref=combined_decision.related_event_ref,
+                    area=combined_decision.area,
+                )
+                if links:
+                    event_links_recorded(event_id=event_id, links=links)
+                    event = deps.persistence.fetch_event(event_id) or event
+                    area = event.get("area")
 
         try:
             risk_assessment = (

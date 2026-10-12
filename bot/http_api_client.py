@@ -42,6 +42,11 @@ from bot.contracts import (
 )
 from tools import get_trace_id, new_trace_id, stage_context
 
+
+# Longer than the API's own synchronous model deadline (OptimizationPolicy.direct_deadline_seconds,
+# 75s) so the API, which knows what happened, always answers before the bot gives up on it.
+API_READ_TIMEOUT_SECONDS = 100.0
+
 logger = logging.getLogger(__name__)
 
 _TELEGRAM_REQUEST_CONTEXT: ContextVar[tuple[str, str] | None] = ContextVar(
@@ -69,7 +74,7 @@ def _do_request(url: str, method: str, identity: str, request_payload: dict | No
             url,
             headers={"X-Identity": identity},
             json=request_payload,
-            timeout=httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=75.0),
+            timeout=httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=API_READ_TIMEOUT_SECONDS),
         )
         if not response.content:
             return response.status_code, {}
@@ -109,7 +114,7 @@ class HttpApiClient(BotApiClient):
     def _build_client(self) -> httpx.AsyncClient:
         """A new httpx client with the bot's timeout and connection limits."""
 
-        timeout = httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=75.0)
+        timeout = httpx.Timeout(connect=2.0, pool=2.0, write=5.0, read=API_READ_TIMEOUT_SECONDS)
         limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
         return httpx.AsyncClient(base_url=self._base_url, timeout=timeout, limits=limits)
 

@@ -169,6 +169,7 @@ MESSAGES = {
         "the older one first, then reply again.",
     "api.clarify_check_record_do": "Could you clarify what you want me to check, record, or do?",
     "api.clarify_action": "Could you clarify what you want me to do?",
+    "api.question_too_slow": "I could not finish answering in time. Please ask again, or split the question into smaller parts.",
     "api.drone_selection_invalid": "No matching drone was identified. Choose a name or ID from this list:\n{choices}",
     "api.drone_recall_none": "There are no active drone missions; no state was changed.",
     "api.drone_recall_all_done": "Returned to base: {names}. Their missions were closed.",

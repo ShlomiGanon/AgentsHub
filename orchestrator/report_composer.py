@@ -22,8 +22,10 @@ from tools import get_trace_id, stage_context
 
 logger = logging.getLogger(__name__)
 
-REPORT_COMPOSE_TIMEOUT_SECONDS = 10.0
-_COMPOSE_POLICY = InvocationPolicy(max_output_tokens=400, timeout_seconds=REPORT_COMPOSE_TIMEOUT_SECONDS, reasoning_effort="none")
+# Hebrew costs several tokens per word, and this runs off the request thread (the reporter is
+# already acknowledged), so the budget favours a complete reply over a fast fallback.
+REPORT_COMPOSE_TIMEOUT_SECONDS = 30.0
+_COMPOSE_POLICY = InvocationPolicy(max_output_tokens=800, timeout_seconds=REPORT_COMPOSE_TIMEOUT_SECONDS, reasoning_effort="none")
 
 _LANGUAGE_NAMES = {"en": "English", "he": "Hebrew"}
 
@@ -84,6 +86,8 @@ def _viewer_context(summary: RunSummary) -> dict:
         "outcome_failure_reason": summary.outcome_failure_reason,
         "actions_taken": _actions_taken(summary),
     }
+    if summary.corrected_report:
+        context["corrects_earlier_report"] = summary.corrected_report
     if summary.resource_unavailable_fact:
         # Unlike insight_text (commander-only), this fact must reach every audience -- the
         # reporter is told concretely what could not be dispatched, regardless of their level.
@@ -139,12 +143,13 @@ def compose_report(
     summary: RunSummary,
     audience: Audience,
     catalog: MessageCatalog,
+    fallback_text: str | None = None,
 ) -> str:
     """Always returns usable text — the model's composed reply, or, on any failure, timeout,
-    unclear/empty response, or when no agent is available at all, the deterministic
-    `render_summary` fallback. Never raises."""
+    unclear/empty response, or when no agent is available at all, `fallback_text` when the
+    caller has a better fixed reply, else the deterministic `render_summary`. Never raises."""
 
-    fallback = render_summary(summary, audience, catalog)
+    fallback = fallback_text or render_summary(summary, audience, catalog)
     if agent is None:
         return fallback
 

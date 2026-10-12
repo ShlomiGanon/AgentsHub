@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS events (
 
     corrects_event_id TEXT,
     retracted INTEGER NOT NULL DEFAULT 0 CHECK (retracted IN (0, 1)),
+    incident_id TEXT,
 
     telegram_chat_id TEXT,
     telegram_chat_type TEXT,
@@ -353,6 +354,11 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         "default telegram_groups attendance check to disabled",
         "UPDATE telegram_groups SET attendance_check_enabled = 0;",
     ),
+    (
+        29,
+        "group events that describe the same real-world incident",
+        "ALTER TABLE events ADD COLUMN incident_id TEXT;",
+    ),
 ]
 
 
@@ -468,6 +474,11 @@ def run_migrations(db_path: str) -> None:
                 }
                 if "attendance_check_enabled" in group_columns:
                     connection.execute("UPDATE telegram_groups SET attendance_check_enabled = 0")
+            elif version == 29:
+                # Fresh databases already get the column from EVENTS_TABLE_DDL.
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(events)").fetchall()}
+                if columns and "incident_id" not in columns:
+                    connection.execute("ALTER TABLE events ADD COLUMN incident_id TEXT")
             else:
                 connection.executescript(sql)
 

@@ -23,7 +23,7 @@ from api.routes_messages_support import (
     queued_answer_text,
     validate_message_fields,
 )
-from agents import AgentInvocationError, authenticated_request_identity, set_invocation_deadline
+from agents import AgentInvocationError, AgentTimeoutError, authenticated_request_identity, set_invocation_deadline
 from auth.permissions import PermissionLevel, RequestedOperation
 from history import record_event_outcome, storage_timestamp
 from orchestrator.flows import (
@@ -553,6 +553,10 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     provenance = None
             except OrchestrationParseError as exc:
                 raise RunFailureError(str(exc)) from exc
+            except AgentTimeoutError:
+                # A question has no event to report back on later, so a model timeout must turn
+                # into a plain reply here rather than a bare 500 the asker never sees explained.
+                answer, provenance = messages.text("api.question_too_slow"), None
             _remember("assistant", answer)
             response_payload = {"taken_as": "question", "answer": answer}
             if provenance is not None:

@@ -19,7 +19,7 @@ from agents import (
     set_invocation_deadline,
 )
 from config import ModelTierError, SettingsStore, TierModel, load_base_config, resolve_tier_model_from_env
-from history import SummaryScheduler
+from history import SummaryScheduler, record_event_outcome
 from messages import set_current_catalog
 from history.query import HistoryQueryService
 from orchestrator.flows import (
@@ -190,6 +190,7 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
     report_composer_agent = ReportComposerAgent(model=sub_model.model, api_key=sub_model.api_key)
 
     history_agent = registry.get("history_agent")
+    area_registry = build_area_registry(loaded_profile)
     history_query_service = HistoryQueryService(
         persistence,
         history_agent,
@@ -198,6 +199,7 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
         areas=loaded_profile.areas,
         protocol_names=tuple(protocol.name for protocol in loaded_profile.protocols),
         timezone_name=loaded_profile.timezone_name,
+        area_labels=dict(area_registry.labels),
     )
 
     deps = FlowDeps(
@@ -206,7 +208,7 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
         registry=registry,
         protocol_set=load_protocols(loaded_profile),
         event_type_registry=build_event_type_registry(loaded_profile),
-        area_registry=build_area_registry(loaded_profile),
+        area_registry=area_registry,
         history_query_service=history_query_service,
         optimization_policy=loaded_profile.optimization_policy,
         report_composer_agent=report_composer_agent,
@@ -216,6 +218,14 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
         resource_unavailable_description=loaded_profile.resource_unavailable_description,
     )
 
+    def _expire_queue_item(item: object) -> None:
+        """Record a failed outcome for work that outlived its deadline while still queued."""
+
+        event_id, _work_fn = item
+        event = persistence.fetch_event(event_id)
+        if event is not None and event.get("outcome") is None:
+            record_event_outcome(persistence, event_id, "failed", failure_reason="queue deadline exceeded before processing")
+
     queue_policy = loaded_profile.optimization_policy
     if queue_policy.event_queue_mode == "policy":
         queue = PolicyAwareEventQueue(
@@ -223,9 +233,10 @@ def build_context(module_path: str, core_model: TierModel, sub_model: TierModel)
             workers=queue_policy.event_workers,
             max_size=queue_policy.event_queue_size,
             reserved_continuation_percent=queue_policy.reserved_continuation_percent,
+            on_expired=_expire_queue_item,
         )
     else:
-        queue = SerialEventQueue(_dispatch_queue_item)
+        queue = SerialEventQueue(_dispatch_queue_item, on_expired=_expire_queue_item)
     queue.start()
 
     scheduler = SummaryScheduler(persistence, history_agent)

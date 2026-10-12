@@ -4,11 +4,12 @@ Both `flows.py` and `flows_protocol.py` import this module so protocol
 execution does not need a circular host import.
 """
 
+import logging
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable, Literal
 
-from history import parse_timestamp, record_event_outcome
+from history import parse_timestamp, record_event_data_update, record_event_outcome, record_event_state
 from messages import get_catalog
 from orchestrator.report_composer import compose_report
 from orchestrator.run_report import build_run_summary, resolve_audience
@@ -16,7 +17,7 @@ from orchestrator.reasoning import construct_core_agents as construct_main_agent
 from orchestrator.reasoning import construct_insights_agent
 from profiles import OptimizationPolicy
 from protocols.executor import execute_steps
-from tools.log_events import event_outcome, reply_latency
+from tools.log_events import event_correction_recorded, event_outcome, reply_latency
 
 if TYPE_CHECKING:
     from agents import Agent
@@ -29,6 +30,8 @@ if TYPE_CHECKING:
     from profiles.loader import LoadedProfile
     from protocols import ProtocolSet
     from profiles import AreaRegistry, EventTypeRegistry
+
+logger = logging.getLogger(__name__)
 
 # Tests patch orchestrator.flows.execute_steps; call_execute_steps reads that name at call time.
 execute_steps = execute_steps
@@ -77,6 +80,73 @@ class FlowResult:
     event_id: str
     outcome: FlowOutcome
     detail: str = ""
+
+
+def operational_context_for(deps: FlowDeps, exclude_event_id: str | None = None) -> list[dict]:
+    """Recent cross-channel event digest for one decision; empty when history cannot supply it."""
+
+    reader = getattr(deps.history_query_service, "operational_context", None)
+    if not callable(reader):
+        return []
+    try:
+        entries = reader(
+            area_labels=getattr(deps.area_registry, "labels", None),
+            exclude_event_ids=(exclude_event_id,) if exclude_event_id else (),
+        )
+    except Exception as exc:  # context is advisory; a read failure must not block the run
+        logger.warning(
+            "operational context unavailable",
+            extra={"event": "operational_context_failed", "reason": str(exc)},
+        )
+        return []
+    return entries if isinstance(entries, list) else []
+
+
+def apply_event_links(
+    deps: FlowDeps,
+    event_id: str,
+    context: list[dict],
+    *,
+    related_ref: str | None = None,
+    corrects_ref: str | None = None,
+    area: str | None = None,
+) -> dict:
+    """Record incident membership, an explicit correction, and a resolved area for one event.
+
+    Refs are only trusted when they name an entry of the context the model was shown, so a
+    hallucinated id can never retract or re-parent an unrelated event. Returns the updates made."""
+
+    known_refs = {entry.get("ref") for entry in context if entry.get("ref")}
+    event = deps.persistence.fetch_event(event_id) or {}
+    state: dict = {}
+    data: dict = {}
+
+    anchor_ref = related_ref if related_ref in known_refs and related_ref != event_id else None
+    corrected_ref = corrects_ref if corrects_ref in known_refs and corrects_ref != event_id else None
+    anchor = deps.persistence.fetch_event(anchor_ref or corrected_ref) if (anchor_ref or corrected_ref) else None
+    if anchor and not event.get("incident_id"):
+        state["incident_id"] = anchor.get("incident_id") or anchor.get("event_id")
+
+    if corrected_ref and not event.get("corrects_event_id"):
+        state["corrects_event_id"] = corrected_ref
+        record_event_state(deps.persistence, corrected_ref, {"retracted": True})
+        event_correction_recorded(event_id=event_id, corrects_event_id=corrected_ref)
+
+    if not event.get("area"):
+        resolved = None
+        if area:
+            resolver = getattr(deps.area_registry, "resolve", None)
+            resolved = resolver(area) if callable(resolver) else (area if deps.area_registry.is_valid(area) else None)
+        if resolved is None and anchor_ref and anchor:
+            resolved = anchor.get("area")
+        if resolved:
+            data["area"] = resolved
+
+    if state:
+        record_event_state(deps.persistence, event_id, state)
+    if data:
+        record_event_data_update(deps.persistence, event_id, data)
+    return {**state, **data}
 
 
 @dataclass(frozen=True)
@@ -161,7 +231,9 @@ def _record_outcome_with_report(
     protocol = _selected_protocol(deps, event_id)
     reply_key = getattr(protocol, "viewer_reply_key", "") if protocol else ""
     notice_key = getattr(protocol, "operational_notice_key", "") if protocol else ""
-    if outcome == "succeeded" and reply_key:
+    if outcome == "succeeded" and reply_key and (
+        deps.report_composer_agent is None or not deps.settings_store.get_rich_reports_enabled()
+    ):
         report_text = deps.message_catalog.text(reply_key)
     elif deps.settings_store.get_rich_reports_enabled() or resource_unavailable_fact is not None or force_compose:
         summary = build_run_summary(deps.persistence, event_id)
@@ -172,7 +244,17 @@ def _record_outcome_with_report(
             insight_text=insight_text if insight_text is not None else summary.insight_text,
             resource_unavailable_fact=resource_unavailable_fact,
         )
-        if summary.selected_protocol in {"query_situational_picture", "overall_situational_picture"}:
+        history_only = protocol is not None and tuple(protocol.participating_agents) == ("history_agent",)
+        record_answer = "\n".join(
+            step.result_text.strip()
+            for step in summary.steps
+            if step.status == "succeeded" and step.result_text and step.result_text.strip()
+        )
+        if history_only and outcome == "succeeded" and record_answer:
+            # A debrief or timeline written from the stored record is itself the answer; the
+            # short report composer would boil it down to a sentence about having summarized.
+            report_text = record_answer
+        elif summary.selected_protocol in {"query_situational_picture", "overall_situational_picture"}:
             # Picture protocols collect deliberately detailed, heterogeneous read-tool output.
             # Prefer the dedicated picture synthesis produced by flows_protocol; concatenating
             # the raw tool strings leaks their unrelated headings, languages and formatting.
@@ -186,7 +268,13 @@ def _record_outcome_with_report(
                 ]
                 report_text = "\n".join(picture_lines)
         else:
-            report_text = compose_report(deps.report_composer_agent, summary, resolve_audience(summary), deps.message_catalog)
+            # A protocol's fixed reply is only the fallback: the composed reply answers what this
+            # sender actually said (a correction, a request, a follow-up), not a canned sentence.
+            fixed_reply = deps.message_catalog.text(reply_key) if outcome == "succeeded" and reply_key else None
+            report_text = compose_report(
+                deps.report_composer_agent, summary, resolve_audience(summary), deps.message_catalog,
+                fallback_text=fixed_reply,
+            )
 
     record_event_outcome(
         deps.persistence, event_id, outcome,

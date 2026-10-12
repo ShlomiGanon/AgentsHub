@@ -168,6 +168,7 @@ MESSAGES = {
         "ולאחר מכן ניתן להשיב שוב.",
     "api.clarify_check_record_do": "נא להבהיר מה ברצונך שאבדוק, אתעד או אבצע.",
     "api.clarify_action": "נא להבהיר מה ברצונך שאבצע.",
+    "api.question_too_slow": "לא הספקתי להשלים את התשובה בזמן. נסו לשאול שוב, או לפצל את השאלה לחלקים קטנים יותר.",
     "api.drone_selection_invalid": "לא זיהיתי רחפן מתאים. בחר שם או מזהה מהרשימה:\n{choices}",
     "api.drone_recall_none": "אין כרגע רחפנים במשימה; לא בוצע שינוי.",
     "api.drone_recall_all_done": "הוחזרו לבסיס: {names}. המשימות נסגרו.",

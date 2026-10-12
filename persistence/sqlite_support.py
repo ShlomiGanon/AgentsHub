@@ -82,6 +82,7 @@ _EVENT_COLUMNS = (
     "corrects_event_id",
     "retracted",
     "hold_escalation_alert_text",
+    "incident_id",
 )
 
 _EVENT_JSON_COLUMNS = {"entities", "precedent_matched_event_ids"}

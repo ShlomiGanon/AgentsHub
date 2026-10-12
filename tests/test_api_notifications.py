@@ -149,10 +149,10 @@ def test_resource_unavailable_outcome_produces_a_job_finished_and_a_separate_com
     assert alert["payload"]["alert_text"] == "Commander alert — decision needed: a drone was unavailable. Alternatives: none."
 
 
-def test_resource_unavailable_alert_payload_is_empty_when_no_alert_text_was_recorded(tmp_path, teardown_ctx):
-    # Defensive: a "handled_resource_unavailable" outcome always sets commander_alert_text in
-    # practice (orchestrator/flows.py), but the payload builder itself must never crash if not.
-    """Resource unavailable alert payload is empty when no alert text was recorded."""
+def test_resource_unavailable_alert_without_text_is_not_delivered(tmp_path, teardown_ctx):
+    # The orchestrator withholds the text of an alert that repeats one just sent; an alert with
+    # nothing to say must not reach commanders, while the reporter's own result still does.
+    """A resource-unavailable alert with no recorded text is dropped from the poll."""
     ctx = build_context(tmp_path)
     teardown_ctx.append(ctx)
     client = build_app(ctx).test_client()
@@ -161,9 +161,11 @@ def test_resource_unavailable_alert_payload_is_empty_when_no_alert_text_was_reco
     record_event_outcome(ctx.deps.persistence, event_id, "handled_resource_unavailable")
 
     resp = client.get("/Notifications", headers=auth_headers(COMMANDER_IDENTITY))
-    alert = next(n for n in resp.get_json()["notifications"] if n["kind"] == "resource_unavailable_alert")
+    kinds = [n["kind"] for n in resp.get_json()["notifications"]]
 
-    assert alert["payload"]["alert_text"] == ""
+    assert "resource_unavailable_alert" not in kinds
+    assert "job_finished" in kinds
+    assert resp.get_json()["next_cursor"] > 0
 
 
 def test_job_finished_targets_only_the_submitter_for_an_ordinary_succeeded_outcome(tmp_path, teardown_ctx):
@@ -271,6 +273,25 @@ def test_event_data_question_is_delivered_to_the_original_reporter(tmp_path, tea
     assert notification["target_chat_ids"] == ["alice"]
     assert notification["reply_to_message_id"] == "message-7"
     assert notification["payload"]["question"] == "Where did it happen?"
+
+
+def test_event_data_question_about_a_group_report_is_asked_in_that_group(tmp_path, teardown_ctx):
+    """A missing-details question follows the report into the group it came from, not a private chat."""
+    ctx = build_context(tmp_path)
+    teardown_ctx.append(ctx)
+    client = build_app(ctx).test_client()
+
+    event_id = _minimal_event(
+        ctx.deps.persistence, source="telegram", sender_identity="alice", source_message_id="message-9",
+        telegram_chat_id="-100500", telegram_chat_type="supergroup",
+    )
+    create_event_data_hold(ctx.deps.persistence, event_id, ("area",), "Where did it happen?", ("check",))
+
+    resp = client.get("/Notifications", headers=auth_headers(COMMANDER_IDENTITY))
+    [notification] = resp.get_json()["notifications"]
+
+    assert notification["target_chat_ids"] == ["-100500"]
+    assert notification["reply_to_message_id"] == "message-9"
 
 
 def test_job_finished_and_job_failed_carry_the_real_originating_message_id(tmp_path, teardown_ctx):

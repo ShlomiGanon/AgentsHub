@@ -27,6 +27,9 @@ class ExtractionResult:
     availability_start: str | None = None
     availability_end: str | None = None
     absence_reason: str | None = None
+    # Refs into the operational context the extraction was shown; validated by the caller.
+    related_event_ref: str | None = None
+    corrects_event_ref: str | None = None
 
 
 @dataclass(frozen=True)

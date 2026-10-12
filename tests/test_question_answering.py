@@ -5,6 +5,7 @@ import time
 
 import pytest
 
+from agents import AgentTimeoutError
 from agents.history import HistoryAgent
 from agents.runtime import build_agent_registry
 from agents.runtime import ToolInfo
@@ -59,9 +60,13 @@ class _ScriptedMainAgent:
         self._responses = list(responses)  # consumed in call order
         self.calls = []
 
-    def process(self, text, allowed_tools):
+    def process(self, text, allowed_tools, invocation_policy=None):
         """Process."""
         self.calls.append((text, allowed_tools))
+        if not self._responses:
+            # A test that scripts no composition reply exercises the compose-unavailable
+            # fallback: the specialist's own (de-formatted) words become the answer.
+            raise AgentTimeoutError("main_agent", "no scripted response")
         response_text, status = self._responses.pop(0)
 
         class _Result:
@@ -109,16 +114,44 @@ NO_HISTORY_SERVICE = _ScriptedHistoryQueryService()  # unused in tests with no r
 _ROUTE_NORMAL = ("ROUTE: normal", "success")
 
 
-def test_single_agent_chosen_answer_passes_through_without_a_compose_call():
-    """Single agent chosen answer passes through without a compose call."""
-    reference_agent = _ScriptedAgent("reference_agent", MIXED_TOOLS, response_text="gate 3 is nominal")
+def test_single_agent_answer_is_composed_against_the_question():
+    """A single specialist's answer is still written against the question, not passed through."""
+    reference_agent = _ScriptedAgent("reference_agent", MIXED_TOOLS, response_text="**Gate 3**: nominal")
     registry = build_agent_registry({}, [reference_agent])
-    main_agent = _ScriptedMainAgent([_ROUTE_NORMAL, ("AGENT: reference_agent\nTASK: check gate 3", "success")])
+    main_agent = _ScriptedMainAgent([
+        _ROUTE_NORMAL,
+        ("AGENT: reference_agent\nTASK: check gate 3", "success"),
+        ("Yes, gate 3 is fine.", "success"),
+    ])
 
     answer = answer_question(main_agent, "is gate 3 ok?", registry, NO_HISTORY_SERVICE)
 
-    assert answer == "gate 3 is nominal"
-    assert len(main_agent.calls) == 2  # classification + selection; no compose call needed for a single agent
+    assert answer == "Yes, gate 3 is fine."
+    assert len(main_agent.calls) == 3  # classification + selection + compose
+    compose_prompt = main_agent.calls[2][0]
+    assert "is gate 3 ok?" in compose_prompt and "nominal" in compose_prompt
+
+
+def test_single_agent_answer_falls_back_to_plain_specialist_text_when_compose_fails():
+    """When composition cannot run, the specialist's own words come back without markdown."""
+    reference_agent = _ScriptedAgent("reference_agent", MIXED_TOOLS, response_text="**Gate 3**: nominal")
+    registry = build_agent_registry({}, [reference_agent])
+
+    class _ComposeTimesOut(_ScriptedMainAgent):
+        """Scripted main agent whose third call (composition) times out."""
+
+        def process(self, text, allowed_tools, invocation_policy=None):
+            """Raise a model timeout on the compose call."""
+            if len(self.calls) == 2:
+                self.calls.append((text, allowed_tools))
+                raise AgentTimeoutError("main_agent", "timed out")
+            return super().process(text, allowed_tools, invocation_policy)
+
+    main_agent = _ComposeTimesOut([_ROUTE_NORMAL, ("AGENT: reference_agent\nTASK: check gate 3", "success")])
+
+    answer = answer_question(main_agent, "is gate 3 ok?", registry, NO_HISTORY_SERVICE)
+
+    assert answer == "Gate 3: nominal"
 
 
 def test_side_effecting_tool_is_never_passed_to_a_chosen_agent():
@@ -181,7 +214,7 @@ def test_duplicate_agent_selection_gets_one_targeted_repair():
     answer = answer_question(main_agent, "what is the situation in the sector?", registry, NO_HISTORY_SERVICE)
 
     assert answer == "both sectors are nominal"
-    assert len(main_agent.calls) == 3
+    assert len(main_agent.calls) == 4  # direct lookup + selection + repair + (unscripted) composition
     assert "more than once" in main_agent.calls[2][0]
     assert "each agent may appear at most once" in main_agent.calls[2][0].lower()
 

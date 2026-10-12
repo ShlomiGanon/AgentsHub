@@ -581,7 +581,7 @@ SIMULATOR_SCRIPT = """<script id="sim-data" type="application/json">{{ page_data
     if (identity) headers['X-Identity'] = identity;
     if (traceId) headers['X-Trace-ID'] = traceId;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), method === 'POST' ? 85000 : 15000);
+    const timer = setTimeout(() => controller.abort(), method === 'POST' ? 140000 : 15000);
     try {
       const response = await fetch(url, {
         method: method,

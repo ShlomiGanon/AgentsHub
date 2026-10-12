@@ -184,13 +184,16 @@ def _target_chat_ids(ctx: "ApiContext", kind: str, event_id: str, event: dict | 
         return []
     if sender == BOT_SERVICE_IDENTITY:
         return []
-    if kind in ("job_finished", "job_failed"):
+    if kind in ("job_finished", "job_failed", "event_data_hold"):
         # Falls back to the sender's own identity for events that predate this column, or
         # weren't submitted with a known chat (e.g. a non-Telegram "sensor" source). Never
         # widened to include commanders — a `handled_resource_unavailable` outcome's commander
         # alert is an entirely separate notification kind (`resource_unavailable_alert`,
         # below), delivered only to each commander's own private chat, precisely so the
         # reporter's own chat (this one, possibly a group) never receives it.
+        # A missing-details question goes to the same chat as the report it is about: the
+        # reply is matched to the event in that conversation (POST /Msg checks it), a private
+        # chat with an outside reporter may not even be open, and the group sees it pending.
         return [event.get("telegram_chat_id") or sender]
     return [sender]
 
@@ -265,6 +268,15 @@ def build_notifications_blueprint(ctx: "ApiContext") -> Blueprint:
         with stage_context("notification_delivery"):
             notification_rows = ctx.deps.persistence.wait_for_notifications_since(since, wait_seconds)
             notifications = [_format_notification(ctx, notification_row) for notification_row in notification_rows]
+            # An alert whose text the orchestrator withheld (a repeat of one just sent) has nothing
+            # to say; the cursor below still advances past it.
+            notifications = [
+                notification for notification in notifications
+                if not (
+                    notification["kind"] == "resource_unavailable_alert"
+                    and not (notification["payload"].get("alert_text") or "").strip()
+                )
+            ]
         next_cursor = notification_rows[-1]["sequence_id"] if notification_rows else since
 
         return jsonify({"notifications": notifications, "next_cursor": next_cursor})

@@ -29,6 +29,9 @@ EVENT_DATA_QUESTION_INSTRUCTION = """Write one concise question to the event rep
 Tone: never open by announcing that the report/request/update "was received" — ask directly for what is missing instead. Never surface an internal label (classification, severity, protocol name).
 {tone_examples}
 
+Every report comes from inside this one deployment, so never ask which town, settlement or site it is in. When a location is missing, ask which of the deployment's known places below it is, using their names (not ids).
+
+Known places of this deployment JSON: {known_places_json}
 Original report JSON: {original_report_json}
 Known event data JSON: {known_event_data_json}
 Missing details JSON: {missing_details_json}
@@ -48,7 +51,18 @@ HISTORY_LIST_INSTRUCTION = (
     "State plainly when a fact is missing rather than inventing it."
 )
 
-SITUATIONAL_PICTURE_PLAN_INSTRUCTION = """You are the Main Agent preparing a live situational picture and you know nothing about the current state yet. Decide what you must ask each specialist agent right now so the picture is built only from data they fetch at this moment. For every specialist listed below write one concrete, self-contained question in the requester's language that makes that specialist call its read-only tools and report current facts for its whole domain: counts, statuses, names, identifiers, locations, and anomalies. Then choose how many hours of the recent event log to review for what happened lately.
+NARRATIVE_INSTRUCTION = (
+    "Write the debrief, timeline, or summary the question asks for, only from the supplied stored "
+    "events, in chronological order: what was reported and by whom, how each part was handled, which "
+    "reports turned out false or were corrected (an event marked retracted, or one that corrects "
+    "another), casualties and the people and forces involved, and how it ended. Then cover anything "
+    "else the question explicitly asks for, such as a draft message to residents — present a draft as a "
+    "draft and never claim it was sent. State plainly when the record is missing something the question "
+    "asks for. Use short labeled sections in plain text, no markdown tables; Event IDs are not needed "
+    "unless the question asks for them."
+)
+
+SITUATIONAL_PICTURE_PLAN_INSTRUCTION ="""You are the Main Agent preparing a live situational picture and you know nothing about the current state yet. Decide what you must ask each specialist agent right now so the picture is built only from data they fetch at this moment. For every specialist listed below write one concrete, self-contained question in the requester's language that makes that specialist call its read-only tools and report the current facts the requester's message needs from its domain (for a general picture, its whole domain): counts, statuses, names, identifiers, locations, and anomalies. Ask for the whole site unless the requester names a specific place; never invent a place filter. Then choose how many hours of the recent event log to review for what happened lately.
 
 Requester's message JSON: {request_json}
 Current time: {current_time}
@@ -58,7 +72,9 @@ Respond with only a JSON object of exactly this shape and nothing else:
 {{"domains": [{{"agent": "<specialist name exactly as listed>", "query": "<question to that specialist>"}}], "recent_events_hours": <integer between 1 and 72>}}
 Include every listed specialist exactly once and no other agent."""
 
-SITUATIONAL_PICTURE_COMPOSE_INSTRUCTION = """Write the live situational picture for the requester. The specialist reports and the recent-events log below were gathered moments ago and are the only facts that exist; use nothing else. Preserve the factual detail, but synthesize it instead of copying each specialist's raw formatting. State counts, statuses, names and stable identifiers exactly as reported, cover every domain that reported, mention what happened recently when the log has events, and open with the most operationally significant fact. If a domain is marked unavailable, say plainly that its data is unavailable right now; never fill the gap. Do not add assumptions, background, or general statements not grounded in the reports/log below.
+SITUATIONAL_PICTURE_COMPOSE_INSTRUCTION = """Write the live situational picture for the requester. The specialist reports and the recent-events log below were gathered moments ago and are the only facts that exist; use nothing else. Preserve the factual detail, but synthesize it instead of copying each specialist's raw formatting. State counts, statuses, names and stable identifiers exactly as reported, cover every domain that reported, and mention what happened recently when the log has events.
+
+The requester asked something specific: open with one short line that directly answers their message (for example what is suspicious in the sector they named, who is missing tonight, or which reports are real and which were retracted), drawing on both the specialist reports and the recent-events log, before the supporting lines. The recent-events log is what people in every channel actually reported (sender, place, status); connect it to the live data when they concern the same place or incident, and treat an entry marked retracted as false as a false report, never as a live threat. If a domain is marked unavailable, say plainly that its data is unavailable right now; never fill the gap. Do not add assumptions, background, or general statements not grounded in the reports/log below.
 
 Organize the available facts into short, consistent labeled lines in the requester's language. When the source data contains them, explicitly cover: people and staffing (totals, available/unavailable/awaiting, names and relevant constraints); vehicles and operational resources (name or identifier, status, location and availability); field picture (incidents, cameras, sensors, drones and notable anomalies); and recent developments. Keep stable IDs unchanged, but translate ordinary headings and status words into the requester's language. Never expose a specialist's raw heading or mix formatting styles.
 
@@ -92,6 +108,8 @@ REPORT_COMPOSE_COMMANDER_AUDIENCE_RULES = (
 REPORT_COMPOSE_INSTRUCTION = """Write the reply to the user's own message below, reporting back what was understood and what was done — lead with that, not with any ID. Use ONLY the facts in the context JSON below; never invent actions, results, units, times, or names beyond what it contains. Reply naturally in {language}. Keep it short, plain prose, no markdown headings or bullet lists, no internal jargon.
 
 Tone: the same plain, short tone for every report, regardless of audience, outcome, or language. Never open with a greeting (e.g. "Good morning") and never open by announcing that the report/request/update "was received" (in any language, in any phrasing of that idea) — start directly with what was understood and what was done, in 1-2 sentences. Never surface an internal label — classification, severity, or protocol name — as a bare word or category; describe the substance instead. If a step failed or something is still pending, say so plainly, concretely, and specifically: state what did not happen and why (e.g. what could not be verified, what was missing), never a vague "the request failed" with no reason. If context.actions_taken is non-empty, it is exactly what was really done (e.g. a drone was dispatched, a status was recorded) — state it concretely, in your own words; never say only that something "was handled" or "was processed" when a specific action is available. If context.actions_taken is empty, do not claim any dispatch, camera confirmation, surveillance, automatic future action, or other operational effect — those things did not happen. If the context JSON includes a resource-unavailable fact, state that fact and what was understood from the report; do not invent alternatives or follow-up actions beyond it. An empty actions_taken means nothing was done yet (e.g. still pending or a resource was unavailable), not that something was done silently.
+
+Answer the sender's own message, not a generic status: if it asked for something (for example protection for a team, who else is joining, whether something is planned), say plainly whether that specific thing was done, and if it was not, say so in a few words instead of reporting only what else happened. If the message brought new facts that change an earlier picture (for example a casualty's real cause, a suspect's new location), reflect them. If context.corrects_earlier_report is present, say which earlier report is now known to be wrong and what was done about it (for example forces released or a notice sent), based only on actions_taken. Never mention checks or actions that nobody asked for and nothing in the context relates to.
 {tone_examples}
 
 {audience_rules}

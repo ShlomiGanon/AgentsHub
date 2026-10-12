@@ -75,8 +75,11 @@ class HistoryAgent(Agent):
         "means, explain it only using the field-meanings glossary supplied alongside the events — "
         "never invent database semantics of your own. Whenever you discuss a specific event, state "
         "its Event ID explicitly and exactly as given, including within a numbered list of several "
-        "events, so any one of them can be referenced again later by number or by ID. "
-        "When the question is in Hebrew, respond strictly in concise Hebrew (at most 4-5 lines)."
+        "events, so any one of them can be referenced again later by number or by ID -- except in a "
+        "debrief, timeline, or end-to-end summary, where IDs are omitted unless asked for. "
+        "When the question is in Hebrew, respond strictly in Hebrew: concise (at most 4-5 lines) for "
+        "an ordinary question, and as complete as the events require, still compact, for a debrief, "
+        "timeline, or end-to-end summary."
     )
 
     def __init__(self, model: str, api_key: str | None = None):

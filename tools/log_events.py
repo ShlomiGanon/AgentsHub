@@ -609,6 +609,12 @@ def event_correction_recorded(*, event_id: str, corrects_event_id: str) -> None:
     emit("event_correction_recorded", event_id=event_id, corrects_event_id=corrects_event_id)
 
 
+def event_links_recorded(*, event_id: str, links: dict) -> None:
+    """Emit which incident, correction target, or area an event inherited from recent context."""
+
+    emit("event_links_recorded", event_id=event_id, links=dict(links))
+
+
 def protocol_waiting_for_event_data(*, event_id: str, missing_event_fields: Iterable[str]) -> None:
     """Emit a structured protocol_waiting_for_event_data log event."""
 

@@ -195,6 +195,8 @@ _EXTRACT_AND_DECIDE_SCHEMA = {
         "availability_start": {"type": ["string", "null"]},
         "availability_end": {"type": ["string", "null"]},
         "absence_reason": {"type": ["string", "null"]},
+        "related_event_ref": {"type": ["string", "null"]},
+        "corrects_event_ref": {"type": ["string", "null"]},
         "risk_score": {"type": "number", "minimum": 0, "maximum": 1},
         "risk_reason": {"type": "string"},
         "protocol_status": {"type": "string", "enum": ["selected", "ambiguous", "no_match"]},
@@ -205,6 +207,7 @@ _EXTRACT_AND_DECIDE_SCHEMA = {
     "required": [
         "classification", "area", "entities", "description", "severity",
         "occurred_at", "availability_start", "availability_end", "absence_reason",
+        "related_event_ref", "corrects_event_ref",
         "risk_score", "risk_reason", "protocol_status", "protocol_name", "candidate_names", "protocol_reason",
     ],
     "additionalProperties": False,
@@ -219,9 +222,12 @@ _OPERATIONAL_DECISION_SCHEMA = {
         "protocol_name": {"type": ["string", "null"]},
         "candidate_names": {"type": "array", "items": {"type": "string"}},
         "protocol_reason": {"type": "string"},
+        "area": {"type": ["string", "null"]},
+        "related_event_ref": {"type": ["string", "null"]},
     },
     "required": [
-        "risk_score", "risk_reason", "protocol_status", "protocol_name", "candidate_names", "protocol_reason"
+        "risk_score", "risk_reason", "protocol_status", "protocol_name", "candidate_names", "protocol_reason",
+        "area", "related_event_ref",
     ],
     "additionalProperties": False,
 }
@@ -389,6 +395,10 @@ class OperationalDecision:
 
     risk: RiskAssessment
     selection: ProtocolSelectionResult
+    # Only a request has no extraction step, so its decision also names where it applies and
+    # which recent event it continues; both stay None for a report or when unknown.
+    area: str | None = None
+    related_event_ref: str | None = None
 
 @dataclass(frozen=True)
 class FinalAssessment:
