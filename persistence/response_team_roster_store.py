@@ -117,6 +117,22 @@ class ResponseTeamRosterStore(TeamStatusPersistenceInterface):
                 (identity,),
             )
 
+    def withdraw_member(self, telegram_identity: str) -> None:
+        """Clear one member's approval so they stop counting toward the roster.
+
+        The row and its attendance history stay, because responses reference it and an
+        operator may approve the member again later.
+        """
+
+        identity = telegram_identity.strip()
+        if not identity:
+            raise TeamStatusPersistenceError("telegram identity is required")
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE team_members SET approved = 0 WHERE telegram_identity = ?",
+                (identity,),
+            )
+
     def approve_roster(self, approved_by: str, approved_at: str | None = None) -> int:
         """Mark every team_members row approved and record the singleton approval."""
 

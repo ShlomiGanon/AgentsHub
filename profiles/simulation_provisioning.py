@@ -21,7 +21,7 @@ import importlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from profiles.simulation import simulation_group_chat_id, simulation_user_telegram_id
+from profiles.simulation import SIMULATION_USER_ID_BASE, simulation_group_chat_id, simulation_user_telegram_id
 
 if TYPE_CHECKING:
     from persistence import PersistenceInterface
@@ -36,6 +36,7 @@ class ProvisioningResult:
     created_groups: tuple[str, ...]
     registered_roster_members: tuple[tuple[str, str], ...] = ()
     newly_approved_rosters: tuple[str, ...] = ()
+    withdrawn_roster_members: tuple[tuple[str, str], ...] = ()
 
 
 def ensure_simulation_entities(persistence: "PersistenceInterface", loaded_profile: "LoadedProfile") -> ProvisioningResult:
@@ -79,6 +80,7 @@ def ensure_simulation_entities(persistence: "PersistenceInterface", loaded_profi
                 )
 
     registered_roster_members, newly_approved_rosters = _ensure_roster_memberships(loaded_profile)
+    withdrawn_roster_members = _withdraw_undeclared_simulation_members(loaded_profile)
 
     _run_operational_seed(loaded_profile)
 
@@ -87,7 +89,46 @@ def ensure_simulation_entities(persistence: "PersistenceInterface", loaded_profi
         created_groups=tuple(created_groups),
         registered_roster_members=registered_roster_members,
         newly_approved_rosters=newly_approved_rosters,
+        withdrawn_roster_members=withdrawn_roster_members,
     )
+
+
+def _is_simulation_user_identity(identity: str) -> bool:
+    """True for an ID inside the reserved simulation-user block, which no real Telegram user can hold."""
+
+    return identity.isdigit() and int(identity) >= SIMULATION_USER_ID_BASE
+
+
+def _withdraw_undeclared_simulation_members(loaded_profile: "LoadedProfile") -> tuple[tuple[str, str], ...]:
+    """Withdraw approval from simulation personas still on a roster they are no longer declared for.
+
+    Registration is never undone by later restarts on its own, so a persona whose
+    `pre_approved_rosters` dropped a roster would otherwise stay counted as a member forever.
+    Only identities in the reserved simulation-user block are touched; real members never are.
+    A roster no persona references is never opened (same rule as `_ensure_roster_memberships`),
+    and a roster store without `withdraw_member` is left as it is.
+    """
+
+    declared_by_roster: dict[str, set[str]] = {}
+    for persona in loaded_profile.simulation_users:
+        for roster_key in persona.pre_approved_rosters:
+            declared_by_roster.setdefault(roster_key, set()).add(simulation_user_telegram_id(persona.offset))
+
+    withdrawn: list[tuple[str, str]] = []
+    for roster in getattr(loaded_profile, "simulation_rosters", ()) or ():
+        declared = declared_by_roster.get(roster.key)
+        if not declared:
+            continue
+        store = roster.open(roster.db_path)
+        withdraw_member = getattr(store, "withdraw_member", None)
+        if withdraw_member is None:
+            continue
+        for member in store.list_members(approved_only=True):
+            identity = str(member["telegram_identity"])
+            if _is_simulation_user_identity(identity) and identity not in declared:
+                withdraw_member(identity)
+                withdrawn.append((roster.key, identity))
+    return tuple(withdrawn)
 
 
 def _run_operational_seed(loaded_profile: "LoadedProfile") -> None:

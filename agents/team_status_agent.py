@@ -7,8 +7,16 @@ from zoneinfo import ZoneInfo
 
 from agents.runtime import Agent, get_authenticated_request_identity, tool
 from agents.contracts import failed_tool_result
-from messages import get_current_catalog
+from messages import MessageCatalogError, get_current_catalog
 from persistence import AttendanceCycle, TeamStatusPersistenceError, open_team_status_persistence
+
+# Optional, more specific variants of a notice key, tried in this order. Each names the
+# placeholders it needs, so `<key>.area` is used only when an area is known, and so on.
+_NOTICE_VARIANTS = (
+    ("area_description", ("area", "description")),
+    ("area", ("area",)),
+    ("description", ("description",)),
+)
 
 
 def _aware_datetime(value: str | None) -> datetime:
@@ -224,18 +232,56 @@ class TeamStatusAgent(Agent):
 
         return "The attendance response was stored."
 
+    def _notice_context(self, about_event_id: str, area: str, description: str) -> tuple[str, str]:
+        """(area text, description text) for a notice; a profile may resolve about_event_id itself."""
+
+        return area, description
+
     @tool(
         "post_operational_notice",
-        "Returns the catalog sentence for one operational update. Does not dispatch a resource and does not ask which camera to check.",
+        "Returns the catalog sentence for one operational update. area, description, and about_event_id "
+        "are optional details of the event the update is about; a more specific catalog sentence is used "
+        "when they are known. Does not dispatch a resource and does not ask which camera to check.",
         side_effecting=False,
     )
-    def post_operational_notice(self, notice_key: str = "") -> str:
+    def post_operational_notice(
+        self, notice_key: str = "", area: str = "", description: str = "", about_event_id: str = ""
+    ) -> str:
         """Return the catalog sentence for a profile-declared operational update."""
 
         catalog = get_current_catalog()
         if notice_key not in catalog.messages:
             return failed_tool_result("Clarification required: unknown operational notice.")
-        return catalog.text(notice_key)
+        area_text, description_text = self._notice_context(
+            about_event_id.strip(), area.strip(), description.strip()
+        )
+        known = {"area": area_text, "description": description_text}
+        for suffix, placeholders in _NOTICE_VARIANTS:
+            variant_key = f"{notice_key}.{suffix}"
+            if variant_key in catalog.messages and all(known[name] for name in placeholders):
+                try:
+                    return catalog.text(variant_key, **{name: known[name] for name in placeholders})
+                except MessageCatalogError:
+                    continue
+        try:
+            return catalog.text(notice_key)
+        except MessageCatalogError:
+            return failed_tool_result("Clarification required: the operational notice needs event details.")
+
+    def _field_presence(self, entry: dict) -> str | None:
+        """Where a member not yet reporting attendance is known to be active, if a profile tracks it."""
+
+        return None
+
+    def _until_text(self, unavailable_until: str) -> str:
+        """Local date and time for an unavailability end, formatted without non-ASCII strftime."""
+
+        local = _aware_datetime(unavailable_until).astimezone(ZoneInfo(self.timezone_name))
+        # Windows strftime rejects non-ASCII format strings, so only digits go through it and
+        # the connecting words come from the catalog.
+        return get_current_catalog().text(
+            "attendance.report.until_datetime", date=local.strftime("%d/%m/%Y"), time=local.strftime("%H:%M")
+        )
 
     @tool(
         "report_team_availability",
@@ -245,49 +291,53 @@ class TeamStatusAgent(Agent):
     def report_team_availability(self, as_of_iso: str = "") -> str:
         """Report team availability."""
 
+        catalog = get_current_catalog()
         now = _aware_datetime(as_of_iso or None)
         snapshot = self.status_store.availability_snapshot(now.isoformat())
         if not snapshot:
-            return "The readiness-team roster is empty or has not been approved."
+            return catalog.text("attendance.report.empty")
 
-        is_hebrew = get_current_catalog().language == "he"
-        labels = (
-            {"available": "זמין", "unavailable": "לא זמין", "awaiting_response": "טרם התקבלה תשובה"}
-            if is_hebrew
-            else {"available": "available", "unavailable": "unavailable", "awaiting_response": "awaiting response"}
-        )
-        lines = ["👥 סטטוס כיתת הכוננות" if is_hebrew else "Readiness-team status:"]
-        counts = {"available": 0, "unavailable": 0, "awaiting_response": 0}
+        # The Hebrew report stays short for commanders; other languages keep the raw response.
+        include_original = catalog.language != "he"
+        lines = [catalog.text("attendance.report.header")]
+        counts = {"available": 0, "unavailable": 0, "awaiting_response": 0, "in_field": 0}
         for entry in snapshot:
             status = entry["availability"]
+            label_values: dict = {}
+            if status == "awaiting_response":
+                presence = self._field_presence(entry)
+                if presence:
+                    status, label_values = "in_field", {"area": presence}
             counts[status] += 1
             detail = ""
             if status == "unavailable":
-                if is_hebrew:
-                    detail = f" — סיבה: {entry['reason']}"
-                else:
-                    detail = f" — reason: {entry['reason']}; unavailable until: {entry['unavailable_until']}"
-                if is_hebrew and entry["unavailable_until"]:
-                    unavailable_until = _aware_datetime(entry["unavailable_until"]).astimezone(
-                        ZoneInfo(self.timezone_name)
+                detail = catalog.text("attendance.report.reason_detail", reason=entry["reason"])
+                if entry["unavailable_until"]:
+                    detail += catalog.text(
+                        "attendance.report.until_detail", until=self._until_text(entry["unavailable_until"])
                     )
-                    detail += f"; עד {unavailable_until.strftime('%d/%m/%Y בשעה %H:%M')}"
-            if not is_hebrew and entry["original_text"]:
-                detail += f"; original response: {entry['original_text']}; received at: {entry['received_at']}"
-            lines.append(f"- {entry['full_name']}: {labels[status]}{detail}")
+            if include_original and entry["original_text"]:
+                detail += catalog.text(
+                    "attendance.report.original_detail",
+                    original=entry["original_text"], received_at=entry["received_at"],
+                )
+            lines.append(catalog.text(
+                "attendance.report.member_line",
+                name=entry["full_name"],
+                status=catalog.text(f"attendance.report.status.{status}", **label_values),
+                detail=detail,
+            ))
 
-        if is_hebrew:
-            lines.extend((
-                "",
-                f"סה״כ חברי כיתה: {len(snapshot)}",
-                f"זמינים: {counts['available']} | לא זמינים: {counts['unavailable']} | טרם ענו: {counts['awaiting_response']}",
-            ))
-        else:
-            lines.extend((
-                "",
-                f"Total: {len(snapshot)}",
-                f"Available: {counts['available']}",
-                f"Unavailable: {counts['unavailable']}",
-                f"Awaiting response: {counts['awaiting_response']}",
-            ))
+        count_parts = [
+            catalog.text("attendance.report.count_available", count=counts["available"]),
+            catalog.text("attendance.report.count_unavailable", count=counts["unavailable"]),
+            catalog.text("attendance.report.count_awaiting", count=counts["awaiting_response"]),
+        ]
+        if counts["in_field"]:
+            count_parts.append(catalog.text("attendance.report.count_in_field", count=counts["in_field"]))
+        lines.extend((
+            "",
+            catalog.text("attendance.report.total", count=len(snapshot)),
+            catalog.text("attendance.report.count_separator").join(count_parts),
+        ))
         return "\n".join(lines)

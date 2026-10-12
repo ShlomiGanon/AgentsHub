@@ -81,6 +81,22 @@ class IncidentResponderStore:
             )
         return candidates[0], None
 
+    def event_summary(self, event_id: str) -> dict | None:
+        """Return area, description, classification, and raw_text of one events row, or None."""
+
+        if not (event_id or "").strip():
+            return None
+        with self._connect() as conn:
+            try:
+                row = conn.execute(
+                    "SELECT event_id, area, description, classification, raw_text FROM events WHERE event_id = ?",
+                    (event_id.strip(),),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                # Same tolerance as find_candidate_events: no events table yet means no event.
+                return None
+        return dict(row) if row is not None else None
+
     def find_open_link(self, identity: str) -> dict | None:
         """Return this identity's open incident_responders row, or None."""
 
