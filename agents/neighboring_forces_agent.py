@@ -12,6 +12,20 @@ from typing import Callable
 from agents.runtime import Agent, tool
 from agents.contracts import failed_tool_result
 from persistence import open_neighboring_force_store
+from tools import get_current_event_id
+
+
+def resolve_event_links(event_id: str = "", incident_id: str = "") -> "tuple[str | None, str | None]":
+    """Return (event_id, incident_id) for a resource write, defaulting to the running protocol's event.
+
+    A direct-tool binder passes both ids explicitly; a model-formulated step does not, so the
+    event whose protocol is executing is used instead. An event that has no incident of its
+    own is its own incident, which keeps "release this incident" working for single reports.
+    """
+
+    resolved_event = (event_id or "").strip() or get_current_event_id() or None
+    resolved_incident = (incident_id or "").strip() or resolved_event
+    return resolved_event, resolved_incident
 
 
 class NeighboringForcesAgent(Agent):
@@ -86,12 +100,15 @@ class NeighboringForcesAgent(Agent):
         Default: the busy-window pool check -- a dispatched unit stays busy for
         `force_busy_seconds` regardless of en_route/arrived status, checked against
         `force_pool_size`. A subclass whose capacity for a kind comes from somewhere else
-        entirely (e.g. a live roster count) overrides this for that kind."""
+        entirely (e.g. a live roster count) overrides this for that kind. A released dispatch
+        no longer occupies its units."""
 
         busy_since = (datetime.now(timezone.utc) - timedelta(seconds=self.force_busy_seconds)).isoformat()
         busy_units = sum(
             dispatch["unit_count"] for dispatch in self.dispatch_store.list_dispatches()
-            if dispatch["force_kind"] == kind_norm and dispatch["dispatched_at"] > busy_since
+            if dispatch["force_kind"] == kind_norm
+            and dispatch["dispatched_at"] > busy_since
+            and not dispatch.get("released_at")
         )
         remaining = max(self.force_pool_size - busy_units, 0)
         return remaining >= unit_count, remaining
@@ -112,12 +129,21 @@ class NeighboringForcesAgent(Agent):
         "Records a request to dispatch a neighboring/external force to a named target area, "
         "with the unit count and an optional note. Returns the recorded request, its en_route "
         "status, and computed ETA -- or a clear statement that too few units are currently "
-        "available. Side-effecting and not idempotent -- running it twice records two dispatch "
+        "available. event_id and incident_id are optional links to the report being handled. "
+        "Side-effecting and not idempotent -- running it twice records two dispatch "
         "requests, not one.",
         side_effecting=True,
         idempotent=False,
     )
-    def dispatch_neighboring_force(self, kind: str, target_area: str, unit_count: int = 1, note: str = "") -> str:
+    def dispatch_neighboring_force(
+        self,
+        kind: str,
+        target_area: str,
+        unit_count: int = 1,
+        note: str = "",
+        event_id: str = "",
+        incident_id: str = "",
+    ) -> str:
         """Record one dispatch or return why capacity or arguments were refused."""
 
         kind_norm = kind.strip().lower()
@@ -141,6 +167,7 @@ class NeighboringForcesAgent(Agent):
             return f"{kind_norm} dispatch failed: {reason}"
 
         eta = self._eta_seconds(origin_area, cleaned_area)
+        linked_event, linked_incident = resolve_event_links(event_id, incident_id)
         record = self.dispatch_store.dispatch(
             force_kind=kind_norm,
             origin_area=origin_area,
@@ -148,6 +175,8 @@ class NeighboringForcesAgent(Agent):
             unit_count=unit_count,
             eta_seconds=eta,
             note=note.strip(),
+            event_id=linked_event,
+            incident_id=linked_incident,
         )
         return (
             f"{kind_norm} dispatch recorded, en route to {record['target_area']}, "
@@ -158,8 +187,9 @@ class NeighboringForcesAgent(Agent):
         "list_neighboring_force_dispatches",
         "Returns the current neighboring-force dispatch log (request id, kind, unit count, "
         "origin/target area, status, ETA, dispatched-at), optionally filtered to one status "
-        "('en_route' or 'arrived'). A dispatch already shows 'arrived' once its ETA has elapsed, "
-        "with no separate report needed for that transition.",
+        "('en_route', 'arrived', or 'released'). A dispatch already shows 'arrived' once its ETA has elapsed, "
+        "with no separate report needed for that transition. A RELEASED dispatch was cancelled "
+        "or stood down and no longer occupies its units.",
         side_effecting=False,
     )
     def list_neighboring_force_dispatches(self, status: str = "") -> str:
@@ -171,9 +201,14 @@ class NeighboringForcesAgent(Agent):
             return "No neighboring-force dispatches recorded."
         lines = [f"Neighboring-force dispatches ({len(rows)}):"]
         for row in rows:
+            if row.get("released_at"):
+                reason = f": {row['release_reason']}" if row.get("release_reason") else ""
+                state = f"RELEASED at {row['released_at']}{reason}"
+            else:
+                state = row["status"].upper()
             lines.append(
                 f"- [{row['request_id']}] {row['force_kind']} x{row['unit_count']}: "
-                f"{row['origin_area']} -> {row['target_area']} ({row['status'].upper()}, "
+                f"{row['origin_area']} -> {row['target_area']} ({state}, "
                 f"ETA {row['eta_seconds']}s, dispatched {row['dispatched_at']})"
             )
         return "\n".join(lines)

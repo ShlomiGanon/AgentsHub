@@ -89,7 +89,14 @@ AREAS = [
 
 DRONES_WAREHOUSE = "drones_warehouse"
 
-# Cameras: create-if-missing only. IDs match the SEC_001 camera narrative.
+# How long a drone stays over its target after arriving before the mission completes and the
+# drone is ready again at DRONES_WAREHOUSE. Without an end, two launches would exhaust the
+# two-drone fleet for the rest of the run.
+DRONE_LOITER_SECONDS = 10 * 60
+
+# Cameras: create-if-missing only. IDs match the SEC_001 camera narrative. The mast and drone
+# cameras start offline: they are live coverage only after a camera_status report says the
+# mast was raised or a drone feed is up, never from the seed itself.
 CAMERAS = (
     {
         "camera_id": "CAM-01",
@@ -98,6 +105,7 @@ CAMERAS = (
         "status": "active",
         "azimuth_degrees": 90,
         "feed_summary": _catalog_text("response_team.camera.cam_01.feed"),
+        "kind": "fixed",
     },
     {
         "camera_id": "CAM-02",
@@ -106,6 +114,7 @@ CAMERAS = (
         "status": "active",
         "azimuth_degrees": 110,
         "feed_summary": _catalog_text("response_team.camera.cam_02.feed"),
+        "kind": "fixed",
     },
     {
         "camera_id": "CAM-03",
@@ -114,22 +123,25 @@ CAMERAS = (
         "status": "active",
         "azimuth_degrees": 200,
         "feed_summary": _catalog_text("response_team.camera.cam_03.feed"),
+        "kind": "fixed",
     },
     {
         "camera_id": "CAM-MAST",
         "name": _catalog_text("response_team.camera.cam_mast.name"),
         "area": "old_public_building",
-        "status": "active",
+        "status": "offline",
         "azimuth_degrees": 180,
         "feed_summary": _catalog_text("response_team.camera.cam_mast.feed"),
+        "kind": "mast",
     },
     {
         "camera_id": "CAM-DRONE",
         "name": _catalog_text("response_team.camera.cam_drone.name"),
         "area": "old_public_building",
-        "status": "active",
+        "status": "offline",
         "azimuth_degrees": 0,
         "feed_summary": _catalog_text("response_team.camera.cam_drone.feed"),
+        "kind": "drone",
     },
 )
 

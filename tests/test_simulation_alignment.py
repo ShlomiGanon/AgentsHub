@@ -172,8 +172,9 @@ def test_correction_and_closure_notify_without_asking_about_cameras():
     assert closure[0].direct_tool_name == "post_operational_notice"
     assert "camera" not in correction[0].direct_tool_name
     correction_protocol = _protocol(RESPONSE_PROTOCOLS, "correct_false_security_report")
+    # The broadcast notice is generic, never tied to one scenario's area or threat.
     assert correction_protocol.operational_notice_key == (
-        "response_team.notice.false_gunfire"
+        "response_team.notice.report_corrected"
     )
     assert correction_protocol.retracts_precedent
     assert _protocol(RESPONSE_PROTOCOLS, "close_security_incident").operational_notice_key == (
@@ -183,27 +184,31 @@ def test_correction_and_closure_notify_without_asking_about_cameras():
     assert logged[0].direct_tool_name == "log_security_observation"
 
 
-def test_yasam_commander_is_approved_on_an_already_approved_roster(tmp_path):
+def test_yasam_commander_is_an_external_force_not_a_squad_roster_member(tmp_path):
+    """The police special-unit commander is never provisioned onto the site's own squad roster."""
     persona = next(user for user in SIMULATION_USERS if user.key == "yasam_commander")
-    assert persona.pre_approved_rosters == ("team_status",)
+    assert persona.pre_approved_rosters == ()
+    squad = [user for user in SIMULATION_USERS if "team_status" in user.pre_approved_rosters]
+    assert len(squad) == 6
 
+    # An approved squad member still records their own movement on an approved roster.
     store = open_response_team_roster_store(str(tmp_path / "roster.db"))
     store.register_member("existing", "Existing Member")
     store.approve_roster("commander")
     store.register_member("pending-real", "Pending Real Member")
-    store.register_member("9000000000000014", "Yasam")
-    store.approve_member("9000000000000014")
+    store.register_member("9000000000000000", "Eli")
+    store.approve_member("9000000000000000")
 
     members = {row["telegram_identity"]: row for row in store.list_members(approved_only=False)}
-    assert members["9000000000000014"]["approved"]
+    assert members["9000000000000000"]["approved"]
     assert not members["pending-real"]["approved"]
 
     agent = ResponseTeamRosterAgent.__new__(ResponseTeamRosterAgent)
     agent.status_store = store
-    stored = agent.report_team_movement(area="old_public_building", member_identity="9000000000000014")
+    stored = agent.report_team_movement(area="old_public_building", member_identity="9000000000000000")
     assert "old_public_building" in stored
     updated = {row["telegram_identity"]: row for row in store.list_members(approved_only=False)}
-    assert updated["9000000000000014"]["current_area"] == "old_public_building"
+    assert updated["9000000000000000"]["current_area"] == "old_public_building"
 
 
 def test_contained_fire_and_false_alarm_notify_without_a_camera_check():

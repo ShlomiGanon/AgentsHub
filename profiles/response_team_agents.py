@@ -11,7 +11,9 @@ from agents import (
     get_authenticated_request_identity,
     tool,
 )
+from messages import get_current_catalog
 from persistence import (
+    NeighboringForceStoreError,
     SurveillancePersistenceError,
     TeamStatusPersistenceError,
     open_incident_responder_store,
@@ -20,7 +22,9 @@ from persistence import (
 )
 from profiles.contracts import AgentSpec
 from profiles.response_team import (
+    AREAS,
     DB_PATH,
+    DRONE_LOITER_SECONDS,
     DRONES_WAREHOUSE,
     FORCE_BASES,
     FORCE_BUSY_SECONDS,
@@ -31,6 +35,24 @@ from profiles.response_team import (
     _catalog_text,
     eta_seconds,
 )
+
+# A notice quotes the corrected report's description; a long free-text report would bury the
+# update itself, so it is shortened to one readable clause.
+_NOTICE_DESCRIPTION_LIMIT = 120
+
+
+def _current_area_label(area: str) -> str:
+    """Area label in the request's own catalog language, or the raw value when undeclared."""
+
+    key = f"response_team.area.{area}"
+    catalog = get_current_catalog()
+    return catalog.text(key) if key in catalog.messages else area
+
+
+def _release_reference_missing(event_id: str, incident_id: str) -> bool:
+    """True when neither id was given, so a release tool must refuse rather than guess."""
+
+    return not ((event_id or "").strip() or (incident_id or "").strip())
 
 class ResponseTeamRosterAgent(TeamStatusAgent):
     """Roster/attendance specialist -- a profile-owned subclass of the
@@ -55,6 +77,30 @@ class ResponseTeamRosterAgent(TeamStatusAgent):
         self.status_store = open_response_team_roster_store(self.status_db_path)
         self.incident_store = open_incident_responder_store(self.status_db_path)
         Agent.__init__(self, model, api_key)
+
+    def _notice_context(self, about_event_id: str, area: str, description: str) -> tuple[str, str]:
+        """Prefer the area and description of the event the notice is about, labeled for readers."""
+
+        summary = self.incident_store.event_summary(about_event_id) if about_event_id else None
+        if summary:
+            area = (summary.get("area") or "").strip() or area
+            description = (summary.get("description") or "").strip() or description
+        description = " ".join(description.split())
+        if len(description) > _NOTICE_DESCRIPTION_LIMIT:
+            description = description[: _NOTICE_DESCRIPTION_LIMIT - 1].rstrip() + "…"
+        return (_current_area_label(area) if area else ""), description
+
+    def _field_presence(self, entry: dict) -> str | None:
+        """Area label for a member linked to an open incident or with a reported current area."""
+
+        area = ""
+        link = self.incident_store.find_open_link(entry["telegram_identity"])
+        if link is not None:
+            # Read-only: the linked incident's area, falling back to the member's own report.
+            summary = self.incident_store.event_summary(link["event_id"]) or {}
+            area = (summary.get("area") or "").strip()
+        area = area or (entry.get("current_area") or "").strip()
+        return _current_area_label(area) if area else None
 
     @tool(
         "report_team_movement",
@@ -176,28 +222,79 @@ class ResponseTeamSurveillanceAgent(SurveillanceAgent):
     seed (cameras/drones come from this profile's own `CAMERAS`/`DRONES`
     via `OPERATIONAL_SEED`, below). Inherits `get_drone_fleet_status`,
     `dispatch_drone_to_area`, `get_active_missions`, and
-    `get_surveillance_overview` unchanged; adds `update_camera_status` and
-    `recall_drone` (recalling to `DRONES_WAREHOUSE`)."""
+    `get_surveillance_overview` unchanged; adds `update_camera_status`,
+    `recall_drone` (recalling to `DRONES_WAREHOUSE`), and `end_drone_missions`
+    (releasing the missions of one event or incident)."""
 
     camera_catalog_stem = "response_team"
+    area_catalog_stem = "response_team"
+    declared_areas = tuple(AREAS)
     surveillance_db_path = DB_PATH
     system_prompt = SurveillanceAgent.system_prompt + (
         " When the user writes in Hebrew, the entire answer must be in simple, natural Hebrew. "
-        "Translate operational statuses into everyday Hebrew: active means פעילה, degraded means תקלה חלקית, "
-        "and offline means לא פעילה. Keep camera IDs unchanged. Do not use English headings, English status words, "
+        "Translate operational statuses into everyday Hebrew: "
+        f"active means {_catalog_text('response_team.camera_status.active')}, "
+        f"degraded means {_catalog_text('response_team.camera_status.degraded')}, "
+        f"and offline means {_catalog_text('response_team.camera_status.offline')}. "
+        "Keep camera IDs unchanged. Do not use English headings, English status words, "
         "asterisk emphasis, dramatic alerts, or unsolicited recommendations. Start with one plain summary sentence, "
-        "then give one short Hebrew line for each camera."
+        "then give one short Hebrew line for each camera. "
+        "A mast camera or drone camera is temporary coverage, never a fence camera. "
+        "A drone shown in flight with a Mission id is on that assignment, not an anomaly."
     )
 
     def __init__(self, model: str, api_key: str | None = None):
-        """Open this profile's surveillance store with its ETA matrix and warehouse home."""
+        """Open this profile's surveillance store with its ETA matrix, warehouse home, and loiter window."""
 
         if not self.surveillance_db_path:
             raise TypeError("ResponseTeamSurveillanceAgent requires a class-level surveillance_db_path")
         self.surveillance_store = open_response_team_surveillance_store(
-            self.surveillance_db_path, eta_fn=eta_seconds, home_area=DRONES_WAREHOUSE
+            self.surveillance_db_path,
+            eta_fn=eta_seconds,
+            home_area=DRONES_WAREHOUSE,
+            mission_loiter_seconds=DRONE_LOITER_SECONDS,
         )
         Agent.__init__(self, model, api_key)
+
+    @tool(
+        "end_drone_missions",
+        "Ends every active drone mission linked to one event or incident -- for example after its "
+        "report was corrected as false or the incident was closed -- and records those drones as "
+        f"ready at {DRONES_WAREHOUSE}. Pass event_id and/or incident_id; nothing is ended without one. "
+        "outcome is 'completed' (default) or 'aborted'. Side-effecting and idempotent -- a second "
+        "call finds nothing left to end.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def end_drone_missions(
+        self, event_id: str = "", incident_id: str = "", outcome: str = "completed", reason: str = ""
+    ) -> str:
+        """End the drone missions linked to an event or incident and return a catalog confirmation."""
+
+        if _release_reference_missing(event_id, incident_id):
+            return failed_tool_result(_catalog_text("response_team.release.missing_reference"))
+        cleaned_outcome = (outcome or "").strip().lower()
+        if cleaned_outcome not in {"completed", "aborted"}:
+            cleaned_outcome = "completed"
+        try:
+            ended = self.surveillance_store.end_missions(
+                event_id=(event_id or "").strip() or None,
+                incident_id=(incident_id or "").strip() or None,
+                outcome=cleaned_outcome,
+                reason=reason,
+            )
+        except SurveillancePersistenceError as exc:
+            return failed_tool_result(f"Ending drone missions failed: {exc}")
+        if not ended:
+            return _catalog_text("response_team.release.no_missions")
+        missions = ", ".join(
+            f"{mission['callsign']} ({mission['mission_id']}, {_AREA_LABELS.get(mission['target_area'], mission['target_area'])})"
+            for mission in ended
+        )
+        return _catalog_text(
+            "response_team.release.missions_ended",
+            count=len(ended), missions=missions, home=_AREA_LABELS[DRONES_WAREHOUSE],
+        )
 
     @tool(
         "update_camera_status",
@@ -272,7 +369,7 @@ class ResponseTeamSurveillanceAgent(SurveillanceAgent):
 
 
 class NeighboringForcesAgent(_NeighboringForcesAgentBase):
-    """Dispatch specialist with this profile's kinds plus own-roster `squad` capacity."""
+    """Dispatch specialist with this profile's kinds, own-roster `squad` capacity, and event-scoped release."""
 
     dispatch_db_path = DB_PATH
     force_bases = FORCE_BASES
@@ -329,17 +426,52 @@ class NeighboringForcesAgent(_NeighboringForcesAgentBase):
         "dispatch_squad",
         "Dispatches this site's own response-team roster to a named target area. This is not a "
         "neighboring/external force -- ambulance, police, K9, and YASAM go through "
-        "dispatch_neighboring_force instead. unit_count defaults to 1. Side-effecting and not "
-        "idempotent.",
+        "dispatch_neighboring_force instead. unit_count defaults to 1. event_id and incident_id "
+        "are optional links to the report being handled. Side-effecting and not idempotent.",
         side_effecting=True,
         idempotent=False,
     )
-    def dispatch_squad(self, target_area: str, unit_count: int = 1, note: str = "") -> str:
+    def dispatch_squad(
+        self, target_area: str, unit_count: int = 1, note: str = "", event_id: str = "", incident_id: str = ""
+    ) -> str:
         """Dispatch this site's own roster through the shared neighboring-force tool."""
 
         return self.dispatch_neighboring_force(
             kind=SQUAD_KIND, target_area=target_area, unit_count=unit_count, note=note,
+            event_id=event_id, incident_id=incident_id,
         )
+
+    @tool(
+        "release_force_dispatches",
+        "Releases (stands down) every force dispatch -- neighboring forces and this site's own "
+        "squad -- linked to one event or incident, for example after its report was corrected as "
+        "false or the incident was closed. Released dispatches stay in the log as RELEASED and no "
+        "longer count against capacity. Pass event_id and/or incident_id; nothing is released "
+        "without one. Side-effecting and idempotent.",
+        side_effecting=True,
+        idempotent=True,
+    )
+    def release_force_dispatches(self, event_id: str = "", incident_id: str = "", reason: str = "") -> str:
+        """Release the dispatches linked to an event or incident and return a catalog confirmation."""
+
+        if _release_reference_missing(event_id, incident_id):
+            return failed_tool_result(_catalog_text("response_team.release.missing_reference"))
+        try:
+            released = self.dispatch_store.release_dispatches(
+                event_id=(event_id or "").strip() or None,
+                incident_id=(incident_id or "").strip() or None,
+                reason=reason,
+            )
+        except NeighboringForceStoreError as exc:
+            return failed_tool_result(f"Releasing force dispatches failed: {exc}")
+        if not released:
+            return _catalog_text("response_team.release.no_dispatches")
+        dispatches = ", ".join(
+            f"{_force_kind_label(row['force_kind'])} x{row['unit_count']} -> "
+            f"{_AREA_LABELS.get(row['target_area'], row['target_area'])} ({row['request_id']})"
+            for row in released
+        )
+        return _catalog_text("response_team.release.dispatches_released", count=len(released), dispatches=dispatches)
 
 
 # -- Resource-unavailable copy ------------------------------------------------
@@ -369,13 +501,20 @@ _AREA_LABELS = {
 }
 
 
+def _force_kind_label(force_kind: str) -> str:
+    """Display label for a dispatch's force kind; the own squad is labeled as squad members."""
+
+    return _RESOURCE_KIND_LABELS.get("squad_member" if force_kind == SQUAD_KIND else force_kind, force_kind)
+
+
 def _force_remaining_capacity(neighboring_forces_agent) -> dict[str, int]:
     """Remaining units per force kind inside the same busy window the dispatch tool uses."""
 
     busy_since = (datetime.now(timezone.utc) - timedelta(seconds=FORCE_BUSY_SECONDS)).isoformat()
     busy_by_kind: dict[str, int] = {}
     for dispatch in neighboring_forces_agent.dispatch_store.list_dispatches():
-        if dispatch["dispatched_at"] > busy_since:
+        # A released dispatch no longer occupies its units, exactly as in the dispatch tool.
+        if dispatch["dispatched_at"] > busy_since and not dispatch.get("released_at"):
             busy_by_kind[dispatch["force_kind"]] = busy_by_kind.get(dispatch["force_kind"], 0) + dispatch["unit_count"]
     return {kind: max(FORCE_POOL_SIZE - busy_by_kind.get(kind, 0), 0) for kind in FORCE_BASES}
 
@@ -393,6 +532,15 @@ def _find_resource_alternatives(area: str, registry) -> str:
         parts.append(_catalog_text("response_team.resource_unavailable.alternatives.cameras_covering", area=area_label, cameras=camera_text))
     else:
         parts.append(_catalog_text("response_team.resource_unavailable.alternatives.no_cameras", area=area_label))
+
+    # A drone already over the area is coverage the commander can use without a new launch.
+    over_area = [
+        mission for mission in surveillance_agent.surveillance_store.get_active_missions()
+        if (mission.get("target_area") or "").strip().lower() == (area or "").strip().lower()
+    ]
+    if over_area:
+        drones_text = ", ".join(f"{mission['callsign']} ({mission['mission_id']}, {mission['status']})" for mission in over_area)
+        parts.append(_catalog_text("response_team.resource_unavailable.alternatives.drones_over_area", area=area_label, drones=drones_text))
 
     ready_drones = surveillance_agent.surveillance_store.list_drones(status="ready")
     parts.append(_catalog_text("response_team.resource_unavailable.alternatives.ready_drones", count=len(ready_drones)))
