@@ -154,6 +154,10 @@ def _build_agent_selection_prompt(
         "the reference, route to clarification and ask which one, rather than guessing.\n"
         "For a history route, resolve relative calendar periods using current_time_local and timezone, "
         "then return absolute ISO-8601 bounds. "
+        "A debrief, timeline, or end-to-end summary of an incident or a period is operation=\"narrative\" "
+        "over the whole period it covers (the last 24 hours when none is named), time_basis=\"received_at\", "
+        "order=\"oldest\", limit 100, and no classification, area, outcome, or protocol filters unless the "
+        "question names them -- an incident is told by every report about it, not by one event type. "
         "Use only listed classifications, areas, protocols, outcomes, and risk levels. "
         "Return exactly one JSON object and nothing else. Shapes:\n"
         '{"route":"agents","tasks":[{"agent_name":"listed name","task":"specific read-only task"}],"reason":"why"}\n'

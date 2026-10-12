@@ -123,10 +123,20 @@ def _commander_context(summary: RunSummary) -> dict:
     return context
 
 
-def build_prompt(summary: RunSummary, audience: Audience, language: str, catalog: MessageCatalog | None = None) -> str:
+def build_prompt(
+    summary: RunSummary,
+    audience: Audience,
+    language: str,
+    catalog: MessageCatalog | None = None,
+    recent_reports: list[dict] | None = None,
+) -> str:
     """Compose the grounded report-writer prompt for this audience and language."""
 
     context = _commander_context(summary) if audience == "commander" else _viewer_context(summary)
+    if audience == "commander" and recent_reports:
+        # A commander's request often also asks to cross-check what came in or to recommend a
+        # deployment; those answers can only come from what every channel reported.
+        context["recent_reports"] = recent_reports
     audience_rules = REPORT_COMPOSE_COMMANDER_AUDIENCE_RULES if audience == "commander" else REPORT_COMPOSE_VIEWER_AUDIENCE_RULES
     tone_examples = catalog.text("orchestrator.report_tone.examples") if catalog is not None else ""
     return REPORT_COMPOSE_INSTRUCTION.format(
@@ -144,6 +154,7 @@ def compose_report(
     audience: Audience,
     catalog: MessageCatalog,
     fallback_text: str | None = None,
+    recent_reports: list[dict] | None = None,
 ) -> str:
     """Always returns usable text — the model's composed reply, or, on any failure, timeout,
     unclear/empty response, or when no agent is available at all, `fallback_text` when the
@@ -153,7 +164,7 @@ def compose_report(
     if agent is None:
         return fallback
 
-    prompt = build_prompt(summary, audience, catalog.language, catalog)
+    prompt = build_prompt(summary, audience, catalog.language, catalog, recent_reports)
     started = time.monotonic()
     for attempt in (1, 2):
         try:

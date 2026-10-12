@@ -533,7 +533,12 @@ def _finish_protocol_assessment(
         outcome = "succeeded" if first_failure is None else "failed"
         failure_reason = first_failure.failure_reason if first_failure is not None else None
         picture_text = ""
-        if outcome == "succeeded" and protocol.name in {"query_situational_picture", "overall_situational_picture"}:
+        is_picture = protocol.name in {"query_situational_picture", "overall_situational_picture"}
+        if is_picture and first_failure is not None and any(item.succeeded for item in step_outcomes):
+            # A read-only picture with one domain down is still an answer: the composer names
+            # the missing domain, instead of the whole picture collapsing into a raw dump.
+            outcome, failure_reason = "succeeded", None
+        if outcome == "succeeded" and is_picture:
             # Keep the deterministic read plan and success decision intact. Only the final
             # presentation is synthesized so mixed specialist formats become one grounded,
             # requester-language operational picture.

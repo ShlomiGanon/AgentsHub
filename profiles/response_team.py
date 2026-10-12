@@ -260,8 +260,9 @@ EVENT_TYPE_DESCRIPTIONS = {
     "camera_status": (
         "A camera offline, degraded, back online, or physically damaged, including a physically "
         "cut camera communications cable. Camera identifiers go into entities. The physical "
-        "observation (what was seen) belongs in description; any stated cause or suspicion from "
-        "the reporter is the reporter's own claim, never recorded as fact."
+        "observation (what was seen) belongs in description. A cause the reporter only suspects "
+        "is their own claim, never recorded as fact; a finding the reporter says they checked or "
+        "verified on site themselves is recorded as verified by that reporter (attributed to them)."
     ),
     "security_incident": (
         "An unconfirmed hostile, suspicious, or security-relevant event -- a suspicious vehicle "

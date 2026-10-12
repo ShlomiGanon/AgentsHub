@@ -271,9 +271,11 @@ def _record_outcome_with_report(
             # A protocol's fixed reply is only the fallback: the composed reply answers what this
             # sender actually said (a correction, a request, a follow-up), not a canned sentence.
             fixed_reply = deps.message_catalog.text(reply_key) if outcome == "succeeded" and reply_key else None
+            audience = resolve_audience(summary)
             report_text = compose_report(
-                deps.report_composer_agent, summary, resolve_audience(summary), deps.message_catalog,
+                deps.report_composer_agent, summary, audience, deps.message_catalog,
                 fallback_text=fixed_reply,
+                recent_reports=operational_context_for(deps, exclude_event_id=event_id) if audience == "commander" else None,
             )
 
     record_event_outcome(

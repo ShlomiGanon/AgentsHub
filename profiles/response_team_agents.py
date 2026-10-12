@@ -140,28 +140,41 @@ class ResponseTeamRosterAgent(TeamStatusAgent):
         "through the area. Never links on area alone: if no recent incident is on record, or more "
         "than one is, nothing is linked and a plain explanation is returned instead of a guess. "
         "Automatically closes any other incident the caller was previously linked to "
-        "(reassignment). Side-effecting and idempotent.",
+        "(reassignment). When the task names the incident id this report belongs to, pass it as "
+        "incident_id and that exact incident is used. Side-effecting and idempotent.",
         side_effecting=True,
         idempotent=True,
     )
-    def join_incident_response(self, area: str = "", member_identity: str = "") -> str:
-        """Link the caller to the single incident currently on record for `area`."""
+    def join_incident_response(self, area: str = "", member_identity: str = "", incident_id: str = "") -> str:
+        """Link the caller to the given incident, or to the single incident on record for `area`."""
 
         identity = (member_identity or get_authenticated_request_identity() or "").strip()
         if not identity:
             return "Not linked: authenticated requester identity is unavailable."
-        if not area.strip():
+        if not area.strip() and not incident_id.strip():
             return failed_tool_result("Clarification required: area is required.")
 
         approved_members = self.status_store.list_members(approved_only=True)
         if not any(member["telegram_identity"] == identity for member in approved_members):
             return "Not linked: requester is not an approved roster member."
 
-        event, clarification = self.incident_store.resolve_single_candidate(area.strip())
+        event, clarification = self._incident_for(area, incident_id)
         if event is None:
             return f"Not linked: {clarification}"
         self.incident_store.join(event["event_id"], identity)
-        return f"Linked to the incident currently on record for '{area.strip()}'."
+        return f"Linked to the incident on record for '{(event.get('area') or area).strip()}'."
+
+    def _incident_for(self, area: str, incident_id: str) -> tuple[dict | None, str | None]:
+        """The incident a report was already linked to, else the single one on record for `area`.
+
+        A report the orchestrator tied to a specific incident must not be re-resolved by area,
+        where two open incidents in one sector would make the answer 'unclear'."""
+
+        if incident_id.strip():
+            summary = self.incident_store.event_summary(incident_id.strip())
+            if summary is not None:
+                return summary, None
+        return self.incident_store.resolve_single_candidate(area.strip())
 
     @tool(
         "leave_incident_response",
@@ -188,18 +201,20 @@ class ResponseTeamRosterAgent(TeamStatusAgent):
         "currently on record for `area`, when exactly one exists -- lists only members actually "
         "linked to that incident (via join_incident_response), never members merely recorded in "
         "the same area. If no recent incident is on record, or more than one is, says so plainly "
-        "instead of guessing. Read-only.",
+        "instead of guessing. When the task names the incident id this report belongs to, pass it "
+        "as incident_id. Read-only.",
         side_effecting=False,
     )
-    def list_incident_responders(self, area: str = "") -> str:
-        """List members linked to the single incident currently on record for `area`."""
+    def list_incident_responders(self, area: str = "", incident_id: str = "") -> str:
+        """List members linked to the given incident, or to the single incident on record for `area`."""
 
-        if not area.strip():
+        if not area.strip() and not incident_id.strip():
             return failed_tool_result("Clarification required: area is required.")
 
-        event, clarification = self.incident_store.resolve_single_candidate(area.strip())
+        event, clarification = self._incident_for(area, incident_id)
         if event is None:
             return clarification
+        area = (event.get("area") or area).strip()
 
         links = self.incident_store.list_open_responders(event["event_id"])
         if not links:
@@ -401,10 +416,13 @@ class NeighboringForcesAgent(_NeighboringForcesAgentBase):
         """Count live available roster members for squad; use the pool for other kinds."""
 
         if kind_norm == SQUAD_KIND:
+            # A squad call-out reaches every approved member who has not said they are away --
+            # the same rule the attendance check uses for who is required -- so members who
+            # simply have not answered today's check are called, not counted as missing.
             now_iso = datetime.now(timezone.utc).isoformat()
             available = sum(
                 1 for entry in self.roster_store.availability_snapshot(now_iso)
-                if entry["availability"] == "available"
+                if entry["availability"] != "unavailable"
             )
             return available >= unit_count, available
         return super()._check_capacity(kind_norm, unit_count)
@@ -549,7 +567,7 @@ def _find_resource_alternatives(area: str, registry) -> str:
     now_iso = datetime.now(timezone.utc).isoformat()
     available_members = [
         entry["full_name"] for entry in roster_agent.status_store.availability_snapshot(now_iso)
-        if entry["availability"] == "available"
+        if entry["availability"] != "unavailable"
     ]
     if available_members:
         parts.append(_catalog_text("response_team.resource_unavailable.alternatives.available_members", members=", ".join(available_members)))

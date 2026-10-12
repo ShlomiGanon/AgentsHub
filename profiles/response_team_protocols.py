@@ -367,6 +367,15 @@ def _bind_report_team_movement(event: dict) -> tuple[Step, ...]:
     # from the free-text report, the same class of decision `_bind_update_camera_status` makes
     # for a camera's resulting status -- so the specialist agent decides and calls the relevant
     # tool(s) itself rather than a keyword heuristic pre-deciding it.
+    incident_id = (event.get("incident_id") or "").strip()
+    # The orchestrator already tied this report to an incident from the shared context; naming
+    # it keeps two open incidents in one sector from turning "who is with me?" into a refusal.
+    incident_hint = (
+        f" This report belongs to incident '{incident_id}': pass incident_id='{incident_id}' to "
+        f"join_incident_response and list_incident_responders."
+        if incident_id
+        else ""
+    )
     return (
         Step(
             agent_name="roster_agent",
@@ -376,7 +385,8 @@ def _bind_report_team_movement(event: dict) -> tuple[Step, ...]:
                 f"is responding to, heading to, or dispatched to a specific incident at that area (not "
                 f"merely stationed or passing through)? If so, also call join_incident_response for the "
                 f"same area. If the report also asks who else is with/responding, also call "
-                f"list_incident_responders for the same area and include its answer in your reply.\n\n"
+                f"list_incident_responders for the same area and include its answer in your reply."
+                f"{incident_hint}\n\n"
                 f"Report: {description}"
             ),
             allowed_tools=("report_team_movement", "join_incident_response", "list_incident_responders"),
@@ -425,8 +435,9 @@ PROTOCOLS = [
             "Camera identifiers belong in entities; call update_camera_status once per named "
             "camera. Does not apply to what a camera shows about a hostile or suspicious event "
             "(use report_security_incident for that). Record the physical observation reported "
-            "(what was seen); any stated cause or suspicion from the reporter is the reporter's "
-            "own claim, never recorded as fact."
+            "(what was seen). A cause the reporter only suspects is their own claim, never "
+            "recorded as fact; a finding the reporter says they checked or verified on site "
+            "themselves is recorded as verified by that reporter (attributed to them)."
         ),
         participating_agents=("surveillance_agent",),
         approved_tools=("update_camera_status",),

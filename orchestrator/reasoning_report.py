@@ -454,7 +454,9 @@ def make_operational_decision(
         stage="operational_decision",
         label="operational decision",
         policy=InvocationPolicy(
-            max_output_tokens=600,
+            # Reasoning tokens share this budget with the JSON; with the operational context to
+            # weigh, 600 was cut off mid-answer and the whole report failed.
+            max_output_tokens=2000,
             timeout_seconds=60.0,
             reasoning_effort="medium",
             response_schema={"name": "operational_decision", "schema": _OPERATIONAL_DECISION_SCHEMA},
@@ -592,7 +594,9 @@ def extract_and_decide(
             stage="extract_and_decide",
             label="extract and decide",
             policy=InvocationPolicy(
-                max_output_tokens=900,
+                # Same shared reasoning-and-answer budget as the operational decision, plus the
+                # extraction fields; sized so a context-heavy report is not cut off.
+                max_output_tokens=2500,
                 timeout_seconds=75.0,
                 reasoning_effort="medium",
                 response_schema={"name": "extract_and_decide", "schema": _EXTRACT_AND_DECIDE_SCHEMA},
