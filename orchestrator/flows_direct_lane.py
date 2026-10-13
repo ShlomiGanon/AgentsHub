@@ -47,8 +47,8 @@ def _direct_lane_eligible_protocols(protocols: "tuple[Protocol, ...]") -> "tuple
         if protocol.direct_lane_eligible and not protocol.commander_only and not protocol.approval_flag
     )
 
-def _build_direct_lane_prompt(protocols: "tuple[Protocol, ...]", registry: "AgentRegistry", raw_text: str) -> tuple[str, dict]:
-    """Prompt asking the cheap model to pick a direct-lane action or decline."""
+def _direct_lane_tools(protocols: "tuple[Protocol, ...]", registry: "AgentRegistry") -> tuple[list[str], dict]:
+    """One description line per fast-lane tool, and which protocol and agent own each tool."""
 
     tool_lines: list[str] = []
     tool_owner: dict[str, tuple[str, str]] = {}
@@ -61,24 +61,59 @@ def _build_direct_lane_prompt(protocols: "tuple[Protocol, ...]", registry: "Agen
                 continue
             tool_owner[tool_name] = (protocol.name, agent_name)
             tool_lines.append(f"- {tool_name}: {tool_info.description}")
+    return tool_lines, tool_owner
 
+
+# When a message may take the fast lane. Shared by the stand-alone triage call and the merged
+# message planner, so both apply exactly the same bar.
+_DIRECT_LANE_RULES = (
+    "If this message clearly matches one or more of the tools above, with every "
+    "parameter each chosen tool needs explicitly stated in the message (never guessed), "
+    "it is eligible: "
+    '{"eligible": true, "actions": [{"tool_name": "...", "parameters": {...}}, ...]}. '
+    "A message with more than one such intent may return more than one action. Otherwise -- "
+    "if the message involves any threat, hostile/suspicious activity, an emergency, any other "
+    "risk indicator, any ambiguity, a parameter a chosen tool needs but the message does not "
+    "state, or does not clearly match any tool above -- it is not eligible: "
+    '{"eligible": false, "reason": "a few words"}. When in doubt, return not eligible: the full '
+    "pipeline handles everything this lane does not."
+)
+
+
+def _build_direct_lane_prompt(protocols: "tuple[Protocol, ...]", registry: "AgentRegistry", raw_text: str) -> tuple[str, dict]:
+    """Prompt asking the cheap model to pick a direct-lane action or decline."""
+
+    tool_lines, tool_owner = _direct_lane_tools(protocols, registry)
     prompt = (
         "You triage one incoming message for a fast lane that handles ONLY simple, low-stakes, "
         "already-unambiguous actions. Available tools (the only ones you may name):\n"
         + "\n".join(tool_lines)
-        + "\n\nIf this message clearly matches one or more of the tools above, with every "
-        "parameter each chosen tool needs explicitly stated in the message (never guessed), "
-        "return exactly one JSON object: "
-        '{"eligible": true, "actions": [{"tool_name": "...", "parameters": {...}}, ...]}. '
-        "A message with more than one such intent may return more than one action. Otherwise -- "
-        "if the message involves any threat, hostile/suspicious activity, an emergency, any other "
-        "risk indicator, any ambiguity, a parameter a chosen tool needs but the message does not "
-        "state, or does not clearly match any tool above -- return exactly "
-        '{"eligible": false, "reason": "..."}. When in doubt, return not eligible: the full '
-        "pipeline handles everything this lane does not.\n\n"
+        + "\n\n"
+        + _DIRECT_LANE_RULES
+        + " Return exactly one of those JSON objects.\n\n"
         f"Message: {json.dumps(raw_text, ensure_ascii=False)}"
     )
     return prompt, tool_owner
+
+
+def direct_lane_plan_section(protocols: "tuple[Protocol, ...]", registry: "AgentRegistry") -> str | None:
+    """The fast-lane part of the merged message plan, or None when no protocol is lane-eligible."""
+
+    eligible_protocols = _direct_lane_eligible_protocols(protocols)
+    if not eligible_protocols:
+        return None
+    tool_lines, _tool_owner = _direct_lane_tools(eligible_protocols, registry)
+    if not tool_lines:
+        return None
+    return (
+        "\nFAST LANE (fast_lane). Only when primary_intent is report, decide whether it can skip the full "
+        "pipeline: a fast lane handles ONLY simple, low-stakes, already-unambiguous actions. Fast-lane tools "
+        "(the only ones you may name):\n"
+        + "\n".join(tool_lines)
+        + "\n"
+        + _DIRECT_LANE_RULES
+        + " fast_lane is one of those two objects for a report, and null for any other intent.\n"
+    )
 
 
 def _parameters_match_tool(method, parameters: dict) -> bool:
@@ -121,6 +156,12 @@ def classify_direct_lane(
         payload = json.loads(_unwrap_json_code_fence(agent_result.text))
     except (json.JSONDecodeError, TypeError):
         return DirectLaneResult(eligible=False, reason="direct lane classification returned invalid JSON")
+    return direct_lane_result_from_payload(payload, tool_owner, registry)
+
+
+def direct_lane_result_from_payload(payload: object, tool_owner: dict, registry: "AgentRegistry") -> DirectLaneResult:
+    """Validate a fast-lane decision: only approved tools, with parameters those tools accept."""
+
     if not isinstance(payload, dict):
         return DirectLaneResult(eligible=False, reason="direct lane classification returned a non-object")
     if not payload.get("eligible"):
@@ -189,10 +230,19 @@ def run_direct_lane(
 
 def attempt_direct_lane(
     deps: FlowDeps, main_agent: "MainAgent", event_id: str, sender_identity: str, raw_text: str,
+    *, planned: dict | None = None,
 ) -> "FlowResult | None":
-    """Try the fast lane after begin_report; return None so the caller can queue the full pipeline."""
+    """Try the fast lane after begin_report; return None so the caller can queue the full pipeline.
 
-    result = classify_direct_lane(main_agent, deps.protocol_set.all(), deps.registry, raw_text)
+    `planned` is the merged message planner's own fast-lane decision: it is validated exactly like
+    a stand-alone triage answer, and saves that separate model call."""
+
+    if planned is not None:
+        eligible_protocols = _direct_lane_eligible_protocols(deps.protocol_set.all())
+        _tool_lines, tool_owner = _direct_lane_tools(eligible_protocols, deps.registry)
+        result = direct_lane_result_from_payload(planned, tool_owner, deps.registry)
+    else:
+        result = classify_direct_lane(main_agent, deps.protocol_set.all(), deps.registry, raw_text)
     if not result.eligible:
         direct_lane_declined(event_id=event_id, reason=result.reason)
         return None

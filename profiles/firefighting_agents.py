@@ -46,6 +46,7 @@ class FirefightingCrewStatusAgent(TeamStatusAgent):
     timezone_name = "Asia/Jerusalem"
     response_window_hours = 1
     apparatus_catalog_stem = "firefighting"
+    snapshot_tools = ("report_team_availability", "get_apparatus_status", "list_active_fires")
 
     def __init__(self, model: str, api_key: str | None = None):
         """Open apparatus, fire, and incident stores after the shared team-status setup."""

@@ -166,7 +166,6 @@ MESSAGES = {
     "api.event_detail_ambiguous": "יש כרגע {count} דיווחים הממתינים לפרטים חסרים, ולכן אינני יכול לדעת "
         "לאיזה מהם מתייחסת התגובה הזו. על מפקד לסגור קודם את הישן מביניהם, "
         "ולאחר מכן ניתן להשיב שוב.",
-    "api.clarify_check_record_do": "נא להבהיר מה ברצונך שאבדוק, אתעד או אבצע.",
     "api.clarify_action": "נא להבהיר מה ברצונך שאבצע.",
     "api.question_too_slow": "לא הספקתי להשלים את התשובה בזמן. נסו לשאול שוב, או לפצל את השאלה לחלקים קטנים יותר.",
     "api.drone_selection_invalid": "לא זיהיתי רחפן מתאים. בחר שם או מזהה מהרשימה:\n{choices}",
@@ -602,6 +601,8 @@ MESSAGES = {
     "admin.simulator.step_label": "צעד {step}",
     "admin.simulator.send_this": "שלח צעד זה ({step})",
     "admin.simulator.wait_turn": "המתן לתור ({step})",
+    "admin.simulator.waiting_previous_reply": "ממתין לתשובה לצעד הקודם ({step})",
+    "admin.simulator.awaiting_input": "ממתין לתשובה או לאישור — השאלה נשלחה בצ׳אט.",
     "admin.simulator.edit": "ערוך",
     "admin.simulator.edit_title": "ערוך צעד {step}",
     "admin.simulator.edit_text": "תוכן ההודעה",

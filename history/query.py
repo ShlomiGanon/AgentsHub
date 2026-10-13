@@ -313,6 +313,12 @@ class HistoryQueryService:
         self._timezone_name = timezone_name
         self._area_labels = dict(area_labels or {})
 
+    @property
+    def area_labels(self) -> dict[str, str]:
+        """This deployment's area id -> display name map (empty when none was configured)."""
+
+        return dict(self._area_labels)
+
     def planning_context(self) -> dict:
         """Return only the bounded vocabulary needed to plan a history query."""
 

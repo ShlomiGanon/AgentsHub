@@ -294,3 +294,12 @@ def test_commander_pending_approval_includes_risk_detail_in_the_prompt():
     prompt = build_prompt(summary, "commander", "en")
 
     assert "active flame near the west gate" in prompt
+
+
+def test_the_report_prompt_carries_area_names_so_the_reply_never_shows_an_internal_area_id():
+    """Tool confirmations name areas by internal id; the writer gets each id's display name."""
+    prompt = build_prompt(_summary(), "viewer", "en", area_labels={"north_sector": "the north sector"})
+
+    assert '"area_names": {"north_sector": "the north sector"}' in prompt
+    assert "never by its internal id" in prompt
+    assert '"area_names"' not in build_prompt(_summary(), "viewer", "en")

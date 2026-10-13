@@ -167,7 +167,6 @@ MESSAGES = {
     "api.event_detail_ambiguous": "You have {count} reports waiting for missing details right now, so I "
         "can't tell which one this reply is about. A commander should resolve "
         "the older one first, then reply again.",
-    "api.clarify_check_record_do": "Could you clarify what you want me to check, record, or do?",
     "api.clarify_action": "Could you clarify what you want me to do?",
     "api.question_too_slow": "I could not finish answering in time. Please ask again, or split the question into smaller parts.",
     "api.drone_selection_invalid": "No matching drone was identified. Choose a name or ID from this list:\n{choices}",
@@ -604,6 +603,8 @@ MESSAGES = {
     "admin.simulator.next_in_chat": "Next in this chat",
     "admin.simulator.step_label": "step {step}",
     "admin.simulator.send_this": "Send this step ({step})",
+    "admin.simulator.waiting_previous_reply": "Waiting for the previous step's reply ({step})",
+    "admin.simulator.awaiting_input": "Waiting for an answer or an approval; the question was sent in the chat.",
     "admin.simulator.wait_turn": "Wait for turn ({step})",
     "admin.simulator.edit": "Edit",
     "admin.simulator.edit_title": "Edit step {step}",

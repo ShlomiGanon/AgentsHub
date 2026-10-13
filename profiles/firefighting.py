@@ -205,6 +205,8 @@ TIMEZONE = "Asia/Jerusalem"
 CONVERSATION_HISTORY_TURNS = 6
 CONVERSATION_HISTORY_TTL_HOURS = 24
 OPTIMIZATION_POLICY = OptimizationPolicy(
+    # One model call classifies a message, routes a question, and decides a report's fast lane.
+    planner_mode="merged",
     operational_decision_mode="merged",
     final_assessment_mode="low_risk_merged",
     event_queue_mode="policy",

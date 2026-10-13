@@ -62,6 +62,7 @@ class SurveillanceAgent(Agent):
     """Specialist agent responsible for cameras, drone fleet operations, and tactical aerial dispatch."""
 
     name = "surveillance_agent"
+    snapshot_tools = ("get_surveillance_overview",)
     role = (
         "Maintains real-time visual surveillance and situational awareness across all sectors. Monitors security "
         "cameras, reports visual feeds, checks drone fleet availability, dispatches tactical drones "

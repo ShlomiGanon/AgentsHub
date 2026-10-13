@@ -953,7 +953,7 @@ def test_no_reasoning_policy_asks_always_thinking_models_for_low_effort_with_hea
     )
 
     assert options["reasoning_effort"] == "low"
-    assert options["max_tokens"] == 400 + 1024
+    assert options["max_tokens"] == 400 + 2048
 
 
 def test_no_reasoning_policy_leaves_older_models_without_a_reasoning_setting():
@@ -969,3 +969,24 @@ def test_no_reasoning_policy_leaves_older_models_without_a_reasoning_setting():
 
     assert "reasoning_effort" not in options
     assert options["max_tokens"] == 400
+
+
+def test_a_call_without_any_policy_still_asks_always_thinking_models_for_low_effort():
+    """No policy at all used to mean the model's default (high) effort on a model that always thinks."""
+    from agents.runtime_llm import _llm_options
+
+    descriptor = SimpleNamespace(model="openrouter/anthropic/claude-sonnet-5.5", api_key=None, name="main_agent")
+    options = _llm_options(descriptor, timeout_seconds=30.0, invocation_policy=None)
+
+    assert options["reasoning_effort"] == "low"
+    assert "max_tokens" not in options
+
+
+def test_a_call_without_any_policy_leaves_older_models_unchanged():
+    """Sonnet 4.6 without a policy keeps sending no reasoning setting."""
+    from agents.runtime_llm import _llm_options
+
+    descriptor = SimpleNamespace(model="openrouter/anthropic/claude-sonnet-4.6", api_key=None, name="main_agent")
+    options = _llm_options(descriptor, timeout_seconds=30.0, invocation_policy=None)
+
+    assert "reasoning_effort" not in options

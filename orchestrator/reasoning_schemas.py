@@ -96,8 +96,6 @@ class IntentAnalysis:
     reports_occurrence: bool
     requests_action: bool
     social_only: bool
-    is_quoted: bool
-    is_hypothetical: bool
     is_followup_without_context: bool
     evidence: dict[str, str]
     matched_protocol_names: tuple[str, ...]
@@ -310,8 +308,6 @@ _MESSAGE_PLAN_SCHEMA = {
         "reports_occurrence": {"type": "boolean"},
         "requests_action": {"type": "boolean"},
         "social_only": {"type": "boolean"},
-        "is_quoted": {"type": "boolean"},
-        "is_hypothetical": {"type": "boolean"},
         "is_followup_without_context": {"type": "boolean"},
         "evidence": {
             "type": "object",
@@ -326,12 +322,11 @@ _MESSAGE_PLAN_SCHEMA = {
         "ambiguity_reason": {"type": ["string", "null"]},
         "clarification_question": {"type": ["string", "null"]},
         "question_plan": _QUESTION_PLAN_SCHEMA,
-        "conversational_reply": {"type": ["string", "null"]},
     },
     "required": [
         "primary_intent", "asks_for_information", "reports_occurrence", "requests_action", "social_only",
-        "is_quoted", "is_hypothetical", "is_followup_without_context", "evidence", "matched_protocol_names",
-        "reason", "ambiguity_reason", "clarification_question", "question_plan", "conversational_reply"
+        "is_followup_without_context", "evidence", "matched_protocol_names",
+        "reason", "ambiguity_reason", "clarification_question", "question_plan"
     ],
     "additionalProperties": False,
 }

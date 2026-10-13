@@ -34,6 +34,7 @@ class TeamStatusAgent(Agent):
     """Specialist used only by readiness-team profiles."""
 
     name = "team_status_agent"
+    snapshot_tools = ("report_team_availability",)
     role = (
         "Maintains the approved readiness-team roster and its current attendance picture. "
         "It opens the daily attendance cycle, records normalized available or unavailable "

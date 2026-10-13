@@ -213,6 +213,10 @@ class Agent:
     role: str = ""
     system_prompt: str = ""
     timeout_seconds: int = 60
+    # Read-only tools that, called with no arguments, together return this agent's whole current
+    # state. A read-only question or picture is then answered from that data directly, without a
+    # specialist model round trip; an agent that declares none is asked through its model.
+    snapshot_tools: tuple[str, ...] = ()
 
     def __init__(self, model: str, api_key: str | None = None):
         """Bind model credentials, wrap declared tools, and freeze the descriptor."""
@@ -220,6 +224,10 @@ class Agent:
         missing = [attribute for attribute in _REQUIRED_CLASS_ATTRS if not getattr(type(self), attribute, "")]
         if missing:
             raise TypeError(f"{type(self).__name__} must set class-level {', '.join(missing)}")
+        read_only_tools = {info.name for info in exposed_tools_for(self) if not info.side_effecting}
+        not_read_only = [name for name in type(self).snapshot_tools if name not in read_only_tools]
+        if not_read_only:
+            raise TypeError(f"{type(self).__name__}.snapshot_tools must name read-only tools: {', '.join(not_read_only)}")
 
         self.model = model
         self.api_key = api_key
@@ -246,6 +254,21 @@ class Agent:
         """Return the tools this agent advertised on its descriptor."""
 
         return self.descriptor.tools
+
+    def read_snapshot(self) -> ToolResult | None:
+        """Call every snapshot tool with no arguments. None when this agent declares none."""
+
+        if not self.snapshot_tools:
+            return None
+        parts: list[str] = []
+        ok = True
+        for tool_name in self.snapshot_tools:
+            raw = getattr(self, tool_name)()
+            ok = ok and (raw.ok if isinstance(raw, ToolResult) else True)
+            text = str(raw.text if isinstance(raw, ToolResult) else (raw or "")).strip()
+            if text:
+                parts.append(text)
+        return ToolResult(text="\n\n".join(parts), ok=ok and bool(parts))
 
     def signal_resource_unavailable(self, resource_kind: str, area: str, reason: str) -> None:
         """Record a dispatch shortage as instance state so a later tool thread can still see it.

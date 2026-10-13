@@ -307,6 +307,7 @@ def _record_outcome_with_report(
                 deps.report_composer_agent, summary, audience, deps.message_catalog,
                 fallback_text=fixed_reply,
                 recent_reports=operational_context_for(deps, exclude_event_id=event_id) if audience == "commander" else None,
+                area_labels=getattr(deps.area_registry, "labels", None),
             )
 
     record_event_outcome(

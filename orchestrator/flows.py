@@ -15,6 +15,7 @@ from orchestrator.flows_direct_lane import (
     DirectLaneResult,
     attempt_direct_lane,
     classify_direct_lane,
+    direct_lane_plan_section,
     run_direct_lane,
 )
 from orchestrator.flows_execution import (
@@ -142,6 +143,7 @@ __all__ = [
     "continue_after_clarification",
     "continue_from_risk_assessment",
     "decline",
+    "direct_lane_plan_section",
     "execute_steps",
     "is_scoped_target",
     "plan_message",

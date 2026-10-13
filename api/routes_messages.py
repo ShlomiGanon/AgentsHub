@@ -40,6 +40,7 @@ from orchestrator.flows import (
     build_role_aware_system_context,
     build_situational_picture,
     classify_intent,
+    direct_lane_plan_section,
     picture_protocol,
     question_requests_picture,
     continue_from_risk_assessment,
@@ -438,7 +439,11 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                 "protocol": matched_protocol.name,
             })
 
+        # A commander's "what about the motorbike?" refers to something reported in another chat;
+        # without the cross-channel reports it looked like a follow-up with no context.
+        recent_reports = _recent_reports_for(ctx, None if level >= PermissionLevel.COMMANDER else caller_identity)
         message_plan = None
+        plan_unavailable: AgentInvocationError | None = None
         planner_mode = optimization_policy.planner_mode
         if planner_mode in {"shadow", "merged"}:
             try:
@@ -449,26 +454,37 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                     ctx.deps.registry,
                     ctx.deps.history_query_service,
                     prior_messages,
-                    system_context,
+                    recent_reports,
+                    # The fast-lane decision rides on the same call, so a simple report does not
+                    # wait for a second triage call before it is handled.
+                    direct_lane_plan_section(ctx.deps.protocol_set.all(), ctx.deps.registry)
+                    if planner_mode == "merged" else None,
                 )
             except OrchestrationParseError as exc:
+                # An unusable plan falls back to the stand-alone classifier below, which retries
+                # with the validation error, rather than asking the sender to rephrase.
                 logger.warning(
                     "merged message planner failed validation",
                     extra={"event": "message_plan_invalid", "planner_mode": planner_mode, "reason": str(exc), "trace_id": trace_id},
                 )
+            except AgentInvocationError as exc:
+                # The model itself is unavailable; a second classification call would only wait
+                # out the same outage, so this message is handled as a failed classification.
                 if planner_mode == "merged":
-                    answer = messages.text("api.clarify_check_record_do")
-                    _remember("assistant", answer)
-                    return jsonify({"taken_as": "clarification", "answer": answer})
+                    plan_unavailable = exc
+                logger.warning(
+                    "merged message planner unavailable",
+                    extra={"event": "message_plan_unavailable", "planner_mode": planner_mode, "reason": str(exc), "trace_id": trace_id},
+                )
 
         received_at = utc_now_storage()
+        merged_plan = message_plan if planner_mode == "merged" else None
 
         try:
-            intent = message_plan.intent if planner_mode == "merged" and message_plan is not None else classify_intent(
-                ctx.main_agent, ctx.deps.protocol_set.all(), text, prior_messages,
-                # A commander's "what about the motorbike?" refers to something reported in another
-                # chat; without the cross-channel reports it looked like a follow-up with no context.
-                _recent_reports_for(ctx, None if level >= PermissionLevel.COMMANDER else caller_identity),
+            if plan_unavailable is not None:
+                raise plan_unavailable
+            intent = merged_plan.intent if merged_plan is not None else classify_intent(
+                ctx.main_agent, ctx.deps.protocol_set.all(), text, prior_messages, recent_reports,
             )
         except OrchestrationParseError as exc:
             raise RunFailureError(str(exc)) from exc
@@ -511,11 +527,9 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
         if intent.intent == "conversational":
             require(level, RequestedOperation.CONVERSE)
             try:
-                reply = (
-                    message_plan.conversational_reply
-                    if planner_mode == "merged" and message_plan is not None
-                    else answer_conversationally(ctx.main_agent, text, system_context, prior_messages)
-                )
+                # Always its own call over the caller's role-filtered system context: the merged
+                # plan's model saw protocols and agents that a viewer's reply must never draw on.
+                reply = answer_conversationally(ctx.main_agent, text, system_context, prior_messages)
             except OrchestrationParseError as exc:
                 raise RunFailureError(str(exc)) from exc
             _remember("assistant", reply)
@@ -547,11 +561,11 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
                         "provenance": picture.provenance(),
                     })
             try:
-                if planner_mode == "merged" and message_plan is not None and message_plan.question_selection is not None:
+                if merged_plan is not None and merged_plan.question_selection is not None:
                     question_answer = answer_question_from_plan(
                         ctx.main_agent,
                         text,
-                        message_plan.question_selection,
+                        merged_plan.question_selection,
                         ctx.deps.registry,
                         ctx.deps.history_query_service,
                         max_fanout=optimization_policy.specialist_fanout,
@@ -604,7 +618,10 @@ def build_messages_blueprint(app_ctx: "ApiContext") -> Blueprint:
             # anything else (a threat/risk indicator, ambiguity, a missing parameter, or simply
             # not matching a direct-lane-eligible tool) returns None and falls through to the
             # ordinary queued path below, completely unchanged.
-            direct_lane_result = attempt_direct_lane(ctx.deps, ctx.main_agent, event_id, sender_identity, text)
+            direct_lane_result = attempt_direct_lane(
+                ctx.deps, ctx.main_agent, event_id, sender_identity, text,
+                planned=merged_plan.fast_lane if merged_plan is not None else None,
+            )
             if direct_lane_result is not None:
                 ctx.queue.release_reservation(reservation)
                 finished_event = ctx.deps.persistence.fetch_event(event_id)

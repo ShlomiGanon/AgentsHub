@@ -2170,3 +2170,60 @@ console.log(JSON.stringify({{
     assert outcome["eventReq"]["body"]["timestamp"] == "2026-09-06T07:30:00Z"
     assert "timestamp" not in outcome["eventNoTs"]["body"]
 
+
+
+def test_a_held_job_is_shown_as_waiting_for_input_and_releases_the_next_step(tmp_path, teardown_ctx, _admin_env):
+    """A job held for details or approval is answered, not lost: its ack never turns red, and the
+    next step, which waits for this one to settle, is released."""
+
+    import json as _json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+
+    client = _client(tmp_path, teardown_ctx)
+    _login(client)
+    page = client.get("/admin/simulator").data.decode("utf-8")
+    _claim_fn, poll_fn = _extract_claim_and_poll_fns(page)
+    settle_fn = _extract_between(page, "function waitForStepToSettle(", "  // ---- mapping panel")
+
+    driver = f"""
+const POLL_INTERVAL_MS = 5;
+const POLL_TIMEOUT_MS = 300;
+const pollGenerationByChatId = {{ 'chat-h': 1 }};
+const statusBubblesByChatId = {{}};
+const privatePollWatermarksByIdentity = {{}};
+const bubbleCalls = [];
+function t(key) {{ return key; }}
+function appendBubble() {{}}
+function copyPollWatermark(mark) {{ return mark; }}
+function setBubbleText(bubble, text, status, isError) {{ bubbleCalls.push({{ status: status, isError: isError }}); }}
+async function apiCall(method, path) {{
+  if (path.indexOf('/admin/simulator/trace/') === 0) {{
+    return {{ status: 200, payload: {{ execution_status: 'awaiting_approval', terminal: false, stages: [] }} }};
+  }}
+  return {{ status: 200, payload: {{ watermark: {{ status_len: 1, sent_len: 0 }}, status_updates: [], sent_messages: [] }} }};
+}}
+{poll_fn}
+{settle_fn}
+(async function () {{
+  const reply = {{ querySelector: function () {{ return {{ textContent: 'ack' }}; }} }};
+  const deliveryState = {{ waitingForJob: true, watcherDone: false }};
+  const watch = pollSimulatorChat('k', 'chat-h', {{ status_len: 0, sent_len: 0 }}, 1, reply, null, 'trace-1', deliveryState, null, false, 'k', null);
+  const started = Date.now();
+  await waitForStepToSettle(deliveryState, 5000);
+  const settledAfter = Date.now() - started;
+  await watch;
+  console.log(JSON.stringify({{ waiting: deliveryState.waitingForJob, settledAfter: settledAfter, calls: bubbleCalls }}));
+}})();
+"""
+    result = subprocess.run([node, "-e", driver], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    outcome = _json.loads(result.stdout.strip().splitlines()[-1])
+    assert outcome["waiting"] is False
+    assert outcome["settledAfter"] < 1000
+    assert {"status": "awaiting_input", "isError": False} in outcome["calls"]
+    assert not any(call["isError"] for call in outcome["calls"])

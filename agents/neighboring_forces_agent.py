@@ -32,6 +32,7 @@ class NeighboringForcesAgent(Agent):
     """Logs neighboring-force dispatches and answers read-only questions about that log."""
 
     name = "neighboring_forces_agent"
+    snapshot_tools = ("list_neighboring_force_dispatches",)
     role = (
         "Records requests to dispatch a neighboring/external force into one of this site's "
         "areas, and answers read-only questions about the current dispatch log. A dispatch's "

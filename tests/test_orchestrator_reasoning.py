@@ -645,5 +645,5 @@ def test_message_plan_prompt_instructs_wide_scope_narrative_routing_for_a_debrie
 
     prompt = main_agent.prompts[0]
     assert 'operation="narrative"' in prompt
-    assert "Leave classifications and areas empty" in prompt
-    assert "not just the most recent event" in prompt
+    assert "no classification, area, outcome, or protocol filters unless the" in prompt
+    assert "never by one event type or only the most recent event" in prompt

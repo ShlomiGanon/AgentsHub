@@ -1,11 +1,13 @@
 """A situational picture assembled at request time, never from prepared text.
 
-The Main Agent first decides what it needs to know from every specialist
-that participates in the picture protocol (one concrete question per
-domain), those questions are put to the specialists concurrently so each
-one answers from its own read-only tools against live state, the recent
-event log is pulled from history for the window the Main Agent chose, and
-only then does the Main Agent write the picture from exactly those
+When every read tool the picture protocol approves runs without arguments,
+each participating domain's live state is read directly from those tools,
+concurrently with the recent event log, and the Main Agent writes the
+picture from exactly that data -- no planning call and no specialist model
+round trip. Otherwise the Main Agent first decides what it needs to know
+from every participating specialist (one concrete question per domain),
+those questions are put to the specialists concurrently so each one answers
+from its own read-only tools, and the picture is written from their
 findings. A domain that fails or times out is reported as unavailable
 rather than papered over, and when the model cannot compose, the findings
 are still returned verbatim under a timestamped header.
@@ -13,6 +15,7 @@ are still returned verbatim under a timestamped header.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import re
@@ -410,6 +413,114 @@ def collect_domain_reports(
     return tuple(reports)
 
 
+def _runs_without_arguments(method) -> bool:
+    """True when a bound tool method can be called with no arguments at all."""
+
+    if not callable(method):
+        return False
+    try:
+        signature = inspect.signature(method)
+    except (TypeError, ValueError):
+        return False
+    return all(
+        parameter.default is not inspect.Parameter.empty
+        or parameter.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+        for parameter in signature.parameters.values()
+    )
+
+
+def direct_read_tools(protocol: "Protocol", registry: "AgentRegistry") -> dict[str, tuple[str, ...]] | None:
+    """Each participating agent's approved tools, when all of them are read-only and run without
+    arguments -- the picture is then read straight from live state. None otherwise."""
+
+    tools_by_agent: dict[str, tuple[str, ...]] = {}
+    for agent_name in protocol.participating_agents:
+        agent = registry.get(agent_name)
+        exposed = {tool.name: tool for tool in agent.exposed_tools()}
+        owned = tuple(name for name in protocol.approved_tools if name in exposed)
+        if not owned:
+            return None
+        for name in owned:
+            if exposed[name].side_effecting or not _runs_without_arguments(getattr(agent, name, None)):
+                return None
+        tools_by_agent[agent_name] = owned
+    return tools_by_agent
+
+
+def collect_direct_domain_reports(
+    tools_by_agent: dict[str, tuple[str, ...]],
+    registry: "AgentRegistry",
+    history_query_service: "HistoryQueryService",
+    *,
+    caller_identity: str | None,
+    sender_identity_filter: str | None,
+    now: datetime,
+    hours: int = DEFAULT_RECENT_EVENTS_HOURS,
+    timeout_per_specialist: float = SPECIALIST_TIMEOUT_SECONDS,
+) -> tuple[DomainReport, ...]:
+    """Read every domain's approved tools and the recent events, all concurrently, with no model call."""
+
+    outcomes: dict[str, tuple[str, bool]] = {}
+
+    def _domain_reader(agent_name: str, tool_names: tuple[str, ...]) -> Callable[[], SpecialistResult]:
+        """Build a runner that reads one domain's live state from its tools."""
+
+        def _run() -> SpecialistResult:
+            """Call each tool and keep its text; any failure marks the domain unavailable."""
+
+            agent = registry.get(agent_name)
+            parts: list[str] = []
+            succeeded = True
+            try:
+                with authenticated_request_identity(caller_identity), stage_context("picture_direct_read"):
+                    for tool_name in tool_names:
+                        raw = getattr(agent, tool_name)()
+                        succeeded = succeeded and getattr(raw, "ok", True)
+                        text = str(getattr(raw, "text", raw) or "").strip()
+                        if text:
+                            parts.append(text)
+            except Exception as exc:
+                outcomes[agent_name] = (str(exc), False)
+                return SpecialistResult(answer=str(exc))
+            text = "\n".join(parts)
+            outcomes[agent_name] = (text, succeeded and bool(text))
+            return SpecialistResult(answer=text)
+
+        return _run
+
+    def _history_runner() -> SpecialistResult:
+        """Fetch recent events as one concurrent picture domain."""
+
+        report = collect_recent_events(
+            history_query_service, hours=hours, now=now, sender_identity_filter=sender_identity_filter
+        )
+        outcomes[RECENT_EVENTS_DOMAIN] = (report.text, report.succeeded)
+        return SpecialistResult(answer=report.text)
+
+    runners: list[tuple[str, Callable[[], SpecialistResult]]] = [
+        (agent_name, _domain_reader(agent_name, tool_names)) for agent_name, tool_names in tools_by_agent.items()
+    ]
+    runners.append((RECENT_EVENTS_DOMAIN, _history_runner))
+    raw_answers = run_parallel_specialists(runners, max_workers=len(runners), timeout_per_specialist=timeout_per_specialist)
+
+    catalog = get_current_catalog()
+    default_query = catalog.text("orchestrator.picture.default_domain_query")
+    reports: list[DomainReport] = []
+    for domain, _runner in runners:
+        query = (
+            catalog.text("orchestrator.picture.recent_events_question", hours=hours)
+            if domain == RECENT_EVENTS_DOMAIN
+            else default_query
+        )
+        if domain in outcomes:
+            text, succeeded = outcomes[domain]
+        else:
+            result = raw_answers.get(domain)
+            text, succeeded = (result.answer if result else ""), False
+        reports.append(DomainReport(domain, query, text, succeeded))
+    return tuple(reports)
+
+
 def _reports_json(reports: tuple[DomainReport, ...]) -> str:
     """JSON of specialist reports, excluding the recent-events domain."""
 
@@ -486,6 +597,7 @@ def compose_situational_picture(
     current_time: str,
     recent_events_hours: int,
     max_lines: int = PICTURE_MAX_LINES,
+    area_labels: dict[str, str] | None = None,
 ) -> str:
     """Have the Main Agent write the picture from the collected findings only."""
 
@@ -496,6 +608,7 @@ def compose_situational_picture(
         max_lines=max_lines,
         request_json=json.dumps(raw_text, ensure_ascii=False),
         current_time=current_time,
+        area_names_json=json.dumps(area_labels or {}, ensure_ascii=False, sort_keys=True),
         reports_json=_reports_json(reports),
         recent_events=_recent_events_block(reports),
     )
@@ -534,22 +647,39 @@ def build_situational_picture(
 
     now = now or datetime.now(timezone.utc)
     current_time = _current_time_label(history_query_service, now)
-    plan = plan_situational_picture(main_agent, protocol, registry, raw_text, current_time=current_time)
-    reports = collect_domain_reports(
-        plan,
-        protocol,
-        registry,
-        history_query_service,
-        caller_identity=caller_identity,
-        sender_identity_filter=sender_identity_filter,
-        now=now,
-    )
+    tools_by_agent = direct_read_tools(protocol, registry)
+    if tools_by_agent is not None:
+        # Every domain's whole live state is one argument-free read away: read it directly and let
+        # the composer answer the request from the complete data, instead of first planning and
+        # then asking each specialist model to summarize its own tools.
+        plan = _default_plan(protocol)
+        reports = collect_direct_domain_reports(
+            tools_by_agent,
+            registry,
+            history_query_service,
+            caller_identity=caller_identity,
+            sender_identity_filter=sender_identity_filter,
+            now=now,
+            hours=plan.recent_events_hours,
+        )
+    else:
+        plan = plan_situational_picture(main_agent, protocol, registry, raw_text, current_time=current_time)
+        reports = collect_domain_reports(
+            plan,
+            protocol,
+            registry,
+            history_query_service,
+            caller_identity=caller_identity,
+            sender_identity_filter=sender_identity_filter,
+            now=now,
+        )
     text = compose_situational_picture(
         main_agent,
         reports,
         raw_text or protocol.description,
         current_time=current_time,
         recent_events_hours=plan.recent_events_hours,
+        area_labels=getattr(history_query_service, "area_labels", None),
     )
     logger.info(
         "situational picture composed",
@@ -601,6 +731,7 @@ def compose_picture_from_step_outcomes(
         raw_text or protocol.description,
         current_time=current_time,
         recent_events_hours=DEFAULT_RECENT_EVENTS_HOURS,
+        area_labels=getattr(history_query_service, "area_labels", None),
     )
 
 

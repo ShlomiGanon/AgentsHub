@@ -129,10 +129,14 @@ def build_prompt(
     language: str,
     catalog: MessageCatalog | None = None,
     recent_reports: list[dict] | None = None,
+    area_labels: dict[str, str] | None = None,
 ) -> str:
     """Compose the grounded report-writer prompt for this audience and language."""
 
     context = _commander_context(summary) if audience == "commander" else _viewer_context(summary)
+    if area_labels:
+        # Tool confirmations name areas by internal id; the reply calls them by their names.
+        context["area_names"] = dict(area_labels)
     if audience == "commander" and recent_reports:
         # A commander's request often also asks to cross-check what came in or to recommend a
         # deployment; those answers can only come from what every channel reported.
@@ -155,6 +159,7 @@ def compose_report(
     catalog: MessageCatalog,
     fallback_text: str | None = None,
     recent_reports: list[dict] | None = None,
+    area_labels: dict[str, str] | None = None,
 ) -> str:
     """Always returns usable text — the model's composed reply, or, on any failure, timeout,
     unclear/empty response, or when no agent is available at all, `fallback_text` when the
@@ -164,7 +169,7 @@ def compose_report(
     if agent is None:
         return fallback
 
-    prompt = build_prompt(summary, audience, catalog.language, catalog, recent_reports)
+    prompt = build_prompt(summary, audience, catalog.language, catalog, recent_reports, area_labels)
     started = time.monotonic()
     for attempt in (1, 2):
         try:

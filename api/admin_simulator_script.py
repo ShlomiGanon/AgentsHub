@@ -11,6 +11,10 @@ SIMULATOR_SCRIPT = """<script id="sim-data" type="application/json">{{ page_data
   const POLL_INTERVAL_MS = 250;
   const JOB_WAIT_SECONDS = 15;
   const POLL_TIMEOUT_MS = 5 * 60 * 1000;
+  // The next step usually builds on this one's outcome (a call-out, then "I got the call-out"),
+  // so it is offered only once this step's reply arrived, its job is waiting for an answer, or
+  // this long has passed.
+  const STEP_GATE_TIMEOUT_MS = 3 * 60 * 1000;
   const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'uncertain', 'closed_on_precedent', 'declined']);
   const CHAT_TYPES = new Set(['private', 'group', 'supergroup']);
   const CHAT_KINDS = new Set(['message', 'event']);
@@ -401,7 +405,9 @@ SIMULATOR_SCRIPT = """<script id="sim-data" type="application/json">{{ page_data
       const warning = senderWarning(step);
       if (warning) preview.appendChild(el('div', 'preview-warn', warning));
 
-      button.textContent = isNext ? t('send_this', { step: step.step }) : t('wait_turn', { step: step.step });
+      button.textContent = state.awaitingReply
+        ? t('waiting_previous_reply', { step: step.step })
+        : (isNext ? t('send_this', { step: step.step }) : t('wait_turn', { step: step.step }));
       button.disabled = !isNext || state.busy;
     });
   }
@@ -802,6 +808,13 @@ SIMULATOR_SCRIPT = """<script id="sim-data" type="application/json">{{ page_data
         try {
           const traceResult = await apiCall('GET', '/admin/simulator/trace/' + encodeURIComponent(traceId), null);
           if (traceResult.status === 200 && traceResult.payload) {
+            if (traceResult.payload.execution_status === 'awaiting_approval') {
+              // The job is held for details, a clarification, or an approval; its question is
+              // already in a chat, so this step is answered rather than lost.
+              setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('awaiting_input'), false);
+              deliveryState.waitingForJob = false;
+              continue;
+            }
             if (traceResult.payload.diagnostic_state === 'job_stopped_without_outcome') {
               setBubbleText(reply, reply.querySelector('.bubble-text').textContent, t('job_stopped'), true);
               return;
@@ -895,19 +908,17 @@ SIMULATOR_SCRIPT = """<script id="sim-data" type="application/json">{{ page_data
     // blocking this step's queue.
     setBubbleText(reply, payload.reply_text || t('bot_no_reply'), null, false);
     queue.shift();
-    state.busy = false;
-    updateGlobalState();
     const ackEvent = (payload.status_updates || []).find(event => event.kind === 'send');
     if (ackEvent) {
       if (!statusBubblesByChatId[request.body.chat_id]) statusBubblesByChatId[request.body.chat_id] = new Map();
       statusBubblesByChatId[request.body.chat_id].set(String(ackEvent.message_id), reply);
     }
     const waitingForJob = QUEUED_ACK_PREFIXES.some(prefix => (payload.reply_text || '').startsWith(prefix));
-    const deliveryState = { waitingForJob: waitingForJob };
+    const deliveryState = { waitingForJob: waitingForJob, watcherDone: false };
     const senderIdentity = String(request.body.sender_identity || '');
     const isPrivateOrigin = request.body.chat_type === 'private';
     const originWatermark = payload.watermark;
-    pollSimulatorChat(
+    const originWatch = pollSimulatorChat(
       chatKey,
       request.body.chat_id,
       originWatermark,
@@ -938,6 +949,28 @@ SIMULATOR_SCRIPT = """<script id="sim-data" type="application/json">{{ page_data
         step.timestamp
       );
     }
+    originWatch.finally(function () { deliveryState.watcherDone = true; });
+    if (waitingForJob) {
+      state.awaitingReply = true;
+      updateGlobalState();
+      await waitForStepToSettle(deliveryState, STEP_GATE_TIMEOUT_MS);
+      state.awaitingReply = false;
+    }
+    state.busy = false;
+    updateGlobalState();
+  }
+
+  function waitForStepToSettle(deliveryState, timeoutMs) {
+    const startedAt = Date.now();
+    return new Promise(function (resolve) {
+      (function check() {
+        if (!deliveryState.waitingForJob || deliveryState.watcherDone || Date.now() - startedAt >= timeoutMs) {
+          resolve();
+          return;
+        }
+        setTimeout(check, POLL_INTERVAL_MS);
+      })();
+    });
   }
 
   // ---- mapping panel: prompts for any Telegram ID a manually-provided scenario is missing ----
@@ -2354,7 +2387,7 @@ SIMULATOR_SCRIPT = """<script id="sim-data" type="application/json">{{ page_data
   document.getElementById('reset-view').addEventListener('click', function () {
     // View only: clears the cards and the queues. Nothing already sent is undone on the server.
     invalidatePollWatchers();
-    state.scenario = null; state.scenarioSteps = []; state.chats = []; state.chatsByKey = {}; state.queues = {}; state.runId = null; state.busy = false;
+    state.scenario = null; state.scenarioSteps = []; state.chats = []; state.chatsByKey = {}; state.queues = {}; state.runId = null; state.busy = false; state.awaitingReply = false;
     document.getElementById('chats-container').innerHTML = '';
     document.getElementById('scenario-title').textContent = t('no_scenario');
     document.getElementById('scenario-desc').textContent = '';
